@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Research Asset"
+  short_description: "Reuse or version scripts and datasets"
+  default_prompt: "Use $manage-research-asset to reuse or safely modify this research asset."

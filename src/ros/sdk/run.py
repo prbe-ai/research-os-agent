@@ -1,0 +1,370 @@
+"""The SDK Run handle: the agent's per-run write surface.
+
+Wraps a run row and exposes the write verbs from the SDK/CLI sketch, each mapped
+to a v3 endpoint:
+
+  log()          -> POST /v1/runs/{id}/metrics
+  log_hw()       -> POST /v1/runs/{id}/metrics (kind=hardware)
+  span()/step()  -> POST /v1/runs/{id}/spans | /steps      (trajectory)
+  log_artifact() -> POST /v1/runs/{id}/artifacts
+  link()         -> PATCH /v1/runs/{id} (merges foreign_keys into metadata)
+  snapshot()     -> local git shadow-ref capture, stored on run.metadata
+  finish()       -> PATCH /v1/runs/{id} {status, ended_at}
+
+Gaps against the design (flagged inline, not silently swallowed): metrics carry no
+first-class dimensions (host/rank/device) yet, artifacts have no upload/presign flow
+yet, and foreign_keys live in metadata rather than a first-class column.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import os
+import subprocess
+import sys
+import warnings
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
+from uuid import UUID, uuid4
+
+from . import snapshot as _snapshot
+from ..models import ArtifactCreate, MetricBatch, MetricPointIn, SpanBatch, SpanCreate
+
+if TYPE_CHECKING:
+    from .client import Client
+
+_UPLOAD_WARNED = False
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _hw_key(key: str, dims: dict[str, Any]) -> str:
+    """Encode dimensions into the metric key until the backend grows real
+    dimension columns. ``gpu_temp`` + {device:3,host:'n1'} -> ``gpu_temp{device=3,host=n1}``."""
+    if not dims:
+        return key
+    inner = ",".join(f"{k}={dims[k]}" for k in sorted(dims))
+    return f"{key}{{{inner}}}"
+
+
+class Run:
+    def __init__(self, client: "Client", data: dict):
+        self._client = client
+        self._data = data
+
+    # -- identity -----------------------------------------------------------
+    @property
+    def id(self) -> str:
+        return str(self._data["id"])
+
+    @property
+    def experiment_id(self) -> str:
+        return str(self._data["experiment_id"])
+
+    @property
+    def name(self) -> str:
+        return str(self._data["name"])
+
+    @property
+    def status(self) -> str:
+        return str(self._data.get("status", "running"))
+
+    @property
+    def data(self) -> dict:
+        return self._data
+
+    def refresh(self) -> "Run":
+        self._data = self._client.get_run(self.id)
+        return self
+
+    # -- spine --------------------------------------------------------------
+    def child(self, name: str, *, relation: str = "fork", **kw) -> "Run":
+        """Open a sub-run. ``relation`` in fork|resume|retry|branch."""
+        return self._client.create_run(
+            self.experiment_id,
+            name,
+            parent_run_id=self.id,
+            parent_relation=relation,
+            **kw,
+        )
+
+    # -- metrics ------------------------------------------------------------
+    def log(
+        self,
+        metrics: dict[str, float],
+        *,
+        step: int | None = None,
+        kind: str = "model",
+        wall_clock: str | None = None,
+        strict: bool | None = None,
+    ):
+        """Append metric points. Fail-open by default (spools on failure).
+
+        The payload is built through the generated ``MetricBatch``/``MetricPointIn``
+        models, so a client-side schema drift (renamed/removed field) fails here
+        instead of as a server 422."""
+        batch = MetricBatch(
+            points=[
+                MetricPointIn(
+                    key=key,
+                    kind=kind,
+                    value=float(value),
+                    step_index=step,
+                    wall_clock=wall_clock,
+                )
+                for key, value in metrics.items()
+            ]
+        )
+        body = batch.model_dump(mode="json", exclude_none=True)
+        return self._client.write(
+            "POST", f"/v1/runs/{self.id}/metrics", body, strict=strict
+        )
+
+    def log_hw(
+        self,
+        metrics: dict[str, float],
+        *,
+        step: int | None = None,
+        wall_clock: str | None = None,
+        strict: bool | None = None,
+        **dims: Any,
+    ):
+        """Log hardware metrics. Dimensions (host/rank/device) are encoded into the
+        key until the backend adds dimension columns (design gap, not dropped)."""
+        keyed = {_hw_key(k, dims): v for k, v in metrics.items()}
+        return self.log(keyed, step=step, kind="hardware", wall_clock=wall_clock, strict=strict)
+
+    # -- trajectory (spans) -------------------------------------------------
+    def span(
+        self,
+        span_type: str,
+        *,
+        id: str | None = None,
+        parent_span_id: str | None = None,
+        name: str | None = None,
+        step_index: int | None = None,
+        external_key: str | None = None,
+        provider: str | None = None,
+        status: str = "running",
+        started_at: str | None = None,
+        ended_at: str | None = None,
+        attributes: dict | None = None,
+        summary: dict | None = None,
+        strict: bool | None = None,
+    ) -> str:
+        """Upsert one span (client-generated UUID). Returns the span id."""
+        span_id = id or str(uuid4())
+        UUID(span_id)  # validate shape early
+        span = SpanCreate(
+            id=span_id,
+            span_type=span_type,
+            parent_span_id=parent_span_id,
+            name=name,
+            step_index=step_index,
+            external_key=external_key,
+            provider=provider,
+            status=status,
+            started_at=started_at,
+            ended_at=ended_at,
+            attributes=attributes or {},
+            summary=summary or {},
+        )
+        body = SpanBatch(spans=[span]).model_dump(mode="json")
+        self._client.write("POST", f"/v1/runs/{self.id}/spans", body, strict=strict)
+        return span_id
+
+    def step(self, step_index: int, *, name: str | None = None, **kw):
+        body = {"step_index": step_index, "name": name, **kw}
+        return self._client.write("POST", f"/v1/runs/{self.id}/steps", body)
+
+    # -- artifacts ----------------------------------------------------------
+    def log_artifact(
+        self,
+        name: str,
+        *,
+        path: str | None = None,
+        uri: str | None = None,
+        kind: str = "file",
+        content_hash: str | None = None,
+        content_type: str | None = None,
+        size_bytes: int | None = None,
+        is_reference: bool | None = None,
+        span_id: str | None = None,
+        step_index: int | None = None,
+        meta: dict | None = None,
+        strict: bool | None = None,
+    ):
+        """Record an artifact. If ``path`` is given we fingerprint it locally
+        (sha256 + size). NOTE: there is no upload/presign flow in v3 yet, so the
+        bytes are NOT uploaded here; a local path is recorded as a reference with
+        its hash. Pass ``uri`` for an object already in a bucket."""
+        global _UPLOAD_WARNED
+        meta = dict(meta or {})
+        if path is not None:
+            digest, size = _fingerprint(path)
+            content_hash = content_hash or digest
+            size_bytes = size_bytes if size_bytes is not None else size
+            if uri is None:
+                is_reference = True if is_reference is None else is_reference
+                meta.setdefault("local_path", os.path.abspath(path))
+                if not _UPLOAD_WARNED:
+                    warnings.warn(
+                        "research-os has no artifact upload flow yet; recording "
+                        f"'{name}' as a reference (hash+metadata only, bytes not uploaded).",
+                        stacklevel=2,
+                    )
+                    _UPLOAD_WARNED = True
+        artifact = ArtifactCreate(
+            kind=kind,
+            name=name,
+            uri=uri,
+            content_hash=content_hash,
+            content_type=content_type,
+            size_bytes=size_bytes,
+            is_reference=bool(is_reference) if is_reference is not None else False,
+            span_id=span_id,
+            step_index=step_index,
+            meta=meta,
+        )
+        body = artifact.model_dump(mode="json", exclude_none=True)
+        return self._client.write(
+            "POST", f"/v1/runs/{self.id}/artifacts", body, strict=strict
+        )
+
+    # -- foreign keys (shadow-SoT handles) ----------------------------------
+    def link(self, *, strict: bool | None = None, **foreign_keys: Any):
+        """Attach foreign keys (wandb_run_id, mlflow_run_id, s3_prefix, ...). Stored
+        under ``metadata.foreign_keys`` since v3 has no first-class column yet. Merges
+        with existing keys rather than replacing the metadata blob."""
+        current = self.refresh()._data.get("metadata", {}) or {}
+        merged_fk = {**current.get("foreign_keys", {}), **foreign_keys}
+        metadata = {**current, "foreign_keys": merged_fk}
+        data = self._client.write(
+            "PATCH", f"/v1/runs/{self.id}", {"metadata": metadata}, strict=strict
+        )
+        if data:
+            self._data = data
+        return data
+
+    # -- snapshot (execution record) ----------------------------------------
+    def snapshot(
+        self,
+        *,
+        cwd: str | None = None,
+        include_env: bool = True,
+        include_gpu: bool = True,
+        strict: bool | None = None,
+    ) -> dict:
+        """Capture code (git shadow ref) + deps + GPUs, store on run.metadata.snapshot,
+        and record the shadow commit as a reference artifact. Non-disruptive."""
+        snap: dict[str, Any] = {"git": _snapshot.capture_git_snapshot(self.id, cwd)}
+        if include_env:
+            snap["env"] = _snapshot.capture_env()
+        if include_gpu:
+            snap["gpu"] = _snapshot.capture_gpu()
+
+        current = self.refresh()._data.get("metadata", {}) or {}
+        metadata = {**current, "snapshot": snap}
+        data = self._client.write(
+            "PATCH", f"/v1/runs/{self.id}", {"metadata": metadata}, strict=strict
+        )
+        if data:
+            self._data = data
+        # Also record the shadow commit as a reference artifact for lineage.
+        self.log_artifact(
+            "code-snapshot",
+            uri=f"git:{snap['git']['ref']}#{snap['git']['commit']}",
+            kind="code_snapshot",
+            is_reference=True,
+            meta={"branch": snap["git"].get("branch"), "dirty": snap["git"].get("dirty")},
+            strict=strict,
+        )
+        return snap
+
+    # -- lifecycle ----------------------------------------------------------
+    def set_status(self, status: str, *, ended_at: str | None = None, summary: dict | None = None):
+        body: dict[str, Any] = {"status": status}
+        if ended_at is not None:
+            body["ended_at"] = ended_at
+        if summary is not None:
+            body["summary"] = summary
+        data = self._client.write("PATCH", f"/v1/runs/{self.id}", body, strict=True)
+        if data:
+            self._data = data
+        return data
+
+    def finish(self, status: str = "completed", *, summary: dict | None = None):
+        """Close the run. Flushes any spooled writes first."""
+        self._client.flush()
+        return self.set_status(status, ended_at=_now(), summary=summary)
+
+    def execute(
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess:
+        """Run a local command with deterministic run/process correlation.
+
+        This is normal experiment execution capture, not the hook-only session
+        API. Output streams pass through to the caller; a process span records
+        argv, cwd, timestamps, and exit state.
+        """
+        if not argv:
+            raise ValueError("argv must not be empty")
+        started_at = _now()
+        span_id = self.span(
+            "process",
+            name=os.path.basename(argv[0]),
+            status="running",
+            started_at=started_at,
+            attributes={"argv": argv, "cwd": os.path.abspath(cwd or os.getcwd())},
+        )
+        process_env = {**os.environ, **(env or {}), "ROS_RUN_ID": self.id}
+        try:
+            result = subprocess.run(argv, cwd=cwd, env=process_env, check=False)
+        except BaseException:
+            self.span(
+                "process",
+                id=span_id,
+                name=os.path.basename(argv[0]),
+                status="failed",
+                started_at=started_at,
+                ended_at=_now(),
+                attributes={"argv": argv, "cwd": os.path.abspath(cwd or os.getcwd())},
+            )
+            raise
+        self.span(
+            "process",
+            id=span_id,
+            name=os.path.basename(argv[0]),
+            status="completed" if result.returncode == 0 else "failed",
+            started_at=started_at,
+            ended_at=_now(),
+            attributes={
+                "argv": argv,
+                "cwd": os.path.abspath(cwd or os.getcwd()),
+                "exit_code": result.returncode,
+            },
+        )
+        return result
+
+    # -- context manager ----------------------------------------------------
+    def __enter__(self) -> "Run":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.finish("failed" if exc_type else "completed")
+
+
+def _fingerprint(path: str) -> tuple[str, int]:
+    h = hashlib.sha256()
+    size = 0
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            h.update(chunk)
+            size += len(chunk)
+    return h.hexdigest(), size
