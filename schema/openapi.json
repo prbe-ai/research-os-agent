@@ -255,6 +255,272 @@
         "title": "ArtifactOut",
         "type": "object"
       },
+      "DeviceAuthorizationDecision": {
+        "properties": {
+          "decision": {
+            "enum": [
+              "approve",
+              "deny"
+            ],
+            "title": "Decision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision"
+        ],
+        "title": "DeviceAuthorizationDecision",
+        "type": "object"
+      },
+      "DeviceAuthorizationDecisionOut": {
+        "properties": {
+          "status": {
+            "enum": [
+              "approved",
+              "denied"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "DeviceAuthorizationDecisionOut",
+        "type": "object"
+      },
+      "DeviceAuthorizationOut": {
+        "properties": {
+          "client_name": {
+            "title": "Client Name",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "approved",
+              "denied",
+              "expired",
+              "consumed"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "token_name": {
+            "title": "Token Name",
+            "type": "string"
+          },
+          "user_code": {
+            "title": "User Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "user_code",
+          "client_name",
+          "token_name",
+          "status",
+          "expires_at"
+        ],
+        "title": "DeviceAuthorizationOut",
+        "type": "object"
+      },
+      "DeviceAuthorizationStart": {
+        "description": "Start a first-party CLI browser handoff.\n\nPKCE is mandatory even though the high-entropy device code is already a\nbearer secret: it binds the exchange to the CLI process that initiated it\nif a terminal transcript or launch URL is copied elsewhere.",
+        "properties": {
+          "code_challenge": {
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "title": "Code Challenge",
+            "type": "string"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/Scope"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes"
+          },
+          "token_name": {
+            "default": "Research OS CLI",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Token Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code_challenge"
+        ],
+        "title": "DeviceAuthorizationStart",
+        "type": "object"
+      },
+      "DeviceAuthorizationStartOut": {
+        "properties": {
+          "device_code": {
+            "title": "Device Code",
+            "type": "string"
+          },
+          "expires_in": {
+            "title": "Expires In",
+            "type": "integer"
+          },
+          "interval": {
+            "title": "Interval",
+            "type": "integer"
+          },
+          "user_code": {
+            "title": "User Code",
+            "type": "string"
+          },
+          "verification_uri": {
+            "title": "Verification Uri",
+            "type": "string"
+          },
+          "verification_uri_complete": {
+            "title": "Verification Uri Complete",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_code",
+          "user_code",
+          "verification_uri",
+          "verification_uri_complete",
+          "expires_in",
+          "interval"
+        ],
+        "title": "DeviceAuthorizationStartOut",
+        "type": "object"
+      },
+      "DeviceTokenCreated": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "token_prefix": {
+            "title": "Token Prefix",
+            "type": "string"
+          },
+          "token_type": {
+            "const": "Bearer",
+            "default": "Bearer",
+            "title": "Token Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "token_prefix",
+          "created_at",
+          "token"
+        ],
+        "title": "DeviceTokenCreated",
+        "type": "object"
+      },
+      "DeviceTokenExchange": {
+        "properties": {
+          "code_verifier": {
+            "maxLength": 128,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9._~-]+$",
+            "title": "Code Verifier",
+            "type": "string"
+          },
+          "device_code": {
+            "maxLength": 256,
+            "minLength": 32,
+            "title": "Device Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_code",
+          "code_verifier"
+        ],
+        "title": "DeviceTokenExchange",
+        "type": "object"
+      },
       "ExperimentArtifactCreate": {
         "properties": {
           "content_hash": {
@@ -2409,7 +2675,7 @@
         "type": "object"
       },
       "TeamCreate": {
-        "description": "POST /auth/teams. `slug` format/uniqueness is validated\nserver-side (app.provisioning) so the 400/409 carries a helpful message +\na collision suggestion; the model only bounds length.",
+        "description": "POST /auth/teams. `slug` format/uniqueness is validated\nserver-side (app.teams.service) so the 400/409 carries a helpful message +\na collision suggestion; the model only bounds length.",
         "properties": {
           "display_name": {
             "maxLength": 120,
@@ -2789,6 +3055,184 @@
           }
         },
         "summary": "Callback",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/device/code": {
+      "post": {
+        "description": "Create a short-lived request. No user/session exists at this stage.",
+        "operationId": "start_device_authorization_auth_device_code_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceAuthorizationStart"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceAuthorizationStartOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Device Authorization",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/device/requests/{user_code}": {
+      "get": {
+        "description": "Consent metadata for the signed-in browser; never returns a secret.",
+        "operationId": "get_device_authorization_auth_device_requests__user_code__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_code",
+            "required": true,
+            "schema": {
+              "title": "User Code",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceAuthorizationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Device Authorization",
+        "tags": [
+          "auth"
+        ]
+      },
+      "post": {
+        "description": "Explicit session-only Allow/Deny with an atomic pending-state CAS.",
+        "operationId": "decide_device_authorization_auth_device_requests__user_code__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_code",
+            "required": true,
+            "schema": {
+              "title": "User Code",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceAuthorizationDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceAuthorizationDecisionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Decide Device Authorization",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/auth/device/token": {
+      "post": {
+        "description": "Poll/exchange a decided request; mint at most one user-bound PAT.",
+        "operationId": "exchange_device_token_auth_device_token_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeviceTokenExchange"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeviceTokenCreated"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Exchange Device Token",
         "tags": [
           "auth"
         ]

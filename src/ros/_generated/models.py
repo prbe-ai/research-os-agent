@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field, RootModel
@@ -49,6 +49,73 @@ class ArtifactOut(BaseModel):
     span_id: UUID | None = Field(None, title='Span Id')
     step_index: int | None = Field(None, title='Step Index')
     uri: str | None = Field(None, title='Uri')
+
+
+class Decision(StrEnum):
+    approve = 'approve'
+    deny = 'deny'
+
+
+class DeviceAuthorizationDecision(BaseModel):
+    decision: Decision = Field(..., title='Decision')
+
+
+class Status(StrEnum):
+    approved = 'approved'
+    denied = 'denied'
+
+
+class DeviceAuthorizationDecisionOut(BaseModel):
+    status: Status = Field(..., title='Status')
+
+
+class Status1(StrEnum):
+    pending = 'pending'
+    approved = 'approved'
+    denied = 'denied'
+    expired = 'expired'
+    consumed = 'consumed'
+
+
+class DeviceAuthorizationOut(BaseModel):
+    client_name: str = Field(..., title='Client Name')
+    expires_at: AwareDatetime = Field(..., title='Expires At')
+    scopes: list[str] | None = Field(None, title='Scopes')
+    status: Status1 = Field(..., title='Status')
+    token_name: str = Field(..., title='Token Name')
+    user_code: str = Field(..., title='User Code')
+
+
+class DeviceAuthorizationStartOut(BaseModel):
+    device_code: str = Field(..., title='Device Code')
+    expires_in: int = Field(..., title='Expires In')
+    interval: int = Field(..., title='Interval')
+    user_code: str = Field(..., title='User Code')
+    verification_uri: str = Field(..., title='Verification Uri')
+    verification_uri_complete: str = Field(..., title='Verification Uri Complete')
+
+
+class DeviceTokenCreated(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    expires_at: AwareDatetime | None = Field(None, title='Expires At')
+    id: UUID = Field(..., title='Id')
+    last_used_at: AwareDatetime | None = Field(None, title='Last Used At')
+    name: str = Field(..., title='Name')
+    scopes: list[str] | None = Field(None, title='Scopes')
+    token: str = Field(..., title='Token')
+    token_prefix: str = Field(..., title='Token Prefix')
+    token_type: Literal['Bearer'] = Field('Bearer', title='Token Type')
+
+
+class DeviceTokenExchange(BaseModel):
+    code_verifier: str = Field(
+        ...,
+        max_length=128,
+        min_length=43,
+        pattern='^[A-Za-z0-9._~-]+$',
+        title='Code Verifier',
+    )
+    device_code: str = Field(..., max_length=256, min_length=32, title='Device Code')
 
 
 class ExperimentArtifactCreate(BaseModel):
@@ -397,7 +464,7 @@ class SwitchTeamRequest(BaseModel):
 class TeamCreate(BaseModel):
     """
     POST /auth/teams. `slug` format/uniqueness is validated
-    server-side (app.provisioning) so the 400/409 carries a helpful message +
+    server-side (app.teams.service) so the 400/409 carries a helpful message +
     a collision suggestion; the model only bounds length.
     """
 
@@ -500,6 +567,28 @@ class ValidationError(BaseModel):
     loc: list[str | int] = Field(..., title='Location')
     msg: str = Field(..., title='Message')
     type: str = Field(..., title='Error Type')
+
+
+class Scopes(RootModel[list[Scope]]):
+    root: list[Scope] = Field(..., min_length=1, title='Scopes')
+
+
+class DeviceAuthorizationStart(BaseModel):
+    """
+    Start a first-party CLI browser handoff.
+
+    PKCE is mandatory even though the high-entropy device code is already a
+    bearer secret: it binds the exchange to the CLI process that initiated it
+    if a terminal transcript or launch URL is copied elsewhere.
+    """
+
+    code_challenge: str = Field(
+        ..., pattern='^[A-Za-z0-9_-]{43}$', title='Code Challenge'
+    )
+    scopes: Scopes | None = Field(None, title='Scopes')
+    token_name: str | None = Field(
+        'Research OS CLI', max_length=120, min_length=1, title='Token Name'
+    )
 
 
 class HTTPValidationError(BaseModel):
