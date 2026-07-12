@@ -1,6 +1,6 @@
 # research-os plugin + MCP hosting — spec
 
-**Status:** Spec for review. Decisions locked: MCP = **both** models, **default remote HTTP**; distribution = **prbe-ai marketplace + PyPI**.
+**Status:** Implemented (Phase A merged). MCP = **both** models, **default remote HTTP**; distribution = **prbe-ai marketplace**. Update: **PyPI skipped** — Claude Code plugins/marketplaces are GitHub-repo-hosted, and the `exp`/MCP CLI installs from `git+https://github.com/prbe-ai/research-os-agent` (§5 below superseded). Hosted MCP image `ghcr.io/prbe-ai/research-os-mcp:0.4.0` is pushed; deploy applied to `probe-research` (pending package-public + DNS).
 **Goal:** turn the 3 skills + read-only MCP + `exp` CLI into a one-command install, and host the MCP so reads need zero local setup.
 
 ---

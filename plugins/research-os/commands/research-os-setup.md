@@ -6,8 +6,10 @@ description: Install the Research OS CLI and connect this project (login + MCP r
 
 Run these in order. Show the user each command before running any write.
 
-1. **CLI present?** If `exp --version` fails, install it:
-   `uv tool install research-os-agent` (or `pipx install research-os-agent`, or `pip install research-os-agent`).
+1. **CLI present?** If `exp --version` fails, install it from the repo (no PyPI):
+   `uv tool install "git+https://github.com/prbe-ai/research-os-agent"`
+   (or `pipx install "git+https://github.com/prbe-ai/research-os-agent"`, or
+   `pip install "git+https://github.com/prbe-ai/research-os-agent"`).
 
 2. **Log in (write token).** Ask for the base URL (default `https://api.research.prbe.ai`)
    and a **write** API token (`ros_pat_…`, minted in the dashboard), then:
@@ -23,8 +25,8 @@ Run these in order. Show the user each command before running any write.
 4. **Verify the hosted MCP** is reachable: `curl -s https://mcp.research.prbe.ai/healthz`
    should return `{"status":"ok"}`.
    *Self-host / air-gap:* instead of the hosted URL, run a local server
-   (`uv tool run --from research-os-agent research-os-mcp` with `ROS_MCP_TOKEN` +
-   `ROS_BASE_URL`) and point the plugin's `.mcp.json` at it.
+   (`uvx --from "git+https://github.com/prbe-ai/research-os-agent" research-os-mcp`
+   with `ROS_MCP_TOKEN` + `ROS_BASE_URL`) and point the plugin's `.mcp.json` at it.
 
 5. **Confirm.** The `research-os` MCP server should be connected (its `research_*` tools
    available) and `exp` logged in. You can now use the **track-experiment**,
