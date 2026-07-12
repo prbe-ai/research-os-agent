@@ -13,6 +13,7 @@ Runs two ways from one module:
 from __future__ import annotations
 
 import contextvars
+import json
 import os
 from typing import Any
 
@@ -131,23 +132,67 @@ def create_server(
     return mcp
 
 
-def with_auth_and_health(inner: Any) -> Any:
-    """Wrap an ASGI app: answer ``GET /healthz`` and copy the request's Bearer token
-    into ``_token_var`` for the duration of each HTTP request (so the per-request
-    service picks it up). Non-HTTP scopes (lifespan) pass straight through."""
+_PROTECTED_RESOURCE_PATH = "/.well-known/oauth-protected-resource"
+
+
+def _oauth_discovery() -> dict | None:
+    """OAuth discovery config, or None to disable it (self-host / static bearer).
+
+    Enabled by default so a hosted MCP client can find the authorization server
+    and start the OAuth flow. ``ROS_MCP_OAUTH=0`` turns it off; the resource and
+    authorization-server URLs are overridable for self-host."""
+    if os.environ.get("ROS_MCP_OAUTH", "1") != "1":
+        return None
+    resource = os.environ.get("ROS_MCP_RESOURCE_URL", "https://mcp.research.prbe.ai").rstrip("/")
+    auth_server = os.environ.get("ROS_MCP_AUTH_SERVER", "https://api.research.prbe.ai").rstrip("/")
+    return {"resource": resource, "authorization_servers": [auth_server]}
+
+
+async def _send_json(send: Any, status: int, body: bytes, *, extra_headers: list | None = None) -> None:
+    headers = [(b"content-type", b"application/json")] + (extra_headers or [])
+    await send({"type": "http.response.start", "status": status, "headers": headers})
+    await send({"type": "http.response.body", "body": body})
+
+
+def with_auth_and_health(inner: Any, *, mcp_path: str = "/mcp") -> Any:
+    """Wrap an ASGI app: answer ``GET /healthz``; when OAuth discovery is on, serve
+    the RFC 9728 protected-resource metadata and return a ``WWW-Authenticate``
+    challenge for an unauthenticated MCP request (so clients auto-discover the
+    authorization server). Otherwise copy the request's Bearer token into
+    ``_token_var`` for the request (the per-request service picks it up).
+    Non-HTTP scopes (lifespan) pass straight through."""
+
+    discovery = _oauth_discovery()
 
     async def app(scope: dict, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
             await inner(scope, receive, send)
             return
-        if scope.get("path") == "/healthz":
-            await send({"type": "http.response.start", "status": 200,
-                        "headers": [(b"content-type", b"application/json")]})
-            await send({"type": "http.response.body", "body": b'{"status":"ok"}'})
+        path = scope.get("path")
+        if path == "/healthz":
+            await _send_json(send, 200, b'{"status":"ok"}')
+            return
+        if discovery and path == _PROTECTED_RESOURCE_PATH:
+            body = json.dumps({
+                "resource": discovery["resource"],
+                "authorization_servers": discovery["authorization_servers"],
+                "scopes_supported": ["research:read"],
+                "bearer_methods_supported": ["header"],
+            }).encode()
+            await _send_json(send, 200, body)
             return
         headers = dict(scope.get("headers") or [])
         raw = headers.get(b"authorization", b"")
         token = raw[7:].decode() if raw[:7].lower() == b"bearer " else None
+        if discovery and token is None and path.startswith(mcp_path):
+            challenge = (
+                'Bearer realm="research", '
+                f'resource_metadata="{discovery["resource"]}{_PROTECTED_RESOURCE_PATH}", '
+                'scope="research:read"'
+            )
+            await _send_json(send, 401, b'{"error":"invalid_token"}',
+                             extra_headers=[(b"www-authenticate", challenge.encode())])
+            return
         reset = _token_var.set(token)
         try:
             await inner(scope, receive, send)
@@ -175,7 +220,7 @@ def http_app(mcp: FastMCP | None = None, *, path: str = "/mcp") -> Any:
         )
         mcp = create_server(transport_security=security)
     mcp.settings.streamable_http_path = path
-    return with_auth_and_health(mcp.streamable_http_app())
+    return with_auth_and_health(mcp.streamable_http_app(), mcp_path=path)
 
 
 def main() -> None:
