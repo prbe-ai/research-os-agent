@@ -74,7 +74,9 @@ class Client:
 
     # -- identity / auth ----------------------------------------------------
     def me(self) -> dict:
-        return self.transport.get("/auth/me")
+        # /v1/me (not the session-only /auth/me): resolves through the unified
+        # door, so a `ros_pat` or OAuth token identifies its own tenant/role.
+        return self.transport.get("/v1/me")
 
     def logout(self) -> None:
         """Revoke the calling token (CLI logout)."""
