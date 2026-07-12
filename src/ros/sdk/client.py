@@ -4,9 +4,7 @@ Two write paths, one core (per the SDK/CLI primitives sketch):
   * granular ``/v1`` calls for interactive / agent-driven capture (Anthrogen);
   * one-shot idempotent ``/ingest`` push for install-once passive capture (Osmosis).
 
-Implemented experiment methods map onto real v3 endpoints. The separately
-namespaced asset client defines the target contract and fails with an explicit
-capability error while those backend routes remain unavailable.
+Every method maps onto a real v4 endpoint (research-os v0.4.0.0 ingestion fold-in).
 """
 
 from __future__ import annotations
@@ -14,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import errors
+from ..models import EdgeCreate, ExecutionRecordCreate, ExperimentVersionMint, IngestRunRequest
 from .config import Settings, resolve
 from .spool import Spool
 from .transport import Page, Transport
@@ -43,6 +42,7 @@ class Client:
         self.spool = spool or Spool()
         self._sessions = None
         self._events = None
+        self._notes = None
         self._assets = None
 
     # -- lifecycle ----------------------------------------------------------
@@ -207,8 +207,10 @@ class Client:
         artifacts = bundle.get("artifacts", [])
         metadata = run.get("metadata") or {}
         missing: list[str] = []
-        if not metadata.get("snapshot"):
-            missing.append("launch_snapshot")
+        # env_ref (execution record) is the launch-capture signal (fold #7). On the
+        # ingest path it is run.env_ref; on the interactive path it is metadata.env_ref.
+        if not (run.get("env_ref") or metadata.get("env_ref")):
+            missing.append("execution_record")
         if not any(item.get("kind") == "code_snapshot" for item in artifacts):
             missing.append("code_snapshot_artifact")
         local_only = [
@@ -223,29 +225,91 @@ class Client:
             "state": "complete" if not missing else "incomplete",
             "missing": missing,
             "local_only_artifacts": local_only,
-            "promotion_manifest_available": False,
         }
 
-    def promote(
+    # -- lineage edges (fold #2) -------------------------------------------
+    def add_edge(
         self,
-        run_id: str,
         *,
-        approval: str,
-        asset_refs: list[str] | None = None,
+        source_type: str,
+        source_id: str,
+        relation: str,
+        target_type: str,
+        target_id: str,
+        meta: dict | None = None,
+        strict: bool | None = None,
+    ) -> dict | None:
+        """POST /v1/edges. Closed vocab for types (run/artifact/asset_version) and
+        relation (consumes/produces/evaluates_on/...); the generated EdgeCreate enforces it."""
+        model = EdgeCreate(
+            source_type=source_type,
+            source_id=source_id,
+            relation=relation,
+            target_type=target_type,
+            target_id=target_id,
+            meta=meta or {},
+        )
+        return self.write(
+            "POST", "/v1/edges", model.model_dump(mode="json", exclude_none=True), strict=strict
+        )
+
+    def run_edges(self, run_id: str) -> list[dict]:
+        return self.transport.get(f"/v1/runs/{run_id}/edges")
+
+    # -- execution records (fold #7) ---------------------------------------
+    def execution_record(
+        self,
+        *,
+        code: dict | None = None,
+        deps: dict | None = None,
+        hardware: dict | None = None,
+        settings: dict | None = None,
+        paths: dict | None = None,
     ) -> dict:
-        """Publish an immutable experiment manifest once the backend supports it."""
-        if not approval.strip():
-            raise ValueError("explicit approval text is required")
-        try:
-            return self.transport.post(
-                f"/v1/runs/{run_id}/promote",
-                {"approval": approval.strip(), "asset_refs": asset_refs or []},
-            )
-        except errors.NotFoundError as exc:
-            raise errors.CapabilityUnavailable(
-                "promotion_manifests",
-                "the deployed research-os API cannot publish immutable experiment manifests yet",
-            ) from exc
+        """POST /v1/execution-records (content-addressed, idempotent). Returns
+        {content_hash, ...}."""
+        model = ExecutionRecordCreate(
+            code=code or {},
+            deps=deps or {},
+            hardware=hardware or {},
+            settings=settings or {},
+            paths=paths or {},
+        )
+        return self.transport.post(
+            "/v1/execution-records", model.model_dump(mode="json"), idempotent=True
+        )
+
+    def get_execution_record(self, content_hash: str) -> dict:
+        return self.transport.get(f"/v1/execution-records/{content_hash}")
+
+    # -- experiment versions (fold #6) -------------------------------------
+    def experiment_version(
+        self,
+        experiment_id: str,
+        *,
+        label: str | None = None,
+        as_of: str | None = None,
+        exclude_run_ids: list[str] | None = None,
+        strict: bool | None = None,
+    ) -> dict | None:
+        """POST /v1/experiments/{id}/versions - mint an immutable launch-time manifest
+        (a snapshot of the experiment's runs). This replaces the removed run-level
+        `promote`; research-os rejected promotion tiers."""
+        model = ExperimentVersionMint(
+            label=label, as_of=as_of, exclude_run_ids=exclude_run_ids or []
+        )
+        return self.write(
+            "POST",
+            f"/v1/experiments/{experiment_id}/versions",
+            model.model_dump(mode="json", exclude_none=True),
+            strict=strict,
+        )
+
+    def list_experiment_versions(self, experiment_id: str) -> list[dict]:
+        return self.transport.get(f"/v1/experiments/{experiment_id}/versions")
+
+    def get_experiment_version(self, experiment_id: str, version: int | str) -> dict:
+        return self.transport.get(f"/v1/experiments/{experiment_id}/versions/{version}")
 
     def list_runs(self, *, experiment_id: str | None = None, **params) -> Page:
         query = dict(params)
@@ -273,6 +337,7 @@ class Client:
         project_slug: str | None = None,
         experiment_hypothesis: str | None = None,
         batch_id: str | None = None,
+        execution_record: dict | None = None,
         spans: list[dict] | None = None,
         metrics: list[dict] | None = None,
         artifacts: list[dict] | None = None,
@@ -283,15 +348,18 @@ class Client:
 
         Built through the generated ``IngestRunRequest`` (the backend now declares
         this body in its OpenAPI schema), so a malformed run/span/metric/artifact
-        fails client-side instead of as a server 422."""
-        from ..models import IngestRunRequest
+        fails client-side instead of as a server 422.
 
+        The ingest path is where the fold-in fields actually pin server-side:
+        ``run['foreign_keys']`` (per-key new-wins merge), ``execution_record``
+        (pins ``run.env_ref``), and per-metric ``dimensions``."""
         model = IngestRunRequest(
             experiment_slug=experiment_slug,
             run=run,
             project_slug=project_slug,
             experiment_hypothesis=experiment_hypothesis,
             batch_id=batch_id,
+            execution_record=execution_record,
             spans=spans or [],
             metrics=metrics or [],
             artifacts=artifacts or [],
@@ -310,17 +378,26 @@ class Client:
         return self._sessions
 
     @property
-    def events(self):
-        """Append evidence-linked research intent/decision/result events."""
-        if self._events is None:
-            from .events import ResearchEventClient
+    def notes(self):
+        """Write structured research notes (intent/decision/observation) as artifacts."""
+        if self._notes is None:
+            from .events import NoteClient
 
-            self._events = ResearchEventClient(self)
+            self._notes = NoteClient(self)
+        return self._notes
+
+    @property
+    def events(self):
+        """Read the backend append-only lifecycle+structure events log (read-only)."""
+        if self._events is None:
+            from .events import EventsReadClient
+
+            self._events = EventsReadClient(self)
         return self._events
 
     @property
     def assets(self):
-        """Versioned-asset client. Target routes may be unavailable on API v3."""
+        """Versioned-asset registry client (fold #5): register + zero-copy versions."""
         if self._assets is None:
             from .assets import AssetClient
 

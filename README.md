@@ -186,29 +186,47 @@ changing the SDK, CLI, MCP, or skill contracts.
 | `client.ingest()` | `POST /ingest/v1/runs` |
 | `client.run_bundle()` / `run_lineage()` | `GET /v1/runs/{id}/bundle` \| `/lineage` |
 
-## Known backend gaps (see the gap analysis)
+## v0.4.0.0 ingestion fold-in (Phase 1)
 
-These are recorded honestly, not silently worked around:
+Most earlier gaps are closed by research-os v0.4 (PR #13). Now wired:
 
-- **Artifact upload/presign is not wired.** `log_artifact(path=...)` fingerprints the
-  file (sha256 + size) and records it as a *reference* with a warning; bytes are not
-  uploaded. Pass `uri=` for an object already in a bucket.
-- **Metrics have no dimension columns.** `log_hw(..., device=3, host="n1")` encodes
-  dims into the metric key (`gpu_temp{device=3,host=n1}`) until the backend adds them.
-- **No first-class `foreign_keys`.** `link()` stores them under `metadata.foreign_keys`.
-- **No asset registry / promotion / manifest** in v3. The SDK/CLI asset contracts
-  fail with `CapabilityUnavailable` instead of pretending metadata is official.
-- **MCP semantic/KB search is not live.** API v3 gets a bounded structured
-  keyword fallback and capability warnings; the KB currently only bootstraps extensions.
-- **Session hooks are not installed.** Only the explicit hook-facing ABI exists;
-  asset-reuse hooks and automatic launch/session wiring are later work.
+- **Real metric dimensions.** `log_hw(..., device=3, host="n1")` sends `dimensions`
+  (fold #9); `log(..., dimensions={...})`. No more key-encoding.
+- **Presign artifact upload.** `log_artifact(path=...)` runs presign → PUT to R2 →
+  confirm (fold #16). Fails open to a reference on error. (`kind`/`meta` aren't carried
+  by the upload flow yet, warned once — a Phase-2 backend follow-up.)
+- **Execution records.** `snapshot()` posts a content-addressed `execution-record`
+  (fold #7); `client.execution_record(...)`.
+- **Asset registry.** `client.assets.register()` + `add_version()` + `resolve()`
+  (fold #5). The aspirational fork/propose/promote-candidate surface was dropped
+  (promotion tiers rejected upstream).
+- **Experiment versions.** `client.experiment_version()` mints the immutable manifest
+  (fold #6). This replaces the removed run-level `promote`.
+- **Lineage edges.** `client.add_edge()` / `run.edges()` (fold #2).
+- **foreign_keys.** first-class on the ingest path (`run['foreign_keys']`, fold #8) and
+  surfaced on reads (`run.foreign_keys`, `run.short_id`).
+- **Events read.** `client.events.list()` / `for_run()` (server-emitted lifecycle log).
+  Research notes moved to `client.notes.add()` (stored as `kind="note"` artifacts).
+
+### Remaining (Phase 2)
+
+- **`foreign_keys` / `env_ref` on the interactive path.** Settable only via ingest
+  today; `RunPatch` can't set them, so interactive `link()`/`snapshot()` write
+  `metadata.foreign_keys` / `metadata.env_ref` as interim. Needs a small backend PR
+  adding those fields (merge) to `RunPatch`.
+- **Asset `materialize`.** Deferred until the backend exposes an asset-version download.
+- **Upload `kind`/`meta`.** The presign flow doesn't carry them yet.
+- **MCP semantic/KB search** and **session hooks** remain later work.
 
 ## Typed models (generated from the OpenAPI contract)
 
 Request/response models are generated from the backend's OpenAPI schema, not
 hand-written, so the client cannot silently drift from the contract. The write
-paths (`log`/`span`/`log_artifact`) build their payloads through the generated
-models, so a renamed or removed field fails client-side instead of as a server 422.
+paths (`log`/`span`/`log_artifact`/`ingest`/`assets`/`edges`/`execution-records`)
+build their payloads through the generated models, so a renamed or removed field
+fails client-side instead of as a server 422. `/ingest/v1/runs` is now declared in
+the schema too (research-os PR #12), so the passive push is generated and validated
+like every other path.
 
 - `schema/openapi.json` - a snapshot of research-os's FastAPI schema.
 - `src/ros/_generated/models.py` - generated, never hand-edited.
@@ -222,11 +240,6 @@ make regen        # dump-openapi (RESEARCH_OS=../../research-os) + gen-models
 RESEARCH_OS=/path/to/research-os python scripts/dump_openapi.py
 python scripts/gen_models.py
 ```
-
-Caveat: `POST /ingest/v1/runs` is not in the OpenAPI schema (the endpoint reads a
-raw `Request` and parses the body by hand server-side), so there is no generated
-model for the passive push. `client.ingest()` stays dict-shaped until the backend
-declares that body in its schema.
 
 ## CLI grammar note
 

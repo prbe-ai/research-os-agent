@@ -27,8 +27,17 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
+from . import errors
 from . import snapshot as _snapshot
-from ..models import ArtifactCreate, MetricBatch, MetricPointIn, SpanBatch, SpanCreate
+from ..models import (
+    ArtifactCreate,
+    ExecutionRecordCreate,
+    MetricBatch,
+    MetricPointIn,
+    SpanBatch,
+    SpanCreate,
+    UploadRequest,
+)
 
 if TYPE_CHECKING:
     from .client import Client
@@ -38,15 +47,6 @@ _UPLOAD_WARNED = False
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
-
-
-def _hw_key(key: str, dims: dict[str, Any]) -> str:
-    """Encode dimensions into the metric key until the backend grows real
-    dimension columns. ``gpu_temp`` + {device:3,host:'n1'} -> ``gpu_temp{device=3,host=n1}``."""
-    if not dims:
-        return key
-    inner = ",".join(f"{k}={dims[k]}" for k in sorted(dims))
-    return f"{key}{{{inner}}}"
 
 
 class Run:
@@ -72,12 +72,26 @@ class Run:
         return str(self._data.get("status", "running"))
 
     @property
+    def short_id(self) -> str | None:
+        """Human-readable petname (fold #21); present on /v1 reads (RunDetailOut)."""
+        return self._data.get("short_id")
+
+    @property
+    def foreign_keys(self) -> dict:
+        """Incumbent-id map (fold #8); present on /v1 reads (RunDetailOut)."""
+        return self._data.get("foreign_keys") or {}
+
+    @property
     def data(self) -> dict:
         return self._data
 
     def refresh(self) -> "Run":
         self._data = self._client.get_run(self.id)
         return self
+
+    def edges(self) -> list[dict]:
+        """Lineage edges touching this run (fold #2): GET /v1/runs/{id}/edges."""
+        return self._client.transport.get(f"/v1/runs/{self.id}/edges")
 
     # -- spine --------------------------------------------------------------
     def child(self, name: str, *, relation: str = "fork", **kw) -> "Run":
@@ -98,13 +112,16 @@ class Run:
         step: int | None = None,
         kind: str = "model",
         wall_clock: str | None = None,
+        dimensions: dict[str, Any] | None = None,
         strict: bool | None = None,
     ):
         """Append metric points. Fail-open by default (spools on failure).
 
-        The payload is built through the generated ``MetricBatch``/``MetricPointIn``
-        models, so a client-side schema drift (renamed/removed field) fails here
-        instead of as a server 422."""
+        ``dimensions`` is a bounded flat label map (<=8 keys); it widens the series
+        identity to ``(run,kind,key,dims_hash)`` (fold #9). Dimension-less points stay
+        byte-identical. Built through the generated ``MetricBatch``/``MetricPointIn``,
+        so schema drift fails here, not as a server 422."""
+        dims = dimensions or {}
         batch = MetricBatch(
             points=[
                 MetricPointIn(
@@ -113,6 +130,7 @@ class Run:
                     value=float(value),
                     step_index=step,
                     wall_clock=wall_clock,
+                    dimensions=dims,
                 )
                 for key, value in metrics.items()
             ]
@@ -131,10 +149,14 @@ class Run:
         strict: bool | None = None,
         **dims: Any,
     ):
-        """Log hardware metrics. Dimensions (host/rank/device) are encoded into the
-        key until the backend adds dimension columns (design gap, not dropped)."""
-        keyed = {_hw_key(k, dims): v for k, v in metrics.items()}
-        return self.log(keyed, step=step, kind="hardware", wall_clock=wall_clock, strict=strict)
+        """Log hardware metrics with real dimensions (host/rank/device, fold #9).
+
+        ``run.log_hw({"gpu_temp": 88}, device=3, host="n1")`` sends
+        ``dimensions={"device": 3, "host": "n1"}``, kind=hardware."""
+        return self.log(
+            metrics, step=step, kind="hardware", wall_clock=wall_clock,
+            dimensions=dims or None, strict=strict,
+        )
 
     # -- trajectory (spans) -------------------------------------------------
     def span(
@@ -196,26 +218,37 @@ class Run:
         meta: dict | None = None,
         strict: bool | None = None,
     ):
-        """Record an artifact. If ``path`` is given we fingerprint it locally
-        (sha256 + size). NOTE: there is no upload/presign flow in v3 yet, so the
-        bytes are NOT uploaded here; a local path is recorded as a reference with
-        its hash. Pass ``uri`` for an object already in a bucket."""
-        global _UPLOAD_WARNED
+        """Record an artifact.
+
+        With ``path`` and no ``uri``: the real presign upload flow (fold #16) runs,
+        fingerprint -> presign -> PUT bytes to R2 -> confirm. The upload flow carries
+        name/hash/size/content_type/span/step only; ``kind``/``meta`` are not settable
+        server-side yet, so they are warned about (a Phase-2 backend follow-up).
+
+        With ``uri`` (object already in a bucket) or no bytes: a metadata-only
+        reference artifact is recorded, as before."""
         meta = dict(meta or {})
+        if path is not None and uri is None:
+            digest, size = _fingerprint(path)
+            if (kind and kind != "file") or meta:
+                self._warn_upload_kind(name)
+            return self._upload_file(
+                name,
+                path,
+                content_hash=content_hash or digest,
+                size_bytes=size_bytes if size_bytes is not None else size,
+                content_type=content_type,
+                span_id=span_id,
+                step_index=step_index,
+                strict=strict,
+            )
+
+        # Reference / uri path (no bytes uploaded).
         if path is not None:
             digest, size = _fingerprint(path)
             content_hash = content_hash or digest
             size_bytes = size_bytes if size_bytes is not None else size
-            if uri is None:
-                is_reference = True if is_reference is None else is_reference
-                meta.setdefault("local_path", os.path.abspath(path))
-                if not _UPLOAD_WARNED:
-                    warnings.warn(
-                        "research-os has no artifact upload flow yet; recording "
-                        f"'{name}' as a reference (hash+metadata only, bytes not uploaded).",
-                        stacklevel=2,
-                    )
-                    _UPLOAD_WARNED = True
+            meta.setdefault("local_path", os.path.abspath(path))
         artifact = ArtifactCreate(
             kind=kind,
             name=name,
@@ -223,7 +256,7 @@ class Run:
             content_hash=content_hash,
             content_type=content_type,
             size_bytes=size_bytes,
-            is_reference=bool(is_reference) if is_reference is not None else False,
+            is_reference=bool(is_reference) if is_reference is not None else (uri is not None),
             span_id=span_id,
             step_index=step_index,
             meta=meta,
@@ -232,6 +265,80 @@ class Run:
         return self._client.write(
             "POST", f"/v1/runs/{self.id}/artifacts", body, strict=strict
         )
+
+    def _warn_upload_kind(self, name: str) -> None:
+        global _UPLOAD_WARNED
+        if not _UPLOAD_WARNED:
+            warnings.warn(
+                f"the artifact upload flow does not carry kind/meta yet; '{name}' is "
+                "uploaded as a 'file' artifact (Phase-2 backend follow-up).",
+                stacklevel=3,
+            )
+            _UPLOAD_WARNED = True
+
+    def _upload_file(
+        self,
+        name: str,
+        path: str,
+        *,
+        content_hash: str,
+        size_bytes: int,
+        content_type: str | None,
+        span_id: str | None,
+        step_index: int | None,
+        strict: bool | None,
+    ):
+        """presign -> PUT -> confirm. Fail-open: on failure (and not strict) falls
+        back to recording a hash+metadata reference so the training loop is unblocked."""
+        strict_resolved = (not self._client.fail_open) if strict is None else strict
+        req = UploadRequest(
+            name=name,
+            content_hash=content_hash,
+            size_bytes=size_bytes,
+            content_type=content_type,
+            span_id=span_id,
+            step_index=step_index,
+        )
+        try:
+            presign = self._client.transport.post(
+                f"/v1/runs/{self.id}/artifacts/uploads",
+                req.model_dump(mode="json", exclude_none=True),
+            )
+            if not presign.get("have"):
+                with open(path, "rb") as fh:
+                    data = fh.read()
+                self._client.transport.put_url(
+                    presign["upload_url"],
+                    data,
+                    content_type=content_type or "application/octet-stream",
+                )
+            return self._client.transport.post(
+                f"/v1/artifacts/{presign['artifact_id']}/confirm", None
+            )
+        except errors.RosError:
+            if strict_resolved:
+                raise
+            warnings.warn(
+                f"artifact upload for '{name}' failed; recorded as a reference instead.",
+                stacklevel=3,
+            )
+            fallback = ArtifactCreate(
+                kind="file",
+                name=name,
+                content_hash=content_hash,
+                size_bytes=size_bytes,
+                content_type=content_type,
+                is_reference=True,
+                span_id=span_id,
+                step_index=step_index,
+                meta={"local_path": os.path.abspath(path), "upload": "failed"},
+            )
+            return self._client.write(
+                "POST",
+                f"/v1/runs/{self.id}/artifacts",
+                fallback.model_dump(mode="json", exclude_none=True),
+                strict=False,
+            )
 
     # -- foreign keys (shadow-SoT handles) ----------------------------------
     def link(self, *, strict: bool | None = None, **foreign_keys: Any):
@@ -257,31 +364,41 @@ class Run:
         include_gpu: bool = True,
         strict: bool | None = None,
     ) -> dict:
-        """Capture code (git shadow ref) + deps + GPUs, store on run.metadata.snapshot,
-        and record the shadow commit as a reference artifact. Non-disruptive."""
-        snap: dict[str, Any] = {"git": _snapshot.capture_git_snapshot(self.id, cwd)}
-        if include_env:
-            snap["env"] = _snapshot.capture_env()
-        if include_gpu:
-            snap["gpu"] = _snapshot.capture_gpu()
+        """Capture code (git shadow ref) + deps + GPUs as a content-addressed
+        execution record (fold #7), and record the shadow commit as a reference
+        artifact. Non-disruptive.
+
+        The execution record pins ``run.env_ref`` on the INGEST path. On the interactive
+        /v1 path there is no ``RunPatch.env_ref`` yet, so the content_hash is recorded in
+        ``run.metadata.env_ref`` as an interim (Phase-2 backend follow-up)."""
+        git = _snapshot.capture_git_snapshot(self.id, cwd)
+        record = ExecutionRecordCreate(
+            code={"git": git},
+            deps=_snapshot.capture_env() if include_env else {},
+            hardware={"gpu": _snapshot.capture_gpu()} if include_gpu else {},
+        )
+        exec_rec = self._client.transport.post(
+            "/v1/execution-records", record.model_dump(mode="json", exclude_none=True)
+        )
+        content_hash = exec_rec.get("content_hash") if exec_rec else None
 
         current = self.refresh()._data.get("metadata", {}) or {}
-        metadata = {**current, "snapshot": snap}
+        metadata = {**current, "env_ref": content_hash}
         data = self._client.write(
             "PATCH", f"/v1/runs/{self.id}", {"metadata": metadata}, strict=strict
         )
         if data:
             self._data = data
-        # Also record the shadow commit as a reference artifact for lineage.
+        # Record the shadow commit as a reference artifact for lineage.
         self.log_artifact(
             "code-snapshot",
-            uri=f"git:{snap['git']['ref']}#{snap['git']['commit']}",
+            uri=f"git:{git['ref']}#{git['commit']}",
             kind="code_snapshot",
             is_reference=True,
-            meta={"branch": snap["git"].get("branch"), "dirty": snap["git"].get("dirty")},
+            meta={"branch": git.get("branch"), "dirty": git.get("dirty"), "env_ref": content_hash},
             strict=strict,
         )
-        return snap
+        return {"git": git, "execution_record": exec_rec, "content_hash": content_hash}
 
     # -- lifecycle ----------------------------------------------------------
     def set_status(self, status: str, *, ended_at: str | None = None, summary: dict | None = None):

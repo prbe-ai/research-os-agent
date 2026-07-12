@@ -30,11 +30,12 @@ def test_context_and_search_use_current_api_fallback(client, app):
     assert "semantic_search" in results["completeness"]["missing"]
 
 
-def test_asset_resolve_is_honest_when_registry_is_absent(client):
+def test_asset_resolve_returns_no_match_when_not_found(client):
+    # The registry exists now (fold #5); resolving an absent asset is an honest
+    # no_match over the real registry, not a missing-capability.
     service = ResearchReadService(ResearchOSSource(client))
     result = service.research_resolve("dockq-scorer", kind="script")
     assert result["data"]["state"] == "no_match"
-    assert result["completeness"]["missing"] == ["versioned_assets"]
 
 
 def test_server_exposes_only_the_six_read_tools(client):
