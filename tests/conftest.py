@@ -43,6 +43,7 @@ class FakeApp:
         self.experiment_versions: dict[str, list[dict]] = {}
         self.uploaded: set[str] = set()
         self.puts: list[str] = []
+        self.gets: list[str] = []
         self.metrics_inserted = 0
         self.spans_upserted = 0
         # test knobs
@@ -189,8 +190,14 @@ class FakeApp:
             return httpx.Response(200, json=row)
         if m and method == "PATCH":
             rid = m.group(1)
-            row = self.runs.setdefault(rid, self._new_run(rid, "exp", {"name": "r"}))
-            row.update({k: v for k, v in body.items()})
+            # NB: not setdefault() - _new_run has a side effect (stores the row), so
+            # an eager default would clobber the existing run on every PATCH.
+            row = self.runs.get(rid) or self._new_run(rid, "exp", {"name": "r"})
+            for k, v in body.items():
+                if k == "foreign_keys":  # per-key new-wins merge (mirrors the backend)
+                    row["foreign_keys"] = {**(row.get("foreign_keys") or {}), **v}
+                else:
+                    row[k] = v
             return httpx.Response(200, json=row)
 
         # -- assets (fold #5) --
@@ -296,6 +303,14 @@ class FakeApp:
                             self.uploaded.add(a["content_hash"])
                         return httpx.Response(200, json=a)
             return httpx.Response(404, json={"detail": "not found"})
+
+        # artifact download (presigned GET) -> used by asset materialize
+        m = re.match(r"^/v1/artifacts/([^/]+)/download$", path)
+        if m and method == "POST":
+            return httpx.Response(200, json={"download_url": f"http://r2.test/get/{m.group(1)}"})
+        if path.startswith("/get/") and method == "GET":
+            self.gets.append(path)
+            return httpx.Response(200, content=b"ASSET-BYTES")
 
         if path == "/ingest/v1/runs" and method == "POST":
             rid = str(uuid.uuid4())
