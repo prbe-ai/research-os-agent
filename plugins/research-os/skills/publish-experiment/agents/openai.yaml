@@ -1,0 +1,4 @@
+interface:
+  display_name: "Publish Experiment"
+  short_description: "Validate and publish official results"
+  default_prompt: "Use $publish-experiment to validate and publish this experiment explicitly."
