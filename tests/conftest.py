@@ -59,8 +59,13 @@ class FakeApp:
         except (json.JSONDecodeError, ValueError):
             body = {}  # e.g. a raw-bytes PUT to a presigned URL
 
-        if path == "/auth/me" and method == "GET":
-            return httpx.Response(200, json={"email": "dev@example.com", "customer_id": "lab-42"})
+        if path == "/v1/me" and method == "GET":
+            return httpx.Response(200, json={
+                "user_id": "00000000-0000-0000-0000-000000000001",
+                "email": "dev@example.com", "name": "Dev",
+                "customer_id": "lab-42", "role": "owner",
+                "scopes": ["read", "write", "delete", "admin"], "via": "token",
+            })
 
         if path == "/v1/tokens/current" and method == "DELETE":
             return httpx.Response(204)
