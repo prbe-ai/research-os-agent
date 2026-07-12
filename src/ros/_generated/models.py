@@ -44,11 +44,63 @@ class ArtifactOut(BaseModel):
     kind: str = Field(..., title='Kind')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
+    project_id: UUID | None = Field(None, title='Project Id')
     run_id: UUID | None = Field(None, title='Run Id')
     size_bytes: int | None = Field(None, title='Size Bytes')
     span_id: UUID | None = Field(None, title='Span Id')
+    status: str | None = Field('complete', title='Status')
     step_index: int | None = Field(None, title='Step Index')
     uri: str | None = Field(None, title='Uri')
+
+
+class AssetCreate(BaseModel):
+    description: str | None = Field(None, title='Description')
+    kind: str | None = Field('dataset', title='Kind')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., min_length=1, title='Name')
+    tags: list[str] | None = Field(None, title='Tags')
+
+
+class AssetOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    customer_id: str = Field(..., title='Customer Id')
+    description: str | None = Field(None, title='Description')
+    id: UUID = Field(..., title='Id')
+    kind: str = Field(..., title='Kind')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., title='Name')
+    tags: list[str] | None = Field(None, title='Tags')
+
+
+class AssetVersionCreate(BaseModel):
+    """
+    Create a version. Either PROMOTE from an existing artifact (`from_artifact_id`,
+    zero-copy: the version copies the artifact's content_hash + full r2:// uri + size)
+    OR supply the pointer identity directly.
+    """
+
+    content_hash: str | None = Field(None, title='Content Hash')
+    content_type: str | None = Field(None, title='Content Type')
+    from_artifact_id: UUID | None = Field(None, title='From Artifact Id')
+    label: str | None = Field(None, title='Label')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+    size_bytes: int | None = Field(None, title='Size Bytes')
+    uri: str | None = Field(None, title='Uri')
+
+
+class AssetVersionOut(BaseModel):
+    asset_id: UUID = Field(..., title='Asset Id')
+    content_hash: str | None = Field(None, title='Content Hash')
+    content_type: str | None = Field(None, title='Content Type')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    customer_id: str = Field(..., title='Customer Id')
+    id: UUID = Field(..., title='Id')
+    label: str | None = Field(None, title='Label')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+    size_bytes: int | None = Field(None, title='Size Bytes')
+    source_artifact_id: UUID | None = Field(None, title='Source Artifact Id')
+    uri: str | None = Field(None, title='Uri')
+    version: int = Field(..., title='Version')
 
 
 class Decision(StrEnum):
@@ -118,6 +170,40 @@ class DeviceTokenExchange(BaseModel):
     device_code: str = Field(..., max_length=256, min_length=32, title='Device Code')
 
 
+class DownloadResponse(BaseModel):
+    download_url: str = Field(..., title='Download Url')
+
+
+class EventOut(BaseModel):
+    actor: str | None = Field(None, title='Actor')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    customer_id: str = Field(..., title='Customer Id')
+    event_type: str = Field(..., title='Event Type')
+    id: UUID = Field(..., title='Id')
+    payload: dict[str, Any] | None = Field(None, title='Payload')
+    subject_id: UUID | None = Field(None, title='Subject Id')
+    subject_type: str | None = Field(None, title='Subject Type')
+
+
+class ExecutionRecordCreate(BaseModel):
+    code: dict[str, Any] | None = Field(None, title='Code')
+    deps: dict[str, Any] | None = Field(None, title='Deps')
+    hardware: dict[str, Any] | None = Field(None, title='Hardware')
+    paths: dict[str, Any] | None = Field(None, title='Paths')
+    settings: dict[str, Any] | None = Field(None, title='Settings')
+
+
+class ExecutionRecordOut(BaseModel):
+    code: dict[str, Any] | None = Field(None, title='Code')
+    content_hash: str = Field(..., title='Content Hash')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    customer_id: str = Field(..., title='Customer Id')
+    deps: dict[str, Any] | None = Field(None, title='Deps')
+    hardware: dict[str, Any] | None = Field(None, title='Hardware')
+    paths: dict[str, Any] | None = Field(None, title='Paths')
+    settings: dict[str, Any] | None = Field(None, title='Settings')
+
+
 class ExperimentArtifactCreate(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
@@ -174,10 +260,39 @@ class ExperimentPatch(BaseModel):
     summary: dict[str, Any] | None = Field(None, title='Summary')
 
 
+class ExperimentVersionMint(BaseModel):
+    """
+    Mint an immutable reproduction manifest (fold #6). `as_of` defaults to the
+    mint-time watermark; `exclude_run_ids` are recorded and left out of the refs.
+    """
+
+    as_of: AwareDatetime | None = Field(None, title='As Of')
+    exclude_run_ids: list[UUID] | None = Field(None, title='Exclude Run Ids')
+    label: str | None = Field(None, title='Label')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+
+
+class ExperimentVersionOut(BaseModel):
+    artifact_refs: list[UUID] | None = Field(None, title='Artifact Refs')
+    as_of: AwareDatetime = Field(..., title='As Of')
+    asset_version_refs: list[UUID] | None = Field(None, title='Asset Version Refs')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    customer_id: str = Field(..., title='Customer Id')
+    excludes: dict[str, Any] | None = Field(None, title='Excludes')
+    execution_record_refs: list[str] | None = Field(None, title='Execution Record Refs')
+    experiment_id: UUID = Field(..., title='Experiment Id')
+    id: UUID = Field(..., title='Id')
+    label: str | None = Field(None, title='Label')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+    run_refs: list[UUID] | None = Field(None, title='Run Refs')
+    version: int = Field(..., title='Version')
+
+
 class IngestArtifact(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
     external_span_key: str | None = Field(None, title='External Span Key')
+    external_span_type: str | None = Field(None, title='External Span Type')
     is_reference: bool | None = Field(False, title='Is Reference')
     kind: str | None = Field('file', title='Kind')
     meta: dict[str, Any] | None = Field(None, title='Meta')
@@ -207,11 +322,48 @@ class InviteOut(BaseModel):
     role: Role1 = Field(..., title='Role')
 
 
+class LineageEdgeOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    customer_id: str = Field(..., title='Customer Id')
+    id: UUID = Field(..., title='Id')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+    relation: str = Field(..., title='Relation')
+    source_id: UUID = Field(..., title='Source Id')
+    source_type: str = Field(..., title='Source Type')
+    target_id: UUID = Field(..., title='Target Id')
+    target_type: str = Field(..., title='Target Type')
+
+
+class LineageEntityType(StrEnum):
+    """
+    The endpoints a lineage edge can connect (closed set).
+    """
+
+    run = 'run'
+    artifact = 'artifact'
+    asset_version = 'asset_version'
+
+
+class LineageRelation(StrEnum):
+    """
+    The closed relation vocabulary.
+    """
+
+    consumes = 'consumes'
+    produces = 'produces'
+    evaluates_on = 'evaluates_on'
+    forked_from = 'forked_from'
+    resumed_from = 'resumed_from'
+    promoted_to = 'promoted_to'
+    derived_from = 'derived_from'
+
+
 class MetricInsertResult(BaseModel):
     inserted: int = Field(..., title='Inserted')
 
 
 class MetricPointIn(BaseModel):
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     key: str = Field(..., title='Key')
     kind: str | None = Field('model', title='Kind')
     step_index: int | None = Field(None, title='Step Index')
@@ -220,6 +372,7 @@ class MetricPointIn(BaseModel):
 
 
 class MetricPointOut(BaseModel):
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     id: int = Field(..., title='Id')
     key: str = Field(..., title='Key')
     kind: str = Field(..., title='Kind')
@@ -234,6 +387,7 @@ class MetricSeriesOut(BaseModel):
     One catalog row: what/how-much/what-shape, no point scan (D15).
     """
 
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     first_step_index: int | None = Field(None, title='First Step Index')
     first_wall_clock: AwareDatetime | None = Field(None, title='First Wall Clock')
     key: str = Field(..., title='Key')
@@ -265,6 +419,21 @@ class PendingInviteOut(BaseModel):
     display_name: str = Field(..., title='Display Name')
     id: UUID = Field(..., title='Id')
     role: Role1 = Field(..., title='Role')
+
+
+class ProjectArtifactCreate(BaseModel):
+    """
+    Project-anchored artifact (fold #22); same shape as the experiment-anchored one.
+    """
+
+    content_hash: str | None = Field(None, title='Content Hash')
+    content_type: str | None = Field(None, title='Content Type')
+    is_reference: bool | None = Field(False, title='Is Reference')
+    kind: str | None = Field('file', title='Kind')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+    name: str = Field(..., title='Name')
+    size_bytes: int | None = Field(None, title='Size Bytes')
+    uri: str | None = Field(None, title='Uri')
 
 
 class ProjectCreate(BaseModel):
@@ -307,7 +476,9 @@ class RunCounts(BaseModel):
 
 class RunCreate(BaseModel):
     config: dict[str, Any] | None = Field(None, title='Config')
+    env_ref: str | None = Field(None, title='Env Ref')
     external_id: str | None = Field(None, title='External Id')
+    foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     group_id: UUID | None = Field(None, title='Group Id')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
@@ -392,6 +563,7 @@ class MaxPoints(RootModel[int]):
 
 
 class SeriesResult(BaseModel):
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     key: str = Field(..., title='Key')
     kind: str = Field(..., title='Kind')
     points: list[SeriesPoint] = Field(..., title='Points')
@@ -400,6 +572,7 @@ class SeriesResult(BaseModel):
 
 
 class SeriesSelector(BaseModel):
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     key: str = Field(..., title='Key')
     kind: str = Field(..., title='Kind')
 
@@ -407,6 +580,7 @@ class SeriesSelector(BaseModel):
 class SpanCreate(BaseModel):
     attributes: dict[str, Any] | None = Field(None, title='Attributes')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
+    env_ref: str | None = Field(None, title='Env Ref')
     external_key: str | None = Field(None, title='External Key')
     id: UUID = Field(..., title='Id')
     name: str | None = Field(None, title='Name')
@@ -561,6 +735,30 @@ class TokenOut(BaseModel):
     token_prefix: str = Field(..., title='Token Prefix')
 
 
+class UploadGcRequest(BaseModel):
+    older_than: AwareDatetime = Field(..., title='Older Than')
+
+
+class UploadGcResult(BaseModel):
+    swept: int = Field(..., title='Swept')
+
+
+class UploadRequest(BaseModel):
+    content_hash: str = Field(..., title='Content Hash')
+    content_type: str | None = Field(None, title='Content Type')
+    name: str = Field(..., title='Name')
+    size_bytes: int | None = Field(None, title='Size Bytes')
+    span_id: UUID | None = Field(None, title='Span Id')
+    step_index: int | None = Field(None, title='Step Index')
+
+
+class UploadResponse(BaseModel):
+    artifact_id: UUID = Field(..., title='Artifact Id')
+    have: bool = Field(..., title='Have')
+    key: str | None = Field(None, title='Key')
+    upload_url: str | None = Field(None, title='Upload Url')
+
+
 class ValidationError(BaseModel):
     ctx: dict[str, Any] | None = Field(None, title='Context')
     input: Any | None = Field(None, title='Input')
@@ -591,6 +789,15 @@ class DeviceAuthorizationStart(BaseModel):
     )
 
 
+class EdgeCreate(BaseModel):
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+    relation: LineageRelation
+    source_id: UUID = Field(..., title='Source Id')
+    source_type: LineageEntityType
+    target_id: UUID = Field(..., title='Target Id')
+    target_type: LineageEntityType
+
+
 class HTTPValidationError(BaseModel):
     detail: list[ValidationError] | None = Field(None, title='Detail')
 
@@ -599,6 +806,7 @@ class IngestRun(BaseModel):
     config: dict[str, Any] | None = Field(None, title='Config')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     external_id: str = Field(..., title='External Id')
+    foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     parent_external_id: str | None = Field(None, title='Parent External Id')
@@ -615,6 +823,7 @@ class IngestRunRequest(BaseModel):
         None, max_length=1000, title='Artifacts'
     )
     batch_id: str | None = Field(None, title='Batch Id')
+    execution_record: ExecutionRecordCreate | None = None
     experiment_hypothesis: str | None = Field(None, title='Experiment Hypothesis')
     experiment_slug: str = Field(..., title='Experiment Slug')
     metrics: list[MetricPointIn] | None = Field(None, max_length=50000, title='Metrics')
@@ -625,6 +834,50 @@ class IngestRunRequest(BaseModel):
 
 class MetricBatch(BaseModel):
     points: list[MetricPointIn] = Field(..., max_length=50000, title='Points')
+
+
+class RunDetailOut(BaseModel):
+    """
+    The /v1 read view of a run: RunOut plus the fold fields that are DELIBERATELY
+    absent from RunOut so the frozen ingest response stays byte-identical (the ingest
+    route keeps response_model=RunOut, which filters these out). short_id (fold #21)
+    is the human-facing petname the dashboard displays; created_by (fold #1), env_ref
+    (fold #7), and foreign_keys (fold #8) surface here for reads.
+    """
+
+    config: dict[str, Any] | None = Field(None, title='Config')
+    counts: RunCounts | None = None
+    created_at: AwareDatetime = Field(..., title='Created At')
+    created_by: str | None = Field(None, title='Created By')
+    customer_id: str = Field(..., title='Customer Id')
+    deleted_at: AwareDatetime | None = Field(None, title='Deleted At')
+    ended_at: AwareDatetime | None = Field(None, title='Ended At')
+    env_ref: str | None = Field(None, title='Env Ref')
+    experiment_id: UUID = Field(..., title='Experiment Id')
+    external_id: str | None = Field(None, title='External Id')
+    foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
+    group_id: UUID | None = Field(None, title='Group Id')
+    id: UUID = Field(..., title='Id')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., title='Name')
+    parent_relation: ParentRelation | None = None
+    parent_run_id: UUID | None = Field(None, title='Parent Run Id')
+    short_id: str | None = Field(None, title='Short Id')
+    source: str = Field(..., title='Source')
+    started_at: AwareDatetime | None = Field(None, title='Started At')
+    status: RunStatus
+    summary: dict[str, Any] | None = Field(None, title='Summary')
+    tags: list[str] | None = Field(None, title='Tags')
+
+
+class RunLineage(BaseModel):
+    """
+    Ancestors + descendants of a run (recursive-CTE result).
+    """
+
+    ancestors: list[RunDetailOut] | None = Field(None, title='Ancestors')
+    descendants: list[RunDetailOut] | None = Field(None, title='Descendants')
+    run_id: UUID = Field(..., title='Run Id')
 
 
 class RunOut(BaseModel):
@@ -691,16 +944,6 @@ class RunBundle(BaseModel):
     artifacts: list[ArtifactOut] = Field(..., title='Artifacts')
     child_run_ids: list[UUID] | None = Field(None, title='Child Run Ids')
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
-    run: RunOut
+    run: RunDetailOut
     series: list[MetricSeriesOut] = Field(..., title='Series')
     span_types: list[SpanTypeCount] = Field(..., title='Span Types')
-
-
-class RunLineage(BaseModel):
-    """
-    Ancestors + descendants of a run (recursive-CTE result).
-    """
-
-    ancestors: list[RunOut] | None = Field(None, title='Ancestors')
-    descendants: list[RunOut] | None = Field(None, title='Descendants')
-    run_id: UUID = Field(..., title='Run Id')

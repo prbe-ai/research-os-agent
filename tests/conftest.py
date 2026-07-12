@@ -6,6 +6,7 @@ Lets us test the SDK + CLI end to end with no live server.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -35,6 +36,13 @@ class FakeApp:
         self.experiments: dict[str, dict] = {}
         self.projects: dict[str, dict] = {}
         self.artifacts: dict[str, list[dict]] = {}
+        self.assets: dict[str, dict] = {}
+        self.asset_versions: dict[str, list[dict]] = {}
+        self.edges: list[dict] = []
+        self.execution_records: dict[str, dict] = {}
+        self.experiment_versions: dict[str, list[dict]] = {}
+        self.uploaded: set[str] = set()
+        self.puts: list[str] = []
         self.metrics_inserted = 0
         self.spans_upserted = 0
         # test knobs
@@ -45,7 +53,10 @@ class FakeApp:
         self.requests.append(request)
         method = request.method
         path = request.url.path
-        body = json.loads(request.content) if request.content else {}
+        try:
+            body = json.loads(request.content) if request.content else {}
+        except (json.JSONDecodeError, ValueError):
+            body = {}  # e.g. a raw-bytes PUT to a presigned URL
 
         if path == "/auth/me" and method == "GET":
             return httpx.Response(200, json={"email": "dev@example.com", "customer_id": "lab-42"})
@@ -182,6 +193,110 @@ class FakeApp:
             row.update({k: v for k, v in body.items()})
             return httpx.Response(200, json=row)
 
+        # -- assets (fold #5) --
+        if path == "/v1/assets" and method == "POST":
+            dup = next((a for a in self.assets.values() if a["name"] == body["name"]), None)
+            if dup:
+                return httpx.Response(409, json={"detail": {"message": "asset name exists", "existing_id": dup["id"]}})
+            aid = str(uuid.uuid4())
+            row = {"id": aid, "customer_id": "lab-42", "name": body["name"], "kind": body.get("kind", "dataset"),
+                   "description": body.get("description"), "tags": body.get("tags", []),
+                   "metadata": body.get("metadata", {}), "created_at": "2026-07-11T00:00:00Z"}
+            self.assets[aid] = row
+            self.asset_versions[aid] = []
+            return httpx.Response(201, json=row)
+        if path == "/v1/assets" and method == "GET":
+            return httpx.Response(200, json=list(self.assets.values()))
+        if path.startswith("/v1/assets/") and path.endswith("/versions"):
+            aid = path.split("/")[3]
+            if method == "POST":
+                vers = self.asset_versions.setdefault(aid, [])
+                v = {"id": str(uuid.uuid4()), "customer_id": "lab-42", "asset_id": aid,
+                     "version": len(vers) + 1, "label": body.get("label"),
+                     "content_hash": body.get("content_hash"), "uri": body.get("uri"),
+                     "size_bytes": body.get("size_bytes"), "content_type": body.get("content_type"),
+                     "source_artifact_id": body.get("from_artifact_id"), "meta": body.get("meta", {}),
+                     "created_at": "2026-07-11T00:00:00Z"}
+                vers.append(v)
+                return httpx.Response(201, json=v)
+            if method == "GET":
+                return httpx.Response(200, json=self.asset_versions.get(aid, []))
+        m = re.match(r"^/v1/assets/([^/]+)$", path)
+        if m and method == "GET":
+            aid = m.group(1)
+            return httpx.Response(200, json=self.assets[aid]) if aid in self.assets else httpx.Response(404, json={"detail": "not found"})
+
+        # -- lineage edges (fold #2) --
+        if path == "/v1/edges" and method == "POST":
+            row = {"id": str(uuid.uuid4()), "customer_id": "lab-42", **body, "created_at": "2026-07-11T00:00:00Z"}
+            self.edges.append(row)
+            return httpx.Response(201, json=row)
+        m = re.match(r"^/v1/runs/([^/]+)/edges$", path)
+        if m and method == "GET":
+            rid = m.group(1)
+            return httpx.Response(200, json=[e for e in self.edges if rid in (e.get("source_id"), e.get("target_id"))])
+
+        # -- execution records (fold #7) --
+        if path == "/v1/execution-records" and method == "POST":
+            ch = "sha256:" + hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
+            row = {"customer_id": "lab-42", "content_hash": ch,
+                   **{k: body.get(k, {}) for k in ("code", "deps", "hardware", "settings", "paths")},
+                   "created_at": "2026-07-11T00:00:00Z"}
+            self.execution_records[ch] = row
+            return httpx.Response(201, json=row)
+        m = re.match(r"^/v1/execution-records/(.+)$", path)
+        if m and method == "GET":
+            return httpx.Response(200, json=self.execution_records.get(m.group(1), {"content_hash": m.group(1)}))
+
+        # -- experiment versions (fold #6) --
+        m = re.match(r"^/v1/experiments/([^/]+)/versions$", path)
+        if m and method == "POST":
+            eid = m.group(1)
+            vers = self.experiment_versions.setdefault(eid, [])
+            v = {"id": str(uuid.uuid4()), "experiment_id": eid, "version": len(vers) + 1,
+                 "label": body.get("label"), "created_at": "2026-07-11T00:00:00Z"}
+            vers.append(v)
+            return httpx.Response(201, json=v)
+        if m and method == "GET":
+            return httpx.Response(200, json=self.experiment_versions.get(m.group(1), []))
+
+        # -- events (fold #10, read-only) --
+        if path == "/v1/events" and method == "GET":
+            return httpx.Response(200, json=[])
+        m = re.match(r"^/v1/runs/([^/]+)/events$", path)
+        if m and method == "GET":
+            return httpx.Response(200, json=[])
+
+        # -- artifact upload flow (fold #16) --
+        m = re.match(r"^/v1/runs/([^/]+)/artifacts/uploads$", path)
+        if m and method == "POST":
+            rid = m.group(1)
+            ch = body["content_hash"]
+            aid = str(uuid.uuid4())
+            have = ch in self.uploaded
+            art = {"id": aid, "run_id": rid, "name": body["name"], "content_hash": ch,
+                   "size_bytes": body.get("size_bytes"), "kind": "file",
+                   "status": "complete" if have else "pending", "is_reference": False}
+            self.artifacts.setdefault(rid, []).append(art)
+            return httpx.Response(201, json={
+                "artifact_id": aid, "have": have,
+                "upload_url": None if have else f"http://r2.test/put/{aid}",
+                "key": f"lab-42/{aid}"})
+        if path.startswith("/put/") and method == "PUT":
+            self.puts.append(path)
+            return httpx.Response(200)
+        m = re.match(r"^/v1/artifacts/([^/]+)/confirm$", path)
+        if m and method == "POST":
+            aid = m.group(1)
+            for arts in self.artifacts.values():
+                for a in arts:
+                    if a.get("id") == aid:
+                        a["status"] = "complete"
+                        if a.get("content_hash"):
+                            self.uploaded.add(a["content_hash"])
+                        return httpx.Response(200, json=a)
+            return httpx.Response(404, json={"detail": "not found"})
+
         if path == "/ingest/v1/runs" and method == "POST":
             rid = str(uuid.uuid4())
             run = body["run"]
@@ -191,6 +306,7 @@ class FakeApp:
         return httpx.Response(404, json={"detail": f"no fake route for {method} {path}"})
 
     def _new_run(self, rid: str, experiment_id: str, body: dict) -> dict:
+        # RunDetailOut shape (fold fields surfaced on /v1 reads).
         row = {
             "id": rid,
             "experiment_id": experiment_id,
@@ -201,6 +317,10 @@ class FakeApp:
             "config": body.get("config", {}),
             "parent_run_id": body.get("parent_run_id"),
             "parent_relation": body.get("parent_relation"),
+            "short_id": body.get("short_id", f"run-{rid[:8]}"),
+            "foreign_keys": body.get("foreign_keys", {}),
+            "env_ref": body.get("env_ref"),
+            "created_by": "ingest:test",
         }
         self.runs[rid] = row
         return row

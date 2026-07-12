@@ -9,19 +9,26 @@ import pytest
 from ros import errors
 
 
-def test_research_event_is_normal_experiment_upload(client, app):
+def test_research_note_is_normal_experiment_upload(client, app):
     run = client.run(experiment="e", hypothesis="h", name="r")
-    result = client.events.add(
+    result = client.notes.add(
         run.id,
         "decision",
         "Use the official scorer",
         evidence_refs=["tool:91"],
         confidence=0.9,
     )
-    assert result["kind"] == "research_event"
-    event = app.artifacts[run.id][0]["meta"]
-    assert event["kind"] == "decision"
-    assert event["evidence_refs"] == ["tool:91"]
+    assert result["kind"] == "note"
+    note = app.artifacts[run.id][0]["meta"]
+    assert note["kind"] == "decision"
+    assert note["evidence_refs"] == ["tool:91"]
+
+
+def test_events_read_surface_is_read_only(client, app):
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    # client.events is the read surface (backend lifecycle log); no write method.
+    assert not hasattr(client.events, "add")
+    assert client.events.for_run(run.id) == []
 
 
 def test_hook_session_surface_attaches_checkpoints_and_detaches(client, app, tmp_path):
@@ -55,25 +62,23 @@ def test_hook_session_surface_attaches_checkpoints_and_detaches(client, app, tmp
     assert artifact["meta"]["portable"] is False
 
 
-def test_asset_surface_reports_missing_backend_capability(client, app, tmp_path):
-    source = tmp_path / "score.py"
-    source.write_text("print('score')\n")
-    with pytest.raises(errors.CapabilityUnavailable) as exc:
-        client.assets.propose(
-            str(source),
-            run_id="run-1",
-            kind="script",
-            canonical_name="dockq-scorer",
-            new_identity_reason="no compatible scorer exists",
-        )
-    assert exc.value.capability == "asset_registry"
-    assert not client.spool.pending(), "unsupported registry calls must not be spooled forever"
+def test_asset_registry_registers_and_versions(client, app):
+    client.fail_open = False
+    asset = client.assets.register("dockq-scorer", kind="script")
+    version = client.assets.add_version(asset["id"], content_hash="c" * 64, label="v1")
+    assert version["asset_id"] == asset["id"]
+    assert version["version"] == 1
+    # the aspirational fork/propose/promote-candidate surface was dropped (registry only)
+    assert not any(hasattr(client.assets, m) for m in ("fork", "propose", "materialize"))
 
 
-def test_promotion_surface_requires_real_manifest_backend(client):
-    with pytest.raises(errors.CapabilityUnavailable) as exc:
-        client.promote("run-1", approval="Approved by researcher")
-    assert exc.value.capability == "promotion_manifests"
+def test_experiment_version_replaces_run_promote(client, app):
+    client.fail_open = False
+    exp = client.ensure_experiment("dockq", "DockQ", "h")
+    version = client.experiment_version(exp["id"], label="launch")
+    assert version["version"] == 1
+    # run-level promote is gone (promotion_tier rejected upstream)
+    assert not hasattr(client, "promote")
 
 
 def test_execute_propagates_run_id(client, app, tmp_path):
@@ -93,11 +98,13 @@ def test_execute_propagates_run_id(client, app, tmp_path):
 
 def test_run_check_distinguishes_local_reference_from_portable(client, app):
     run = client.run(experiment="e", hypothesis="h", name="r")
-    run._data["metadata"] = {"snapshot": {"git": {"commit": "abc"}}}
+    # env_ref (execution record) present -> launch capture is satisfied.
+    run._data["metadata"] = {"env_ref": "sha256:abc"}
     app.runs[run.id]["metadata"] = run._data["metadata"]
     run.log_artifact("code-snapshot", uri="git:refs/ros/snapshots/x#abc", kind="code_snapshot")
     run.log_artifact("local-output", kind="file", is_reference=True)
     report = client.check_run(run.id)
     assert report["state"] == "incomplete"
     assert "portable_artifact_bytes" in report["missing"]
-    assert report["promotion_manifest_available"] is False
+    assert "execution_record" not in report["missing"]
+    assert "promotion_manifest_available" not in report

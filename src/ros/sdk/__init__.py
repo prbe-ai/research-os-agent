@@ -7,14 +7,15 @@ hooks, Python experiments, and passive platform integrations all build on it.
 from .assets import AssetClient
 from .client import Client
 from .config import Settings, resolve
-from .events import ResearchEventClient
+from .events import EventsReadClient, NoteClient
 from .run import Run
 from .sessions import SessionCaptureClient
 
 __all__ = [
     "AssetClient",
     "Client",
-    "ResearchEventClient",
+    "EventsReadClient",
+    "NoteClient",
     "Run",
     "SessionCaptureClient",
     "Settings",

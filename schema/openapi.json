@@ -186,6 +186,18 @@
             "title": "Name",
             "type": "string"
           },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
           "run_id": {
             "anyOf": [
               {
@@ -221,6 +233,11 @@
             ],
             "title": "Span Id"
           },
+          "status": {
+            "default": "complete",
+            "title": "Status",
+            "type": "string"
+          },
           "step_index": {
             "anyOf": [
               {
@@ -253,6 +270,293 @@
           "created_at"
         ],
         "title": "ArtifactOut",
+        "type": "object"
+      },
+      "AssetCreate": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "kind": {
+            "default": "dataset",
+            "title": "Kind",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AssetCreate",
+        "type": "object"
+      },
+      "AssetOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "name",
+          "kind",
+          "created_at"
+        ],
+        "title": "AssetOut",
+        "type": "object"
+      },
+      "AssetVersionCreate": {
+        "description": "Create a version. Either PROMOTE from an existing artifact (`from_artifact_id`,\nzero-copy: the version copies the artifact's content_hash + full r2:// uri + size)\nOR supply the pointer identity directly.",
+        "properties": {
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "from_artifact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Artifact Id"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uri"
+          }
+        },
+        "title": "AssetVersionCreate",
+        "type": "object"
+      },
+      "AssetVersionOut": {
+        "properties": {
+          "asset_id": {
+            "format": "uuid",
+            "title": "Asset Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "source_artifact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Artifact Id"
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uri"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "asset_id",
+          "version",
+          "created_at"
+        ],
+        "title": "AssetVersionOut",
         "type": "object"
       },
       "DeviceAuthorizationDecision": {
@@ -519,6 +823,205 @@
           "code_verifier"
         ],
         "title": "DeviceTokenExchange",
+        "type": "object"
+      },
+      "DownloadResponse": {
+        "properties": {
+          "download_url": {
+            "title": "Download Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "download_url"
+        ],
+        "title": "DownloadResponse",
+        "type": "object"
+      },
+      "EdgeCreate": {
+        "properties": {
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/LineageRelation"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_type": {
+            "$ref": "#/components/schemas/LineageEntityType"
+          },
+          "target_id": {
+            "format": "uuid",
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_type": {
+            "$ref": "#/components/schemas/LineageEntityType"
+          }
+        },
+        "required": [
+          "source_type",
+          "source_id",
+          "relation",
+          "target_type",
+          "target_id"
+        ],
+        "title": "EdgeCreate",
+        "type": "object"
+      },
+      "EventOut": {
+        "properties": {
+          "actor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actor"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          },
+          "subject_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Type"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "event_type",
+          "created_at"
+        ],
+        "title": "EventOut",
+        "type": "object"
+      },
+      "ExecutionRecordCreate": {
+        "properties": {
+          "code": {
+            "additionalProperties": true,
+            "title": "Code",
+            "type": "object"
+          },
+          "deps": {
+            "additionalProperties": true,
+            "title": "Deps",
+            "type": "object"
+          },
+          "hardware": {
+            "additionalProperties": true,
+            "title": "Hardware",
+            "type": "object"
+          },
+          "paths": {
+            "additionalProperties": true,
+            "title": "Paths",
+            "type": "object"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "title": "ExecutionRecordCreate",
+        "type": "object"
+      },
+      "ExecutionRecordOut": {
+        "properties": {
+          "code": {
+            "additionalProperties": true,
+            "title": "Code",
+            "type": "object"
+          },
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "deps": {
+            "additionalProperties": true,
+            "title": "Deps",
+            "type": "object"
+          },
+          "hardware": {
+            "additionalProperties": true,
+            "title": "Hardware",
+            "type": "object"
+          },
+          "paths": {
+            "additionalProperties": true,
+            "title": "Paths",
+            "type": "object"
+          },
+          "settings": {
+            "additionalProperties": true,
+            "title": "Settings",
+            "type": "object"
+          }
+        },
+        "required": [
+          "customer_id",
+          "content_hash",
+          "created_at"
+        ],
+        "title": "ExecutionRecordOut",
         "type": "object"
       },
       "ExperimentArtifactCreate": {
@@ -799,6 +1302,143 @@
         "title": "ExperimentPatch",
         "type": "object"
       },
+      "ExperimentVersionMint": {
+        "description": "Mint an immutable reproduction manifest (fold #6). `as_of` defaults to the\nmint-time watermark; `exclude_run_ids` are recorded and left out of the refs.",
+        "properties": {
+          "as_of": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "exclude_run_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Exclude Run Ids",
+            "type": "array"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          }
+        },
+        "title": "ExperimentVersionMint",
+        "type": "object"
+      },
+      "ExperimentVersionOut": {
+        "properties": {
+          "artifact_refs": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Artifact Refs",
+            "type": "array"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
+          },
+          "asset_version_refs": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Asset Version Refs",
+            "type": "array"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "excludes": {
+            "additionalProperties": true,
+            "title": "Excludes",
+            "type": "object"
+          },
+          "execution_record_refs": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Execution Record Refs",
+            "type": "array"
+          },
+          "experiment_id": {
+            "format": "uuid",
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          },
+          "run_refs": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Run Refs",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "experiment_id",
+          "version",
+          "as_of",
+          "created_at"
+        ],
+        "title": "ExperimentVersionOut",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -849,6 +1489,18 @@
             ],
             "default": null,
             "title": "External Span Key"
+          },
+          "external_span_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "External Span Type"
           },
           "is_reference": {
             "default": false,
@@ -935,6 +1587,11 @@
           "external_id": {
             "title": "External Id",
             "type": "string"
+          },
+          "foreign_keys": {
+            "additionalProperties": true,
+            "title": "Foreign Keys",
+            "type": "object"
           },
           "metadata": {
             "additionalProperties": true,
@@ -1031,6 +1688,17 @@
             ],
             "default": null,
             "title": "Batch Id"
+          },
+          "execution_record": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExecutionRecordCreate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "experiment_hypothesis": {
             "anyOf": [
@@ -1150,6 +1818,87 @@
         "title": "InviteOut",
         "type": "object"
       },
+      "LineageEdgeOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          },
+          "relation": {
+            "title": "Relation",
+            "type": "string"
+          },
+          "source_id": {
+            "format": "uuid",
+            "title": "Source Id",
+            "type": "string"
+          },
+          "source_type": {
+            "title": "Source Type",
+            "type": "string"
+          },
+          "target_id": {
+            "format": "uuid",
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_type": {
+            "title": "Target Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "source_type",
+          "source_id",
+          "relation",
+          "target_type",
+          "target_id",
+          "created_at"
+        ],
+        "title": "LineageEdgeOut",
+        "type": "object"
+      },
+      "LineageEntityType": {
+        "description": "The endpoints a lineage edge can connect (closed set).",
+        "enum": [
+          "run",
+          "artifact",
+          "asset_version"
+        ],
+        "title": "LineageEntityType",
+        "type": "string"
+      },
+      "LineageRelation": {
+        "description": "The closed relation vocabulary.",
+        "enum": [
+          "consumes",
+          "produces",
+          "evaluates_on",
+          "forked_from",
+          "resumed_from",
+          "promoted_to",
+          "derived_from"
+        ],
+        "title": "LineageRelation",
+        "type": "string"
+      },
       "MetricBatch": {
         "properties": {
           "points": {
@@ -1182,6 +1931,11 @@
       },
       "MetricPointIn": {
         "properties": {
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
           "key": {
             "title": "Key",
             "type": "string"
@@ -1228,6 +1982,11 @@
       },
       "MetricPointOut": {
         "properties": {
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
           "id": {
             "title": "Id",
             "type": "integer"
@@ -1280,6 +2039,11 @@
       "MetricSeriesOut": {
         "description": "One catalog row: what/how-much/what-shape, no point scan (D15).",
         "properties": {
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
           "first_step_index": {
             "anyOf": [
               {
@@ -1439,6 +2203,79 @@
           "created_at"
         ],
         "title": "PendingInviteOut",
+        "type": "object"
+      },
+      "ProjectArtifactCreate": {
+        "description": "Project-anchored artifact (fold #22); same shape as the experiment-anchored one.",
+        "properties": {
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "is_reference": {
+            "default": false,
+            "title": "Is Reference",
+            "type": "boolean"
+          },
+          "kind": {
+            "default": "file",
+            "title": "Kind",
+            "type": "string"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uri"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ProjectArtifactCreate",
         "type": "object"
       },
       "ProjectCreate": {
@@ -1615,7 +2452,7 @@
             "title": "Parent Run Id"
           },
           "run": {
-            "$ref": "#/components/schemas/RunOut"
+            "$ref": "#/components/schemas/RunDetailOut"
           },
           "series": {
             "items": {
@@ -1673,6 +2510,17 @@
             "title": "Config",
             "type": "object"
           },
+          "env_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env Ref"
+          },
           "external_id": {
             "anyOf": [
               {
@@ -1683,6 +2531,11 @@
               }
             ],
             "title": "External Id"
+          },
+          "foreign_keys": {
+            "additionalProperties": true,
+            "title": "Foreign Keys",
+            "type": "object"
           },
           "group_id": {
             "anyOf": [
@@ -1744,6 +2597,203 @@
           "name"
         ],
         "title": "RunCreate",
+        "type": "object"
+      },
+      "RunDetailOut": {
+        "description": "The /v1 read view of a run: RunOut plus the fold fields that are DELIBERATELY\nabsent from RunOut so the frozen ingest response stays byte-identical (the ingest\nroute keeps response_model=RunOut, which filters these out). short_id (fold #21)\nis the human-facing petname the dashboard displays; created_by (fold #1), env_ref\n(fold #7), and foreign_keys (fold #8) surface here for reads.",
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "counts": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RunCounts"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "env_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env Ref"
+          },
+          "experiment_id": {
+            "format": "uuid",
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "external_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Id"
+          },
+          "foreign_keys": {
+            "additionalProperties": true,
+            "title": "Foreign Keys",
+            "type": "object"
+          },
+          "group_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_relation": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParentRelation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parent_run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Run Id"
+          },
+          "short_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Id"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RunStatus"
+          },
+          "summary": {
+            "additionalProperties": true,
+            "title": "Summary",
+            "type": "object"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "experiment_id",
+          "name",
+          "status",
+          "source",
+          "created_at"
+        ],
+        "title": "RunDetailOut",
         "type": "object"
       },
       "RunGcRequest": {
@@ -1899,14 +2949,14 @@
         "properties": {
           "ancestors": {
             "items": {
-              "$ref": "#/components/schemas/RunOut"
+              "$ref": "#/components/schemas/RunDetailOut"
             },
             "title": "Ancestors",
             "type": "array"
           },
           "descendants": {
             "items": {
-              "$ref": "#/components/schemas/RunOut"
+              "$ref": "#/components/schemas/RunDetailOut"
             },
             "title": "Descendants",
             "type": "array"
@@ -2286,6 +3336,11 @@
       },
       "SeriesResult": {
         "properties": {
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
           "key": {
             "title": "Key",
             "type": "string"
@@ -2323,6 +3378,18 @@
       },
       "SeriesSelector": {
         "properties": {
+          "dimensions": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dimensions"
+          },
           "key": {
             "title": "Key",
             "type": "string"
@@ -2374,6 +3441,17 @@
               }
             ],
             "title": "Ended At"
+          },
+          "env_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env Ref"
           },
           "external_key": {
             "anyOf": [
@@ -2990,6 +4068,137 @@
           "created_at"
         ],
         "title": "TokenOut",
+        "type": "object"
+      },
+      "UploadGcRequest": {
+        "properties": {
+          "older_than": {
+            "format": "date-time",
+            "title": "Older Than",
+            "type": "string"
+          }
+        },
+        "required": [
+          "older_than"
+        ],
+        "title": "UploadGcRequest",
+        "type": "object"
+      },
+      "UploadGcResult": {
+        "properties": {
+          "swept": {
+            "title": "Swept",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "swept"
+        ],
+        "title": "UploadGcResult",
+        "type": "object"
+      },
+      "UploadRequest": {
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          },
+          "step_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Index"
+          }
+        },
+        "required": [
+          "name",
+          "content_hash"
+        ],
+        "title": "UploadRequest",
+        "type": "object"
+      },
+      "UploadResponse": {
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "have": {
+            "title": "Have",
+            "type": "boolean"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "upload_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Url"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "have"
+        ],
+        "title": "UploadResponse",
         "type": "object"
       },
       "ValidationError": {
@@ -3799,6 +5008,48 @@
         "summary": "Livez"
       }
     },
+    "/v1/artifacts/uploads/gc": {
+      "post": {
+        "description": "Purge abandoned pending uploads older than `older_than` (owner/admin). DB rows\nonly -- R2 blob GC stays OFF (a pending row has no confirmed object).",
+        "operationId": "sweep_orphan_uploads_v1_artifacts_uploads_gc_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadGcRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadGcResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sweep Orphan Uploads",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/v1/artifacts/{artifact_id}": {
       "delete": {
         "description": "Soft-delete the artifact row (idempotent-safe: an already-deleted or absent\nartifact -> 404). The R2 blob is intentionally left in place (deferred gc).",
@@ -3833,6 +5084,548 @@
         "summary": "Delete Artifact",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/v1/artifacts/{artifact_id}/confirm": {
+      "post": {
+        "operationId": "confirm_upload_v1_artifacts__artifact_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Upload",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/v1/artifacts/{artifact_id}/download": {
+      "post": {
+        "operationId": "presign_download_v1_artifacts__artifact_id__download_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Presign Download",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/v1/assets": {
+      "get": {
+        "operationId": "list_assets_v1_assets_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssetOut"
+                  },
+                  "title": "Response List Assets V1 Assets Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Assets",
+        "tags": [
+          "assets"
+        ]
+      },
+      "post": {
+        "operationId": "create_asset_v1_assets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Asset",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/v1/assets/{asset_id}": {
+      "get": {
+        "operationId": "get_asset_v1_assets__asset_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Asset",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/v1/assets/{asset_id}/versions": {
+      "get": {
+        "operationId": "list_versions_v1_assets__asset_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/AssetVersionOut"
+                  },
+                  "title": "Response List Versions V1 Assets  Asset Id  Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Versions",
+        "tags": [
+          "assets"
+        ]
+      },
+      "post": {
+        "operationId": "create_version_v1_assets__asset_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "asset_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Asset Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssetVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssetVersionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Version",
+        "tags": [
+          "assets"
+        ]
+      }
+    },
+    "/v1/edges": {
+      "post": {
+        "operationId": "create_lineage_edge_v1_edges_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EdgeCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineageEdgeOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Lineage Edge",
+        "tags": [
+          "lineage"
+        ]
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "list_events_v1_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "offset",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "minimum": 0,
+              "title": "Offset",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EventOut"
+                  },
+                  "title": "Response List Events V1 Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Events",
+        "tags": [
+          "events"
+        ]
+      }
+    },
+    "/v1/execution-records": {
+      "post": {
+        "operationId": "create_execution_record_v1_execution_records_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExecutionRecordCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionRecordOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Execution Record",
+        "tags": [
+          "execution-records"
+        ]
+      }
+    },
+    "/v1/execution-records/{content_hash}": {
+      "get": {
+        "operationId": "get_execution_record_v1_execution_records__content_hash__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "content_hash",
+            "required": true,
+            "schema": {
+              "title": "Content Hash",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionRecordOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Execution Record",
+        "tags": [
+          "execution-records"
         ]
       }
     },
@@ -4222,6 +6015,54 @@
         ]
       }
     },
+    "/v1/experiments/{experiment_id}/edges": {
+      "get": {
+        "description": "Every edge touching a run or artifact that belongs to this experiment.",
+        "operationId": "list_experiment_edges_v1_experiments__experiment_id__edges_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LineageEdgeOut"
+                  },
+                  "title": "Response List Experiment Edges V1 Experiments  Experiment Id  Edges Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Experiment Edges",
+        "tags": [
+          "lineage"
+        ]
+      }
+    },
     "/v1/experiments/{experiment_id}/groups": {
       "get": {
         "operationId": "list_groups_v1_experiments__experiment_id__groups_get",
@@ -4393,7 +6234,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunOut"
+                  "$ref": "#/components/schemas/RunDetailOut"
                 }
               }
             },
@@ -4413,6 +6254,156 @@
         "summary": "Create Run",
         "tags": [
           "runs"
+        ]
+      }
+    },
+    "/v1/experiments/{experiment_id}/versions": {
+      "get": {
+        "operationId": "list_versions_v1_experiments__experiment_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExperimentVersionOut"
+                  },
+                  "title": "Response List Versions V1 Experiments  Experiment Id  Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Versions",
+        "tags": [
+          "experiment-versions"
+        ]
+      },
+      "post": {
+        "operationId": "mint_version_v1_experiments__experiment_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExperimentVersionMint"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentVersionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mint Version",
+        "tags": [
+          "experiment-versions"
+        ]
+      }
+    },
+    "/v1/experiments/{experiment_id}/versions/{version}": {
+      "get": {
+        "operationId": "get_version_v1_experiments__experiment_id__versions__version__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentVersionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Version",
+        "tags": [
+          "experiment-versions"
         ]
       }
     },
@@ -4781,6 +6772,104 @@
         ]
       }
     },
+    "/v1/projects/{project_id}/artifacts": {
+      "get": {
+        "operationId": "list_project_artifacts_v1_projects__project_id__artifacts_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactOut"
+                  },
+                  "title": "Response List Project Artifacts V1 Projects  Project Id  Artifacts Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Project Artifacts",
+        "tags": [
+          "projects"
+        ]
+      },
+      "post": {
+        "operationId": "create_project_artifact_v1_projects__project_id__artifacts_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProjectArtifactCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Project Artifact",
+        "tags": [
+          "projects"
+        ]
+      }
+    },
     "/v1/projects/{project_id}/restore": {
       "post": {
         "operationId": "restore_project_v1_projects__project_id__restore_post",
@@ -4862,6 +6951,24 @@
             }
           },
           {
+            "description": "incumbent-id lookup as 'key:value' (fold #8), GIN @> containment",
+            "in": "query",
+            "name": "foreign_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "incumbent-id lookup as 'key:value' (fold #8), GIN @> containment",
+              "title": "Foreign Key"
+            }
+          },
+          {
             "description": "'deleted' to include soft-deleted",
             "in": "query",
             "name": "include",
@@ -4926,7 +7033,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/RunOut"
+                    "$ref": "#/components/schemas/RunDetailOut"
                   },
                   "title": "Response List Runs V1 Runs Get",
                   "type": "array"
@@ -5015,7 +7122,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunOut"
+                  "$ref": "#/components/schemas/RunDetailOut"
                 }
               }
             },
@@ -5033,66 +7140,6 @@
           }
         },
         "summary": "Delete Run",
-        "tags": [
-          "runs"
-        ]
-      },
-      "get": {
-        "operationId": "get_run_v1_runs__run_id__get",
-        "parameters": [
-          {
-            "in": "path",
-            "name": "run_id",
-            "required": true,
-            "schema": {
-              "format": "uuid",
-              "title": "Run Id",
-              "type": "string"
-            }
-          },
-          {
-            "description": "'deleted' to fetch a soft-deleted run",
-            "in": "query",
-            "name": "include",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "const": "deleted",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "'deleted' to fetch a soft-deleted run",
-              "title": "Include"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RunOut"
-                }
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get Run",
         "tags": [
           "runs"
         ]
@@ -5126,7 +7173,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunOut"
+                  "$ref": "#/components/schemas/RunDetailOut"
                 }
               }
             },
@@ -5247,10 +7294,9 @@
         ]
       }
     },
-    "/v1/runs/{run_id}/bundle": {
-      "get": {
-        "description": "The run-page JSON dump (D9): run + catalog + bounded artifact index +\nspan-type overview + lineage refs. Raw points come from /series/query.\n404 on a soft-deleted run; child_run_ids + artifacts exclude deleted rows.",
-        "operationId": "get_bundle_v1_runs__run_id__bundle_get",
+    "/v1/runs/{run_id}/artifacts/uploads": {
+      "post": {
+        "operationId": "presign_upload_v1_runs__run_id__artifacts_uploads_post",
         "parameters": [
           {
             "in": "path",
@@ -5263,12 +7309,22 @@
             }
           }
         ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
+          "201": {
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunBundle"
+                  "$ref": "#/components/schemas/UploadResponse"
                 }
               }
             },
@@ -5285,15 +7341,15 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Bundle",
+        "summary": "Presign Upload",
         "tags": [
-          "runs"
+          "artifacts"
         ]
       }
     },
-    "/v1/runs/{run_id}/lineage": {
+    "/v1/runs/{run_id}/edges": {
       "get": {
-        "operationId": "get_lineage_v1_runs__run_id__lineage_get",
+        "operationId": "list_run_edges_v1_runs__run_id__edges_get",
         "parameters": [
           {
             "in": "path",
@@ -5311,7 +7367,11 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunLineage"
+                  "items": {
+                    "$ref": "#/components/schemas/LineageEdgeOut"
+                  },
+                  "title": "Response List Run Edges V1 Runs  Run Id  Edges Get",
+                  "type": "array"
                 }
               }
             },
@@ -5328,9 +7388,56 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Get Lineage",
+        "summary": "List Run Edges",
         "tags": [
-          "runs"
+          "lineage"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/events": {
+      "get": {
+        "operationId": "list_run_events_v1_runs__run_id__events_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/EventOut"
+                  },
+                  "title": "Response List Run Events V1 Runs  Run Id  Events Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Run Events",
+        "tags": [
+          "events"
         ]
       }
     },
@@ -5497,7 +7604,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/RunOut"
+                  "$ref": "#/components/schemas/RunDetailOut"
                 }
               }
             },
@@ -5793,6 +7900,153 @@
         "summary": "Create Step",
         "tags": [
           "spans"
+        ]
+      }
+    },
+    "/v1/runs/{run_ref}": {
+      "get": {
+        "description": "`run_ref` is a UUID or a petname short_id (fold #21); resolved unambiguously.",
+        "operationId": "get_run_v1_runs__run_ref__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_ref",
+            "required": true,
+            "schema": {
+              "title": "Run Ref",
+              "type": "string"
+            }
+          },
+          {
+            "description": "'deleted' to fetch a soft-deleted run",
+            "in": "query",
+            "name": "include",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "const": "deleted",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "'deleted' to fetch a soft-deleted run",
+              "title": "Include"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Run",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_ref}/bundle": {
+      "get": {
+        "description": "The run-page JSON dump (D9): run + catalog + bounded artifact index +\nspan-type overview + lineage refs. Raw points come from /series/query.\n`run_ref` is a UUID or a petname short_id. 404 on a soft-deleted run;\nchild_run_ids + artifacts exclude deleted rows.",
+        "operationId": "get_bundle_v1_runs__run_ref__bundle_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_ref",
+            "required": true,
+            "schema": {
+              "title": "Run Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunBundle"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Bundle",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_ref}/lineage": {
+      "get": {
+        "operationId": "get_lineage_v1_runs__run_ref__lineage_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_ref",
+            "required": true,
+            "schema": {
+              "title": "Run Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunLineage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Lineage",
+        "tags": [
+          "runs"
         ]
       }
     },

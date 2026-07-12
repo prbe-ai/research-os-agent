@@ -314,11 +314,13 @@ def log(
     metric: list[str] = typer.Argument(..., metavar="key=value..."),
     step: int = typer.Option(None, "--step"),
     kind: str = typer.Option("model", "--kind"),
+    dim: list[str] = typer.Option(None, "--dim", metavar="k=v"),
 ) -> None:
-    """Append metric points."""
+    """Append metric points. --dim adds series dimensions (fold #9)."""
     metrics = _kv_pairs(metric, cast_float=True)
+    dims = _kv_pairs(dim) if dim else None
     with _client() as c:
-        _run_handle(c, run).log(metrics, step=step, kind=kind)
+        _run_handle(c, run).log(metrics, step=step, kind=kind, dimensions=dims)
     print(f"logged {len(metrics)} metric(s) to {run}")
 
 
@@ -436,13 +438,15 @@ def bundle(run: str = typer.Argument(...)) -> None:
         _print_json(c.run_bundle(run))
 
 
-# -- structured experiment knowledge ----------------------------------------
-event_app = typer.Typer(no_args_is_help=True, help="upload structured research knowledge")
-app.add_typer(event_app, name="event")
+# -- structured research notes ----------------------------------------------
+# (backend `events` are server-emitted + read-only; a research note is stored as a
+# kind="note" artifact. `exp events` reads the backend lifecycle log.)
+note_app = typer.Typer(no_args_is_help=True, help="upload structured research knowledge")
+app.add_typer(note_app, name="note")
 
 
-@event_app.command("add")
-def event_add(
+@note_app.command("add")
+def note_add(
     run: str = typer.Argument(...),
     kind: EventKind = typer.Option(..., "--kind"),
     statement: str = typer.Option(..., "--statement"),
@@ -452,9 +456,9 @@ def event_add(
     supersedes: str = typer.Option(None, "--supersedes"),
     meta: list[str] = typer.Option(None, "--meta", metavar="k=v"),
 ) -> None:
-    """Append a research event (normal experiment upload; agents/researchers/SDK)."""
+    """Append a research note (normal experiment upload; agents/researchers/SDK)."""
     with _client() as c:
-        result = c.events.add(
+        result = c.notes.add(
             run,
             kind.value,
             statement,
@@ -465,6 +469,13 @@ def event_add(
             metadata=_kv_pairs(meta) if meta else None,
         )
     _print_json(result)
+
+
+@app.command()
+def events(run: str = typer.Argument(...)) -> None:
+    """Read the backend lifecycle events for a run (fold #10, read-only)."""
+    with _client() as c:
+        _print_json(c.events.for_run(run))
 
 
 # -- reserved hook adapter ABI (no hooks installed this release) -------------
@@ -517,90 +528,91 @@ def hook_session_detach(
     _print_json(result)
 
 
-# -- reusable asset writes --------------------------------------------------
-asset_app = typer.Typer(no_args_is_help=True, help="materialize or modify reusable assets")
+# -- reusable asset registry (fold #5) --------------------------------------
+asset_app = typer.Typer(no_args_is_help=True, help="named asset registry + zero-copy versions")
 app.add_typer(asset_app, name="asset")
 
 
-@asset_app.command("materialize")
-def asset_materialize(
-    asset: str = typer.Argument(..., help="exact resolved asset version ref"),
-    run: str = typer.Option(..., "--run"),
-    to: str = typer.Option(..., "--to"),
-    mode: AssetMode = typer.Option(AssetMode.readonly, "--mode"),
+@asset_app.command("register")
+def asset_register(
+    name: str = typer.Argument(...),
+    kind: str = typer.Option("dataset", "--kind"),
+    description: str = typer.Option(None, "--description"),
+    tag: list[str] = typer.Option(None, "--tag"),
 ) -> None:
+    """Create a named asset (409 if the name already exists)."""
     with _client() as c:
-        result = c.assets.materialize(asset, run_id=run, destination=to, mode=mode.value)
+        result = c.assets.register(name, kind=kind, description=description, tags=tag or None)
     _print_json(result)
 
 
-@asset_app.command("fork")
-def asset_fork(
-    asset: str = typer.Argument(..., help="exact pinned base version ref"),
-    run: str = typer.Option(..., "--run"),
-    to: str = typer.Option(..., "--to"),
-    reason: str = typer.Option(..., "--reason"),
+@asset_app.command("version")
+def asset_version(
+    asset_id: str = typer.Argument(...),
+    from_artifact: str = typer.Option(None, "--from-artifact", help="zero-copy from an artifact id"),
+    content_hash: str = typer.Option(None, "--content-hash"),
+    uri: str = typer.Option(None, "--uri"),
+    label: str = typer.Option(None, "--label"),
 ) -> None:
+    """Pin a new immutable version (zero-copy from an artifact, or by content_hash)."""
     with _client() as c:
-        result = c.assets.fork(asset, run_id=run, destination=to, reason=reason)
-    _print_json(result)
-
-
-@asset_app.command("propose")
-def asset_propose(
-    source: str = typer.Argument(...),
-    run: str = typer.Option(..., "--run"),
-    kind: str = typer.Option(..., "--kind"),
-    name: str = typer.Option(..., "--name"),
-    base: str = typer.Option(None, "--base"),
-    new_identity_reason: str = typer.Option(None, "--new-identity-reason"),
-    contract: str = typer.Option(None, "--contract", help="JSON object or @file"),
-    validation: str = typer.Option(None, "--validation", help="JSON object or @file"),
-    transform: str = typer.Option(None, "--transform", help="JSON object or @file"),
-    nearest_matches: str = typer.Option(
-        None, "--nearest-matches", help='JSON object or @file shaped {"matches": [...]}'
-    ),
-) -> None:
-    with _client() as c:
-        result = c.assets.propose(
-            source,
-            run_id=run,
-            kind=kind,
-            canonical_name=name,
-            base_ref=base,
-            contract=_json_value(contract),
-            validation=_json_value(validation),
-            transform=_json_value(transform),
-            nearest_matches=(
-                (_json_value(nearest_matches) or {}).get("matches", [])
-                if nearest_matches
-                else None
-            ),
-            new_identity_reason=new_identity_reason,
+        result = c.assets.add_version(
+            asset_id, from_artifact_id=from_artifact, content_hash=content_hash, uri=uri, label=label
         )
     _print_json(result)
 
 
-@asset_app.command("promote")
-def asset_promote(
-    candidate: str = typer.Argument(...),
-    approval: str = typer.Option(..., "--approval"),
-) -> None:
+@asset_app.command("list")
+def asset_list() -> None:
+    """List assets."""
     with _client() as c:
-        result = c.assets.promote(candidate, approval=approval)
+        _print_json(c.assets.list().items)
+
+
+# -- lineage edges (fold #2) ------------------------------------------------
+edge_app = typer.Typer(no_args_is_help=True, help="lineage edges (run/artifact/asset_version)")
+app.add_typer(edge_app, name="edge")
+
+
+@edge_app.command("add")
+def edge_add(
+    source: str = typer.Option(..., "--source", metavar="type:id"),
+    relation: str = typer.Option(..., "--relation"),
+    target: str = typer.Option(..., "--target", metavar="type:id"),
+) -> None:
+    """Add a lineage edge. --source/--target are `type:id` (type in run|artifact|asset_version)."""
+    st, _, sid = source.partition(":")
+    tt, _, tid = target.partition(":")
+    if not sid or not tid:
+        raise typer.BadParameter("source/target must be `type:id`")
+    with _client() as c:
+        result = c.add_edge(
+            source_type=st, source_id=sid, relation=relation, target_type=tt, target_id=tid
+        )
     _print_json(result)
 
 
-@app.command()
-def promote(
-    run: str = typer.Argument(...),
-    approval: str = typer.Option(..., "--approval"),
-    asset: list[str] = typer.Option(None, "--asset", help="approved candidate asset ref"),
+# -- experiment versions (fold #6) ------------------------------------------
+version_app = typer.Typer(no_args_is_help=True, help="immutable experiment version manifests")
+app.add_typer(version_app, name="version")
+
+
+@version_app.command("create")
+def version_create(
+    experiment_id: str = typer.Argument(...),
+    label: str = typer.Option(None, "--label"),
 ) -> None:
-    """Publish an approved immutable experiment manifest."""
+    """Mint an immutable experiment version (launch-time manifest)."""
     with _client() as c:
-        result = c.promote(run, approval=approval, asset_refs=asset)
+        result = c.experiment_version(experiment_id, label=label)
     _print_json(result)
+
+
+@version_app.command("list")
+def version_list(experiment_id: str = typer.Argument(...)) -> None:
+    """List an experiment's versions."""
+    with _client() as c:
+        _print_json(c.list_experiment_versions(experiment_id))
 
 
 # -- entrypoint -------------------------------------------------------------

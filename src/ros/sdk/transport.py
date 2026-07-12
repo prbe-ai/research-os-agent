@@ -144,3 +144,26 @@ class Transport:
     def get_page(self, path: str, *, params: dict[str, Any] | None = None) -> Page:
         resp = self.request("GET", path, params=params, idempotent=True)
         return Page(items=resp.json(), next_cursor=resp.headers.get("X-Next-Cursor"))
+
+    def put_url(self, url: str, data: bytes, *, content_type: str | None = None) -> None:
+        """Raw PUT of bytes to a presigned URL (artifact upload, fold #16).
+
+        No Authorization header: the presigned URL carries its own signature. This
+        goes to an absolute URL (R2), not the API base; retried on network blips."""
+        headers = {"Content-Type": content_type} if content_type else {}
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                resp = self._client.put(url, content=data, headers=headers)
+            except httpx.HTTPError as exc:
+                if attempt <= self.max_retries:
+                    time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                    continue
+                raise errors.TransportError(f"PUT {url}: {exc}") from exc
+            if resp.status_code in _RETRYABLE and attempt <= self.max_retries:
+                time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                continue
+            if resp.status_code >= 400:
+                raise errors.error_for(resp.status_code, resp.text)
+            return
