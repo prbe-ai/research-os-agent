@@ -9,7 +9,7 @@ COPY src ./src
 RUN pip install --no-cache-dir ".[mcp-http]"
 
 ENV ROS_BASE_URL=https://api.research.prbe.ai \
-    HOST=:: \
+    HOST=0.0.0.0 \
     PORT=8080
 EXPOSE 8080
 
