@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "research-os": {
+      "type": "http",
+      "url": "https://mcp.research.prbe.ai/mcp",
+      "headers": { "Authorization": "Bearer ${ROS_MCP_TOKEN}" }
+    }
+  }
+}

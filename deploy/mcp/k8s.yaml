@@ -1,0 +1,69 @@
+# Hosted read-only Research OS MCP on the existing DOKS cluster (namespace `research`),
+# behind the ingress-nginx + cert-manager already installed for the API. Stateless,
+# no secrets (auth is the caller's per-request Bearer token). Host: mcp.research.prbe.ai.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: research-os-mcp
+  namespace: research
+  labels: { app: research-os-mcp }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: research-os-mcp }
+  template:
+    metadata:
+      labels: { app: research-os-mcp }
+    spec:
+      containers:
+        - name: mcp
+          image: ghcr.io/prbe-ai/research-os-mcp:0.4.0
+          ports: [{ containerPort: 8080 }]
+          env:
+            # Same-cluster: point at the internal API service to avoid LB hairpin.
+            # Swap to https://api.research.prbe.ai if calling the public endpoint.
+            - { name: ROS_BASE_URL, value: "http://research-os-api.research.svc.cluster.local:8080" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 3
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+          resources:
+            requests: { cpu: 50m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: research-os-mcp
+  namespace: research
+spec:
+  selector: { app: research-os-mcp }
+  ports: [{ port: 80, targetPort: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: research-os-mcp
+  namespace: research
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    # Streamable HTTP can hold a response open; give it room.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [mcp.research.prbe.ai]
+      secretName: research-os-mcp-tls
+  rules:
+    - host: mcp.research.prbe.ai
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: research-os-mcp
+                port: { number: 80 }

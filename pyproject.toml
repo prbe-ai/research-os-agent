@@ -4,11 +4,22 @@ build-backend = "hatchling.build"
 
 [project]
 name = "research-os-agent"
-version = "0.1.0"
-description = "CLI + SDK client for research-os (Probe experiment tracking). Emits to the v3 ingestion contract."
+version = "0.4.0"
+description = "CLI + SDK + read-only MCP client for research-os (Probe experiment tracking)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
+authors = [{ name = "Probe", email = "team@prbe.ai" }]
+keywords = ["mlops", "experiment-tracking", "reinforcement-learning", "mcp", "research-os"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 dependencies = [
     "httpx>=0.27",
     "mcp>=1.23,<2",
@@ -23,10 +34,17 @@ dev = [
     # See `make gen-models` / scripts/gen_models.py.
     "datamodel-code-generator>=0.25",
 ]
+# Extra needed only to RUN the hosted HTTP MCP service (not for stdio/CLI users).
+mcp-http = ["uvicorn>=0.30"]
+
+[project.urls]
+Homepage = "https://github.com/prbe-ai/research-os-agent"
+Repository = "https://github.com/prbe-ai/research-os-agent"
 
 [project.scripts]
 exp = "ros.cli:main"
 research-os-mcp = "ros.mcp.server:main"
+research-os-mcp-http = "ros.mcp.server:main_http"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ros"]
