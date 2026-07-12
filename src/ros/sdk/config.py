@@ -9,8 +9,8 @@ Env vars:
   ROS_HMAC_SECRET     optional shared secret for the X-Signature body HMAC on /ingest
 
 Config file: $XDG_CONFIG_HOME/ros/config.json (default ~/.config/ros/config.json),
-written by ``exp login``. This is the air-gap-friendly paste-token path; a device
-flow is future work (see research-os TODOS).
+written by ``exp login``. ``exp login --device`` captures the token via the browser
+handoff; ``exp login --token`` is the air-gap-friendly paste path.
 """
 
 from __future__ import annotations

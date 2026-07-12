@@ -8,8 +8,8 @@ Connection flags (`--base-url/--token/--ingest-token/--hmac-secret`) are global 
 go before the command: `exp --token ros_pat_x log RUN loss=0.1`. `login` also accepts
 them directly so `exp login --token ...` works. Config lives in ~/.config/ros/config.json.
 
-Auth: `exp login` pastes a `ros_pat_...` token (air-gap friendly); a device flow is
-future work.
+Auth: `exp login --device` runs the browser handoff (RFC 8628) and captures the
+`ros_pat_...` token; `exp login --token ros_pat_...` is the air-gap paste path.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import typer
 from .. import __version__, errors
 from ..sdk.client import Client
 from ..sdk.config import clear_file, load_file, resolve, save_file
+from ..sdk.device import DeviceLoginError, DevicePrompt, device_login
 
 
 # -- global connection state (set by the root callback) ---------------------
@@ -165,12 +166,39 @@ def login(
     token: str = typer.Option(None, "--token"),
     ingest_token: str = typer.Option(None, "--ingest-token"),
     hmac_secret: str = typer.Option(None, "--hmac-secret"),
+    device: bool = typer.Option(
+        False,
+        "--device",
+        help="browser-assisted login: approve in the dashboard, no token to paste",
+    ),
 ) -> None:
-    """Save endpoint + token, verifying the user token if present."""
+    """Save endpoint + token, verifying the user token if present.
+
+    ``--device`` runs the browser handoff (RFC 8628) and captures the token for
+    you; otherwise pass ``--token ros_pat_...`` (air-gap friendly), or neither to
+    just set the endpoint.
+    """
     data = load_file()
+    resolved_token = token or _conn.token
+    base = base_url or _conn.base_url
+
+    if device and not resolved_token:
+        endpoint = resolve(base_url=base).base_url
+        print(f"opening {endpoint} for browser approval…")
+
+        def _show(prompt: DevicePrompt) -> None:
+            print(f"  visit: {prompt.verification_uri_complete}")
+            print(f"  code:  {prompt.user_code}")
+
+        try:
+            resolved_token = device_login(endpoint, on_prompt=_show)
+        except DeviceLoginError as exc:
+            print(f"device login failed: {exc}", file=sys.stderr)
+            raise typer.Exit(1) from exc
+
     settings = resolve(
-        base_url=base_url or _conn.base_url,
-        token=token or _conn.token,
+        base_url=base,
+        token=resolved_token,
         ingest_token=ingest_token or _conn.ingest_token,
         hmac_secret=hmac_secret or _conn.hmac_secret,
     )
