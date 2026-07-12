@@ -15,9 +15,12 @@ spec:
     metadata:
       labels: { app: research-os-mcp }
     spec:
+      imagePullSecrets:
+        - name: probe-ghcr-pull   # same GHCR pull secret research-os uses
       containers:
         - name: mcp
           image: ghcr.io/prbe-ai/research-os-mcp:0.4.0
+          imagePullPolicy: Always   # re-pull the mutable 0.4.0 tag on every roll
           ports: [{ containerPort: 8080 }]
           env:
             # Same-cluster: point at the internal API service to avoid LB hairpin.
