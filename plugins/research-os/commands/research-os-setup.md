@@ -27,5 +27,5 @@ Run these in order. Show the user each command before running any write.
    `ROS_BASE_URL`) and point the plugin's `.mcp.json` at it.
 
 5. **Confirm.** The `research-os` MCP server should be connected (its `research_*` tools
-   available) and `exp` logged in. You can now use the **experiment**,
+   available) and `exp` logged in. You can now use the **track-experiment**,
    **manage-research-asset**, and **publish-experiment** skills.

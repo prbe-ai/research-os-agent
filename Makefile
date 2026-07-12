@@ -19,7 +19,7 @@ regen: dump-openapi gen-models
 
 # Keep the plugin's skill copies in sync with the canonical top-level skills/.
 sync-plugin-skills:
-	@for s in experiment manage-research-asset publish-experiment; do \
+	@for s in track-experiment manage-research-asset publish-experiment; do \
 	  rm -rf plugins/research-os/skills/$$s; mkdir -p plugins/research-os/skills/$$s; \
 	  cp -R skills/$$s/. plugins/research-os/skills/$$s/; done
 	@echo "synced skills -> plugins/research-os/skills"

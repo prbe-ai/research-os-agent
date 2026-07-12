@@ -16,7 +16,7 @@ src/ros/
 ├── cli/       # `exp`: thin shell over the SDK
 └── mcp/       # `research-os-mcp`: strictly read-only tools and resources
 skills/
-├── experiment/
+├── track-experiment/
 ├── manage-research-asset/
 └── publish-experiment/
 ```
@@ -59,7 +59,7 @@ The MCP server prefers `ROS_MCP_TOKEN`, which should be a separately minted
 read-only token. It falls back to `ROS_TOKEN` for local development, but exposes
 no mutation tools.
 
-On rented compute (RunPod) with no standing config, the `/experiment` skill seeds
+On rented compute (RunPod) with no standing config, the `/track-experiment` skill seeds
 `ROS_TOKEN` at session start.
 
 ## SDK (agent-driven / interactive)
@@ -167,7 +167,7 @@ identifiers and evidence first.
 - `publish-experiment` requires explicit approval and refuses to imitate official
   promotion when manifest/asset capabilities are unavailable.
 
-Asset-reuse hooks are deliberately deferred. The experiment skill contains the
+Asset-reuse hooks are deliberately deferred. The track-experiment skill contains the
 reuse-before-create rule; deterministic enforcement can be added later without
 changing the SDK, CLI, MCP, or skill contracts.
 

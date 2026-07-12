@@ -9,7 +9,7 @@
     {
       "name": "research-os",
       "source": "./plugins/research-os",
-      "description": "Experiment-tracking skills (experiment, manage-research-asset, publish-experiment) wired to a read-only Research OS MCP server; writes via the `exp` CLI."
+      "description": "Experiment-tracking skills (track-experiment, manage-research-asset, publish-experiment) wired to a read-only Research OS MCP server; writes via the `exp` CLI."
     }
   ]
 }

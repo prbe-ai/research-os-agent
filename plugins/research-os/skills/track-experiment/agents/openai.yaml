@@ -1,0 +1,4 @@
+interface:
+  display_name: "Track Experiment"
+  short_description: "Box, capture, and hand off research runs"
+  default_prompt: "Use $track-experiment to track this research run with prior context and reproducibility evidence."

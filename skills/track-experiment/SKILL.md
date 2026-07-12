@@ -1,5 +1,5 @@
 ---
-name: experiment
+name: track-experiment
 description: Box and track scientific training, evaluation, docking, scoring, sweep, simulation, or other result-producing work. Use before launching, resuming, interpreting, checkpointing, completing, or handing off a research experiment. Do not use for ordinary editing, formatting, installation, or unit tests unless they are evidence inside an active experiment.
 ---
 

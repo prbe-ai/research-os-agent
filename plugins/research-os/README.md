@@ -18,7 +18,7 @@ central prbe-ai marketplace, the install becomes `research-os@prbe-ai`.)
 
 ## What's inside
 
-- **Skills:** `experiment` (track a run end to end), `manage-research-asset` (reuse /
+- **Skills:** `track-experiment` (track a run end to end), `manage-research-asset` (reuse /
   version assets), `publish-experiment` (mint an immutable experiment version).
 - **MCP server** (`.mcp.json`): defaults to the hosted endpoint
   `https://mcp.research.prbe.ai/mcp` with `Authorization: Bearer ${ROS_MCP_TOKEN}`
