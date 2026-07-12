@@ -44,7 +44,7 @@ def test_link_command(wired, capsys):
     run_id = capsys.readouterr().out.strip()
     rc = cli.main(["link", run_id, "--set", "wandb_run_id=abc", "--set", "gpu_job=rp-1"])
     assert rc == 0
-    assert wired.runs[run_id]["metadata"]["foreign_keys"] == {
+    assert wired.runs[run_id]["foreign_keys"] == {
         "wandb_run_id": "abc",
         "gpu_job": "rp-1",
     }

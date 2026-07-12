@@ -167,3 +167,23 @@ class Transport:
             if resp.status_code >= 400:
                 raise errors.error_for(resp.status_code, resp.text)
             return
+
+    def get_url(self, url: str) -> bytes:
+        """Raw GET of a presigned URL (artifact download); returns the bytes.
+        No Authorization header - the presigned URL carries its own signature."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                resp = self._client.get(url)
+            except httpx.HTTPError as exc:
+                if attempt <= self.max_retries:
+                    time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                    continue
+                raise errors.TransportError(f"GET {url}: {exc}") from exc
+            if resp.status_code in _RETRYABLE and attempt <= self.max_retries:
+                time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                continue
+            if resp.status_code >= 400:
+                raise errors.error_for(resp.status_code, resp.text)
+            return resp.content

@@ -569,6 +569,19 @@ def asset_list() -> None:
         _print_json(c.assets.list().items)
 
 
+@asset_app.command("materialize")
+def asset_materialize(
+    name: str = typer.Argument(...),
+    to: str = typer.Option(..., "--to", help="local destination path"),
+    kind: str = typer.Option(None, "--kind"),
+    requirement: str = typer.Option(None, "--requirement", help="exact version number or label"),
+) -> None:
+    """Download a pinned asset version's bytes to a local path."""
+    with _client() as c:
+        result = c.assets.materialize(name, to, kind=kind, requirement=requirement)
+    _print_json(result)
+
+
 # -- lineage edges (fold #2) ------------------------------------------------
 edge_app = typer.Typer(no_args_is_help=True, help="lineage edges (run/artifact/asset_version)")
 app.add_typer(edge_app, name="edge")

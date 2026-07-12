@@ -13,8 +13,10 @@ download path.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import errors
 from ..models import AssetCreate, AssetVersionCreate
 
 if TYPE_CHECKING:
@@ -131,3 +133,37 @@ class AssetClient:
             "versions": vers,
             "selected": selected,
         }
+
+    def materialize(
+        self,
+        name: str,
+        dest: str,
+        *,
+        kind: str | None = None,
+        requirement: str | None = None,
+    ) -> dict:
+        """Copy a pinned asset version's bytes into ``dest`` (fold #16 download).
+
+        Resolves the asset by name, picks the selected version (latest, or the one
+        matching ``requirement``), and downloads the artifact it was pinned from via
+        a presigned GET. Requires a version created from an artifact
+        (``source_artifact_id``); a version pinned by ``content_hash`` alone has no
+        downloadable object. Returns ``{dest, artifact_id, version}``."""
+        resolved = self.resolve(name, kind=kind, requirement=requirement)
+        if resolved["state"] != "match":
+            raise errors.NotFoundError(f"asset {name!r} not found")
+        version = resolved.get("selected")
+        if not version:
+            raise errors.NotFoundError(f"asset {name!r} has no versions")
+        source_artifact_id = version.get("source_artifact_id")
+        if not source_artifact_id:
+            raise ValueError(
+                f"asset version {version.get('version')} was pinned by content_hash only; "
+                "materialize needs a version created from an artifact (from_artifact_id)"
+            )
+        presigned = self.client.transport.post(
+            f"/v1/artifacts/{source_artifact_id}/download", None
+        )
+        data = self.client.transport.get_url(presigned["download_url"])
+        Path(dest).write_bytes(data)
+        return {"dest": str(dest), "artifact_id": source_artifact_id, "version": version.get("version")}

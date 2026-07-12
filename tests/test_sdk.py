@@ -58,11 +58,15 @@ def test_span_generates_uuid_and_posts(client, app):
     assert body["spans"][0]["span_type"] == "rollout"
 
 
-def test_link_merges_foreign_keys_into_metadata(client, app):
+def test_link_writes_real_foreign_keys_column(client, app):
     run = client.run(experiment="e", hypothesis="h", name="r")
     run.link(wandb_run_id="abc", s3_prefix="s3://x/y")
-    row = app.runs[run.id]
-    assert row["metadata"]["foreign_keys"] == {"wandb_run_id": "abc", "s3_prefix": "s3://x/y"}
+    # real runs.foreign_keys column (not metadata), server-merged
+    assert app.runs[run.id]["foreign_keys"] == {"wandb_run_id": "abc", "s3_prefix": "s3://x/y"}
+    # a later link merges per-key new-wins (overwrite one, keep the rest)
+    run.link(wandb_run_id="def")
+    assert app.runs[run.id]["foreign_keys"] == {"wandb_run_id": "def", "s3_prefix": "s3://x/y"}
+    assert "foreign_keys" not in (app.runs[run.id].get("metadata") or {})
 
 
 def test_artifact_with_uri(client, app):
@@ -239,3 +243,48 @@ def test_run_exposes_short_id_and_foreign_keys(client, app):
     run = client.run(experiment="e", hypothesis="h", name="r")
     assert run.short_id and run.short_id.startswith("run-")
     assert run.foreign_keys == {}
+
+
+# -- v0.4 fold-in Phase 2 -----------------------------------------------------
+def test_snapshot_pins_real_env_ref_column(client, app, tmp_path):
+    # snapshot() posts an execution record and pins runs.env_ref via RunPatch
+    # (not metadata). Uses a throwaway git repo for the shadow-ref capture.
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@e.com"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=repo, check=True)
+    (repo / "a.txt").write_text("x\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+    client.fail_open = False
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    snap = run.snapshot(cwd=str(repo), include_env=False, include_gpu=False)
+    assert snap["content_hash"]
+    assert app.runs[run.id]["env_ref"] == snap["content_hash"]
+    assert "env_ref" not in (app.runs[run.id].get("metadata") or {})
+
+
+def test_asset_materialize_downloads_bytes(client, app, tmp_path):
+    client.fail_open = False
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    art = run.log_artifact("data.bin", uri="r2://b/data.bin", kind="artifact")
+    asset = client.assets.register("eval-set", kind="dataset")
+    client.assets.add_version(asset["id"], from_artifact_id=art["id"], label="v1")
+    dest = tmp_path / "out.bin"
+    result = client.assets.materialize("eval-set", str(dest))
+    assert dest.read_bytes() == b"ASSET-BYTES"
+    assert result["version"] == 1
+    assert app.gets, "expected a presigned GET for the download"
+
+
+def test_asset_materialize_requires_source_artifact(client, app, tmp_path):
+    import pytest as _pytest
+
+    client.fail_open = False
+    asset = client.assets.register("hashonly", kind="dataset")
+    client.assets.add_version(asset["id"], content_hash="a" * 64, label="v1")  # no source artifact
+    with _pytest.raises(ValueError):
+        client.assets.materialize("hashonly", str(tmp_path / "x"))

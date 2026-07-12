@@ -68,8 +68,10 @@ def test_asset_registry_registers_and_versions(client, app):
     version = client.assets.add_version(asset["id"], content_hash="c" * 64, label="v1")
     assert version["asset_id"] == asset["id"]
     assert version["version"] == 1
-    # the aspirational fork/propose/promote-candidate surface was dropped (registry only)
-    assert not any(hasattr(client.assets, m) for m in ("fork", "propose", "materialize"))
+    # the aspirational fork/propose/promote-candidate surface was dropped (registry only);
+    # materialize (download a pinned version) is supported in Phase 2.
+    assert not any(hasattr(client.assets, m) for m in ("fork", "propose"))
+    assert hasattr(client.assets, "materialize")
 
 
 def test_experiment_version_replaces_run_promote(client, app):

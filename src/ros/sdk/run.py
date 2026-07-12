@@ -342,14 +342,12 @@ class Run:
 
     # -- foreign keys (shadow-SoT handles) ----------------------------------
     def link(self, *, strict: bool | None = None, **foreign_keys: Any):
-        """Attach foreign keys (wandb_run_id, mlflow_run_id, s3_prefix, ...). Stored
-        under ``metadata.foreign_keys`` since v3 has no first-class column yet. Merges
-        with existing keys rather than replacing the metadata blob."""
-        current = self.refresh()._data.get("metadata", {}) or {}
-        merged_fk = {**current.get("foreign_keys", {}), **foreign_keys}
-        metadata = {**current, "foreign_keys": merged_fk}
+        """Attach foreign keys (wandb_run_id, mlflow_run_id, s3_prefix, ...) to the
+        real ``runs.foreign_keys`` column (fold #8). The server merges per-key
+        new-wins via RunPatch, so a late-discovered id attaches without clobbering
+        earlier keys and no read-modify-write round-trip is needed."""
         data = self._client.write(
-            "PATCH", f"/v1/runs/{self.id}", {"metadata": metadata}, strict=strict
+            "PATCH", f"/v1/runs/{self.id}", {"foreign_keys": foreign_keys}, strict=strict
         )
         if data:
             self._data = data
@@ -368,9 +366,8 @@ class Run:
         execution record (fold #7), and record the shadow commit as a reference
         artifact. Non-disruptive.
 
-        The execution record pins ``run.env_ref`` on the INGEST path. On the interactive
-        /v1 path there is no ``RunPatch.env_ref`` yet, so the content_hash is recorded in
-        ``run.metadata.env_ref`` as an interim (Phase-2 backend follow-up)."""
+        The execution record pins ``run.env_ref`` to its content hash via RunPatch
+        (fold #7 + the RunPatch env_ref parity), the same column the ingest path sets."""
         git = _snapshot.capture_git_snapshot(self.id, cwd)
         record = ExecutionRecordCreate(
             code={"git": git},
@@ -382,13 +379,13 @@ class Run:
         )
         content_hash = exec_rec.get("content_hash") if exec_rec else None
 
-        current = self.refresh()._data.get("metadata", {}) or {}
-        metadata = {**current, "env_ref": content_hash}
-        data = self._client.write(
-            "PATCH", f"/v1/runs/{self.id}", {"metadata": metadata}, strict=strict
-        )
-        if data:
-            self._data = data
+        # Pin the real runs.env_ref column (FK to the execution record just created).
+        if content_hash is not None:
+            data = self._client.write(
+                "PATCH", f"/v1/runs/{self.id}", {"env_ref": content_hash}, strict=strict
+            )
+            if data:
+                self._data = data
         # Record the shadow commit as a reference artifact for lineage.
         self.log_artifact(
             "code-snapshot",
