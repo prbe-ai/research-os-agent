@@ -43,6 +43,7 @@ class FakeApp:
         self.experiment_versions: dict[str, list[dict]] = {}
         self.uploaded: set[str] = set()
         self.puts: list[str] = []
+        self.put_headers: list[dict[str, str]] = []
         self.gets: list[str] = []
         self.metrics_inserted = 0
         self.spans_upserted = 0
@@ -293,9 +294,12 @@ class FakeApp:
             return httpx.Response(201, json={
                 "artifact_id": aid, "have": have,
                 "upload_url": None if have else f"http://r2.test/put/{aid}",
-                "key": f"lab-42/{aid}"})
+                "key": f"lab-42/{aid}",
+                "upload_headers": getattr(self, "upload_headers", {}),
+            })
         if path.startswith("/put/") and method == "PUT":
             self.puts.append(path)
+            self.put_headers.append(dict(request.headers))
             return httpx.Response(200)
         m = re.match(r"^/v1/artifacts/([^/]+)/confirm$", path)
         if m and method == "POST":
