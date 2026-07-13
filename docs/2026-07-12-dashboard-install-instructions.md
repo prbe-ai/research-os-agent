@@ -11,22 +11,32 @@ the tokens). This doc is the gathered context and a build plan; the page lives i
   `/mcp` returns a valid MCP `initialize`, Let's Encrypt TLS, grey-cloud DNS → the ingress LB
   `134.199.137.104`. Read-only, per-request Bearer auth.
 - **API base:** `https://api.research.prbe.ai` (`DEFAULT_API_BASE_URL`).
-- **Plugin install (no PyPI, no central marketplace yet):**
+- **Plugin install (no PyPI, no central marketplace yet)** — these are **interactive
+  Claude Code REPL commands** typed in the prompt, *not* shell commands. Run headless
+  (via an agent's `Bash` tool) they launch the TUI and crash (`Raw mode is not supported`).
   ```
-  claude plugin marketplace add prbe-ai/research-os-agent
-  claude plugin install research-os@research-os-agent
+  /plugin marketplace add prbe-ai/research-os-agent
+  /plugin install research-os@research-os-agent
   /research-os-setup
   ```
-- **CLI install (git, not PyPI):** `uv tool install "git+https://github.com/prbe-ai/research-os-agent"`
-  (or pipx/pip with the same git URL). Provides `exp` + `research-os-mcp`.
+- **CLI install (git, not PyPI):**
+  `uv tool install --force "git+https://github.com/prbe-ai/research-os-agent@main"`
+  (or pipx/pip with the same git URL). Provides `exp`, `research-os-mcp` (stdio),
+  `research-os-mcp-http` (hosted). **Pin `@main`/a tag** so you get the `/v1/me` identity
+  fix (#11); older builds `401` on `login --token`/`whoami`. Ensure `~/.local/bin` is on
+  PATH (`uv tool update-shell`).
+- **Identity:** `GET /v1/me` (bearer-accepting: session, `ros_pat`, or OAuth JWT) → the
+  caller's identity. The old `/auth/me` is session-cookie only — do **not** verify tokens
+  against it.
 
 ## 1. What the page must convey (content)
 
 Three things a user does, in order:
 
-1. **Install the plugin** (Claude Code) — the two `claude plugin …` commands above, then
-   `/research-os-setup`. This gives the skills (`track-experiment`, `manage-research-asset`,
-   `publish-experiment`) and wires the hosted MCP.
+1. **Install** — interactive Claude Code users run the `/plugin …` commands above (skills +
+   auto-wired MCP), then `/research-os-setup`. **Any other agent / headless** installs the
+   CLI with `uv tool install … @main` and wires the MCP manually (see agent-proofing below).
+   Skills are `track-experiment`, `manage-research-asset`, `publish-experiment`.
 2. **Mint tokens** (right here on the page):
    - a **read-only** token → `export ROS_MCP_TOKEN=<ros_pat_read_…>` (for the MCP server);
    - a **write** token → `exp login --base-url https://api.research.prbe.ai --token <ros_pat_…>`
@@ -34,7 +44,34 @@ Three things a user does, in order:
 3. **Verify** — `exp whoami` and that the `research-os` MCP tools (`research_*`) are connected.
 
 Also show the **self-host / air-gap** variant (local stdio MCP via
-`uvx --from "git+…/research-os-agent" research-os-mcp` + `ROS_MCP_TOKEN`/`ROS_BASE_URL`).
+`uvx --from "git+…/research-os-agent@main" research-os-mcp` + `ROS_MCP_TOKEN`/`ROS_BASE_URL`).
+
+### 1a. Agent-proofing the pasteable prompt
+
+The one-paste prompt is executed by *some* coding agent, often headless. Bake these in so
+it succeeds unattended and is safe to re-run (the canonical agent copy lives in
+`plugins/research-os/commands/research-os-setup.md` — keep the two in sync):
+
+- **Never emit `claude plugin …` as a shell step.** It's interactive-only and crashes
+  headless. Lead with `uv tool install … @main`; mention `/plugin` as an interactive-only
+  extra for skills.
+- **Resolve binaries, don't trust bare names.** Users alias `claude`; use `command -v` /
+  absolute paths. Ensure `~/.local/bin` is on PATH after install (`uv tool update-shell`).
+- **Pin the version** (`@main`/tag) — the `/v1/me` fix (#11) is required for `whoami`.
+- **Verify identity against `/v1/me`, not `login`'s exit code.** Older CLIs raise before
+  persisting config; confirm `~/.config/ros/config.json` contains `"token"` and that
+  `curl -H "Authorization: Bearer …" /v1/me` returns 200.
+- **Idempotency:** `uv tool install --force`; `grep`-guard the shell-profile append (blind
+  `>>` duplicates on re-run); `claude mcp remove` before `claude mcp add`.
+- **MCP transport reality:** the plugin's `.mcp.json` is `type: http` (auto-connects once
+  `ROS_MCP_TOKEN` is set). For the manual path, some `claude mcp add` builds support only
+  `stdio`/`sse` — offer both the hosted-HTTP config snippet and a local-stdio
+  `research-os-mcp` fallback.
+- **MCP tools don't hot-load** — they appear in the *next* session. Tell the user to
+  restart; verify liveness with `curl /healthz` (retry; it can flap `502` mid-rollover)
+  and connection with `claude mcp list`.
+- **Secrets:** read-only token for the MCP, write token only for `exp login`; both persist
+  in plaintext (`~/.config/ros/config.json` `600`, `~/.claude.json`) — don't log or commit.
 
 ## 2. Where it goes in the dashboard
 

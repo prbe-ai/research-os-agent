@@ -51,7 +51,8 @@ pip install -e ".[dev]"     # from this directory
 exp login --base-url https://api.research.prbe.ai --token ros_pat_xxxxxxxx
 ```
 
-This verifies the token (`GET /auth/me`) and writes `~/.config/ros/config.json`.
+This verifies the token (`GET /v1/me`, which accepts a `ros_pat` bearer) and writes
+`~/.config/ros/config.json`.
 Or set env: `ROS_BASE_URL`, `ROS_TOKEN` (user token, `/v1`), `ROS_INGEST_TOKEN`
 (ingest token, `/ingest`), `ROS_HMAC_SECRET` (optional body-signature secret).
 
