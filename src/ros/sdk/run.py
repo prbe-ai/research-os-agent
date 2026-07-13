@@ -311,6 +311,7 @@ class Run:
                     presign["upload_url"],
                     data,
                     content_type=content_type or "application/octet-stream",
+                    headers=presign.get("upload_headers") or presign.get("headers"),
                 )
             return self._client.transport.post(
                 f"/v1/artifacts/{presign['artifact_id']}/confirm", None
@@ -386,6 +387,14 @@ class Run:
             )
             if data:
                 self._data = data
+                if data.get("env_ref") != content_hash:
+                    message = (
+                        "Research OS API did not persist run.env_ref after snapshot "
+                        f"(expected {content_hash}, got {data.get('env_ref')!r})"
+                    )
+                    if strict is True or (strict is None and not self._client.fail_open):
+                        raise errors.CapabilityUnavailable("run.env_ref", message)
+                    warnings.warn(message, stacklevel=2)
         # Record the shadow commit as a reference artifact for lineage.
         self.log_artifact(
             "code-snapshot",

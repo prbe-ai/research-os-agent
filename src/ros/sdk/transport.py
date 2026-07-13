@@ -16,6 +16,7 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
@@ -145,17 +146,26 @@ class Transport:
         resp = self.request("GET", path, params=params, idempotent=True)
         return Page(items=resp.json(), next_cursor=resp.headers.get("X-Next-Cursor"))
 
-    def put_url(self, url: str, data: bytes, *, content_type: str | None = None) -> None:
+    def put_url(
+        self,
+        url: str,
+        data: bytes,
+        *,
+        content_type: str | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> None:
         """Raw PUT of bytes to a presigned URL (artifact upload, fold #16).
 
         No Authorization header: the presigned URL carries its own signature. This
         goes to an absolute URL (R2), not the API base; retried on network blips."""
-        headers = {"Content-Type": content_type} if content_type else {}
+        request_headers = dict(headers or {})
+        if content_type:
+            request_headers.setdefault("Content-Type", content_type)
         attempt = 0
         while True:
             attempt += 1
             try:
-                resp = self._client.put(url, content=data, headers=headers)
+                resp = self._client.put(url, content=data, headers=request_headers)
             except httpx.HTTPError as exc:
                 if attempt <= self.max_retries:
                     time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))

@@ -174,6 +174,18 @@ def test_artifact_presign_upload(client, app, tmp_path):
     assert any(p.endswith("/confirm") for p in paths)
 
 
+def test_artifact_presign_upload_sends_server_signed_headers(client, app, tmp_path):
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    f = tmp_path / "ckpt.bin"
+    f.write_bytes(b"weights")
+    app.upload_headers = {"x-amz-checksum-sha256": "checksum"}
+    client.fail_open = False
+
+    run.log_artifact("ckpt.bin", path=str(f), strict=True)
+
+    assert app.put_headers[-1]["x-amz-checksum-sha256"] == "checksum"
+
+
 def test_artifact_reference_still_metadata_only(client, app):
     run = client.run(experiment="e", hypothesis="h", name="r")
     run.log_artifact("final.sif", uri="r2://bucket/final.sif", kind="artifact")
@@ -265,6 +277,36 @@ def test_snapshot_pins_real_env_ref_column(client, app, tmp_path):
     assert snap["content_hash"]
     assert app.runs[run.id]["env_ref"] == snap["content_hash"]
     assert "env_ref" not in (app.runs[run.id].get("metadata") or {})
+
+
+def test_snapshot_rejects_backend_that_drops_env_ref(client, app, tmp_path):
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@e.com"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=repo, check=True)
+    (repo / "a.txt").write_text("x\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+    original_handler = app.handler
+
+    def drop_env_ref(request):
+        response = original_handler(request)
+        if request.method == "PATCH" and request.url.path.startswith("/v1/runs/"):
+            body = response.json()
+            body["env_ref"] = None
+            return httpx.Response(response.status_code, json=body)
+        return response
+
+    import httpx
+
+    client.transport._client = httpx.Client(base_url="http://test", transport=httpx.MockTransport(drop_env_ref))
+    client.fail_open = False
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    with pytest.raises(errors.CapabilityUnavailable, match="run.env_ref"):
+        run.snapshot(cwd=str(repo), include_env=False, include_gpu=False, strict=True)
 
 
 def test_asset_materialize_downloads_bytes(client, app, tmp_path):
