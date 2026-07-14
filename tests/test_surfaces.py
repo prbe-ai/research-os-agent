@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from ros import errors
+from probe import errors
 
 
 def test_research_note_is_normal_experiment_upload(client, app):
@@ -103,7 +103,7 @@ def test_run_check_distinguishes_local_reference_from_portable(client, app):
     # env_ref (execution record) present -> launch capture is satisfied.
     run._data["metadata"] = {"env_ref": "sha256:abc"}
     app.runs[run.id]["metadata"] = run._data["metadata"]
-    run.log_artifact("code-snapshot", uri="git:refs/ros/snapshots/x#abc", kind="code_snapshot")
+    run.log_artifact("code-snapshot", uri="git:refs/probe/snapshots/x#abc", kind="code_snapshot")
     run.log_artifact("local-output", kind="file", is_reference=True)
     report = client.check_run(run.id)
     assert report["state"] == "incomplete"

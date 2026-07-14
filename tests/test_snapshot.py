@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from ros import snapshot
+from probe import snapshot
 
 
 def _git(cwd, *args):
@@ -50,7 +50,7 @@ def test_snapshot_captures_uncommitted_without_touching_worktree(repo):
     assert head_before == head_after
     assert status_before == status_after
     assert snap["dirty"] is True
-    assert snap["ref"] == "refs/ros/snapshots/run-xyz"
+    assert snap["ref"] == "refs/probe/snapshots/run-xyz"
 
     # the shadow commit exists and contains the untracked file
     tree = subprocess.run(

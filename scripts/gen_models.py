@@ -2,7 +2,7 @@
 """Regenerate the typed client models from the backend's OpenAPI schema.
 
 Reads ``schema/openapi.json`` (a snapshot of research-os's FastAPI schema) and
-writes ``src/ros/_generated/models.py``. The generated file is the "floor" the
+writes ``src/probe/_generated/models.py``. The generated file is the "floor" the
 hand-written SDK ergonomics sit on. Never hand-edit the generated file; when the
 contract moves, refresh ``schema/openapi.json`` (see ``scripts/dump_openapi.py``)
 and re-run this.
@@ -21,7 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SCHEMA = ROOT / "schema" / "openapi.json"
-OUT = ROOT / "src" / "ros" / "_generated" / "models.py"
+OUT = ROOT / "src" / "probe" / "_generated" / "models.py"
 
 
 def main() -> int:

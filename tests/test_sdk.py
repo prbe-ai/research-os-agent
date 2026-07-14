@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from ros import errors
+from probe import errors
 
 
 def test_run_high_level_creates_experiment_and_run(client, app):

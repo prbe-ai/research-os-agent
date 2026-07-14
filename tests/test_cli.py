@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from ros import cli
+from probe import cli
 from tests.conftest import make_client
 
 

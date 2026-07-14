@@ -1,20 +1,27 @@
-# research-os-agent (`ros` / `exp`)
+# probe-agent (`probe` SDK/CLI + `probe-research` plugin)
 
-CLI + SDK client for **research-os**, Probe's experiment-tracking platform. It is a
-thin client over the v3 ingestion contract (`CONTRACT.md` in `research-os`).
+CLI + SDK client for **Probe Research**, Probe's experiment-tracking platform. It is a
+thin client over the v3 ingestion contract (`CONTRACT.md` in the Probe Research backend).
 Implemented experiment calls map onto real endpoints. Target asset-registry
 methods are present as an explicit client contract but fail closed with a
 capability error until the backend routes exist.
 
-> Names (`ros` import, `exp` CLI) are placeholders per the SDK/CLI primitives sketch.
+## Two client surfaces
+
+Probe Research exposes experiment tracking through two separate surfaces over the same backend, for two different workflows:
+
+- **`probe` — SDK + CLI (non-agent).** A Python library (`import probe`) and the `probe` command-line tool for integrating with existing setups and manual experimentation. Drop it into a training script or pipeline to record runs, metrics, spans, and artifacts. No agent required.
+- **`probe-research` — plugin: skills + MCP (agent-centric).** Installed into a coding agent (e.g. Claude Code). Its skills teach the agent the experiment workflow, its read-only MCP server lets the agent query experiment state, and writes flow through the `probe` CLI. This is the surface for agent-driven research loops such as Anthrogen.
+
+Same backend, two entry points: humans-in-code reach for the SDK/CLI; agents-in-the-loop use the plugin.
 
 ## Package boundaries
 
 ```text
-src/ros/
+src/probe/
 ├── sdk/       # typed client, uploads, local capture, session adapter ABI
-├── cli/       # `exp`: thin shell over the SDK
-└── mcp/       # `research-os-mcp`: strictly read-only tools and resources
+├── cli/       # `probe`: thin shell over the SDK
+└── mcp/       # `probe-research-mcp`: strictly read-only tools and resources
 skills/
 ├── track-experiment/
 ├── manage-research-asset/
@@ -28,11 +35,11 @@ therefore have capability parity; they differ only in ergonomics.
 | Surface | SDK | CLI | Intended caller |
 |---|---|---|---|
 | Experiment upload | `Client.run`, `Run.log/span/log_artifact/snapshot/link/execute`, `Client.events`, `Client.promote` | `run`, `log`, `span`, `artifact`, `snapshot`, `link`, `exec`, `event`, `promote` | Researchers, agents, notebooks, training/platform code |
-| Session adapter | `Client.sessions.attach/checkpoint/detach` | `exp hook session ...` | **Future deterministic hooks/broker only** |
+| Session adapter | `Client.sessions.attach/checkpoint/detach` | `probe hook session ...` | **Future deterministic hooks/broker only** |
 | Asset read/selection | `Client.assets.resolve`, normally behind MCP | No normal read verb | Agent through read-only MCP |
-| Asset effects | `Client.assets.materialize/fork/propose/promote` | `exp asset ...` | Agent/researcher after selecting an exact asset ref |
+| Asset effects | `Client.assets.materialize/fork/propose/promote` | `probe asset ...` | Agent/researcher after selecting an exact asset ref |
 | Passive ingestion | `Client.ingest` | No convenience command yet | Install-once platform integration |
-| Read plane | SDK reads used by `ros.mcp` | `get`/`bundle` diagnostics | MCP for agents; CLI for humans/scripts |
+| Read plane | SDK reads used by `probe.mcp` | `get`/`bundle` diagnostics | MCP for agents; CLI for humans/scripts |
 
 Session commands do not upload metrics or experiment outputs. They correlate a
 coding-agent session with a run and checkpoint redacted transcript metadata.
@@ -48,15 +55,15 @@ pip install -e ".[dev]"     # from this directory
 ## Auth
 
 ```bash
-exp login --base-url https://api.research.prbe.ai --token ros_pat_xxxxxxxx
+probe login --base-url https://api.research.prbe.ai --token ros_pat_xxxxxxxx
 ```
 
 This verifies the token (`GET /v1/me`, which accepts a `ros_pat` bearer) and writes
-`~/.config/ros/config.json`.
+`~/.config/probe/config.json`.
 Or set env: `ROS_BASE_URL`, `ROS_TOKEN` (user token, `/v1`), `ROS_INGEST_TOKEN`
 (ingest token, `/ingest`), `ROS_HMAC_SECRET` (optional body-signature secret).
 
-The MCP server prefers `ROS_MCP_TOKEN`, which should be a separately minted
+The MCP server prefers `PROBE_MCP_TOKEN`, which should be a separately minted
 read-only token. It falls back to `ROS_TOKEN` for local development, but exposes
 no mutation tools.
 
@@ -66,9 +73,9 @@ On rented compute (RunPod) with no standing config, the `/track-experiment` skil
 ## SDK (agent-driven / interactive)
 
 ```python
-import ros
+import probe
 
-client = ros.Client()  # resolves creds from env / `exp login`
+client = probe.Client()  # resolves creds from env / `probe login`
 
 run = client.run(experiment="dockq-sweep", hypothesis="temp 0.7 wins", name="run-1",
                  project="folding", source="runpod", external_id="rp-9931")
@@ -93,8 +100,8 @@ report = client.check_run(run.id)
 ```
 
 Data writes are **fail-open** by default: on failure they spool to disk
-(`~/.local/state/ros/spool`) and return, never blocking the training loop. `run.finish()`
-(or `exp flush`) replays the spool. Pass `strict=True` to make a write raise.
+(`~/.local/state/probe/spool`) and return, never blocking the training loop. `run.finish()`
+(or `probe flush`) replays the spool. Pass `strict=True` to make a write raise.
 
 ## SDK (install-once / passive push)
 
@@ -110,30 +117,30 @@ client.ingest(
 One idempotent push (bearer ingest token + optional HMAC), keyed on
 `(customer_id, source, external_id)`.
 
-## CLI (`exp`)
+## CLI (`probe`)
 
 ```bash
-RUN=$(exp run start --experiment dockq --hypothesis "temp 0.7 wins" --name run-1 \
+RUN=$(probe run start --experiment dockq --hypothesis "temp 0.7 wins" --name run-1 \
         --project folding --source runpod --external-id rp-9931)
-exp snapshot $RUN
-exp link $RUN --set wandb_run_id=abc --set gpu_job=rp-9931
-exp log $RUN loss=0.42 dockq=0.71 --step 42
-exp span add $RUN --type rollout --name rollout-0 --step 1
-exp artifact add $RUN ./final.sif --kind artifact
-exp event add $RUN --kind decision --statement "Use DockQ scorer v3" --evidence tool:91
-exp exec $RUN -- python train.py --config dockq.yaml
-exp run check $RUN
-exp run end $RUN --status completed
-exp bundle $RUN            # read: run + series + artifacts
+probe snapshot $RUN
+probe link $RUN --set wandb_run_id=abc --set gpu_job=rp-9931
+probe log $RUN loss=0.42 dockq=0.71 --step 42
+probe span add $RUN --type rollout --name rollout-0 --step 1
+probe artifact add $RUN ./final.sif --kind artifact
+probe event add $RUN --kind decision --statement "Use DockQ scorer v3" --evidence tool:91
+probe exec $RUN -- python train.py --config dockq.yaml
+probe run check $RUN
+probe run end $RUN --status completed
+probe bundle $RUN            # read: run + series + artifacts
 ```
 
 The following commands are reserved for future hook configuration and are not
 part of the normal researcher workflow:
 
 ```bash
-exp hook session attach RUN --session-id SESSION --transcript-path PATH --cwd DIR
-exp hook session checkpoint RUN --session-id SESSION --transcript-path PATH --reason pre_compact
-exp hook session detach RUN --session-id SESSION --reason session_end
+probe hook session attach RUN --session-id SESSION --transcript-path PATH --cwd DIR
+probe hook session checkpoint RUN --session-id SESSION --transcript-path PATH --reason pre_compact
+probe hook session detach RUN --session-id SESSION --reason session_end
 ```
 
 They currently encode session links in `run.metadata.agent.sessions[]` and
@@ -142,7 +149,7 @@ artifact upload exists, transcript portability remains explicitly false.
 
 ## Read-only MCP server
 
-Run the stdio server with `research-os-mcp`. It exposes exactly six tools:
+Run the stdio server with `probe-research-mcp`. It exposes exactly six tools:
 
 | Tool | Function |
 |---|---|
@@ -153,7 +160,7 @@ Run the stdio server with `research-os-mcp`. It exposes exactly six tools:
 | `research_resolve` | Compatible asset resolution; honest partial result on API v3 |
 | `research_trace_file` | Producer-consumer and cleanup lineage; partial until trace indexing lands |
 
-MCP reads through the Research OS API—never directly from Postgres or R2. Its
+MCP reads through the Probe Research API—never directly from Postgres or R2. Its
 logical sources are control identity/tenant scope, the structured experiment
 store, the future asset/manifest registry, the future KB projection, and
 object-store resource pointers returned by the API. W&B, RunPod, Kubernetes,
@@ -189,7 +196,7 @@ changing the SDK, CLI, MCP, or skill contracts.
 
 ## v0.4.0.0 ingestion fold-in (Phase 1)
 
-Most earlier gaps are closed by research-os v0.4 (PR #13). Now wired:
+Most earlier gaps are closed by Probe Research v0.4 (PR #13). Now wired:
 
 - **Real metric dimensions.** `log_hw(..., device=3, host="n1")` sends `dimensions`
   (fold #9); `log(..., dimensions={...})`. No more key-encoding.
@@ -226,12 +233,12 @@ hand-written, so the client cannot silently drift from the contract. The write
 paths (`log`/`span`/`log_artifact`/`ingest`/`assets`/`edges`/`execution-records`)
 build their payloads through the generated models, so a renamed or removed field
 fails client-side instead of as a server 422. `/ingest/v1/runs` is now declared in
-the schema too (research-os PR #12), so the passive push is generated and validated
+the schema too (Probe Research PR #12), so the passive push is generated and validated
 like every other path.
 
-- `schema/openapi.json` - a snapshot of research-os's FastAPI schema.
-- `src/ros/_generated/models.py` - generated, never hand-edited.
-- `src/ros/models.py` - the stable import seam the SDK uses.
+- `schema/openapi.json` - a snapshot of Probe Research's FastAPI schema.
+- `src/probe/_generated/models.py` - generated, never hand-edited.
+- `src/probe/models.py` - the stable import seam the SDK uses.
 
 Refresh when the contract moves:
 
@@ -242,11 +249,14 @@ RESEARCH_OS=/path/to/research-os python scripts/dump_openapi.py
 python scripts/gen_models.py
 ```
 
+`RESEARCH_OS` points at a local checkout of the Probe Research backend source repo
+(directory name `research-os`); it is only used to regenerate the schema snapshot.
+
 ## CLI grammar note
 
 The CLI is built on **typer**. Connection flags are global and go *before* the
-command: `exp --token ros_pat_x log RUN loss=0.1`. `exp login` also accepts them
-directly (`exp login --token ...`).
+command: `probe --token ros_pat_x log RUN loss=0.1`. `probe login` also accepts them
+directly (`probe login --token ...`).
 
 ## Tests
 

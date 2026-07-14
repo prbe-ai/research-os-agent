@@ -7,7 +7,7 @@ import json
 
 import pytest
 
-from ros.mcp.server import with_auth_and_health
+from probe.mcp.server import with_auth_and_health
 
 
 async def _inner(scope: dict, receive, send) -> None:

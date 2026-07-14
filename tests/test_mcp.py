@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import asyncio
 
-from ros.mcp.server import create_server
-from ros.mcp.service import ResearchReadService
-from ros.mcp.source import ResearchOSSource
+from probe.mcp.server import create_server
+from probe.mcp.service import ResearchReadService
+from probe.mcp.source import ResearchOSSource
 
 
 def test_context_and_search_use_current_api_fallback(client, app):
@@ -56,7 +56,7 @@ def test_server_exposes_only_the_six_read_tools(client):
 
 # -- hosted HTTP mode: per-request auth + health -----------------------------
 def test_http_auth_middleware_propagates_token_and_health():
-    from ros.mcp.server import _token_var, with_auth_and_health
+    from probe.mcp.server import _token_var, with_auth_and_health
 
     captured: dict = {}
 
@@ -91,7 +91,7 @@ def test_http_auth_middleware_propagates_token_and_health():
 
 
 def test_service_resolves_from_request_token():
-    from ros.mcp.server import _clients, _service_from_token, _token_var
+    from probe.mcp.server import _clients, _service_from_token, _token_var
 
     _clients.clear()
     reset = _token_var.set("read-only-tok")
@@ -105,7 +105,7 @@ def test_service_resolves_from_request_token():
 
 
 def test_http_app_builds():
-    from ros.mcp.server import http_app
+    from probe.mcp.server import http_app
 
     app = http_app()  # FastMCP streamable-http + auth/health wrapper
     assert callable(app)

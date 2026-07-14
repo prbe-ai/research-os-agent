@@ -1,8 +1,0 @@
-{
-  "name": "research-os",
-  "version": "0.4.0",
-  "description": "Research OS: experiment tracking for agentic ML/RL training. Skills for tracking runs, reusing/versioning assets, and publishing results, wired to a read-only Research OS MCP server. Writes go through the `exp` CLI (installed via /research-os-setup).",
-  "author": { "name": "Probe", "email": "team@prbe.ai" },
-  "homepage": "https://github.com/prbe-ai/research-os-agent",
-  "keywords": ["mlops", "experiment-tracking", "reinforcement-learning", "research-os", "mcp"]
-}

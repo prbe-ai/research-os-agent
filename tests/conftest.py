@@ -1,4 +1,4 @@
-"""A stateful in-memory fake of the research-os v3 API over httpx.MockTransport.
+"""A stateful in-memory fake of the Probe Research v3 API over httpx.MockTransport.
 
 Routes only what the client exercises, with response shapes matching CONTRACT.md.
 Lets us test the SDK + CLI end to end with no live server.
@@ -14,9 +14,9 @@ import uuid
 import httpx
 import pytest
 
-from ros.client import Client
-from ros.config import Settings
-from ros.transport import Transport
+from probe.client import Client
+from probe.config import Settings
+from probe.transport import Transport
 
 _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")
 _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
@@ -359,7 +359,7 @@ def make_client(app: FakeApp, *, fail_open: bool = True, tmp_spool=None) -> Clie
     )
     httpx_client = httpx.Client(base_url="http://test", transport=httpx.MockTransport(app.handler))
     transport = Transport(settings, client=httpx_client)
-    from ros.spool import Spool
+    from probe.spool import Spool
 
     spool = Spool(tmp_spool) if tmp_spool else None
     return Client(settings=settings, transport=transport, fail_open=fail_open, spool=spool)
