@@ -8,10 +8,10 @@ COPY pyproject.toml README.md ./
 COPY src ./src
 RUN pip install --no-cache-dir ".[mcp-http]"
 
-ENV ROS_BASE_URL=https://api.research.prbe.ai \
+ENV PROBE_BASE_URL=https://api.research.prbe.ai \
     HOST=0.0.0.0 \
     PORT=8080
 EXPOSE 8080
 
 # Serves the streamable-HTTP MCP at /mcp and a health check at /healthz.
-CMD ["research-os-mcp-http"]
+CMD ["probe-research-mcp-http"]
