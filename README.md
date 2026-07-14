@@ -60,15 +60,15 @@ probe login --base-url https://api.research.prbe.ai --token ros_pat_xxxxxxxx
 
 This verifies the token (`GET /v1/me`, which accepts a `ros_pat` bearer) and writes
 `~/.config/probe/config.json`.
-Or set env: `ROS_BASE_URL`, `ROS_TOKEN` (user token, `/v1`), `ROS_INGEST_TOKEN`
-(ingest token, `/ingest`), `ROS_HMAC_SECRET` (optional body-signature secret).
+Or set env: `PROBE_BASE_URL`, `PROBE_TOKEN` (user token, `/v1`), `PROBE_INGEST_TOKEN`
+(ingest token, `/ingest`), `PROBE_HMAC_SECRET` (optional body-signature secret).
 
 The MCP server prefers `PROBE_MCP_TOKEN`, which should be a separately minted
-read-only token. It falls back to `ROS_TOKEN` for local development, but exposes
+read-only token. It falls back to `PROBE_TOKEN` for local development, but exposes
 no mutation tools.
 
 On rented compute (RunPod) with no standing config, the `/track-experiment` skill seeds
-`ROS_TOKEN` at session start.
+`PROBE_TOKEN` at session start.
 
 ## SDK (agent-driven / interactive)
 

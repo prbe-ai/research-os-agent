@@ -90,7 +90,7 @@ def test_execute_propagates_run_id(client, app, tmp_path):
         [
             sys.executable,
             "-c",
-            f"import os, pathlib; pathlib.Path({str(output)!r}).write_text(os.environ['ROS_RUN_ID'])",
+            f"import os, pathlib; pathlib.Path({str(output)!r}).write_text(os.environ['PROBE_RUN_ID'])",
         ]
     )
     assert result.returncode == 0
