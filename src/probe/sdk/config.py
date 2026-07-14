@@ -3,10 +3,10 @@
 Precedence (highest first): explicit argument -> environment -> config file.
 
 Env vars:
-  ROS_BASE_URL        e.g. https://api.research.prbe.ai
-  ROS_TOKEN           a user API token (ros_pat_...) for /v1
-  ROS_INGEST_TOKEN    an ingest token (ros_ing_...) for /ingest
-  ROS_HMAC_SECRET     optional shared secret for the X-Signature body HMAC on /ingest
+  PROBE_BASE_URL      e.g. https://api.research.prbe.ai
+  PROBE_TOKEN         a user API token (ros_pat_...) for /v1
+  PROBE_INGEST_TOKEN  an ingest token (ros_ing_...) for /ingest
+  PROBE_HMAC_SECRET   optional shared secret for the X-Signature body HMAC on /ingest
 
 Config file: $XDG_CONFIG_HOME/probe/config.json (default ~/.config/probe/config.json),
 written by ``probe login``. ``probe login --device`` captures the token via the browser
@@ -79,15 +79,15 @@ def resolve(
     return Settings(
         base_url=(
             base_url
-            or os.environ.get("ROS_BASE_URL")
+            or os.environ.get("PROBE_BASE_URL")
             or file.get("base_url")
             or DEFAULT_BASE_URL
         ).rstrip("/"),
-        token=token or os.environ.get("ROS_TOKEN") or file.get("token"),
+        token=token or os.environ.get("PROBE_TOKEN") or file.get("token"),
         ingest_token=(
-            ingest_token or os.environ.get("ROS_INGEST_TOKEN") or file.get("ingest_token")
+            ingest_token or os.environ.get("PROBE_INGEST_TOKEN") or file.get("ingest_token")
         ),
         hmac_secret=(
-            hmac_secret or os.environ.get("ROS_HMAC_SECRET") or file.get("hmac_secret")
+            hmac_secret or os.environ.get("PROBE_HMAC_SECRET") or file.get("hmac_secret")
         ),
     )

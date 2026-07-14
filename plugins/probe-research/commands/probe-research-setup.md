@@ -117,7 +117,7 @@ for i in 1 2 3; do curl -fsS https://mcp.research.prbe.ai/healthz | grep -q '"st
 
 *Self-host / air-gap:* run a local server
 (`uvx --from "git+https://github.com/prbe-ai/research-os-agent@main" probe-research-mcp`
-with `PROBE_MCP_TOKEN` + `ROS_BASE_URL`) and point your MCP config at it.
+with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
 
 ## 5. Confirm
 

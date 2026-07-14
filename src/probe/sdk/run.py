@@ -446,7 +446,7 @@ class Run:
             started_at=started_at,
             attributes={"argv": argv, "cwd": os.path.abspath(cwd or os.getcwd())},
         )
-        process_env = {**os.environ, **(env or {}), "ROS_RUN_ID": self.id}
+        process_env = {**os.environ, **(env or {}), "PROBE_RUN_ID": self.id}
         try:
             result = subprocess.run(argv, cwd=cwd, env=process_env, check=False)
         except BaseException:

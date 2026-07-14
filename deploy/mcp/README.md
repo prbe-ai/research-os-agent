@@ -11,7 +11,7 @@ Endpoint: `https://mcp.research.prbe.ai/mcp` · health: `/healthz`.
 
 ```bash
 pip install -e ".[mcp-http]"
-ROS_BASE_URL=https://api.research.prbe.ai research-os-mcp-http   # serves :8080/mcp
+PROBE_BASE_URL=https://api.research.prbe.ai probe-research-mcp-http   # serves :8080/mcp
 curl -s localhost:8080/healthz            # {"status":"ok"}
 ```
 
@@ -37,7 +37,7 @@ curl -s https://mcp.research.prbe.ai/healthz
 ```
 
 Notes:
-- `k8s.yaml` points `ROS_BASE_URL` at the in-cluster API service to avoid an LB hairpin;
+- `k8s.yaml` points `PROBE_BASE_URL` at the in-cluster API service to avoid an LB hairpin;
   swap to `https://api.research.prbe.ai` if you prefer the public endpoint.
 - No secrets in the manifest — auth is per-request. Rate-limit at the ingress if needed.
 - This is a **production change**; do it only with explicit go-ahead.

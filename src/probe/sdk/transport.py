@@ -66,7 +66,7 @@ class Transport:
         is_ingest = path.startswith("/ingest")
         if is_ingest:
             if not self.settings.ingest_token:
-                raise errors.AuthError("no ingest token configured (set ROS_INGEST_TOKEN)")
+                raise errors.AuthError("no ingest token configured (set PROBE_INGEST_TOKEN)")
             headers["Authorization"] = f"Bearer {self.settings.ingest_token}"
             if self.settings.hmac_secret:
                 sig = hmac.new(

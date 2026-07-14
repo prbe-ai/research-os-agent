@@ -25,7 +25,7 @@ spec:
           env:
             # Same-cluster: point at the internal API service to avoid LB hairpin.
             # Swap to https://api.research.prbe.ai if calling the public endpoint.
-            - { name: ROS_BASE_URL, value: "http://research-os.research.svc.cluster.local:8080" }
+            - { name: PROBE_BASE_URL, value: "http://research-os.research.svc.cluster.local:8080" }
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 3

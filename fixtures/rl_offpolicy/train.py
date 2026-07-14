@@ -12,7 +12,7 @@ What gets tracked:
   - finish + an immutable experiment version (the "box")
 
 Run standalone against a live Probe Research:
-    export ROS_BASE_URL=https://api.research.prbe.ai ROS_TOKEN=ros_pat_xxxxxxxx
+    export PROBE_BASE_URL=https://api.research.prbe.ai PROBE_TOKEN=ros_pat_xxxxxxxx
     python -m fixtures.rl_offpolicy.train
 
 Or drive it with a client you built: run_training(client, cwd=".").
@@ -161,7 +161,7 @@ def run_training(client: "probe.Client", *, hyperparams: dict | None = None, run
 
 
 def main() -> None:
-    client = probe.Client()  # ROS_BASE_URL / ROS_TOKEN from env or `probe login`
+    client = probe.Client()  # PROBE_BASE_URL / PROBE_TOKEN from env or `probe login`
     run = run_training(client, cwd=os.getcwd())
     print(f"run: {run.id}  short_id: {run.short_id}")
     client.close()
