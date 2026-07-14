@@ -1,11 +1,11 @@
-"""Device-authorization login (RFC 8628) against a mock research-os device API."""
+"""Device-authorization login (RFC 8628) against a mock Probe Research device API."""
 
 from __future__ import annotations
 
 import httpx
 import pytest
 
-from ros.sdk.device import DeviceLoginError, DevicePrompt, device_login
+from probe.sdk.device import DeviceLoginError, DevicePrompt, device_login
 
 _START = {
     "device_code": "dev-abc",

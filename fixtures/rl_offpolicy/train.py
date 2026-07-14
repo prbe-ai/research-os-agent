@@ -1,4 +1,4 @@
-"""An off-policy RL training run, annotated with the research-os SDK exactly as we'd
+"""An off-policy RL training run, annotated with the Probe Research SDK exactly as we'd
 expect a researcher (or their coding agent) to instrument it.
 
 What gets tracked:
@@ -11,7 +11,7 @@ What gets tracked:
   - artifacts: a checkpoint pointer + a rollout .jsonl (the trajectory convention)
   - finish + an immutable experiment version (the "box")
 
-Run standalone against a live research-os:
+Run standalone against a live Probe Research:
     export ROS_BASE_URL=https://api.research.prbe.ai ROS_TOKEN=ros_pat_xxxxxxxx
     python -m fixtures.rl_offpolicy.train
 
@@ -26,7 +26,7 @@ import random
 import tempfile
 import time
 
-import ros
+import probe
 
 from .env import ChainWalk, QLearner, ReplayBuffer
 
@@ -46,7 +46,7 @@ HYPARAMS = {
 }
 
 
-def run_training(client: "ros.Client", *, hyperparams: dict | None = None, run_name: str | None = None, cwd: str | None = None):
+def run_training(client: "probe.Client", *, hyperparams: dict | None = None, run_name: str | None = None, cwd: str | None = None):
     hp = {**HYPARAMS, **(hyperparams or {})}
 
     # 1) open a run on the spine (experiment + hypothesis + config)
@@ -161,7 +161,7 @@ def run_training(client: "ros.Client", *, hyperparams: dict | None = None, run_n
 
 
 def main() -> None:
-    client = ros.Client()  # ROS_BASE_URL / ROS_TOKEN from env or `exp login`
+    client = probe.Client()  # ROS_BASE_URL / ROS_TOKEN from env or `probe login`
     run = run_training(client, cwd=os.getcwd())
     print(f"run: {run.id}  short_id: {run.short_id}")
     client.close()

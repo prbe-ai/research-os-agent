@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "research-os-agent"
+name = "probe-agent"
 version = "0.4.0"
-description = "CLI + SDK + read-only MCP client for research-os (Probe experiment tracking)."
+description = "CLI + SDK + read-only MCP client for Probe Research (experiment tracking)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Probe", email = "team@prbe.ai" }]
-keywords = ["mlops", "experiment-tracking", "reinforcement-learning", "mcp", "research-os"]
+keywords = ["mlops", "experiment-tracking", "reinforcement-learning", "mcp", "probe-research"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
@@ -30,7 +30,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8",
-    # Regenerates src/ros/_generated/models.py from schema/openapi.json.
+    # Regenerates src/probe/_generated/models.py from schema/openapi.json.
     # See `make gen-models` / scripts/gen_models.py.
     "datamodel-code-generator>=0.25",
 ]
@@ -42,18 +42,18 @@ Homepage = "https://github.com/prbe-ai/research-os-agent"
 Repository = "https://github.com/prbe-ai/research-os-agent"
 
 [project.scripts]
-exp = "ros.cli:main"
-research-os-mcp = "ros.mcp.server:main"
-research-os-mcp-http = "ros.mcp.server:main_http"
+probe = "probe.cli:main"
+probe-research-mcp = "probe.mcp.server:main"
+probe-research-mcp-http = "probe.mcp.server:main_http"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/ros"]
+packages = ["src/probe"]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"skills" = "share/research-os-agent/skills"
+"skills" = "share/probe-agent/skills"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/ros", "skills", "tests", "README.md", "pyproject.toml"]
+include = ["src/probe", "skills", "tests", "README.md", "pyproject.toml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

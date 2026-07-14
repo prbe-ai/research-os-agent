@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "probe-research": {
+      "type": "http",
+      "url": "https://mcp.research.prbe.ai/mcp",
+      "headers": { "Authorization": "Bearer ${PROBE_MCP_TOKEN}" }
+    }
+  }
+}
