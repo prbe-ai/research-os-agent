@@ -1,6 +1,6 @@
 # Hosted read-only Research OS MCP (streamable HTTP).
 # Stateless: it holds no tenant credential and proxies to the Research OS API using
-# each request's Bearer token. Build: docker build -f deploy/mcp/Dockerfile -t ghcr.io/prbe-ai/research-os-mcp:0.4.0 .
+# each request's Bearer token. Build: docker build -f deploy/mcp/Dockerfile -t ghcr.io/prbe-ai/research-os-mcp:0.5.0 .
 FROM python:3.12-slim
 
 WORKDIR /app

@@ -4,7 +4,8 @@ install:
 	pip install -e ".[dev]"
 
 test:
-	pytest
+	# `python -m` puts the repo root on sys.path; bare `pytest` cannot import tests.conftest.
+	python -m pytest
 
 # Snapshot the backend contract. Point RESEARCH_OS at a checkout with deps installed.
 dump-openapi:

@@ -14,10 +14,14 @@ Auth: `probe login --device` runs the browser handoff (RFC 8628) and captures th
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shlex
 import sys
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 import click
@@ -25,7 +29,7 @@ import typer
 
 from .. import __version__, errors
 from ..sdk.client import Client
-from ..sdk.config import clear_file, load_file, resolve, save_file
+from ..sdk.config import clear_file, config_path, load_file, resolve, save_file
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login
 
 
@@ -237,6 +241,227 @@ def whoami() -> None:
     """Show the current principal."""
     with _client() as c:
         _print_json(c.me())
+
+
+# -- mcp read credential ----------------------------------------------------
+mcp_app = typer.Typer(no_args_is_help=True, help="the read-only credential the MCP surface uses")
+app.add_typer(mcp_app, name="mcp")
+
+mcp_token_app = typer.Typer(no_args_is_help=True, help="manage the read-only MCP token")
+mcp_app.add_typer(mcp_token_app, name="token")
+
+_READ_ONLY_SCOPES = {"read"}
+
+
+def _normalize_token(raw: str) -> str:
+    """Undo how tokens actually arrive: pasted with `Bearer `, quotes, or a newline."""
+    token = raw.strip()
+    for _ in range(2):  # e.g. "Bearer probe_pat_x" needs both peels
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+            token = token[1:-1].strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+    return token
+
+
+def _checked_token(raw: str) -> str:
+    token = _normalize_token(raw)
+    if not token:
+        # click's, not typer's: typer.BadParameter is not a click.ClickException, so
+        # main()'s handler misses it and the user gets a traceback.
+        raise click.BadParameter("token is empty")
+    # No prefix check: the server takes both `ros_pat_` and `probe_pat_`, and the
+    # prefix is only a discriminator — real auth is a sha256 lookup.
+    if any(c.isspace() or ord(c) < 32 for c in token):
+        raise click.BadParameter("token contains whitespace or control characters")
+    return token
+
+
+def _fingerprint(token: str) -> str:
+    """Enough to compare two tokens without printing either."""
+    return f"…{token[-4:]} (sha256:{hashlib.sha256(token.encode()).hexdigest()[:8]})"
+
+
+def _verify(token: str, base_url: str) -> tuple[str, dict | None]:
+    """Ask the API who this token is. Returns (state, identity).
+
+    state: ``ok`` | ``rejected`` (definitive 401/403) | ``unreachable`` (blip).
+    """
+    try:
+        with Client(base_url=base_url, token=token, fail_open=False) as client:
+            return "ok", client.me()
+    except (errors.AuthError, errors.ScopeError):  # 401, 403 — both definitive
+        return "rejected", None
+    except (errors.TransportError, errors.ServerError):
+        return "unreachable", None
+
+
+@mcp_token_app.command("set")
+def mcp_token_set(
+    token: str = typer.Option(None, "--token", help="paste a read-only token (air-gap path)"),
+    allow_write: bool = typer.Option(False, "--allow-write", help="persist even if it can write"),
+    verify: bool = typer.Option(True, "--verify/--no-verify", help="check the token against /v1/me"),
+) -> None:
+    """Store the read-only token the MCP uses. Re-run to rotate — it replaces, never appends.
+
+    Bare `probe mcp token set` mints a read-only token in the browser, so nothing is
+    pasted and no secret lands in your shell history or `ps` output.
+    """
+    base = resolve(base_url=_conn.base_url).base_url
+    if token is not None:
+        # `--token ""` is a mistake to report, not a cue to open a browser.
+        secret = _checked_token(token)
+    else:
+        def _show(prompt: DevicePrompt) -> None:
+            print(f"  visit: {prompt.verification_uri_complete}")
+            print(f"  code:  {prompt.user_code}")
+
+        print(f"opening {base} to mint a read-only token…")
+        try:
+            secret = device_login(
+                base, scopes=["read"], token_name="Probe Research MCP (read-only)", on_prompt=_show
+            )
+        except DeviceLoginError as exc:
+            print(f"device login failed: {exc}", file=sys.stderr)
+            raise typer.Exit(1) from exc
+
+    state, identity = _verify(secret, base) if verify else ("skipped", None)
+    if state == "rejected":
+        # Persisting a token the API already refuses just moves the failure somewhere
+        # quieter — the MCP would load its tools and fail every call.
+        print("error: the API rejected this token; nothing was saved", file=sys.stderr)
+        raise typer.Exit(1)
+
+    scopes = set((identity or {}).get("scopes") or [])
+    if scopes and not scopes <= _READ_ONLY_SCOPES and not allow_write:
+        print(
+            f"error: this token carries {sorted(scopes)}; the MCP credential should be read-only.\n"
+            "       Mint a read-only one with `probe mcp token set` (no --token), "
+            "or pass --allow-write to override.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    data = load_file()
+    data["mcp_token"] = secret
+    data.setdefault("base_url", base)
+    path = save_file(data)
+
+    who = (identity or {}).get("email") or "unverified"
+    # Never report success without saying whether it was actually checked — an
+    # unverified write that reads like a verified one is how this broke before.
+    note = {
+        "ok": f"verified: yes ({who}, scopes={sorted(scopes) or 'unknown'})",
+        "unreachable": "verified: no (API unreachable — run `probe mcp status` to recheck)",
+        "skipped": "verified: no (--no-verify)",
+    }[state]
+    print(f"saved mcp_token {_fingerprint(secret)} to {path}\n{note}")
+    if scopes and not scopes <= _READ_ONLY_SCOPES:
+        print("warning: this token can write; the MCP surface is read-only by design")
+    elif state != "ok":
+        # The read-only guard runs on the verified path only. Say so, rather than let
+        # an unchecked token look like a checked one that passed.
+        print("warning: scopes unchecked — this token may be able to write")
+    print("Restart any MCP client that is already running, or reconnect it, to pick this up.")
+
+
+@mcp_token_app.command("unset")
+def mcp_token_unset() -> None:
+    """Remove the stored read-only MCP token."""
+    data = load_file()
+    if data.pop("mcp_token", None) is None:
+        print("no mcp_token stored")
+        return
+    print(f"removed mcp_token from {save_file(data)}")
+
+
+@mcp_app.command("headers")
+def mcp_headers() -> None:
+    """Emit the MCP Authorization header as JSON (for a client's headers helper)."""
+    settings = resolve(base_url=_conn.base_url)
+    if not settings.mcp_token:
+        print(
+            "no MCP token: set PROBE_MCP_TOKEN or run `probe mcp token set`",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+    print(json.dumps({"Authorization": f"Bearer {settings.mcp_token}"}))
+
+
+@mcp_app.command("env")
+def mcp_env() -> None:
+    """Print the export line, for MCP clients that only read the environment.
+
+    Prints a secret to stdout. Nothing is written to a shell profile: a tool that
+    edits rc files it did not author breaks `export X=$(op read …)` and compound
+    statements. Add the line yourself, or use a client that supports a headers helper.
+    """
+    settings = resolve(base_url=_conn.base_url)
+    if not settings.mcp_token:
+        print("no MCP token: run `probe mcp token set` first", file=sys.stderr)
+        raise typer.Exit(1)
+    print(f"export PROBE_MCP_TOKEN={shlex.quote(settings.mcp_token)}")
+
+
+def _stale_literal_copies(token: str | None) -> list[str]:
+    """Places that pin a *different* literal token and would outlive a rotation."""
+    path = Path.home() / ".claude.json"
+    try:
+        servers = json.loads(path.read_text()).get("mcpServers") or {}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return []
+    stale = []
+    for name, cfg in servers.items():
+        if not isinstance(cfg, dict):
+            continue
+        pinned = [
+            (cfg.get("env") or {}).get("PROBE_MCP_TOKEN"),
+            (cfg.get("headers") or {}).get("Authorization"),
+        ]
+        for value in pinned:
+            if isinstance(value, str) and "pat_" in value and (not token or token not in value):
+                stale.append(f"~/.claude.json -> mcpServers.{name}")
+                break
+    return stale
+
+
+@mcp_app.command("status")
+def mcp_status() -> None:
+    """Diagnose the MCP credential: where it comes from, whether it still works."""
+    settings = resolve(base_url=_conn.base_url)
+    file_token = load_file().get("mcp_token")
+    env_token = os.environ.get("PROBE_MCP_TOKEN")
+    token = settings.mcp_token
+
+    print(f"config:   {config_path()}")
+    print(f"endpoint: {settings.base_url}")
+    if not token:
+        print("token:    none — run `probe mcp token set`")
+        raise typer.Exit(1)
+
+    source = "environment (PROBE_MCP_TOKEN)" if env_token else "config file"
+    print(f"token:    {_fingerprint(token)} from {source}")
+    if env_token and file_token and env_token != file_token:
+        # The env wins, so a freshly-rotated config token is not what the MCP sends.
+        print("          ! the environment and config hold DIFFERENT tokens; the environment wins")
+        print(f"          config holds {_fingerprint(file_token)} — open a new shell, or unset PROBE_MCP_TOKEN")
+
+    state, identity = _verify(token, settings.base_url)
+    if state == "ok":
+        scopes = sorted((identity or {}).get("scopes") or [])
+        print(f"verify:   ok — {identity.get('email')} scopes={scopes}")
+        if set(scopes) - _READ_ONLY_SCOPES:
+            print("          ! this token can write; the MCP surface is read-only by design")
+    elif state == "rejected":
+        print("verify:   REJECTED — the API refuses this token. Rotate: `probe mcp token set`")
+    else:
+        print("verify:   unknown — the API was unreachable")
+
+    for place in _stale_literal_copies(token):
+        print(f"stale:    ! {place} pins a different token and takes precedence over this one")
+
+    if state == "rejected":
+        raise typer.Exit(1)
 
 
 # -- run lifecycle ----------------------------------------------------------

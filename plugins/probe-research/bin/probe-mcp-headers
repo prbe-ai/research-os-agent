@@ -1,0 +1,67 @@
+#!/bin/sh
+# Emit the Probe Research MCP Authorization header as JSON on stdout.
+#
+# Claude Code runs this on every connect and again after a 401/403, so a rotated
+# token is picked up without restarting the session. It runs through a plain shell
+# with whatever environment Claude Code itself has: launched from the dock, no
+# profile is ever sourced and ~/.local/bin is not on PATH.
+#
+# Resolution matches sdk.config.resolve: PROBE_MCP_TOKEN first, so a shell that
+# already exports it keeps working untouched, then the `mcp_token` that
+# `probe mcp token set` writes. The write token in the same file is never read —
+# this surface is read-only.
+#
+# Caveat of that order: if the launching shell exports a *stale* PROBE_MCP_TOKEN, this
+# re-emits it after every 401 and the token can never heal — `probe mcp token set` writes
+# a config the export keeps shadowing. `probe mcp status` names that case; the fix is to
+# drop the export and let the config win.
+#
+# It reads the config file rather than calling `probe mcp headers` on purpose. The
+# plugin and the CLI version independently, and a CLI older than the plugin fails
+# with `No such command 'mcp'` and takes the MCP down with it. Reading one JSON key
+# cannot skew, and skips a ~300ms interpreter start on every connect. The CLI is
+# the last resort, for a box with no python.
+#
+# Diagnostics go to stderr; stdout must be JSON and nothing else.
+set -eu
+
+emit() {
+  printf '{"Authorization": "Bearer %s"}\n' "$1"
+  exit 0
+}
+
+[ -n "${PROBE_MCP_TOKEN:-}" ] && emit "$PROBE_MCP_TOKEN"
+
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/probe/config.json"
+if [ -r "$CONFIG" ]; then
+  for python in python3 python; do
+    command -v "$python" >/dev/null 2>&1 || continue
+    token=$("$python" -c '
+import json, sys
+try:
+    print(json.load(open(sys.argv[1])).get("mcp_token") or "")
+except (OSError, ValueError):
+    print("")
+' "$CONFIG" 2>/dev/null) || token=""
+    [ -n "$token" ] && emit "$token"
+    break
+  done
+fi
+
+# No python, or nothing stored: let the CLI answer if it is new enough to know how.
+# Try every candidate — an old `probe` first on PATH must not hide a newer one, which is
+# the whole reason this is a list.
+for candidate in \
+  "$(command -v probe 2>/dev/null || true)" \
+  "$HOME/.local/bin/probe" \
+  "$HOME/.local/share/uv/tools/probe-agent/bin/probe"
+do
+  [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+  if out=$("$candidate" mcp headers 2>/dev/null) && [ -n "$out" ]; then
+    printf '%s\n' "$out"
+    exit 0
+  fi
+done
+
+echo "no Probe MCP token: run \`probe mcp token set\` (or export PROBE_MCP_TOKEN)" >&2
+exit 1
