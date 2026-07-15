@@ -52,9 +52,13 @@ class FakeApp:
         self.fail_next_metrics = False
         # /v1/search (workspaces+kb fold-in): None = a backend that predates the
         # endpoint (404); a dict is returned verbatim. Bodies are captured either way.
+        # search_responses (a queue, popped per request) takes precedence over
+        # search_response; search_404_once simulates one stale pod mid-deploy.
         self.search_response: dict | None = None
+        self.search_responses: list[dict] = []
         self.search_requests: list[dict] = []
         self.search_404_workspace_ids: set[str] = set()
+        self.search_404_once = False
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -78,10 +82,15 @@ class FakeApp:
 
         if path == "/v1/search" and method == "POST":
             self.search_requests.append(body)
-            if self.search_response is None:
+            if self.search_404_once:
+                self.search_404_once = False
                 return httpx.Response(404, json={"detail": "Not Found"})
             if body.get("workspace_id") in self.search_404_workspace_ids:
                 return httpx.Response(404, json={"detail": "not found"})
+            if self.search_responses:
+                return httpx.Response(200, json=self.search_responses.pop(0))
+            if self.search_response is None:
+                return httpx.Response(404, json={"detail": "Not Found"})
             return httpx.Response(200, json=self.search_response)
 
         if path == "/v1/projects" and method == "POST":
