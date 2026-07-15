@@ -61,6 +61,10 @@ class FakeApp:
         # test knobs
         self.experiment_conflict_id: str | None = None
         self.fail_next_metrics = False
+        # /v1/me reports the *token's* scopes, not the principal's: a read-only PAT
+        # answers ["read"] even when its owner is an owner.
+        self.me_scopes: list[str] = ["read", "write", "delete", "admin"]
+        self.me_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -72,11 +76,13 @@ class FakeApp:
             body = {}  # e.g. a raw-bytes PUT to a presigned URL
 
         if path == "/v1/me" and method == "GET":
+            if self.me_status != 200:
+                return httpx.Response(self.me_status, json={"error": "invalid_token"})
             return httpx.Response(200, json={
                 "user_id": "00000000-0000-0000-0000-000000000001",
                 "email": "dev@example.com", "name": "Dev",
                 "customer_id": "lab-42", "role": "owner",
-                "scopes": ["read", "write", "delete", "admin"], "via": "token",
+                "scopes": list(self.me_scopes), "via": "token",
             })
 
         if path == "/v1/tokens/current" and method == "DELETE":
