@@ -18,6 +18,17 @@ from probe.client import Client
 from probe.config import Settings
 from probe.transport import Transport
 
+@pytest.fixture(autouse=True)
+def _no_live_token_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the hosted MCP's edge token check off by default.
+
+    It calls the real ``/v1/me``, so any test handing a bearer to the wrapper would
+    quietly hit production and fail on a 401. Tests that cover verification inject
+    their own ``token_rejected`` instead (see tests/test_mcp_hosted.py).
+    """
+    monkeypatch.setenv("PROBE_MCP_VERIFY_TOKEN", "0")
+
+
 _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")
 _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
 _RUN_ARTIFACTS = re.compile(r"^/v1/runs/([^/]+)/artifacts$")

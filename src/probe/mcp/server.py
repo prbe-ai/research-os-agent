@@ -13,15 +13,19 @@ Runs two ways from one module:
 from __future__ import annotations
 
 import contextvars
+import hashlib
 import json
 import os
+import time
 import warnings
 from typing import Any
 
+import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ..sdk.client import Client
+from ..sdk.config import resolve
 from .service import ResearchReadService
 from .source import ResearchOSSource
 
@@ -167,21 +171,77 @@ def _oauth_discovery() -> dict | None:
     return {"resource": resource, "authorization_servers": [auth_server]}
 
 
+# A rejection is cached so a retry storm costs one upstream call, not one per request.
+# Rotation is unaffected: a new token hashes to a new key and is checked immediately.
+_VERIFY_TTL_SECONDS = 60.0
+_VERIFY_CACHE_MAX = 512
+_verify_cache: dict[str, tuple[bool, float]] = {}
+
+
+async def _upstream_rejects(token: str) -> bool:
+    """Whether the API definitively rejects this token (401/403).
+
+    Only a definitive rejection returns True. A timeout, connection error, or 5xx
+    returns False — a transient API blip must not disconnect every MCP client. The
+    tool call behind it will surface a real error on its own.
+    """
+    key = hashlib.sha256(token.encode()).hexdigest()
+    now = time.monotonic()
+    cached = _verify_cache.get(key)
+    if cached is not None and cached[1] > now:
+        return cached[0]
+    try:
+        async with httpx.AsyncClient(base_url=resolve().base_url, timeout=5.0) as client:
+            response = await client.get("/v1/me", headers={"Authorization": f"Bearer {token}"})
+    except httpx.HTTPError:
+        return False
+    if response.status_code >= 500:
+        return False
+    rejected = response.status_code in (401, 403)
+    if len(_verify_cache) >= _VERIFY_CACHE_MAX:
+        _verify_cache.clear()
+    _verify_cache[key] = (rejected, now + _VERIFY_TTL_SECONDS)
+    return rejected
+
+
 async def _send_json(send: Any, status: int, body: bytes, *, extra_headers: list | None = None) -> None:
     headers = [(b"content-type", b"application/json")] + (extra_headers or [])
     await send({"type": "http.response.start", "status": status, "headers": headers})
     await send({"type": "http.response.body", "body": body})
 
 
-def with_auth_and_health(inner: Any, *, mcp_path: str = "/mcp") -> Any:
+def with_auth_and_health(inner: Any, *, mcp_path: str = "/mcp", token_rejected: Any = None) -> Any:
     """Wrap an ASGI app: answer ``GET /healthz``; when OAuth discovery is on, serve
     the RFC 9728 protected-resource metadata and return a ``WWW-Authenticate``
     challenge for an unauthenticated MCP request (so clients auto-discover the
     authorization server). Otherwise copy the request's Bearer token into
     ``_token_var`` for the request (the per-request service picks it up).
-    Non-HTTP scopes (lifespan) pass straight through."""
+    Non-HTTP scopes (lifespan) pass straight through.
+
+    A *present but invalid* token is rejected here too, with the same 401 challenge.
+    It has to happen at the edge: an MCP tool error is protocol-level and always
+    rides inside an HTTP 200, so a stale token would otherwise load its tools and
+    fail every call. The 401 is also what makes a client re-run its credential
+    helper and retry (Claude Code >= 2.1.193), which is what lets a rotated token
+    heal without a restart. ``token_rejected`` is injectable for tests;
+    ``PROBE_MCP_VERIFY_TOKEN=0`` turns the check off.
+    """
 
     discovery = _oauth_discovery()
+    if token_rejected is None and _env("MCP_VERIFY_TOKEN", "1") == "1":
+        token_rejected = _upstream_rejects
+
+    challenge = None
+    if discovery:
+        challenge = (
+            'Bearer realm="research", '
+            f'resource_metadata="{discovery["resource"]}{_PROTECTED_RESOURCE_PATH}", '
+            'scope="research:read"'
+        ).encode()
+
+    async def _unauthorized(send: Any) -> None:
+        extra = [(b"www-authenticate", challenge)] if challenge else None
+        await _send_json(send, 401, b'{"error":"invalid_token"}', extra_headers=extra)
 
     async def app(scope: dict, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -203,15 +263,13 @@ def with_auth_and_health(inner: Any, *, mcp_path: str = "/mcp") -> Any:
         headers = dict(scope.get("headers") or [])
         raw = headers.get(b"authorization", b"")
         token = raw[7:].decode() if raw[:7].lower() == b"bearer " else None
-        if discovery and token is None and path.startswith(mcp_path):
-            challenge = (
-                'Bearer realm="research", '
-                f'resource_metadata="{discovery["resource"]}{_PROTECTED_RESOURCE_PATH}", '
-                'scope="research:read"'
-            )
-            await _send_json(send, 401, b'{"error":"invalid_token"}',
-                             extra_headers=[(b"www-authenticate", challenge.encode())])
-            return
+        if path.startswith(mcp_path):
+            if discovery and token is None:
+                await _unauthorized(send)
+                return
+            if token and token_rejected is not None and await token_rejected(token):
+                await _unauthorized(send)
+                return
         reset = _token_var.set(token)
         try:
             await inner(scope, receive, send)

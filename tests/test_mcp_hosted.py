@@ -12,7 +12,7 @@ import httpx
 import pytest
 from mcp.server.transport_security import TransportSecuritySettings
 
-from probe.mcp.server import create_server
+from probe.mcp.server import create_server, with_auth_and_health
 
 _INIT = {
     "jsonrpc": "2.0",
@@ -73,3 +73,98 @@ def service(client):
     from probe.mcp.source import ResearchOSSource
 
     return ResearchReadService(ResearchOSSource(client))
+
+
+# -- edge token verification -------------------------------------------------
+async def _inner_ok(scope, receive, send) -> None:
+    """Stands in for the MCP app: reaching it means the token passed the wrapper."""
+    await send({"type": "http.response.start", "status": 200, "headers": []})
+    await send({"type": "http.response.body", "body": b'{"reached":true}'})
+
+
+def _call(app, headers: list | None = None) -> dict:
+    out: dict = {}
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    async def send(msg):
+        if msg["type"] == "http.response.start":
+            out["status"] = msg["status"]
+            out["headers"] = {k.decode(): v.decode() for k, v in msg["headers"]}
+        elif msg["type"] == "http.response.body":
+            out["body"] = msg.get("body", b"")
+
+    scope = {"type": "http", "method": "POST", "path": "/mcp", "headers": headers or []}
+    asyncio.run(app(scope, receive, send))
+    return out
+
+
+@pytest.fixture
+def hosted_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROBE_MCP_OAUTH", "1")
+    monkeypatch.setenv("PROBE_MCP_RESOURCE_URL", "https://mcp.test")
+    monkeypatch.setenv("PROBE_MCP_AUTH_SERVER", "https://api.test")
+
+
+def _bearer(token: str) -> list:
+    return [(b"authorization", f"Bearer {token}".encode())]
+
+
+def test_invalid_token_gets_401_not_a_200_tool_error(hosted_env) -> None:
+    """A stale token must fail at the edge.
+
+    Otherwise its tools load and every call fails inside an HTTP 200 — and the 401
+    is what makes a client re-run its credential helper and retry.
+    """
+
+    async def rejects(token: str) -> bool:
+        return True
+
+    app = with_auth_and_health(_inner_ok, mcp_path="/mcp", token_rejected=rejects)
+    res = _call(app, _bearer("probe_pat_revoked"))
+    assert res["status"] == 401
+    assert res["headers"]["www-authenticate"].startswith("Bearer ")
+    assert b"reached" not in res["body"]
+
+
+def test_valid_token_reaches_the_mcp_app(hosted_env) -> None:
+    async def accepts(token: str) -> bool:
+        return False
+
+    app = with_auth_and_health(_inner_ok, mcp_path="/mcp", token_rejected=accepts)
+    assert _call(app, _bearer("probe_pat_good"))["status"] == 200
+
+
+def test_both_token_prefixes_are_accepted(hosted_env) -> None:
+    """The prefix only discriminates; auth is a sha256 lookup. Legacy ros_pat_ lives."""
+    seen: list[str] = []
+
+    async def accepts(token: str) -> bool:
+        seen.append(token)
+        return False
+
+    app = with_auth_and_health(_inner_ok, mcp_path="/mcp", token_rejected=accepts)
+    for token in ("ros_pat_legacy", "probe_pat_current"):
+        assert _call(app, _bearer(token))["status"] == 200
+    assert seen == ["ros_pat_legacy", "probe_pat_current"]
+
+
+def test_verification_fails_open_so_an_api_blip_does_not_disconnect_everyone(hosted_env) -> None:
+    """Only a definitive 401/403 rejects; an unreachable API must not 401 the world."""
+
+    async def unreachable(token: str) -> bool:
+        return False  # what _upstream_rejects returns on timeout/connection error/5xx
+
+    app = with_auth_and_health(_inner_ok, mcp_path="/mcp", token_rejected=unreachable)
+    assert _call(app, _bearer("probe_pat_any"))["status"] == 200
+
+
+def test_verification_disabled_wires_no_verifier(hosted_env) -> None:
+    """PROBE_MCP_VERIFY_TOKEN=0 (set for the whole suite in conftest) skips the check.
+
+    Nothing is injected here, so reaching the inner app proves no upstream call was
+    attempted — the escape hatch self-hosters use to avoid the extra round-trip.
+    """
+    app = with_auth_and_health(_inner_ok, mcp_path="/mcp")
+    assert _call(app, _bearer("probe_pat_unchecked"))["status"] == 200
