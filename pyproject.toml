@@ -58,3 +58,7 @@ include = ["src/probe", "skills", "tests", "README.md", "pyproject.toml"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# Puts the repo root on sys.path so `from tests.conftest import ...` resolves under a
+# bare `pytest` (CI, editors, `make test`) and not only under `python -m pytest`, which
+# adds the cwd implicitly. Without this, collection fails before a single test runs.
+pythonpath = ["."]

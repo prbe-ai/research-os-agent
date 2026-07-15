@@ -72,7 +72,7 @@ def _error_code(resp: httpx.Response) -> tuple[str | None, str | None]:
     return None, str(detail)
 
 
-def device_login(
+def device_authorize(
     base_url: str,
     *,
     scopes: list[str] | None = None,
@@ -82,14 +82,24 @@ def device_login(
     client: httpx.Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
-) -> str:
-    """Run the device flow and return the minted ``probe_pat`` secret.
+) -> dict:
+    """Run the device flow and return the whole mint response (``TokenCreated``).
 
-    ``scopes=None`` mints a full-role token (read + write) for the CLI; pass e.g.
-    ``["read"]`` for a read-only token. ``on_prompt`` receives the verification
-    URI/code so the caller can print it; ``open_browser`` also launches it.
-    ``token_name`` defaults to a hostname-labelled name so the token is
-    identifiable in the dashboard's client list.
+    This is the CLI's only way to mint a token: ``POST /v1/tokens`` is session-only
+    on purpose ("a leaked token must not be able to mint more tokens"), so a human
+    approves in the browser and the backend mints exactly one ``probe_pat`` here.
+
+    The response carries ``token`` (the plaintext secret, shown exactly once) plus
+    ``id``/``name``/``token_prefix``/``scopes`` — the identifying fields a caller
+    needs in order to later revoke it without ever re-reading the secret.
+
+    ``scopes=None`` requests read + write + delete — "full access" for the CLI means
+    research data, so ``admin`` (browser-only team administration) is deliberately not
+    in the default. Pass e.g. ``["read"]`` for a read-only token. Whatever is
+    requested, the minted token can never exceed the scopes the approver's role
+    confers. ``on_prompt`` receives the verification URI/code so the caller can print
+    it; ``open_browser`` also launches it. ``token_name`` defaults to a
+    hostname-labelled name so the token is identifiable in the dashboard's client list.
     """
     if token_name is None:
         token_name = f"Probe Research CLI · {hostname()}"
@@ -129,7 +139,7 @@ def device_login(
                 json={"device_code": device_code, "code_verifier": verifier},
             )
             if resp.status_code == 200:
-                return resp.json()["token"]
+                return resp.json()
             code, desc = _error_code(resp)
             if code == "slow_down":
                 interval += _SLOW_DOWN_BACKOFF
@@ -143,3 +153,12 @@ def device_login(
     finally:
         if owns_client:
             http.close()
+
+
+def device_login(base_url: str, **kwargs) -> str:
+    """Run the device flow and return just the minted ``probe_pat`` secret.
+
+    The login path only ever needs the secret; use :func:`device_authorize` when you
+    also need the token's id (e.g. to print what to revoke later).
+    """
+    return device_authorize(base_url, **kwargs)["token"]

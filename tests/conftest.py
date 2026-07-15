@@ -31,6 +31,7 @@ def _no_live_token_verification(monkeypatch: pytest.MonkeyPatch) -> None:
 
 _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")
 _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
+_RUN_SERIES = re.compile(r"^/v1/runs/([^/]+)/series$")
 _RUN_ARTIFACTS = re.compile(r"^/v1/runs/([^/]+)/artifacts$")
 _RUN_BUNDLE = re.compile(r"^/v1/runs/([^/]+)/bundle$")
 _RUN_LINEAGE = re.compile(r"^/v1/runs/([^/]+)/lineage$")
@@ -47,6 +48,11 @@ class FakeApp:
         self.experiments: dict[str, dict] = {}
         self.projects: dict[str, dict] = {}
         self.artifacts: dict[str, list[dict]] = {}
+        self.tokens: dict[str, dict] = {}
+        self.groups: dict[str, dict] = {}
+        self.series: dict[str, list[dict]] = {}
+        self.metric_points: dict[str, list[dict]] = {}
+        self.spans: dict[str, list[dict]] = {}
         self.assets: dict[str, dict] = {}
         self.asset_versions: dict[str, list[dict]] = {}
         self.edges: list[dict] = []
@@ -87,6 +93,18 @@ class FakeApp:
             })
 
         if path == "/v1/tokens/current" and method == "DELETE":
+            return httpx.Response(204)
+
+        # -- tokens (mint is session-only, so it is NOT routed here: the CLI mints
+        # via the device flow, which tests/test_device_login.py covers) --
+        if path == "/v1/tokens" and method == "GET":
+            return httpx.Response(200, json=list(self.tokens.values()))
+        m = re.match(r"^/v1/tokens/([^/]+)$", path)
+        if m and method == "DELETE":
+            tid = m.group(1)
+            if tid not in self.tokens:
+                return httpx.Response(404, json={"detail": "token not found"})
+            self.tokens.pop(tid)
             return httpx.Response(204)
 
         if path == "/v1/projects" and method == "POST":
@@ -225,6 +243,13 @@ class FakeApp:
             return httpx.Response(200, json={"run_id": m.group(1), "ancestors": [], "descendants": []})
 
         m = _RUN_ITEM.match(path)
+        if m and method == "DELETE":
+            rid = m.group(1)
+            row = self.runs.get(rid)
+            if row is None or row.get("deleted_at"):
+                return httpx.Response(404, json={"detail": "run not found"})
+            row["deleted_at"] = "2026-07-15T00:00:00Z"
+            return httpx.Response(200, json=row)
         if m and method == "GET":
             rid = m.group(1)
             row = self.runs.get(rid)
@@ -242,6 +267,154 @@ class FakeApp:
                 else:
                     row[k] = v
             return httpx.Response(200, json=row)
+
+        # -- run groups --
+        m = re.match(r"^/v1/experiments/([^/]+)/groups$", path)
+        if m and method == "POST":
+            eid = m.group(1)
+            dup = next(
+                (g for g in self.groups.values()
+                 if g["experiment_id"] == eid and g["name"] == body["name"]),
+                None,
+            )
+            if dup:
+                return httpx.Response(
+                    409, json={"detail": {"message": "group name exists", "existing_id": dup["id"]}}
+                )
+            gid = str(uuid.uuid4())
+            row = {"id": gid, "customer_id": "lab-42", "experiment_id": eid,
+                   "kind": body.get("kind", "group"), "name": body["name"],
+                   "spec": body.get("spec", {}), "created_at": "2026-07-15T00:00:00Z"}
+            self.groups[gid] = row
+            return httpx.Response(201, json=row)
+        if m and method == "GET":
+            eid = m.group(1)
+            return httpx.Response(
+                200, json=[g for g in self.groups.values() if g["experiment_id"] == eid]
+            )
+        m = re.match(r"^/v1/groups/([^/]+)$", path)
+        if m and method in ("GET", "PATCH"):
+            gid = m.group(1)
+            row = self.groups.get(gid)
+            if row is None:
+                return httpx.Response(404, json={"detail": "group not found"})
+            if method == "PATCH":
+                row.update({k: v for k, v in body.items() if v is not None})
+            return httpx.Response(200, json=row)
+
+        # -- archive / restore / gc --
+        m = re.match(r"^/v1/experiments/([^/]+)/(archive|restore)$", path)
+        if m and method == "POST":
+            eid, verb = m.group(1), m.group(2)
+            row = self.experiments.get(eid)
+            if row is None:
+                return httpx.Response(404, json={"detail": "experiment not found"})
+            # Idempotent archive: keep the first archive time (mirrors the backend).
+            row["archived_at"] = (
+                row.get("archived_at") or "2026-07-15T00:00:00Z" if verb == "archive" else None
+            )
+            return httpx.Response(200, json=row)
+
+        m = re.match(r"^/v1/runs/([^/]+)/restore$", path)
+        if m and method == "POST":
+            rid = m.group(1)
+            row = self.runs.get(rid)
+            if row is None:
+                return httpx.Response(404, json={"detail": "run not found"})
+            row["deleted_at"] = None
+            return httpx.Response(200, json=row)
+
+        if path == "/v1/runs/gc" and method == "POST":
+            ids, older_than = body.get("run_ids"), body.get("older_than")
+            if (ids is None) == (older_than is None):  # exactly one selector (backend 422s)
+                return httpx.Response(422, json={"detail": "exactly one of run_ids/older_than"})
+            # Only ever purges SOFT-DELETED runs — a live run is untouched even if its
+            # id is named explicitly. Mirrors app/runs/router.py.
+            if ids is not None:
+                doomed = [r for r in ids if (self.runs.get(r) or {}).get("deleted_at")]
+            else:
+                doomed = [
+                    r for r, row in self.runs.items()
+                    if row.get("deleted_at") and row["deleted_at"] < older_than
+                ]
+            for rid in doomed:
+                self.runs.pop(rid)
+            return httpx.Response(200, json={"purged": len(doomed)})
+
+        if path == "/v1/artifacts/uploads/gc" and method == "POST":
+            older_than = body["older_than"]
+            swept = 0
+            for arts in self.artifacts.values():
+                for a in list(arts):
+                    # Pending AND old enough: a confirmed artifact is never swept, and
+                    # neither is an upload started after the cutoff.
+                    if a.get("status") == "pending" and a.get("created_at", "") < older_than:
+                        arts.remove(a)
+                        swept += 1
+            return httpx.Response(200, json={"swept": swept})
+
+        m = re.match(r"^/v1/artifacts/([^/]+)$", path)
+        if m and method == "DELETE":
+            aid = m.group(1)
+            for arts in self.artifacts.values():
+                for a in list(arts):
+                    if a.get("id") == aid:
+                        arts.remove(a)
+                        return httpx.Response(204)
+            return httpx.Response(404, json={"detail": "artifact not found"})
+
+        # -- reads: series / metrics / spans / experiment edges --
+        m = _RUN_SERIES.match(path)
+        if m and method == "GET":
+            return httpx.Response(200, json=self.series.get(m.group(1), []))
+
+        m = _RUN_METRICS.match(path)
+        if m and method == "GET":
+            rid = m.group(1)
+            rows = self.metric_points.get(rid, [])
+            key = request.url.params.get("key")
+            if key:
+                rows = [p for p in rows if p.get("key") == key]
+            return httpx.Response(200, json=rows)
+
+        m = _RUN_SPANS.match(path)
+        if m and method == "GET":
+            rid = m.group(1)
+            rows = self.spans.get(rid, [])
+            span_type = request.url.params.get("span_type")
+            if span_type:
+                rows = [s for s in rows if s.get("span_type") == span_type]
+            return httpx.Response(200, json=rows)
+
+        m = re.match(r"^/v1/spans/([^/]+)$", path)
+        if m and method == "GET":
+            sid = m.group(1)
+            for rows in self.spans.values():
+                for span in rows:
+                    if span.get("id") == sid:
+                        return httpx.Response(200, json=span)
+            return httpx.Response(404, json={"detail": "span not found"})
+
+        m = re.match(r"^/v1/experiments/([^/]+)/edges$", path)
+        if m and method == "GET":
+            # Mirrors app/lineage/router.py: an edge belongs to the experiment when the
+            # run/artifact on either end does. Returning every edge instead would let a
+            # client that passed the wrong id still pass the test.
+            eid = m.group(1)
+            run_ids = {r for r, row in self.runs.items() if row.get("experiment_id") == eid}
+            artifact_ids = {
+                a["id"] for rid in run_ids for a in self.artifacts.get(rid, []) if a.get("id")
+            }
+            def _touches(edge: dict) -> bool:
+                for side in ("source", "target"):
+                    kind, ref = edge.get(f"{side}_type"), edge.get(f"{side}_id")
+                    if kind == "run" and ref in run_ids:
+                        return True
+                    if kind == "artifact" and ref in artifact_ids:
+                        return True
+                return False
+
+            return httpx.Response(200, json=[e for e in self.edges if _touches(e)])
 
         # -- assets (fold #5) --
         if path == "/v1/assets" and method == "POST":
@@ -384,6 +557,7 @@ class FakeApp:
             "config": body.get("config", {}),
             "parent_run_id": body.get("parent_run_id"),
             "parent_relation": body.get("parent_relation"),
+            "group_id": body.get("group_id"),
             "short_id": body.get("short_id", f"run-{rid[:8]}"),
             "foreign_keys": body.get("foreign_keys", {}),
             "env_ref": body.get("env_ref"),

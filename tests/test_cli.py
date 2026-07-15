@@ -60,6 +60,31 @@ def test_child_command(wired, capsys):
     assert wired.runs[child]["parent_relation"] == "resume"
 
 
+@pytest.mark.parametrize(
+    "argv",
+    [
+        pytest.param(["log", "r-1", "not-a-kv-pair"], id="bad_parameter"),
+        pytest.param(["--bogus-flag"], id="no_such_option"),
+        pytest.param(["nosuchcommand"], id="unknown_command"),
+    ],
+)
+def test_usage_errors_exit_cleanly_instead_of_raising(argv, capsys):
+    """main() must turn a usage error into an exit code, never a traceback.
+
+    Regression guard: typer vendored click into `typer._click`, so main()'s
+    `except click.ClickException` (the standalone package's class) silently stopped
+    matching anything typer raises, and every usage error escaped as a traceback.
+    An unpinned `typer>=0.12` bump was enough to do it, with no test to notice.
+    """
+    assert cli.main(argv) == 2
+
+
+def test_help_and_version_exit_zero(capsys):
+    assert cli.main(["--help"]) == 0
+    assert cli.main(["--version"]) == 0
+    assert "probe" in capsys.readouterr().out
+
+
 def test_help_separates_hook_adapter_from_experiment_upload(capsys):
     # typer/click return an exit code from main() rather than raising SystemExit.
     rc = cli.main(["--help"])

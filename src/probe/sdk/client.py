@@ -15,7 +15,16 @@ import warnings
 from typing import Any
 
 from . import defaults, errors
-from ..models import EdgeCreate, ExecutionRecordCreate, ExperimentVersionMint, IngestRunRequest
+from ..models import (
+    EdgeCreate,
+    ExecutionRecordCreate,
+    ExperimentVersionMint,
+    IngestRunRequest,
+    RunGcRequest,
+    RunGroupCreate,
+    RunGroupPatch,
+    UploadGcRequest,
+)
 from .config import Settings, resolve
 from .spool import Spool
 from .transport import Page, Transport
@@ -131,6 +140,45 @@ class Client:
         """Revoke the calling token (CLI logout)."""
         self.transport.delete("/v1/tokens/current")
 
+    # -- tokens -------------------------------------------------------------
+    def list_tokens(self) -> list[dict]:
+        """My live (unrevoked) tokens. Secrets are never returned — only
+        ``token_prefix``, which is what a human matches against."""
+        return self.transport.get("/v1/tokens")
+
+    def create_token(
+        self,
+        name: str,
+        *,
+        scopes: list[str] | None = None,
+        open_browser: bool = True,
+        on_prompt=None,
+    ) -> dict:
+        """Mint a named token through the browser device flow.
+
+        NOT ``POST /v1/tokens``: that route is session-only by design, so it 403s
+        for a token-authenticated CLI. The device flow reaches the same minter with
+        a human approving in the browser, which is what the invariant "a leaked
+        token must not be able to mint more tokens" is protecting.
+
+        Returns ``TokenCreated``; ``["token"]`` is the plaintext secret and this is
+        the only time it exists. Callers must show it once and never persist it.
+        """
+        from .device import device_authorize
+
+        return device_authorize(
+            self.settings.base_url,
+            scopes=scopes,
+            token_name=name,
+            open_browser=open_browser,
+            on_prompt=on_prompt,
+        )
+
+    def revoke_token(self, token_id: str) -> None:
+        """Revoke a token by id. Your own: any writer. A teammate's: needs a
+        browser session AND owner/admin, so it 403s from the CLI (by design)."""
+        self.transport.delete(f"/v1/tokens/{token_id}")
+
     # -- projects -----------------------------------------------------------
     def ensure_project(self, slug: str, name: str | None = None, **kw) -> dict:
         try:
@@ -218,6 +266,56 @@ class Client:
             query["project_id"] = project_id
         return self.transport.get_page("/v1/experiments", params=query or None)
 
+    def archive_experiment(self, experiment_id: str) -> dict:
+        """Hide an experiment without destroying it. Idempotent: re-archiving keeps
+        the original archive time."""
+        return self.transport.post(f"/v1/experiments/{experiment_id}/archive", None)
+
+    def restore_experiment(self, experiment_id: str) -> dict:
+        """Un-archive an experiment."""
+        return self.transport.post(f"/v1/experiments/{experiment_id}/restore", None)
+
+    def experiment_edges(self, experiment_id: str) -> list[dict]:
+        """Every lineage edge under an experiment (the run-level view is
+        :meth:`run_edges`)."""
+        return self.transport.get(f"/v1/experiments/{experiment_id}/edges")
+
+    # -- run groups (sweeps / ensembles) ------------------------------------
+    def create_group(
+        self,
+        experiment_id: str,
+        name: str,
+        *,
+        kind: str = "group",
+        spec: dict | None = None,
+    ) -> dict:
+        """Create a run group under an experiment — coordination metadata for a
+        sweep or ensemble; ``spec`` holds e.g. the search space.
+
+        Pass the returned ``id`` to :meth:`create_run` as ``group_id`` to file a run
+        under it. 409 if the name is taken within the experiment."""
+        model = RunGroupCreate(name=name, kind=kind, spec=spec or {})
+        return self.transport.post(
+            f"/v1/experiments/{experiment_id}/groups",
+            model.model_dump(mode="json", exclude_none=True),
+        )
+
+    def list_groups(self, experiment_id: str) -> list[dict]:
+        return self.transport.get(f"/v1/experiments/{experiment_id}/groups")
+
+    def get_group(self, group_id: str) -> dict:
+        return self.transport.get(f"/v1/groups/{group_id}")
+
+    def update_group(
+        self, group_id: str, *, name: str | None = None, spec: dict | None = None
+    ) -> dict:
+        """Field-replace PATCH: only the fields you pass change."""
+        model = RunGroupPatch(name=name, spec=spec)
+        body = model.model_dump(mode="json", exclude_none=True)
+        if not body:
+            raise ValueError("update_group needs at least one of name/spec")
+        return self.transport.patch(f"/v1/groups/{group_id}", body)
+
     # -- runs (create) ------------------------------------------------------
     def create_run(
         self,
@@ -291,6 +389,84 @@ class Client:
 
     def run_lineage(self, run_id: str) -> dict:
         return self.transport.get(f"/v1/runs/{run_id}/lineage")
+
+    def run_metrics(
+        self,
+        run_id: str,
+        *,
+        key: str | None = None,
+        kind: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Raw metric points for a run. :meth:`run_series` is the summarized view;
+        :meth:`query_series` is the multi-run comparison."""
+        params = {k: v for k, v in {"key": key, "kind": kind, "limit": limit}.items() if v is not None}
+        return self.transport.get(f"/v1/runs/{run_id}/metrics", params=params or None)
+
+    def run_series(self, run_id: str) -> list[dict]:
+        """Per-series summary for a run (key/kind/dimensions + first/last/min/max)."""
+        return self.transport.get(f"/v1/runs/{run_id}/series")
+
+    def run_spans(
+        self,
+        run_id: str,
+        *,
+        span_type: str | None = None,
+        parent_span_id: str | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+        limit: int | None = None,
+    ) -> list[dict]:
+        """Read a run's trajectory spans back (the write path is ``Run.span``)."""
+        params = {
+            k: v
+            for k, v in {
+                "span_type": span_type,
+                "parent_span_id": parent_span_id,
+                "step_from": step_from,
+                "step_to": step_to,
+                "limit": limit,
+            }.items()
+            if v is not None
+        }
+        return self.transport.get(f"/v1/runs/{run_id}/spans", params=params or None)
+
+    def get_span(self, span_id: str) -> dict:
+        return self.transport.get(f"/v1/spans/{span_id}")
+
+    # -- lifecycle (soft-delete / restore / purge) --------------------------
+    def delete_run(self, run_id: str) -> dict:
+        """Soft-delete: hides the run until restore or gc, and keeps its natural key
+        reserved. Returns the deleted run. 404 if already deleted or absent."""
+        return self.transport.delete(f"/v1/runs/{run_id}")
+
+    def restore_run(self, run_id: str) -> dict:
+        """Un-delete a soft-deleted run."""
+        return self.transport.post(f"/v1/runs/{run_id}/restore", None)
+
+    def gc_runs(self, *, run_ids: list[str] | None = None, older_than: str | None = None) -> dict:
+        """PERMANENTLY purge soft-deleted runs (owner/admin). Exactly one selector:
+        an explicit id list, or everything deleted before ``older_than``.
+
+        Irreversible, and cascades to spans/metrics/artifacts. Purges DB rows only —
+        R2 blobs are not touched (deferred, backend-side)."""
+        if (run_ids is None) == (older_than is None):
+            raise ValueError("gc_runs needs exactly one of run_ids or older_than")
+        model = RunGcRequest(run_ids=run_ids, older_than=older_than)
+        return self.transport.post(
+            "/v1/runs/gc", model.model_dump(mode="json", exclude_none=True)
+        )
+
+    def delete_artifact(self, artifact_id: str) -> None:
+        """Delete an artifact row."""
+        self.transport.delete(f"/v1/artifacts/{artifact_id}")
+
+    def gc_uploads(self, older_than: str) -> dict:
+        """Sweep abandoned (never-confirmed) artifact uploads older than
+        ``older_than``. Only ever touches pending rows; confirmed artifacts are
+        untouched."""
+        model = UploadGcRequest(older_than=older_than)
+        return self.transport.post("/v1/artifacts/uploads/gc", model.model_dump(mode="json"))
 
     def check_run(self, run_id: str) -> dict:
         """Assess capture completeness from the bounded run bundle.

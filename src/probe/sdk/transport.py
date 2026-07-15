@@ -139,8 +139,11 @@ class Transport:
     def patch(self, path: str, json_body: Any) -> Any:
         return self.request("PATCH", path, json_body=json_body).json()
 
-    def delete(self, path: str) -> None:
-        self.request("DELETE", path, idempotent=True)
+    def delete(self, path: str) -> Any:
+        """Returns the parsed body when the route sends one (e.g. DELETE
+        /v1/runs/{id} echoes the deleted run), and None on a 204."""
+        resp = self.request("DELETE", path, idempotent=True)
+        return resp.json() if resp.content else None
 
     def get_page(self, path: str, *, params: dict[str, Any] | None = None) -> Page:
         resp = self.request("GET", path, params=params, idempotent=True)
