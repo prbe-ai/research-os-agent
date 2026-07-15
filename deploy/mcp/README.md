@@ -15,7 +15,9 @@ PROBE_BASE_URL=https://api.research.prbe.ai probe-research-mcp-http   # serves :
 curl -s localhost:8080/healthz            # {"status":"ok"}
 ```
 
-Or stdio (single-tenant, `ROS_MCP_TOKEN`): `research-os-mcp`.
+Or stdio (single-tenant): `probe-research-mcp`. It takes the token from
+`PROBE_MCP_TOKEN`, falling back to the `mcp_token` that `probe mcp token set` stores.
+(The pre-rename `ROS_MCP_TOKEN` still works, deprecated, with a warning.)
 
 ## Deploy to DOKS (Phase B — production; gated)
 
