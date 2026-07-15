@@ -172,37 +172,42 @@ def _oauth_discovery() -> dict | None:
     return {"resource": resource, "authorization_servers": [auth_server]}
 
 
-# A rejection is cached so a retry storm costs one upstream call, not one per request.
-# Rotation is unaffected: a new token hashes to a new key and is checked immediately.
-_VERIFY_TTL_SECONDS = 60.0
+# Only *rejections* are cached, so a client retrying a dead token costs one upstream call
+# instead of one per request. Acceptance is re-checked every time on purpose: caching it
+# would keep letting a just-revoked token through, and the 401 that a cached accept
+# suppresses is exactly what tells the client to re-run its helper and heal. Rotation is
+# never delayed either way — a new token hashes to a new key.
+_REJECT_TTL_SECONDS = 60.0
 _VERIFY_CACHE_MAX = 512
-_verify_cache: dict[str, tuple[bool, float]] = {}
+_verify_cache: dict[str, float] = {}
 
 
 async def _upstream_rejects(token: str) -> bool:
     """Whether the API definitively rejects this token (401/403).
 
     Only a definitive rejection returns True. A timeout, connection error, or 5xx
-    returns False — a transient API blip must not disconnect every MCP client. The
-    tool call behind it will surface a real error on its own.
+    returns False — a transient API blip must not disconnect every MCP client, and the
+    edge check is a UX affordance, not the security boundary: the API still
+    authenticates the tool call behind it.
     """
     key = hashlib.sha256(token.encode()).hexdigest()
     now = time.monotonic()
-    cached = _verify_cache.get(key)
-    if cached is not None and cached[1] > now:
-        return cached[0]
+    expires = _verify_cache.get(key)
+    if expires is not None:
+        if expires > now:
+            return True
+        del _verify_cache[key]
     try:
         async with httpx.AsyncClient(base_url=resolve().base_url, timeout=5.0) as client:
             response = await client.get("/v1/me", headers={"Authorization": f"Bearer {token}"})
     except httpx.HTTPError:
         return False
-    if response.status_code >= 500:
+    if response.status_code not in (401, 403):
         return False
-    rejected = response.status_code in (401, 403)
     if len(_verify_cache) >= _VERIFY_CACHE_MAX:
         _verify_cache.clear()
-    _verify_cache[key] = (rejected, now + _VERIFY_TTL_SECONDS)
-    return rejected
+    _verify_cache[key] = now + _REJECT_TTL_SECONDS
+    return True
 
 
 async def _send_json(send: Any, status: int, body: bytes, *, extra_headers: list | None = None) -> None:
@@ -224,8 +229,10 @@ def with_auth_and_health(inner: Any, *, mcp_path: str = "/mcp", token_rejected: 
     rides inside an HTTP 200, so a stale token would otherwise load its tools and
     fail every call. The 401 is also what makes a client re-run its credential
     helper and retry (Claude Code >= 2.1.193), which is what lets a rotated token
-    heal without a restart. ``token_rejected`` is injectable for tests;
-    ``PROBE_MCP_VERIFY_TOKEN=0`` turns the check off.
+    heal without a restart. That is a different floor from the plugin's own helper,
+    which needs >= 2.1.195 for ``${CLAUDE_PLUGIN_ROOT}`` to interpolate.
+    ``token_rejected`` is injectable for tests; ``PROBE_MCP_VERIFY_TOKEN=0`` turns
+    the check off.
     """
 
     discovery = _oauth_discovery()

@@ -17,6 +17,12 @@ have shell aliases (e.g. `claude` aliased) that break bare invocations.
 - Required tools: `uv`, `curl`, `git`, `python3`. Optional: `gh` (only if the repo is
   private and git has no other credentials), `claude` (only for the plugin/MCP wiring).
   If `uv` is missing: `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+- **If using the plugin, check `claude --version` ≥ 2.1.195.** The plugin's MCP resolves
+  its token via `headersHelper: "${CLAUDE_PLUGIN_ROOT}/…"`, and that placeholder is only
+  interpolated from 2.1.195 on. On an older build it is passed through literally, the
+  helper never runs, and you get `✘ Failed to connect` with nothing explaining it. There
+  is no manifest field that enforces this. Tell the user to run `claude update`, or use
+  the non-plugin path in Step 4 with a static header.
 - If the repo is private, confirm git can read it: `gh auth status` (or a configured git
   credential helper). If neither, stop and have the user run `gh auth login`.
 - Do **not** run `claude plugin …` from a shell/`Bash` tool. Those are **interactive
@@ -97,9 +103,14 @@ token unless you pass `--allow-write`, and tells you whether it actually verifie
 
 Do **not** hand-edit a shell profile. The plugin reads the token through a helper at
 connect time, so no environment variable is needed and a dock-launched Claude Code works
-too. `PROBE_MCP_TOKEN` is still honored if your shell already exports it — nothing to
-migrate. For a non-Claude MCP client that only reads the environment,
-`probe mcp env` prints the export line for you to place yourself.
+too. For a non-Claude MCP client that only reads the environment, `probe mcp env` prints
+the export line for you to place yourself.
+
+`PROBE_MCP_TOKEN` still wins if your shell exports it, so nothing breaks on upgrade — but
+**an old `export PROBE_MCP_TOKEN=…` left in a profile will shadow every rotation you do
+here**, and it cannot self-heal: the helper keeps re-emitting the exported value. If
+`probe mcp status` reports the token came from the environment, delete that line from the
+profile and open a new shell.
 
 ## 4. Connect the MCP server
 

@@ -29,6 +29,12 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 
 - **Skills:** `track-experiment` (track a run end to end), `manage-research-asset` (reuse /
   version assets), `publish-experiment` (mint an immutable experiment version).
+- **Requires Claude Code ≥ 2.1.195.** The MCP passes its credential through a headers
+  helper addressed as `${CLAUDE_PLUGIN_ROOT}/bin/probe-mcp-headers`; that placeholder is
+  only interpolated from 2.1.195 on. Older builds pass it through literally, the helper
+  never runs, and the server fails to connect with no clue as to why — there is no
+  manifest field to declare this, so `claude --version` is the check. (Live rotation
+  without a restart additionally wants ≥ 2.1.193, which is implied by the above.)
 - **MCP server** (`.mcp.json`): defaults to the hosted endpoint
   `https://mcp.research.prbe.ai/mcp` (read-only). `bin/probe-mcp-headers` supplies the
   Authorization header at connect time, reading `PROBE_MCP_TOKEN` or the stored

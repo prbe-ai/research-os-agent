@@ -150,14 +150,104 @@ def test_both_token_prefixes_are_accepted(hosted_env) -> None:
     assert seen == ["ros_pat_legacy", "probe_pat_current"]
 
 
-def test_verification_fails_open_so_an_api_blip_does_not_disconnect_everyone(hosted_env) -> None:
-    """Only a definitive 401/403 rejects; an unreachable API must not 401 the world."""
+# -- the real verifier ------------------------------------------------------
+def _verifier_against(monkeypatch, *, status: int | None = None, exc: Exception | None = None):
+    """Point _upstream_rejects at a mock transport instead of the live API."""
+    import probe.mcp.server as server
 
-    async def unreachable(token: str) -> bool:
-        return False  # what _upstream_rejects returns on timeout/connection error/5xx
+    server._verify_cache.clear()
 
-    app = with_auth_and_health(_inner_ok, mcp_path="/mcp", token_rejected=unreachable)
-    assert _call(app, _bearer("probe_pat_any"))["status"] == 200
+    def handle(request: httpx.Request) -> httpx.Response:
+        if exc is not None:
+            raise exc
+        return httpx.Response(status, json={})
+
+    real = httpx.AsyncClient
+
+    class Mocked(real):
+        def __init__(self, **kwargs):
+            kwargs.pop("base_url", None)
+            super().__init__(transport=httpx.MockTransport(handle), base_url="http://api.test", **kwargs)
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", Mocked)
+    return server
+
+
+@pytest.mark.parametrize(
+    ("status", "exc", "rejected", "why"),
+    [
+        (200, None, False, "valid"),
+        (401, None, True, "revoked"),
+        (403, None, True, "forbidden"),
+        (500, None, False, "server error must not disconnect everyone"),
+        (None, httpx.ConnectError("down"), False, "API down must not disconnect everyone"),
+        (None, httpx.ReadTimeout("slow"), False, "timeout must not disconnect everyone"),
+    ],
+)
+def test_upstream_rejects_only_on_a_definitive_refusal(monkeypatch, status, exc, rejected, why) -> None:
+    """Fail closed on 401/403; fail open on everything else. `why` documents each case."""
+    server = _verifier_against(monkeypatch, status=status, exc=exc)
+    assert asyncio.run(server._upstream_rejects("probe_pat_x")) is rejected, why
+
+
+def test_a_rejection_is_cached_but_an_acceptance_is_not(monkeypatch) -> None:
+    """Caching an accept would keep letting a just-revoked token through, suppressing
+    the 401 that tells the client to re-run its helper and heal."""
+    import probe.mcp.server as server
+
+    calls: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        # 401 for the dead token, 200 for the live one.
+        bad = request.headers["Authorization"].endswith("dead")
+        return httpx.Response(401 if bad else 200, json={})
+
+    real = httpx.AsyncClient
+
+    class Mocked(real):
+        def __init__(self, **kwargs):
+            kwargs.pop("base_url", None)
+            super().__init__(transport=httpx.MockTransport(handle), base_url="http://api.test", **kwargs)
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", Mocked)
+    server._verify_cache.clear()
+
+    assert asyncio.run(server._upstream_rejects("probe_pat_dead")) is True
+    assert asyncio.run(server._upstream_rejects("probe_pat_dead")) is True
+    assert len(calls) == 1  # second rejection served from cache
+
+    calls.clear()
+    assert asyncio.run(server._upstream_rejects("probe_pat_live")) is False
+    assert asyncio.run(server._upstream_rejects("probe_pat_live")) is False
+    assert len(calls) == 2  # acceptance re-checked every time
+
+
+def test_rotating_past_a_cached_rejection_is_not_delayed(monkeypatch) -> None:
+    """A cached rejection must not bleed onto the replacement token.
+
+    Rotation is the moment this matters: the revoked token is cached as dead, and the
+    new one has to be believed immediately or the heal stalls for the whole TTL.
+    """
+    import probe.mcp.server as server
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        revoked = request.headers["Authorization"].endswith("old")
+        return httpx.Response(401 if revoked else 200, json={})
+
+    real = httpx.AsyncClient
+
+    class Mocked(real):
+        def __init__(self, **kwargs):
+            kwargs.pop("base_url", None)
+            super().__init__(transport=httpx.MockTransport(handle), base_url="http://api.test", **kwargs)
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", Mocked)
+    server._verify_cache.clear()
+
+    assert asyncio.run(server._upstream_rejects("probe_pat_old")) is True
+    assert len(server._verify_cache) == 1  # the dead one is remembered
+    assert asyncio.run(server._upstream_rejects("probe_pat_new")) is False  # and not inherited
 
 
 def test_verification_disabled_wires_no_verifier(hosted_env) -> None:

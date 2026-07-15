@@ -51,12 +51,15 @@ def save_file(data: dict) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     # Write a complete file then swap it in: a crash mid-write would otherwise leave
     # truncated JSON, which load_file() reads as {} — silently losing every credential.
-    # The temp file is created 0600 and lives in the target dir so os.replace is atomic.
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".config-", suffix=".json")
+    # Follow a symlink first: os.replace would swap the *link* for a regular file, so a
+    # config symlinked into a dotfiles repo would silently stop tracking. The temp file
+    # is created 0600 and must share the target's directory for os.replace to be atomic.
+    target = path.resolve() if path.is_symlink() else path
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".config-", suffix=".json")
     try:
         with os.fdopen(fd, "w") as handle:
             json.dump(data, handle, indent=2, sort_keys=True)
-        os.replace(tmp, path)
+        os.replace(tmp, target)
     except BaseException:
         Path(tmp).unlink(missing_ok=True)
         raise

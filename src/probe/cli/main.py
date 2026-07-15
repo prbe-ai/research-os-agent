@@ -290,7 +290,7 @@ def _verify(token: str, base_url: str) -> tuple[str, dict | None]:
     try:
         with Client(base_url=base_url, token=token, fail_open=False) as client:
             return "ok", client.me()
-    except errors.AuthError:
+    except (errors.AuthError, errors.ScopeError):  # 401, 403 — both definitive
         return "rejected", None
     except (errors.TransportError, errors.ServerError):
         return "unreachable", None
@@ -358,6 +358,10 @@ def mcp_token_set(
     print(f"saved mcp_token {_fingerprint(secret)} to {path}\n{note}")
     if scopes and not scopes <= _READ_ONLY_SCOPES:
         print("warning: this token can write; the MCP surface is read-only by design")
+    elif state != "ok":
+        # The read-only guard runs on the verified path only. Say so, rather than let
+        # an unchecked token look like a checked one that passed.
+        print("warning: scopes unchecked — this token may be able to write")
     print("Restart any MCP client that is already running, or reconnect it, to pick this up.")
 
 

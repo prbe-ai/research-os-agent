@@ -11,6 +11,11 @@
 # `probe mcp token set` writes. The write token in the same file is never read —
 # this surface is read-only.
 #
+# Caveat of that order: if the launching shell exports a *stale* PROBE_MCP_TOKEN, this
+# re-emits it after every 401 and the token can never heal — `probe mcp token set` writes
+# a config the export keeps shadowing. `probe mcp status` names that case; the fix is to
+# drop the export and let the config win.
+#
 # It reads the config file rather than calling `probe mcp headers` on purpose. The
 # plugin and the CLI version independently, and a CLI older than the plugin fails
 # with `No such command 'mcp'` and takes the MCP down with it. Reading one JSON key
@@ -44,6 +49,8 @@ except (OSError, ValueError):
 fi
 
 # No python, or nothing stored: let the CLI answer if it is new enough to know how.
+# Try every candidate — an old `probe` first on PATH must not hide a newer one, which is
+# the whole reason this is a list.
 for candidate in \
   "$(command -v probe 2>/dev/null || true)" \
   "$HOME/.local/bin/probe" \
@@ -54,7 +61,6 @@ do
     printf '%s\n' "$out"
     exit 0
   fi
-  break
 done
 
 echo "no Probe MCP token: run \`probe mcp token set\` (or export PROBE_MCP_TOKEN)" >&2
