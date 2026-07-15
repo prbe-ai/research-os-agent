@@ -94,9 +94,19 @@ def create_server(
         collapse: str = "experiment",
         limit: int = 8,
         cursor: str | None = None,
+        workspace_id: str | None = None,
     ) -> dict:
-        """Hybrid search over experiments and, when available, assets, procedures, docs, and transcript evidence."""
-        return svc().research_search(query, corpora, filters, collapse, limit, cursor)
+        """Search experiments, projects, artifacts, and indexed knowledge through the backend's
+        one-index exact+semantic search (POST /v1/search), with per-result channel provenance.
+
+        Experiments are always searched. Optional `corpora` narrows the knowledge side and maps
+        onto backend corpora as: assets -> files, procedures -> files, documents -> github+files;
+        transcripts are not indexed yet (reported via completeness.missing = kb_corpora).
+        `workspace_id` scopes workspace-owned documents. If the semantic engine is down the
+        result is completeness.state = "partial" with missing = ["semantic_search"]; on a backend
+        that predates /v1/search the tool degrades to structured keyword matching over experiments.
+        """
+        return svc().research_search(query, corpora, filters, collapse, limit, cursor, workspace_id)
 
     @mcp.tool()
     def research_get(

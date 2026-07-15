@@ -15,24 +15,95 @@ class ResearchOSSource:
     tenancy and returns object-store resource pointers where appropriate.
     """
 
+    # Minimal request used to discover whether the backend ships POST /v1/search.
+    _SEARCH_PROBE_QUERY = "capability probe"
+
     def __init__(self, client: Client):
         self.client = client
+        # Tri-state: None = not yet discovered, then cached for the source's
+        # lifetime (refreshed by every real search response).
+        self._search_supported: bool | None = None
+        self._search_semantic_ok: bool = False
 
     def close(self) -> None:
         self.client.close()
 
     def capabilities(self) -> dict[str, bool]:
-        # These false values describe the checked-in API v3. Future capability
-        # discovery should replace this static compatibility map.
+        # Search capabilities are discovered against the live backend (one
+        # cached probe of POST /v1/search); the rest still describe the
+        # checked-in API contract statically.
+        if self._search_supported is None:
+            self._probe_search()
         return {
             "structured_experiments": True,
-            "semantic_search": False,
-            "kb_documents": False,
+            "unified_search": bool(self._search_supported),
+            "semantic_search": bool(self._search_supported) and self._search_semantic_ok,
+            "kb_documents": bool(self._search_supported) and self._search_semantic_ok,
             "versioned_assets": False,
             "portable_snapshots": False,
             "managed_artifact_upload": False,
             "promotion_manifests": False,
         }
+
+    def _record_search_response(self, response: dict) -> None:
+        self._search_supported = True
+        self._search_semantic_ok = (response.get("semantic") or {}).get("error") is None
+
+    def _probe_search(self) -> None:
+        """One trivial POST /v1/search to learn whether the backend has the
+        one-index search door (404 = a server that predates it)."""
+        try:
+            response = self.client.search(self._SEARCH_PROBE_QUERY, exact_limit=1, top_k=1)
+        except errors.NotFoundError:
+            self._search_supported = False
+            self._search_semantic_ok = False
+        except errors.RosError:
+            # Transient (network/5xx/auth): report unavailable for this call but
+            # leave the tri-state unset so the next call re-probes.
+            return
+        else:
+            self._record_search_response(response)
+
+    def search(
+        self,
+        query: str,
+        *,
+        corpus: list[str] | None = None,
+        workspace_id: str | None = None,
+        top_k: int | None = None,
+        exact_limit: int | None = None,
+        exact_cursor: str | None = None,
+        semantic_cursor: str | None = None,
+    ) -> dict:
+        """POST /v1/search, raising :class:`errors.CapabilityUnavailable` when the
+        backend predates the endpoint (so callers can fall back honestly)."""
+        try:
+            response = self.client.search(
+                query,
+                corpus=corpus,
+                workspace_id=workspace_id,
+                top_k=top_k,
+                exact_limit=exact_limit,
+                exact_cursor=exact_cursor,
+                semantic_cursor=semantic_cursor,
+            )
+        except errors.NotFoundError:
+            # A 404 is ambiguous when a workspace filter rode along: the contract
+            # 404s an unknown/foreign workspace_id (oracle-safe). Disambiguate via
+            # the cached/probed endpoint support before deciding.
+            if workspace_id is not None:
+                if self._search_supported is None:
+                    self._probe_search()
+                if self._search_supported is not False:
+                    raise  # endpoint exists (or unknown) -> surface the 404 as-is
+            self._search_supported = False
+            self._search_semantic_ok = False
+            raise errors.CapabilityUnavailable(
+                "unified_search",
+                "this Probe Research backend predates POST /v1/search",
+            ) from None
+        self._record_search_response(response)
+        return response
 
     def identity(self) -> dict:
         return self.client.me()

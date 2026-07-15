@@ -2,11 +2,22 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from typing import Any
 
 from ..sdk import errors
 from .source import ResearchOSSource
+
+# Tool corpora vocabulary -> backend /v1/search `corpus` values. Experiments are
+# always searched (the tool's core corpus); transcripts have no backend corpus
+# yet and are reported as a missing kb_corpora capability.
+_CORPORA_TO_BACKEND: dict[str, set[str]] = {
+    "assets": {"files"},
+    "procedures": {"files"},
+    "documents": {"github", "files"},
+    "experiments": {"experiments"},
+}
 
 
 def _now() -> str:
@@ -23,6 +34,100 @@ def _text(record: dict) -> str:
         " ".join(record.get("tags") or []),
     ]
     return " ".join(str(value) for value in fields if value).lower()
+
+
+def _map_corpora(corpora: list[str] | None) -> tuple[list[str] | None, list[str]]:
+    """Translate the tool's corpora vocabulary into backend corpus values.
+
+    Returns ``(backend_corpus_or_None, unsupported_corpora)``. No corpora means
+    no filter (the backend searches every corpus)."""
+    if not corpora:
+        return None, []
+    backend: set[str] = {"experiments"}
+    unsupported: list[str] = []
+    for corpus in corpora:
+        mapped = _CORPORA_TO_BACKEND.get(corpus)
+        if mapped is None:
+            unsupported.append(corpus)
+        else:
+            backend.update(mapped)
+    return sorted(backend), sorted(set(unsupported))
+
+
+def _exact_result(row: dict) -> dict:
+    """An exact-channel hit (project | experiment | artifact) in the tool's result shape."""
+    entity_type = row.get("entity_type")
+    entity_id = row.get("id")
+    card = {
+        key: row.get(key)
+        for key in ("name", "slug", "workspace_id", "project_id", "experiment_id", "run_id")
+        if row.get(key) is not None
+    }
+    return {
+        "entity_type": entity_type,
+        "id": entity_id,
+        "card": card,
+        "why_matched": {"mode": "exact", "channel": "exact", "score": row.get("score")},
+        "resource": (
+            f"research://experiments/{entity_id}/card" if entity_type == "experiment" else None
+        ),
+    }
+
+
+def _semantic_result(row: dict) -> dict:
+    """A semantic-channel document hit (engine) in the tool's result shape."""
+    ref = row.get("ref") or {}
+    kind = ref.get("kind")
+    entity_id = ref.get("id") or row.get("doc_id")
+    resource = None
+    if kind == "experiment":
+        resource = f"research://experiments/{entity_id}/card"
+    elif kind == "run":
+        resource = f"research://runs/{entity_id}/handoff"
+    card = {
+        key: row.get(key)
+        for key in ("title", "snippet", "source_system", "source_url", "doc_id")
+        if row.get(key) is not None
+    }
+    return {
+        "entity_type": kind or "document",
+        "id": entity_id,
+        "card": card,
+        "why_matched": {"mode": "semantic", "channel": "semantic", "score": row.get("score")},
+        "resource": resource,
+    }
+
+
+def _interleave(first: list[dict], second: list[dict]) -> list[dict]:
+    """Fair round-robin merge — the backend returns per-channel sections with no
+    merged ranking, so neither channel gets to starve the other."""
+    merged: list[dict] = []
+    for index in range(max(len(first), len(second))):
+        if index < len(first):
+            merged.append(first[index])
+        if index < len(second):
+            merged.append(second[index])
+    return merged
+
+
+def _split_cursor(cursor: str | None) -> tuple[str | None, str | None]:
+    """The tool's opaque cursor is a JSON object of per-channel backend cursors."""
+    if not cursor:
+        return None, None
+    try:
+        parsed = json.loads(cursor)
+        if not isinstance(parsed, dict):
+            raise ValueError
+    except (json.JSONDecodeError, ValueError):
+        raise ValueError(
+            "malformed cursor: pass the next_cursor value from a previous research_search call"
+        ) from None
+    return parsed.get("exact"), parsed.get("semantic")
+
+
+def _join_cursor(exact: str | None, semantic: str | None) -> str | None:
+    cursors = {key: value for key, value in (("exact", exact), ("semantic", semantic)) if value}
+    return json.dumps(cursors, sort_keys=True) if cursors else None
 
 
 class ResearchReadService:
@@ -123,8 +228,67 @@ class ResearchReadService:
         collapse: str = "experiment",
         limit: int = 8,
         cursor: str | None = None,
+        workspace_id: str | None = None,
     ) -> dict:
         filters = filters or {}
+        workspace_id = workspace_id or filters.get("workspace_id")
+        corpus, unsupported = _map_corpora(corpora)
+        exact_cursor, semantic_cursor = _split_cursor(cursor)
+        page = max(1, min(limit, 50))  # backend caps top_k/exact_limit at 50
+        try:
+            response = self.source.search(
+                query,
+                corpus=corpus,
+                workspace_id=workspace_id,
+                top_k=page,
+                exact_limit=page,
+                exact_cursor=exact_cursor,
+                semantic_cursor=semantic_cursor,
+            )
+        except errors.CapabilityUnavailable:
+            # This backend predates POST /v1/search: keep the old servers working
+            # with the structured keyword fallback.
+            return self._keyword_search(query, corpora, filters, collapse, limit, cursor)
+
+        exact = response.get("exact") or {}
+        semantic = response.get("semantic") or {}
+        results = _interleave(
+            [_exact_result(row) for row in exact.get("results") or []],
+            [_semantic_result(row) for row in semantic.get("results") or []],
+        )[:limit]
+        missing = []
+        if exact.get("error"):
+            missing.append("exact_search")
+        if semantic.get("error"):
+            missing.append("semantic_search")
+        if unsupported:
+            missing.append("kb_corpora")
+        return self._envelope(
+            {
+                "query": query,
+                "collapse": collapse,
+                "results": results,
+                "channels": {
+                    "exact": {"error": exact.get("error")},
+                    "semantic": {"error": semantic.get("error")},
+                },
+                "unsupported_corpora": unsupported,
+            },
+            state="complete" if response.get("state") == "ok" and not missing else "partial",
+            missing=sorted(set(missing)),
+            next_cursor=_join_cursor(exact.get("cursor"), semantic.get("cursor")),
+        )
+
+    def _keyword_search(
+        self,
+        query: str,
+        corpora: list[str] | None,
+        filters: dict[str, Any],
+        collapse: str,
+        limit: int,
+        cursor: str | None,
+    ) -> dict:
+        """Pre-/v1/search behavior: keyword match over experiment cards only."""
         project_id = filters.get("project_id")
         experiments = self.source.experiments(project_id=project_id, limit=100)
         terms = set(query.lower().split())
