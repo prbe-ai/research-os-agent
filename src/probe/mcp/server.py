@@ -5,7 +5,7 @@ Runs two ways from one module:
 - **stdio** (`main`, local / self-host): the token comes from ``PROBE_MCP_TOKEN`` and
   every call uses one client. This is the current behavior.
 - **streamable HTTP** (`main_http`, hosted): a stateless multi-tenant service. Each
-  request carries the caller's read-scoped ``ros_pat`` as ``Authorization: Bearer …``;
+  request carries the caller's read-scoped ``probe_pat`` as ``Authorization: Bearer …``;
   the server builds a client from that header **per request**, holds no tenant
   credential of its own, and relies on the Probe Research API's RLS for isolation.
 """

@@ -4,7 +4,7 @@ Precedence (highest first): explicit argument -> environment -> config file.
 
 Env vars:
   PROBE_BASE_URL      e.g. https://api.research.prbe.ai
-  PROBE_TOKEN         a user API token (ros_pat_...) for /v1
+  PROBE_TOKEN         a user API token (probe_pat_...) for /v1
   PROBE_INGEST_TOKEN  an ingest token (ros_ing_...) for /ingest
   PROBE_HMAC_SECRET   optional shared secret for the X-Signature body HMAC on /ingest
 

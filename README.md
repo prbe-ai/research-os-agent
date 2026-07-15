@@ -58,7 +58,7 @@ pip install -e ".[dev]"     # from this directory
 probe login       # browser device flow (RFC 8628 + PKCE) — the default; nothing to paste
 ```
 
-Air-gap paste path: `probe login --token ros_pat_xxxxxxxx` (verified via `GET /v1/me`);
+Air-gap paste path: `probe login --token probe_pat_xxxxxxxx` (verified via `GET /v1/me`);
 `probe login --endpoint-only --base-url …` saves the endpoint without minting a token.
 Both write `~/.config/probe/config.json`.
 Or set env: `PROBE_BASE_URL`, `PROBE_TOKEN` (user token, `/v1`), `PROBE_INGEST_TOKEN`
@@ -265,7 +265,7 @@ python scripts/gen_models.py
 ## CLI grammar note
 
 The CLI is built on **typer**. Connection flags are global and go *before* the
-command: `probe --token ros_pat_x log RUN loss=0.1`. `probe login` also accepts them
+command: `probe --token probe_pat_x log RUN loss=0.1`. `probe login` also accepts them
 directly (`probe login --token ...`).
 
 ## Tests

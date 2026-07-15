@@ -56,18 +56,18 @@ Skip this block entirely in a headless/agent session — Steps 2–4 don't need 
 ## 2. Log in (write token)
 
 Ask for the base URL (default `https://api.research.prbe.ai`) and a **write** API token
-(`ros_pat_…`, minted in the dashboard). Then:
+(`probe_pat_…`, minted in the dashboard). Then:
 
 ```bash
-probe login --base-url https://api.research.prbe.ai --token ros_pat_xxxxxxxx
+probe login --base-url https://api.research.prbe.ai --token probe_pat_xxxxxxxx
 probe whoami            # prints your identity (resolves via /v1/me)
 ```
 
-- `login`/`whoami` verify against `/v1/me`, which accepts a `ros_pat` bearer (as of #11).
+- `login`/`whoami` verify against `/v1/me`, which accepts a `probe_pat` bearer (as of #11).
 - **Don't gate success on `login`'s exit code alone.** Confirm the token independently and
   that config actually persisted:
   ```bash
-  curl -fsS -H "Authorization: Bearer ros_pat_xxxxxxxx" https://api.research.prbe.ai/v1/me >/dev/null && echo "token OK"
+  curl -fsS -H "Authorization: Bearer probe_pat_xxxxxxxx" https://api.research.prbe.ai/v1/me >/dev/null && echo "token OK"
   grep -q '"token"' ~/.config/probe/config.json && echo "config persisted"
   ```
   (Older CLIs raise on the `/auth/me` verify *before* saving config — the `grep` catches that.)
@@ -79,7 +79,7 @@ surface read-only. Export it and persist it to the correct shell profile **witho
 duplicating** on re-run:
 
 ```bash
-export PROBE_MCP_TOKEN=ros_pat_read_xxxxxxxx
+export PROBE_MCP_TOKEN=probe_pat_read_xxxxxxxx
 PROFILE="$HOME/.zshrc"; [ "$(basename "${SHELL:-}")" = "bash" ] && PROFILE="$HOME/.bashrc"
 grep -q 'PROBE_MCP_TOKEN' "$PROFILE" || echo "export PROBE_MCP_TOKEN=$PROBE_MCP_TOKEN" >> "$PROFILE"
 ```
