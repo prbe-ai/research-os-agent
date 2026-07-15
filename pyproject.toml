@@ -3,8 +3,12 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "probe-agent"
-version = "0.5.0"
+# NOT `probe-agent`: that name belongs to an unrelated project already on PyPI, so
+# `pip install probe-agent` fetches a stranger's package. This name matches the
+# plugin, the `probe-research-mcp` binaries, and mcp.research.prbe.ai. The import
+# name (`probe`) and the CLI binary (`probe`) are unchanged.
+name = "probe-research"
+version = "0.6.0"
 description = "CLI + SDK + read-only MCP client for Probe Research (experiment tracking)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -50,7 +54,7 @@ probe-research-mcp-http = "probe.mcp.server:main_http"
 packages = ["src/probe"]
 
 [tool.hatch.build.targets.wheel.shared-data]
-"skills" = "share/probe-agent/skills"
+"skills" = "share/probe-research/skills"
 
 [tool.hatch.build.targets.sdist]
 include = ["src/probe", "skills", "tests", "README.md", "pyproject.toml"]

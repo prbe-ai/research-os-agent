@@ -50,10 +50,13 @@ fi
 
 # No python, or nothing stored: let the CLI answer if it is new enough to know how.
 # Try every candidate — an old `probe` first on PATH must not hide a newer one, which is
-# the whole reason this is a list.
+# the whole reason this is a list. uv names its tool dir after the DISTRIBUTION, so
+# both spellings appear: `probe-research` (current) and `probe-agent` (pre-2026-07-15
+# installs, still on disk until the user reinstalls).
 for candidate in \
   "$(command -v probe 2>/dev/null || true)" \
   "$HOME/.local/bin/probe" \
+  "$HOME/.local/share/uv/tools/probe-research/bin/probe" \
   "$HOME/.local/share/uv/tools/probe-agent/bin/probe"
 do
   [ -n "$candidate" ] && [ -x "$candidate" ] || continue

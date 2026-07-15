@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from importlib import metadata
+from pathlib import Path
 
 import pytest
 
@@ -83,6 +85,33 @@ def test_help_and_version_exit_zero(capsys):
     assert cli.main(["--help"]) == 0
     assert cli.main(["--version"]) == 0
     assert "probe" in capsys.readouterr().out
+
+
+def test_distribution_name_matches_pyproject():
+    """`probe.__init__` looks the version up by DISTRIBUTION name, so a rename that
+    misses one side fails silently: `probe --version` quietly degrades to the
+    `0.0.0.dev0` source-tree fallback instead of erroring.
+
+    (It is `probe-research`, not `probe-agent` — the latter is an unrelated project
+    already on PyPI that we never owned.)
+    """
+    import tomllib
+
+    import probe
+
+    pyproject = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())
+    assert probe._DISTRIBUTION == pyproject["project"]["name"] == "probe-research"
+
+
+def test_version_resolves_from_the_installed_distribution():
+    """Guards the same seam from the other side: an installed tree must report a real
+    version. The whole pitch is reproducibility — a client that cannot say what it is
+    fails that on its own terms."""
+    import probe
+
+    if probe.__version__ == "0.0.0.dev0":
+        pytest.skip("not an installed distribution (source tree)")
+    assert probe.__version__ == metadata.version("probe-research")
 
 
 def test_help_separates_hook_adapter_from_experiment_upload(capsys):

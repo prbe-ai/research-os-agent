@@ -42,8 +42,10 @@ command -v probe && probe --version
 
 - Pin to `@main` (or a released tag/commit) so you get the **`/v1/me` identity fix (#11)**.
   Older builds identify via the session-only `/auth/me`, so `login --token`/`whoami` 401
-  with `missing session cookie`. If you have an old build: `uv tool upgrade probe-agent`
-  (the distribution is `probe-agent`; the repo name is not the package name).
+  with `missing session cookie`. If you have an old build: `uv tool upgrade probe-research`
+  (the distribution is `probe-research`; the repo name is not the package name. It was
+  `probe-agent` before 2026-07-15 — if `uv tool upgrade probe-research` reports nothing
+  installed, you have the old one: `uv tool uninstall probe-agent` first).
 - `--force` makes re-runs safe. Installs three executables: `probe`, `probe-research-mcp`
   (local stdio server), `probe-research-mcp-http` (hosted server).
 - If `probe` isn't found after install, `~/.local/bin` isn't on this shell's PATH — re-run

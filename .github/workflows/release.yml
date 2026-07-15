@@ -1,0 +1,51 @@
+name: Release
+
+# Publishes to PyPI from a TAG, never from a branch. Installing `@main` means nobody
+# can say which build they are running — a bad property for a tool whose pitch is
+# reproducibility. A tag is the immutable thing users pin.
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # The tag is the release's identity: if it disagrees with the version the build
+      # would publish, stop. Publishing v0.6.0 from a tree that says 0.5.0 puts a
+      # permanently wrong version on PyPI, and PyPI will not let you reuse the number.
+      - name: Tag must match the packaged version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          if [ "$tag" != "$pkg" ]; then
+            echo "::error::tag $GITHUB_REF_NAME implies version $tag, but pyproject says $pkg"
+            exit 1
+          fi
+          echo "releasing $pkg"
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+      - run: pip install build && python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # A protected environment means a human approves each publish, and PyPI releases
+    # cannot be un-published — only yanked.
+    environment: pypi
+    permissions:
+      id-token: write # PyPI trusted publishing (OIDC); no long-lived token in secrets
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
