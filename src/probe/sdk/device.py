@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import socket
 import time
 import webbrowser
 from collections.abc import Callable
@@ -22,6 +23,20 @@ import httpx
 _START_PATH = "/auth/device/code"
 _TOKEN_PATH = "/auth/device/token"
 _SLOW_DOWN_BACKOFF = 5
+
+
+def hostname() -> str:
+    """This machine's short name, for labelling a minted token.
+
+    The token name is the only way to tell one client apart from another in the
+    dashboard's client list, so default it to the host — three laptops otherwise
+    show up as three identical rows and "revoke that one" is guesswork.
+    """
+    try:
+        name = socket.gethostname().split(".")[0].strip()  # drop .local / domain
+    except OSError:
+        name = ""
+    return name or "unknown-host"
 
 
 class DeviceLoginError(Exception):
@@ -61,7 +76,7 @@ def device_login(
     base_url: str,
     *,
     scopes: list[str] | None = None,
-    token_name: str = "Probe Research CLI",
+    token_name: str | None = None,
     open_browser: bool = True,
     on_prompt: Callable[[DevicePrompt], None] | None = None,
     client: httpx.Client | None = None,
@@ -73,7 +88,11 @@ def device_login(
     ``scopes=None`` mints a full-role token (read + write) for the CLI; pass e.g.
     ``["read"]`` for a read-only token. ``on_prompt`` receives the verification
     URI/code so the caller can print it; ``open_browser`` also launches it.
+    ``token_name`` defaults to a hostname-labelled name so the token is
+    identifiable in the dashboard's client list.
     """
+    if token_name is None:
+        token_name = f"Probe Research CLI · {hostname()}"
     verifier, challenge = _pkce_pair()
     owns_client = client is None
     http = client or httpx.Client(base_url=base_url, timeout=30.0)

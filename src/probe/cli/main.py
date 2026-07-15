@@ -30,7 +30,7 @@ import typer
 from .. import __version__, errors
 from ..sdk.client import Client
 from ..sdk.config import clear_file, config_path, load_file, resolve, save_file
-from ..sdk.device import DeviceLoginError, DevicePrompt, device_login
+from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
 
 
 # -- global connection state (set by the root callback) ---------------------
@@ -319,7 +319,10 @@ def mcp_token_set(
         print(f"opening {base} to mint a read-only token…")
         try:
             secret = device_login(
-                base, scopes=["read"], token_name="Probe Research MCP (read-only)", on_prompt=_show
+                base,
+                scopes=["read"],
+                token_name=f"Probe Research MCP (read-only) · {hostname()}",
+                on_prompt=_show,
             )
         except DeviceLoginError as exc:
             print(f"device login failed: {exc}", file=sys.stderr)
