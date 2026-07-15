@@ -36,9 +36,9 @@ def _call(app, path: str, headers: list | None = None) -> dict:
 
 @pytest.fixture
 def discovery_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ROS_MCP_OAUTH", "1")
-    monkeypatch.setenv("ROS_MCP_RESOURCE_URL", "https://mcp.test")
-    monkeypatch.setenv("ROS_MCP_AUTH_SERVER", "https://api.test")
+    monkeypatch.setenv("PROBE_MCP_OAUTH", "1")
+    monkeypatch.setenv("PROBE_MCP_RESOURCE_URL", "https://mcp.test")
+    monkeypatch.setenv("PROBE_MCP_AUTH_SERVER", "https://api.test")
 
 
 def test_protected_resource_metadata(discovery_env) -> None:
@@ -76,9 +76,28 @@ def test_healthz_always_ok(discovery_env) -> None:
 
 
 def test_discovery_disabled_skips_challenge(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("ROS_MCP_OAUTH", "0")
+    monkeypatch.setenv("PROBE_MCP_OAUTH", "0")
     app = with_auth_and_health(_inner, mcp_path="/mcp")
     # No challenge: an unauthenticated request falls through to the inner app.
     assert _call(app, "/mcp")["status"] == 200
     # Metadata endpoint is not served either (falls through to inner).
     assert json.loads(_call(app, "/.well-known/oauth-protected-resource")["body"]) == {"ok": True}
+
+
+def test_legacy_ros_env_spelling_still_works_with_warning(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The pre-rename ROS_MCP_* vars keep working (deprecated) so existing deploys don't break."""
+    monkeypatch.delenv("PROBE_MCP_RESOURCE_URL", raising=False)
+    monkeypatch.setenv("ROS_MCP_OAUTH", "1")
+    monkeypatch.setenv("ROS_MCP_RESOURCE_URL", "https://legacy.test")
+    with pytest.warns(UserWarning, match="ROS_MCP_RESOURCE_URL is deprecated"):
+        app = with_auth_and_health(_inner)
+    res = _call(app, "/.well-known/oauth-protected-resource")
+    assert json.loads(res["body"])["resource"] == "https://legacy.test"
+
+
+def test_probe_env_wins_over_legacy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PROBE_MCP_RESOURCE_URL", "https://new.test")
+    monkeypatch.setenv("ROS_MCP_RESOURCE_URL", "https://legacy.test")
+    app = with_auth_and_health(_inner)
+    res = _call(app, "/.well-known/oauth-protected-resource")
+    assert json.loads(res["body"])["resource"] == "https://new.test"

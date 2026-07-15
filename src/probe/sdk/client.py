@@ -9,9 +9,12 @@ Every method maps onto a real v4 endpoint (Probe Research v0.4.0.0 ingestion fol
 
 from __future__ import annotations
 
+import os
+import sys
+import warnings
 from typing import Any
 
-from . import errors
+from . import defaults, errors
 from ..models import EdgeCreate, ExecutionRecordCreate, ExperimentVersionMint, IngestRunRequest
 from .config import Settings, resolve
 from .spool import Spool
@@ -73,6 +76,52 @@ class Client:
         return self.spool.flush(self.transport)
 
     # -- identity / auth ----------------------------------------------------
+    def ensure_authenticated(self, *, interactive: bool | None = None) -> bool:
+        """Make sure a user token exists, minting one via the browser device flow
+        when a human can approve it.
+
+        The interactive path runs only when stdin+stderr are TTYs and
+        ``PROBE_AUTO_LOGIN`` is not ``0`` (or when ``interactive=True`` forces it).
+        On success the token is persisted to the same config file ``probe login``
+        writes, so the browser round-trip happens once per machine. Returns True
+        when a token is available; False leaves the transport to raise its normal
+        ``AuthError`` on first use (the crisp headless/CI behavior)."""
+        if self.settings.token:
+            return True
+        if interactive is None:
+            interactive = (
+                os.environ.get("PROBE_AUTO_LOGIN", "1") != "0"
+                and sys.stdin.isatty()
+                and sys.stderr.isatty()
+            )
+        if not interactive:
+            return False
+        from .config import load_file, save_file
+        from .device import DeviceLoginError, device_login
+
+        print(
+            f"no Probe token found — opening {self.settings.base_url} for browser approval…",
+            file=sys.stderr,
+        )
+
+        def _show(prompt) -> None:
+            print(f"  visit: {prompt.verification_uri_complete}", file=sys.stderr)
+            print(f"  code:  {prompt.user_code}", file=sys.stderr)
+
+        try:
+            token = device_login(self.settings.base_url, on_prompt=_show)
+        except DeviceLoginError as exc:
+            warnings.warn(f"automatic device login failed: {exc}", stacklevel=2)
+            return False
+        data = load_file()
+        data["base_url"] = self.settings.base_url
+        data["token"] = token
+        save_file(data)
+        # Settings is shared with the transport; mutating it authenticates both.
+        self.settings.token = token
+        print("logged in — token saved for future runs", file=sys.stderr)
+        return True
+
     def me(self) -> dict:
         # /v1/me (not the session-only /auth/me): resolves through the unified
         # door, so a `ros_pat` or OAuth token identifies its own tenant/role.
@@ -104,14 +153,21 @@ class Client:
         self,
         slug: str,
         name: str,
-        hypothesis: str,
+        hypothesis: str | None = None,
         *,
         project_id: str | None = None,
         description: str | None = None,
         tags: list[str] | None = None,
     ) -> dict:
-        """Get-or-create. A create requires ``hypothesis`` (422); an existing
-        experiment keeps its own hypothesis (first-write-wins), so re-running is safe."""
+        """Get-or-create. A create requires a hypothesis (422); an existing
+        experiment keeps its own (first-write-wins), so re-running is safe.
+
+        ``hypothesis=None`` composes a marked ``[auto]`` placeholder from ambient
+        context (repo@branch, script, coding-agent session) — replace it later
+        with :meth:`update_experiment`. It only ever lands on a brand-new
+        experiment; an existing one is never overwritten by the fallback."""
+        if hypothesis is None:
+            hypothesis = defaults.auto_hypothesis(slug)
         body: dict[str, Any] = {"slug": slug, "name": name, "hypothesis": hypothesis}
         if project_id:
             body["project_id"] = project_id
@@ -128,6 +184,33 @@ class Client:
 
     def get_experiment(self, experiment_id: str) -> dict:
         return self.transport.get(f"/v1/experiments/{experiment_id}")
+
+    def update_experiment(
+        self,
+        experiment_id: str,
+        *,
+        hypothesis: str | None = None,
+        name: str | None = None,
+        description: str | None = None,
+        metadata: dict | None = None,
+        summary: dict | None = None,
+    ) -> dict:
+        """PATCH /v1/experiments/{id} — e.g. replace an ``[auto]`` hypothesis with
+        the real one once the experiment's intent is settled."""
+        body = {
+            key: value
+            for key, value in {
+                "hypothesis": hypothesis,
+                "name": name,
+                "description": description,
+                "metadata": metadata,
+                "summary": summary,
+            }.items()
+            if value is not None
+        }
+        if not body:
+            raise ValueError("update_experiment needs at least one field to set")
+        return self.transport.patch(f"/v1/experiments/{experiment_id}", body)
 
     def list_experiments(self, *, project_id: str | None = None, **params) -> Page:
         query = dict(params)
@@ -170,15 +253,26 @@ class Client:
     def run(
         self,
         *,
-        experiment: str,
-        hypothesis: str,
-        name: str,
+        experiment: str | None = None,
+        hypothesis: str | None = None,
+        name: str | None = None,
         project: str | None = None,
         experiment_name: str | None = None,
         **run_kw,
     ) -> "Run":
         """High-level: ensure the experiment (and project) exist, then open a run.
-        This is the ``/experiment`` launch path."""
+        This is the ``/experiment`` launch path.
+
+        Every identity argument now has an opinionated default so
+        ``client.run()`` alone works: no token triggers the one-time browser
+        device login (TTY only), ``experiment`` falls back to the git repo /
+        script name, ``name`` to a timestamp (the backend also mints a petname
+        ``short_id``), and a brand-new experiment gets a marked ``[auto]``
+        hypothesis composed from context — set the real one with
+        :meth:`update_experiment` / ``probe experiment set``."""
+        self.ensure_authenticated()
+        experiment = experiment or defaults.default_experiment_slug()
+        name = name or defaults.default_run_name()
         project_id = None
         if project:
             project_id = self.ensure_project(project)["id"]

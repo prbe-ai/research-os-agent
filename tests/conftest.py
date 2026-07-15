@@ -136,6 +136,13 @@ class FakeApp:
         if m and method == "GET":
             eid = m.group(1)
             return httpx.Response(200, json=self.experiments.get(eid, {"id": eid, "hypothesis": "h", "project_id": str(uuid.uuid4())}))
+        if m and method == "PATCH":
+            eid = m.group(1)
+            row = self.experiments.get(eid)
+            if row is None:
+                return httpx.Response(404, json={"detail": "not found"})
+            row.update(body)
+            return httpx.Response(200, json=row)
 
         m = _EXP_RUNS.match(path)
         if m and method == "POST":

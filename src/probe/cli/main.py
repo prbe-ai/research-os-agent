@@ -167,16 +167,16 @@ def login(
     ingest_token: str = typer.Option(None, "--ingest-token"),
     hmac_secret: str = typer.Option(None, "--hmac-secret"),
     device: bool = typer.Option(
-        False,
-        "--device",
-        help="browser-assisted login: approve in the dashboard, no token to paste",
+        True,
+        "--device/--endpoint-only",
+        help="browser-assisted login (the default); --endpoint-only saves the endpoint without minting a token",
     ),
 ) -> None:
-    """Save endpoint + token, verifying the user token if present.
+    """Log in. Bare ``probe login`` runs the browser handoff (RFC 8628) — approve
+    in the dashboard, no token to see or paste.
 
-    ``--device`` runs the browser handoff (RFC 8628) and captures the token for
-    you; otherwise pass ``--token ros_pat_...`` (air-gap friendly), or neither to
-    just set the endpoint.
+    Pass ``--token ros_pat_...`` for the air-gap paste path, or
+    ``--endpoint-only`` to just save ``--base-url`` without minting a token.
     """
     data = load_file()
     resolved_token = token or _conn.token
@@ -246,9 +246,12 @@ app.add_typer(run_app, name="run")
 
 @run_app.command("start")
 def run_start(
-    experiment: str = typer.Option(..., "--experiment"),
-    hypothesis: str = typer.Option(..., "--hypothesis"),
-    name: str = typer.Option(..., "--name"),
+    experiment: str = typer.Option(None, "--experiment", help="defaults to the git repo / script name"),
+    hypothesis: str = typer.Option(
+        None, "--hypothesis",
+        help="required knowledge for a NEW experiment; omitted -> a marked [auto] placeholder from context",
+    ),
+    name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
     experiment_name: str = typer.Option(None, "--experiment-name"),
     project: str = typer.Option(None, "--project"),
     source: str = typer.Option("api", "--source"),
@@ -504,6 +507,28 @@ def events(run: str = typer.Argument(...)) -> None:
     """Read the backend lifecycle events for a run (fold #10, read-only)."""
     with _client() as c:
         _print_json(c.events.for_run(run))
+
+
+# -- experiment maintenance ---------------------------------------------------
+experiment_app = typer.Typer(no_args_is_help=True, help="experiment maintenance")
+app.add_typer(experiment_app, name="experiment")
+
+
+@experiment_app.command("set")
+def experiment_set(
+    experiment_id: str = typer.Argument(...),
+    hypothesis: str = typer.Option(None, "--hypothesis", help="replace the hypothesis (e.g. an [auto] placeholder)"),
+    name: str = typer.Option(None, "--name"),
+    description: str = typer.Option(None, "--description"),
+) -> None:
+    """Update experiment fields — the follow-up to an [auto]-generated hypothesis."""
+    if hypothesis is None and name is None and description is None:
+        raise typer.BadParameter("pass at least one of --hypothesis/--name/--description")
+    with _client() as c:
+        result = c.update_experiment(
+            experiment_id, hypothesis=hypothesis, name=name, description=description
+        )
+    _print_json(result)
 
 
 # -- reserved hook adapter ABI (no hooks installed this release) -------------

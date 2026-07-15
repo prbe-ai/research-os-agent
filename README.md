@@ -55,13 +55,19 @@ pip install -e ".[dev]"     # from this directory
 ## Auth
 
 ```bash
-probe login --base-url https://api.research.prbe.ai --token ros_pat_xxxxxxxx
+probe login       # browser device flow (RFC 8628 + PKCE) — the default; nothing to paste
 ```
 
-This verifies the token (`GET /v1/me`, which accepts a `ros_pat` bearer) and writes
-`~/.config/probe/config.json`.
+Air-gap paste path: `probe login --token ros_pat_xxxxxxxx` (verified via `GET /v1/me`);
+`probe login --endpoint-only --base-url …` saves the endpoint without minting a token.
+Both write `~/.config/probe/config.json`.
 Or set env: `PROBE_BASE_URL`, `PROBE_TOKEN` (user token, `/v1`), `PROBE_INGEST_TOKEN`
 (ingest token, `/ingest`), `PROBE_HMAC_SECRET` (optional body-signature secret).
+
+You can also skip `probe login` entirely: the first `client.run()` /
+`probe run start` with no token triggers the same browser approval inline (TTY only)
+and persists the result. Disable with `PROBE_AUTO_LOGIN=0`; headless/CI keeps the
+crisp `AuthError` and should set `PROBE_TOKEN`.
 
 The MCP server prefers `PROBE_MCP_TOKEN`, which should be a separately minted
 read-only token. It falls back to `PROBE_TOKEN` for local development, but exposes
@@ -79,6 +85,10 @@ client = probe.Client()  # resolves creds from env / `probe login`
 
 run = client.run(experiment="dockq-sweep", hypothesis="temp 0.7 wins", name="run-1",
                  project="folding", source="runpod", external_id="rp-9931")
+# …or with zero identity args: `client.run()` defaults experiment to the git repo /
+# script name, name to a timestamp (the server adds a petname short_id), and a NEW
+# experiment gets a marked "[auto] …" hypothesis composed from context. Set the real
+# one later: client.update_experiment(id, hypothesis="…")  /  probe experiment set.
 
 run.snapshot()                                   # non-disruptive git + deps + GPU capture
 run.link(wandb_run_id="abc123", s3_prefix="s3://x/y")
