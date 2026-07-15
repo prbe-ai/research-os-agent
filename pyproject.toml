@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "probe-agent"
-version = "0.4.0"
+version = "0.5.0"
 description = "CLI + SDK + read-only MCP client for Probe Research (experiment tracking)."
 readme = "README.md"
 requires-python = ">=3.11"

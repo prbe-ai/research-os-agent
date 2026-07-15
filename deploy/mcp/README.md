@@ -25,8 +25,8 @@ Prereqs already on the `research` cluster: ingress-nginx, cert-manager (`letsenc
 
 ```bash
 # 1. build + push the image (GHCR)
-docker build -f deploy/mcp/Dockerfile -t ghcr.io/prbe-ai/research-os-mcp:0.4.0 .
-docker push ghcr.io/prbe-ai/research-os-mcp:0.4.0
+docker build -f deploy/mcp/Dockerfile -t ghcr.io/prbe-ai/research-os-mcp:0.5.0 .
+docker push ghcr.io/prbe-ai/research-os-mcp:0.5.0
 
 # 2. DNS: point mcp.research.prbe.ai at the same ingress LB IP as api.research.prbe.ai
 
