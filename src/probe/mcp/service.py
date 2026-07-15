@@ -320,6 +320,11 @@ class ResearchReadService:
         cursor: str | None = None,
         workspace_id: str | None = None,
     ) -> dict:
+        if collapse is not None and collapse != EntityType.EXPERIMENT:
+            raise errors.ValidationError(
+                f'unknown collapse value {collapse!r}: pass "experiment" or null',
+                status=422,
+            )
         filters = filters or {}
         workspace_id = workspace_id or filters.get("workspace_id")
         project_id = filters.get("project_id")

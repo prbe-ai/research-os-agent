@@ -427,6 +427,59 @@ def test_malformed_cursor_raises_validation_error(client, app):
         service.research_search("q", cursor='["wrong-shape"]')
 
 
+def test_search_unknown_collapse_rejected(client, app):
+    # only "experiment" (dedupe) and null (heterogeneous) are defined; anything
+    # else must fail loudly instead of silently falling through
+    app.search_response = _search_response()
+    service = ResearchReadService(ResearchOSSource(client))
+    with pytest.raises(errors.ValidationError):
+        service.research_search("q", collapse="run")
+    assert app.search_requests == []  # rejected before any backend call
+
+
+def test_token_factory_evicts_oldest_pair_beyond_cap(monkeypatch):
+    from probe.mcp import server as server_mod
+
+    server_mod._clients.clear()
+    server_mod._sources.clear()
+    monkeypatch.setattr(server_mod, "_MAX_CACHED_TOKENS", 3)
+    closed: list[str] = []
+
+    class FakeClient:
+        def __init__(self, token):
+            self.token = token
+
+        def close(self):
+            closed.append(self.token)
+
+    monkeypatch.setattr(server_mod, "Client", lambda token, fail_open: FakeClient(token))
+
+    def resolve(token):
+        reset = server_mod._token_var.set(token)
+        try:
+            return server_mod._service_from_token()
+        finally:
+            server_mod._token_var.reset(reset)
+
+    try:
+        for token in ("t1", "t2", "t3"):
+            resolve(token)
+        resolve("t1")  # refresh t1's recency: t2 is now the stalest
+        resolve("t4")  # exceeds the cap -> t2 evicted, its client closed
+        assert closed == ["t2"]
+        assert list(server_mod._sources) == ["t3", "t1", "t4"]
+        assert list(server_mod._clients) == list(server_mod._sources)  # kept in step
+        # an evicted token re-creates cleanly (and evicts the next stalest)
+        service = resolve("t2")
+        assert service.source.client.token == "t2"
+        assert closed == ["t2", "t3"]
+        assert list(server_mod._sources) == ["t1", "t4", "t2"]
+        assert list(server_mod._clients) == list(server_mod._sources)
+    finally:
+        server_mod._clients.clear()
+        server_mod._sources.clear()
+
+
 def test_search_malformed_response_degrades_to_partial(client, app):
     # A broken proxy/server returning garbage must degrade, never AttributeError.
     app.search_response = {"state": "ok", "exact": "broken", "semantic": ["nope"]}

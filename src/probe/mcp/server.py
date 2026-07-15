@@ -17,6 +17,7 @@ import json
 import os
 import threading
 import warnings
+from collections import OrderedDict
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -32,9 +33,13 @@ _token_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("probe_m
 # Reuse a client AND a source per distinct token: the client so we do not open
 # an httpx client per call, the source because it carries the /v1/search
 # capability-probe cache — a fresh source per call would re-probe (a full
-# search fan-out) on every tool call, including unrelated reads.
-_clients: dict[str | None, Client] = {}
-_sources: dict[str | None, ResearchOSSource] = {}
+# search fan-out) on every tool call, including unrelated reads. Both maps are
+# LRU-bounded together (hosted multi-tenant mode must not pin one client+source
+# per distinct token forever); the least-recently-used pair is evicted and its
+# httpx client closed. An evicted token simply re-creates on its next request.
+_MAX_CACHED_TOKENS = 256
+_clients: OrderedDict[str | None, Client] = OrderedDict()
+_sources: OrderedDict[str | None, ResearchOSSource] = OrderedDict()
 _factory_lock = threading.Lock()
 
 
@@ -66,6 +71,14 @@ def _service_from_token() -> ResearchReadService:
                 _clients[token] = client
             source = ResearchOSSource(client)
             _sources[token] = source
+        # LRU: refresh both maps' recency together, then evict the stalest
+        # pair(s) beyond the cap, closing the evicted httpx client.
+        _clients.move_to_end(token)
+        _sources.move_to_end(token)
+        while len(_sources) > _MAX_CACHED_TOKENS:
+            stale_token, stale_source = _sources.popitem(last=False)
+            _clients.pop(stale_token, None)
+            stale_source.close()  # closes the underlying httpx client
     return ResearchReadService(source)
 
 
@@ -115,8 +128,13 @@ def create_server(
         Experiments are always searched. Optional `corpora` narrows the knowledge side and maps
         onto backend corpora as: assets -> files, procedures -> files, documents -> github+files;
         transcripts are not indexed yet (reported via completeness.missing = kb_corpora).
-        `collapse="experiment"` (the default) returns deduped experiment-level results only; pass
-        collapse=null for heterogeneous project/experiment/artifact/file hits. `workspace_id`
+        `limit` is a soft per-channel budget, not an exact result count: it is split across the
+        exact and semantic channels (ceil(limit/2) each, so an odd limit can return one extra row
+        and the effective minimum is 2) and results are never truncated after fetch, which keeps
+        the pagination cursors honest. `collapse="experiment"` (the default) returns deduped
+        experiment-level results only; pass collapse=null for heterogeneous
+        project/experiment/artifact/file hits (any other collapse value is rejected with a
+        validation error). `workspace_id`
         scopes workspace-owned documents (rejected on servers that predate /v1/search);
         `filters.project_id` scopes the exact channel client-side and excludes the semantic
         channel (channel error `project_scope_unsupported`). Every result carries
