@@ -124,7 +124,7 @@ class Client:
 
     def me(self) -> dict:
         # /v1/me (not the session-only /auth/me): resolves through the unified
-        # door, so a `ros_pat` or OAuth token identifies its own tenant/role.
+        # door, so a `probe_pat` or OAuth token identifies its own tenant/role.
         return self.transport.get("/v1/me")
 
     def logout(self) -> None:

@@ -33,8 +33,8 @@ reference (no crash, no lost run).
 
 ```bash
 pip install -e .                      # from the repo root: installs the `probe` SDK + CLI
-probe login --base-url https://api.research.prbe.ai --token ros_pat_xxxxxxxx
-#   or: export PROBE_BASE_URL=... PROBE_TOKEN=ros_pat_...
+probe login --base-url https://api.research.prbe.ai --token probe_pat_xxxxxxxx
+#   or: export PROBE_BASE_URL=... PROBE_TOKEN=probe_pat_...
 python -m fixtures.rl_offpolicy.train
 ```
 

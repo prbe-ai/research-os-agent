@@ -2,7 +2,7 @@
 
 ``probe login --device`` starts a short-lived request, opens the dashboard so a
 signed-in human approves the exact scopes/team, then polls for the minted
-``ros_pat``. Mirrors Probe Research ``/auth/device/*`` with mandatory S256 PKCE:
+``probe_pat``. Mirrors Probe Research ``/auth/device/*`` with mandatory S256 PKCE:
 the browser never sees the token, and the PKCE verifier binds the exchange to
 this CLI process. This is the browser alternative to the ``--token`` paste path.
 """
@@ -68,7 +68,7 @@ def device_login(
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> str:
-    """Run the device flow and return the minted ``ros_pat`` secret.
+    """Run the device flow and return the minted ``probe_pat`` secret.
 
     ``scopes=None`` mints a full-role token (read + write) for the CLI; pass e.g.
     ``["read"]`` for a read-only token. ``on_prompt`` receives the verification

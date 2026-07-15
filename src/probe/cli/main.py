@@ -5,11 +5,11 @@ to record experiment data. Data writes are fail-open (spool locally, never block
 Read convenience verbs (`get`, `bundle`) wrap the same read service the MCP tools use.
 
 Connection flags (`--base-url/--token/--ingest-token/--hmac-secret`) are global and
-go before the command: `probe --token ros_pat_x log RUN loss=0.1`. `login` also accepts
+go before the command: `probe --token probe_pat_x log RUN loss=0.1`. `login` also accepts
 them directly so `probe login --token ...` works. Config lives in ~/.config/probe/config.json.
 
 Auth: `probe login --device` runs the browser handoff (RFC 8628) and captures the
-`ros_pat_...` token; `probe login --token ros_pat_...` is the air-gap paste path.
+`probe_pat_...` token; `probe login --token probe_pat_...` is the air-gap paste path.
 """
 
 from __future__ import annotations
@@ -175,7 +175,7 @@ def login(
     """Log in. Bare ``probe login`` runs the browser handoff (RFC 8628) — approve
     in the dashboard, no token to see or paste.
 
-    Pass ``--token ros_pat_...`` for the air-gap paste path, or
+    Pass ``--token probe_pat_...`` for the air-gap paste path, or
     ``--endpoint-only`` to just save ``--base-url`` without minting a token.
     """
     data = load_file()

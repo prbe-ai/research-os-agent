@@ -1,7 +1,7 @@
 """SDK HTTP transport over the Probe Research v3 contract.
 
 One thin wrapper around httpx that knows the two auth surfaces:
-  * ``/v1/*``    -> ``Authorization: Bearer ros_pat_...`` (user API token)
+  * ``/v1/*``    -> ``Authorization: Bearer probe_pat_...`` (user API token)
   * ``/ingest/*`` -> ``Authorization: Bearer ros_ing_...`` (+ optional X-Signature HMAC)
 
 It maps HTTP status to the typed exceptions in ``errors`` and retries idempotent
