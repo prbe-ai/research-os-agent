@@ -15,6 +15,7 @@ from __future__ import annotations
 import contextvars
 import json
 import os
+import warnings
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -25,16 +26,29 @@ from .service import ResearchReadService
 from .source import ResearchOSSource
 
 # Per-request caller token (set by the HTTP auth middleware; None under stdio).
-_token_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("ros_mcp_token", default=None)
+_token_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("probe_mcp_token", default=None)
 
 # Reuse a client per distinct token so we do not open an httpx client per call.
 _clients: dict[str | None, Client] = {}
 
 
+def _env(name: str, default: str | None = None) -> str | None:
+    """Read ``PROBE_<name>``, falling back to the legacy ``ROS_<name>`` spelling
+    (deprecated in the #14/#15 rename; the fallback keeps old deployments working)."""
+    value = os.environ.get(f"PROBE_{name}")
+    if value is not None:
+        return value
+    legacy = os.environ.get(f"ROS_{name}")
+    if legacy is not None:
+        warnings.warn(f"ROS_{name} is deprecated; set PROBE_{name} instead", stacklevel=2)
+        return legacy
+    return default
+
+
 def _service_from_token() -> ResearchReadService:
     """Build a read service bound to the current request's token (HTTP) or the
     ``PROBE_MCP_TOKEN`` env (stdio)."""
-    token = _token_var.get() or os.environ.get("PROBE_MCP_TOKEN")
+    token = _token_var.get() or _env("MCP_TOKEN")
     client = _clients.get(token)
     if client is None:
         client = Client(token=token, fail_open=False)
@@ -53,7 +67,7 @@ def create_server(
         return service if service is not None else _service_from_token()
 
     mcp = FastMCP(
-        "research-os-read",
+        "probe-research-read",
         transport_security=transport_security,
         instructions=(
             "Read-only access to Probe Research experiments, knowledge, and reusable assets. "
@@ -139,12 +153,12 @@ def _oauth_discovery() -> dict | None:
     """OAuth discovery config, or None to disable it (self-host / static bearer).
 
     Enabled by default so a hosted MCP client can find the authorization server
-    and start the OAuth flow. ``ROS_MCP_OAUTH=0`` turns it off; the resource and
+    and start the OAuth flow. ``PROBE_MCP_OAUTH=0`` turns it off; the resource and
     authorization-server URLs are overridable for self-host."""
-    if os.environ.get("ROS_MCP_OAUTH", "1") != "1":
+    if _env("MCP_OAUTH", "1") != "1":
         return None
-    resource = os.environ.get("ROS_MCP_RESOURCE_URL", "https://mcp.research.prbe.ai").rstrip("/")
-    auth_server = os.environ.get("ROS_MCP_AUTH_SERVER", "https://api.research.prbe.ai").rstrip("/")
+    resource = _env("MCP_RESOURCE_URL", "https://mcp.research.prbe.ai").rstrip("/")
+    auth_server = _env("MCP_AUTH_SERVER", "https://api.research.prbe.ai").rstrip("/")
     return {"resource": resource, "authorization_servers": [auth_server]}
 
 
@@ -209,10 +223,10 @@ def http_app(mcp: FastMCP | None = None, *, path: str = "/mcp") -> Any:
     DNS-rebinding protection (which rejects a non-localhost Host header) is OFF by
     default: this runs behind an authenticated reverse proxy (ingress + per-request
     Bearer token), so the browser-local-server threat it guards against does not apply.
-    Set ``ROS_MCP_DNS_REBIND_PROTECT=1`` (+ ``ROS_MCP_ALLOWED_HOSTS=a,b``) to re-enable."""
+    Set ``PROBE_MCP_DNS_REBIND_PROTECT=1`` (+ ``PROBE_MCP_ALLOWED_HOSTS=a,b``) to re-enable."""
     if mcp is None:
-        protect = os.environ.get("ROS_MCP_DNS_REBIND_PROTECT", "0") == "1"
-        hosts = [h.strip() for h in os.environ.get("ROS_MCP_ALLOWED_HOSTS", "").split(",") if h.strip()]
+        protect = _env("MCP_DNS_REBIND_PROTECT", "0") == "1"
+        hosts = [h.strip() for h in (_env("MCP_ALLOWED_HOSTS") or "").split(",") if h.strip()]
         security = TransportSecuritySettings(
             enable_dns_rebinding_protection=protect,
             allowed_hosts=hosts or ["*"],
