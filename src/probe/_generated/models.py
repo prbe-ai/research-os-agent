@@ -6,7 +6,7 @@ from enum import StrEnum
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, Field, RootModel
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel
 
 
 class Role(StrEnum):
@@ -101,6 +101,36 @@ class AssetVersionOut(BaseModel):
     source_artifact_id: UUID | None = Field(None, title='Source Artifact Id')
     uri: str | None = Field(None, title='Uri')
     version: int = Field(..., title='Version')
+
+
+class BodyConsentOauthConsentPost(BaseModel):
+    csrf: str = Field(..., title='Csrf')
+    decision: str = Field(..., title='Decision')
+
+
+class BodyTokenOauthTokenPost(BaseModel):
+    client_id: str | None = Field(None, title='Client Id')
+    code: str | None = Field(None, title='Code')
+    code_verifier: str | None = Field(None, title='Code Verifier')
+    grant_type: str = Field(..., title='Grant Type')
+    redirect_uri: str | None = Field(None, title='Redirect Uri')
+    refresh_token: str | None = Field(None, title='Refresh Token')
+
+
+class ClientRegistrationIn(BaseModel):
+    """
+    RFC 7591 dynamic client registration request. We accept the standard
+    metadata but fix grant/response types and the (none) auth method ourselves.
+    """
+
+    client_name: str | None = Field(None, title='Client Name')
+    grant_types: list[str] | None = Field(None, title='Grant Types')
+    redirect_uris: list[str] = Field(..., min_length=1, title='Redirect Uris')
+    response_types: list[str] | None = Field(None, title='Response Types')
+    scope: str | None = Field(None, title='Scope')
+    token_endpoint_auth_method: str | None = Field(
+        None, title='Token Endpoint Auth Method'
+    )
 
 
 class Decision(StrEnum):
@@ -552,6 +582,24 @@ class Scope(StrEnum):
     admin = 'admin'
 
 
+class ScopedUploadRequest(BaseModel):
+    """
+    Upload fields shared by project and experiment anchors.
+
+    The anchor comes exclusively from the URL and the R2 pointer/key are always
+    server-built. Forbid extras so a client-supplied ``uri`` or ``key`` is rejected
+    instead of being silently ignored by Pydantic.
+    """
+
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    content_hash: str = Field(..., title='Content Hash')
+    content_type: str | None = Field(None, title='Content Type')
+    name: str = Field(..., title='Name')
+    size_bytes: int | None = Field(None, title='Size Bytes')
+
+
 class SeriesPoint(BaseModel):
     step_index: int | None = Field(None, title='Step Index')
     value: float = Field(..., title='Value')
@@ -746,6 +794,8 @@ class UploadGcResult(BaseModel):
 class UploadRequest(BaseModel):
     content_hash: str = Field(..., title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
+    kind: str | None = Field(None, title='Kind')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
     size_bytes: int | None = Field(None, title='Size Bytes')
     span_id: UUID | None = Field(None, title='Span Id')
@@ -756,6 +806,7 @@ class UploadResponse(BaseModel):
     artifact_id: UUID = Field(..., title='Artifact Id')
     have: bool = Field(..., title='Have')
     key: str | None = Field(None, title='Key')
+    upload_headers: dict[str, str] | None = Field(None, title='Upload Headers')
     upload_url: str | None = Field(None, title='Upload Url')
 
 
@@ -904,6 +955,8 @@ class RunOut(BaseModel):
 
 class RunPatch(BaseModel):
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
+    env_ref: str | None = Field(None, title='Env Ref')
+    foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: Name | None = Field(None, title='Name')
     status: RunStatus | None = None

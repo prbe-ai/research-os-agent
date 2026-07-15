@@ -559,6 +559,171 @@
         "title": "AssetVersionOut",
         "type": "object"
       },
+      "Body_consent_oauth_consent_post": {
+        "properties": {
+          "csrf": {
+            "title": "Csrf",
+            "type": "string"
+          },
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "csrf"
+        ],
+        "title": "Body_consent_oauth_consent_post",
+        "type": "object"
+      },
+      "Body_token_oauth_token_post": {
+        "properties": {
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "code_verifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Verifier"
+          },
+          "grant_type": {
+            "title": "Grant Type",
+            "type": "string"
+          },
+          "redirect_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirect Uri"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
+          }
+        },
+        "required": [
+          "grant_type"
+        ],
+        "title": "Body_token_oauth_token_post",
+        "type": "object"
+      },
+      "ClientRegistrationIn": {
+        "description": "RFC 7591 dynamic client registration request. We accept the standard\nmetadata but fix grant/response types and the (none) auth method ourselves.",
+        "properties": {
+          "client_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Name"
+          },
+          "grant_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Types"
+          },
+          "redirect_uris": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Redirect Uris",
+            "type": "array"
+          },
+          "response_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Types"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "token_endpoint_auth_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Endpoint Auth Method"
+          }
+        },
+        "required": [
+          "redirect_uris"
+        ],
+        "title": "ClientRegistrationIn",
+        "type": "object"
+      },
       "DeviceAuthorizationDecision": {
         "properties": {
           "decision": {
@@ -3145,6 +3310,29 @@
             ],
             "title": "Ended At"
           },
+          "env_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env Ref"
+          },
+          "foreign_keys": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Foreign Keys"
+          },
           "metadata": {
             "anyOf": [
               {
@@ -3217,6 +3405,48 @@
         ],
         "title": "Scope",
         "type": "string"
+      },
+      "ScopedUploadRequest": {
+        "additionalProperties": false,
+        "description": "Upload fields shared by project and experiment anchors.\n\nThe anchor comes exclusively from the URL and the R2 pointer/key are always\nserver-built. Forbid extras so a client-supplied ``uri`` or ``key`` is rejected\ninstead of being silently ignored by Pydantic.",
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          }
+        },
+        "required": [
+          "name",
+          "content_hash"
+        ],
+        "title": "ScopedUploadRequest",
+        "type": "object"
       },
       "SeriesPoint": {
         "properties": {
@@ -4114,6 +4344,29 @@
             ],
             "title": "Content Type"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -4182,6 +4435,13 @@
             ],
             "title": "Key"
           },
+          "upload_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Upload Headers",
+            "type": "object"
+          },
           "upload_url": {
             "anyOf": [
               {
@@ -4249,6 +4509,25 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "operationId": "authorization_server_metadata__well_known_oauth_authorization_server_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Authorization Server Metadata",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
     "/auth/callback": {
       "get": {
         "description": "Verify the ID token, upsert the user, mint a session, 302 to dashboard.",
@@ -5006,6 +5285,161 @@
           }
         },
         "summary": "Livez"
+      }
+    },
+    "/oauth/authorize": {
+      "get": {
+        "operationId": "authorize_oauth_authorize_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Authorize",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
+    "/oauth/consent": {
+      "post": {
+        "operationId": "consent_oauth_consent_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_consent_oauth_consent_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Consent",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
+    "/oauth/jwks": {
+      "get": {
+        "operationId": "jwks_oauth_jwks_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Jwks",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
+    "/oauth/register": {
+      "post": {
+        "operationId": "register_oauth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientRegistrationIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "operationId": "token_oauth_token_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_token_oauth_token_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Token",
+        "tags": [
+          "mcp-oauth"
+        ]
       }
     },
     "/v1/artifacts/uploads/gc": {
@@ -6015,6 +6449,59 @@
         ]
       }
     },
+    "/v1/experiments/{experiment_id}/artifacts/uploads": {
+      "post": {
+        "operationId": "presign_experiment_upload_v1_experiments__experiment_id__artifacts_uploads_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Presign Experiment Upload",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/v1/experiments/{experiment_id}/edges": {
       "get": {
         "description": "Every edge touching a run or artifact that belongs to this experiment.",
@@ -6501,6 +6988,30 @@
         ]
       }
     },
+    "/v1/me": {
+      "get": {
+        "description": "The authenticated caller: identity + resolved tenant, role, and scopes.\n\n`require_scopes()` with no required scope accepts any authenticated principal,\nso this works for a session cookie, a `ros_pat`, or an OAuth access token.",
+        "operationId": "whoami_v1_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Whoami V1 Me Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whoami",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/v1/projects": {
       "get": {
         "operationId": "list_projects_v1_projects_get",
@@ -6870,6 +7381,59 @@
         ]
       }
     },
+    "/v1/projects/{project_id}/artifacts/uploads": {
+      "post": {
+        "operationId": "presign_project_upload_v1_projects__project_id__artifacts_uploads_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Presign Project Upload",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/v1/projects/{project_id}/restore": {
       "post": {
         "operationId": "restore_project_v1_projects__project_id__restore_post",
@@ -7198,6 +7762,7 @@
     },
     "/v1/runs/{run_id}/artifacts": {
       "get": {
+        "description": "List a run's artifacts, optionally filtered by kind and/or step range.\n\n``kind`` matches the normalized (lowercased) column. Step bounds are\ninclusive and compare against ``step_index``, so rows with no step are\nexcluded whenever either bound is set (SQL NULL comparison) \u2014 exactly what\nstep-scoped forensics (\"sandbox state at steps 599..601\") wants.",
         "operationId": "list_artifacts_v1_runs__run_id__artifacts_get",
         "parameters": [
           {
@@ -7208,6 +7773,54 @@
               "format": "uuid",
               "title": "Run Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step To"
             }
           }
         ],

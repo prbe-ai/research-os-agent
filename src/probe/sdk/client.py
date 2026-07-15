@@ -413,8 +413,23 @@ class Client:
             query["experiment_id"] = experiment_id
         return self.transport.get_page("/v1/runs", params=query or None)
 
-    def list_run_artifacts(self, run_id: str) -> list[dict]:
-        return self.transport.get(f"/v1/runs/{run_id}/artifacts")
+    def list_run_artifacts(
+        self,
+        run_id: str,
+        *,
+        kind: str | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+    ) -> list[dict]:
+        """List a run's artifacts, optionally server-filtered by kind and/or an
+        inclusive step window — e.g. sandbox states around a collapse:
+        ``list_run_artifacts(run_id, kind="sandbox_state", step_from=599, step_to=601)``."""
+        params = {
+            key: value
+            for key, value in {"kind": kind, "step_from": step_from, "step_to": step_to}.items()
+            if value is not None
+        }
+        return self.transport.get(f"/v1/runs/{run_id}/artifacts", params=params or None)
 
     def list_experiment_artifacts(self, experiment_id: str) -> list[dict]:
         return self.transport.get(f"/v1/experiments/{experiment_id}/artifacts")

@@ -330,3 +330,77 @@ def test_asset_materialize_requires_source_artifact(client, app, tmp_path):
     client.assets.add_version(asset["id"], content_hash="a" * 64, label="v1")  # no source artifact
     with _pytest.raises(ValueError):
         client.assets.materialize("hashonly", str(tmp_path / "x"))
+
+
+def test_artifact_upload_carries_kind_and_meta(client, app, tmp_path):
+    """Harbor-ownership Phase 0: byte uploads are labeled like reference artifacts."""
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    f = tmp_path / "trial.tar"
+    f.write_bytes(b"sandbox-state")
+    client.fail_open = False
+    result = run.log_artifact(
+        "trial-600",
+        path=str(f),
+        kind="harbor_trial",
+        meta={"schema_version": "1.0", "trial": {"name": "swe__x"}},
+        step_index=600,
+        strict=True,
+    )
+    assert result["status"] == "complete"
+    presign_body = json.loads(
+        next(r for r in app.requests if r.url.path.endswith("/artifacts/uploads")).content
+    )
+    assert presign_body["kind"] == "harbor_trial"
+    assert presign_body["meta"] == {"schema_version": "1.0", "trial": {"name": "swe__x"}}
+    assert presign_body["step_index"] == 600
+    stored = client.list_run_artifacts(run.id, kind="harbor_trial")
+    assert [a["name"] for a in stored] == ["trial-600"]
+
+
+def test_artifact_upload_default_kind_stays_file(client, app, tmp_path):
+    """A plain upload omits kind (None on the wire) so restages preserve labels."""
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    f = tmp_path / "ckpt.bin"
+    f.write_bytes(b"weights")
+    client.fail_open = False
+    run.log_artifact("ckpt.bin", path=str(f), strict=True)
+    presign_body = json.loads(
+        next(r for r in app.requests if r.url.path.endswith("/artifacts/uploads")).content
+    )
+    assert "kind" not in presign_body  # exclude_none: absent, not "file"
+    stored = client.list_run_artifacts(run.id)
+    assert stored[0]["kind"] == "file"
+
+
+def test_artifact_upload_fallback_keeps_kind_and_meta(client, app, tmp_path):
+    """Fail-open fallback records the same label, not a bare 'file' reference."""
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    f = tmp_path / "trial.tar"
+    f.write_bytes(b"sandbox-state")
+    app.fail_next_uploads = True
+    with pytest.warns(UserWarning, match="recorded as a reference"):
+        run.log_artifact(
+            "trial-601", path=str(f), kind="harbor_trial", meta={"v": 1}, step_index=601
+        )
+    body = json.loads(app.requests[-1].content)
+    assert body["kind"] == "harbor_trial"
+    assert body["meta"]["v"] == 1
+    assert body["meta"]["upload"] == "failed"
+    assert body["is_reference"] is True
+
+
+def test_list_run_artifacts_filters(client, app):
+    """kind + inclusive step-window filters pass through as query params."""
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    for step in (599, 600, 601):
+        run.log_artifact(
+            f"sandbox-{step}", uri=f"s3://lake/{step}", kind="sandbox_state", step_index=step
+        )
+    run.log_artifact("note", uri="s3://lake/note", kind="note")
+    window = client.list_run_artifacts(run.id, kind="sandbox_state", step_from=599, step_to=601)
+    assert sorted(a["name"] for a in window) == ["sandbox-599", "sandbox-600", "sandbox-601"]
+    upper = client.list_run_artifacts(run.id, step_from=601)
+    assert [a["name"] for a in upper] == ["sandbox-601"]
+    request = app.requests[-1]
+    assert request.url.params["step_from"] == "601"
+    assert len(client.list_run_artifacts(run.id)) == 4

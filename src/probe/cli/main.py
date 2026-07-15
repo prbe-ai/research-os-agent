@@ -416,6 +416,20 @@ def artifact_add(
     print(f"artifact {resolved!r} recorded on {run}")
 
 
+@artifact_app.command("list")
+def artifact_list(
+    run: str = typer.Argument(...),
+    kind: str = typer.Option(None, "--kind"),
+    step_from: int = typer.Option(None, "--step-from"),
+    step_to: int = typer.Option(None, "--step-to"),
+) -> None:
+    """List a run's artifacts (server-filtered): step-window sandbox forensics."""
+    with _client() as c:
+        _print_json(
+            c.list_run_artifacts(run, kind=kind, step_from=step_from, step_to=step_to)
+        )
+
+
 # -- link / snapshot / flush / reads ----------------------------------------
 @app.command()
 def link(

@@ -13,9 +13,8 @@ to a v3 endpoint:
                     and records the git shadow ref as a code_snapshot artifact
   finish()       -> PATCH /v1/runs/{id} {status, ended_at}
 
-Remaining gap (flagged inline, not silently swallowed): the presign upload flow
-does not carry ``kind``/``meta`` yet, so byte uploads land as plain ``file``
-artifacts (warned once; a Phase-2 backend follow-up).
+The presign upload flow carries ``kind``/``meta`` (Harbor-ownership Phase 0), so
+byte uploads and reference artifacts label identically — no gaps flagged.
 """
 
 from __future__ import annotations
@@ -43,8 +42,6 @@ from ..models import (
 
 if TYPE_CHECKING:
     from .client import Client
-
-_UPLOAD_WARNED = False
 
 
 def _now() -> str:
@@ -223,25 +220,25 @@ class Run:
         """Record an artifact.
 
         With ``path`` and no ``uri``: the real presign upload flow (fold #16) runs,
-        fingerprint -> presign -> PUT bytes to R2 -> confirm. The upload flow carries
-        name/hash/size/content_type/span/step only; ``kind``/``meta`` are not settable
-        server-side yet, so they are warned about (a Phase-2 backend follow-up).
+        fingerprint -> presign -> PUT bytes to R2 -> confirm, carrying
+        ``kind``/``meta`` so the stored artifact is labeled (harbor_trial,
+        sandbox_state, ...) exactly like a reference artifact would be.
 
         With ``uri`` (object already in a bucket) or no bytes: a metadata-only
         reference artifact is recorded, as before."""
         meta = dict(meta or {})
         if path is not None and uri is None:
             digest, size = _fingerprint(path)
-            if (kind and kind != "file") or meta:
-                self._warn_upload_kind(name)
             return self._upload_file(
                 name,
                 path,
+                kind=kind,
                 content_hash=content_hash or digest,
                 size_bytes=size_bytes if size_bytes is not None else size,
                 content_type=content_type,
                 span_id=span_id,
                 step_index=step_index,
+                meta=meta,
                 strict=strict,
             )
 
@@ -268,26 +265,18 @@ class Run:
             "POST", f"/v1/runs/{self.id}/artifacts", body, strict=strict
         )
 
-    def _warn_upload_kind(self, name: str) -> None:
-        global _UPLOAD_WARNED
-        if not _UPLOAD_WARNED:
-            warnings.warn(
-                f"the artifact upload flow does not carry kind/meta yet; '{name}' is "
-                "uploaded as a 'file' artifact (Phase-2 backend follow-up).",
-                stacklevel=3,
-            )
-            _UPLOAD_WARNED = True
-
     def _upload_file(
         self,
         name: str,
         path: str,
         *,
+        kind: str,
         content_hash: str,
         size_bytes: int,
         content_type: str | None,
         span_id: str | None,
         step_index: int | None,
+        meta: dict,
         strict: bool | None,
     ):
         """presign -> PUT -> confirm. Fail-open: on failure (and not strict) falls
@@ -300,6 +289,8 @@ class Run:
             content_type=content_type,
             span_id=span_id,
             step_index=step_index,
+            kind=kind if kind != "file" else None,  # None preserves labels on restage
+            meta=meta or None,
         )
         try:
             presign = self._client.transport.post(
@@ -326,7 +317,7 @@ class Run:
                 stacklevel=3,
             )
             fallback = ArtifactCreate(
-                kind="file",
+                kind=kind,
                 name=name,
                 content_hash=content_hash,
                 size_bytes=size_bytes,
@@ -334,7 +325,7 @@ class Run:
                 is_reference=True,
                 span_id=span_id,
                 step_index=step_index,
-                meta={"local_path": os.path.abspath(path), "upload": "failed"},
+                meta={**meta, "local_path": os.path.abspath(path), "upload": "failed"},
             )
             return self._client.write(
                 "POST",
