@@ -3,17 +3,19 @@
 Wraps a run row and exposes the write verbs from the SDK/CLI sketch, each mapped
 to a v3 endpoint:
 
-  log()          -> POST /v1/runs/{id}/metrics
-  log_hw()       -> POST /v1/runs/{id}/metrics (kind=hardware)
+  log()/log_hw() -> POST /v1/runs/{id}/metrics       (first-class dimensions, fold #9)
   span()/step()  -> POST /v1/runs/{id}/spans | /steps      (trajectory)
-  log_artifact() -> POST /v1/runs/{id}/artifacts
-  link()         -> PATCH /v1/runs/{id} (merges foreign_keys into metadata)
-  snapshot()     -> local git shadow-ref capture, stored on run.metadata
+  log_artifact() -> POST /v1/runs/{id}/artifacts, or the presign upload flow
+                    (fold #16: fingerprint -> presign -> PUT to R2 -> confirm)
+  link()         -> PATCH /v1/runs/{id} (per-key new-wins merge into the real
+                    runs.foreign_keys column, fold #8)
+  snapshot()     -> content-addressed execution record (fold #7); pins run.env_ref
+                    and records the git shadow ref as a code_snapshot artifact
   finish()       -> PATCH /v1/runs/{id} {status, ended_at}
 
-Gaps against the design (flagged inline, not silently swallowed): metrics carry no
-first-class dimensions (host/rank/device) yet, artifacts have no upload/presign flow
-yet, and foreign_keys live in metadata rather than a first-class column.
+Remaining gap (flagged inline, not silently swallowed): the presign upload flow
+does not carry ``kind``/``meta`` yet, so byte uploads land as plain ``file``
+artifacts (warned once; a Phase-2 backend follow-up).
 """
 
 from __future__ import annotations
