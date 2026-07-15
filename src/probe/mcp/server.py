@@ -25,7 +25,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ..sdk.client import Client
-from ..sdk.config import resolve
+from ..sdk.config import load_file, resolve
 from .service import ResearchReadService
 from .source import ResearchOSSource
 
@@ -50,9 +50,10 @@ def _env(name: str, default: str | None = None) -> str | None:
 
 
 def _service_from_token() -> ResearchReadService:
-    """Build a read service bound to the current request's token (HTTP) or the
-    ``PROBE_MCP_TOKEN`` env (stdio)."""
-    token = _token_var.get() or _env("MCP_TOKEN")
+    """Build a read service bound to the current request's token (HTTP) or, under
+    stdio, ``PROBE_MCP_TOKEN`` falling back to the ``mcp_token`` that
+    ``probe mcp token set`` stores — so a local server needs no env var either."""
+    token = _token_var.get() or _env("MCP_TOKEN") or load_file().get("mcp_token")
     client = _clients.get(token)
     if client is None:
         client = Client(token=token, fail_open=False)
