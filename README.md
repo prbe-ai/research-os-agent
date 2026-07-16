@@ -144,6 +144,28 @@ probe run end $RUN --status completed
 probe bundle $RUN            # read: run + series + artifacts
 ```
 
+### Harbor trial capture (`probe trial`)
+
+Capture a Harbor trial directory into a run, keyed to the training step —
+the sandbox↔step join (see `docs/2026-07-15-harbor-native-ownership-plan.md`
+for status: what's shipped vs parked):
+
+```bash
+# rollout span + reward metric + labeled CAS file uploads + kind=harbor_trial
+# manifest; a recognized trajectory format (ATIF v1.x built in) also expands
+# into turn/tool_call spans under the rollout span
+probe trial add $RUN jobs/my-job/trials/swe-fix__x1 --step 600 --env-type skypilot-fork
+probe trial add $RUN <dir> --step 601 --no-expand      # raw-only capture
+# retroactively expand a stored trajectory (e.g. after a fork's parser ships);
+# deterministic span ids make this idempotent — re-runs upsert, never duplicate
+probe trial expand $RUN <manifest-artifact-id> --max-spans 0
+```
+
+Query it back: `client.list_run_artifacts(run_id, kind="harbor_trial",
+step_from=599, step_to=601)`. Fork parsers plug in via
+`probe.connectors.atif.register_trajectory_parser("their-format", fn)`;
+unknown formats are captured raw (never rejected) and expanded later.
+
 The following commands are reserved for future hook configuration and are not
 part of the normal researcher workflow:
 
