@@ -1,6 +1,13 @@
 # Hosted read-only Research OS MCP on the existing DOKS cluster (namespace `research`),
 # behind the ingress-nginx + cert-manager already installed for the API. Stateless,
 # no secrets (auth is the caller's per-request Bearer token). Host: mcp.research.prbe.ai.
+#
+# `__IMAGE__` is a placeholder, NOT a tag: .github/workflows/deploy-mcp.yml substitutes
+# the commit-pinned `ghcr.io/prbe-ai/research-os-mcp:sha-<git-sha>` at apply time. This
+# file is therefore not `kubectl apply -f`-able as-is, on purpose — the previous version
+# pinned a mutable `:0.5.0` that nobody re-pushed, so the deployed service silently drifted
+# from main and "what is running?" had no answer. A placeholder fails loudly instead.
+# To apply by hand (break-glass), substitute a real SHA — see deploy/mcp/README.md.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -19,8 +26,8 @@ spec:
         - name: probe-ghcr-pull   # same GHCR pull secret research-os uses
       containers:
         - name: mcp
-          image: ghcr.io/prbe-ai/research-os-mcp:0.5.0
-          imagePullPolicy: Always   # re-pull the mutable 0.5.0 tag on every roll
+          image: __IMAGE__          # substituted with :sha-<git-sha> by deploy-mcp.yml
+          imagePullPolicy: IfNotPresent   # the tag is immutable; re-pulling it buys nothing
           ports: [{ containerPort: 8080 }]
           env:
             # Same-cluster: point at the internal API service to avoid LB hairpin.

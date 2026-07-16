@@ -1,0 +1,188 @@
+# =============================================================================
+# deploy-mcp — build the hosted MCP image and roll it onto DOKS.
+# =============================================================================
+# Replaces the hand-run runbook in deploy/mcp/README.md. That runbook left the
+# deployed service drifting from main with no way to tell what was running: the
+# manifest pinned a MUTABLE `:0.5.0` tag while the package moved to 0.6.0, so
+# "what is live?" had no answer. Every image is now tagged with its commit SHA
+# and the rollout is verified against it.
+#
+# THE DEPLOY IS DORMANT BY DEFAULT. It no-ops until BOTH exist:
+#   * repo VARIABLE  DEPLOY_MCP_ENABLED = true   (Settings -> Secrets and
+#                    variables -> Actions -> Variables)
+#   * Production ENVIRONMENT SECRET  DIGITALOCEAN_ACCESS_TOKEN  (DO API token,
+#                    write scope; an environment secret, never a repo-level one)
+# The build job has no such gate — it needs only the built-in GITHUB_TOKEN, so
+# images accumulate in GHCR from day one and enabling the deploy later can roll
+# to any past SHA.
+#
+# Why a repo variable gates the job rather than the secret: GitHub does not
+# expose the `secrets` context in job-level `if:`, so we gate on the variable and
+# still fail fast inside if the token is missing.
+#
+# Trigger note: this runs on `push: main` directly, NOT on `workflow_run`. The
+# backend uses workflow_run and has to carefully refuse pull-request SHAs,
+# because that trigger hands production secrets to a job that could check out
+# fork-controlled code. A push-to-main trigger cannot run on a PR at all, which
+# removes that whole class of problem.
+name: deploy-mcp
+
+on:
+  push:
+    branches: [main]
+    paths:
+      # Scoped to what the MCP entrypoint ACTUALLY imports — its measured
+      # transitive closure, not the whole package. So a change to cli/ or
+      # connectors/ (which the server never loads) builds nothing.
+      #
+      # tests/test_deploy_scope.py recomputes that closure and fails if this list
+      # stops covering it. That is what makes narrowing safe: the day someone
+      # makes the server import connectors/, the test fails here rather than
+      # silently deploying a stale MCP — which is the exact failure this
+      # pipeline exists to end.
+      #
+      # NOTE: mcp/ alone would be wrong. The server builds a `probe.sdk.Client`
+      # and imports the shared models, so sdk/ and the generated contract reach
+      # the deployed service just as surely as mcp/ does.
+      - "src/probe/__init__.py"
+      - "src/probe/errors.py"
+      - "src/probe/models.py"
+      - "src/probe/_generated/**"
+      - "src/probe/mcp/**"
+      - "src/probe/sdk/**"
+      - "pyproject.toml" # deps + the console entrypoint
+      - "deploy/mcp/**" # Dockerfile + manifest
+      - ".github/workflows/deploy-mcp.yml"
+  workflow_dispatch: # break-glass: redeploy current main without a code change
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/prbe-ai/research-os-mcp
+  NAMESPACE: research
+  DEPLOYMENT: research-os-mcp
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR with the built-in token; no extra secret
+    steps:
+      - uses: actions/checkout@v4
+
+      # The image is the package. Ship it only if the package's own gate passes —
+      # otherwise a red CI run and a green deploy can disagree about the same commit.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - run: pip install -e ".[dev]"
+      - run: pytest -q
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/mcp/Dockerfile
+          push: true
+          # sha-<full-git-sha> is the immutable identity the deploy pins and
+          # verifies. `latest` is a convenience pointer only — never deployed by
+          # tag, because a mutable tag is what made the old deploy unanswerable.
+          tags: |
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    if: ${{ vars.DEPLOY_MCP_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    environment: Production
+    # Serialize real rollouts; never cancel one in flight.
+    concurrency:
+      group: research-os-mcp-production
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard against a stale rollout
+        id: freshness
+        run: |
+          latest_sha="$(git ls-remote origin refs/heads/main | awk '{print $1}')"
+          if [ -z "$latest_sha" ]; then
+            echo "Could not resolve the current main SHA" >&2
+            exit 1
+          fi
+          if [ "${GITHUB_SHA}" != "$latest_sha" ]; then
+            echo "deploy=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping stale image sha-${GITHUB_SHA}; main is ${latest_sha}."
+            exit 0
+          fi
+          echo "deploy=true" >> "$GITHUB_OUTPUT"
+
+      - name: Guard — require the DO token
+        if: steps.freshness.outputs.deploy == 'true'
+        env:
+          DO_TOKEN: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+        run: |
+          if [ -z "$DO_TOKEN" ]; then
+            echo "DIGITALOCEAN_ACCESS_TOKEN is not set — refusing to deploy." >&2
+            exit 1
+          fi
+
+      - name: Install doctl
+        if: steps.freshness.outputs.deploy == 'true'
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Save kubeconfig for probe-research
+        if: steps.freshness.outputs.deploy == 'true'
+        run: doctl kubernetes cluster kubeconfig save probe-research
+
+      # One apply carrying the pinned image, so manifest changes (env, probes,
+      # ingress) and the image roll together instead of racing as two rollouts.
+      - name: Apply the manifest at this commit's image
+        if: steps.freshness.outputs.deploy == 'true'
+        run: |
+          sed "s|__IMAGE__|${IMAGE}:sha-${GITHUB_SHA}|" deploy/mcp/k8s.yaml \
+            | kubectl apply -f -
+
+      - name: Wait for the rollout, and verify what actually landed
+        if: steps.freshness.outputs.deploy == 'true'
+        run: |
+          kubectl -n "$NAMESPACE" rollout status "deployment/$DEPLOYMENT" --timeout=5m
+          # "rollout succeeded" is not "the intended image is running" — assert it.
+          expected="${IMAGE}:sha-${GITHUB_SHA}"
+          actual="$(kubectl -n "$NAMESPACE" get "deployment/$DEPLOYMENT" \
+            -o jsonpath='{.spec.template.spec.containers[0].image}')"
+          if [ "$actual" != "$expected" ]; then
+            echo "Expected deployed image $expected, found $actual" >&2
+            exit 1
+          fi
+          echo "deployed $actual"
+
+      - name: Verify the live endpoint
+        if: steps.freshness.outputs.deploy == 'true'
+        run: |
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 10 https://mcp.research.prbe.ai/healthz | grep -q '"ok"'; then
+              echo "mcp.research.prbe.ai healthy"; exit 0
+            fi
+            echo "attempt $i: not healthy yet"; sleep 6
+          done
+          echo "mcp.research.prbe.ai did not report healthy after the rollout" >&2
+          exit 1
