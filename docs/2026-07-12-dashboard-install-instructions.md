@@ -1,5 +1,13 @@
 # Dashboard install instructions — gathered info + plan
 
+> **Superseded — historical.** Written before the #14/#15 rename, so the names below are
+> stale: `exp` → `probe`, `research-os-mcp` → `probe-research-mcp`, `ROS_*` → `PROBE_*`,
+> plugin `research-os@…` → `probe-research@…`. The token no longer goes in a shell
+> profile — `probe mcp token set` stores it and the plugin reads it through a headers
+> helper. Kept as a record of the plan; do not follow it as instructions. The live copy is
+> generated from `NAMES` in `research-os/dashboard/src/components/connect/install-flow.ts`,
+> and the current setup steps are in `plugins/probe-research/commands/probe-research-setup.md`.
+
 **Goal:** add a "Connect the CLI + agent" page to the research-os **dashboard** so a
 researcher can install and wire up the plugin + `exp` CLI from the UI (including minting
 the tokens). This doc is the gathered context and a build plan; the page lives in

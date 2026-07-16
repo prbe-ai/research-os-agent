@@ -18,6 +18,17 @@ from probe.client import Client
 from probe.config import Settings
 from probe.transport import Transport
 
+@pytest.fixture(autouse=True)
+def _no_live_token_verification(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the hosted MCP's edge token check off by default.
+
+    It calls the real ``/v1/me``, so any test handing a bearer to the wrapper would
+    quietly hit production and fail on a 401. Tests that cover verification inject
+    their own ``token_rejected`` instead (see tests/test_mcp_hosted.py).
+    """
+    monkeypatch.setenv("PROBE_MCP_VERIFY_TOKEN", "0")
+
+
 _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")
 _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
 _RUN_ARTIFACTS = re.compile(r"^/v1/runs/([^/]+)/artifacts$")
@@ -51,6 +62,10 @@ class FakeApp:
         self.experiment_conflict_id: str | None = None
         self.fail_next_metrics = False
         self.fail_next_uploads = False
+        # /v1/me reports the *token's* scopes, not the principal's: a read-only PAT
+        # answers ["read"] even when its owner is an owner.
+        self.me_scopes: list[str] = ["read", "write", "delete", "admin"]
+        self.me_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -62,11 +77,13 @@ class FakeApp:
             body = {}  # e.g. a raw-bytes PUT to a presigned URL
 
         if path == "/v1/me" and method == "GET":
+            if self.me_status != 200:
+                return httpx.Response(self.me_status, json={"error": "invalid_token"})
             return httpx.Response(200, json={
                 "user_id": "00000000-0000-0000-0000-000000000001",
                 "email": "dev@example.com", "name": "Dev",
                 "customer_id": "lab-42", "role": "owner",
-                "scopes": ["read", "write", "delete", "admin"], "via": "token",
+                "scopes": list(self.me_scopes), "via": "token",
             })
 
         if path == "/v1/tokens/current" and method == "DELETE":
