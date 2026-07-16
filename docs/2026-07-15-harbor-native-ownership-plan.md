@@ -1,6 +1,36 @@
 # Harbor-native ownership plan (Osmosis)
 
-**Date:** 2026-07-15 · **Status:** Phase 0 in progress · **Owners:** Mahit (+ Richard's infra design)
+**Date:** 2026-07-15 · **Status:** Phases 0–1 shipped, Phase 2 partially shipped (see Status) · **Owners:** Mahit (+ Richard's infra design)
+
+## Status (updated 2026-07-16)
+
+**Shipped**
+- Phase 0, all of it — research-os #41 (+ lint fix #47, deployed to prod):
+  uploads carry `kind`/`meta`, list filters `?kind=&step_from=&step_to=`;
+  agent #20: `log_artifact(kind=, meta=)`, `list_run_artifacts(...)` filters.
+- Phase 1 capture — agent #22: `probe.connectors.harbor.capture_trial()` +
+  `probe trial add RUN DIR --step N`. Env-agnostic, fail-open, CAS-deduped.
+  Prod-smoked (run `attractive-sloth-845`): step-window manifest query, R2
+  byte round-trip, cross-trial dedup.
+- Phase 2 trajectory expansion — agent #24: `probe.connectors.atif` parser
+  registry, ATIF v1.6/v1.7 built in (validated against Harbor's own golden
+  fixtures), normalized `turn`/`tool_call` span vocabulary with subagent
+  nesting, deterministic ids ⇒ idempotent + retroactive
+  (`probe trial expand RUN MANIFEST_ID` re-reads stored R2 bytes).
+  Prod-smoked (run `silver-heron-263`): capture-time + retroactive paths.
+
+**Not implemented (deliberate)**
+- S3 backfill importer (`probe ingest harbor-s3`) — parked to last by
+  decision 2026-07-16: fresh runs matter more than history; "what we mainly
+  care about is how it is after they start using it."
+- Phase 2 capture-at-source: Harbor-bridge hook, Miles plugin
+  (`rollout_id → step`), environment collector, and the Osmosis-fork
+  trajectory parser — all blocked on Andy's cooperation / a sample of their
+  fork's `trajectory.json`.
+- Phase 3 entirely (probe-research cluster, dashboard trial gallery /
+  sandbox diff / trajectory viewer, sandbox MCP views, pricing). Note: the
+  spans are in the DB today; the dashboard does not render trajectory trees
+  yet — that is Phase 3 work.
 
 The decision: although Andy (Osmosis) framed us as a bolt-on, for the Harbor case we
 want to **own as much natively as possible** — sandbox binaries in our store, the
@@ -34,7 +64,7 @@ contract mapping), `019f53c9` (capture-point decision: Harbor bridge host).
 
 ---
 
-## Phase 0 — contract + blocking API gaps (days) ← CURRENT
+## Phase 0 — contract + blocking API gaps (days) ✅ SHIPPED
 
 1. **Upload flow carries `kind`/`meta`** (research-os). `POST
    /v1/runs/{id}/artifacts/uploads` hardcodes `kind="file"` and drops meta; you
@@ -49,7 +79,7 @@ contract mapping), `019f53c9` (capture-point decision: Harbor bridge host).
    passes `kind`/`meta` on the upload path (drop the once-warning),
    `list_run_artifacts(kind=…, step_from=…, step_to=…)`.
 
-## Phase 1 — SDK-native trial capture (1–2 wks)
+## Phase 1 — SDK-native trial capture (1–2 wks) ✅ SHIPPED (except backfill, parked)
 
 - `probe.connectors.harbor.capture_trial(run, trial_dir, step_index=…)`:
   parse `result.json`/`reward` → metrics at step; `trajectory.json` → rollout span
@@ -62,7 +92,7 @@ contract mapping), `019f53c9` (capture-point decision: Harbor bridge host).
   private fork so we can demo before asking for integration.
 - Demo milestone: step-600 collapse forensics on Osmosis-shaped data.
 
-## Phase 2 — capture at source, zero-code (2–4 wks)
+## Phase 2 — capture at source, zero-code (2–4 wks) — trajectory expansion ✅, rest blocked on Andy
 
 - **Harbor-bridge hook** (the `019f53c9` decision): callback in their fork's
   request loop — after verifier returns, stream the trial dir to Probe ingest
