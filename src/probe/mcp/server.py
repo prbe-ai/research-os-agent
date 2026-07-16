@@ -16,8 +16,10 @@ import contextvars
 import hashlib
 import json
 import os
+import threading
 import time
 import warnings
+from collections import OrderedDict
 from typing import Any
 
 import httpx
@@ -32,8 +34,17 @@ from .source import ResearchOSSource
 # Per-request caller token (set by the HTTP auth middleware; None under stdio).
 _token_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("probe_mcp_token", default=None)
 
-# Reuse a client per distinct token so we do not open an httpx client per call.
-_clients: dict[str | None, Client] = {}
+# Reuse a client AND a source per distinct token: the client so we do not open
+# an httpx client per call, the source because it carries the /v1/search
+# capability-probe cache — a fresh source per call would re-probe (a full
+# search fan-out) on every tool call, including unrelated reads. Both maps are
+# LRU-bounded together (hosted multi-tenant mode must not pin one client+source
+# per distinct token forever); the least-recently-used pair is evicted and its
+# httpx client closed. An evicted token simply re-creates on its next request.
+_MAX_CACHED_TOKENS = 256
+_clients: OrderedDict[str | None, Client] = OrderedDict()
+_sources: OrderedDict[str | None, ResearchOSSource] = OrderedDict()
+_factory_lock = threading.Lock()
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -50,15 +61,30 @@ def _env(name: str, default: str | None = None) -> str | None:
 
 
 def _service_from_token() -> ResearchReadService:
-    """Build a read service bound to the current request's token (HTTP) or, under
-    stdio, ``PROBE_MCP_TOKEN`` falling back to the ``mcp_token`` that
-    ``probe mcp token set`` stores — so a local server needs no env var either."""
+    """Build a read service bound to the current request's token (HTTP) or the
+    ``PROBE_MCP_TOKEN`` (stdio), falling back to the ``mcp_token`` that
+    ``probe mcp token set`` stores. Client and source are memoized per token
+    (the service itself is a stateless wrapper); the lock only guards the maps —
+    a racing double-probe inside the source is idempotent and accepted."""
     token = _token_var.get() or _env("MCP_TOKEN") or load_file().get("mcp_token")
-    client = _clients.get(token)
-    if client is None:
-        client = Client(token=token, fail_open=False)
-        _clients[token] = client
-    return ResearchReadService(ResearchOSSource(client))
+    with _factory_lock:
+        source = _sources.get(token)
+        if source is None:
+            client = _clients.get(token)
+            if client is None:
+                client = Client(token=token, fail_open=False)
+                _clients[token] = client
+            source = ResearchOSSource(client)
+            _sources[token] = source
+        # LRU: refresh both maps' recency together, then evict the stalest
+        # pair(s) beyond the cap, closing the evicted httpx client.
+        _clients.move_to_end(token)
+        _sources.move_to_end(token)
+        while len(_sources) > _MAX_CACHED_TOKENS:
+            stale_token, stale_source = _sources.popitem(last=False)
+            _clients.pop(stale_token, None)
+            stale_source.close()  # closes the underlying httpx client
+    return ResearchReadService(source)
 
 
 def create_server(
@@ -101,12 +127,35 @@ def create_server(
         query: str,
         corpora: list[str] | None = None,
         filters: dict[str, Any] | None = None,
-        collapse: str = "experiment",
+        collapse: str | None = "experiment",
         limit: int = 8,
         cursor: str | None = None,
+        workspace_id: str | None = None,
     ) -> dict:
-        """Hybrid search over experiments and, when available, assets, procedures, docs, and transcript evidence."""
-        return svc().research_search(query, corpora, filters, collapse, limit, cursor)
+        """Search experiments, projects, artifacts, and indexed knowledge through the backend's
+        one-index exact+semantic search (POST /v1/search), with per-result channel provenance.
+
+        Experiments are always searched. Optional `corpora` narrows the knowledge side and maps
+        onto backend corpora as: assets -> files, procedures -> files, documents -> github+files;
+        transcripts are not indexed yet (reported via completeness.missing = kb_corpora).
+        `limit` is a soft per-channel budget, not an exact result count: it is split across the
+        exact and semantic channels (ceil(limit/2) each, so an odd limit can return one extra row
+        and the effective minimum is 2) and results are never truncated after fetch, which keeps
+        the pagination cursors honest. `collapse="experiment"` (the default) returns deduped
+        experiment-level results only; pass collapse=null for heterogeneous
+        project/experiment/artifact/file hits (any other collapse value is rejected with a
+        validation error). `workspace_id`
+        scopes workspace-owned documents (rejected on servers that predate /v1/search);
+        `filters.project_id` scopes the exact channel client-side and excludes the semantic
+        channel (channel error `project_scope_unsupported`). Every result carries
+        why_matched = {mode, channel, score, terms}; `card` keys are name/slug/ids for exact
+        hits, title/snippet/source_system/source_url/doc_id for semantic document hits, and
+        name/hypothesis/summary for keyword-fallback hits. If the semantic engine is down the
+        result is completeness.state = "partial" with missing = ["semantic_search"]; on a backend
+        that predates /v1/search the tool degrades to structured keyword matching over
+        experiments (unpaginated: next_cursor is always null there).
+        """
+        return svc().research_search(query, corpora, filters, collapse, limit, cursor, workspace_id)
 
     @mcp.tool()
     def research_get(
@@ -152,6 +201,11 @@ def create_server(
     def experiment_card(experiment_id: str) -> dict:
         """Addressable compact experiment card."""
         return svc().research_get(f"experiment:{experiment_id}", "card")
+
+    @mcp.resource("research://projects/{project_id}/card")
+    def project_card(project_id: str) -> dict:
+        """Addressable compact project card (exact search hits link here)."""
+        return svc().research_get(f"project:{project_id}", "card")
 
     return mcp
 

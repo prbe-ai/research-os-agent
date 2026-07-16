@@ -617,6 +617,35 @@ class Client:
             "/v1/series/query", {"run_ids": run_ids, **kw}, idempotent=True
         )
 
+    def search(
+        self,
+        query: str,
+        *,
+        corpus: list[str] | None = None,
+        workspace_id: str | None = None,
+        top_k: int | None = None,
+        exact_limit: int | None = None,
+        exact_cursor: str | None = None,
+        semantic_cursor: str | None = None,
+    ) -> dict:
+        """``POST /v1/search`` (workspaces+kb fold-in): one-index exact+semantic search.
+
+        POST-for-read, so it retries like any GET. Returns the sectioned
+        per-channel response ``{query, state, exact:{results,cursor,error},
+        semantic:{results,cursor,error}}``; a backend that predates the
+        endpoint 404s (callers such as the MCP source fall back)."""
+        body: dict[str, Any] = {"query": query}
+        optional = {
+            "corpus": corpus,
+            "workspace_id": workspace_id,
+            "top_k": top_k,
+            "exact_limit": exact_limit,
+            "exact_cursor": exact_cursor,
+            "semantic_cursor": semantic_cursor,
+        }
+        body.update({key: value for key, value in optional.items() if value is not None})
+        return self.transport.post("/v1/search", body, idempotent=True)
+
     # -- passive / batch push ----------------------------------------------
     def ingest(
         self,

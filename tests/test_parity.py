@@ -288,7 +288,6 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
 # are deliberately deferred so the `probe project` group and the artifact anchor
 # generalization are each designed ONCE against the final model, rather than built now
 # and reworked. Tracked in tasks/probe-workspace-context-handoff.md.
-_WORKSPACES = "deferred to the workspaces pass — see tasks/probe-workspace-context-handoff.md"
 # The workspaces + KB fold-in (backend PR #42/#43) also shipped the workspace surface
 # itself, federated search, and the GitHub knowledge-connector. These are all part of
 # that same program and belong to the workspaces client pass — NOT permanently
@@ -296,6 +295,7 @@ _WORKSPACES = "deferred to the workspaces pass — see tasks/probe-workspace-con
 # install flow) is CLI surface or dashboard-only is a decision for THAT pass to make,
 # so it sits in PENDING rather than being pre-declared permanent here.
 _CONNECTORS = "workspaces + KB connector pass — see tasks/probe-workspace-context-handoff.md"
+_WORKSPACES = "deferred to the workspaces pass — see tasks/probe-workspace-context-handoff.md"
 
 PENDING: dict[Op, str] = {
     ("PATCH", "/v1/projects/{}"): _WORKSPACES,
@@ -311,7 +311,6 @@ PENDING: dict[Op, str] = {
     ("GET", "/v1/workspaces/{}"): _WORKSPACES,
     ("GET", "/v1/workspaces/{}/files"): _WORKSPACES,
     ("POST", "/v1/workspaces/{}/files/uploads"): _WORKSPACES,
-    ("POST", "/v1/search"): _WORKSPACES,
     # GitHub knowledge-connector management (READ status + ADMIN install/uninstall).
     ("GET", "/v1/integrations/github"): _CONNECTORS,
     ("POST", "/v1/integrations/github/installations"): _CONNECTORS,

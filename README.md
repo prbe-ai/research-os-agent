@@ -164,7 +164,7 @@ Run the stdio server with `probe-research-mcp`. It exposes exactly six tools:
 | Tool | Function |
 |---|---|
 | `research_context` | Project/session bootstrap, prior experiments, active runs, capability warnings |
-| `research_search` | Structured keyword fallback now; semantic/KB fusion when the backend lands |
+| `research_search` | One-index exact+semantic backend search (`POST /v1/search`, corpora: assets/procedures → files, documents → github+files, transcripts unsupported); keyword fallback on pre-search backends |
 | `research_get` | Progressive card, handoff, reproduction, lineage, metrics, and artifact views |
 | `research_compare` | Server-side comparison of runs, experiments, and future asset versions |
 | `research_resolve` | Compatible asset resolution; honest partial result on API v3 |
@@ -172,8 +172,10 @@ Run the stdio server with `probe-research-mcp`. It exposes exactly six tools:
 
 MCP reads through the Probe Research API—never directly from Postgres or R2. Its
 logical sources are control identity/tenant scope, the structured experiment
-store, the future asset/manifest registry, the future KB projection, and
-object-store resource pointers returned by the API. W&B, RunPod, Kubernetes,
+store, the asset/manifest registry, the one-index search door (`POST /v1/search`:
+exact SQL channel + the KB engine's semantic channel; search capabilities are
+discovered against the live backend with one cached probe), and object-store
+resource pointers returned by the API. W&B, RunPod, Kubernetes,
 Git, and local transcript paths are not live MCP sources; adapters upload their
 identifiers and evidence first.
 
@@ -203,6 +205,7 @@ changing the SDK, CLI, MCP, or skill contracts.
 | `client.sessions.*` | `PATCH /v1/runs/{id}` + transcript artifact metadata (hook ABI) |
 | `client.ingest()` | `POST /ingest/v1/runs` |
 | `client.run_bundle()` / `run_lineage()` | `GET /v1/runs/{id}/bundle` \| `/lineage` |
+| `client.search()` (used by `research_search`) | `POST /v1/search` (exact+semantic, sectioned) |
 
 ## v0.4.0.0 ingestion fold-in (Phase 1)
 
@@ -228,7 +231,9 @@ Most earlier gaps are closed by Probe Research v0.4 (PR #13). Now wired:
 
 ### Remaining
 
-- **MCP semantic/KB search** and **session hooks** remain later work.
+- **MCP semantic/KB search** is now wired to `POST /v1/search` (workspaces+kb
+  fold-in) with an honest keyword fallback on older backends; transcript
+  evidence is not indexed yet. **Session hooks** remain later work.
 - **Harbor-native ownership Phases 1–3** (trial capture connector, capture-at-source,
   platform surface): see `docs/2026-07-15-harbor-native-ownership-plan.md`.
 
