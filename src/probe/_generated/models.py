@@ -51,6 +51,7 @@ class ArtifactOut(BaseModel):
     status: str | None = Field('complete', title='Status')
     step_index: int | None = Field(None, title='Step Index')
     uri: str | None = Field(None, title='Uri')
+    workspace_id: UUID | None = Field(None, title='Workspace Id')
 
 
 class AssetCreate(BaseModel):
@@ -115,6 +116,17 @@ class BodyTokenOauthTokenPost(BaseModel):
     grant_type: str = Field(..., title='Grant Type')
     redirect_uri: str | None = Field(None, title='Redirect Uri')
     refresh_token: str | None = Field(None, title='Refresh Token')
+
+
+class ChannelError(StrEnum):
+    """
+    Machine-readable per-channel failure reasons (state:"partial").
+    """
+
+    engine_unconfigured = 'engine_unconfigured'
+    engine_timeout = 'engine_timeout'
+    engine_error = 'engine_error'
+    sql_budget_exceeded = 'sql_budget_exceeded'
 
 
 class ClientRegistrationIn(BaseModel):
@@ -318,6 +330,63 @@ class ExperimentVersionOut(BaseModel):
     version: int = Field(..., title='Version')
 
 
+class Code(RootModel[str]):
+    root: str = Field(..., max_length=512, title='Code')
+
+
+class State(RootModel[str]):
+    root: str = Field(..., max_length=2048, title='State')
+
+
+class GitHubInstallationClaim(BaseModel):
+    """
+    Post-install redirect claim: GitHub sends
+    ?installation_id=...&state=...&code=... back to the Connect page (Setup
+    URL), which POSTs all three here.
+
+    `state` is the signed token the install_url carried (team identity).
+    `code` is the user-authorization code GitHub adds when the App has
+    "Request user authorization (OAuth) during installation" enabled --
+    exchanged server-side to prove the claiming user ADMINISTERS the
+    installation (review F1: state alone cannot; installation ids are small
+    integers and the App-JWT lookup proves existence, never ownership).
+    Absent state is a POLICY rejection (422) except for the same-team
+    revival/re-claim path; absent code is a 422 when the server has the App's
+    OAuth client creds configured.
+    """
+
+    code: Code | None = Field(None, title='Code')
+    installation_id: int = Field(..., ge=1, title='Installation Id')
+    state: State | None = Field(None, title='State')
+
+
+class GitHubInstallationOut(BaseModel):
+    account_login: str = Field(..., title='Account Login')
+    installation_id: int = Field(..., title='Installation Id')
+    repository_selection: str = Field(..., title='Repository Selection')
+    suspended: bool = Field(..., title='Suspended')
+
+
+class GitHubIntegrationState(StrEnum):
+    """
+    Server-side integration state the Connect page renders.
+    """
+
+    not_configured = 'not_configured'
+    available = 'available'
+    installed = 'installed'
+
+
+class IndexCorpus(StrEnum):
+    """
+    The /v1/search corpus filter vocabulary (github.* is engine-native).
+    """
+
+    experiments = 'experiments'
+    files = 'files'
+    github = 'github'
+
+
 class IngestArtifact(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
@@ -471,6 +540,7 @@ class ProjectCreate(BaseModel):
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     slug: str = Field(..., title='Slug')
+    workspace_id: UUID | None = Field(None, title='Workspace Id')
 
 
 class ProjectOut(BaseModel):
@@ -482,16 +552,21 @@ class ProjectOut(BaseModel):
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     slug: str = Field(..., title='Slug')
+    workspace_id: UUID | None = Field(..., title='Workspace Id')
 
 
 class ProjectPatch(BaseModel):
     """
     Field-replace PATCH (D9). Only provided fields change; None = untouched.
+
+    `workspace_id` re-files the project into another workspace (D6: projects
+    stay re-fileable); it is resolved in-tenant before use (amendment #3).
     """
 
     description: str | None = Field(None, title='Description')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: Name | None = Field(None, title='Name')
+    workspace_id: UUID | None = Field(None, title='Workspace Id')
 
 
 class RunCounts(BaseModel):
@@ -598,6 +673,41 @@ class ScopedUploadRequest(BaseModel):
     content_type: str | None = Field(None, title='Content Type')
     name: str = Field(..., title='Name')
     size_bytes: int | None = Field(None, title='Size Bytes')
+
+
+class SearchEntityType(StrEnum):
+    """
+    Entities the exact SQL channel searches (names + slugs).
+    """
+
+    project = 'project'
+    experiment = 'experiment'
+    artifact = 'artifact'
+
+
+class SearchRequest(BaseModel):
+    corpus: list[IndexCorpus] | None = Field(None, title='Corpus')
+    exact_cursor: str | None = Field(None, title='Exact Cursor')
+    exact_limit: int | None = Field(20, ge=1, le=50, title='Exact Limit')
+    query: str = Field(..., max_length=500, min_length=1, title='Query')
+    semantic_cursor: str | None = Field(None, title='Semantic Cursor')
+    top_k: int | None = Field(20, ge=1, le=50, title='Top K')
+    workspace_id: UUID | None = Field(None, title='Workspace Id')
+
+
+class SearchState(StrEnum):
+    ok = 'ok'
+    partial = 'partial'
+
+
+class SemanticRefKind(StrEnum):
+    """
+    research-os entities a semantic doc id resolves back to.
+    """
+
+    run = 'run'
+    experiment = 'experiment'
+    file = 'file'
 
 
 class SeriesPoint(BaseModel):
@@ -818,6 +928,31 @@ class ValidationError(BaseModel):
     type: str = Field(..., title='Error Type')
 
 
+class WorkspaceKind(StrEnum):
+    """
+    The closed workspace kind vocabulary (DB CHECK mirrors this).
+    """
+
+    personal = 'personal'
+    shared = 'shared'
+
+
+class WorkspaceOut(BaseModel):
+    """
+    One dropdown entry: the dashboard's workspace switcher builds on this.
+    """
+
+    archived_at: AwareDatetime | None = Field(None, title='Archived At')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    customer_id: str = Field(..., title='Customer Id')
+    id: UUID = Field(..., title='Id')
+    kind: WorkspaceKind
+    name: str = Field(..., title='Name')
+    owner_user_id: str | None = Field(None, title='Owner User Id')
+    project_count: int | None = Field(0, title='Project Count')
+    slug: str = Field(..., title='Slug')
+
+
 class Scopes(RootModel[list[Scope]]):
     root: list[Scope] = Field(..., min_length=1, title='Scopes')
 
@@ -847,6 +982,30 @@ class EdgeCreate(BaseModel):
     source_type: LineageEntityType
     target_id: UUID = Field(..., title='Target Id')
     target_type: LineageEntityType
+
+
+class ExactHit(BaseModel):
+    entity_type: SearchEntityType
+    experiment_id: UUID | None = Field(None, title='Experiment Id')
+    id: UUID = Field(..., title='Id')
+    name: str = Field(..., title='Name')
+    project_id: UUID | None = Field(None, title='Project Id')
+    run_id: UUID | None = Field(None, title='Run Id')
+    score: float = Field(..., title='Score')
+    slug: str | None = Field(None, title='Slug')
+    workspace_id: UUID | None = Field(None, title='Workspace Id')
+
+
+class ExactSection(BaseModel):
+    cursor: str | None = Field(None, title='Cursor')
+    error: ChannelError | None = None
+    results: list[ExactHit] | None = Field(None, title='Results')
+
+
+class GitHubIntegrationOut(BaseModel):
+    install_url: str | None = Field(..., title='Install Url')
+    installations: list[GitHubInstallationOut] = Field(..., title='Installations')
+    state: GitHubIntegrationState
 
 
 class HTTPValidationError(BaseModel):
@@ -963,6 +1122,11 @@ class RunPatch(BaseModel):
     summary: dict[str, Any] | None = Field(None, title='Summary')
 
 
+class SemanticRef(BaseModel):
+    id: UUID = Field(..., title='Id')
+    kind: SemanticRefKind
+
+
 class Series(RootModel[list[SeriesSelector]]):
     root: list[SeriesSelector] = Field(..., max_length=200, title='Series')
 
@@ -1000,3 +1164,26 @@ class RunBundle(BaseModel):
     run: RunDetailOut
     series: list[MetricSeriesOut] = Field(..., title='Series')
     span_types: list[SpanTypeCount] = Field(..., title='Span Types')
+
+
+class SemanticHit(BaseModel):
+    doc_id: str = Field(..., title='Doc Id')
+    ref: SemanticRef | None = None
+    score: float = Field(..., title='Score')
+    snippet: str = Field(..., title='Snippet')
+    source_system: str | None = Field(None, title='Source System')
+    source_url: str | None = Field(None, title='Source Url')
+    title: str | None = Field(None, title='Title')
+
+
+class SemanticSection(BaseModel):
+    cursor: str | None = Field(None, title='Cursor')
+    error: ChannelError | None = None
+    results: list[SemanticHit] | None = Field(None, title='Results')
+
+
+class SearchResponse(BaseModel):
+    exact: ExactSection
+    query: str = Field(..., title='Query')
+    semantic: SemanticSection
+    state: SearchState

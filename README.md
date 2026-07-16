@@ -1,4 +1,4 @@
-# probe-agent (`probe` SDK/CLI + `probe-research` plugin)
+# probe-research (`probe` SDK/CLI + `probe-research` plugin)
 
 CLI + SDK client for **Probe Research**, Probe's experiment-tracking platform. It is a
 thin client over the v3 ingestion contract (`CONTRACT.md` in the Probe Research backend).
