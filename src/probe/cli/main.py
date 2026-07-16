@@ -658,6 +658,43 @@ def artifact_list(
         )
 
 
+# -- Harbor trial capture (Harbor-ownership Phase 1) --------------------------
+trial_app = typer.Typer(no_args_is_help=True, help="capture Harbor sandbox trials into a run")
+app.add_typer(trial_app, name="trial")
+
+
+@trial_app.command("add")
+def trial_add(
+    run: str = typer.Argument(...),
+    trial_dir: str = typer.Argument(..., help="a Harbor trial output directory"),
+    step: int = typer.Option(None, "--step", help="training step / Miles rollout_id — the join key"),
+    env_type: str = typer.Option(None, "--env-type", help="opaque environment label (e.g. skypilot-fork)"),
+) -> None:
+    """Capture one Harbor trial: rollout span + reward metric + labeled file
+    uploads + a kind=harbor_trial manifest, all keyed by --step."""
+    from ..connectors.harbor import capture_trial
+
+    with _client() as c:
+        result = capture_trial(
+            _run_handle(c, run),
+            trial_dir,
+            step_index=step,
+            environment={"type": env_type} if env_type else None,
+            source_mode="cli",
+        )
+    manifest = result.get("manifest") or {}
+    _print_json(
+        {
+            "trial": result["trial"],
+            "span_id": result["span_id"],
+            "reward": result["reward"],
+            "manifest_artifact_id": manifest.get("id") if isinstance(manifest, dict) else None,
+            "files": len(result["files"]),
+            "uploaded": sum(1 for f in result["files"] if f.get("uploaded")),
+        }
+    )
+
+
 # -- link / snapshot / flush / reads ----------------------------------------
 @app.command()
 def link(
