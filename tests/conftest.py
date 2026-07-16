@@ -61,6 +61,7 @@ class FakeApp:
         # test knobs
         self.experiment_conflict_id: str | None = None
         self.fail_next_metrics = False
+        self.fail_next_uploads = False
         # /v1/me reports the *token's* scopes, not the principal's: a read-only PAT
         # answers ["read"] even when its owner is an owner.
         self.me_scopes: list[str] = ["read", "write", "delete", "admin"]
@@ -188,7 +189,19 @@ class FakeApp:
             self.artifacts.setdefault(m.group(1), []).append(row)
             return httpx.Response(201, json=row)
         if m and method == "GET":
-            return httpx.Response(200, json=self.artifacts.get(m.group(1), []))
+            rows = self.artifacts.get(m.group(1), [])
+            kind = request.url.params.get("kind")
+            step_from = request.url.params.get("step_from")
+            step_to = request.url.params.get("step_to")
+            if kind is not None:
+                rows = [r for r in rows if r.get("kind") == kind.strip().lower()]
+            if step_from is not None:
+                rows = [r for r in rows if r.get("step_index") is not None
+                        and r["step_index"] >= int(step_from)]
+            if step_to is not None:
+                rows = [r for r in rows if r.get("step_index") is not None
+                        and r["step_index"] <= int(step_to)]
+            return httpx.Response(200, json=rows)
 
         m = _RUN_BUNDLE.match(path)
         if m and method == "GET":
@@ -307,12 +320,18 @@ class FakeApp:
         # -- artifact upload flow (fold #16) --
         m = re.match(r"^/v1/runs/([^/]+)/artifacts/uploads$", path)
         if m and method == "POST":
+            if self.fail_next_uploads:
+                self.fail_next_uploads = False
+                return httpx.Response(503, json={"detail": "storage down"})
             rid = m.group(1)
             ch = body["content_hash"]
             aid = str(uuid.uuid4())
             have = ch in self.uploaded
             art = {"id": aid, "run_id": rid, "name": body["name"], "content_hash": ch,
-                   "size_bytes": body.get("size_bytes"), "kind": "file",
+                   "size_bytes": body.get("size_bytes"),
+                   "kind": (body.get("kind") or "file").strip().lower(),
+                   "meta": body.get("meta"), "step_index": body.get("step_index"),
+                   "span_id": body.get("span_id"),
                    "status": "complete" if have else "pending", "is_reference": False}
             self.artifacts.setdefault(rid, []).append(art)
             return httpx.Response(201, json={
