@@ -1,4 +1,4 @@
-# probe-agent (`probe` SDK/CLI + `probe-research` plugin)
+# probe-research (`probe` SDK/CLI + `probe-research` plugin)
 
 CLI + SDK client for **Probe Research**, Probe's experiment-tracking platform. It is a
 thin client over the v3 ingestion contract (`CONTRACT.md` in the Probe Research backend).
@@ -214,8 +214,8 @@ Most earlier gaps are closed by Probe Research v0.4 (PR #13). Now wired:
 - **Real metric dimensions.** `log_hw(..., device=3, host="n1")` sends `dimensions`
   (fold #9); `log(..., dimensions={...})`. No more key-encoding.
 - **Presign artifact upload.** `log_artifact(path=...)` runs presign → PUT to R2 →
-  confirm (fold #16). Fails open to a reference on error. (`kind`/`meta` aren't carried
-  by the upload flow yet, warned once — a Phase-2 backend follow-up.)
+  confirm (fold #16), carrying `kind`/`meta` so byte uploads are labeled like
+  reference artifacts (Harbor-ownership Phase 0). Fails open to a reference on error.
 - **Execution records.** `snapshot()` posts a content-addressed `execution-record`
   (fold #7); `client.execution_record(...)`.
 - **Asset registry.** `client.assets.register()` + `add_version()` + `resolve()`
@@ -229,17 +229,17 @@ Most earlier gaps are closed by Probe Research v0.4 (PR #13). Now wired:
 - **Events read.** `client.events.list()` / `for_run()` (server-emitted lifecycle log).
   Research notes moved to `client.notes.add()` (stored as `kind="note"` artifacts).
 
-### Remaining (Phase 2)
+### Remaining
 
-- **`foreign_keys` / `env_ref` on the interactive path.** Settable only via ingest
-  today; `RunPatch` can't set them, so interactive `link()`/`snapshot()` write
-  `metadata.foreign_keys` / `metadata.env_ref` as interim. Needs a small backend PR
-  adding those fields (merge) to `RunPatch`.
-- **Asset `materialize`.** Deferred until the backend exposes an asset-version download.
-- **Upload `kind`/`meta`.** The presign flow doesn't carry them yet.
 - **MCP semantic/KB search** is now wired to `POST /v1/search` (workspaces+kb
   fold-in) with an honest keyword fallback on older backends; transcript
   evidence is not indexed yet. **Session hooks** remain later work.
+- **Harbor-native ownership Phases 1–3** (trial capture connector, capture-at-source,
+  platform surface): see `docs/2026-07-15-harbor-native-ownership-plan.md`.
+
+(Previously listed here and since shipped: `RunPatch` `foreign_keys`/`env_ref` parity,
+asset `materialize`, upload `kind`/`meta`, and server-side artifact list filters
+`?kind=&step_from=&step_to=`.)
 
 ## Typed models (generated from the OpenAPI contract)
 

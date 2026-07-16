@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import secrets
+import socket
 import time
 import webbrowser
 from collections.abc import Callable
@@ -22,6 +23,20 @@ import httpx
 _START_PATH = "/auth/device/code"
 _TOKEN_PATH = "/auth/device/token"
 _SLOW_DOWN_BACKOFF = 5
+
+
+def hostname() -> str:
+    """This machine's short name, for labelling a minted token.
+
+    The token name is the only way to tell one client apart from another in the
+    dashboard's client list, so default it to the host — three laptops otherwise
+    show up as three identical rows and "revoke that one" is guesswork.
+    """
+    try:
+        name = socket.gethostname().split(".")[0].strip()  # drop .local / domain
+    except OSError:
+        name = ""
+    return name or "unknown-host"
 
 
 class DeviceLoginError(Exception):
@@ -57,23 +72,37 @@ def _error_code(resp: httpx.Response) -> tuple[str | None, str | None]:
     return None, str(detail)
 
 
-def device_login(
+def device_authorize(
     base_url: str,
     *,
     scopes: list[str] | None = None,
-    token_name: str = "Probe Research CLI",
+    token_name: str | None = None,
     open_browser: bool = True,
     on_prompt: Callable[[DevicePrompt], None] | None = None,
     client: httpx.Client | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
-) -> str:
-    """Run the device flow and return the minted ``probe_pat`` secret.
+) -> dict:
+    """Run the device flow and return the whole mint response (``TokenCreated``).
 
-    ``scopes=None`` mints a full-role token (read + write) for the CLI; pass e.g.
-    ``["read"]`` for a read-only token. ``on_prompt`` receives the verification
-    URI/code so the caller can print it; ``open_browser`` also launches it.
+    This is the CLI's only way to mint a token: ``POST /v1/tokens`` is session-only
+    on purpose ("a leaked token must not be able to mint more tokens"), so a human
+    approves in the browser and the backend mints exactly one ``probe_pat`` here.
+
+    The response carries ``token`` (the plaintext secret, shown exactly once) plus
+    ``id``/``name``/``token_prefix``/``scopes`` — the identifying fields a caller
+    needs in order to later revoke it without ever re-reading the secret.
+
+    ``scopes=None`` requests read + write + delete — "full access" for the CLI means
+    research data, so ``admin`` (browser-only team administration) is deliberately not
+    in the default. Pass e.g. ``["read"]`` for a read-only token. Whatever is
+    requested, the minted token can never exceed the scopes the approver's role
+    confers. ``on_prompt`` receives the verification URI/code so the caller can print
+    it; ``open_browser`` also launches it. ``token_name`` defaults to a
+    hostname-labelled name so the token is identifiable in the dashboard's client list.
     """
+    if token_name is None:
+        token_name = f"Probe Research CLI · {hostname()}"
     verifier, challenge = _pkce_pair()
     owns_client = client is None
     http = client or httpx.Client(base_url=base_url, timeout=30.0)
@@ -110,7 +139,7 @@ def device_login(
                 json={"device_code": device_code, "code_verifier": verifier},
             )
             if resp.status_code == 200:
-                return resp.json()["token"]
+                return resp.json()
             code, desc = _error_code(resp)
             if code == "slow_down":
                 interval += _SLOW_DOWN_BACKOFF
@@ -124,3 +153,12 @@ def device_login(
     finally:
         if owns_client:
             http.close()
+
+
+def device_login(base_url: str, **kwargs) -> str:
+    """Run the device flow and return just the minted ``probe_pat`` secret.
+
+    The login path only ever needs the secret; use :func:`device_authorize` when you
+    also need the token's id (e.g. to print what to revoke later).
+    """
+    return device_authorize(base_url, **kwargs)["token"]

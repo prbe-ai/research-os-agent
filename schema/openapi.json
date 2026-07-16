@@ -259,6 +259,18 @@
               }
             ],
             "title": "Uri"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
           }
         },
         "required": [
@@ -557,6 +569,182 @@
           "created_at"
         ],
         "title": "AssetVersionOut",
+        "type": "object"
+      },
+      "Body_consent_oauth_consent_post": {
+        "properties": {
+          "csrf": {
+            "title": "Csrf",
+            "type": "string"
+          },
+          "decision": {
+            "title": "Decision",
+            "type": "string"
+          }
+        },
+        "required": [
+          "decision",
+          "csrf"
+        ],
+        "title": "Body_consent_oauth_consent_post",
+        "type": "object"
+      },
+      "Body_token_oauth_token_post": {
+        "properties": {
+          "client_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Id"
+          },
+          "code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "code_verifier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code Verifier"
+          },
+          "grant_type": {
+            "title": "Grant Type",
+            "type": "string"
+          },
+          "redirect_uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirect Uri"
+          },
+          "refresh_token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refresh Token"
+          }
+        },
+        "required": [
+          "grant_type"
+        ],
+        "title": "Body_token_oauth_token_post",
+        "type": "object"
+      },
+      "ChannelError": {
+        "description": "Machine-readable per-channel failure reasons (state:\"partial\").",
+        "enum": [
+          "engine_unconfigured",
+          "engine_timeout",
+          "engine_error",
+          "sql_budget_exceeded"
+        ],
+        "title": "ChannelError",
+        "type": "string"
+      },
+      "ClientRegistrationIn": {
+        "description": "RFC 7591 dynamic client registration request. We accept the standard\nmetadata but fix grant/response types and the (none) auth method ourselves.",
+        "properties": {
+          "client_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Client Name"
+          },
+          "grant_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grant Types"
+          },
+          "redirect_uris": {
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "title": "Redirect Uris",
+            "type": "array"
+          },
+          "response_types": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Response Types"
+          },
+          "scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scope"
+          },
+          "token_endpoint_auth_method": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Endpoint Auth Method"
+          }
+        },
+        "required": [
+          "redirect_uris"
+        ],
+        "title": "ClientRegistrationIn",
         "type": "object"
       },
       "DeviceAuthorizationDecision": {
@@ -942,6 +1130,127 @@
           "created_at"
         ],
         "title": "EventOut",
+        "type": "object"
+      },
+      "ExactHit": {
+        "properties": {
+          "entity_type": {
+            "$ref": "#/components/schemas/SearchEntityType"
+          },
+          "experiment_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experiment Id"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "entity_type",
+          "id",
+          "name",
+          "score"
+        ],
+        "title": "ExactHit",
+        "type": "object"
+      },
+      "ExactSection": {
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/ExactHit"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "title": "ExactSection",
         "type": "object"
       },
       "ExecutionRecordCreate": {
@@ -1439,6 +1748,115 @@
         "title": "ExperimentVersionOut",
         "type": "object"
       },
+      "GitHubInstallationClaim": {
+        "description": "Post-install redirect claim: GitHub sends\n?installation_id=...&state=...&code=... back to the Connect page (Setup\nURL), which POSTs all three here.\n\n`state` is the signed token the install_url carried (team identity).\n`code` is the user-authorization code GitHub adds when the App has\n\"Request user authorization (OAuth) during installation\" enabled --\nexchanged server-side to prove the claiming user ADMINISTERS the\ninstallation (review F1: state alone cannot; installation ids are small\nintegers and the App-JWT lookup proves existence, never ownership).\nAbsent state is a POLICY rejection (422) except for the same-team\nrevival/re-claim path; absent code is a 422 when the server has the App's\nOAuth client creds configured.",
+        "properties": {
+          "code": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Code"
+          },
+          "installation_id": {
+            "minimum": 1.0,
+            "title": "Installation Id",
+            "type": "integer"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          }
+        },
+        "required": [
+          "installation_id"
+        ],
+        "title": "GitHubInstallationClaim",
+        "type": "object"
+      },
+      "GitHubInstallationOut": {
+        "properties": {
+          "account_login": {
+            "title": "Account Login",
+            "type": "string"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "integer"
+          },
+          "repository_selection": {
+            "title": "Repository Selection",
+            "type": "string"
+          },
+          "suspended": {
+            "title": "Suspended",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "installation_id",
+          "account_login",
+          "repository_selection",
+          "suspended"
+        ],
+        "title": "GitHubInstallationOut",
+        "type": "object"
+      },
+      "GitHubIntegrationOut": {
+        "properties": {
+          "install_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Install Url"
+          },
+          "installations": {
+            "items": {
+              "$ref": "#/components/schemas/GitHubInstallationOut"
+            },
+            "title": "Installations",
+            "type": "array"
+          },
+          "state": {
+            "$ref": "#/components/schemas/GitHubIntegrationState"
+          }
+        },
+        "required": [
+          "state",
+          "install_url",
+          "installations"
+        ],
+        "title": "GitHubIntegrationOut",
+        "type": "object"
+      },
+      "GitHubIntegrationState": {
+        "description": "Server-side integration state the Connect page renders.",
+        "enum": [
+          "not_configured",
+          "available",
+          "installed"
+        ],
+        "title": "GitHubIntegrationState",
+        "type": "string"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -1451,6 +1869,16 @@
         },
         "title": "HTTPValidationError",
         "type": "object"
+      },
+      "IndexCorpus": {
+        "description": "The /v1/search corpus filter vocabulary (github.* is engine-native).",
+        "enum": [
+          "experiments",
+          "files",
+          "github"
+        ],
+        "title": "IndexCorpus",
+        "type": "string"
       },
       "IngestArtifact": {
         "properties": {
@@ -2303,6 +2731,18 @@
           "slug": {
             "title": "Slug",
             "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
           }
         },
         "required": [
@@ -2363,11 +2803,24 @@
           "slug": {
             "title": "Slug",
             "type": "string"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
           }
         },
         "required": [
           "id",
           "customer_id",
+          "workspace_id",
           "slug",
           "name",
           "created_at"
@@ -2376,7 +2829,7 @@
         "type": "object"
       },
       "ProjectPatch": {
-        "description": "Field-replace PATCH (D9). Only provided fields change; None = untouched.",
+        "description": "Field-replace PATCH (D9). Only provided fields change; None = untouched.\n\n`workspace_id` re-files the project into another workspace (D6: projects\nstay re-fileable); it is resolved in-tenant before use (amendment #3).",
         "properties": {
           "description": {
             "anyOf": [
@@ -2412,6 +2865,18 @@
               }
             ],
             "title": "Name"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
           }
         },
         "title": "ProjectPatch",
@@ -3145,6 +3610,29 @@
             ],
             "title": "Ended At"
           },
+          "env_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Env Ref"
+          },
+          "foreign_keys": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Foreign Keys"
+          },
           "metadata": {
             "anyOf": [
               {
@@ -3217,6 +3705,296 @@
         ],
         "title": "Scope",
         "type": "string"
+      },
+      "ScopedUploadRequest": {
+        "additionalProperties": false,
+        "description": "Upload fields shared by project and experiment anchors.\n\nThe anchor comes exclusively from the URL and the R2 pointer/key are always\nserver-built. Forbid extras so a client-supplied ``uri`` or ``key`` is rejected\ninstead of being silently ignored by Pydantic.",
+        "properties": {
+          "content_hash": {
+            "title": "Content Hash",
+            "type": "string"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          }
+        },
+        "required": [
+          "name",
+          "content_hash"
+        ],
+        "title": "ScopedUploadRequest",
+        "type": "object"
+      },
+      "SearchEntityType": {
+        "description": "Entities the exact SQL channel searches (names + slugs).",
+        "enum": [
+          "project",
+          "experiment",
+          "artifact"
+        ],
+        "title": "SearchEntityType",
+        "type": "string"
+      },
+      "SearchRequest": {
+        "properties": {
+          "corpus": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/IndexCorpus"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Corpus"
+          },
+          "exact_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exact Cursor"
+          },
+          "exact_limit": {
+            "default": 20,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Exact Limit",
+            "type": "integer"
+          },
+          "query": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Query",
+            "type": "string"
+          },
+          "semantic_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Semantic Cursor"
+          },
+          "top_k": {
+            "default": 20,
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Top K",
+            "type": "integer"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SearchRequest",
+        "type": "object"
+      },
+      "SearchResponse": {
+        "properties": {
+          "exact": {
+            "$ref": "#/components/schemas/ExactSection"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "semantic": {
+            "$ref": "#/components/schemas/SemanticSection"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SearchState"
+          }
+        },
+        "required": [
+          "query",
+          "state",
+          "exact",
+          "semantic"
+        ],
+        "title": "SearchResponse",
+        "type": "object"
+      },
+      "SearchState": {
+        "enum": [
+          "ok",
+          "partial"
+        ],
+        "title": "SearchState",
+        "type": "string"
+      },
+      "SemanticHit": {
+        "properties": {
+          "doc_id": {
+            "title": "Doc Id",
+            "type": "string"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SemanticRef"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "snippet": {
+            "title": "Snippet",
+            "type": "string"
+          },
+          "source_system": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source System"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "doc_id",
+          "snippet",
+          "score"
+        ],
+        "title": "SemanticHit",
+        "type": "object"
+      },
+      "SemanticRef": {
+        "properties": {
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SemanticRefKind"
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "title": "SemanticRef",
+        "type": "object"
+      },
+      "SemanticRefKind": {
+        "description": "research-os entities a semantic doc id resolves back to.",
+        "enum": [
+          "run",
+          "experiment",
+          "file"
+        ],
+        "title": "SemanticRefKind",
+        "type": "string"
+      },
+      "SemanticSection": {
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ChannelError"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/SemanticHit"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "title": "SemanticSection",
+        "type": "object"
       },
       "SeriesPoint": {
         "properties": {
@@ -4114,6 +4892,29 @@
             ],
             "title": "Content Type"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "meta": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Meta"
+          },
           "name": {
             "title": "Name",
             "type": "string"
@@ -4182,6 +4983,13 @@
             ],
             "title": "Key"
           },
+          "upload_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Upload Headers",
+            "type": "object"
+          },
           "upload_url": {
             "anyOf": [
               {
@@ -4240,6 +5048,83 @@
         ],
         "title": "ValidationError",
         "type": "object"
+      },
+      "WorkspaceKind": {
+        "description": "The closed workspace kind vocabulary (DB CHECK mirrors this).",
+        "enum": [
+          "personal",
+          "shared"
+        ],
+        "title": "WorkspaceKind",
+        "type": "string"
+      },
+      "WorkspaceOut": {
+        "description": "One dropdown entry: the dashboard's workspace switcher builds on this.",
+        "properties": {
+          "archived_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Archived At"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/WorkspaceKind"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "owner_user_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner User Id"
+          },
+          "project_count": {
+            "default": 0,
+            "title": "Project Count",
+            "type": "integer"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "slug",
+          "name",
+          "kind",
+          "created_at"
+        ],
+        "title": "WorkspaceOut",
+        "type": "object"
       }
     }
   },
@@ -4249,6 +5134,25 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/.well-known/oauth-authorization-server": {
+      "get": {
+        "operationId": "authorization_server_metadata__well_known_oauth_authorization_server_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Authorization Server Metadata",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
     "/auth/callback": {
       "get": {
         "description": "Verify the ID token, upsert the user, mint a session, 302 to dashboard.",
@@ -5006,6 +5910,161 @@
           }
         },
         "summary": "Livez"
+      }
+    },
+    "/oauth/authorize": {
+      "get": {
+        "operationId": "authorize_oauth_authorize_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Authorize",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
+    "/oauth/consent": {
+      "post": {
+        "operationId": "consent_oauth_consent_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_consent_oauth_consent_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Consent",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
+    "/oauth/jwks": {
+      "get": {
+        "operationId": "jwks_oauth_jwks_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Jwks",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
+    "/oauth/register": {
+      "post": {
+        "operationId": "register_oauth_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientRegistrationIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register",
+        "tags": [
+          "mcp-oauth"
+        ]
+      }
+    },
+    "/oauth/token": {
+      "post": {
+        "operationId": "token_oauth_token_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_token_oauth_token_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Token",
+        "tags": [
+          "mcp-oauth"
+        ]
       }
     },
     "/v1/artifacts/uploads/gc": {
@@ -6015,6 +7074,59 @@
         ]
       }
     },
+    "/v1/experiments/{experiment_id}/artifacts/uploads": {
+      "post": {
+        "operationId": "presign_experiment_upload_v1_experiments__experiment_id__artifacts_uploads_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Presign Experiment Upload",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/v1/experiments/{experiment_id}/edges": {
       "get": {
         "description": "Every edge touching a run or artifact that belongs to this experiment.",
@@ -6501,6 +7613,127 @@
         ]
       }
     },
+    "/v1/integrations/github": {
+      "get": {
+        "operationId": "get_integration_v1_integrations_github_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubIntegrationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Integration",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/v1/integrations/github/installations": {
+      "post": {
+        "operationId": "claim_installation_v1_integrations_github_installations_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GitHubInstallationClaim"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GitHubInstallationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Claim Installation",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/v1/integrations/github/installations/{installation_id}": {
+      "delete": {
+        "operationId": "release_installation_v1_integrations_github_installations__installation_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "installation_id",
+            "required": true,
+            "schema": {
+              "title": "Installation Id",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Release Installation",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "description": "The authenticated caller: identity + resolved tenant, role, and scopes.\n\n`require_scopes()` with no required scope accepts any authenticated principal,\nso this works for a session cookie, a `ros_pat`, or an OAuth access token.",
+        "operationId": "whoami_v1_me_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Whoami V1 Me Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Whoami",
+        "tags": [
+          "identity"
+        ]
+      }
+    },
     "/v1/projects": {
       "get": {
         "operationId": "list_projects_v1_projects_get",
@@ -6522,6 +7755,25 @@
               ],
               "description": "'archived' to include archived",
               "title": "Include"
+            }
+          },
+          {
+            "description": "only projects filed in this workspace",
+            "in": "query",
+            "name": "workspace_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "only projects filed in this workspace",
+              "title": "Workspace Id"
             }
           },
           {
@@ -6870,6 +8122,59 @@
         ]
       }
     },
+    "/v1/projects/{project_id}/artifacts/uploads": {
+      "post": {
+        "operationId": "presign_project_upload_v1_projects__project_id__artifacts_uploads_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Presign Project Upload",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/v1/projects/{project_id}/restore": {
       "post": {
         "operationId": "restore_project_v1_projects__project_id__restore_post",
@@ -7198,6 +8503,7 @@
     },
     "/v1/runs/{run_id}/artifacts": {
       "get": {
+        "description": "List a run's artifacts, optionally filtered by kind and/or step range.\n\n``kind`` matches the normalized (lowercased) column. Step bounds are\ninclusive and compare against ``step_index``, so rows with no step are\nexcluded whenever either bound is set (SQL NULL comparison) \u2014 exactly what\nstep-scoped forensics (\"sandbox state at steps 599..601\") wants.",
         "operationId": "list_artifacts_v1_runs__run_id__artifacts_get",
         "parameters": [
           {
@@ -7208,6 +8514,54 @@
               "format": "uuid",
               "title": "Run Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step To"
             }
           }
         ],
@@ -8050,6 +9404,47 @@
         ]
       }
     },
+    "/v1/search": {
+      "post": {
+        "operationId": "search_v1_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search",
+        "tags": [
+          "search"
+        ]
+      }
+    },
     "/v1/series/query": {
       "post": {
         "description": "One request serves the run page (1 run) and the comparison view (N runs).\nRLS scopes the read; every run_id is validated in-tenant AND live (a soft-\ndeleted run is hidden -> 404) before any points are read.",
@@ -8249,6 +9644,194 @@
         "summary": "Revoke Token",
         "tags": [
           "tokens"
+        ]
+      }
+    },
+    "/v1/workspaces": {
+      "get": {
+        "operationId": "list_workspaces_v1_workspaces_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceOut"
+                  },
+                  "title": "Response List Workspaces V1 Workspaces Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Workspaces",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}": {
+      "get": {
+        "operationId": "get_workspace_v1_workspaces__workspace_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Workspace",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/files": {
+      "get": {
+        "description": "Flat, name-ordered live COMPLETE files; names with slashes imply folders\n(the existing explorer contract builds the tree client-side). Pending rows\nare staged replacements/first uploads (review F14) -- hidden here so a\nmid-upload replacement never shadows or duplicates the live version.",
+        "operationId": "list_workspace_files_v1_workspaces__workspace_id__files_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactOut"
+                  },
+                  "title": "Response List Workspace Files V1 Workspaces  Workspace Id  Files Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Workspace Files",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/files/uploads": {
+      "post": {
+        "operationId": "presign_workspace_file_upload_v1_workspaces__workspace_id__files_uploads_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Presign Workspace File Upload",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/webhooks/github": {
+      "post": {
+        "operationId": "github_webhook_webhooks_github_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Github Webhook",
+        "tags": [
+          "github-webhooks"
         ]
       }
     }

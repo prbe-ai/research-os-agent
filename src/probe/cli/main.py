@@ -14,19 +14,24 @@ Auth: `probe login --device` runs the browser handoff (RFC 8628) and captures th
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shlex
 import sys
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
-import click
 import typer
+from pydantic import ValidationError
 
 from .. import __version__, errors
+from ..models import Scope
 from ..sdk.client import Client
-from ..sdk.config import clear_file, load_file, resolve, save_file
-from ..sdk.device import DeviceLoginError, DevicePrompt, device_login
+from ..sdk.config import clear_file, config_path, load_file, resolve, save_file
+from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
 
 
 # -- global connection state (set by the root callback) ---------------------
@@ -42,6 +47,8 @@ _conn = Conn()
 
 
 # -- enums (choices) --------------------------------------------------------
+# `Scope` is not redefined here: it is imported from the generated contract models,
+# so `make regen` picks up a new backend scope for free instead of drifting.
 class Relation(str, Enum):
     fork = "fork"
     resume = "resume"
@@ -109,6 +116,13 @@ def _print_json(obj: Any) -> None:
     print(json.dumps(obj, indent=2, default=str))
 
 
+def _show_device_prompt(prompt: DevicePrompt) -> None:
+    """Print the browser URL + user code for a device-flow approval. One definition,
+    reused by every command that mints via the device flow (login, token, mcp)."""
+    print(f"  visit: {prompt.verification_uri_complete}")
+    print(f"  code:  {prompt.user_code}")
+
+
 def _client() -> Client:
     # `Client` is a module global so the CLI package can monkeypatch it in tests.
     return Client(
@@ -129,6 +143,23 @@ def _version_cb(value: bool) -> None:
     if value:
         typer.echo(f"probe {__version__}")
         raise typer.Exit()
+
+
+# Typer vendors its own click (`typer._click`, since 0.13). The standalone `click`
+# package is a DIFFERENT module object, so `except click.ClickException` matched
+# nothing typer raises and every usage error escaped main() as a traceback instead of
+# an exit code — silently, on an unpinned typer bump.
+#
+# `typer.Exit`/`typer.Abort` are public re-exports of whichever click typer uses.
+# ClickException — the base of every usage error (BadParameter, NoSuchOption,
+# UsageError, ...) — is not re-exported, but it is reachable from BadParameter's MRO
+# under either layout, so resolving it here follows typer rather than pinning to one.
+ClickException = next(
+    (base for base in typer.BadParameter.__mro__ if base.__name__ == "ClickException"),
+    # Never expected; the fallback keeps `import probe.cli` working (a StopIteration at
+    # import time would make the whole CLI unusable) and degrades to catching nothing.
+    type("_NoClickException", (Exception,), {}),
+)
 
 
 # -- app --------------------------------------------------------------------
@@ -186,12 +217,8 @@ def login(
         endpoint = resolve(base_url=base).base_url
         print(f"opening {endpoint} for browser approval…")
 
-        def _show(prompt: DevicePrompt) -> None:
-            print(f"  visit: {prompt.verification_uri_complete}")
-            print(f"  code:  {prompt.user_code}")
-
         try:
-            resolved_token = device_login(endpoint, on_prompt=_show)
+            resolved_token = device_login(endpoint, on_prompt=_show_device_prompt)
         except DeviceLoginError as exc:
             print(f"device login failed: {exc}", file=sys.stderr)
             raise typer.Exit(1) from exc
@@ -239,6 +266,288 @@ def whoami() -> None:
         _print_json(c.me())
 
 
+# -- mcp read credential ----------------------------------------------------
+mcp_app = typer.Typer(no_args_is_help=True, help="the read-only credential the MCP surface uses")
+app.add_typer(mcp_app, name="mcp")
+
+mcp_token_app = typer.Typer(no_args_is_help=True, help="manage the read-only MCP token")
+mcp_app.add_typer(mcp_token_app, name="token")
+
+_READ_ONLY_SCOPES = {"read"}
+
+
+def _normalize_token(raw: str) -> str:
+    """Undo how tokens actually arrive: pasted with `Bearer `, quotes, or a newline."""
+    token = raw.strip()
+    for _ in range(2):  # e.g. "Bearer probe_pat_x" needs both peels
+        if len(token) >= 2 and token[0] == token[-1] and token[0] in "\"'":
+            token = token[1:-1].strip()
+        if token.lower().startswith("bearer "):
+            token = token[7:].strip()
+    return token
+
+
+def _checked_token(raw: str) -> str:
+    token = _normalize_token(raw)
+    if not token:
+        # These used to raise the standalone click's BadParameter to dodge the bug
+        # main() now fixes at the root (see the ClickException note above): typer's own
+        # BadParameter is caught correctly, so the workaround is gone.
+        raise typer.BadParameter("token is empty")
+    # No prefix check: the server takes both `ros_pat_` and `probe_pat_`, and the
+    # prefix is only a discriminator — real auth is a sha256 lookup.
+    if any(c.isspace() or ord(c) < 32 for c in token):
+        raise typer.BadParameter("token contains whitespace or control characters")
+    return token
+
+
+def _fingerprint(token: str) -> str:
+    """Enough to compare two tokens without printing either."""
+    return f"…{token[-4:]} (sha256:{hashlib.sha256(token.encode()).hexdigest()[:8]})"
+
+
+def _verify(token: str, base_url: str) -> tuple[str, dict | None]:
+    """Ask the API who this token is. Returns (state, identity).
+
+    state: ``ok`` | ``rejected`` (definitive 401/403) | ``unreachable`` (blip).
+    """
+    try:
+        with Client(base_url=base_url, token=token, fail_open=False) as client:
+            return "ok", client.me()
+    except (errors.AuthError, errors.ScopeError):  # 401, 403 — both definitive
+        return "rejected", None
+    except (errors.TransportError, errors.ServerError):
+        return "unreachable", None
+
+
+@mcp_token_app.command("set")
+def mcp_token_set(
+    token: str = typer.Option(None, "--token", help="paste a read-only token (air-gap path)"),
+    allow_write: bool = typer.Option(False, "--allow-write", help="persist even if it can write"),
+    verify: bool = typer.Option(True, "--verify/--no-verify", help="check the token against /v1/me"),
+) -> None:
+    """Store the read-only token the MCP uses. Re-run to rotate — it replaces, never appends.
+
+    Bare `probe mcp token set` mints a read-only token in the browser, so nothing is
+    pasted and no secret lands in your shell history or `ps` output.
+    """
+    base = resolve(base_url=_conn.base_url).base_url
+    if token is not None:
+        # `--token ""` is a mistake to report, not a cue to open a browser.
+        secret = _checked_token(token)
+    else:
+        print(f"opening {base} to mint a read-only token…")
+        try:
+            secret = device_login(
+                base,
+                scopes=["read"],
+                token_name=f"Probe Research MCP (read-only) · {hostname()}",
+                on_prompt=_show_device_prompt,
+            )
+        except DeviceLoginError as exc:
+            print(f"device login failed: {exc}", file=sys.stderr)
+            raise typer.Exit(1) from exc
+
+    state, identity = _verify(secret, base) if verify else ("skipped", None)
+    if state == "rejected":
+        # Persisting a token the API already refuses just moves the failure somewhere
+        # quieter — the MCP would load its tools and fail every call.
+        print("error: the API rejected this token; nothing was saved", file=sys.stderr)
+        raise typer.Exit(1)
+
+    scopes = set((identity or {}).get("scopes") or [])
+    if scopes and not scopes <= _READ_ONLY_SCOPES and not allow_write:
+        print(
+            f"error: this token carries {sorted(scopes)}; the MCP credential should be read-only.\n"
+            "       Mint a read-only one with `probe mcp token set` (no --token), "
+            "or pass --allow-write to override.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+
+    data = load_file()
+    data["mcp_token"] = secret
+    data.setdefault("base_url", base)
+    path = save_file(data)
+
+    who = (identity or {}).get("email") or "unverified"
+    # Never report success without saying whether it was actually checked — an
+    # unverified write that reads like a verified one is how this broke before.
+    note = {
+        "ok": f"verified: yes ({who}, scopes={sorted(scopes) or 'unknown'})",
+        "unreachable": "verified: no (API unreachable — run `probe mcp status` to recheck)",
+        "skipped": "verified: no (--no-verify)",
+    }[state]
+    print(f"saved mcp_token {_fingerprint(secret)} to {path}\n{note}")
+    if scopes and not scopes <= _READ_ONLY_SCOPES:
+        print("warning: this token can write; the MCP surface is read-only by design")
+    elif state != "ok":
+        # The read-only guard runs on the verified path only. Say so, rather than let
+        # an unchecked token look like a checked one that passed.
+        print("warning: scopes unchecked — this token may be able to write")
+    print("Restart any MCP client that is already running, or reconnect it, to pick this up.")
+
+
+@mcp_token_app.command("unset")
+def mcp_token_unset() -> None:
+    """Remove the stored read-only MCP token."""
+    data = load_file()
+    if data.pop("mcp_token", None) is None:
+        print("no mcp_token stored")
+        return
+    print(f"removed mcp_token from {save_file(data)}")
+
+
+@mcp_app.command("headers")
+def mcp_headers() -> None:
+    """Emit the MCP Authorization header as JSON (for a client's headers helper)."""
+    settings = resolve(base_url=_conn.base_url)
+    if not settings.mcp_token:
+        print(
+            "no MCP token: set PROBE_MCP_TOKEN or run `probe mcp token set`",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+    print(json.dumps({"Authorization": f"Bearer {settings.mcp_token}"}))
+
+
+@mcp_app.command("env")
+def mcp_env() -> None:
+    """Print the export line, for MCP clients that only read the environment.
+
+    Prints a secret to stdout. Nothing is written to a shell profile: a tool that
+    edits rc files it did not author breaks `export X=$(op read …)` and compound
+    statements. Add the line yourself, or use a client that supports a headers helper.
+    """
+    settings = resolve(base_url=_conn.base_url)
+    if not settings.mcp_token:
+        print("no MCP token: run `probe mcp token set` first", file=sys.stderr)
+        raise typer.Exit(1)
+    print(f"export PROBE_MCP_TOKEN={shlex.quote(settings.mcp_token)}")
+
+
+def _stale_literal_copies(token: str | None) -> list[str]:
+    """Places that pin a *different* literal token and would outlive a rotation."""
+    path = Path.home() / ".claude.json"
+    try:
+        servers = json.loads(path.read_text()).get("mcpServers") or {}
+    except (OSError, json.JSONDecodeError, AttributeError):
+        return []
+    stale = []
+    for name, cfg in servers.items():
+        if not isinstance(cfg, dict):
+            continue
+        pinned = [
+            (cfg.get("env") or {}).get("PROBE_MCP_TOKEN"),
+            (cfg.get("headers") or {}).get("Authorization"),
+        ]
+        for value in pinned:
+            if isinstance(value, str) and "pat_" in value and (not token or token not in value):
+                stale.append(f"~/.claude.json -> mcpServers.{name}")
+                break
+    return stale
+
+
+@mcp_app.command("status")
+def mcp_status() -> None:
+    """Diagnose the MCP credential: where it comes from, whether it still works."""
+    settings = resolve(base_url=_conn.base_url)
+    file_token = load_file().get("mcp_token")
+    env_token = os.environ.get("PROBE_MCP_TOKEN")
+    token = settings.mcp_token
+
+    print(f"config:   {config_path()}")
+    print(f"endpoint: {settings.base_url}")
+    if not token:
+        print("token:    none — run `probe mcp token set`")
+        raise typer.Exit(1)
+
+    source = "environment (PROBE_MCP_TOKEN)" if env_token else "config file"
+    print(f"token:    {_fingerprint(token)} from {source}")
+    if env_token and file_token and env_token != file_token:
+        # The env wins, so a freshly-rotated config token is not what the MCP sends.
+        print("          ! the environment and config hold DIFFERENT tokens; the environment wins")
+        print(f"          config holds {_fingerprint(file_token)} — open a new shell, or unset PROBE_MCP_TOKEN")
+
+    state, identity = _verify(token, settings.base_url)
+    if state == "ok":
+        scopes = sorted((identity or {}).get("scopes") or [])
+        print(f"verify:   ok — {identity.get('email')} scopes={scopes}")
+        if set(scopes) - _READ_ONLY_SCOPES:
+            print("          ! this token can write; the MCP surface is read-only by design")
+    elif state == "rejected":
+        print("verify:   REJECTED — the API refuses this token. Rotate: `probe mcp token set`")
+    else:
+        print("verify:   unknown — the API was unreachable")
+
+    for place in _stale_literal_copies(token):
+        print(f"stale:    ! {place} pins a different token and takes precedence over this one")
+
+    if state == "rejected":
+        raise typer.Exit(1)
+
+# -- tokens -----------------------------------------------------------------
+token_app = typer.Typer(no_args_is_help=True, help="API tokens (probe_pat_...)")
+app.add_typer(token_app, name="token")
+
+
+@token_app.command("list")
+def token_list() -> None:
+    """List my live tokens. Secrets are never shown — match on `token_prefix`."""
+    with _client() as c:
+        _print_json(c.list_tokens())
+
+
+@token_app.command("create")
+def token_create(
+    name: str = typer.Option(..., "--name", help="what this token is for, e.g. 'ci-bot'"),
+    scope: list[Scope] = typer.Option(
+        None, "--scope",
+        help="repeatable; omit to request read+write+delete (never admin). A token can "
+             "never exceed the scopes your role confers.",
+    ),
+    no_browser: bool = typer.Option(False, "--no-browser", help="print the URL instead of opening it"),
+) -> None:
+    """Mint a token via the browser device flow — approve in the dashboard.
+
+    Minting deliberately requires a human in a browser (a leaked token must not be
+    able to mint more tokens), so this prints a URL + code and waits for approval.
+    The secret is printed ONCE and never stored; copy it now.
+    """
+    with _client() as c:
+        print(f"opening {c.settings.base_url} for browser approval…")
+        try:
+            created = c.create_token(
+                name,
+                scopes=[s.value for s in scope] if scope else None,
+                open_browser=not no_browser,
+                on_prompt=_show_device_prompt,
+            )
+        except DeviceLoginError as exc:
+            print(f"token creation failed: {exc}", file=sys.stderr)
+            raise typer.Exit(1) from exc
+
+    # The token is already minted server-side; its plaintext exists exactly once. Read
+    # the secret FIRST so a missing name/id (response drift) can't KeyError before it is
+    # shown and orphan an unrecoverable token. name/id are decorative — fall back.
+    secret = created["token"]
+    label = created.get("name", name)
+    token_id = created.get("id", "unknown")
+    # Shown once, and only here: not via _print_json (which invites piping it to a
+    # file) and never written to config.
+    print(f"\ntoken {label!r} created (id: {token_id})")
+    print(f"\n  {secret}\n")
+    print("^ copy it now — this is the only time it is shown.", file=sys.stderr)
+
+
+@token_app.command("revoke")
+def token_revoke(token_id: str = typer.Argument(..., help="token id (from `probe token list`)")) -> None:
+    """Revoke one of my tokens. Revoking a teammate's needs the dashboard."""
+    with _client() as c:
+        c.revoke_token(token_id)
+    print(f"revoked {token_id}")
+
+
 # -- run lifecycle ----------------------------------------------------------
 run_app = typer.Typer(no_args_is_help=True, help="run lifecycle")
 app.add_typer(run_app, name="run")
@@ -254,6 +563,7 @@ def run_start(
     name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
     experiment_name: str = typer.Option(None, "--experiment-name"),
     project: str = typer.Option(None, "--project"),
+    group: str = typer.Option(None, "--group", help="run group id (see `probe group create`)"),
     source: str = typer.Option("api", "--source"),
     external_id: str = typer.Option(None, "--external-id"),
     config: list[str] = typer.Option(None, "--config", metavar="k=v"),
@@ -267,6 +577,7 @@ def run_start(
             hypothesis=hypothesis,
             name=name,
             project=project,
+            group_id=group,
             source=source,
             external_id=external_id,
             config=_kv_pairs(config) if config else None,
@@ -316,6 +627,67 @@ def run_check(run: str = typer.Argument(...)) -> None:
     _print_json(result)
     if result.get("state") != "complete":
         raise typer.Exit(2)
+
+
+@run_app.command("delete")
+def run_delete(run: str = typer.Argument(...)) -> None:
+    """Soft-delete a run (reversible with `probe run restore`)."""
+    with _client() as c:
+        c.delete_run(run)
+    print(f"{run} deleted (restore with `probe run restore {run}`)")
+
+
+@run_app.command("restore")
+def run_restore(run: str = typer.Argument(...)) -> None:
+    """Un-delete a soft-deleted run."""
+    with _client() as c:
+        c.restore_run(run)
+    print(f"{run} restored")
+
+
+@run_app.command("gc")
+def run_gc(
+    run_id: list[str] = typer.Option(None, "--id", metavar="UUID", help="repeatable; purge these runs (ids, not petnames)"),
+    older_than: str = typer.Option(
+        None, "--older-than", metavar="TIMESTAMP",
+        help="purge runs deleted before this; must carry a timezone, e.g. 2026-07-01T00:00:00Z",
+    ),
+    yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
+) -> None:
+    """PERMANENTLY purge soft-deleted runs (owner/admin). Irreversible.
+
+    Pass exactly one selector: --id (repeatable) or --older-than.
+    """
+    if bool(run_id) == bool(older_than):
+        raise typer.BadParameter("pass exactly one of --id or --older-than")
+    target = f"{len(run_id)} run(s)" if run_id else f"every run deleted before {older_than}"
+    if not yes:
+        typer.confirm(
+            f"permanently purge {target}? spans/metrics/artifacts go too, and this cannot be undone",
+            abort=True,
+        )
+    with _client() as c:
+        result = c.gc_runs(run_ids=run_id or None, older_than=older_than)
+    _print_json(result)
+
+
+@run_app.command("series")
+def run_series(run: str = typer.Argument(...)) -> None:
+    """Per-series summary for a run (key/kind/dimensions + first/last/min/max)."""
+    with _client() as c:
+        _print_json(c.run_series(run))
+
+
+@run_app.command("metrics")
+def run_metrics(
+    run: str = typer.Argument(...),
+    key: str = typer.Option(None, "--key"),
+    kind: str = typer.Option(None, "--kind"),
+    limit: int = typer.Option(None, "--limit"),
+) -> None:
+    """Raw metric points for a run."""
+    with _client() as c:
+        _print_json(c.run_metrics(run, key=key, kind=kind, limit=limit))
 
 
 # -- exec (process correlation) ---------------------------------------------
@@ -387,6 +759,36 @@ def span_add(
     print(span_id)
 
 
+@span_app.command("list")
+def span_list(
+    run: str = typer.Argument(...),
+    span_type: str = typer.Option(None, "--type"),
+    parent: str = typer.Option(None, "--parent"),
+    step_from: int = typer.Option(None, "--step-from"),
+    step_to: int = typer.Option(None, "--step-to"),
+    limit: int = typer.Option(None, "--limit"),
+) -> None:
+    """Read a run's spans back."""
+    with _client() as c:
+        _print_json(
+            c.run_spans(
+                run,
+                span_type=span_type,
+                parent_span_id=parent,
+                step_from=step_from,
+                step_to=step_to,
+                limit=limit,
+            )
+        )
+
+
+@span_app.command("get")
+def span_get(span_id: str = typer.Argument(...)) -> None:
+    """Print one span."""
+    with _client() as c:
+        _print_json(c.get_span(span_id))
+
+
 # -- artifacts --------------------------------------------------------------
 artifact_app = typer.Typer(no_args_is_help=True, help="artifacts")
 app.add_typer(artifact_app, name="artifact")
@@ -414,6 +816,77 @@ def artifact_add(
             resolved, path=path, uri=uri, kind=kind, step_index=step
         )
     print(f"artifact {resolved!r} recorded on {run}")
+
+
+@artifact_app.command("list")
+def artifact_list(
+    run: str = typer.Argument(...),
+    kind: str = typer.Option(None, "--kind"),
+    step_from: int = typer.Option(None, "--step-from"),
+    step_to: int = typer.Option(None, "--step-to"),
+) -> None:
+    """List a run's artifacts (server-filtered): step-window sandbox forensics."""
+    with _client() as c:
+        _print_json(
+            c.list_run_artifacts(run, kind=kind, step_from=step_from, step_to=step_to)
+        )
+
+
+@artifact_app.command("delete")
+def artifact_delete(artifact_id: str = typer.Argument(...)) -> None:
+    """Delete an artifact."""
+    with _client() as c:
+        c.delete_artifact(artifact_id)
+    print(f"artifact {artifact_id} deleted")
+
+
+@artifact_app.command("gc-uploads")
+def artifact_gc_uploads(
+    older_than: str = typer.Option(
+        ..., "--older-than", metavar="TIMESTAMP",
+        help="sweep uploads started before this; must carry a timezone, e.g. 2026-07-01T00:00:00Z",
+    ),
+) -> None:
+    """Sweep abandoned (never-confirmed) uploads. Confirmed artifacts are untouched."""
+    with _client() as c:
+        _print_json(c.gc_uploads(older_than))
+
+
+# -- Harbor trial capture (Harbor-ownership Phase 1) --------------------------
+trial_app = typer.Typer(no_args_is_help=True, help="capture Harbor sandbox trials into a run")
+app.add_typer(trial_app, name="trial")
+
+
+@trial_app.command("add")
+def trial_add(
+    run: str = typer.Argument(...),
+    trial_dir: str = typer.Argument(..., help="a Harbor trial output directory"),
+    step: int = typer.Option(None, "--step", help="training step / Miles rollout_id — the join key"),
+    env_type: str = typer.Option(None, "--env-type", help="opaque environment label (e.g. skypilot-fork)"),
+) -> None:
+    """Capture one Harbor trial: rollout span + reward metric + labeled file
+    uploads + a kind=harbor_trial manifest, all keyed by --step."""
+    from ..connectors.harbor import capture_trial
+
+    with _client() as c:
+        result = capture_trial(
+            _run_handle(c, run),
+            trial_dir,
+            step_index=step,
+            environment={"type": env_type} if env_type else None,
+            source_mode="cli",
+        )
+    manifest = result.get("manifest") or {}
+    _print_json(
+        {
+            "trial": result["trial"],
+            "span_id": result["span_id"],
+            "reward": result["reward"],
+            "manifest_artifact_id": manifest.get("id") if isinstance(manifest, dict) else None,
+            "files": len(result["files"]),
+            "uploaded": sum(1 for f in result["files"] if f.get("uploaded")),
+        }
+    )
 
 
 # -- link / snapshot / flush / reads ----------------------------------------
@@ -528,6 +1001,75 @@ def experiment_set(
         result = c.update_experiment(
             experiment_id, hypothesis=hypothesis, name=name, description=description
         )
+    _print_json(result)
+
+
+@experiment_app.command("archive")
+def experiment_archive(experiment_id: str = typer.Argument(...)) -> None:
+    """Archive an experiment (reversible; idempotent)."""
+    with _client() as c:
+        c.archive_experiment(experiment_id)
+    print(f"{experiment_id} archived")
+
+
+@experiment_app.command("restore")
+def experiment_restore(experiment_id: str = typer.Argument(...)) -> None:
+    """Un-archive an experiment."""
+    with _client() as c:
+        c.restore_experiment(experiment_id)
+    print(f"{experiment_id} restored")
+
+
+@experiment_app.command("edges")
+def experiment_edges(experiment_id: str = typer.Argument(...)) -> None:
+    """Print every lineage edge under an experiment."""
+    with _client() as c:
+        _print_json(c.experiment_edges(experiment_id))
+
+
+# -- run groups (sweeps / ensembles) ----------------------------------------
+group_app = typer.Typer(no_args_is_help=True, help="run groups: sweeps, ensembles, distributed runs")
+app.add_typer(group_app, name="group")
+
+
+@group_app.command("create")
+def group_create(
+    experiment_id: str = typer.Argument(...),
+    name: str = typer.Option(..., "--name"),
+    kind: str = typer.Option("group", "--kind", help="e.g. sweep, ensemble"),
+    spec: str = typer.Option(None, "--spec", metavar="JSON|@file", help="e.g. a sweep search space"),
+) -> None:
+    """Create a run group. Pass the printed id to `probe run start --group`."""
+    with _client() as c:
+        result = c.create_group(experiment_id, name, kind=kind, spec=_json_value(spec))
+    _print_json(result)
+
+
+@group_app.command("list")
+def group_list(experiment_id: str = typer.Argument(...)) -> None:
+    """List an experiment's run groups."""
+    with _client() as c:
+        _print_json(c.list_groups(experiment_id))
+
+
+@group_app.command("get")
+def group_get(group_id: str = typer.Argument(...)) -> None:
+    """Print one run group."""
+    with _client() as c:
+        _print_json(c.get_group(group_id))
+
+
+@group_app.command("set")
+def group_set(
+    group_id: str = typer.Argument(...),
+    name: str = typer.Option(None, "--name"),
+    spec: str = typer.Option(None, "--spec", metavar="JSON|@file"),
+) -> None:
+    """Update a run group's name and/or spec."""
+    if name is None and spec is None:
+        raise typer.BadParameter("pass at least one of --name/--spec")
+    with _client() as c:
+        result = c.update_group(group_id, name=name, spec=_json_value(spec))
     _print_json(result)
 
 
@@ -686,14 +1228,26 @@ def main(argv: list[str] | None = None) -> int:
     """Run the CLI, returning a process exit code (never calls sys.exit itself)."""
     try:
         result = app(args=argv, prog_name="probe", standalone_mode=False)
-    except click.exceptions.Exit as exc:  # --help, --version, explicit typer.Exit
+        # NB: --help/--version/explicit typer.Exit don't raise here — click catches
+        # Exit internally (standalone_mode=False) and RETURNS the code, so it flows
+        # through the `return result` below. The except clauses catch what actually
+        # propagates: usage errors (ClickException), Abort, model ValidationError.
+    except typer.Exit as exc:  # defensive: a typer.Exit that does propagate
         return int(exc.exit_code)
-    except click.exceptions.Abort:
+    except typer.Abort:
         print("aborted", file=sys.stderr)
         return 1
-    except click.ClickException as exc:  # usage / bad-parameter errors
+    except ClickException as exc:  # usage / bad-parameter errors
         exc.show()
         return exc.exit_code or 2
+    except ValidationError as exc:
+        # A CLI string that fails the generated model's validation is a usage error,
+        # not a crash: `--older-than 2026-07-01` is valid ISO 8601 but not an aware
+        # datetime, and `--id abc` is not a UUID. Report it like one (exit 2).
+        for err in exc.errors():
+            field = ".".join(str(p) for p in err["loc"]) or exc.title
+            print(f"error: invalid {field}: {err['msg']}", file=sys.stderr)
+        return 2
     except errors.RosError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -193,12 +193,17 @@ class ResearchOSSource:
         return self.client.assets.resolve(**query)
 
     def trace_file(self, query: str) -> dict:
-        try:
-            return self.client.transport.get("/v1/artifacts/trace", params={"q": query})
-        except errors.NotFoundError:
-            return {
-                "query": query,
-                "matches": [],
-                "state": "partial",
-                "missing_capability": "artifact_trace_index",
-            }
+        # The artifact trace index does not exist server-side: there has never been a
+        # `/v1/artifacts/trace` route, so the call this used to make could only ever
+        # 404 into the degraded answer below. Returning it directly is the same
+        # result without the doomed round-trip. `missing_capability` is the honest
+        # signal to the agent that this tool has no backend yet.
+        #
+        # When the backend does ship the index, tests/test_parity.py will fail with
+        # the new route listed as unreachable — that is the prompt to wire it here.
+        return {
+            "query": query,
+            "matches": [],
+            "state": "partial",
+            "missing_capability": "artifact_trace_index",
+        }

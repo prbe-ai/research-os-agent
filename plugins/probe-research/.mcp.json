@@ -3,7 +3,7 @@
     "probe-research": {
       "type": "http",
       "url": "https://mcp.research.prbe.ai/mcp",
-      "headers": { "Authorization": "Bearer ${PROBE_MCP_TOKEN}" }
+      "headersHelper": "${CLAUDE_PLUGIN_ROOT}/bin/probe-mcp-headers"
     }
   }
 }

@@ -1,10 +1,19 @@
-.PHONY: install test dump-openapi gen-models regen
+.PHONY: install test parity dump-openapi gen-models regen
 
 install:
 	pip install -e ".[dev]"
 
 test:
+	# Bare `pytest` works: `pythonpath = ["."]` in pyproject puts the repo root on
+	# sys.path, so `tests.conftest` imports without the `python -m` trick (which CI,
+	# editors, and a plain `pytest` invocation do not use).
 	pytest
+
+# Contract guard: every route in schema/openapi.json must be reachable from a client
+# method, or be explicitly allowlisted. Run by `regen` so a schema refresh that adds a
+# backend route fails here instead of shipping a client that silently cannot call it.
+parity:
+	pytest tests/test_parity.py -q
 
 # Snapshot the backend contract. Point RESEARCH_OS at a checkout with deps installed.
 dump-openapi:
@@ -14,8 +23,11 @@ dump-openapi:
 gen-models:
 	python scripts/gen_models.py
 
-# Full refresh: pull the latest schema, then regenerate models.
-regen: dump-openapi gen-models
+# Full refresh: pull the latest schema, regenerate models, then prove the client can
+# still reach everything the backend now declares. The parity step is the point: before
+# it existed, a new backend route regenerated a model and nothing failed, so nobody
+# noticed the client had no way to call it.
+regen: dump-openapi gen-models parity
 
 # Keep the plugin's skill copies in sync with the canonical top-level skills/.
 sync-plugin-skills:
