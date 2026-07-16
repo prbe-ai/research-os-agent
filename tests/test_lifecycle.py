@@ -26,7 +26,18 @@ def wired(app, tmp_path, monkeypatch):
 
 
 # -- tokens -----------------------------------------------------------------
-def test_list_tokens_never_exposes_a_secret(client, app):
+def test_list_response_model_omits_the_secret_by_contract():
+    """`list_tokens` is a passthrough, so "never exposes a secret" cannot be proven
+    against the fake (which only returns what the test put in). The real guarantee is
+    the contract: GET /v1/tokens returns TokenOut, which has no plaintext field, while
+    only the mint response (TokenCreated) carries one. Assert that, not a tautology."""
+    from probe.models import TokenCreated, TokenOut
+
+    assert "token" not in TokenOut.model_fields  # the list/rows model — no secret
+    assert "token" in TokenCreated.model_fields  # the mint model — the one place it lives
+
+
+def test_list_tokens_passes_through_the_endpoint_rows(client, app):
     app.tokens["t-1"] = {
         "id": "t-1",
         "name": "ci-bot",
@@ -36,8 +47,6 @@ def test_list_tokens_never_exposes_a_secret(client, app):
     }
     (listed,) = client.list_tokens()
     assert listed["token_prefix"] == "probe_pat_abcd"
-    # The mint response is the only place a secret ever exists.
-    assert "token" not in listed
 
 
 def test_revoke_token_deletes_it(client, app):
@@ -80,6 +89,21 @@ def test_token_create_prints_the_secret_once(wired, capsys, monkeypatch):
     out = capsys.readouterr()
     assert out.out.count("probe_pat_shown1ce") == 1
     assert "only time it is shown" in out.err
+
+
+def test_token_create_shows_the_secret_even_if_name_and_id_are_missing(wired, capsys, monkeypatch):
+    """The token is minted the instant the mint response arrives, and its plaintext
+    exists exactly once. A drifted response missing name/id must NOT KeyError before
+    the secret is printed — that would orphan an unrecoverable token."""
+    monkeypatch.setattr(
+        "probe.sdk.device.device_authorize",
+        lambda base_url, **kw: {"token": "probe_pat_survives"},  # no id, no name
+    )
+    rc = cli.main(["token", "create", "--name", "ci-bot"])
+    assert rc == 0
+    out = capsys.readouterr()
+    assert "probe_pat_survives" in out.out
+    assert "ci-bot" in out.out  # falls back to the requested name
 
 
 # -- groups -----------------------------------------------------------------
@@ -125,6 +149,19 @@ def test_update_group_needs_a_field(client, app):
         client.update_group("g-1")
 
 
+def test_list_and_get_group_read_back(client, app):
+    """list_groups/get_group had only reachability coverage — prove the calls are
+    shaped right and the response reads back."""
+    client.fail_open = False
+    exp = client.ensure_experiment("e", "E", "h")
+    created = client.create_group(exp["id"], "sweep-x", spec={"lr": [0.1]})
+    assert [g["id"] for g in client.list_groups(exp["id"])] == [created["id"]]
+    fetched = client.get_group(created["id"])
+    assert fetched["name"] == "sweep-x" and fetched["spec"] == {"lr": [0.1]}
+    with pytest.raises(errors.NotFoundError):
+        client.get_group(str(uuid.uuid4()))
+
+
 # -- lifecycle --------------------------------------------------------------
 def test_experiment_archive_is_idempotent_then_restores(client, app):
     exp = client.ensure_experiment("e", "E", "h")
@@ -148,6 +185,14 @@ def test_gc_runs_requires_exactly_one_selector(client, app):
         client.gc_runs()
     with pytest.raises(ValueError):
         client.gc_runs(run_ids=["r-1"], older_than="2026-01-01T00:00:00Z")
+
+
+def test_gc_runs_rejects_an_empty_id_list(client, app):
+    """An empty run_ids is not a valid selector — sending `{"run_ids": []}` risks the
+    backend reading it as an unfiltered purge. It must raise, not slip through."""
+    with pytest.raises(ValueError):
+        client.gc_runs(run_ids=[])
+    assert not [r for r in app.requests if r.url.path == "/v1/runs/gc"]
 
 
 def test_gc_runs_purges_by_id(client, app):
@@ -201,6 +246,21 @@ def test_delete_artifact(client, app):
     artifact_id = app.artifacts[run.id][0]["id"]
     client.delete_artifact(artifact_id)
     assert app.artifacts[run.id] == []
+
+
+def test_delete_tolerates_a_non_json_2xx_body(client, app):
+    """A 2xx DELETE carrying a non-JSON body (a CDN/ingress HTML interstitial) must
+    not escape as a raw JSONDecodeError — the delete still succeeded."""
+    import httpx
+
+    from probe.sdk.transport import Transport
+
+    def handler(request):
+        return httpx.Response(200, content=b"<html>rate limited</html>")
+
+    mock = httpx.Client(base_url="http://test", transport=httpx.MockTransport(handler))
+    t = Transport(client.settings, client=mock)
+    assert t.delete("/v1/runs/whatever") is None  # tolerated, not a crash
 
 
 def test_gc_uploads_only_sweeps_pending(client, app, tmp_path):

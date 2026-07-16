@@ -450,8 +450,10 @@ class Client:
 
         Irreversible, and cascades to spans/metrics/artifacts. Purges DB rows only —
         R2 blobs are not touched (deferred, backend-side)."""
-        if (run_ids is None) == (older_than is None):
-            raise ValueError("gc_runs needs exactly one of run_ids or older_than")
+        # Truthiness, not `is None`: an empty run_ids list is not a valid selector, and
+        # sending `{"run_ids": []}` could be read server-side as an unfiltered purge.
+        if bool(run_ids) == bool(older_than):
+            raise ValueError("gc_runs needs exactly one of run_ids (non-empty) or older_than")
         model = RunGcRequest(run_ids=run_ids, older_than=older_than)
         return self.transport.post(
             "/v1/runs/gc", model.model_dump(mode="json", exclude_none=True)

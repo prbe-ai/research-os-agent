@@ -143,7 +143,14 @@ class Transport:
         """Returns the parsed body when the route sends one (e.g. DELETE
         /v1/runs/{id} echoes the deleted run), and None on a 204."""
         resp = self.request("DELETE", path, idempotent=True)
-        return resp.json() if resp.content else None
+        if not resp.content:
+            return None
+        try:
+            return resp.json()
+        except (json.JSONDecodeError, ValueError):
+            # A 2xx with a non-JSON body (an ingress/CDN HTML interstitial in front of
+            # the API) must not escape as a raw JSONDecodeError; the delete succeeded.
+            return None
 
     def get_page(self, path: str, *, params: dict[str, Any] | None = None) -> Page:
         resp = self.request("GET", path, params=params, idempotent=True)

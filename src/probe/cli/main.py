@@ -116,6 +116,13 @@ def _print_json(obj: Any) -> None:
     print(json.dumps(obj, indent=2, default=str))
 
 
+def _show_device_prompt(prompt: DevicePrompt) -> None:
+    """Print the browser URL + user code for a device-flow approval. One definition,
+    reused by every command that mints via the device flow (login, token, mcp)."""
+    print(f"  visit: {prompt.verification_uri_complete}")
+    print(f"  code:  {prompt.user_code}")
+
+
 def _client() -> Client:
     # `Client` is a module global so the CLI package can monkeypatch it in tests.
     return Client(
@@ -210,12 +217,8 @@ def login(
         endpoint = resolve(base_url=base).base_url
         print(f"opening {endpoint} for browser approval…")
 
-        def _show(prompt: DevicePrompt) -> None:
-            print(f"  visit: {prompt.verification_uri_complete}")
-            print(f"  code:  {prompt.user_code}")
-
         try:
-            resolved_token = device_login(endpoint, on_prompt=_show)
+            resolved_token = device_login(endpoint, on_prompt=_show_device_prompt)
         except DeviceLoginError as exc:
             print(f"device login failed: {exc}", file=sys.stderr)
             raise typer.Exit(1) from exc
@@ -333,17 +336,13 @@ def mcp_token_set(
         # `--token ""` is a mistake to report, not a cue to open a browser.
         secret = _checked_token(token)
     else:
-        def _show(prompt: DevicePrompt) -> None:
-            print(f"  visit: {prompt.verification_uri_complete}")
-            print(f"  code:  {prompt.user_code}")
-
         print(f"opening {base} to mint a read-only token…")
         try:
             secret = device_login(
                 base,
                 scopes=["read"],
                 token_name=f"Probe Research MCP (read-only) · {hostname()}",
-                on_prompt=_show,
+                on_prompt=_show_device_prompt,
             )
         except DeviceLoginError as exc:
             print(f"device login failed: {exc}", file=sys.stderr)
@@ -515,10 +514,6 @@ def token_create(
     able to mint more tokens), so this prints a URL + code and waits for approval.
     The secret is printed ONCE and never stored; copy it now.
     """
-    def _show(prompt: DevicePrompt) -> None:
-        print(f"  visit: {prompt.verification_uri_complete}")
-        print(f"  code:  {prompt.user_code}")
-
     with _client() as c:
         print(f"opening {c.settings.base_url} for browser approval…")
         try:
@@ -526,16 +521,22 @@ def token_create(
                 name,
                 scopes=[s.value for s in scope] if scope else None,
                 open_browser=not no_browser,
-                on_prompt=_show,
+                on_prompt=_show_device_prompt,
             )
         except DeviceLoginError as exc:
             print(f"token creation failed: {exc}", file=sys.stderr)
             raise typer.Exit(1) from exc
 
-    # The secret is shown exactly once, and only here: not via _print_json (which
-    # would invite piping it into a file) and never written to config.
-    print(f"\ntoken {created['name']!r} created (id: {created['id']})")
-    print(f"\n  {created['token']}\n")
+    # The token is already minted server-side; its plaintext exists exactly once. Read
+    # the secret FIRST so a missing name/id (response drift) can't KeyError before it is
+    # shown and orphan an unrecoverable token. name/id are decorative — fall back.
+    secret = created["token"]
+    label = created.get("name", name)
+    token_id = created.get("id", "unknown")
+    # Shown once, and only here: not via _print_json (which invites piping it to a
+    # file) and never written to config.
+    print(f"\ntoken {label!r} created (id: {token_id})")
+    print(f"\n  {secret}\n")
     print("^ copy it now — this is the only time it is shown.", file=sys.stderr)
 
 
@@ -1227,7 +1228,11 @@ def main(argv: list[str] | None = None) -> int:
     """Run the CLI, returning a process exit code (never calls sys.exit itself)."""
     try:
         result = app(args=argv, prog_name="probe", standalone_mode=False)
-    except typer.Exit as exc:  # --help, --version, explicit typer.Exit
+        # NB: --help/--version/explicit typer.Exit don't raise here — click catches
+        # Exit internally (standalone_mode=False) and RETURNS the code, so it flows
+        # through the `return result` below. The except clauses catch what actually
+        # propagates: usage errors (ClickException), Abort, model ValidationError.
+    except typer.Exit as exc:  # defensive: a typer.Exit that does propagate
         return int(exc.exit_code)
     except typer.Abort:
         print("aborted", file=sys.stderr)

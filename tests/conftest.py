@@ -68,10 +68,17 @@ class FakeApp:
         self.experiment_conflict_id: str | None = None
         self.fail_next_metrics = False
         self.fail_next_uploads = False
+        self._ts = 0
         # /v1/me reports the *token's* scopes, not the principal's: a read-only PAT
         # answers ["read"] even when its owner is an owner.
         self.me_scopes: list[str] = ["read", "write", "delete", "admin"]
         self.me_status = 200
+
+    def _stamp(self) -> str:
+        """A fresh, monotonically increasing timestamp per call. Distinct values let a
+        preservation test (archive is idempotent) actually catch a wrong re-stamp."""
+        self._ts += 1
+        return f"2026-07-15T00:00:{self._ts:02d}Z"
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
@@ -150,6 +157,9 @@ class FakeApp:
                 "name": body["name"],
                 "hypothesis": body["hypothesis"],
                 "project_id": body.get("project_id") or str(uuid.uuid4()),
+                "customer_id": "lab-42",
+                "created_at": self._stamp(),
+                "archived_at": None,
             }
             self.experiments[eid] = row
             return httpx.Response(201, json=row)
@@ -309,10 +319,13 @@ class FakeApp:
             row = self.experiments.get(eid)
             if row is None:
                 return httpx.Response(404, json={"detail": "experiment not found"})
-            # Idempotent archive: keep the first archive time (mirrors the backend).
-            row["archived_at"] = (
-                row.get("archived_at") or "2026-07-15T00:00:00Z" if verb == "archive" else None
-            )
+            if verb == "archive":
+                # Idempotent: keep the FIRST archive time (mirrors the backend). The
+                # stamp is unique per call, so an idempotency test that asserts the time
+                # was preserved would actually fail if this wrongly re-stamped.
+                row["archived_at"] = row.get("archived_at") or self._stamp()
+            else:
+                row["archived_at"] = None
             return httpx.Response(200, json=row)
 
         m = re.match(r"^/v1/runs/([^/]+)/restore$", path)
@@ -562,6 +575,10 @@ class FakeApp:
             "foreign_keys": body.get("foreign_keys", {}),
             "env_ref": body.get("env_ref"),
             "created_by": "ingest:test",
+            # Required on the real RunDetailOut, so delete_run/restore_run responses
+            # match the contract rather than a leaner fiction.
+            "customer_id": "lab-42",
+            "created_at": self._stamp(),
         }
         self.runs[rid] = row
         return row

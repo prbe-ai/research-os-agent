@@ -53,20 +53,34 @@ _VERB_ATTRS = {
 _METHOD_FIRST = {"request", "write"}
 _HTTP_METHODS = {"GET", "POST", "PATCH", "DELETE", "PUT"}
 
-# `.get(...)` is overwhelmingly `dict.get`, so a verb call only counts when its
-# receiver is actually an HTTP client. Everything in this repo is reached through a
-# `*transport` attribute, except sdk/device.py, which drives a bare httpx client named
-# `http` (the device flow runs before a Transport exists).
-#
-# This is deliberately fail-CLOSED. A receiver named something new is silently skipped,
-# so its routes read as UNREACHABLE — noisy, and someone investigates. The opposite
-# (treating `ROUTES.get("/v1/x")` on a plain dict as a real call) would mark a route
-# reachable that nothing calls, hiding the exact gap this file exists to find.
-_HTTP_RECEIVER_NAMES = {"http"}
+# Both branches gate on the receiver, so a lookalike (`ROUTES.get("/v1/x")` on a plain
+# dict, `audit_log.write("POST", "/v1/x")` on a logger) can't be mistaken for an HTTP
+# call and mark a route reachable that nothing calls — which would hide the exact gap
+# this file exists to find. Everything in this repo reaches the wire through a
+# `*transport` attribute; the exceptions are bare httpx clients named `http`
+# (sdk/device.py, before a Transport exists) and `client` (mcp/server.py).
+_HTTP_RECEIVER_NAMES = {"http", "client"}
 
 
 def _is_http_receiver(receiver: str) -> bool:
+    """Receiver for a verb call (`x.get("/path")`): an HTTP client, not a dict."""
     return receiver.endswith("transport") or receiver in _HTTP_RECEIVER_NAMES
+
+
+def _is_dispatch_receiver(receiver: str) -> bool:
+    """Receiver for a method-first call (`x.write("POST", "/path")`).
+
+    `write`/`request` are common method names (files, buffers, loggers), so the
+    method+path shape alone is not enough — `audit_log.write("POST", "/x")` would
+    otherwise register. Only the SDK's own dispatchers carry these: `Client.write`
+    (receiver `self`), the composed clients (`self.client` / `self._client`), and
+    `Transport.request` (`*transport`). A logger/buffer receiver is rejected.
+    """
+    return (
+        receiver == "self"
+        or receiver.endswith("client")  # self.client, self._client, a bare `client`
+        or _is_http_receiver(receiver)
+    )
 
 _PARAM = re.compile(r"\{[^}]*\}")
 
@@ -176,10 +190,11 @@ def _scan(src: Path | None = None, root: Path | None = None) -> tuple[dict[Op, l
                 continue
             where = f"{py.relative_to(root)}:{node.lineno}"
             attr, receiver = node.func.attr, _receiver(node)
-            if attr in _METHOD_FIRST:
-                # An explicit HTTP method in arg 0 is the discriminator here, so this
-                # form needs no receiver check: `Client.write("POST", ...)` qualifies
-                # while `file.write("POST")` (one arg, no path) does not.
+            if attr in _METHOD_FIRST and _is_dispatch_receiver(receiver):
+                # `write`/`request` need BOTH an HTTP-method arg0 AND a dispatcher
+                # receiver: the method string alone would let `audit_log.write("POST",
+                # "/x")` through, and the receiver alone would catch `file.write("POST")`
+                # (no path). Together they pin it to a real SDK dispatch.
                 path_node = _arg_node(node, 1, "path")
                 method = _arg(node, 0, "method", constants)
                 path = _arg(node, 1, "path", constants)
@@ -193,7 +208,7 @@ def _scan(src: Path | None = None, root: Path | None = None) -> tuple[dict[Op, l
 
             if path and path.startswith("/"):
                 found.setdefault((method.upper(), _normalize(path)), []).append(where)
-            elif _is_http_receiver(receiver) and _is_opaque_path(path_node):
+            elif _is_dispatch_receiver(receiver) and _is_opaque_path(path_node):
                 opaque.append(f"{where}  ({receiver}.{attr}(...))")
     return found, opaque
 
@@ -260,6 +275,9 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
     # so `probe token create` drives the device flow instead — a human approves in
     # the browser and the same backend mints exactly one PAT.
     ("POST", "/v1/tokens"): "session-only mint by design; `probe token create` uses the device flow",
+    # Inbound webhook: GitHub POSTs here (HMAC-verified), the `probe` client never
+    # calls it. Structurally not a client surface, like the liveness probes.
+    ("POST", "/webhooks/github"): "inbound GitHub webhook; server receives, client never calls",
 }
 
 # --------------------------------------------------------------------------
@@ -271,6 +289,13 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
 # generalization are each designed ONCE against the final model, rather than built now
 # and reworked. Tracked in tasks/probe-workspace-context-handoff.md.
 _WORKSPACES = "deferred to the workspaces pass — see tasks/probe-workspace-context-handoff.md"
+# The workspaces + KB fold-in (backend PR #42/#43) also shipped the workspace surface
+# itself, federated search, and the GitHub knowledge-connector. These are all part of
+# that same program and belong to the workspaces client pass — NOT permanently
+# not-our-job. Whether the GitHub-integration management (ADMIN-scoped, browser OAuth
+# install flow) is CLI surface or dashboard-only is a decision for THAT pass to make,
+# so it sits in PENDING rather than being pre-declared permanent here.
+_CONNECTORS = "workspaces + KB connector pass — see tasks/probe-workspace-context-handoff.md"
 
 PENDING: dict[Op, str] = {
     ("PATCH", "/v1/projects/{}"): _WORKSPACES,
@@ -281,6 +306,16 @@ PENDING: dict[Op, str] = {
     ("POST", "/v1/projects/{}/artifacts/uploads"): _WORKSPACES,
     ("POST", "/v1/experiments/{}/artifacts"): _WORKSPACES,
     ("POST", "/v1/experiments/{}/artifacts/uploads"): _WORKSPACES,
+    # Workspace surface (the switchable axis) + federated search.
+    ("GET", "/v1/workspaces"): _WORKSPACES,
+    ("GET", "/v1/workspaces/{}"): _WORKSPACES,
+    ("GET", "/v1/workspaces/{}/files"): _WORKSPACES,
+    ("POST", "/v1/workspaces/{}/files/uploads"): _WORKSPACES,
+    ("POST", "/v1/search"): _WORKSPACES,
+    # GitHub knowledge-connector management (READ status + ADMIN install/uninstall).
+    ("GET", "/v1/integrations/github"): _CONNECTORS,
+    ("POST", "/v1/integrations/github/installations"): _CONNECTORS,
+    ("DELETE", "/v1/integrations/github/installations/{}"): _CONNECTORS,
 }
 
 _ALLOWED: dict[Op, str] = {**NOT_CLIENT_SURFACE, **PENDING}
@@ -450,6 +485,35 @@ def flush(self, transport, entry):
 ''')
     assert found == {}
     assert not opaque
+
+
+def test_method_first_requires_a_dispatcher_receiver(tmp_path):
+    """`write`/`request` are ubiquitous method names — a method-string + path on a
+    NON-dispatcher receiver (a logger, a buffer) must NOT register as a reachable
+    route. Otherwise an unrelated `.write("POST", "/v1/x")` could silently satisfy —
+    and thereby retire — a PENDING entry, with no test going red.
+    """
+    found, _ = _scan_source(tmp_path, '''
+def calls(self, audit_log, buf):
+    audit_log.write("POST", "/v1/runs/gc")   # a logger, not an HTTP client
+    buf.write("GET", "/v1/tokens")            # a buffer
+    self.write("POST", "/v1/real")            # Client.write — a real dispatch
+    self._client.write("PATCH", "/v1/also-real")  # run helper — a real dispatch
+''')
+    assert set(found) == {("POST", "/v1/real"), ("PATCH", "/v1/also-real")}
+    assert ("POST", "/v1/runs/gc") not in found
+    assert ("GET", "/v1/tokens") not in found
+
+
+def test_verb_call_on_a_bare_http_client_is_seen(tmp_path):
+    """`client.get("/v1/me")` (mcp/server.py's httpx client) must register, so a route
+    wired only through such a receiver still clears its PENDING entry."""
+    found, _ = _scan_source(tmp_path, '''
+def calls(client, some_dict):
+    client.get("/v1/me")            # a real httpx client
+    some_dict.get("not-a-path")     # a dict lookup, ignored (no leading /)
+''')
+    assert ("GET", "/v1/me") in found
 
 
 @pytest.mark.parametrize(
