@@ -58,6 +58,8 @@ class FakeApp:
         self.gets: list[str] = []
         self.metrics_inserted = 0
         self.spans_upserted = 0
+        self.spans: dict[str, list[dict]] = {}
+        self.blobs: dict[str, bytes] = {}
         # test knobs
         self.experiment_conflict_id: str | None = None
         self.fail_next_metrics = False
@@ -181,6 +183,7 @@ class FakeApp:
         if m and method == "POST":
             n = len(body.get("spans", []))
             self.spans_upserted += n
+            self.spans.setdefault(m.group(1), []).extend(body.get("spans", []))
             return httpx.Response(200, json={"upserted": n})
 
         m = _RUN_ARTIFACTS.match(path)
@@ -343,6 +346,7 @@ class FakeApp:
         if path.startswith("/put/") and method == "PUT":
             self.puts.append(path)
             self.put_headers.append(dict(request.headers))
+            self.blobs[path.rsplit("/", 1)[-1]] = request.content or b""
             return httpx.Response(200)
         m = re.match(r"^/v1/artifacts/([^/]+)/confirm$", path)
         if m and method == "POST":
@@ -362,7 +366,8 @@ class FakeApp:
             return httpx.Response(200, json={"download_url": f"http://r2.test/get/{m.group(1)}"})
         if path.startswith("/get/") and method == "GET":
             self.gets.append(path)
-            return httpx.Response(200, content=b"ASSET-BYTES")
+            blob = self.blobs.get(path.rsplit("/", 1)[-1])
+            return httpx.Response(200, content=blob if blob is not None else b"ASSET-BYTES")
 
         if path == "/ingest/v1/runs" and method == "POST":
             rid = str(uuid.uuid4())
