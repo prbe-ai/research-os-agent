@@ -168,4 +168,12 @@ them by `artifact_id`. Nothing here depends on which provider ran the sandbox.
   manifest ships now and migrates cleanly into the table later — the table can be
   populated from manifests.
 - Trajectory formats vary (ATIF vs fork-specific): store raw always; parse into
-  spans only for formats we recognize (`atif@1`), record `trajectory_format`.
+  spans only for formats we recognize, record `trajectory_format`. SHIPPED
+  (2026-07-16): `probe.connectors.atif` — parser registry keyed by format
+  prefix, ATIF v1.x built in (real spec key is `schema_version: "ATIF-v1.7"`,
+  validated against Harbor's golden fixtures), normalized turn/tool_call
+  vocabulary with subagent nesting, deterministic uuid5 span ids so expansion
+  is idempotent and retroactive (`probe trial expand <run> <manifest-id>`
+  re-reads stored R2 bytes once a fork's parser ships). Eager cap is
+  lazy-loading only (`marker` span records the remainder; `--max-spans 0`
+  expands fully); raw bytes always stored regardless.

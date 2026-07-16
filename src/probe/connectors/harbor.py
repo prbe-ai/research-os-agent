@@ -21,9 +21,11 @@ byte in it) to the training step, so "look at the sandbox at steps 599..601"
 becomes ``client.list_run_artifacts(run_id, kind="harbor_trial", step_from=599,
 step_to=601)``.
 
-Trajectory contents are stored raw always; span-tree expansion of recognized
-trajectory formats is deliberately deferred (the format varies across forks —
-we record ``trajectory_format`` and keep the bytes).
+Trajectory contents are stored raw always; recognized formats (ATIF built in,
+forks register their own — see ``probe.connectors.atif``) are additionally
+expanded into turn/tool_call spans under the rollout span at capture time.
+Unknown formats stay raw-only and can be expanded retroactively once a parser
+exists (``probe trial expand``).
 """
 
 from __future__ import annotations
@@ -32,6 +34,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
+
+from . import atif
 
 if TYPE_CHECKING:
     from ..sdk.run import Run
@@ -99,6 +103,7 @@ class ParsedTrial:
     result: dict | None = None
     reward: float | None = None
     trajectory_format: str | None = None
+    trajectory: dict | None = None
 
     @property
     def task_name(self) -> str | None:
@@ -167,12 +172,8 @@ def parse_trial(trial_dir: str | Path) -> ParsedTrial:
         if isinstance(verifier, dict):
             reward = _as_float(verifier.get("reward"))
 
-    trajectory_format = None
     trajectory = _load_json(root / "trajectory.json")
-    if isinstance(trajectory, dict):
-        trajectory_format = trajectory.get("schema") or trajectory.get("format") or "unknown"
-    elif trajectory is not None:
-        trajectory_format = "unknown"
+    trajectory_format = atif.detect_trajectory_format(trajectory)
 
     name = None
     if isinstance(result, dict):
@@ -185,6 +186,7 @@ def parse_trial(trial_dir: str | Path) -> ParsedTrial:
         result=result if isinstance(result, dict) else None,
         reward=reward,
         trajectory_format=trajectory_format,
+        trajectory=trajectory if isinstance(trajectory, dict) else None,
     )
 
 
@@ -196,6 +198,8 @@ def capture_trial(
     environment: dict | None = None,
     source_mode: str = "local",
     reward_key: str = "reward",
+    expand: bool = True,
+    max_trajectory_spans: int | None = None,
     strict: bool | None = None,
 ) -> dict:
     """Capture one Harbor trial into ``run``, keyed by ``step_index``.
@@ -207,8 +211,12 @@ def capture_trial(
     - Uploads are fail-open like every SDK data write: a file that cannot reach
       storage right now falls back to a labeled reference and the manifest marks
       it ``uploaded: false`` — the training loop is never blocked.
+    - ``expand`` turns a recognized trajectory format (ATIF or a registered
+      fork parser) into turn/tool_call spans under the rollout span.
+      ``max_trajectory_spans`` bounds the eager window only (0 = unlimited);
+      raw bytes are always stored regardless.
 
-    Returns ``{trial, span_id, reward, manifest, files}``.
+    Returns ``{trial, span_id, reward, manifest, files, trajectory}``.
     """
     parsed = parse_trial(trial_dir)
     status = "failed" if parsed.exception else "completed"
@@ -230,6 +238,19 @@ def capture_trial(
     )
     if parsed.reward is not None:
         run.log({reward_key: parsed.reward}, step=step_index, strict=strict)
+
+    trajectory_report = {"format": parsed.trajectory_format, "expanded": False, "spans": 0}
+    if expand and parsed.trajectory is not None:
+        trajectory_report = atif.expand_trajectory(
+            run,
+            parsed.trajectory,
+            root_span_id=span_id,
+            trial=parsed.name,
+            step_index=step_index,
+            fmt=parsed.trajectory_format,
+            max_spans=max_trajectory_spans,
+            strict=strict,
+        )
 
     file_entries: list[dict] = []
     for path in parsed.files:
@@ -269,6 +290,7 @@ def capture_trial(
         "environment": environment or {},
         "exception": parsed.exception,
         "trajectory_format": parsed.trajectory_format,
+        "trajectory": trajectory_report,
         "source": {"mode": source_mode, "rollout_id": step_index},
         "files": file_entries,
     }
@@ -286,4 +308,5 @@ def capture_trial(
         "reward": parsed.reward,
         "manifest": manifest,
         "files": file_entries,
+        "trajectory": trajectory_report,
     }

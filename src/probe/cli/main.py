@@ -863,6 +863,8 @@ def trial_add(
     trial_dir: str = typer.Argument(..., help="a Harbor trial output directory"),
     step: int = typer.Option(None, "--step", help="training step / Miles rollout_id — the join key"),
     env_type: str = typer.Option(None, "--env-type", help="opaque environment label (e.g. skypilot-fork)"),
+    expand: bool = typer.Option(True, "--expand/--no-expand", help="expand a recognized trajectory format into spans"),
+    max_spans: int = typer.Option(None, "--max-spans", help="eager expansion window (0 = unlimited)"),
 ) -> None:
     """Capture one Harbor trial: rollout span + reward metric + labeled file
     uploads + a kind=harbor_trial manifest, all keyed by --step."""
@@ -875,6 +877,8 @@ def trial_add(
             step_index=step,
             environment={"type": env_type} if env_type else None,
             source_mode="cli",
+            expand=expand,
+            max_trajectory_spans=max_spans,
         )
     manifest = result.get("manifest") or {}
     _print_json(
@@ -885,8 +889,51 @@ def trial_add(
             "manifest_artifact_id": manifest.get("id") if isinstance(manifest, dict) else None,
             "files": len(result["files"]),
             "uploaded": sum(1 for f in result["files"] if f.get("uploaded")),
+            "trajectory": result.get("trajectory"),
         }
     )
+
+
+@trial_app.command("expand")
+def trial_expand(
+    run: str = typer.Argument(...),
+    manifest_id: str = typer.Argument(..., help="a kind=harbor_trial manifest artifact id"),
+    max_spans: int = typer.Option(0, "--max-spans", help="eager expansion window (default 0 = full)"),
+) -> None:
+    """Retroactively expand a captured trial's stored trajectory into spans —
+    e.g. after a parser for its format shipped. Idempotent (deterministic span
+    ids), so re-running only upserts."""
+    from ..connectors.atif import expand_trajectory
+
+    with _client() as c:
+        manifests = {
+            a["id"]: a for a in c.list_run_artifacts(run, kind="harbor_trial")
+        }
+        manifest = manifests.get(manifest_id)
+        if manifest is None:
+            typer.echo(f"no kind=harbor_trial artifact {manifest_id} on run {run}", err=True)
+            raise typer.Exit(1)
+        meta = manifest.get("meta") or {}
+        traj_entry = next(
+            (f for f in meta.get("files") or [] if f.get("role") == "trajectory" and f.get("artifact_id")),
+            None,
+        )
+        if traj_entry is None:
+            typer.echo("manifest has no uploaded trajectory file", err=True)
+            raise typer.Exit(1)
+        presigned = c.transport.post(
+            f"/v1/artifacts/{traj_entry['artifact_id']}/download", None
+        )
+        doc = json.loads(c.transport.get_url(presigned["download_url"]))
+        report = expand_trajectory(
+            _run_handle(c, run),
+            doc,
+            root_span_id=str(manifest["span_id"]),
+            trial=(meta.get("trial") or {}).get("name") or manifest.get("name"),
+            step_index=manifest.get("step_index"),
+            max_spans=max_spans,
+        )
+    _print_json(report)
 
 
 # -- link / snapshot / flush / reads ----------------------------------------
