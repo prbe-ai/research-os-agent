@@ -124,7 +124,11 @@ class AssetClient:
                 None,
             )
         elif vers:
-            selected = vers[-1]  # latest
+            # Pick by the version NUMBER, never by list position: the backend
+            # returns versions ORDER BY version DESC, so vers[-1] -- which this
+            # used to do, commented "latest" -- was the OLDEST. Anything with two
+            # or more versions silently resolved (and materialized) to v1.
+            selected = max(vers, key=lambda v: v.get("version") or 0)
         return {
             "state": "match",
             "name": name,
