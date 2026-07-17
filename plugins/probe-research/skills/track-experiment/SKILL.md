@@ -30,7 +30,7 @@ does not have is an error that names the ones it does.
 | how the numbers moved | `view="metrics"`; add `filters={"key": "loss"}` for that series' raw points |
 | what came out of it | `view="artifacts"` (a run's also takes `filters={"kind": ..., "step_from": ..., "step_to": ...}`) |
 | can I re-run this exactly | `view="reproduce"` on a run — hypothesis + `env_ref` resolved to its execution record |
-| I am a new session, catch me up | `view="handoff"` on a run |
+| I am a new session, catch me up | `view="handoff"` on a run (its artifact list is bundle-capped — `missing: ["artifacts_beyond_bundle_limit"]` means read `view="artifacts"` for all of them) |
 | what produced or consumed this | `view="lineage"` (a run's ancestry; an experiment's edges) |
 | what happened to this run, in order | `view="events"` on a run |
 | what sweeps/ensembles exist | `view="groups"` on an experiment, then `ref="group:<id>"` for one |

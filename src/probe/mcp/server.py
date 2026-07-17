@@ -184,7 +184,9 @@ def create_server(
         record (code/deps/hardware/settings) — a run that captured no environment honestly
         reports missing=["execution_record"]. `handoff` is what a new session needs to
         continue: hypothesis, run state, series, lineage, and span_type counts that tell you
-        whether a `trajectory` call is worth making. `lineage` is ancestry for a run and
+        whether a `trajectory` call is worth making. Its artifact list is capped by the
+        backend's bundle — compare `artifact_total`, and missing=["artifacts_beyond_bundle_limit"]
+        means read `view="artifacts"` for the full, uncapped list. `lineage` is ancestry for a run and
         edges for an experiment. `events` is the append-only lifecycle log. `groups` lists an
         experiment's sweeps/ensembles (read one with `ref="group:<id>"`); `versions` lists
         its immutable published manifests.

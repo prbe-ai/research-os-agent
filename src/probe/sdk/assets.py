@@ -97,6 +97,27 @@ class AssetClient:
     def versions(self, asset_id: str) -> list[dict]:
         return self.client.transport.get(f"/v1/assets/{asset_id}/versions")
 
+    # GET /v1/assets caps `limit` at 200 (default 50). Page carries next_cursor but
+    # does NOT auto-follow, so a scan has to walk it.
+    _PAGE = 200
+    _SCAN_PAGE_CAP = 200  # 40k assets; a sanity backstop, not a real bound
+
+    def _find(self, name: str, kind: str | None) -> dict | None:
+        """First asset matching name (+kind), scanning EVERY page of the registry."""
+        cursor: str | None = None
+        for _ in range(self._SCAN_PAGE_CAP):
+            params: dict[str, Any] = {"limit": self._PAGE}
+            if cursor:
+                params["cursor"] = cursor
+            page = self.list(**params)
+            for asset in page.items:
+                if asset.get("name") == name and (kind is None or asset.get("kind") == kind):
+                    return asset
+            cursor = page.next_cursor
+            if not cursor:
+                return None
+        return None
+
     # -- read / resolve (used by the read-only MCP) ------------------------
     def resolve(
         self,
@@ -108,12 +129,14 @@ class AssetClient:
     ) -> dict:
         """Resolve a named asset to its versions (read). The backend has no resolve
         endpoint, so this lists the registry and matches by name (+ kind) client-side.
-        Returns an honest ``state: match|no_match``."""
-        assets = self.list().items
-        match = next(
-            (a for a in assets if a.get("name") == name and (kind is None or a.get("kind") == kind)),
-            None,
-        )
+        Returns an honest ``state: match|no_match``.
+
+        The scan walks EVERY page. It used to be `self.list().items` — one page at the
+        backend's default limit of 50 — so asset 51+ resolved to `no_match`. That is
+        not a near-miss: `no_match` is exactly what licenses a caller to register a new
+        identity (see the manage-research-asset skill), so a big registry silently
+        manufactured the duplicate assets the registry exists to prevent."""
+        match = self._find(name, kind)
         if match is None:
             return {"state": "no_match", "name": name, "kind": kind, "searched": ["assets"]}
         vers = self.versions(match["id"])

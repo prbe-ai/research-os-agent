@@ -134,6 +134,11 @@ class MissingMarker(StrEnum):
     # has not seen everything. Every _bounded consumer must emit its marker.
     SPANS_BEYOND_BACKEND_LIMIT = "spans_beyond_backend_limit"
     METRIC_POINTS_BEYOND_BACKEND_LIMIT = "metric_points_beyond_backend_limit"
+    # GET /v1/runs/{ref}/bundle caps its artifact list at 200 server-side while
+    # `artifact_total` reports the true count, and there is no offset to page it.
+    # So handoff cannot show the rest: it says so, and view="artifacts" (which reads
+    # the uncapped route) is where the full list lives.
+    ARTIFACTS_BEYOND_BUNDLE_LIMIT = "artifacts_beyond_bundle_limit"
 
 
 class ChannelError(StrEnum):
