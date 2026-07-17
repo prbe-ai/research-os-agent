@@ -934,17 +934,26 @@ class ResearchReadService:
         bundle = self.source.bundle(str(entity["id"]))
         missing: list[str] = []
         hypothesis = self._hypothesis_of(entity, missing)
+        artifacts = bundle.get("artifacts") or []
+        total = bundle.get("artifact_total")
+        # The bundle's artifact list is capped SERVER-side (200) while artifact_total
+        # counts them all, and the route takes no offset — so a cursor here would
+        # page an already-truncated list and hand back an empty page as if it were
+        # the end. Say it plainly and name the uncapped door instead: on a 5000-
+        # artifact run this view would otherwise emit 200 and report `complete`.
+        if isinstance(total, int) and total > len(artifacts):
+            missing.append(MissingMarker.ARTIFACTS_BEYOND_BUNDLE_LIMIT)
         return _ViewData(
             payload={
                 "hypothesis": hypothesis,
                 "run": bundle.get("run"),
                 "series": bundle.get("series"),
                 "span_types": bundle.get("span_types"),
-                "artifact_total": bundle.get("artifact_total"),
+                "artifact_total": total,
                 "parent_run_id": bundle.get("parent_run_id"),
                 "child_run_ids": bundle.get("child_run_ids"),
             },
-            rows=bundle.get("artifacts") or [],
+            rows=artifacts,
             rows_key="artifacts",
             missing=missing,
         )

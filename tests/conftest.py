@@ -509,7 +509,22 @@ class FakeApp:
             self.asset_versions[aid] = []
             return httpx.Response(201, json=row)
         if path == "/v1/assets" and method == "GET":
-            return httpx.Response(200, json=list(self.assets.values()))
+            # Mirrors the backend's keyset paging: limit defaults to 50, caps at 200,
+            # and the cursor is an opaque offset. The fake used to return EVERY asset
+            # and ignore `limit`, which hid a real bug — assets.resolve() read one
+            # default-limit page, so asset 51+ resolved to "no_match" and callers were
+            # told to register a duplicate. A fake kinder than the backend is a fake
+            # that certifies broken code.
+            rows = list(self.assets.values())
+            limit = min(int(request.url.params.get("limit") or 50), 200)
+            start = int(request.url.params.get("cursor") or request.url.params.get("offset") or 0)
+            window = rows[start : start + limit]
+            nxt = start + limit
+            return httpx.Response(
+                200,
+                json=window,
+                headers={"x-next-cursor": str(nxt)} if nxt < len(rows) else {},
+            )
         if path.startswith("/v1/assets/") and path.endswith("/versions"):
             aid = path.split("/")[3]
             if method == "POST":
