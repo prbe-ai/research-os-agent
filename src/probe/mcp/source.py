@@ -7,7 +7,7 @@ from typing import Any
 
 from ..sdk import errors
 from ..sdk.client import Client
-from .contract import Capability
+from .contract import Capability, EntityType
 
 # A cached "backend has no /v1/search" verdict is re-checked after this long, so
 # a server upgrade (or a rolling deploy that briefly 404'd) is picked up without
@@ -46,6 +46,15 @@ class ResearchOSSource:
         # probe of POST /v1/search, once per token; an "unsupported" verdict is
         # re-checked after _SUPPORT_RECHECK_SECONDS); the rest still describe
         # the checked-in API contract statically.
+        #
+        # versioned_assets and managed_artifact_upload were both hardcoded False
+        # and both were STALE — the routes are in schema/openapi.json and answer
+        # live (/v1/assets{,/{id},/{id}/versions}; /v1/runs/{id}/artifacts/uploads
+        # + /v1/artifacts/{id}/download). They were set in one stroke alongside a
+        # /v1/search change, never as an assets decision. Because research_context
+        # derives `missing` from this map, the two stale flags pinned EVERY context
+        # envelope to state="partial" — the same "unconditionally missing" lie the
+        # contract/versions/usage views told.
         if self._search_supported is None or (
             self._search_supported is False and self._verdict_expired()
         ):
@@ -56,10 +65,11 @@ class ResearchOSSource:
             Capability.UNIFIED_SEARCH: supported,
             Capability.SEMANTIC_SEARCH: supported and self._search_semantic_ok,
             Capability.KB_DOCUMENTS: supported and self._search_semantic_ok,
-            Capability.VERSIONED_ASSETS: False,
+            Capability.VERSIONED_ASSETS: True,
+            # The one honest False: sdk/snapshot.py captures git/env LOCALLY and
+            # there is no backend snapshot route to read one back.
             Capability.PORTABLE_SNAPSHOTS: False,
-            Capability.MANAGED_ARTIFACT_UPLOAD: False,
-            Capability.PROMOTION_MANIFESTS: False,
+            Capability.MANAGED_ARTIFACT_UPLOAD: True,
         }
 
     def _verdict_expired(self) -> bool:
@@ -165,23 +175,29 @@ class ResearchOSSource:
         return self.client.list_runs(experiment_id=experiment_id, limit=limit).items
 
     def get(self, ref: str) -> tuple[str, dict]:
+        """Resolve ``kind:value`` (or a bare id) to ``(kind, entity)``.
+
+        ``group`` is here rather than behind a research_list_groups tool: a sweep is
+        an experiment-shaped noun, so it belongs on the same ref seam as the rest.
+        """
         kind, _, value = ref.partition(":")
         if not value:
             value = kind
             kind = ""
         getters = {
-            "run": self.client.get_run,
-            "experiment": self.client.get_experiment,
-            "project": self.client.get_project,
+            EntityType.RUN.value: self.client.get_run,
+            EntityType.EXPERIMENT.value: self.client.get_experiment,
+            EntityType.PROJECT.value: self.client.get_project,
+            EntityType.GROUP.value: self.client.get_group,
         }
         if kind in getters:
             return kind, getters[kind](value)
-        for candidate in ("run", "experiment", "project"):
+        for candidate in getters:
             try:
                 return candidate, getters[candidate](value)
             except errors.NotFoundError:
                 continue
-        raise errors.NotFoundError(f"no run, experiment, or project matches {ref}")
+        raise errors.NotFoundError(f"no run, experiment, project, or group matches {ref}")
 
     def bundle(self, run_id: str) -> dict:
         return self.client.run_bundle(run_id)
@@ -189,21 +205,50 @@ class ResearchOSSource:
     def lineage(self, run_id: str) -> dict:
         return self.client.run_lineage(run_id)
 
+    # -- reads the SDK already had, which the MCP simply never surfaced --------
+
+    def run_spans(self, run_id: str, **filters: Any) -> list[dict]:
+        """The trajectory itself. The run bundle carries span_type COUNTS only, so
+        before this an agent could see that 500 rollouts happened and not one of
+        what they did."""
+        return self.client.run_spans(run_id, **filters)
+
+    def run_series(self, run_id: str) -> list[dict]:
+        return self.client.run_series(run_id)
+
+    def run_metrics(self, run_id: str, **filters: Any) -> list[dict]:
+        return self.client.run_metrics(run_id, **filters)
+
+    def run_artifacts(self, run_id: str, **filters: Any) -> list[dict]:
+        return self.client.list_run_artifacts(run_id, **filters)
+
+    def experiment_artifacts(self, experiment_id: str) -> list[dict]:
+        return self.client.list_experiment_artifacts(experiment_id)
+
+    def run_events(self, run_id: str) -> list[dict]:
+        return self.client.events.for_run(run_id)
+
+    def experiment_edges(self, experiment_id: str) -> list[dict]:
+        return self.client.experiment_edges(experiment_id)
+
+    def experiment_groups(self, experiment_id: str) -> list[dict]:
+        return self.client.list_groups(experiment_id)
+
+    def experiment_versions(self, experiment_id: str) -> list[dict]:
+        return self.client.list_experiment_versions(experiment_id)
+
+    def execution_record(self, content_hash: str) -> dict:
+        """The pinned environment behind ``run.env_ref`` — code, deps, hardware,
+        settings, paths. This is what makes the reproduce view a reproduction."""
+        return self.client.get_execution_record(content_hash)
+
+    def experiment(self, experiment_id: str) -> dict:
+        return self.client.get_experiment(experiment_id)
+
+    def assets(self, *, limit: int = 50) -> list[dict]:
+        """The versioned-asset registry — live since fold #5, and never once read
+        by research_context, which returned a hardcoded empty official_assets."""
+        return self.client.assets.list(limit=limit).items
+
     def resolve_asset(self, **query: Any) -> dict:
         return self.client.assets.resolve(**query)
-
-    def trace_file(self, query: str) -> dict:
-        # The artifact trace index does not exist server-side: there has never been a
-        # `/v1/artifacts/trace` route, so the call this used to make could only ever
-        # 404 into the degraded answer below. Returning it directly is the same
-        # result without the doomed round-trip. `missing_capability` is the honest
-        # signal to the agent that this tool has no backend yet.
-        #
-        # When the backend does ship the index, tests/test_parity.py will fail with
-        # the new route listed as unreachable — that is the prompt to wire it here.
-        return {
-            "query": query,
-            "matches": [],
-            "state": "partial",
-            "missing_capability": "artifact_trace_index",
-        }

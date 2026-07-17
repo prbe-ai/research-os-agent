@@ -58,6 +58,7 @@ class FakeApp:
         self.edges: list[dict] = []
         self.execution_records: dict[str, dict] = {}
         self.experiment_versions: dict[str, list[dict]] = {}
+        self.run_events: dict[str, list[dict]] = {}
         self.uploaded: set[str] = set()
         self.puts: list[str] = []
         self.put_headers: list[dict[str, str]] = []
@@ -227,6 +228,20 @@ class FakeApp:
             n = len(body.get("points", []))
             self.metrics_inserted += n
             return httpx.Response(200, json={"inserted": n})
+        if m and method == "GET":
+            rows = self.metric_points.get(m.group(1), [])
+            key = request.url.params.get("key")
+            kind = request.url.params.get("kind")
+            limit = request.url.params.get("limit")
+            if key is not None:
+                rows = [r for r in rows if r.get("key") == key]
+            if kind is not None:
+                rows = [r for r in rows if r.get("kind") == kind]
+            return httpx.Response(200, json=rows[: int(limit)] if limit else rows)
+
+        m = _RUN_SERIES.match(path)
+        if m and method == "GET":
+            return httpx.Response(200, json=self.series.get(m.group(1), []))
 
         m = _RUN_SPANS.match(path)
         if m and method == "POST":
@@ -234,6 +249,24 @@ class FakeApp:
             self.spans_upserted += n
             self.spans.setdefault(m.group(1), []).extend(body.get("spans", []))
             return httpx.Response(200, json={"upserted": n})
+        if m and method == "GET":
+            rows = self.spans.get(m.group(1), [])
+            span_type = request.url.params.get("span_type")
+            parent = request.url.params.get("parent_span_id")
+            step_from = request.url.params.get("step_from")
+            step_to = request.url.params.get("step_to")
+            limit = request.url.params.get("limit")
+            if span_type is not None:
+                rows = [r for r in rows if r.get("span_type") == span_type]
+            if parent is not None:
+                rows = [r for r in rows if r.get("parent_span_id") == parent]
+            if step_from is not None:
+                rows = [r for r in rows
+                        if r.get("step_index") is not None and r["step_index"] >= int(step_from)]
+            if step_to is not None:
+                rows = [r for r in rows
+                        if r.get("step_index") is not None and r["step_index"] <= int(step_to)]
+            return httpx.Response(200, json=rows[: int(limit)] if limit else rows)
 
         m = _RUN_ARTIFACTS.match(path)
         if m and method == "POST":
@@ -432,6 +465,16 @@ class FakeApp:
                         return httpx.Response(200, json=span)
             return httpx.Response(404, json={"detail": "span not found"})
 
+        m = re.match(r"^/v1/experiments/([^/]+)/artifacts$", path)
+        if m and method == "GET":
+            # Mirrors the backend: an artifact belongs to the experiment when its
+            # run does (or when it was filed on the experiment directly).
+            eid = m.group(1)
+            run_ids = {r for r, row in self.runs.items() if row.get("experiment_id") == eid}
+            rows = [a for rid in run_ids for a in self.artifacts.get(rid, [])]
+            rows += [a for a in self.artifacts.get(eid, []) if a.get("experiment_id") == eid]
+            return httpx.Response(200, json=rows)
+
         m = re.match(r"^/v1/experiments/([^/]+)/edges$", path)
         if m and method == "GET":
             # Mirrors app/lineage/router.py: an edge belongs to the experiment when the
@@ -525,7 +568,7 @@ class FakeApp:
             return httpx.Response(200, json=[])
         m = re.match(r"^/v1/runs/([^/]+)/events$", path)
         if m and method == "GET":
-            return httpx.Response(200, json=[])
+            return httpx.Response(200, json=self.run_events.get(m.group(1), []))
 
         # -- artifact upload flow (fold #16) --
         m = re.match(r"^/v1/runs/([^/]+)/artifacts/uploads$", path)

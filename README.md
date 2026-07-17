@@ -181,16 +181,42 @@ artifact upload exists, transcript portability remains explicitly false.
 
 ## Read-only MCP server
 
-Run the stdio server with `probe-research-mcp`. It exposes exactly six tools:
+Run the stdio server with `probe-research-mcp`. It exposes exactly five tools:
 
 | Tool | Function |
 |---|---|
 | `research_context` | Project/session bootstrap, prior experiments, active runs, capability warnings |
 | `research_search` | One-index exact+semantic backend search (`POST /v1/search`, corpora: assets/procedures → files, documents → github+files, transcripts unsupported); keyword fallback on pre-search backends |
-| `research_get` | Progressive card, handoff, reproduction, lineage, metrics, and artifact views |
-| `research_compare` | Server-side comparison of runs, experiments, and future asset versions |
-| `research_resolve` | Compatible asset resolution; honest partial result on API v3 |
-| `research_trace_file` | Producer-consumer and cleanup lineage; partial until trace indexing lands |
+| `research_get` | One entity through a purpose-shaped `view` — see below |
+| `research_compare` | Server-side comparison of runs, experiments, and asset versions |
+| `research_resolve` | Compatible asset resolution against the live registry |
+
+**Thin harness, fat skills.** Coverage grows through `research_get`'s `view` and `filters`
+parameters, never through more tools — fewer tools means less tool-selection confusion, and
+capability that lives inside a tool is code-enforced rather than smeared across entrypoints.
+Which view to ask for when is taught in `skills/track-experiment`.
+
+`research_get(ref, view=..., filters=..., token_budget=..., cursor=...)`, where `ref` is
+`run:<id>`, `experiment:<id>`, `project:<id>`, `group:<id>`, or a bare id:
+
+| Kind | Views |
+|---|---|
+| run | `card` · `trajectory` · `metrics` · `artifacts` · `reproduce` · `handoff` · `lineage` · `events` |
+| experiment | `card` · `artifacts` · `lineage` · `groups` · `versions` |
+| project, group | `card` |
+
+`trajectory` reads a run's spans (the run bundle carries span_type *counts* only, so this is
+the only way to read one). `metrics` returns series summaries, and `filters={"key": "<key>"}`
+drills to raw points. `reproduce` resolves `env_ref` through its execution record. `groups`
+lists an experiment's sweeps; read one with `ref="group:<id>"`. `token_budget` bounds the
+row-shaped part of a view and hands back a `next_cursor`; `reproduce` is atomic and reports
+`token_budget_exceeded` rather than truncating a manifest into something that reproduces
+nothing.
+
+There is no `research_trace_file`: no backend trace index has ever existed, so it answered
+`matches: []` to every query, which agents read as "this file has no lineage". To trace a
+path/URI/hash, use `research_search` (its exact channel matches artifacts) and follow
+`research_get view="lineage"`.
 
 MCP reads through the Probe Research API—never directly from Postgres or R2. Its
 logical sources are control identity/tenant scope, the structured experiment

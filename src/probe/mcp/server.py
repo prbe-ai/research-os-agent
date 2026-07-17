@@ -163,9 +163,44 @@ def create_server(
         view: str = "card",
         token_budget: int = 2000,
         cursor: str | None = None,
+        filters: dict[str, Any] | None = None,
     ) -> dict:
-        """Fetch a run, experiment, or asset progressively as a card, handoff, reproduction, lineage, metrics, or artifact view."""
-        return svc().research_get(ref, view, token_budget, cursor)
+        """Read one run, experiment, project, or group through a purpose-shaped view.
+
+        `ref` is `run:<id>`, `experiment:<id>`, `project:<id>`, `group:<id>`, or a bare id
+        (resolved by trying each kind). Which views exist depends on the kind — asking for
+        one that does not is a validation error naming the kind's real views:
+
+          run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events
+          experiment  card | artifacts | lineage | groups | versions
+          project     card
+          group       card
+
+        `card` (default) is the cheap identity/status glance. `trajectory` returns the run's
+        actual spans (the run bundle carries span_type COUNTS only, so this is the only way
+        to read a trajectory). `metrics` returns per-series summaries, and `filters={"key":
+        "<key>"}` drills through to that series' raw points. `artifacts` lists artifacts.
+        `reproduce` returns the hypothesis plus `env_ref` resolved through its execution
+        record (code/deps/hardware/settings) — a run that captured no environment honestly
+        reports missing=["execution_record"]. `handoff` is what a new session needs to
+        continue: hypothesis, run state, series, lineage, and span_type counts that tell you
+        whether a `trajectory` call is worth making. `lineage` is ancestry for a run and
+        edges for an experiment. `events` is the append-only lifecycle log. `groups` lists an
+        experiment's sweeps/ensembles (read one with `ref="group:<id>"`); `versions` lists
+        its immutable published manifests.
+
+        `filters` maps onto the backend's real server-side filters and is rejected if it does
+        not apply — trajectory takes span_type/parent_span_id/step_from/step_to, metrics takes
+        key/kind, a RUN's artifacts takes kind/step_from/step_to (an experiment's takes none).
+
+        `token_budget` bounds the row-shaped part of a view — the only part that scales. When
+        rows do not fit, the response is completeness.state="partial" with
+        missing=["truncated_by_token_budget"] and a `next_cursor`; pass that cursor back with
+        the SAME view to continue (a cursor from another view is rejected, never re-based).
+        `reproduce` is atomic and is never silently truncated — a manifest with fields dropped
+        to fit reproduces nothing — so it reports missing=["token_budget_exceeded"] instead.
+        """
+        return svc().research_get(ref, view, token_budget, cursor, filters)
 
     @mcp.tool()
     def research_compare(refs: list[str], dimensions: list[str] | None = None) -> dict:
@@ -182,10 +217,12 @@ def create_server(
         """Resolve a compatible official reusable asset before creating or modifying a script, dataset, method, config, image, or checkpoint."""
         return svc().research_resolve(name, kind, requirement, at)
 
-    @mcp.tool()
-    def research_trace_file(query: str) -> dict:
-        """Trace a path, URI, artifact id, or content hash to producers, consumers, durable copies, and cleanup safety."""
-        return svc().research_trace_file(query)
+    # NOTE: there is no research_trace_file. It was removed, not overlooked: no
+    # /v1/artifacts/trace route has ever existed, so it answered `matches: []` to
+    # every query and an agent read that as "this file has no lineage" — a
+    # confident wrong answer. To trace a path/URI/hash, use research_search: its
+    # exact channel matches artifacts and returns REAL hits. If the backend ever
+    # ships a trace index, tests/test_parity.py fails with the route unreachable.
 
     @mcp.resource("research://runs/{run_id}/reproduction")
     def run_reproduction(run_id: str) -> dict:

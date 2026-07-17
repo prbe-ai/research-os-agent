@@ -160,8 +160,8 @@ with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
   still accepts it, and whether a stale literal copy is pinned somewhere that outranks it.
 - `claude mcp list` shows `probe-research` as `✓ Connected` (if registered via the CLI).
 - The `probe-research` MCP tools (`research_context`, `research_search`, `research_get`,
-  `research_compare`, `research_resolve`, `research_trace_file`) are available **in a fresh
-  session** — remind the user to restart if they were just added.
+  `research_compare`, `research_resolve`) are available **in a fresh session** — remind the
+  user to restart if they were just added.
 - The `track-experiment`, `manage-research-asset`, and `publish-experiment` skills are ready
   (plugin installs only).
 

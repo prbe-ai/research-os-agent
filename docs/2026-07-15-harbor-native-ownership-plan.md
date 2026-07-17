@@ -115,7 +115,11 @@ contract mapping), `019f53c9` (capture-point decision: Harbor bridge host).
 - Dashboard: run timeline (metrics + trial gallery per step); **step-N vs N+1
   sandbox diff** (cheap via CAS hashes); trajectory viewer; verifier output
   rendering. This is "W&B charts + container state in one view," verbatim his ask.
-- MCP: `research_get view="sandbox"`, `research_trace_file` over trial manifests.
+- MCP: a `sandbox` view on `research_get` over trial manifests. (Correction, 2026-07-17:
+  neither surface this line assumed exists. `view="sandbox"` was never implemented, and
+  `research_trace_file` has since been REMOVED — it had no backend index and answered
+  `matches: []` to every query. A sandbox view would be new work on `research_get`'s view
+  table; tracing goes through `research_search` + `view="lineage"`.)
 - Pricing: per-researcher (~$1K/mo signal) + metered storage, positioned against
   the $1/GPU·hr complaint.
 

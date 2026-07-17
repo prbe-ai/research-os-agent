@@ -326,11 +326,18 @@ def test_experiment_edges_are_scoped_to_the_experiment(client, app):
     assert [e["source_id"] for e in edges] == [mine.id]
 
 
-def test_trace_file_reports_its_missing_backend_without_a_doomed_call(client, app):
-    """The artifact trace index has no backend route; the MCP tool degrades honestly
-    rather than 404ing on every call."""
+def test_no_trace_file_surface_survives_anywhere(client):
+    """`research_trace_file` is gone, not degraded.
+
+    It answered `matches: []` to every query because no /v1/artifacts/trace route
+    has ever existed, so an agent read it as "this file has no lineage" — a
+    confident wrong answer. Keeping a degraded-but-advertised tool was the older
+    bet; it never paid off. Tracing now goes through research_search, whose exact
+    channel matches artifacts for real. This guards the whole surface (source,
+    service, and tool) so it cannot creep back in one layer at a time."""
+    from probe.mcp.service import ResearchReadService
     from probe.mcp.source import ResearchOSSource
 
-    result = ResearchOSSource(client).trace_file("loss.png")
-    assert result["missing_capability"] == "artifact_trace_index"
-    assert not [r for r in app.requests if "trace" in r.url.path]
+    source = ResearchOSSource(client)
+    assert not hasattr(source, "trace_file")
+    assert not hasattr(ResearchReadService(source), "research_trace_file")

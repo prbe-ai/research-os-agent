@@ -540,7 +540,12 @@ def test_asset_resolve_returns_no_match_when_not_found(client):
     assert result["data"]["state"] == "no_match"
 
 
-def test_server_exposes_only_the_six_read_tools(client):
+def test_server_exposes_only_the_five_read_tools(client):
+    """Thin harness: coverage grows through research_get's `view`/`filters`, NEVER
+    through more tools. Spans, groups, events, execution records and experiment
+    versions all became reachable while the tool count went DOWN (trace_file, which
+    had no backend, was removed). If this number ever climbs, the fat-skills seam
+    was abandoned for a research_get_spans-shaped shortcut."""
     service = ResearchReadService(ResearchOSSource(client))
     server = create_server(service)
     tools = asyncio.run(server.list_tools())
@@ -551,7 +556,6 @@ def test_server_exposes_only_the_six_read_tools(client):
         "research_get",
         "research_compare",
         "research_resolve",
-        "research_trace_file",
     }
     assert not any(name.startswith(("create", "update", "promote", "upload")) for name in names)
 

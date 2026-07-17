@@ -122,6 +122,8 @@ behind auth), which the existing widget already relies on.
 - **Central marketplace:** deferred — install stays `@research-os-agent`. When the plugin is
   added to the central prbe-ai marketplace, update the command to `research-os@prbe-ai`.
 - **Copy accuracy:** the exact skill names are `track-experiment`, `manage-research-asset`,
-  `publish-experiment`. The MCP tools are `research_context/search/get/compare/resolve/trace_file`.
+  `publish-experiment`. The MCP tools are `research_context/search/get/compare/resolve`
+  (`research_trace_file` was removed — it had no backend and answered "no matches" to
+  everything).
 - **Where to build:** this page is in `research-os/dashboard`; this doc is the spec to hand to
   that work (I can implement it there when you want).
