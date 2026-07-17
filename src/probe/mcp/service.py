@@ -757,15 +757,22 @@ class ResearchReadService:
     # unconditionally — an always-`missing` view is the lie this rewrite removes.
 
     @staticmethod
-    def _bounded(fetch: Any, offset: int, backend_max: int) -> tuple[list[dict], bool]:
+    def _bounded(fetch: Any, offset: int, backend_max: int) -> tuple[list[dict], bool, bool]:
         """Fetch the caller's window plus ONE lookahead row, then drop it.
 
-        The lookahead makes "are there more rows?" a fact instead of a guess, with
-        no false positive when the window lands exactly on the end. These routes
-        take `limit` and no offset, so the window is sliced client-side."""
+        Returns ``(rows, more_beyond, capped)``. The lookahead makes "are there more
+        rows?" a fact instead of a guess, with no false positive when the window
+        lands exactly on the end. These routes take `limit` and no offset, so the
+        window is sliced client-side.
+
+        `capped` means the BACKEND refused to go further (it returned its own
+        ceiling), which is the only thing that makes rows genuinely unreachable.
+        Inferring it from the offset instead reports the ceiling on a short run that
+        was read in full -- a false `missing` marker, which corrupts the exact
+        signal the envelope exists to carry."""
         want = min(offset + _PAGE_FETCH, backend_max)
         fetched = fetch(min(want + 1, backend_max))
-        return fetched[:want], len(fetched) > want
+        return fetched[:want], len(fetched) > want, len(fetched) >= backend_max
 
     def _view_card(self, entity: dict, request: _Req) -> _ViewData:
         """The cheap glance: the entity as the backend returned it, no extra calls."""
@@ -776,21 +783,16 @@ class ResearchReadService:
         this an agent could see that 500 rollouts happened and not one of what they
         did — the sharpest gap for an RL-pitched product."""
         run_id = str(entity["id"])
-        spans, more = self._bounded(
+        spans, more, capped = self._bounded(
             lambda limit: self.source.run_spans(run_id, limit=limit, **request.filters),
             request.offset,
             _SPAN_BACKEND_MAX,
-        )
-        missing = (
-            [MissingMarker.SPANS_BEYOND_BACKEND_LIMIT]
-            if request.offset + len(spans) >= _SPAN_BACKEND_MAX
-            else []
         )
         return _ViewData(
             payload={"filters": request.filters or None},
             rows=spans,
             rows_key="spans",
-            missing=missing,
+            missing=[MissingMarker.SPANS_BEYOND_BACKEND_LIMIT] if capped else [],
             more_beyond=more,
         )
 
@@ -800,7 +802,7 @@ class ResearchReadService:
         metric point a run ever logged."""
         run_id = str(entity["id"])
         if request.filters.get("key"):
-            points, more = self._bounded(
+            points, more, _ = self._bounded(
                 lambda limit: self.source.run_metrics(run_id, limit=limit, **request.filters),
                 request.offset,
                 _METRIC_BACKEND_MAX,

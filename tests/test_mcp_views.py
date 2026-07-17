@@ -314,6 +314,22 @@ def test_cursor_walks_a_trajectory_without_skipping_or_duplicating(client, app):
     assert len(seen) == len(set(seen))
 
 
+def test_backend_ceiling_marker_reflects_the_backend_not_the_offset(client, app):
+    """`spans_beyond_backend_limit` must mean the BACKEND refused to go further.
+
+    Deriving it as `offset + len(rows) >= 10000` fired on a short run read at a high
+    offset — a false `missing` marker on a trajectory the agent had seen in full.
+    A wrong entry in `missing` corrupts the one signal the envelope exists to
+    carry, so it is worse than no marker at all."""
+    rid, _, _, _ = _populated(client, app, spans=3)
+    cursor = json.dumps({"offset": 9_900, "view": "trajectory"}, sort_keys=True)
+    result = _service(client).research_get(f"run:{rid}", view="trajectory", cursor=cursor)
+
+    assert result["data"]["spans"] == []  # read past the end
+    assert result["completeness"]["missing"] == []  # ... and says nothing is hidden
+    assert result["completeness"]["state"] == "complete"
+
+
 def test_cursor_from_another_view_is_rejected_not_rebased(client, app):
     """Offset 40 of a trajectory means nothing in an events list; silently
     reinterpreting it would skip 40 events with no signal."""
