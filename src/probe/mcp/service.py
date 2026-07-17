@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -193,20 +195,52 @@ def _collapse_experiments(results: list[dict]) -> list[dict]:
     return list(best.values())
 
 
+def _pack_cursor(payload: dict) -> str:
+    """Pack a cursor payload into an opaque token that is deliberately NOT JSON.
+
+    A raw ``json.dumps({...})`` cursor cannot survive the MCP tool layer. FastMCP's
+    `pre_parse_json` runs json.loads on every string argument and, when the result
+    is not a scalar, REPLACES the argument with the parsed object — so a JSON-object
+    cursor reaches the tool as a dict and is rejected against ``cursor: str | None``.
+    Pagination then works perfectly in-process and 422s over the wire, which is
+    exactly how it shipped: no test calls the tool layer, they all call the service
+    directly.
+
+    Base64 keeps the token a string through that pre-parse, and makes it genuinely
+    opaque, so nobody hand-builds one and depends on the shape."""
+    raw = json.dumps(payload, sort_keys=True).encode()
+    return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+def _unpack_cursor(cursor: str, *, hint: str) -> dict:
+    """Opaque token -> its payload, or a ValidationError naming how to get a real one.
+
+    Raw-JSON cursors are still accepted: tokens minted before cursors were packed
+    are already in agent transcripts, and refusing them would turn a stale cursor
+    into an error instead of a page."""
+    for decode in (
+        lambda: json.loads(
+            base64.urlsafe_b64decode((cursor + "=" * (-len(cursor) % 4)).encode()).decode()
+        ),
+        lambda: json.loads(cursor),  # legacy: pre-pack raw-JSON cursor
+    ):
+        try:
+            parsed = decode()
+        except (json.JSONDecodeError, ValueError, TypeError, binascii.Error, UnicodeDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    raise errors.ValidationError(
+        f"malformed cursor: pass the next_cursor value from a previous {hint} call",
+        status=422,
+    )
+
+
 def _split_cursor(cursor: str | None) -> tuple[str | None, str | None]:
-    """The tool's opaque cursor is a JSON object of per-channel backend cursors."""
+    """The tool's opaque cursor carries the per-channel backend cursors."""
     if not cursor:
         return None, None
-    try:
-        parsed = json.loads(cursor)
-        if not isinstance(parsed, dict):
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
-        raise errors.ValidationError(
-            "malformed cursor: pass the next_cursor value from a previous "
-            "research_search call",
-            status=422,
-        ) from None
+    parsed = _unpack_cursor(cursor, hint="research_search")
     return parsed.get(Channel.EXACT), parsed.get(Channel.SEMANTIC)
 
 
@@ -216,7 +250,7 @@ def _join_cursor(exact: str | None, semantic: str | None) -> str | None:
         for key, value in ((Channel.EXACT.value, exact), (Channel.SEMANTIC.value, semantic))
         if value
     }
-    return json.dumps(cursors, sort_keys=True) if cursors else None
+    return _pack_cursor(cursors) if cursors else None
 
 
 # -- research_get: token budget, cursor, and the view table --------------------
@@ -287,21 +321,19 @@ def _fit_sections(
 
 
 def _split_get_cursor(cursor: str | None, view: str) -> int:
-    """research_get's opaque cursor: ``{"view": v, "offset": n}``.
+    """research_get's opaque cursor, carrying ``{"view": v, "offset": n}``.
 
     The view is carried so a cursor can never be silently re-based onto another
     view — offset 40 of a trajectory means nothing in an events list, and quietly
     reinterpreting it would skip 40 events with no signal at all."""
     if not cursor:
         return 0
+    parsed = _unpack_cursor(cursor, hint="research_get")
     try:
-        parsed = json.loads(cursor)
-        if not isinstance(parsed, dict):
-            raise ValueError
         offset, cursor_view = parsed["offset"], parsed["view"]
         if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
             raise ValueError
-    except (json.JSONDecodeError, ValueError, KeyError, TypeError):
+    except (ValueError, KeyError, TypeError):
         raise errors.ValidationError(
             "malformed cursor: pass the next_cursor value from a previous "
             "research_get call",
@@ -317,7 +349,7 @@ def _split_get_cursor(cursor: str | None, view: str) -> int:
 
 
 def _join_get_cursor(view: str, offset: int) -> str:
-    return json.dumps({"offset": offset, "view": str(view)}, sort_keys=True)
+    return _pack_cursor({"offset": offset, "view": str(view)})
 
 
 @dataclass(frozen=True)
