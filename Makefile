@@ -1,4 +1,4 @@
-.PHONY: install test parity dump-openapi gen-models regen
+.PHONY: install test parity dump-openapi gen-models regen sync-plugin-skills
 
 install:
 	pip install -e ".[dev]"
@@ -30,6 +30,10 @@ gen-models:
 regen: dump-openapi gen-models parity
 
 # Keep the plugin's skill copies in sync with the canonical top-level skills/.
+# Edit skills/, never the plugin copy. tests/test_skills_sync.py fails if they drift,
+# so a forgotten sync is caught by CI (and blocks the MCP deploy) instead of silently
+# shipping a plugin that teaches the old thing. Adding a skill? Update this list AND
+# _SYNCED in that test.
 sync-plugin-skills:
 	@for s in track-experiment manage-research-asset publish-experiment; do \
 	  rm -rf plugins/probe-research/skills/$$s; mkdir -p plugins/probe-research/skills/$$s; \
