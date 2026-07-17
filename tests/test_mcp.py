@@ -108,8 +108,14 @@ def test_search_maps_corpora_and_merges_channels(client, app):
     assert out["capabilities"]["semantic_search"] is True
     assert out["capabilities"]["kb_documents"] is True
 
-    # per-channel backend cursors ride one opaque tool cursor, round-trippable
-    assert json.loads(out["next_cursor"]) == {"exact": "exact-c1"}
+    # Per-channel backend cursors ride one opaque tool cursor, round-trippable.
+    # Opaque means opaque: this used to assert json.loads(next_cursor) == {...},
+    # pinning the cursor to raw JSON -- the very thing that made it unusable through
+    # the MCP tool layer (FastMCP pre-parses a JSON-object string arg into a dict,
+    # which then fails `cursor: str`). What matters is the ROUND TRIP, below; the
+    # encoding is nobody's business. See tests/test_mcp_tool_layer.py.
+    with pytest.raises(json.JSONDecodeError):
+        json.loads(out["next_cursor"])
     service.research_search("adam sweep", cursor=out["next_cursor"])
     assert app.search_requests[-1]["exact_cursor"] == "exact-c1"
     assert "semantic_cursor" not in app.search_requests[-1]
