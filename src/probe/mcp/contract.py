@@ -127,7 +127,13 @@ class MissingMarker(StrEnum):
     TRUNCATED_BY_TOKEN_BUDGET = "truncated_by_token_budget"
     TOKEN_BUDGET_EXCEEDED = "token_budget_exceeded"
     EXECUTION_RECORD = "execution_record"
+    EXPERIMENT = "experiment"  # a run whose experiment could not be read
+    # A backend `limit` ceiling was reached, so rows past it are unreachable. At the
+    # ceiling the lookahead row cannot be fetched (limit == want), so `more_beyond`
+    # is False by construction and THIS is the only remaining signal that the agent
+    # has not seen everything. Every _bounded consumer must emit its marker.
     SPANS_BEYOND_BACKEND_LIMIT = "spans_beyond_backend_limit"
+    METRIC_POINTS_BEYOND_BACKEND_LIMIT = "metric_points_beyond_backend_limit"
 
 
 class ChannelError(StrEnum):

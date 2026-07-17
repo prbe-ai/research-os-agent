@@ -199,6 +199,8 @@ def create_server(
         the SAME view to continue (a cursor from another view is rejected, never re-based).
         `reproduce` is atomic and is never silently truncated — a manifest with fields dropped
         to fit reproduces nothing — so it reports missing=["token_budget_exceeded"] instead.
+        It is an approximate bound on `data`, not on the whole envelope: `scope`,
+        `capabilities`, and `completeness` are small and always sent.
         """
         return svc().research_get(ref, view, token_budget, cursor, filters)
 

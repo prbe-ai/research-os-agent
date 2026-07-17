@@ -675,7 +675,14 @@ class ResearchReadService:
     def _checked_filters(
         self, kind: str, view: str, filters: dict[str, Any] | None
     ) -> dict[str, Any]:
-        supplied = {key: value for key, value in (filters or {}).items() if value is not None}
+        # Empty values are dropped, not passed through: `{"key": ""}` is not a
+        # filter. Kept, it would echo back in the payload as though it had been
+        # applied while every truthiness check downstream ignored it.
+        supplied = {
+            key: value
+            for key, value in (filters or {}).items()
+            if value is not None and value != ""
+        }
         allowed = _VIEW_FILTERS.get((kind, view), set())
         unknown = sorted(set(supplied) - allowed)
         if not unknown:
@@ -762,14 +769,23 @@ class ResearchReadService:
 
         Returns ``(rows, more_beyond, capped)``. The lookahead makes "are there more
         rows?" a fact instead of a guess, with no false positive when the window
-        lands exactly on the end. These routes take `limit` and no offset, so the
-        window is sliced client-side.
+        lands exactly on the end.
 
         `capped` means the BACKEND refused to go further (it returned its own
         ceiling), which is the only thing that makes rows genuinely unreachable.
         Inferring it from the offset instead reports the ceiling on a short run that
         was read in full -- a false `missing` marker, which corrupts the exact
-        signal the envelope exists to carry."""
+        signal the envelope exists to carry.
+
+        CALLERS MUST USE `capped`. At the ceiling `want == backend_max`, so the
+        lookahead row cannot be fetched and `more_beyond` is False BY CONSTRUCTION:
+        a caller that ignores `capped` there emits state="complete" with no cursor
+        while rows sit unread. `capped` is the only signal left at that boundary.
+
+        TODO(backend): these routes take `limit` and no offset, so each page refetches
+        from row 0 and a full walk is quadratic (a 6000-span walk pulls ~90k rows).
+        One backend call per page, but a linearly growing one. An `offset`/cursor on
+        GET /v1/runs/{id}/spans would make this linear."""
         want = min(offset + _PAGE_FETCH, backend_max)
         fetched = fetch(min(want + 1, backend_max))
         return fetched[:want], len(fetched) > want, len(fetched) >= backend_max
@@ -802,7 +818,7 @@ class ResearchReadService:
         metric point a run ever logged."""
         run_id = str(entity["id"])
         if request.filters.get("key"):
-            points, more, _ = self._bounded(
+            points, more, capped = self._bounded(
                 lambda limit: self.source.run_metrics(run_id, limit=limit, **request.filters),
                 request.offset,
                 _METRIC_BACKEND_MAX,
@@ -811,6 +827,7 @@ class ResearchReadService:
                 payload={"granularity": "points", "filters": request.filters},
                 rows=points,
                 rows_key="points",
+                missing=[MissingMarker.METRIC_POINTS_BEYOND_BACKEND_LIMIT] if capped else [],
                 more_beyond=more,
             )
         series = self.source.run_series(run_id)
@@ -841,12 +858,12 @@ class ResearchReadService:
         the envelope is where that absence gets reported."""
         experiment_id = entity.get("experiment_id")
         if not experiment_id:
-            missing.append(EntityType.EXPERIMENT.value)
+            missing.append(MissingMarker.EXPERIMENT)
             return None
         try:
             return self.source.experiment(str(experiment_id)).get("hypothesis")
         except errors.NotFoundError:
-            missing.append(EntityType.EXPERIMENT.value)
+            missing.append(MissingMarker.EXPERIMENT)
             return None
 
     def _view_reproduce(self, entity: dict, request: _Req) -> _ViewData:

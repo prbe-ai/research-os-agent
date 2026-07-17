@@ -17,6 +17,7 @@ import uuid
 
 import pytest
 
+from probe.mcp import service as service_module
 from probe.mcp.service import _VIEWS, ResearchReadService
 from probe.mcp.source import ResearchOSSource
 from probe.sdk import errors
@@ -328,6 +329,76 @@ def test_backend_ceiling_marker_reflects_the_backend_not_the_offset(client, app)
     assert result["data"]["spans"] == []  # read past the end
     assert result["completeness"]["missing"] == []  # ... and says nothing is hidden
     assert result["completeness"]["state"] == "complete"
+
+
+@pytest.mark.parametrize(
+    "view, filters, rows_key, ceiling_const, marker",
+    [
+        ("trajectory", None, "spans", "_SPAN_BACKEND_MAX", "spans_beyond_backend_limit"),
+        ("metrics", {"key": "loss"}, "points", "_METRIC_BACKEND_MAX",
+         "metric_points_beyond_backend_limit"),
+    ],
+)
+def test_at_the_backend_ceiling_a_view_never_claims_complete(
+    client, app, monkeypatch, view, filters, rows_key, ceiling_const, marker
+):
+    """AT the ceiling, `want == backend_max`, so the lookahead row cannot be fetched
+    and `more_beyond` is False BY CONSTRUCTION — `capped` is the only signal left
+    that rows sit unread. A view that ignores it emits state="complete" with no
+    cursor over data it never fetched, which is the precise invariant this whole
+    change exists to protect. _view_metrics did exactly that.
+
+    Both _bounded consumers are parametrized here so a third one cannot be added
+    without this test demanding its marker."""
+    monkeypatch.setattr(service_module, ceiling_const, 10)
+    monkeypatch.setattr(service_module, "_PAGE_FETCH", 10)
+    rid, _, _, _ = _populated(client, app, spans=12)
+    app.metric_points[rid] = [
+        {"id": i, "run_id": rid, "key": "loss", "kind": "scalar", "value": i / 10,
+         "step_index": i, "dimensions": {}, "wall_clock": "2026-07-16T00:00:00Z"}
+        for i in range(12)
+    ]
+
+    result = _service(client).research_get(
+        f"run:{rid}", view=view, filters=filters, token_budget=1_000_000
+    )
+    assert len(result["data"][rows_key]) == 10  # the backend's ceiling, not the 12 that exist
+    assert marker in result["completeness"]["missing"]
+    assert result["completeness"]["state"] == "partial"
+
+
+def test_a_run_whose_experiment_cannot_be_read_says_so(client, app, monkeypatch):
+    """The fake answers 200 for ANY experiment id, so this branch was unreachable in
+    tests. Absent `env_ref` was marked while an unreadable experiment was not: the
+    view returned hypothesis=None under state="complete"."""
+    rid, _, _, _ = _populated(client, app)
+
+    def _gone(_experiment_id):
+        raise errors.NotFoundError("experiment not found")
+
+    monkeypatch.setattr(service_module.ResearchOSSource, "experiment", staticmethod(_gone))
+    result = _service(client).research_get(f"run:{rid}", view="handoff", token_budget=100_000)
+
+    assert result["data"]["hypothesis"] is None
+    assert "experiment" in result["completeness"]["missing"]
+    assert result["completeness"]["state"] == "partial"
+
+
+def test_a_run_with_no_experiment_id_says_so_rather_than_reporting_no_hypothesis(client, app):
+    rid, _, _, _ = _populated(client, app)
+    app.runs[rid]["experiment_id"] = None
+    result = _service(client).research_get(f"run:{rid}", view="reproduce")
+    assert result["data"]["hypothesis"] is None
+    assert "experiment" in result["completeness"]["missing"]
+
+
+def test_an_empty_filter_value_is_dropped_not_echoed_as_applied(client, app):
+    """`{"key": ""}` is falsy, so it fell through to the series path while echoing
+    filters={"key": ""} back — a filter reported as applied that nothing honored."""
+    rid, _, _, _ = _populated(client, app)
+    result = _service(client).research_get(f"run:{rid}", view="metrics", filters={"key": ""})
+    assert result["data"]["granularity"] == "series_summary"
+    assert result["data"]["filters"] is None
 
 
 def test_cursor_from_another_view_is_rejected_not_rebased(client, app):
