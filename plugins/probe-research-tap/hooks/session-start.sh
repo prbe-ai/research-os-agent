@@ -85,7 +85,18 @@ else:
     root = Path(base) if base else Path.home() / ".config"
     path = root / "probe" / "config.json"
 try:
-    tok = json.loads(path.read_text(encoding="utf-8")).get("ingest_token")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        data = {}
+    # The probe CLI writes v2 (named contexts) as of the workspace-context pass; a
+    # file it has not re-saved yet is still flat v1. This gate decides whether the
+    # daemon starts AT ALL, so reading only v1 would silently disable transcript
+    # capture on upgrade — and tap/config.py's own v2 support would never be reached.
+    contexts = data.get("contexts")
+    if isinstance(contexts, dict):
+        active = contexts.get(data.get("current_context") or "default")
+        data = active if isinstance(active, dict) else {}
+    tok = data.get("ingest_token")
 except Exception:
     tok = None
 print("yes" if isinstance(tok, str) and tok.strip() else "")

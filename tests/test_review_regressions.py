@@ -8,6 +8,7 @@ checker, the parity guard, and the happy-path tests all let through.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -249,3 +250,101 @@ def test_context_delete_of_an_unknown_name_exits_nonzero(wired, client, capsys):
 
     assert cli.main(["context", "delete", "nope"]) == 1
     assert "no such context" in capsys.readouterr().err
+
+
+# -- adversarial pass: what the specialists missed ---------------------------
+def test_a_corrupt_config_is_never_silently_overwritten():
+    """`load_file` returns {} for both 'absent' and 'unreadable'. Writers used that
+    as 'fresh install' and replaced the file — one truncated byte took every token
+    for every endpoint on the machine, at exit 0."""
+    from probe.sdk.config import ConfigUnreadable, config_path
+
+    save_context({"token": "probe_pat_PROD"}, name="prod")
+    save_context({"token": "probe_pat_STG"}, name="staging")
+    raw = config_path().read_text()
+    config_path().write_text(raw[: len(raw) // 2])  # truncate
+
+    with pytest.raises(ConfigUnreadable):
+        save_context({"token": "probe_pat_NEW"}, name="scratch")
+
+    # And the damaged original is still on disk to be recovered by hand.
+    assert "probe_pat_PROD" in config_path().read_text()
+
+
+def test_logout_strips_top_level_credentials_left_by_an_older_client():
+    """`_migrate` returns a v2 file untouched, so a hybrid written by an OLD probe
+    (which read v2, saw no top-level keys, and wrote `token` at the root) kept that
+    key forever — outliving every logout while still authenticating that old client."""
+    import json
+
+    from probe.sdk.config import config_path
+
+    save_context({"token": "probe_pat_CTX"})
+    hybrid = json.loads(config_path().read_text())
+    hybrid["token"] = "probe_pat_OLDLOGIN"  # what a downgraded client writes
+    config_path().write_text(json.dumps(hybrid))
+
+    clear_context()
+
+    assert "probe_pat_OLDLOGIN" not in config_path().read_text()
+
+
+def test_the_confirm_race_fallback_never_returns_a_presigned_url(client, app, tmp_path):
+    """The `have`-path 404 fallback returned the presign, which carries `upload_url`
+    — a signed, bearer-equivalent write capability that `probe shared add` prints to
+    stdout. It also lacked id/status, breaking the documented uniform return shape."""
+    from probe.sdk import errors
+
+    blob = tmp_path / "raced.bin"
+    blob.write_bytes(b"RACED")
+    client.upload_file(Anchor.WORKSPACE, _WS_MINE, "raced.bin", str(blob))  # seed `have`
+
+    real_post = client.transport.post
+
+    def post(path, body=None, **kw):
+        if path.endswith("/confirm"):
+            raise errors.NotFoundError("artifact not found")
+        return real_post(path, body, **kw)
+
+    client.transport.post = post
+    out = client.upload_file(Anchor.WORKSPACE, _WS_MINE, "raced.bin", str(blob))
+
+    assert "upload_url" not in out
+    assert "upload_headers" not in out
+    assert out["id"] and out["status"] == "complete"  # uniform shape preserved
+
+
+def test_concurrent_saves_do_not_drop_a_context(tmp_path, monkeypatch):
+    """os.replace gives atomicity, not isolation: both processes read, both wrote,
+    and the second silently dropped the first — while both reported success.
+
+    Real subprocesses, because that is the actual scenario (a CI matrix, two worktree
+    sessions, `project use` racing an auto-login); threads would share the GIL and
+    hide the interleaving that matters.
+    """
+    import os
+    import subprocess
+    import sys
+
+    cfg_home = tmp_path / "cfg"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(cfg_home))
+    env = {**os.environ, "XDG_CONFIG_HOME": str(cfg_home)}
+    src = str(Path(__file__).resolve().parent.parent / "src")
+    env["PYTHONPATH"] = src + os.pathsep + env.get("PYTHONPATH", "")
+
+    program = (
+        "import sys;"
+        "from probe.sdk.config import save_context;"
+        "save_context({'token': 'probe_pat_' + sys.argv[1]}, name=sys.argv[1])"
+    )
+    procs = [
+        subprocess.Popen([sys.executable, "-c", program, f"ctx{i}"], env=env)
+        for i in range(4)
+    ]
+    for proc in procs:
+        assert proc.wait(timeout=60) == 0
+
+    from probe.sdk.config import load_file
+
+    saved = load_file().get("contexts", {})
+    assert {f"ctx{i}" for i in range(4)} <= set(saved), f"a context was dropped: {sorted(saved)}"

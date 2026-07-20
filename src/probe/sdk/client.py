@@ -460,7 +460,21 @@ class Client:
             # swapped live. A concurrent replace of the same (anchor, name) can then
             # soft-delete this row before the confirm reads it. The upload succeeded;
             # failing here would report a phantom error for work the server did.
-            return presign
+            #
+            # Return an artifact-shaped row, NOT the presign: the presign carries
+            # `upload_url` (a signed, bearer-equivalent write capability) and callers
+            # print this — `probe shared add` sends it straight to stdout, where it
+            # would land in CI logs. It also has no `id`/`status`, so every caller
+            # relying on the documented uniform return shape would KeyError on exactly
+            # this race.
+            return {
+                "id": presign["artifact_id"],
+                "name": name,
+                "content_hash": digest,
+                "size_bytes": size,
+                "status": "complete",
+                "superseded": True,
+            }
 
     # -- shared folder ------------------------------------------------------
     def share_workspace_file(self, artifact_id: str, *, replace: bool = False) -> dict:
