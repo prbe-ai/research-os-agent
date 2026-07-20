@@ -109,6 +109,14 @@ def probe_config_path() -> Path:
 
 
 def _read_probe_config() -> dict[str, Any]:
+    """The probe CLI's credentials, flattened to one dict whatever the file shape.
+
+    The CLI writes v2 (named contexts) as of the workspace-context pass; a v1 file
+    is a flat credential blob. This plugin must read BOTH: it shares one file with
+    the CLI, and reading only v1 would mean transcript ingestion silently stopped
+    the first time the user ran any command that saved config — no error, just an
+    unset base_url and a tap that quietly does nothing.
+    """
     p = probe_config_path()
     if not p.is_file():
         return {}
@@ -116,7 +124,13 @@ def _read_probe_config() -> dict[str, Any]:
         data = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    contexts = data.get("contexts")
+    if isinstance(contexts, dict):
+        active = contexts.get(data.get("current_context") or "default")
+        return active if isinstance(active, dict) else {}
+    return data
 
 
 def api_base_url() -> str:

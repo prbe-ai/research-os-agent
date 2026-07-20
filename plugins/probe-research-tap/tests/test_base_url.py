@@ -237,3 +237,44 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# --- v2 named-context config (the CLI's shape as of the workspace-context pass) ---
+
+
+def test_reads_a_v2_context_config():
+    """The tap shares one file with the probe CLI, and the CLI now writes v2.
+
+    Reading only the v1 flat shape meant transcript ingestion stopped silently the
+    first time the user ran any command that saved config: no error, just an unset
+    base_url and a tap that quietly did nothing.
+    """
+    _write_probe_config({
+        "version": 2,
+        "current_context": "default",
+        "contexts": {
+            "default": {"base_url": "https://file.example", "ingest_token": "ros_ing_X"}
+        },
+    })
+    assert cfg.api_base_url() == "https://file.example"
+    assert cfg.load_token() == "ros_ing_X"
+
+
+def test_v2_reads_the_ACTIVE_context_not_the_first_one():
+    _write_probe_config({
+        "version": 2,
+        "current_context": "staging",
+        "contexts": {
+            "default": {"base_url": "https://prod.example", "ingest_token": "ros_ing_PROD"},
+            "staging": {"base_url": "https://staging.example", "ingest_token": "ros_ing_STG"},
+        },
+    })
+    assert cfg.api_base_url() == "https://staging.example"
+    assert cfg.load_token() == "ros_ing_STG"
+
+
+def test_v1_flat_config_still_works():
+    """The migration is lazy — a user who has not run a saving command still has v1."""
+    _write_probe_config({"base_url": "https://legacy.example", "ingest_token": "ros_ing_OLD"})
+    assert cfg.api_base_url() == "https://legacy.example"
+    assert cfg.load_token() == "ros_ing_OLD"

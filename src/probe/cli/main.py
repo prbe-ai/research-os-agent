@@ -23,14 +23,26 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import typer
 from pydantic import ValidationError
 
 from .. import __version__, errors
 from ..models import Scope
-from ..sdk.client import Client
-from ..sdk.config import clear_file, config_path, load_file, resolve, save_file
+from ..sdk.client import _FILE_ANCHORS, Anchor, Client
+from ..sdk.config import (
+    DEFAULT_BASE_URL,
+    clear_context,
+    config_path,
+    current_context_name,
+    delete_context,
+    load_context,
+    load_file,
+    resolve,
+    save_context,
+    use_context,
+)
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
 
 
@@ -54,6 +66,11 @@ class Relation(str, Enum):
     resume = "resume"
     retry = "retry"
     branch = "branch"
+
+
+# The `include` query param is a closed vocabulary in the contract (a const, not a free
+# string), so it lives here rather than as a literal at each call site.
+_INCLUDE_ARCHIVED = "archived"
 
 
 class EndStatus(str, Enum):
@@ -202,14 +219,19 @@ def login(
         "--device/--endpoint-only",
         help="browser-assisted login (the default); --endpoint-only saves the endpoint without minting a token",
     ),
+    context: str = typer.Option(
+        None, "--context", help="name the context to create or overwrite (default: the active one)"
+    ),
 ) -> None:
     """Log in. Bare ``probe login`` runs the browser handoff (RFC 8628) — approve
     in the dashboard, no token to see or paste.
 
     Pass ``--token probe_pat_...`` for the air-gap paste path, or
     ``--endpoint-only`` to just save ``--base-url`` without minting a token.
+
+    ``--context staging`` logs in under a named context instead of the active one,
+    so several endpoints or tenants can coexist on one machine.
     """
-    data = load_file()
     resolved_token = token or _conn.token
     base = base_url or _conn.base_url
 
@@ -228,22 +250,26 @@ def login(
         token=resolved_token,
         ingest_token=ingest_token or _conn.ingest_token,
         hmac_secret=hmac_secret or _conn.hmac_secret,
+        context=context,
     )
-    data["base_url"] = settings.base_url
-    if settings.token:
-        data["token"] = settings.token
-    if settings.ingest_token:
-        data["ingest_token"] = settings.ingest_token
-    if settings.hmac_secret:
-        data["hmac_secret"] = settings.hmac_secret
+    # None means "leave whatever is already there" in save_context, so an --endpoint-only
+    # login never clears a token the user still has.
+    updates = {
+        "base_url": settings.base_url,
+        "token": settings.token or None,
+        "ingest_token": settings.ingest_token or None,
+        "hmac_secret": settings.hmac_secret or None,
+    }
     if settings.token:
         with Client(settings=settings) as c:
             who = c.me()
         print(f"logged in to {settings.base_url} as {who.get('email', who)}")
     else:
         print(f"saved endpoint {settings.base_url} (no user token set)")
-    path = save_file(data)
-    print(f"config: {path}")
+    if context:
+        use_context(context)
+    path = save_context(updates, name=context)
+    print(f"config: {path} (context: {context or current_context_name()})")
 
 
 @app.command()
@@ -255,8 +281,11 @@ def logout() -> None:
         print("token revoked")
     except errors.RosError as exc:
         print(f"revoke skipped ({exc})", file=sys.stderr)
-    clear_file()
-    print("local config cleared")
+    # The ACTIVE context only. Deleting the whole file would sign the user out of every
+    # other endpoint they have configured, which is not what "logout" means.
+    name = current_context_name()
+    clear_context(name)
+    print(f"local config cleared (context: {name})")
 
 
 @app.command()
@@ -365,10 +394,10 @@ def mcp_token_set(
         )
         raise typer.Exit(1)
 
-    data = load_file()
-    data["mcp_token"] = secret
-    data.setdefault("base_url", base)
-    path = save_file(data)
+    updates = {"mcp_token": secret}
+    if not load_context().get("base_url"):
+        updates["base_url"] = base
+    path = save_context(updates)
 
     who = (identity or {}).get("email") or "unverified"
     # Never report success without saying whether it was actually checked — an
@@ -391,11 +420,10 @@ def mcp_token_set(
 @mcp_token_app.command("unset")
 def mcp_token_unset() -> None:
     """Remove the stored read-only MCP token."""
-    data = load_file()
-    if data.pop("mcp_token", None) is None:
+    if not load_context().get("mcp_token"):
         print("no mcp_token stored")
         return
-    print(f"removed mcp_token from {save_file(data)}")
+    print(f"removed mcp_token from {save_context({'mcp_token': None})}")
 
 
 @mcp_app.command("headers")
@@ -452,7 +480,7 @@ def _stale_literal_copies(token: str | None) -> list[str]:
 def mcp_status() -> None:
     """Diagnose the MCP credential: where it comes from, whether it still works."""
     settings = resolve(base_url=_conn.base_url)
-    file_token = load_file().get("mcp_token")
+    file_token = load_context().get("mcp_token")
     env_token = os.environ.get("PROBE_MCP_TOKEN")
     token = settings.mcp_token
 
@@ -485,6 +513,366 @@ def mcp_status() -> None:
 
     if state == "rejected":
         raise typer.Exit(1)
+
+# -- context ----------------------------------------------------------------
+context_app = typer.Typer(
+    no_args_is_help=True, help="named local contexts: endpoint + credentials + anchors"
+)
+app.add_typer(context_app, name="context")
+
+
+def _redact(value: str | None) -> str:
+    """Enough of a token to recognize, never enough to use.
+
+    Shows the TAIL, not the head: the head is a shared prefix (`probe_pat_`,
+    `ros_pat_`) that identifies nothing, so leading characters spend secret entropy
+    to say what every token already says. `context list` output ends up in bug
+    reports and CI logs, so this matches `_fingerprint`'s last-4 convention rather
+    than inventing a second, weaker redaction rule.
+    """
+    if not value:
+        return "-"
+    return f"…{value[-4:]}" if len(value) > 8 else "set"
+
+
+def _context_row(name: str, ctx: dict, *, active: bool) -> dict:
+    anchor = ctx.get("workspace") if isinstance(ctx.get("workspace"), dict) else {}
+    return {
+        "name": name,
+        "active": active,
+        "base_url": ctx.get("base_url") or DEFAULT_BASE_URL,
+        "token": _redact(ctx.get("token")),
+        "mcp_token": _redact(ctx.get("mcp_token")),
+        "workspace": anchor.get("id"),
+        "project": anchor.get("project"),
+    }
+
+
+@context_app.command("list")
+def context_list() -> None:
+    """List local contexts. Credentials are shown redacted."""
+    data = load_file()
+    contexts = data.get("contexts") or {}
+    if not contexts:
+        print("no contexts yet — run `probe login`")
+        return
+    active = current_context_name(data)
+    _print_json(
+        [_context_row(n, c or {}, active=n == active) for n, c in sorted(contexts.items())]
+    )
+
+
+@context_app.command("show")
+def context_show(
+    name: str = typer.Argument(None, help="defaults to the active context"),
+) -> None:
+    """Show one context as it will actually resolve, env overrides included."""
+    target = name or current_context_name()
+    ctx = load_context(target)
+    if not ctx and target not in (load_file().get("contexts") or {}):
+        print(f"no such context: {target}", file=sys.stderr)
+        raise typer.Exit(1)
+    row = _context_row(target, ctx, active=target == current_context_name())
+    # Show the resolved view too: an env var silently outranking the file is exactly
+    # the confusion this command exists to end.
+    settings = resolve(context=target)
+    row["resolved"] = {
+        "base_url": settings.base_url,
+        "workspace": settings.workspace,
+        "project": settings.project,
+    }
+    _print_json(row)
+
+
+@context_app.command("use")
+def context_use(name: str = typer.Argument(..., help="context to make active")) -> None:
+    """Switch the active context, creating it empty if it is new."""
+    path = use_context(name)
+    print(f"active context: {name} ({path})")
+
+
+@context_app.command("delete")
+def context_delete(name: str = typer.Argument(..., help="context to remove")) -> None:
+    """Delete a context and its stored credentials."""
+    if name not in (load_file().get("contexts") or {}):
+        print(f"no such context: {name}", file=sys.stderr)
+        raise typer.Exit(1)
+    delete_context(name)
+    print(f"deleted context {name} (active: {current_context_name()})")
+
+
+# -- workspaces -------------------------------------------------------------
+workspace_app = typer.Typer(
+    no_args_is_help=True, help="workspaces — the folders that own projects"
+)
+app.add_typer(workspace_app, name="workspace")
+
+
+def _workspace_row(ws: dict, *, me: str | None) -> dict:
+    """Flatten a workspace for display.
+
+    A workspace is one person's folder now, so "whose is it" is the useful column —
+    not the retired shared/personal split. ``owner_user_id`` is nullable: a legacy
+    null-owner ``shared`` row survives on any install where the retirement script has
+    not run, and a client that assumes an owner would crash on exactly those rows.
+    """
+    owner = ws.get("owner_user_id")
+    if owner is None:
+        whose = "unowned (legacy)"
+    elif me is not None and owner == me:
+        whose = "mine"
+    else:
+        whose = owner
+    return {
+        "id": ws.get("id"),
+        "name": ws.get("name"),
+        "slug": ws.get("slug"),
+        "kind": ws.get("kind"),
+        "whose": whose,
+        "projects": ws.get("project_count", 0),
+    }
+
+
+@workspace_app.command("list")
+def workspace_list(
+    raw: bool = typer.Option(False, "--raw", help="full API objects instead of the summary"),
+) -> None:
+    """List workspaces. Yours sorts first (server order, preserved).
+
+    Not paginated: there is one workspace per team member, so the list is bounded.
+    """
+    with _client() as c:
+        rows = c.list_workspaces()
+        if raw:
+            _print_json(rows)
+            return
+        # Best-effort: labelling "mine" is a nicety, not worth failing the list over.
+        try:
+            me = (c.me() or {}).get("user_id")
+        except errors.RosError:
+            me = None
+    if not rows:
+        # Provisioning is best-effort at onboarding and can silently fail; the next
+        # write provisions one. An empty list is a state, not an error.
+        print("no workspaces yet — one is provisioned on your first write")
+        return
+    _print_json([_workspace_row(w, me=me) for w in rows])
+
+
+@workspace_app.command("get")
+def workspace_get(workspace_id: str = typer.Argument(..., help="workspace id")) -> None:
+    """Show one workspace."""
+    with _client() as c:
+        _print_json(c.get_workspace(workspace_id))
+
+
+@workspace_app.command("rename")
+def workspace_rename(
+    workspace_id: str = typer.Argument(..., help="workspace id"),
+    name: str = typer.Option(..., "--name", help="new display name"),
+) -> None:
+    """Rename a workspace. Name is the only editable field — slug and ownership
+    are server-managed identity."""
+    with _client() as c:
+        _print_json(c.rename_workspace(workspace_id, name))
+
+
+@workspace_app.command("use")
+def workspace_use(
+    workspace_id: str = typer.Argument(..., help="workspace id to make active"),
+) -> None:
+    """Set the active workspace for this context.
+
+    Clears the active project: a project belongs to exactly one workspace, so keeping
+    the old one selected would leave the context pointing at a project that is not in
+    the workspace you just switched to.
+    """
+    with _client() as c:
+        ws = c.get_workspace(workspace_id)
+    save_context({"workspace": {"id": str(ws["id"]), "project": None}})
+    print(f"active workspace: {ws.get('name')} ({ws['id']}) — project cleared")
+
+
+# -- projects ---------------------------------------------------------------
+project_app = typer.Typer(no_args_is_help=True, help="projects — the top of the data model")
+app.add_typer(project_app, name="project")
+
+
+def _resolve_workspace(explicit: str | None) -> str | None:
+    """Explicit flag -> PROBE_WORKSPACE -> context. Never a hidden requirement."""
+    return resolve(workspace=explicit).workspace
+
+
+def _project_id(client: Client, ref: str) -> str:
+    """Accept a project id OR a slug, and return the id.
+
+    Every ``/v1/projects/{project_id}`` route types the path param as a UUID, so a
+    slug reaches the server as a 422 about UUID parsing rather than a lookup. Slugs
+    are the handle people actually remember (they are what `--project` takes on
+    `run start`), so resolve them here instead of making the id the only way in.
+    """
+    try:
+        UUID(ref)
+        return ref
+    except ValueError:
+        pass
+    for row in client.list_projects(limit=200).items:
+        if row.get("slug") == ref:
+            return str(row["id"])
+    # Archived projects are filtered out of the default listing; look again before
+    # claiming it does not exist, so `project restore <slug>` can find its target.
+    for row in client.list_projects(limit=200, include=_INCLUDE_ARCHIVED).items:
+        if row.get("slug") == ref:
+            return str(row["id"])
+    raise typer.BadParameter(f"no project with id or slug {ref!r}")
+
+
+def _project_slug(client: Client, ref: str | None) -> str | None:
+    """The inverse of :func:`_project_id`, for the get-or-create paths.
+
+    ``Client.run`` takes a project *slug* and creates it if absent, so handing it an
+    id creates a junk project whose slug is a UUID string rather than resolving the
+    one you meant. The ambient anchor stores an id (stable across renames), so it has
+    to be translated on the way in — as does an explicit ``--project <uuid>``.
+
+    A non-UUID passes through untouched: it is already a slug, and creating it when
+    missing is the documented behaviour of ``run start``.
+    """
+    if ref is None:
+        return None
+    try:
+        UUID(ref)
+    except ValueError:
+        return ref
+    return client.get_project(ref).get("slug", ref)
+
+
+@project_app.command("create")
+def project_create(
+    slug: str = typer.Argument(..., help="url-safe identifier, unique per tenant"),
+    name: str = typer.Option(None, "--name", help="display name (defaults to the slug)"),
+    description: str = typer.Option(None, "--description"),
+    workspace: str = typer.Option(
+        None, "--workspace", help="workspace id; defaults to the active one"
+    ),
+) -> None:
+    """Create a project.
+
+    This is what the CLI was missing: creating a project used to require starting a run,
+    which forced an experiment and an invented hypothesis into existence alongside it.
+    """
+    with _client() as c:
+        _print_json(
+            c.create_project(
+                slug,
+                name,
+                workspace_id=_resolve_workspace(workspace),
+                description=description,
+            )
+        )
+
+
+@project_app.command("list")
+def project_list(
+    workspace: str = typer.Option(
+        None, "--workspace", help="workspace id; defaults to the active one"
+    ),
+    all_workspaces: bool = typer.Option(
+        False, "--all", help="every workspace you can see (ignores --workspace and context)"
+    ),
+    include_archived: bool = typer.Option(False, "--include-archived"),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+    cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
+) -> None:
+    """List projects in a workspace, or across all of them with --all."""
+    params: dict[str, Any] = {"limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    if include_archived:
+        params["include"] = _INCLUDE_ARCHIVED
+    # Omitting workspace_id IS "all workspaces" — the server has no all-sentinel, so
+    # --all means "send no filter" rather than some magic value.
+    workspace_id = None if all_workspaces else _resolve_workspace(workspace)
+    with _client() as c:
+        page = c.list_projects(workspace_id=workspace_id, **params)
+    _print_json({"items": page.items, "next_cursor": page.next_cursor})
+
+
+@project_app.command("get")
+def project_get(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
+    """Show one project."""
+    with _client() as c:
+        _print_json(c.get_project(_project_id(c, project_id)))
+
+
+@project_app.command("use")
+def project_use(
+    project_id: str = typer.Argument(..., help="project id or slug to make active"),
+) -> None:
+    """Set the active project for this context, so `run start` and friends default to it."""
+    with _client() as c:
+        proj = c.get_project(_project_id(c, project_id))
+    # Pin the project under the workspace that actually owns it, not the ambient one:
+    # selecting a project from another workspace should move the anchor, not create a
+    # mismatched pair. workspace_id is nullable on legacy rows — fall back to ambient.
+    owner = proj.get("workspace_id") or _resolve_workspace(None)
+    save_context({"workspace": {"id": str(owner) if owner else None, "project": str(proj["id"])}})
+    print(f"active project: {proj.get('slug')} ({proj['id']})")
+
+
+@project_app.command("patch")
+def project_patch(
+    project_id: str = typer.Argument(..., help="project id or slug"),
+    name: str = typer.Option(None, "--name"),
+    description: str = typer.Option(None, "--description"),
+    workspace: str = typer.Option(
+        None, "--workspace", help="not here — use `probe project move`"
+    ),
+) -> None:
+    """Update a project's display fields."""
+    if workspace is not None:
+        # Refused on purpose. Re-filing fans out a reindex across every descendant, so
+        # it must be the thing you asked for, not a flag that rode along on an edit.
+        print(
+            "error: --workspace does not belong on `patch` — re-filing a project reindexes\n"
+            "       all of its experiments and runs. Use `probe project move` to do that.",
+            file=sys.stderr,
+        )
+        raise typer.Exit(1)
+    with _client() as c:
+        _print_json(
+            c.update_project(_project_id(c, project_id), name=name, description=description)
+        )
+
+
+@project_app.command("move")
+def project_move(
+    project_id: str = typer.Argument(..., help="project id or slug"),
+    workspace: str = typer.Option(..., "--workspace", help="destination workspace id"),
+) -> None:
+    """Re-file a project into another workspace.
+
+    Reindexes every live descendant experiment and terminal run in the same transaction,
+    because those documents denormalize the workspace. A move to the current workspace
+    is a no-op and skips the fan-out.
+    """
+    with _client() as c:
+        _print_json(c.move_project(_project_id(c, project_id), workspace))
+
+
+@project_app.command("archive")
+def project_archive(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
+    """Hide a project without destroying it. The `default` project cannot be archived."""
+    with _client() as c:
+        _print_json(c.archive_project(_project_id(c, project_id)))
+
+
+@project_app.command("restore")
+def project_restore(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
+    """Un-archive a project."""
+    with _client() as c:
+        _print_json(c.restore_project(_project_id(c, project_id)))
+
 
 # -- tokens -----------------------------------------------------------------
 token_app = typer.Typer(no_args_is_help=True, help="API tokens (probe_pat_...)")
@@ -562,7 +950,9 @@ def run_start(
     ),
     name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
     experiment_name: str = typer.Option(None, "--experiment-name"),
-    project: str = typer.Option(None, "--project"),
+    project: str = typer.Option(
+        None, "--project", help="project slug/id; defaults to the active one (`probe project use`)"
+    ),
     group: str = typer.Option(None, "--group", help="run group id (see `probe group create`)"),
     source: str = typer.Option("api", "--source"),
     external_id: str = typer.Option(None, "--external-id"),
@@ -570,13 +960,19 @@ def run_start(
     tag: list[str] = typer.Option(None, "--tag"),
 ) -> None:
     """Open a run (creating its experiment/project as needed)."""
+    # This is what makes `probe project use` mean something: without it the ambient
+    # project would be stored and displayed but never actually applied to a write.
+    # Explicit flag still wins, so scripts never depend on a developer's context.
+    resolved_project = resolve(project=project).project
     with _client() as c:
         run = c.run(
             experiment=experiment,
             experiment_name=experiment_name,
             hypothesis=hypothesis,
             name=name,
-            project=project,
+            # run() get-or-creates by SLUG, so an id has to be translated first or it
+            # silently creates a second project named after the UUID.
+            project=_project_slug(c, resolved_project),
             group_id=group,
             source=source,
             external_id=external_id,
@@ -794,42 +1190,155 @@ artifact_app = typer.Typer(no_args_is_help=True, help="artifacts")
 app.add_typer(artifact_app, name="artifact")
 
 
+def _pick_anchor(
+    *,
+    run: str | None,
+    project: str | None,
+    experiment: str | None,
+    workspace: str | None,
+    shared: bool,
+) -> tuple[Anchor, str | None]:
+    """Resolve exactly one anchor from the flags, or fail loudly.
+
+    An artifact hangs off exactly one thing (the DB CHECKs it), so two anchors is a
+    mistake worth stopping for rather than silently picking a winner.
+    """
+    chosen = [
+        (Anchor.PROJECT, project),
+        (Anchor.EXPERIMENT, experiment),
+        (Anchor.WORKSPACE, workspace),
+    ]
+    given = [(a, v) for a, v in chosen if v is not None]
+    if shared:
+        given.append((Anchor.SHARED, None))
+    if run is not None:
+        given.append((Anchor.RUN, run))
+    if len(given) > 1:
+        names = ", ".join(f"--{a.value}" if a is not Anchor.RUN else "RUN" for a, _ in given)
+        raise typer.BadParameter(
+            f"an artifact anchors to exactly one thing; got {names}"
+        )
+    if not given:
+        raise typer.BadParameter(
+            "needs an anchor: a RUN argument, or --project/--experiment/--workspace/--shared"
+        )
+    return given[0]
+
+
 @artifact_app.command("add")
 def artifact_add(
-    run: str = typer.Argument(...),
-    path: str = typer.Argument(None),
-    uri: str = typer.Option(None, "--uri"),
+    run: str = typer.Argument(None, help="run id — omit when using an anchor flag"),
+    path: str = typer.Argument(None, help="local file to upload"),
+    uri: str = typer.Option(None, "--uri", help="record a reference to an existing object"),
     name: str = typer.Option(None, "--name"),
-    kind: str = typer.Option("file", "--kind"),
-    step: int = typer.Option(None, "--step"),
+    kind: str = typer.Option("file", "--kind", help="run anchor only"),
+    step: int = typer.Option(None, "--step", help="run anchor only"),
+    content_type: str = typer.Option(None, "--content-type"),
+    project: str = typer.Option(None, "--project", help="anchor to a project"),
+    experiment: str = typer.Option(None, "--experiment", help="anchor to an experiment"),
+    workspace: str = typer.Option(
+        None, "--workspace", help="anchor to a workspace (a file, not an artifact)"
+    ),
+    shared: bool = typer.Option(False, "--shared", help="put it in the team Shared folder"),
 ) -> None:
-    """Record an artifact."""
+    """Record an artifact against a run, project, experiment, workspace, or Shared.
+
+    With a path and no --uri the real upload runs (fingerprint -> presign -> PUT ->
+    confirm). With --uri it records a metadata-only reference, which only the run,
+    project, and experiment anchors support — a file *is* its bytes.
+    """
+    anchored = project or experiment or workspace or shared
+    if anchored:
+        # With an anchor flag there is no RUN, so the single positional is the path.
+        # Shifting here (rather than guessing from the value) keeps `add ./f.bin` and
+        # `add RUN ./f.bin` both unambiguous.
+        if path is not None:
+            # Two positionals means the caller passed RUN *and* an anchor flag. Catch
+            # it here: after the shift below `run` is always None, so _pick_anchor's
+            # two-anchor check can no longer see the RUN and the id would be silently
+            # reinterpreted as a file path (an unhandled FileNotFoundError).
+            raise typer.BadParameter(
+                "an artifact anchors to exactly one thing; got RUN and an anchor flag. "
+                "Drop the RUN argument, or drop the flag."
+            )
+        path, run = run, None
+
+    anchor, anchor_id = _pick_anchor(
+        run=run, project=project, experiment=experiment, workspace=workspace, shared=shared
+    )
+
     resolved = name
     if resolved is None and path:
-        import os
-
         resolved = os.path.basename(path)
     if resolved is None:
         raise typer.BadParameter("artifact needs --name (or a path to derive it from)")
-    with _client() as c:
-        _run_handle(c, run).log_artifact(
-            resolved, path=path, uri=uri, kind=kind, step_index=step
+
+    if anchor is Anchor.RUN:
+        with _client() as c:
+            _run_handle(c, anchor_id).log_artifact(
+                resolved, path=path, uri=uri, kind=kind, step_index=step,
+                content_type=content_type,
+            )
+        print(f"artifact {resolved!r} recorded on {anchor_id}")
+        return
+
+    if step is not None or kind != "file":
+        raise typer.BadParameter(
+            f"--kind/--step are run-only; the {anchor.value} upload contract rejects them"
         )
-    print(f"artifact {resolved!r} recorded on {run}")
+    if uri is not None and anchor in _FILE_ANCHORS:
+        # Caught here rather than in the SDK so it reads as a usage error instead of
+        # an unhandled ValueError traceback: a file IS its bytes, so there is no
+        # reference-without-bytes form and the backend declares no such route.
+        raise typer.BadParameter(
+            f"--uri records a metadata-only reference, which a {anchor.value} file "
+            "cannot be. Pass a local path to upload the bytes instead."
+        )
+    with _client() as c:
+        if uri is not None:
+            body = {"name": resolved, "uri": uri, "is_reference": True}
+            if content_type:
+                body["content_type"] = content_type
+            _print_json(c.create_anchored_reference(anchor, anchor_id, body))
+        else:
+            if not path:
+                raise typer.BadParameter("needs a file path (or --uri)")
+            _print_json(
+                c.upload_file(
+                    anchor, anchor_id, resolved, path, content_type=content_type
+                )
+            )
 
 
 @artifact_app.command("list")
 def artifact_list(
-    run: str = typer.Argument(...),
-    kind: str = typer.Option(None, "--kind"),
-    step_from: int = typer.Option(None, "--step-from"),
-    step_to: int = typer.Option(None, "--step-to"),
+    run: str = typer.Argument(None, help="run id — omit when using an anchor flag"),
+    kind: str = typer.Option(None, "--kind", help="run anchor only"),
+    step_from: int = typer.Option(None, "--step-from", help="run anchor only"),
+    step_to: int = typer.Option(None, "--step-to", help="run anchor only"),
+    project: str = typer.Option(None, "--project"),
+    experiment: str = typer.Option(None, "--experiment"),
+    workspace: str = typer.Option(None, "--workspace"),
+    shared: bool = typer.Option(False, "--shared"),
 ) -> None:
-    """List a run's artifacts (server-filtered): step-window sandbox forensics."""
+    """List artifacts under an anchor. Run listing is server-filtered by step window."""
+    anchor, anchor_id = _pick_anchor(
+        run=run, project=project, experiment=experiment, workspace=workspace, shared=shared
+    )
     with _client() as c:
-        _print_json(
-            c.list_run_artifacts(run, kind=kind, step_from=step_from, step_to=step_to)
-        )
+        if anchor is Anchor.RUN:
+            _print_json(
+                c.list_run_artifacts(
+                    anchor_id, kind=kind, step_from=step_from, step_to=step_to
+                )
+            )
+            return
+        if kind or step_from is not None or step_to is not None:
+            raise typer.BadParameter(
+                f"--kind/--step-from/--step-to are run-only filters; "
+                f"the {anchor.value} listing does not accept them"
+            )
+        _print_json(c.list_anchored(anchor, anchor_id))
 
 
 @artifact_app.command("delete")
@@ -850,6 +1359,82 @@ def artifact_gc_uploads(
     """Sweep abandoned (never-confirmed) uploads. Confirmed artifacts are untouched."""
     with _client() as c:
         _print_json(c.gc_uploads(older_than))
+
+
+# -- shared folder ----------------------------------------------------------
+shared_app = typer.Typer(no_args_is_help=True, help="the team's Shared folder")
+app.add_typer(shared_app, name="shared")
+
+
+@shared_app.command("list")
+def shared_list() -> None:
+    """List the team's Shared files."""
+    with _client() as c:
+        _print_json(c.list_anchored(Anchor.SHARED))
+
+
+@shared_app.command("add")
+def shared_add(
+    path: str = typer.Argument(..., help="local file to upload"),
+    name: str = typer.Option(None, "--name", help="defaults to the file's basename"),
+    content_type: str = typer.Option(None, "--content-type"),
+) -> None:
+    """Upload a file straight into the team's Shared folder."""
+    resolved = name or os.path.basename(path)
+    with _client() as c:
+        _print_json(
+            c.upload_file(Anchor.SHARED, None, resolved, path, content_type=content_type)
+        )
+
+
+@shared_app.command("share")
+def shared_share(
+    artifact_id: str = typer.Argument(..., help="a workspace file id"),
+    replace: bool = typer.Option(
+        False, "--replace", help="supersede a same-named file already in Shared"
+    ),
+) -> None:
+    """Move one of your workspace files into the team's Shared folder.
+
+    A MOVE, not a copy: the file leaves your workspace listing. Ownership transfers
+    and the search index is re-keyed in the same transaction.
+
+    A name already taken in Shared is a 409 — the server never silently supersedes
+    someone else's file. Pass --replace to do it deliberately.
+    """
+    with _client() as c:
+        _print_json(c.share_workspace_file(artifact_id, replace=replace))
+
+
+@shared_app.command("unshare")
+def shared_unshare(
+    artifact_id: str = typer.Argument(..., help="a shared file id"),
+    replace: bool = typer.Option(
+        False, "--replace", help="supersede a same-named file already in your workspace"
+    ),
+) -> None:
+    """Move a Shared file back into your personal workspace."""
+    with _client() as c:
+        _print_json(c.unshare_file(artifact_id, replace=replace))
+
+
+@shared_app.command("download")
+def shared_download(
+    artifact_id: str = typer.Argument(..., help="a shared file id"),
+) -> None:
+    """Print a presigned download URL for a Shared file."""
+    with _client() as c:
+        _print_json(c.download_shared_file(artifact_id))
+
+
+@shared_app.command("delete")
+def shared_delete(
+    artifact_id: str = typer.Argument(..., help="a shared file id"),
+) -> None:
+    """Remove a file from the Shared folder (soft delete; recoverable)."""
+    with _client() as c:
+        c.delete_shared_file(artifact_id)
+    print(f"shared file {artifact_id} deleted")
 
 
 # -- Harbor trial capture (Harbor-ownership Phase 1) --------------------------
@@ -1296,6 +1881,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: invalid {field}: {err['msg']}", file=sys.stderr)
         return 2
     except errors.RosError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # A bad local path is a usage error, not a crash. The upload commands take a
+        # path and hash it before any request, and the anchored path is strict (no
+        # fail-open spool to absorb it), so a typo would otherwise print a traceback.
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except SystemExit as exc:  # defensive: coerce any stray SystemExit to a code

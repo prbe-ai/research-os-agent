@@ -99,9 +99,9 @@ def test_ensure_authenticated_mints_and_persists_token(app, tmp_path, monkeypatc
     assert client.settings.token == "ros_pat_minted"
     assert calls["base_url"] == "http://test"
     # persisted for the next process, same file `probe login` writes
-    from probe.sdk.config import load_file
+    from probe.sdk.config import load_context
 
-    assert load_file()["token"] == "ros_pat_minted"
+    assert load_context()["token"] == "ros_pat_minted"
     # the shared Settings object authenticates the existing transport too
     assert client.me()["email"] == "dev@example.com"
 
@@ -186,9 +186,9 @@ def test_cli_bare_login_runs_device_flow(wired, tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cli_main, "device_login", lambda endpoint, on_prompt=None: "ros_pat_from_device")
     rc = cli.main(["login"])
     assert rc == 0
-    from probe.sdk.config import load_file
+    from probe.sdk.config import load_context
 
-    saved = load_file()
+    saved = load_context()
     assert saved["token"] == "ros_pat_from_device"
     assert "logged in" in capsys.readouterr().out
 
@@ -197,7 +197,7 @@ def test_cli_login_endpoint_only(wired, tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     rc = cli.main(["login", "--endpoint-only", "--base-url", "http://elsewhere"])
     assert rc == 0
-    from probe.sdk.config import load_file
+    from probe.sdk.config import load_context
 
-    assert load_file()["base_url"] == "http://elsewhere"
+    assert load_context()["base_url"] == "http://elsewhere"
     assert "no user token set" in capsys.readouterr().out

@@ -60,6 +60,7 @@ from ._generated.models import (
     TokenOut,
     UploadGcRequest,
     UploadGcResult,
+    ScopedUploadRequest,
     UploadRequest,
     UploadResponse,
 )
@@ -107,6 +108,7 @@ __all__ = [
     "TokenOut",
     "UploadGcRequest",
     "UploadGcResult",
+    "ScopedUploadRequest",
     "UploadRequest",
     "UploadResponse",
 ]

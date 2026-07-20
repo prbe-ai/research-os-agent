@@ -24,6 +24,15 @@
         "title": "AcceptInviteOut",
         "type": "object"
       },
+      "AnchorType": {
+        "description": "What a summary (and a summary_refresh queue row) is about.",
+        "enum": [
+          "project",
+          "experiment"
+        ],
+        "title": "AnchorType",
+        "type": "string"
+      },
       "ArtifactCreate": {
         "properties": {
           "content_hash": {
@@ -186,6 +195,11 @@
             "title": "Name",
             "type": "string"
           },
+          "path": {
+            "default": "",
+            "title": "Path",
+            "type": "string"
+          },
           "project_id": {
             "anyOf": [
               {
@@ -209,6 +223,18 @@
               }
             ],
             "title": "Run Id"
+          },
+          "shared_folder_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Folder Id"
           },
           "size_bytes": {
             "anyOf": [
@@ -1186,6 +1212,18 @@
             "title": "Score",
             "type": "number"
           },
+          "shared_folder_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shared Folder Id"
+          },
           "slug": {
             "anyOf": [
               {
@@ -1749,7 +1787,7 @@
         "type": "object"
       },
       "GitHubInstallationClaim": {
-        "description": "Post-install redirect claim: GitHub sends\n?installation_id=...&state=...&code=... back to the Connect page (Setup\nURL), which POSTs all three here.\n\n`state` is the signed token the install_url carried (team identity).\n`code` is the user-authorization code GitHub adds when the App has\n\"Request user authorization (OAuth) during installation\" enabled --\nexchanged server-side to prove the claiming user ADMINISTERS the\ninstallation (review F1: state alone cannot; installation ids are small\nintegers and the App-JWT lookup proves existence, never ownership).\nAbsent state is a POLICY rejection (422) except for the same-team\nrevival/re-claim path; absent code is a 422 when the server has the App's\nOAuth client creds configured.",
+        "description": "Post-install redirect claim: GitHub sends\n?installation_id=...&state=...&code=... back to the Integrations page (Setup\nURL), which POSTs all three here.\n\n`state` is the signed token the install_url carried (team identity).\n`code` is the user-authorization code GitHub adds when the App has\n\"Request user authorization (OAuth) during installation\" enabled --\nexchanged server-side to prove the claiming user ADMINISTERS the\ninstallation (review F1: state alone cannot; installation ids are small\nintegers and the App-JWT lookup proves existence, never ownership).\nAbsent state is a POLICY rejection (422) except for the same-team\nrevival/re-claim path; absent code is a 422 when the server has the App's\nOAuth client creds configured.",
         "properties": {
           "code": {
             "anyOf": [
@@ -1848,7 +1886,7 @@
         "type": "object"
       },
       "GitHubIntegrationState": {
-        "description": "Server-side integration state the Connect page renders.",
+        "description": "Server-side integration state the Integrations page renders.",
         "enum": [
           "not_configured",
           "available",
@@ -1871,11 +1909,12 @@
         "type": "object"
       },
       "IndexCorpus": {
-        "description": "The /v1/search corpus filter vocabulary (github.* is engine-native).",
+        "description": "The /v1/search corpus filter vocabulary (github.* and claude_code\ntranscript docs are engine-native, not custom-ingest projections).",
         "enum": [
           "experiments",
           "files",
-          "github"
+          "github",
+          "transcripts"
         ],
         "title": "IndexCorpus",
         "type": "string"
@@ -4517,6 +4556,61 @@
         "title": "StepCreate",
         "type": "object"
       },
+      "SummaryState": {
+        "description": "Derived UI state for a summary (badge).",
+        "enum": [
+          "fresh",
+          "generating",
+          "stale",
+          "failed"
+        ],
+        "title": "SummaryState",
+        "type": "string"
+      },
+      "SummaryStatusOut": {
+        "properties": {
+          "anchor_id": {
+            "format": "uuid",
+            "title": "Anchor Id",
+            "type": "string"
+          },
+          "anchor_type": {
+            "$ref": "#/components/schemas/AnchorType"
+          },
+          "attempts": {
+            "title": "Attempts",
+            "type": "integer"
+          },
+          "has_summary": {
+            "title": "Has Summary",
+            "type": "boolean"
+          },
+          "state": {
+            "$ref": "#/components/schemas/SummaryState"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "anchor_type",
+          "anchor_id",
+          "state",
+          "has_summary",
+          "attempts"
+        ],
+        "title": "SummaryStatusOut",
+        "type": "object"
+      },
       "SwitchTeamRequest": {
         "properties": {
           "customer_id": {
@@ -5050,7 +5144,7 @@
         "type": "object"
       },
       "WorkspaceKind": {
-        "description": "The closed workspace kind vocabulary (DB CHECK mirrors this).",
+        "description": "The closed workspace kind vocabulary (mirrors the DB CHECK).\n\n`SHARED` is RETIRED (decision 2026-07-16): app code never creates a shared\nworkspace anymore. It is kept here only so the API can still serialize a\nlegacy null-owner shared row on an existing install until it is retired by\n`app.workspaces.retire_shared` and a future contract migration drops the kind.",
         "enum": [
           "personal",
           "shared"
@@ -5124,6 +5218,22 @@
           "created_at"
         ],
         "title": "WorkspaceOut",
+        "type": "object"
+      },
+      "WorkspacePatch": {
+        "description": "The one user-editable workspace field.\n\nSlugs and ownership are stable server-managed identity. Names are display\nlabels, trimmed at the API boundary so whitespace-only values never reach\nthe database.",
+        "properties": {
+          "name": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "WorkspacePatch",
         "type": "object"
       }
     }
@@ -5896,6 +6006,49 @@
         ]
       }
     },
+    "/ingest/v1/sessions/claude-code": {
+      "post": {
+        "operationId": "ingest_claude_code_session_ingest_v1_sessions_claude_code_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ingest Claude Code Session",
+        "tags": [
+          "ingestion"
+        ]
+      }
+    },
+    "/ingest/v1/sessions/status": {
+      "get": {
+        "description": "The tap's remote killswitch poll. Static true for now; when a whole\ncustomer needs transcript ingestion disabled, THIS is the seam that says\nso (the tap stops sending instead of us 403ing every batch).",
+        "operationId": "claude_code_ingest_status_ingest_v1_sessions_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Claude Code Ingest Status Ingest V1 Sessions Status Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Claude Code Ingest Status",
+        "tags": [
+          "ingestion"
+        ]
+      }
+    },
     "/livez": {
       "get": {
         "operationId": "livez_livez_get",
@@ -6069,7 +6222,7 @@
     },
     "/v1/artifacts/uploads/gc": {
       "post": {
-        "description": "Purge abandoned pending uploads older than `older_than` (owner/admin). DB rows\nonly -- R2 blob GC stays OFF (a pending row has no confirmed object).",
+        "description": "Prune terminal 'failed' uploads older than `older_than` (owner/admin) -- the\nmanual second stage of the reaper's mark-then-prune. A 'failed' row is already\nHEAD-verified absent + past the grace window, so deleting it is safe; a 'pending'\nrow can be a LIVE in-flight upload and is NEVER swept here (that was the pre-\nauto-confirm behavior -- the reaper now transitions abandoned pending -> failed).\nDB rows only -- R2 blob GC stays OFF.",
         "operationId": "sweep_orphan_uploads_v1_artifacts_uploads_gc_post",
         "requestBody": {
           "content": {
@@ -6227,6 +6380,51 @@
           }
         },
         "summary": "Presign Download",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
+    "/v1/artifacts/{artifact_id}/preview": {
+      "get": {
+        "description": "Relay a bounded, allowlisted R2 blob as inert bytes for UI previews.",
+        "operationId": "preview_artifact_v1_artifacts__artifact_id__preview_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Bounded inert artifact bytes for an authenticated preview"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Preview Artifact",
         "tags": [
           "artifacts"
         ]
@@ -6978,6 +7176,7 @@
     },
     "/v1/experiments/{experiment_id}/artifacts": {
       "get": {
+        "description": "``prefix`` scopes to one folder and everything under it (S3 prefix\nsemantics over the derived ``path``); omit it for the whole experiment.\n``limit`` is opt-in \u2014 this endpoint has always been unbounded, and capping it\nsilently would truncate existing callers with no way for them to notice.",
         "operationId": "list_experiment_artifacts_v1_experiments__experiment_id__artifacts_get",
         "parameters": [
           {
@@ -6988,6 +7187,40 @@
               "format": "uuid",
               "title": "Experiment Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Prefix"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           }
         ],
@@ -7369,6 +7602,104 @@
         ]
       }
     },
+    "/v1/experiments/{experiment_id}/summary/generate": {
+      "post": {
+        "operationId": "generate_experiment_summary_v1_experiments__experiment_id__summary_generate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "See regenerate_project_summary.",
+            "in": "query",
+            "name": "immediate",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "See regenerate_project_summary.",
+              "title": "Immediate",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Experiment Summary",
+        "tags": [
+          "summaries"
+        ]
+      }
+    },
+    "/v1/experiments/{experiment_id}/summary/status": {
+      "get": {
+        "operationId": "experiment_summary_status_v1_experiments__experiment_id__summary_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Experiment Summary Status",
+        "tags": [
+          "summaries"
+        ]
+      }
+    },
     "/v1/experiments/{experiment_id}/versions": {
       "get": {
         "operationId": "list_versions_v1_experiments__experiment_id__versions_get",
@@ -7710,6 +8041,73 @@
         ]
       }
     },
+    "/v1/integrations/ingestion": {
+      "get": {
+        "operationId": "ingestion_stats_v1_integrations_ingestion_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ingestion Stats V1 Integrations Ingestion Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ingestion Stats",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
+    "/v1/integrations/{source}/backfill": {
+      "get": {
+        "operationId": "get_backfill_status_v1_integrations__source__backfill_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "title": "Source",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Backfill Status V1 Integrations  Source  Backfill Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Backfill Status",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/v1/me": {
       "get": {
         "description": "The authenticated caller: identity + resolved tenant, role, and scopes.\n\n`require_scopes()` with no required scope accepts any authenticated principal,\nso this works for a session cookie, a `ros_pat`, or an OAuth access token.",
@@ -8026,6 +8424,7 @@
     },
     "/v1/projects/{project_id}/artifacts": {
       "get": {
+        "description": "``prefix`` scopes to one folder and everything under it (S3 prefix\nsemantics over the derived ``path``); omit it for the whole project.\n``limit`` is opt-in \u2014 this endpoint has always been unbounded, and capping it\nsilently would truncate existing callers with no way for them to notice.",
         "operationId": "list_project_artifacts_v1_projects__project_id__artifacts_get",
         "parameters": [
           {
@@ -8036,6 +8435,40 @@
               "format": "uuid",
               "title": "Project Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Prefix"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           }
         ],
@@ -8215,6 +8648,104 @@
         "summary": "Restore Project",
         "tags": [
           "projects"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/summary/regenerate": {
+      "post": {
+        "operationId": "regenerate_project_summary_v1_projects__project_id__summary_regenerate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "True (manual click): fire ASAP. False (client auto-refresh on visit): use the debounce window so a burst of visitors to an always-stale active project coalesces to one generation per staleness ceiling instead of one paid generation per visit.",
+            "in": "query",
+            "name": "immediate",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "True (manual click): fire ASAP. False (client auto-refresh on visit): use the debounce window so a burst of visitors to an always-stale active project coalesces to one generation per staleness ceiling instead of one paid generation per visit.",
+              "title": "Immediate",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Regenerate Project Summary",
+        "tags": [
+          "summaries"
+        ]
+      }
+    },
+    "/v1/projects/{project_id}/summary/status": {
+      "get": {
+        "operationId": "project_summary_status_v1_projects__project_id__summary_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Project Summary Status",
+        "tags": [
+          "summaries"
         ]
       }
     },
@@ -8503,7 +9034,7 @@
     },
     "/v1/runs/{run_id}/artifacts": {
       "get": {
-        "description": "List a run's artifacts, optionally filtered by kind and/or step range.\n\n``kind`` matches the normalized (lowercased) column. Step bounds are\ninclusive and compare against ``step_index``, so rows with no step are\nexcluded whenever either bound is set (SQL NULL comparison) \u2014 exactly what\nstep-scoped forensics (\"sandbox state at steps 599..601\") wants.",
+        "description": "List a run's artifacts, optionally filtered by kind, step range, or folder.\n\n``kind`` matches the normalized (lowercased) column. Step bounds are\ninclusive and compare against ``step_index``, so rows with no step are\nexcluded whenever either bound is set (SQL NULL comparison) \u2014 exactly what\nstep-scoped forensics (\"sandbox state at steps 599..601\") wants.\n\n``prefix`` scopes to one folder and everything under it (S3 prefix semantics\nover the derived ``path``): ``prefix=outputs`` returns ``outputs/loss.csv``\nand ``outputs/plots/fig.png``, but not ``config.json``. Omit it for the whole\nrun. ``limit`` is opt-in and left unset by default: this endpoint has always\nbeen unbounded, and capping it silently would truncate existing callers'\nresults with no way for them to notice.",
         "operationId": "list_artifacts_v1_runs__run_id__artifacts_get",
         "parameters": [
           {
@@ -8562,6 +9093,40 @@
                 }
               ],
               "title": "Step To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Prefix"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           }
         ],
@@ -9487,6 +10052,299 @@
         ]
       }
     },
+    "/v1/shared/files": {
+      "get": {
+        "description": "The team's Shared files: flat, name-ordered, live COMPLETE rows only\n(names with slashes imply folders -- the same tree convention as the\nworkspace-file/artifact explorer). Team-wide: every member sees all of them.\nA read never provisions the folder -- until the first share/upload the list\nis simply empty.\n\n``prefix`` scopes to one folder and everything under it (S3 prefix semantics\nover the derived ``path``, 0029); ``limit`` is the opt-in sanity cap -- the\nsame folder-scoping its workspace-file sibling has, so both file surfaces\nbehave identically.",
+        "operationId": "list_shared_files_v1_shared_files_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Prefix"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactOut"
+                  },
+                  "title": "Response List Shared Files V1 Shared Files Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Shared Files",
+        "tags": [
+          "shared-files"
+        ]
+      }
+    },
+    "/v1/shared/files/uploads": {
+      "post": {
+        "description": "Presign a direct upload INTO the team Shared folder (reuses the workspace-\nfile presign->confirm rails, anchored on shared_folder_id). The folder is\nauto-provisioned on this first write.",
+        "operationId": "presign_shared_file_upload_v1_shared_files_uploads_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScopedUploadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Presign Shared File Upload",
+        "tags": [
+          "shared-files"
+        ]
+      }
+    },
+    "/v1/shared/files/{artifact_id}": {
+      "delete": {
+        "description": "Soft-delete a Shared file (idempotent-safe: absent/already-deleted/not-a-\nshared-file -> 404). Tombstones the index doc in the same tx (D9). The R2\nblob is left in place (deferred gc).",
+        "operationId": "delete_shared_file_v1_shared_files__artifact_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Shared File",
+        "tags": [
+          "shared-files"
+        ]
+      }
+    },
+    "/v1/shared/files/{artifact_id}/confirm": {
+      "post": {
+        "description": "Confirm a Shared-file upload (anchor-aware confirm; identical swap\nsemantics to a workspace file).",
+        "operationId": "confirm_shared_file_upload_v1_shared_files__artifact_id__confirm_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Confirm Shared File Upload",
+        "tags": [
+          "shared-files"
+        ]
+      }
+    },
+    "/v1/shared/files/{artifact_id}/download": {
+      "get": {
+        "description": "Presigned GET for a Shared file (tenant-prefix verified, like the generic\nartifact download). 404 unless the artifact is a live Shared-folder file.",
+        "operationId": "download_shared_file_v1_shared_files__artifact_id__download_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Shared File",
+        "tags": [
+          "shared-files"
+        ]
+      }
+    },
+    "/v1/shared/files/{artifact_id}/unshare": {
+      "post": {
+        "description": "Reverse of share: move a Shared file back into the CALLER's personal\nworkspace (provisioned on first need). Symmetric re-anchor + index re-key +\nname-collision handling: 409 by default, `replace=true` supersedes the prior\npersonal-workspace file atomically.",
+        "operationId": "unshare_file_v1_shared_files__artifact_id__unshare_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "replace",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Replace",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unshare File",
+        "tags": [
+          "shared-files"
+        ]
+      }
+    },
     "/v1/spans/{span_id}": {
       "get": {
         "description": "Flat single-GET (D9). Hidden when its run is soft-deleted.",
@@ -9647,6 +10505,60 @@
         ]
       }
     },
+    "/v1/workspace-files/{artifact_id}/share": {
+      "post": {
+        "description": "OWNERSHIP TRANSFER: move a personal-workspace file into the team Shared\nfolder. In ONE tenant tx: re-anchor (workspace_id -> shared_folder_id),\nenforce the shared active-name uniqueness, and RE-KEY the search index\n(tombstone the old `workspace:<id>` doc + upsert the new `shared:<customer>`\ndoc, SAME file:<id> doc id). Provenance is preserved.\n\nPermissions posture (deferred-permissions): ANY WRITE-scope team member may\nshare ANY personal-workspace file -- ownership is not checked; only WRITE\nscope + a currently workspace-anchored artifact. A run/experiment/project\nartifact is NOT a file and cannot be shared (422).\n\nName collision in the Shared folder: 409 by default (never auto-supersede);\npass `replace=true` to atomically supersede the prior shared file (the same\nconfirm-time swap the artifacts rails already use).",
+        "operationId": "share_workspace_file_v1_workspace_files__artifact_id__share_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "replace",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Replace",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Share Workspace File",
+        "tags": [
+          "shared-files"
+        ]
+      }
+    },
     "/v1/workspaces": {
       "get": {
         "operationId": "list_workspaces_v1_workspaces_get",
@@ -9713,11 +10625,63 @@
         "tags": [
           "workspaces"
         ]
+      },
+      "patch": {
+        "description": "Rename the caller's own personal workspace.\n\nTenant RLS is necessary but not sufficient here: every member can see the\nteam's filing locations, but a person's workspace label belongs to that\nperson. The owner predicate makes teammate, legacy-shared, foreign, and\nmissing targets the same 404.",
+        "operationId": "patch_workspace_v1_workspaces__workspace_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspacePatch"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Workspace",
+        "tags": [
+          "workspaces"
+        ]
       }
     },
     "/v1/workspaces/{workspace_id}/files": {
       "get": {
-        "description": "Flat, name-ordered live COMPLETE files; names with slashes imply folders\n(the existing explorer contract builds the tree client-side). Pending rows\nare staged replacements/first uploads (review F14) -- hidden here so a\nmid-upload replacement never shadows or duplicates the live version.",
+        "description": "Flat, name-ordered live COMPLETE files; names with slashes imply folders\n(the existing explorer contract builds the tree client-side). Pending rows\nare staged replacements/first uploads (review F14) -- hidden here so a\nmid-upload replacement never shadows or duplicates the live version.\n\n``prefix`` scopes to one folder and everything under it (S3 prefix semantics\nover the derived ``path``, 0029); omit it for the whole workspace. The flat,\nname-ordered contract is unchanged -- prefix narrows the rows, it does not\nreshape them into a tree.",
         "operationId": "list_workspace_files_v1_workspaces__workspace_id__files_get",
         "parameters": [
           {
@@ -9728,6 +10692,40 @@
               "format": "uuid",
               "title": "Workspace Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "prefix",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Prefix"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           }
         ],

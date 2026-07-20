@@ -15,7 +15,7 @@ import json
 import pytest
 
 from probe import cli
-from probe.sdk.config import config_path, load_file
+from probe.sdk.config import config_path, load_context
 from tests.conftest import make_client
 
 # `probe.cli.main` the function shadows `probe.cli.main` the module on the package.
@@ -43,7 +43,7 @@ def wired(app, tmp_path, monkeypatch):
 
 
 def _stored() -> str | None:
-    return load_file().get("mcp_token")
+    return load_context().get("mcp_token")
 
 
 # -- rotation: the reported bug ---------------------------------------------
@@ -62,9 +62,11 @@ def test_rotating_replaces_the_token_and_leaves_no_stale_copy(wired, capsys):
 def test_rotation_does_not_disturb_the_write_token(wired):
     from probe.sdk.config import save_file
 
+    # Deliberately a FLAT v1 file: this doubles as a migration guard, since the write
+    # token has to survive being folded into a context by the first v2 save.
     save_file({"base_url": "http://test", "token": "probe_pat_WRITE"})
     cli.main(["mcp", "token", "set", "--token", "probe_pat_READ"])
-    data = load_file()
+    data = load_context()
     assert data["token"] == "probe_pat_WRITE"  # separate credential, untouched
     assert data["mcp_token"] == "probe_pat_READ"
 
