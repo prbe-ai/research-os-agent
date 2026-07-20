@@ -23,3 +23,6 @@ jobs:
       # tests/test_parity.py is the contract guard: it fails when a backend route in
       # schema/openapi.json has no client call site (or when the allowlists go stale).
       - run: pytest -q
+      # probe-research-tap plugin tests (stdlib-only; own pyproject, so the root
+      # pytest run does not collect them — see also `make test-tap`).
+      - run: pytest -q plugins/probe-research-tap/tests
