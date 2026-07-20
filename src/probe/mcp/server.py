@@ -27,7 +27,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ..sdk.client import Client
-from ..sdk.config import load_file, resolve
+from ..sdk.config import load_context, resolve
 from .service import ResearchReadService
 from .source import ResearchOSSource
 
@@ -66,7 +66,7 @@ def _service_from_token() -> ResearchReadService:
     ``probe mcp token set`` stores. Client and source are memoized per token
     (the service itself is a stateless wrapper); the lock only guards the maps —
     a racing double-probe inside the source is idempotent and accepted."""
-    token = _token_var.get() or _env("MCP_TOKEN") or load_file().get("mcp_token")
+    token = _token_var.get() or _env("MCP_TOKEN") or load_context().get("mcp_token")
     with _factory_lock:
         source = _sources.get(token)
         if source is None:

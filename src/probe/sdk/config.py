@@ -8,6 +8,8 @@ Env vars:
   PROBE_MCP_TOKEN     a read-only token for the MCP surface (see mcp_token below)
   PROBE_INGEST_TOKEN  an ingest token (ros_ing_...) for /ingest
   PROBE_HMAC_SECRET   optional shared secret for the X-Signature body HMAC on /ingest
+  PROBE_WORKSPACE     the active workspace id, overriding the context file
+  PROBE_PROJECT       the active project id/slug, overriding the context file
 
 Config file: $XDG_CONFIG_HOME/probe/config.json (default ~/.config/probe/config.json),
 written by ``probe login``. ``probe login --device`` captures the token via the browser
@@ -17,6 +19,33 @@ handoff; ``probe login --token`` is the air-gap-friendly paste path.
 read-only, so it holds a ``scopes:['read']`` token that cannot write even if it leaks
 (it is handed to an MCP client, which is a wider blast radius than the CLI). Nothing
 falls back from one to the other — ``probe mcp token set`` writes it.
+
+Shape (v2)
+----------
+The file holds *named contexts*, kubectl-style, so one machine can address several
+endpoints or tenants without re-running ``login``::
+
+    {
+      "version": 2,
+      "current_context": "default",
+      "contexts": {
+        "default": {
+          "base_url": "...", "token": "...", "mcp_token": "...",
+          "workspace": {"id": "<uuid>", "project": "<uuid-or-slug>"}
+        }
+      }
+    }
+
+**The active project nests *inside* ``workspace`` rather than sitting beside it.** That
+makes "a project from workspace A while workspace B is active" unrepresentable instead of
+merely invalid: ``workspace use`` replaces the whole object, so a project cannot outlive
+the workspace it belongs to. No validation code, because the bad state has no encoding.
+Two workspace+project pairs at once? That is what a second *context* is for.
+
+v1 (a flat ``{base_url, token, ...}``) is migrated **in memory on read**. Reads never
+write the file back: a read-only command must not rewrite a config that may be symlinked
+into a dotfiles repo (``save_file`` resolves symlinks for the same reason). The file is
+rewritten in v2 the next time something genuinely saves.
 """
 
 from __future__ import annotations
@@ -29,6 +58,21 @@ from pathlib import Path
 
 DEFAULT_BASE_URL = "https://api.research.prbe.ai"
 
+CONFIG_VERSION = 2
+DEFAULT_CONTEXT = "default"
+
+# Per-context credential/endpoint keys. Used to migrate a v1 file and to decide what
+# `clear_context` strips — anything outside this set is somebody else's key and is left
+# alone rather than silently dropped on the floor.
+_CONTEXT_KEYS = (
+    "base_url",
+    "token",
+    "mcp_token",
+    "ingest_token",
+    "hmac_secret",
+    "workspace",
+)
+
 
 def config_path() -> Path:
     base = os.environ.get("XDG_CONFIG_HOME")
@@ -36,14 +80,55 @@ def config_path() -> Path:
     return root / "probe" / "config.json"
 
 
+def _migrate(data: dict) -> dict:
+    """Return ``data`` in v2 shape. Pure — never touches disk."""
+    if not data:
+        return {}
+    if isinstance(data.get("contexts"), dict):
+        data.setdefault("version", CONFIG_VERSION)
+        data.setdefault("current_context", DEFAULT_CONTEXT)
+        return data
+    # v1: a flat credential blob. Everything in it belongs to one context. Carry
+    # unrecognized keys across too — a key we do not know about is more likely a newer
+    # client's than junk, and dropping credentials on read would be unrecoverable.
+    return {
+        "version": CONFIG_VERSION,
+        "current_context": DEFAULT_CONTEXT,
+        "contexts": {DEFAULT_CONTEXT: dict(data)},
+    }
+
+
 def load_file() -> dict:
+    """The raw config file, migrated to v2 in memory. ``{}`` when absent/unreadable."""
     path = config_path()
     if not path.exists():
         return {}
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
+    if not isinstance(data, dict):
+        return {}
+    return _migrate(data)
+
+
+def current_context_name(data: dict | None = None) -> str:
+    data = load_file() if data is None else data
+    return data.get("current_context") or DEFAULT_CONTEXT
+
+
+def load_context(name: str | None = None) -> dict:
+    """The flat credential dict for one context. ``{}`` when it does not exist.
+
+    This is what callers that used to read ``load_file()`` for a credential want;
+    ``load_file()`` now means "the whole file, every context".
+    """
+    data = load_file()
+    contexts = data.get("contexts")
+    if not isinstance(contexts, dict):
+        return {}
+    ctx = contexts.get(name or current_context_name(data))
+    return ctx if isinstance(ctx, dict) else {}
 
 
 def save_file(data: dict) -> Path:
@@ -71,6 +156,72 @@ def save_file(data: dict) -> Path:
     return path
 
 
+def save_context(updates: dict, *, name: str | None = None) -> Path:
+    """Merge ``updates`` into one context and persist the whole file.
+
+    Read-modify-write of the *file*, so saving one context never drops another. A key
+    set to None is removed, which is how a credential gets cleared without clearing
+    its neighbours.
+    """
+    data = load_file() or {
+        "version": CONFIG_VERSION,
+        "current_context": DEFAULT_CONTEXT,
+        "contexts": {},
+    }
+    data.setdefault("contexts", {})
+    target = name or current_context_name(data)
+    ctx = dict(data["contexts"].get(target) or {})
+    for key, value in updates.items():
+        if value is None:
+            ctx.pop(key, None)
+        else:
+            ctx[key] = value
+    data["contexts"][target] = ctx
+    data["current_context"] = data.get("current_context") or target
+    data["version"] = CONFIG_VERSION
+    return save_file(data)
+
+
+def use_context(name: str) -> Path:
+    """Make ``name`` active, creating it empty if it does not exist yet."""
+    data = load_file() or {"version": CONFIG_VERSION, "contexts": {}}
+    data.setdefault("contexts", {}).setdefault(name, {})
+    data["current_context"] = name
+    data["version"] = CONFIG_VERSION
+    return save_file(data)
+
+
+def delete_context(name: str) -> Path:
+    """Drop a context. Clearing the active one leaves ``current_context`` dangling,
+    so fall back to whatever remains (or the default name) to keep the file coherent."""
+    data = load_file()
+    contexts = data.get("contexts") or {}
+    contexts.pop(name, None)
+    data["contexts"] = contexts
+    if data.get("current_context") == name:
+        data["current_context"] = next(iter(contexts), DEFAULT_CONTEXT)
+    return save_file(data)
+
+
+def clear_context(name: str | None = None) -> Path:
+    """Strip credentials from one context, leaving other contexts untouched.
+
+    ``probe logout`` used to delete the whole file. With named contexts that is wrong:
+    logging out of staging would silently sign you out of prod too.
+    """
+    data = load_file()
+    contexts = data.get("contexts")
+    if not isinstance(contexts, dict):
+        return config_path()
+    target = name or current_context_name(data)
+    if target in contexts:
+        contexts[target] = {
+            k: v for k, v in contexts[target].items() if k not in _CONTEXT_KEYS
+        }
+    data["contexts"] = contexts
+    return save_file(data)
+
+
 def clear_file() -> None:
     path = config_path()
     try:
@@ -86,6 +237,8 @@ class Settings:
     mcp_token: str | None = None
     ingest_token: str | None = None
     hmac_secret: str | None = None
+    workspace: str | None = None
+    project: str | None = None
 
 
 def resolve(
@@ -95,10 +248,18 @@ def resolve(
     mcp_token: str | None = None,
     ingest_token: str | None = None,
     hmac_secret: str | None = None,
+    workspace: str | None = None,
+    project: str | None = None,
+    context: str | None = None,
 ) -> Settings:
     """Merge explicit args, env, and the config file into one Settings object."""
-    file = load_file()
+    file = load_context(context)
+    anchor = file.get("workspace") if isinstance(file.get("workspace"), dict) else {}
     return Settings(
+        # PROBE_BASE_URL outranks the context file and must keep doing so: the hosted
+        # MCP pods set it (deploy/mcp/k8s.yaml) to the in-cluster service, and a context
+        # that could outrank it would point production at the wrong API — while /healthz
+        # still returned 200. tests/test_config_contexts.py guards this ordering.
         base_url=(
             base_url
             or os.environ.get("PROBE_BASE_URL")
@@ -115,4 +276,8 @@ def resolve(
         hmac_secret=(
             hmac_secret or os.environ.get("PROBE_HMAC_SECRET") or file.get("hmac_secret")
         ),
+        # Ambient anchors are a convenience, never a requirement: an explicit flag or an
+        # env var always wins, so scripts and CI never depend on a developer's context.
+        workspace=workspace or os.environ.get("PROBE_WORKSPACE") or anchor.get("id"),
+        project=project or os.environ.get("PROBE_PROJECT") or anchor.get("project"),
     )

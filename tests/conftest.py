@@ -29,6 +29,24 @@ def _no_live_token_verification(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PROBE_MCP_VERIFY_TOKEN", "0")
 
 
+@pytest.fixture(autouse=True)
+def _isolate_config_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> None:
+    """Point every test's config at a throwaway dir — no exceptions.
+
+    ``config_path()`` resolves ``$XDG_CONFIG_HOME/probe/config.json`` and falls back to
+    ``~/.config``. Only a handful of tests used to pin the env var, so any *other* test
+    that reached config — directly or through ``resolve()`` — read the developer's real
+    credential file. That was survivable while the config was read-mostly. It stops being
+    survivable once ``load_file()`` migrates shapes: a bug in that path would rewrite a
+    real ``~/.config/probe/config.json``, and the tokens in it are not recoverable.
+
+    Autouse and unconditional, so isolation is the default rather than something each new
+    test has to remember. Tests that need their own config dir still set the var
+    themselves; setting it again inside the test simply wins over this one.
+    """
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg-config")))
+
+
 _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")
 _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
 _RUN_SERIES = re.compile(r"^/v1/runs/([^/]+)/series$")
@@ -39,15 +57,93 @@ _RUN_ITEM = re.compile(r"^/v1/runs/([^/]+)$")
 _EXP_RUNS = re.compile(r"^/v1/experiments/([^/]+)/runs$")
 _EXP_ITEM = re.compile(r"^/v1/experiments/([^/]+)$")
 _PROJ_ITEM = re.compile(r"^/v1/projects/([^/]+)$")
+_WS_ITEM = re.compile(r"^/v1/workspaces/([^/]+)$")
+_WS_FILES = re.compile(r"^/v1/workspaces/([^/]+)/files$")
+_WS_FILE_UPLOADS = re.compile(r"^/v1/workspaces/([^/]+)/files/uploads$")
+_PROJ_ARTIFACTS = re.compile(r"^/v1/projects/([^/]+)/artifacts$")
+_PROJ_ARTIFACT_UPLOADS = re.compile(r"^/v1/projects/([^/]+)/artifacts/uploads$")
+_EXP_ARTIFACTS = re.compile(r"^/v1/experiments/([^/]+)/artifacts$")
+_EXP_ARTIFACT_UPLOADS = re.compile(r"^/v1/experiments/([^/]+)/artifacts/uploads$")
+_PROJ_ARCHIVE = re.compile(r"^/v1/projects/([^/]+)/archive$")
+_PROJ_RESTORE = re.compile(r"^/v1/projects/([^/]+)/restore$")
+_SHARED_FILE_ITEM = re.compile(r"^/v1/shared/files/([^/]+)$")
+_SHARED_FILE_SUB = re.compile(r"^/v1/shared/files/([^/]+)/(confirm|download|unshare)$")
+_WS_FILE_SHARE = re.compile(r"^/v1/workspace-files/([^/]+)/share$")
+
+#: Must match the user_id the fake's /v1/me reports, or "mine" never resolves.
+_ME = "00000000-0000-0000-0000-000000000001"
+_WS_MINE = "11111111-1111-1111-1111-111111111111"
+_WS_OTHER = "22222222-2222-2222-2222-222222222222"
+_T0 = "2026-01-01T00:00:00Z"
+#: The tenant's undeletable fallback project — archiving it is a 409, as on the server.
+_DEFAULT_SLUG = "default"
 
 
 class FakeApp:
+    def _find_artifact(self, artifact_id: str) -> dict | None:
+        """One artifact by id, whatever it hangs off — the fake's echo of the server's
+        single anchor-aware confirm/delete core."""
+        for rows in self.artifacts.values():
+            for row in rows:
+                if row.get("id") == artifact_id:
+                    return row
+        return None
+
+    def _presign(self, anchor: str, anchor_id: str, body: dict):
+        """The shared presign leg for the non-run anchors.
+
+        `have` (the server already holds these bytes) means no PUT. For a file anchor
+        the swap to live also already happened, so the row comes back complete.
+        """
+        content_hash = body["content_hash"]
+        artifact_id = str(uuid.uuid4())
+        have = content_hash in self.uploaded
+        row = {
+            "id": artifact_id,
+            "name": body["name"],
+            "content_hash": content_hash,
+            "size_bytes": body.get("size_bytes"),
+            "content_type": body.get("content_type"),
+            "status": "complete" if have else "pending",
+            "is_reference": False,
+            f"{anchor}_id": anchor_id,
+        }
+        self.artifacts.setdefault(f"{anchor}:{anchor_id}", []).append(row)
+        return httpx.Response(201, json={
+            "artifact_id": artifact_id,
+            "have": have,
+            "upload_url": None if have else f"http://r2.test/put/{artifact_id}",
+            "key": f"lab-42/{artifact_id}",
+            "upload_headers": getattr(self, "upload_headers", {}),
+        })
+
     def __init__(self):
         self.requests: list[httpx.Request] = []
         self.runs: dict[str, dict] = {}
         self.experiments: dict[str, dict] = {}
         self.projects: dict[str, dict] = {}
+        # Two personal workspaces so "mine first" ordering and the not-mine display
+        # branch are both exercisable. `owner_user_id=None` + kind="shared" is the
+        # legacy retired row that must still deserialize — see WorkspaceKind.
+        self.workspaces: dict[str, dict] = {
+            _WS_MINE: {
+                "id": _WS_MINE, "customer_id": "lab-42", "name": "Mine",
+                "slug": "mine", "kind": "personal", "owner_user_id": _ME,
+                "project_count": 0, "created_at": _T0, "archived_at": None,
+            },
+            _WS_OTHER: {
+                "id": _WS_OTHER, "customer_id": "lab-42", "name": "Teammate",
+                "slug": "teammate", "kind": "personal", "owner_user_id": "user-other",
+                "project_count": 0, "created_at": _T0, "archived_at": None,
+            },
+        }
+        # Artifacts are keyed by an anchor key ("run:<id>", "project:<id>", ...) so the
+        # one confirm handler can find a row whatever it hangs off, exactly like the
+        # server's single confirm core.
         self.artifacts: dict[str, list[dict]] = {}
+        # Re-index fan-outs triggered by a project move, so a test can assert the
+        # descendant reprojection actually fired.
+        self.reindexed: list[str] = []
         self.tokens: dict[str, dict] = {}
         self.groups: dict[str, dict] = {}
         self.series: dict[str, list[dict]] = {}
@@ -154,12 +250,49 @@ class FakeApp:
                     },
                 )
             pid = str(uuid.uuid4())
-            row = {"id": pid, "slug": body["slug"], "name": body.get("name", body["slug"])}
+            row = {
+                "id": pid,
+                "slug": body["slug"],
+                "name": body.get("name", body["slug"]),
+                "customer_id": "lab-42",
+                # Present-but-nullable, exactly like ProjectOut: it IS in `required`
+                # and typed anyOf[uuid, null], because legacy rows predate workspaces.
+                "workspace_id": body.get("workspace_id"),
+                "description": body.get("description"),
+                "metadata": body.get("metadata") or {},
+                "created_at": _T0,
+                "archived_at": None,
+            }
             self.projects[pid] = row
             return httpx.Response(201, json=row)
 
         if path == "/v1/projects" and method == "GET":
-            return httpx.Response(200, json=list(self.projects.values()))
+            rows = list(self.projects.values())
+            wanted = request.url.params.get("workspace_id")
+            if wanted:
+                rows = [r for r in rows if r.get("workspace_id") == wanted]
+            if request.url.params.get("include") != "archived":
+                rows = [r for r in rows if r.get("archived_at") is None]
+            return httpx.Response(200, json=rows)
+
+        m = _PROJ_ARCHIVE.match(path)
+        if m and method == "POST":
+            pid = m.group(1)
+            if pid not in self.projects:
+                return httpx.Response(404, json={"detail": "not found"})
+            row = self.projects[pid]
+            if row["slug"] == _DEFAULT_SLUG:
+                return httpx.Response(409, json={"detail": "the default project cannot be archived"})
+            row["archived_at"] = _T0
+            return httpx.Response(200, json=row)
+
+        m = _PROJ_RESTORE.match(path)
+        if m and method == "POST":
+            pid = m.group(1)
+            if pid not in self.projects:
+                return httpx.Response(404, json={"detail": "not found"})
+            self.projects[pid]["archived_at"] = None
+            return httpx.Response(200, json=self.projects[pid])
 
         m = _PROJ_ITEM.match(path)
         if m and method == "GET":
@@ -167,6 +300,64 @@ class FakeApp:
             if pid not in self.projects:
                 return httpx.Response(404, json={"detail": "not found"})
             return httpx.Response(200, json=self.projects[pid])
+
+        m = _PROJ_ITEM.match(path)
+        if m and method == "PATCH":
+            pid = m.group(1)
+            if pid not in self.projects:
+                return httpx.Response(404, json={"detail": "not found"})
+            row = self.projects[pid]
+            if "workspace_id" in body:
+                dest = body["workspace_id"]
+                if dest not in self.workspaces:
+                    # A rejected VALUE, not a missing resource: 422, never 404.
+                    return httpx.Response(422, json={"detail": "unknown workspace"})
+                # Fan out to descendants ONLY when the workspace actually changes —
+                # their documents denormalize workspace_id, so they must reproject.
+                if row.get("workspace_id") != dest:
+                    row["workspace_id"] = dest
+                    for eid, exp in self.experiments.items():
+                        if exp.get("project_id") == pid and not exp.get("archived_at"):
+                            self.reindexed.append(eid)
+                    for rid, run in self.runs.items():
+                        if run.get("project_id") == pid:
+                            self.reindexed.append(rid)
+            for field in ("name", "description", "metadata"):
+                if body.get(field) is not None:
+                    row[field] = body[field]
+            return httpx.Response(200, json=row)
+
+        # -- workspaces --
+        if path == "/v1/workspaces" and method == "GET":
+            # Server order: the caller's own first, then everyone else's alphabetically.
+            # A retired null-owner row sorts as "not mine" and never first.
+            rows = sorted(
+                self.workspaces.values(),
+                key=lambda w: (w.get("owner_user_id") != _ME, w.get("name") or ""),
+            )
+            for row in rows:
+                row["project_count"] = sum(
+                    1 for p in self.projects.values() if p.get("workspace_id") == row["id"]
+                )
+            return httpx.Response(200, json=rows)
+
+        m = _WS_ITEM.match(path)
+        if m and method == "GET":
+            wid = m.group(1)
+            if wid not in self.workspaces:
+                return httpx.Response(404, json={"detail": "not found"})
+            return httpx.Response(200, json=self.workspaces[wid])
+
+        m = _WS_ITEM.match(path)
+        if m and method == "PATCH":
+            wid = m.group(1)
+            if wid not in self.workspaces:
+                return httpx.Response(404, json={"detail": "not found"})
+            name = (body.get("name") or "").strip()
+            if not name:
+                return httpx.Response(422, json={"detail": "name must not be blank"})
+            self.workspaces[wid]["name"] = name
+            return httpx.Response(200, json=self.workspaces[wid])
 
         if path == "/v1/experiments" and method == "POST":
             if self.experiment_conflict_id:
@@ -608,6 +799,95 @@ class FakeApp:
                 "key": f"lab-42/{aid}",
                 "upload_headers": getattr(self, "upload_headers", {}),
             })
+        # -- the other three anchors: project / experiment / workspace / shared --
+        # ScopedUploadRequest is declared extra="forbid", so anything run-only that
+        # reaches here is a 422 — the client is supposed to have refused it first, and
+        # this is what proves the client actually does.
+        for pattern, anchor in (
+            (_PROJ_ARTIFACT_UPLOADS, "project"),
+            (_EXP_ARTIFACT_UPLOADS, "experiment"),
+            (_WS_FILE_UPLOADS, "workspace"),
+        ):
+            m = pattern.match(path)
+            if m and method == "POST":
+                extras = sorted(
+                    set(body) - {"name", "content_hash", "size_bytes", "content_type"}
+                )
+                if extras:
+                    return httpx.Response(
+                        422, json={"detail": f"extra fields not permitted: {extras}"}
+                    )
+                return self._presign(anchor, m.group(1), body)
+        if path == "/v1/shared/files/uploads" and method == "POST":
+            extras = sorted(set(body) - {"name", "content_hash", "size_bytes", "content_type"})
+            if extras:
+                return httpx.Response(422, json={"detail": f"extra fields not permitted: {extras}"})
+            return self._presign("shared", "team", body)
+
+        for pattern, anchor in (
+            (_PROJ_ARTIFACTS, "project"),
+            (_EXP_ARTIFACTS, "experiment"),
+        ):
+            m = pattern.match(path)
+            if m and method == "POST":
+                aid = str(uuid.uuid4())
+                row = {
+                    "id": aid, "name": body["name"], "uri": body.get("uri"),
+                    "is_reference": bool(body.get("is_reference")),
+                    "kind": body.get("kind") or "file", "status": "complete",
+                    f"{anchor}_id": m.group(1),
+                }
+                self.artifacts.setdefault(f"{anchor}:{m.group(1)}", []).append(row)
+                return httpx.Response(201, json=row)
+            if m and method == "GET":
+                return httpx.Response(
+                    200, json=self.artifacts.get(f"{anchor}:{m.group(1)}", [])
+                )
+
+        m = _WS_FILES.match(path)
+        if m and method == "GET":
+            return httpx.Response(200, json=self.artifacts.get(f"workspace:{m.group(1)}", []))
+
+        if path == "/v1/shared/files" and method == "GET":
+            return httpx.Response(200, json=self.artifacts.get("shared:team", []))
+
+        m = _SHARED_FILE_SUB.match(path)
+        if m and method in ("POST", "GET"):
+            aid, verb = m.group(1), m.group(2)
+            row = self._find_artifact(aid)
+            if row is None:
+                return httpx.Response(404, json={"detail": "not found"})
+            if verb == "download":
+                return httpx.Response(200, json={"download_url": f"http://r2.test/get/{aid}"})
+            if verb == "confirm":
+                row["status"] = "complete"
+                return httpx.Response(200, json=row)
+            # unshare: a MOVE back to the caller's personal workspace, not a copy.
+            self.artifacts.get("shared:team", []).remove(row)
+            self.artifacts.setdefault(f"workspace:{_WS_MINE}", []).append(row)
+            return httpx.Response(200, json=row)
+
+        m = _SHARED_FILE_ITEM.match(path)
+        if m and method == "DELETE":
+            row = self._find_artifact(m.group(1))
+            if row is None:
+                return httpx.Response(404, json={"detail": "not found"})
+            self.artifacts.get("shared:team", []).remove(row)
+            return httpx.Response(204)
+
+        m = _WS_FILE_SHARE.match(path)
+        if m and method == "POST":
+            aid = m.group(1)
+            row = self._find_artifact(aid)
+            if row is None:
+                return httpx.Response(404, json={"detail": "not found"})
+            # Ownership-transfer MOVE: it leaves the workspace listing entirely.
+            for key, rows in self.artifacts.items():
+                if key.startswith("workspace:") and row in rows:
+                    rows.remove(row)
+            self.artifacts.setdefault("shared:team", []).append(row)
+            return httpx.Response(200, json=row)
+
         if path.startswith("/put/") and method == "PUT":
             self.puts.append(path)
             self.put_headers.append(dict(request.headers))

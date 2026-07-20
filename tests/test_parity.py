@@ -278,44 +278,51 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
     # Inbound webhook: GitHub POSTs here (HMAC-verified), the `probe` client never
     # calls it. Structurally not a client surface, like the liveness probes.
     ("POST", "/webhooks/github"): "inbound GitHub webhook; server receives, client never calls",
+    # GitHub knowledge-connector management. DECISION (2026-07-16): never CLI surface.
+    # The CLI interacts with our own data; installing a connector is a browser OAuth
+    # flow, and connector admin lives in the dashboard alongside team admin.
+    ("GET", "/v1/integrations/github"): "connector admin; dashboard surface (2026-07-16 decision)",
+    ("POST", "/v1/integrations/github/installations"): "browser OAuth install flow; dashboard surface",
+    ("DELETE", "/v1/integrations/github/installations/{}"): "connector admin; dashboard surface",
+    ("GET", "/v1/integrations/ingestion"): "connector status for the dashboard's Integrations page",
+    ("GET", "/v1/integrations/{}/backfill"): "backfill progress for a dashboard spinner; carries no data the CLI lacks",
+    # Summary generation machinery. DECISION (2026-07-16, re-verified 2026-07-17 against
+    # the v0.9.1.0 one-shot rewrite): these carry NO data. The generated summary persists
+    # to `projects.metadata.research_summary` and `experiments.summary`, both already
+    # readable through ProjectOut/ExperimentOut, which ARE wired. The routes are async
+    # (202 + enqueue) whose fresh/generating/stale states drive a dashboard spinner, and
+    # a `probe summary` group would invent a noun outside project->experiment->run.
+    ("POST", "/v1/projects/{}/summary/regenerate"): "async generation machinery; the summary itself is on ProjectOut",
+    ("GET", "/v1/projects/{}/summary/status"): "dashboard spinner state; carries no data",
+    ("POST", "/v1/experiments/{}/summary/generate"): "async generation machinery; the summary itself is on ExperimentOut",
+    ("GET", "/v1/experiments/{}/summary/status"): "dashboard spinner state; carries no data",
+    # Relays bounded, allowlisted blob bytes inline for the dashboard's file viewer.
+    # The CLI's door to real bytes is GET /v1/artifacts/{}/download, which IS wired.
+    ("GET", "/v1/artifacts/{}/preview"): "inline UI viewer relay; the CLI uses /download",
+    # Reached by the probe-research-tap PLUGIN (plugins/probe-research-tap/tap/), not by
+    # the SDK/CLI under src/probe/ that this file scans. The tap builds its URLs by
+    # concatenation, so they cannot resolve here — but it pins both paths in its own
+    # tests (tests/test_base_url.py, tests/test_killswitch.py), so they stay guarded.
+    ("POST", "/ingest/v1/sessions/claude-code"): "tap plugin surface; path pinned by the tap's own tests",
+    ("GET", "/ingest/v1/sessions/status"): "tap plugin killswitch; path pinned by the tap's own tests",
 }
 
 # --------------------------------------------------------------------------
 # Allowlist 2: TEMPORARY debt. Routes we intend to reach but have not yet.
 # --------------------------------------------------------------------------
-# All of these are entangled with the in-flight workspaces + KB fold-in, which makes
-# `ProjectOut.workspace_id` required and adds a 4th artifact anchor (workspace). They
-# are deliberately deferred so the `probe project` group and the artifact anchor
-# generalization are each designed ONCE against the final model, rather than built now
-# and reworked. Tracked in tasks/probe-workspace-context-handoff.md.
-# The workspaces + KB fold-in (backend PR #42/#43) also shipped the workspace surface
-# itself, federated search, and the GitHub knowledge-connector. These are all part of
-# that same program and belong to the workspaces client pass — NOT permanently
-# not-our-job. Whether the GitHub-integration management (ADMIN-scoped, browser OAuth
-# install flow) is CLI surface or dashboard-only is a decision for THAT pass to make,
-# so it sits in PENDING rather than being pre-declared permanent here.
-_CONNECTORS = "workspaces + KB connector pass — see tasks/probe-workspace-context-handoff.md"
-_WORKSPACES = "deferred to the workspaces pass — see tasks/probe-workspace-context-handoff.md"
-
-PENDING: dict[Op, str] = {
-    ("PATCH", "/v1/projects/{}"): _WORKSPACES,
-    ("POST", "/v1/projects/{}/archive"): _WORKSPACES,
-    ("POST", "/v1/projects/{}/restore"): _WORKSPACES,
-    ("POST", "/v1/projects/{}/artifacts"): _WORKSPACES,
-    ("GET", "/v1/projects/{}/artifacts"): _WORKSPACES,
-    ("POST", "/v1/projects/{}/artifacts/uploads"): _WORKSPACES,
-    ("POST", "/v1/experiments/{}/artifacts"): _WORKSPACES,
-    ("POST", "/v1/experiments/{}/artifacts/uploads"): _WORKSPACES,
-    # Workspace surface (the switchable axis) + federated search.
-    ("GET", "/v1/workspaces"): _WORKSPACES,
-    ("GET", "/v1/workspaces/{}"): _WORKSPACES,
-    ("GET", "/v1/workspaces/{}/files"): _WORKSPACES,
-    ("POST", "/v1/workspaces/{}/files/uploads"): _WORKSPACES,
-    # GitHub knowledge-connector management (READ status + ADMIN install/uninstall).
-    ("GET", "/v1/integrations/github"): _CONNECTORS,
-    ("POST", "/v1/integrations/github/installations"): _CONNECTORS,
-    ("DELETE", "/v1/integrations/github/installations/{}"): _CONNECTORS,
-}
+# EMPTY, and that is the point — every route the backend declares is now either
+# reachable from the client or permanently and explicitly not our job.
+#
+# It held 15 entries until the workspace-context pass (2026-07-20): the 12 workspace
+# and project-anchor routes were wired (`probe workspace`, `probe project`, and the
+# anchor-generalized `probe artifact add`), and the 3 GitHub-connector routes were
+# resolved to a permanent decision rather than left pending — they moved up into
+# NOT_CLIENT_SURFACE with their reasoning.
+#
+# Keep this dict. An empty debt ledger is the healthy state, not a dead structure:
+# the next backend fold that lands ahead of the client goes here, with a pointer to
+# what will close it, instead of being quietly absorbed into "not our job".
+PENDING: dict[Op, str] = {}
 
 _ALLOWED: dict[Op, str] = {**NOT_CLIENT_SURFACE, **PENDING}
 

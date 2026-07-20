@@ -20,6 +20,15 @@ class AcceptInviteOut(BaseModel):
     role: Role = Field(..., title='Role')
 
 
+class AnchorType(StrEnum):
+    """
+    What a summary (and a summary_refresh queue row) is about.
+    """
+
+    project = 'project'
+    experiment = 'experiment'
+
+
 class ArtifactCreate(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
@@ -44,8 +53,10 @@ class ArtifactOut(BaseModel):
     kind: str = Field(..., title='Kind')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
+    path: str | None = Field('', title='Path')
     project_id: UUID | None = Field(None, title='Project Id')
     run_id: UUID | None = Field(None, title='Run Id')
+    shared_folder_id: UUID | None = Field(None, title='Shared Folder Id')
     size_bytes: int | None = Field(None, title='Size Bytes')
     span_id: UUID | None = Field(None, title='Span Id')
     status: str | None = Field('complete', title='Status')
@@ -341,7 +352,7 @@ class State(RootModel[str]):
 class GitHubInstallationClaim(BaseModel):
     """
     Post-install redirect claim: GitHub sends
-    ?installation_id=...&state=...&code=... back to the Connect page (Setup
+    ?installation_id=...&state=...&code=... back to the Integrations page (Setup
     URL), which POSTs all three here.
 
     `state` is the signed token the install_url carried (team identity).
@@ -369,7 +380,7 @@ class GitHubInstallationOut(BaseModel):
 
 class GitHubIntegrationState(StrEnum):
     """
-    Server-side integration state the Connect page renders.
+    Server-side integration state the Integrations page renders.
     """
 
     not_configured = 'not_configured'
@@ -379,12 +390,14 @@ class GitHubIntegrationState(StrEnum):
 
 class IndexCorpus(StrEnum):
     """
-    The /v1/search corpus filter vocabulary (github.* is engine-native).
+    The /v1/search corpus filter vocabulary (github.* and claude_code
+    transcript docs are engine-native, not custom-ingest projections).
     """
 
     experiments = 'experiments'
     files = 'files'
     github = 'github'
+    transcripts = 'transcripts'
 
 
 class IngestArtifact(BaseModel):
@@ -789,6 +802,26 @@ class StepCreate(BaseModel):
     summary: dict[str, Any] | None = Field(None, title='Summary')
 
 
+class SummaryState(StrEnum):
+    """
+    Derived UI state for a summary (badge).
+    """
+
+    fresh = 'fresh'
+    generating = 'generating'
+    stale = 'stale'
+    failed = 'failed'
+
+
+class SummaryStatusOut(BaseModel):
+    anchor_id: UUID = Field(..., title='Anchor Id')
+    anchor_type: AnchorType
+    attempts: int = Field(..., title='Attempts')
+    has_summary: bool = Field(..., title='Has Summary')
+    state: SummaryState
+    updated_at: AwareDatetime | None = Field(None, title='Updated At')
+
+
 class SwitchTeamRequest(BaseModel):
     customer_id: str = Field(..., title='Customer Id')
 
@@ -930,7 +963,12 @@ class ValidationError(BaseModel):
 
 class WorkspaceKind(StrEnum):
     """
-    The closed workspace kind vocabulary (DB CHECK mirrors this).
+    The closed workspace kind vocabulary (mirrors the DB CHECK).
+
+    `SHARED` is RETIRED (decision 2026-07-16): app code never creates a shared
+    workspace anymore. It is kept here only so the API can still serialize a
+    legacy null-owner shared row on an existing install until it is retired by
+    `app.workspaces.retire_shared` and a future contract migration drops the kind.
     """
 
     personal = 'personal'
@@ -951,6 +989,18 @@ class WorkspaceOut(BaseModel):
     owner_user_id: str | None = Field(None, title='Owner User Id')
     project_count: int | None = Field(0, title='Project Count')
     slug: str = Field(..., title='Slug')
+
+
+class WorkspacePatch(BaseModel):
+    """
+    The one user-editable workspace field.
+
+    Slugs and ownership are stable server-managed identity. Names are display
+    labels, trimmed at the API boundary so whitespace-only values never reach
+    the database.
+    """
+
+    name: str = Field(..., max_length=120, min_length=1, title='Name')
 
 
 class Scopes(RootModel[list[Scope]]):
@@ -992,6 +1042,7 @@ class ExactHit(BaseModel):
     project_id: UUID | None = Field(None, title='Project Id')
     run_id: UUID | None = Field(None, title='Run Id')
     score: float = Field(..., title='Score')
+    shared_folder_id: UUID | None = Field(None, title='Shared Folder Id')
     slug: str | None = Field(None, title='Slug')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
 
