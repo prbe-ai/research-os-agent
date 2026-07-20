@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # plugin, the `probe-research-mcp` binaries, and mcp.research.prbe.ai. The import
 # name (`probe`) and the CLI binary (`probe`) are unchanged.
 name = "probe-research"
-version = "0.6.0"
+version = "0.7.0"
 description = "CLI + SDK + read-only MCP client for Probe Research (experiment tracking)."
 readme = "README.md"
 requires-python = ">=3.11"
