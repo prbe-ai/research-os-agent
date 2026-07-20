@@ -9,7 +9,6 @@ Every method maps onto a real v4 endpoint (Probe Research v0.4.0.0 ingestion fol
 
 from __future__ import annotations
 
-import hashlib
 import os
 import sys
 import warnings
@@ -30,6 +29,7 @@ from ..models import (
     UploadRequest,
 )
 from .config import Settings, resolve
+from .hashing import fingerprint
 from .spool import Spool
 from .transport import Page, Transport
 
@@ -57,22 +57,11 @@ _SCOPED_ANCHORS = frozenset(
     {Anchor.EXPERIMENT, Anchor.PROJECT, Anchor.WORKSPACE, Anchor.SHARED}
 )
 
-#: Anchors addressed as "files" rather than "artifacts". Their identity is
+#: Anchors addressed as "files" rather than "artifacts": their identity is
 #: (anchor, name) rather than (anchor, name, content_hash), so re-uploading a name
-#: REPLACES it via a confirm-time swap instead of adding a second version.
+#: REPLACES it via a confirm-time swap instead of adding a second version. They also
+#: have no metadata-only form — a file is its bytes.
 _FILE_ANCHORS = frozenset({Anchor.WORKSPACE, Anchor.SHARED})
-
-
-def fingerprint(path: str) -> tuple[str, int]:
-    """(sha256 hex, size) for a local file, streamed so a large artifact does not
-    have to fit in memory. Lowercase hex — the server 422s on anything else."""
-    digest = hashlib.sha256()
-    size = 0
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-            size += len(chunk)
-    return digest.hexdigest(), size
 
 
 class Client:
@@ -460,25 +449,47 @@ class Client:
         # returns an already-complete row unchanged (uploads_router.py `_confirm_pending_row`
         # is explicitly idempotent), so this costs one call and buys a single uniform
         # return shape — the stored artifact — across every anchor.
-        return self.transport.post(f"/v1/artifacts/{presign['artifact_id']}/confirm", None)
-
-    def delete_artifact(self, artifact_id: str) -> None:
-        """Soft-delete an artifact or file. Recoverable; blob GC stays off."""
-        self.transport.delete(f"/v1/artifacts/{artifact_id}")
+        try:
+            return self.transport.post(
+                f"/v1/artifacts/{presign['artifact_id']}/confirm", None
+            )
+        except errors.NotFoundError:
+            if not presign.get("have"):
+                raise
+            # `have` means the bytes were already stored and, for a file anchor, already
+            # swapped live. A concurrent replace of the same (anchor, name) can then
+            # soft-delete this row before the confirm reads it. The upload succeeded;
+            # failing here would report a phantom error for work the server did.
+            return presign
 
     # -- shared folder ------------------------------------------------------
-    def share_workspace_file(self, artifact_id: str) -> dict:
+    def share_workspace_file(self, artifact_id: str, *, replace: bool = False) -> dict:
         """Move a workspace file into the team's Shared folder.
 
         A MOVE, not a copy: ownership transfers and the search index is re-keyed in the
         same transaction, so the file leaves your workspace listing when it lands in
         Shared.
-        """
-        return self.transport.post(f"/v1/workspace-files/{artifact_id}/share", None)
 
-    def unshare_file(self, artifact_id: str) -> dict:
-        """Move a Shared file back into the caller's personal workspace."""
-        return self.transport.post(f"/v1/shared/files/{artifact_id}/unshare", None)
+        A name collision in the destination is a 409 by default — the server never
+        auto-supersedes someone else's file. ``replace=True`` atomically supersedes
+        the prior one, which has to be asked for explicitly.
+        """
+        return self.transport.request(
+            "POST",
+            f"/v1/workspace-files/{artifact_id}/share",
+            params={"replace": replace} if replace else None,
+        ).json()
+
+    def unshare_file(self, artifact_id: str, *, replace: bool = False) -> dict:
+        """Move a Shared file back into the caller's personal workspace.
+
+        Same collision rule as :meth:`share_workspace_file`, in the other direction.
+        """
+        return self.transport.request(
+            "POST",
+            f"/v1/shared/files/{artifact_id}/unshare",
+            params={"replace": replace} if replace else None,
+        ).json()
 
     def download_shared_file(self, artifact_id: str) -> dict:
         """Presigned download URL for a Shared file."""

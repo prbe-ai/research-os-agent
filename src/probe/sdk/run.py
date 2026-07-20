@@ -19,7 +19,6 @@ byte uploads and reference artifacts label identically — no gaps flagged.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import subprocess
 import sys
@@ -30,6 +29,7 @@ from uuid import UUID, uuid4
 
 from . import errors
 from . import snapshot as _snapshot
+from .hashing import fingerprint
 from ..models import (
     ArtifactCreate,
     ExecutionRecordCreate,
@@ -476,11 +476,6 @@ class Run:
         self.finish("failed" if exc_type else "completed")
 
 
-def _fingerprint(path: str) -> tuple[str, int]:
-    h = hashlib.sha256()
-    size = 0
-    with open(path, "rb") as fh:
-        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
-            h.update(chunk)
-            size += len(chunk)
-    return h.hexdigest(), size
+#: One definition, shared with the anchored-upload path in sdk/client.py — the hash
+#: is part of the wire contract, so two copies could silently diverge.
+_fingerprint = fingerprint

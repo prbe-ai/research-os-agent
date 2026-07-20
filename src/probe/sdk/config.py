@@ -215,9 +215,11 @@ def clear_context(name: str | None = None) -> Path:
         return config_path()
     target = name or current_context_name(data)
     if target in contexts:
-        contexts[target] = {
-            k: v for k, v in contexts[target].items() if k not in _CONTEXT_KEYS
-        }
+        # Wipe, do not subtract known keys. Removing only what `_CONTEXT_KEYS` lists
+        # would fail OPEN: `_migrate` deliberately carries unrecognized keys across
+        # (they are more likely a newer client's than junk), so a credential this
+        # version has never heard of would survive every logout.
+        contexts[target] = {}
     data["contexts"] = contexts
     return save_file(data)
 

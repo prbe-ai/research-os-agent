@@ -23,13 +23,14 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import typer
 from pydantic import ValidationError
 
 from .. import __version__, errors
 from ..models import Scope
-from ..sdk.client import Anchor, Client
+from ..sdk.client import _FILE_ANCHORS, Anchor, Client
 from ..sdk.config import (
     DEFAULT_BASE_URL,
     clear_context,
@@ -521,10 +522,17 @@ app.add_typer(context_app, name="context")
 
 
 def _redact(value: str | None) -> str:
-    """Enough of a token to recognize, never enough to use."""
+    """Enough of a token to recognize, never enough to use.
+
+    Shows the TAIL, not the head: the head is a shared prefix (`probe_pat_`,
+    `ros_pat_`) that identifies nothing, so leading characters spend secret entropy
+    to say what every token already says. `context list` output ends up in bug
+    reports and CI logs, so this matches `_fingerprint`'s last-4 convention rather
+    than inventing a second, weaker redaction rule.
+    """
     if not value:
         return "-"
-    return f"{value[:12]}…" if len(value) > 12 else "set"
+    return f"…{value[-4:]}" if len(value) > 8 else "set"
 
 
 def _context_row(name: str, ctx: dict, *, active: bool) -> dict:
@@ -695,6 +703,50 @@ def _resolve_workspace(explicit: str | None) -> str | None:
     return resolve(workspace=explicit).workspace
 
 
+def _project_id(client: Client, ref: str) -> str:
+    """Accept a project id OR a slug, and return the id.
+
+    Every ``/v1/projects/{project_id}`` route types the path param as a UUID, so a
+    slug reaches the server as a 422 about UUID parsing rather than a lookup. Slugs
+    are the handle people actually remember (they are what `--project` takes on
+    `run start`), so resolve them here instead of making the id the only way in.
+    """
+    try:
+        UUID(ref)
+        return ref
+    except ValueError:
+        pass
+    for row in client.list_projects(limit=200).items:
+        if row.get("slug") == ref:
+            return str(row["id"])
+    # Archived projects are filtered out of the default listing; look again before
+    # claiming it does not exist, so `project restore <slug>` can find its target.
+    for row in client.list_projects(limit=200, include=_INCLUDE_ARCHIVED).items:
+        if row.get("slug") == ref:
+            return str(row["id"])
+    raise typer.BadParameter(f"no project with id or slug {ref!r}")
+
+
+def _project_slug(client: Client, ref: str | None) -> str | None:
+    """The inverse of :func:`_project_id`, for the get-or-create paths.
+
+    ``Client.run`` takes a project *slug* and creates it if absent, so handing it an
+    id creates a junk project whose slug is a UUID string rather than resolving the
+    one you meant. The ambient anchor stores an id (stable across renames), so it has
+    to be translated on the way in — as does an explicit ``--project <uuid>``.
+
+    A non-UUID passes through untouched: it is already a slug, and creating it when
+    missing is the documented behaviour of ``run start``.
+    """
+    if ref is None:
+        return None
+    try:
+        UUID(ref)
+    except ValueError:
+        return ref
+    return client.get_project(ref).get("slug", ref)
+
+
 @project_app.command("create")
 def project_create(
     slug: str = typer.Argument(..., help="url-safe identifier, unique per tenant"),
@@ -750,7 +802,7 @@ def project_list(
 def project_get(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
     """Show one project."""
     with _client() as c:
-        _print_json(c.get_project(project_id))
+        _print_json(c.get_project(_project_id(c, project_id)))
 
 
 @project_app.command("use")
@@ -759,7 +811,7 @@ def project_use(
 ) -> None:
     """Set the active project for this context, so `run start` and friends default to it."""
     with _client() as c:
-        proj = c.get_project(project_id)
+        proj = c.get_project(_project_id(c, project_id))
     # Pin the project under the workspace that actually owns it, not the ambient one:
     # selecting a project from another workspace should move the anchor, not create a
     # mismatched pair. workspace_id is nullable on legacy rows — fall back to ambient.
@@ -788,7 +840,9 @@ def project_patch(
         )
         raise typer.Exit(1)
     with _client() as c:
-        _print_json(c.update_project(project_id, name=name, description=description))
+        _print_json(
+            c.update_project(_project_id(c, project_id), name=name, description=description)
+        )
 
 
 @project_app.command("move")
@@ -803,21 +857,21 @@ def project_move(
     is a no-op and skips the fan-out.
     """
     with _client() as c:
-        _print_json(c.move_project(project_id, workspace))
+        _print_json(c.move_project(_project_id(c, project_id), workspace))
 
 
 @project_app.command("archive")
 def project_archive(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
     """Hide a project without destroying it. The `default` project cannot be archived."""
     with _client() as c:
-        _print_json(c.archive_project(project_id))
+        _print_json(c.archive_project(_project_id(c, project_id)))
 
 
 @project_app.command("restore")
 def project_restore(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
     """Un-archive a project."""
     with _client() as c:
-        _print_json(c.restore_project(project_id))
+        _print_json(c.restore_project(_project_id(c, project_id)))
 
 
 # -- tokens -----------------------------------------------------------------
@@ -896,7 +950,9 @@ def run_start(
     ),
     name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
     experiment_name: str = typer.Option(None, "--experiment-name"),
-    project: str = typer.Option(None, "--project"),
+    project: str = typer.Option(
+        None, "--project", help="project slug/id; defaults to the active one (`probe project use`)"
+    ),
     group: str = typer.Option(None, "--group", help="run group id (see `probe group create`)"),
     source: str = typer.Option("api", "--source"),
     external_id: str = typer.Option(None, "--external-id"),
@@ -904,13 +960,19 @@ def run_start(
     tag: list[str] = typer.Option(None, "--tag"),
 ) -> None:
     """Open a run (creating its experiment/project as needed)."""
+    # This is what makes `probe project use` mean something: without it the ambient
+    # project would be stored and displayed but never actually applied to a write.
+    # Explicit flag still wins, so scripts never depend on a developer's context.
+    resolved_project = resolve(project=project).project
     with _client() as c:
         run = c.run(
             experiment=experiment,
             experiment_name=experiment_name,
             hypothesis=hypothesis,
             name=name,
-            project=project,
+            # run() get-or-creates by SLUG, so an id has to be translated first or it
+            # silently creates a second project named after the UUID.
+            project=_project_slug(c, resolved_project),
             group_id=group,
             source=source,
             external_id=external_id,
@@ -1191,8 +1253,13 @@ def artifact_add(
         # Shifting here (rather than guessing from the value) keeps `add ./f.bin` and
         # `add RUN ./f.bin` both unambiguous.
         if path is not None:
+            # Two positionals means the caller passed RUN *and* an anchor flag. Catch
+            # it here: after the shift below `run` is always None, so _pick_anchor's
+            # two-anchor check can no longer see the RUN and the id would be silently
+            # reinterpreted as a file path (an unhandled FileNotFoundError).
             raise typer.BadParameter(
-                "too many arguments: with an anchor flag, pass only the file path"
+                "an artifact anchors to exactly one thing; got RUN and an anchor flag. "
+                "Drop the RUN argument, or drop the flag."
             )
         path, run = run, None
 
@@ -1218,6 +1285,14 @@ def artifact_add(
     if step is not None or kind != "file":
         raise typer.BadParameter(
             f"--kind/--step are run-only; the {anchor.value} upload contract rejects them"
+        )
+    if uri is not None and anchor in _FILE_ANCHORS:
+        # Caught here rather than in the SDK so it reads as a usage error instead of
+        # an unhandled ValueError traceback: a file IS its bytes, so there is no
+        # reference-without-bytes form and the backend declares no such route.
+        raise typer.BadParameter(
+            f"--uri records a metadata-only reference, which a {anchor.value} file "
+            "cannot be. Pass a local path to upload the bytes instead."
         )
     with _client() as c:
         if uri is not None:
@@ -1315,23 +1390,32 @@ def shared_add(
 @shared_app.command("share")
 def shared_share(
     artifact_id: str = typer.Argument(..., help="a workspace file id"),
+    replace: bool = typer.Option(
+        False, "--replace", help="supersede a same-named file already in Shared"
+    ),
 ) -> None:
     """Move one of your workspace files into the team's Shared folder.
 
     A MOVE, not a copy: the file leaves your workspace listing. Ownership transfers
     and the search index is re-keyed in the same transaction.
+
+    A name already taken in Shared is a 409 — the server never silently supersedes
+    someone else's file. Pass --replace to do it deliberately.
     """
     with _client() as c:
-        _print_json(c.share_workspace_file(artifact_id))
+        _print_json(c.share_workspace_file(artifact_id, replace=replace))
 
 
 @shared_app.command("unshare")
 def shared_unshare(
     artifact_id: str = typer.Argument(..., help="a shared file id"),
+    replace: bool = typer.Option(
+        False, "--replace", help="supersede a same-named file already in your workspace"
+    ),
 ) -> None:
     """Move a Shared file back into your personal workspace."""
     with _client() as c:
-        _print_json(c.unshare_file(artifact_id))
+        _print_json(c.unshare_file(artifact_id, replace=replace))
 
 
 @shared_app.command("download")
@@ -1797,6 +1881,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: invalid {field}: {err['msg']}", file=sys.stderr)
         return 2
     except errors.RosError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        # A bad local path is a usage error, not a crash. The upload commands take a
+        # path and hash it before any request, and the anchored path is strict (no
+        # fail-open spool to absorb it), so a typo would otherwise print a traceback.
         print(f"error: {exc}", file=sys.stderr)
         return 1
     except SystemExit as exc:  # defensive: coerce any stray SystemExit to a code

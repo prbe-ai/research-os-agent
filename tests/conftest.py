@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import uuid
+from pathlib import Path
 
 import httpx
 import pytest
@@ -43,8 +44,27 @@ def _isolate_config_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> N
     Autouse and unconditional, so isolation is the default rather than something each new
     test has to remember. Tests that need their own config dir still set the var
     themselves; setting it again inside the test simply wins over this one.
+
+    HOME is redirected too, and the post-condition is asserted on the way out: the env
+    var is only half the resolution (``config_path()`` falls back to ``Path.home()``),
+    so a test that does ``monkeypatch.delenv("XDG_CONFIG_HOME")`` — a pattern that
+    already exists in this repo — would silently re-point every write at the real
+    credential file. The assert turns that into a failed test instead.
+
+    The check is "did it escape to the REAL home", not "is it under my tmp dir":
+    plenty of tests legitimately point at a tmp dir of their own choosing, and only
+    reaching the developer's actual credentials is the failure worth catching.
     """
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path_factory.mktemp("xdg-config")))
+    real_home = Path.home().resolve()
+    root = tmp_path_factory.mktemp("xdg-config")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(root))
+    monkeypatch.setenv("HOME", str(root))
+    yield
+    from probe.sdk.config import config_path
+
+    assert real_home not in config_path().resolve().parents, (
+        f"config isolation was defeated: {config_path()} is inside the real home"
+    )
 
 
 _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")
