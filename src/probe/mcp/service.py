@@ -26,12 +26,14 @@ from .contract import (
 from .source import ResearchOSSource
 
 # Tool corpora vocabulary -> backend /v1/search `corpus` values. Experiments are
-# always searched (the tool's core corpus); transcripts have no backend corpus
-# yet and are reported as a missing kb_corpora capability.
+# always searched (the tool's core corpus). Transcripts now have a backend corpus
+# (POST /v1/search accepts and defaults to it), so the tool maps them through
+# instead of degrading them to an unsupported kb_corpora miss.
 _CORPORA_TO_BACKEND: dict[str, set[BackendCorpus]] = {
     ToolCorpus.ASSETS: {BackendCorpus.FILES},
     ToolCorpus.PROCEDURES: {BackendCorpus.FILES},
     ToolCorpus.DOCUMENTS: {BackendCorpus.GITHUB, BackendCorpus.FILES},
+    ToolCorpus.TRANSCRIPTS: {BackendCorpus.TRANSCRIPTS},
     ToolCorpus.EXPERIMENTS: {BackendCorpus.EXPERIMENTS},
 }
 

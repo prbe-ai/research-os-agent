@@ -121,13 +121,16 @@ def test_search_maps_corpora_and_merges_channels(client, app):
     assert "semantic_cursor" not in app.search_requests[-1]
 
 
-def test_search_transcripts_corpus_reported_as_missing_kb(client, app):
+def test_search_transcripts_corpus_maps_to_backend(client, app):
+    # transcripts is now a first-class backend corpus (POST /v1/search accepts and
+    # defaults to it), so the tool maps it through instead of degrading it to an
+    # unsupported kb_corpora miss.
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
     out = service.research_search("q", corpora=["transcripts", "assets"])
-    assert app.search_requests[-1]["corpus"] == ["experiments", "files"]
-    assert out["completeness"] == {"state": "partial", "missing": ["kb_corpora"]}
-    assert out["data"]["unsupported_corpora"] == ["transcripts"]
+    assert app.search_requests[-1]["corpus"] == ["experiments", "files", "transcripts"]
+    assert out["completeness"] == {"state": "complete", "missing": []}
+    assert out["data"]["unsupported_corpora"] == []
 
 
 def test_search_falls_back_to_keyword_on_pre_search_backend(client, app):

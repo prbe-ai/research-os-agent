@@ -16,6 +16,7 @@ class BackendCorpus(StrEnum):
     EXPERIMENTS = "experiments"
     FILES = "files"
     GITHUB = "github"
+    TRANSCRIPTS = "transcripts"
 
 
 class ToolCorpus(StrEnum):

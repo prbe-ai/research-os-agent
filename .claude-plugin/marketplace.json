@@ -2,14 +2,19 @@
   "name": "research-os-agent",
   "owner": { "name": "Probe", "url": "https://github.com/prbe-ai" },
   "metadata": {
-    "description": "Probe Research client plugins (experiment tracking + read-only MCP).",
-    "version": "0.5.0"
+    "description": "Probe Research client plugins (experiment tracking + read-only MCP + transcript capture).",
+    "version": "0.6.0"
   },
   "plugins": [
     {
       "name": "probe-research",
       "source": "./plugins/probe-research",
       "description": "Experiment-tracking skills (probe-research:track-experiment, probe-research:manage-research-asset, probe-research:publish-experiment) wired to a read-only Probe Research MCP server; writes via the `probe` CLI."
+    },
+    {
+      "name": "probe-research-tap",
+      "source": "./plugins/probe-research-tap",
+      "description": "Ships sanitized per-session Claude Code transcripts to your Research OS knowledgebase (server-side secret gate + quarantine)."
     }
   ]
 }

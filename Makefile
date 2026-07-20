@@ -1,13 +1,19 @@
-.PHONY: install test parity dump-openapi gen-models regen sync-plugin-skills
+.PHONY: install test test-tap parity dump-openapi gen-models regen sync-plugin-skills
 
 install:
 	pip install -e ".[dev]"
 
-test:
+test: test-tap
 	# Bare `pytest` works: `pythonpath = ["."]` in pyproject puts the repo root on
 	# sys.path, so `tests.conftest` imports without the `python -m` trick (which CI,
 	# editors, and a plain `pytest` invocation do not use).
 	pytest
+
+# probe-research-tap plugin tests. The plugin is stdlib-only and carries its own
+# pyproject (pytest picks it as rootdir/inifile when given this path), so these
+# don't collect under the root `pytest` run and need their own invocation.
+test-tap:
+	pytest -q plugins/probe-research-tap/tests
 
 # Contract guard: every route in schema/openapi.json must be reachable from a client
 # method, or be explicitly allowlisted. Run by `regen` so a schema refresh that adds a
