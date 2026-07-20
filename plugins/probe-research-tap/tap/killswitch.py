@@ -1,9 +1,12 @@
 """Client-side killswitch check.
 
-Polls the backend's /ingest/v1/sessions/status before each tick, expecting
-{"ingest_enabled": bool, "reason": str|null}. When the server says ingestion
-is paused, the daemon skips the entire tick: no tail, no enqueue, no drain.
-byte_offset stays put so the next enabled tick catches up automatically.
+Polls the backend's GET /ingest/v1/sessions/status before each tick. The
+client tolerates {"ingest_enabled": bool, "reason": str|null}, but TODAY the
+Research OS endpoint is static and returns {"ingest_enabled": true}: this poll
+is the SEAM for a FUTURE customer-level pause, not a live control yet. When the
+response ever says paused, the daemon skips the entire tick — no tail, no
+enqueue, no drain — and byte_offset stays put so the next enabled tick catches
+up automatically.
 
 Caches the response for KILLSWITCH_TTL_S to keep poll volume bounded.
 On fetch error: returns the last-known value if fresh, else fails OPEN
@@ -11,9 +14,10 @@ On fetch error: returns the last-known value if fresh, else fails OPEN
 fail-secure — losing reachability to the backend already breaks ingestion,
 so failing closed would just amplify a network hiccup into a full halt.
 
-The defense-in-depth path is server-side: the ingest endpoint checks the
-same killswitch and rejects when off, so even an old plugin (or one with
-a stale cache) gets stopped at the gateway.
+There is NO server-side backstop that mirrors this switch: the ingest POST
+does no customer-level killswitch check. The effective controls today are the
+LOCAL .disabled file (checked by the hook and the daemon) and the backend's
+per-session quarantine, which the drain sees as a 403 (POISON) on the POST.
 """
 
 from __future__ import annotations
@@ -26,8 +30,9 @@ from tap import httpclient
 
 log = logging.getLogger("probe-research-tap.killswitch")
 
-# How long to trust a fresh poll. Matches the server's `next_check_after_s=300`
-# so a flip propagates within 5 minutes through the proactive path.
+# How long to trust a fresh poll. The status endpoint returns no cadence hint,
+# so this is a purely client-side choice: 5 minutes bounds poll volume while
+# keeping a future flip's propagation within one TTL.
 KILLSWITCH_TTL_S = 300
 
 # When a fetch fails, we keep using the last cached value as long as it's

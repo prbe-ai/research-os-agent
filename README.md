@@ -186,7 +186,7 @@ Run the stdio server with `probe-research-mcp`. It exposes exactly five tools:
 | Tool | Function |
 |---|---|
 | `research_context` | Project/session bootstrap, prior experiments, active runs, capability warnings |
-| `research_search` | One-index exact+semantic backend search (`POST /v1/search`, corpora: assets/procedures → files, documents → github+files, transcripts unsupported); keyword fallback on pre-search backends |
+| `research_search` | One-index exact+semantic backend search (`POST /v1/search`, corpora: assets/procedures → files, documents → github+files, transcripts → transcripts); keyword fallback on pre-search backends |
 | `research_get` | One entity through a purpose-shaped `view` — see below |
 | `research_compare` | Server-side comparison of runs, experiments, and asset versions |
 | `research_resolve` | Compatible asset resolution against the live registry |

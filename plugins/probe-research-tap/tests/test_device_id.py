@@ -105,6 +105,34 @@ def test_reuses_existing_device_id(_isolated_plugin_dir: Path, tmp_path: Path) -
         storage.close()
 
 
+def test_concurrent_mint_converges_on_one_id(
+    _isolated_plugin_dir: Path, tmp_path: Path
+) -> None:
+    """Two daemons (two Storage handles on ONE db) minting in the same minute must
+    converge on ONE device_id — the atomic INSERT ... ON CONFLICT DO NOTHING makes
+    the first writer win and the second re-read the winner, instead of forking
+    machine identity via last-writer-wins."""
+    from tap import config as cfg
+    from tap.storage import Storage
+
+    db_path = cfg.state_db_path()
+    daemon_a = Storage(db_path)
+    daemon_b = Storage(db_path)
+    try:
+        # Each daemon generated its own uuid and races to claim the key.
+        id_a = daemon_a.insert_meta_if_absent("device_id", "uuid-from-daemon-a")
+        id_b = daemon_b.insert_meta_if_absent("device_id", "uuid-from-daemon-b")
+
+        assert id_a == id_b, "both daemons must converge on the same device_id"
+        # First writer wins; the second's insert is a no-op that re-reads the winner.
+        assert id_a == "uuid-from-daemon-a"
+        assert daemon_a.get_meta("device_id") == "uuid-from-daemon-a"
+        assert daemon_b.get_meta("device_id") == "uuid-from-daemon-a"
+    finally:
+        daemon_a.close()
+        daemon_b.close()
+
+
 if __name__ == "__main__":
     import sys
 

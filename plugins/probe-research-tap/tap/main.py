@@ -37,8 +37,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tap import config as cfg
-from tap import killswitch
-from tap import outbox
+from tap import killswitch, outbox
 from tap.outbox import HaltError
 from tap.storage import FileOffset, Storage
 from tap.transcript import read_new, validate_json
@@ -62,6 +61,13 @@ ORPHAN_CHECK_EVERY_TICKS = 12
 # Hard cap on how long we'll wait for lsof to return; if it hangs, we'd
 # rather assume "alive" and skip than block the tick.
 ORPHAN_LSOF_TIMEOUT_S = 5
+
+# After a 401 halt, a daemon start older than this cooldown clears the latch and
+# re-probes instead of staying wedged forever. A transient 401 (member removed
+# then re-added with the SAME still-valid token) leaves no fingerprint change to
+# self-clear on, so the cooldown is the only path back — a periodic re-probe that
+# self-heals. 1h keeps the re-POST rate on a genuinely-dead token negligible.
+HALT_RETRY_AFTER_SECONDS = 3600
 
 _shutdown_requested = False
 
@@ -129,7 +135,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--transcript", required=True, type=Path)
     parser.add_argument("--cwd", required=True, type=Path)
-    parser.add_argument("--plugin-root", required=True, type=Path)
+    # Optional on purpose: nothing in tap/ reads plugin_root, and a future hook
+    # change that stops passing it must not argparse-exit the daemon into a
+    # silent capture outage. session-start.sh still passes it (harmless).
+    parser.add_argument("--plugin-root", required=False, default=None, type=Path)
     args = parser.parse_args(argv)
 
     log_dir = cfg.log_dir()
@@ -186,13 +195,31 @@ def main(argv: list[str] | None = None) -> int:
 
     storage = Storage(cfg.state_db_path())
 
-    # 401-halt latch. There is no pairing step to clear it, so it self-clears
-    # when the configured ingest token differs from the one the server
-    # rejected (i.e. the user ran `probe login` or changed PROBE_INGEST_TOKEN).
+    # 401-halt latch. There is no pairing step to clear it, so a daemon start
+    # decides whether the halt still holds. It clears (and resumes) in ANY of
+    # three cases, so a halt is never held longer than it can be justified:
+    #   (a) the configured ingest token differs from the one the server rejected
+    #       (user ran `probe login` or changed PROBE_INGEST_TOKEN) — the fix;
+    #   (b) the halt is older than HALT_RETRY_AFTER_SECONDS — a periodic re-probe
+    #       that self-heals a transient 401 (e.g. member removed then re-added
+    #       with the SAME still-valid token, which leaves no fingerprint change);
+    #   (c) no rejected-token fingerprint was recorded — a crash could split the
+    #       timestamp from the fingerprint (now written atomically, but an old
+    #       split state may persist), and we do not hold a halt we can't justify.
     if storage.get_meta("last_401_at"):
         rejected_fp = storage.get_meta("last_401_token_sha256")
-        if rejected_fp and rejected_fp != outbox.token_fingerprint(token):
-            log.info("ingest token changed since last 401; clearing halt and resuming")
+        last_401_at = _read_int_meta(storage, "last_401_at", default=0)
+        now = int(time.time())
+        token_changed = bool(rejected_fp) and rejected_fp != outbox.token_fingerprint(token)
+        cooldown_expired = last_401_at > 0 and (now - last_401_at) > HALT_RETRY_AFTER_SECONDS
+        no_fingerprint = not rejected_fp
+        if token_changed or cooldown_expired or no_fingerprint:
+            reason = (
+                "ingest token changed since last 401" if token_changed
+                else "halt cooldown expired; re-probing" if cooldown_expired
+                else "no rejected-token fingerprint recorded"
+            )
+            log.info("clearing 401 halt (%s) and resuming", reason)
             storage.delete_meta("last_401_at")
             storage.delete_meta("last_401_token_sha256")
         else:
@@ -222,19 +249,27 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     # the daemon owns it — generate once, persist in meta, send in every batch
     # body. The backend passes it through to the engine, which uses it as the
     # device external id.
-    device_id = storage.get_meta("device_id")
-    if not device_id:
-        device_id = uuid.uuid4().hex
-        storage.set_meta("device_id", device_id)
+    #
+    # Mint atomically: a fresh install with two CC sessions in the same minute
+    # would otherwise have both daemons read device_id="" and write DIFFERENT
+    # uuids (last-writer-wins), forking machine identity. insert_meta_if_absent
+    # is a single atomic INSERT ... ON CONFLICT DO NOTHING + re-read, so both
+    # converge on the first writer's id. We generate unconditionally (cheap) and
+    # let the atomic insert decide the winner.
+    minted = uuid.uuid4().hex
+    device_id = storage.insert_meta_if_absent("device_id", minted)
+    if device_id == minted:
         log.info("generated device_id=%s", device_id)
 
     # Resume batch_seq across daemon restarts.
     #
-    # source_event_id at the upstream gateway is "<session>:<batch_seq>", and
-    # the gateway uses ON CONFLICT DO NOTHING on (customer, source_system,
-    # source_event_id). If we reset batch_seq to 0 on every daemon start, a
-    # restart mid-session will re-issue source_event_ids the gateway already
-    # has — they get silently de-duped, returning 2xx but ingesting nothing.
+    # batch_seq must stay monotonic/unique because the R2 storage key the
+    # upstream writes is "<session>:<batch_seq>". Per prbe-knowledge origin/main
+    # (post-migration-0026) the ingest queue COALESCES on the bare session_id —
+    # it does NOT dedup on source_event_id — so a reset seq would not be dropped
+    # at the queue; instead it would re-derive an EARLIER storage key and
+    # overwrite that batch's blob in R2 (last-write-wins), losing data. Keeping
+    # the seq durable and always-increasing keeps every batch's R2 key distinct.
     #
     # max_batch_seq(outbox) only knows about batches still queued locally;
     # successful drains delete those rows, so it returns -1 after the daemon
@@ -262,12 +297,14 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     while not _shutdown_observed(c):
         tick_count += 1
 
-        # Global ingestion killswitch (fetched + cached for 5min). When the
-        # operator has flipped it off (maintenance, runaway customer, panic
-        # stop) we skip the entire tick — no tail, no enqueue, no drain.
-        # byte_offset stays put so the next enabled tick catches up
-        # automatically. On poll error we fail OPEN inside is_ingestion_enabled
-        # itself; here we just consume the (enabled, reason) tuple.
+        # Ingestion killswitch poll (fetched + cached for 5min). This is the
+        # SEAM for a future customer-level pause: the status endpoint is static
+        # ({"ingest_enabled": true}) today, so this never trips in production
+        # yet. If it ever reports paused we skip the entire tick — no tail, no
+        # enqueue, no drain — and byte_offset stays put so the next enabled tick
+        # catches up automatically. On poll error we fail OPEN inside
+        # is_ingestion_enabled itself; here we just consume the (enabled, reason)
+        # tuple.
         ks_enabled, ks_reason = killswitch.is_ingestion_enabled(
             token=c.token, base_url=base_url
         )
@@ -368,10 +405,8 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                 )
                 # Touch the sentinel so the wrapper exits instead of respawning
                 # us into the same dead-session state.
-                try:
+                with contextlib.suppress(OSError):
                     c.shutdown_sentinel.touch()
-                except OSError:
-                    pass
                 return 0
 
         # Adaptive cadence: a tick that produced new lines resets to active;

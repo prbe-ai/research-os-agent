@@ -211,6 +211,44 @@ class Storage:
             (k, v),
         )
 
+    def insert_meta_if_absent(self, k: str, v: str) -> str:
+        """Atomically claim meta[k]=v iff absent; return the WINNING value.
+
+        `INSERT ... ON CONFLICT(k) DO NOTHING` is a single atomic statement, so
+        two concurrent daemons that each mint a different value for the same key
+        converge on ONE: the first writer wins, the second's insert no-ops, and
+        the read returns the winner for both. Replaces the read-check-write mint
+        that let two same-minute daemons fork machine identity (last-writer-wins).
+        """
+        self._conn.execute(
+            "INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO NOTHING",
+            (k, v),
+        )
+        return self.get_meta(k)
+
+    def set_meta_pair(self, k1: str, v1: str, k2: str, v2: str) -> None:
+        """Upsert two meta rows inside one explicit transaction.
+
+        The connection is autocommit (isolation_level=None), so each bare execute
+        commits on its own — a crash between two set_meta calls can split a pair
+        that must move together (e.g. the 401 latch's timestamp + fingerprint).
+        An explicit BEGIN/COMMIT makes the pair all-or-nothing.
+        """
+        self._conn.execute("BEGIN")
+        try:
+            self._conn.execute(
+                "INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                (k1, v1),
+            )
+            self._conn.execute(
+                "INSERT INTO meta(k, v) VALUES(?, ?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                (k2, v2),
+            )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+
     def get_meta(self, k: str) -> str:
         row = self._conn.execute("SELECT v FROM meta WHERE k=?", (k,)).fetchone()
         return row[0] if row else ""

@@ -9,4 +9,4 @@ lifecycle are owned by Claude Code's session hooks — daemon dies when the
 session ends.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"

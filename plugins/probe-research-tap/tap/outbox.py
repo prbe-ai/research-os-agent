@@ -60,6 +60,11 @@ def build_batch_body(
     that only saw stop_hook_summary + turn_duration). Caller should treat
     None as "nothing to ship, but advance the offset."
     """
+    # TODO: split oversized batches client-side so a legitimately large tick
+    # isn't dropped. Today a body over the gateway's 2MB cap comes back 413 and
+    # is classified POISON (dropped) — see httpclient.classify — because the tap
+    # has no batch-splitting. Splitting here would let a big tick ship in parts
+    # instead of being lost.
     events = []
     for i, line in enumerate(lines):
         try:
@@ -125,10 +130,11 @@ def drain_once(*, storage: Storage, token: str, base_url: str, session_id: str) 
         storage.set_meta("last_successful_post_at", str(now))
         return True
     if resp.classification == httpclient.Classification.POISON:
-        # 400/404 = malformed/unroutable batch; 403 = the backend QUARANTINED
-        # this session. Either way the batch is dropped and the daemon keeps
-        # running — quarantine is a per-session server-side decision, not a
-        # credential failure.
+        # Any non-401 4xx: 400/404 malformed/unroutable, 403 = the backend
+        # QUARANTINED this session, 413 = body over the gateway's 2MB cap,
+        # 422 = schema rejection. None can succeed on retry of the SAME batch,
+        # so the batch is dropped and the daemon keeps running — a per-session /
+        # per-batch server-side decision, not a credential failure.
         log.warning(
             "outbox: poison drop id=%d status=%d body=%r",
             row.id, resp.status, resp.body[:200],
@@ -137,10 +143,16 @@ def drain_once(*, storage: Storage, token: str, base_url: str, session_id: str) 
         return True
     if resp.classification == httpclient.Classification.HALT:
         storage.clear_outbox()
-        storage.set_meta("last_401_at", str(now))
-        # Latch the credential that was rejected so the next daemon start can
-        # self-clear the halt once the token actually changes.
-        storage.set_meta("last_401_token_sha256", token_fingerprint(token))
+        # Latch the timestamp AND the rejected-credential fingerprint in ONE
+        # atomic write. A crash between the two would leave last_401_at set but
+        # the fingerprint empty, and the next daemon start could neither prove
+        # the token changed nor justify holding the halt. The next start uses
+        # the fingerprint to self-clear once the token actually changes, and the
+        # timestamp to self-clear after a cooldown (transient 401 re-probe).
+        storage.set_meta_pair(
+            "last_401_at", str(now),
+            "last_401_token_sha256", token_fingerprint(token),
+        )
         raise HaltError(
             "ingest token rejected (401) — fix PROBE_INGEST_TOKEN or run "
             "`probe login` with a valid ingest token"

@@ -1,6 +1,6 @@
 [project]
 name = "probe-research-tap"
-version = "0.1.0"
+version = "0.1.1"
 description = "Claude Code plugin: ships sanitized per-session Claude Code transcripts to Research OS for ingestion"
 requires-python = ">=3.11"
 dependencies = []

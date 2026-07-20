@@ -117,6 +117,17 @@ def test_blank_ingest_token_is_not_configured(monkeypatch) -> None:
     assert cfg.load_token() is None
 
 
+def test_blank_env_ingest_token_falls_through_to_config_file(monkeypatch) -> None:
+    """An exported-but-empty PROBE_INGEST_TOKEN must NOT mask a valid config-file
+    token. session-start.sh treats empty env as unset and falls through to the
+    config file; the daemon must do the same or hook and daemon disagree."""
+    _write_probe_config({"ingest_token": "file-token"})
+    monkeypatch.setenv("PROBE_INGEST_TOKEN", "")
+    assert cfg.load_token() == "file-token"
+    monkeypatch.setenv("PROBE_INGEST_TOKEN", "   ")
+    assert cfg.load_token() == "file-token"
+
+
 # --- probe config file path resolution ---------------------------------------
 
 
@@ -166,6 +177,23 @@ def test_daemon_noops_without_ingest_token(tmp_path: Path) -> None:
         assert not sentinel.exists()
     finally:
         sentinel.unlink(missing_ok=True)
+
+
+def test_daemon_does_not_require_plugin_root(tmp_path: Path) -> None:
+    """--plugin-root is optional: a future hook that stops passing it must NOT
+    argparse-exit (SystemExit) the daemon into a silent capture outage. With no
+    token configured the daemon cleanly no-ops (returns 0) rather than erroring."""
+    from tap.main import main as watch_main
+
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text("{}\n")
+    args = [
+        "--session-id", "no-plugin-root",
+        "--transcript", str(transcript),
+        "--cwd", str(tmp_path),
+        # deliberately no --plugin-root
+    ]
+    assert watch_main(args) == 0
 
 
 def test_daemon_noops_and_stops_wrapper_when_base_url_unset(

@@ -107,6 +107,13 @@ if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     exit 0
 fi
 
+# No live wrapper for this session_id, so any leftover shutdown sentinel is
+# stale (SessionEnd no longer deletes it — see session-end.sh). Clear it before
+# spawning, or the wrapper's first `[ -f "$SHUTDOWN" ] && exit 0` check would
+# immediately kill the fresh daemon on a resumed session.
+SHUTDOWN_FILE="/tmp/probe-research-tap-watcher-${SESSION_ID}.shutdown"
+rm -f "$SHUTDOWN_FILE"
+
 # Resolve Python interpreter — prefer plugin-local venv.
 PY="$PLUGIN_ROOT/.venv/bin/python3"
 [ -x "$PY" ] || PY="$(command -v python3 || true)"

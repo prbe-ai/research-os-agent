@@ -141,10 +141,16 @@ def load_token() -> str | None:
 
     Returns None when unconfigured — callers treat that as a no-op state
     ("not configured"), never an error.
+
+    An exported-but-empty/whitespace PROBE_INGEST_TOKEN is treated as UNSET
+    (fall through to the config file), NOT as "" masking a valid file token.
+    session-start.sh does the same (`[ -z "$PROBE_INGEST_TOKEN" ]` falls
+    through), and this mirrors the probe CLI's own `env or file` precedence —
+    so hook and daemon always agree on whether a token is configured.
     """
-    env = os.environ.get(ENV_INGEST_TOKEN)
-    if env is not None:
-        return env.strip() or None
+    env = os.environ.get(ENV_INGEST_TOKEN, "").strip()
+    if env:
+        return env
     tok = _read_probe_config().get("ingest_token")
     if isinstance(tok, str) and tok.strip():
         return tok.strip()
@@ -236,7 +242,9 @@ class WatchConfig:
     session_id: str
     transcript_path: Path
     cwd: Path
-    plugin_root: Path
+    # Carried through from --plugin-root but unused by the daemon; optional so a
+    # hook that stops passing it (None) cannot crash the daemon. See main.py.
+    plugin_root: Path | None
     token: str
     active_interval_s: int
     idle_interval_s: int

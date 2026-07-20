@@ -136,8 +136,8 @@ def create_server(
         one-index exact+semantic search (POST /v1/search), with per-result channel provenance.
 
         Experiments are always searched. Optional `corpora` narrows the knowledge side and maps
-        onto backend corpora as: assets -> files, procedures -> files, documents -> github+files;
-        transcripts are not indexed yet (reported via completeness.missing = kb_corpora).
+        onto backend corpora as: assets -> files, procedures -> files, documents -> github+files,
+        transcripts -> transcripts (Claude Code session transcripts, now indexed).
         `limit` is a soft per-channel budget, not an exact result count: it is split across the
         exact and semantic channels (ceil(limit/2) each, so an odd limit can return one extra row
         and the effective minimum is 2) and results are never truncated after fetch, which keeps

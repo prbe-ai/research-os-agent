@@ -13,7 +13,7 @@ import secrets
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 
 from tap import __version__
 
@@ -22,7 +22,7 @@ BACKOFF_BASE_SECONDS = 1.0
 BACKOFF_CAP_SECONDS = 5 * 60.0
 
 
-class Classification(str, Enum):
+class Classification(StrEnum):
     SUCCESS = "success"
     POISON = "poison"
     HALT = "halt"
@@ -38,16 +38,28 @@ class Response:
 
 
 def classify(status: int, err: bool) -> Classification:
+    """Map an HTTP status (or a transport error) to a retry disposition.
+
+    - 2xx                -> SUCCESS
+    - 401                -> HALT (dead ingest token; fixed via PROBE_INGEST_TOKEN
+                            / `probe login`, checked ahead of the 4xx bucket)
+    - any other 4xx      -> POISON (drop + log). A 4xx is a client-side defect the
+                            SAME batch can never fix on retry: 400/404 malformed or
+                            unroutable, 403 a QUARANTINED session, 413 a body over
+                            the gateway's 2MB cap, 422 a schema rejection. The tap
+                            has no client-side batch-splitting, so retrying a 413/422
+                            forever just re-POSTs a doomed body until the outbox byte
+                            cap reaps it — silent data loss + wasted bandwidth. Drop
+                            it and keep the daemon running instead.
+    - transport error / 5xx / anything else -> RETRY
+    """
     if err:
         return Classification.RETRY
     if 200 <= status < 300:
         return Classification.SUCCESS
     if status == 401:
-        # Dead ingest token — fixed via PROBE_INGEST_TOKEN / `probe login`.
         return Classification.HALT
-    if status in (400, 403, 404):
-        # 403 is how the backend signals a QUARANTINED session: drop the
-        # batch, keep the daemon running.
+    if 400 <= status < 500:
         return Classification.POISON
     return Classification.RETRY
 

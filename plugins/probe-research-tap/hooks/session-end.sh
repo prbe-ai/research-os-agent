@@ -27,6 +27,11 @@ if [ -f "$PID_FILE" ]; then
     rm -f "$PID_FILE"
 fi
 
-rm -f "$SHUTDOWN_FILE"
+# Deliberately do NOT rm the shutdown sentinel here. If the wrapper missed the
+# forwarded TERM (raced mid-respawn) or a daemon child outlived it, the sentinel
+# is the only remaining stop signal — the wrapper's respawn loop and the daemon's
+# per-tick _shutdown_observed() both watch it. Deleting it would strand that
+# orphan running. The next session-start for this session_id clears the stale
+# sentinel before spawning a fresh wrapper.
 
 exit 0
