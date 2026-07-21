@@ -175,15 +175,16 @@ class ResearchOSSource:
         """POST /v1/search, raising :class:`errors.CapabilityUnavailable` when the
         backend predates the endpoint (so callers can fall back honestly).
 
-        404 / staleness policy (rolling deploys + oracle-safe workspace 404s):
+        404 / staleness policy (rolling deploys + oracle-safe SCOPE 404s):
         - a FRESH cached "unsupported" verdict short-circuits here, so a
           pre-search server does not eat a doomed POST per call; the verdict
           expires after ``_SUPPORT_RECHECK_SECONDS`` and is then re-checked.
         - any search 404 re-probes the endpoint itself (invalidating a cached
-          True). If the probe finds the endpoint: a workspace-scoped 404 means
-          the WORKSPACE was not found (surfaced as NotFound); otherwise the
-          search is retried once (we likely hit a stale pod mid-deploy) before
-          the 404 is surfaced.
+          True). If the probe finds the endpoint the search is retried ONCE
+          first (a stale pod mid-deploy 404s scoped and unscoped alike); only a
+          second 404 is attributed to the scope, and then a workspace- or
+          project-scoped one surfaces as NotFound because those are oracle-safe
+          404s.
         - if the probe cannot classify (transient error) the original 404 is
           surfaced without caching a verdict, so the next call re-checks.
         """
@@ -203,20 +204,30 @@ class ResearchOSSource:
                     semantic_cursor=semantic_cursor,
                 )
             except errors.NotFoundError:
+                if retried:
+                    # Second 404 with the endpoint already confirmed up. Now the
+                    # 404 is about the REQUEST, not the deployment: a scoped one
+                    # means that scope is absent (both scopes are oracle-safe
+                    # 404s), an unscoped one is a persistent server 404.
+                    raise
+                # First 404: is the endpoint there at all? Probe ONCE per call --
+                # re-probing on the retry too would cost four requests to answer
+                # one question.
                 self._search_supported = None
                 self._probe_search()
-                if self._search_supported is True:
-                    if workspace_id is not None or project_id is not None:
-                        # Endpoint exists, so a scoped 404 means the SCOPE was
-                        # not found -- both scopes are oracle-safe 404s.
-                        raise
-                    if not retried:
-                        retried = True
-                        continue  # likely a stale pod during a rolling deploy
-                    raise  # endpoint present but this search persistently 404s
                 if self._search_supported is None:
                     raise  # probe could not classify; do not cache a verdict
-                raise self._capability_unavailable() from None
+                if self._search_supported is not True:
+                    raise self._capability_unavailable() from None
+                # Endpoint exists. RETRY BEFORE ATTRIBUTING: a stale pod
+                # mid-rolling-deploy 404s scoped and unscoped requests alike, and
+                # calling a scoped 404 "that project does not exist" without
+                # retrying turns a deploy into a wrong answer about the caller's
+                # own data. Project scope is the commoner of the two, so getting
+                # this wrong has a wider blast radius than the workspace-only
+                # version it replaced.
+                retried = True
+                continue
             self._record_search_response(response)
             return response
 

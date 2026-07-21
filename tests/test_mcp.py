@@ -198,8 +198,12 @@ def test_search_unknown_workspace_is_not_found_not_fallback(client, app):
     service = ResearchReadService(ResearchOSSource(client))
     with pytest.raises(errors.NotFoundError):
         service.search_knowledge("q", workspace_id="ws-missing")
-    # disambiguated via one extra probe without the workspace lens
-    assert len(app.search_requests) == 2
+    # original + capability probe + ONE retry. The retry costs a wasted request
+    # on a genuinely-absent scope, and buys a correct answer when the 404 came
+    # from a stale pod mid-deploy instead. Attributing a scoped 404 to the scope
+    # without retrying turns a rolling deploy into "your project does not
+    # exist", which is a wrong answer about the caller's own data.
+    assert len(app.search_requests) == 3  # original + ONE probe + ONE retry
 
 
 def test_search_emits_every_fetched_row_when_channels_overflow(client, app):
@@ -310,7 +314,7 @@ def test_keyword_fallback_ignores_incoming_cursor(client, app):
     assert out["next_cursor"] is None
 
 
-def test_search_project_filter_scopes_exact_and_marks_semantic(client, app):
+def test_search_forwards_project_scope_to_the_backend(client, app):
     app.search_response = _search_response(
         exact=[
             {"entity_type": "experiment", "id": "e-1", "name": "in", "slug": "in",
@@ -412,7 +416,7 @@ def test_unsupported_verdict_short_circuits_then_expires(client, app):
     app.search_response = _search_response()
     source._search_checked_at -= 301
     out = service.search_knowledge("q")
-    assert len(app.search_requests) == 3
+    assert len(app.search_requests) == 3  # original + ONE probe + ONE retry
     assert out["capabilities"]["unified_search"] is True
 
 
@@ -582,14 +586,8 @@ def test_server_exposes_exactly_the_read_tools(client):
     # exist for exactly one release, because MCP tools are served by the SERVER
     # and .mcp.json pins one url for every plugin version -- so renaming a tool
     # breaks every installed client the instant the image rolls.
-    assert NEW_SURFACE == {"browse_research", "search_knowledge", "get_entity"}
-    assert ALIASES == {
-        "research_context",
-        "research_search",
-        "research_get",
-        "research_compare",
-        "research_resolve",
-    }
+    # (Comparing NEW_SURFACE/ALIASES to their own literals would be a tautology;
+    # the load-bearing assertion is that the SERVER exposes exactly their union.)
     assert names == NEW_SURFACE | ALIASES
     assert not any(name.startswith(("create", "update", "promote", "upload")) for name in names)
 
@@ -619,11 +617,26 @@ def test_every_alias_still_answers(client, app):
     tools = {t.name for t in _asyncio.run(server.list_tools())}
     assert ALIASES <= tools
 
-    # research_search's alias translates the retired `filters` dict onto the
-    # typed parameters rather than dropping it on the floor.
-    out = service.search_knowledge("q", project_id="p-1")
+    # Through the TOOL LAYER, not the service: the translation being tested
+    # lives in the alias closure, and calling the service directly would exercise
+    # none of it. The earlier version of this test called
+    # service.search_knowledge(project_id=...) -- with the typed parameter
+    # already applied -- and would have passed with the alias body replaced by
+    # `return {}`.
+    out = _call_tool(
+        server, "research_search", {"query": "q", "filters": {"project_id": "p-1"}}
+    )
     assert app.search_requests[-1]["project_id"] == "p-1"
     assert out["data"]["query"] == "q"
+
+    # `limit` -> `top_k`, and workspace_id from either place.
+    _call_tool(
+        server,
+        "research_search",
+        {"query": "q", "limit": 4, "filters": {"workspace_id": "ws-9"}},
+    )
+    assert app.search_requests[-1]["workspace_id"] == "ws-9"
+    assert app.search_requests[-1]["exact_limit"] == 2  # ceil(4/2) per channel
 
 
 # -- hosted HTTP mode: per-request auth + health -----------------------------
@@ -799,6 +812,19 @@ def test_browse_truncation_is_reported(app, client):
 # bearing -- they are the entire mechanism by which an agent decides to call
 # anything. These guard the claims that would silently rot.
 
+def _call_tool(server, tool: str, args: dict):
+    """Invoke a tool the way a real MCP client does, and unwrap the payload."""
+    import asyncio as _asyncio
+
+    result = _asyncio.run(server.call_tool(tool, args))
+    payload = result[1] if isinstance(result, tuple) else result
+    if isinstance(payload, dict) and "result" in payload:
+        return payload["result"]
+    if isinstance(payload, list):
+        return json.loads(payload[0].text)
+    return payload
+
+
 def _tool_docs(client) -> dict[str, str]:
     import asyncio as _asyncio
 
@@ -926,16 +952,67 @@ def test_verbose_false_keeps_only_the_capabilities_that_are_false(client, app):
     backend cannot do something you may be about to rely on."""
     service = ResearchReadService(ResearchOSSource(client))
     lean = service.search_knowledge("q", verbose=False)
-    # This fake predates /v1/search, so several capabilities are genuinely False.
-    assert all(v is False for v in lean.get("capabilities", {}).values())
+    # The key is ALWAYS present -- omitting it would overload absence to mean
+    # both "all good" and "not reported", so a caller indexing into it would
+    # KeyError on a healthy backend and succeed on a degraded one.
+    assert "capabilities" in lean
+    # This fake predates /v1/search, so several capabilities are genuinely False,
+    # and ONLY the false ones survive compaction.
+    assert lean["capabilities"]
+    assert all(v is False for v in lean["capabilities"].values())
     assert "unified_search" in lean["capabilities"]
 
 
 def test_aliases_still_return_the_full_envelope(client, app):
     """The whole point of an alias is that nothing changes for its callers."""
     app.search_response = _search_response()
+    server = create_server(ResearchReadService(ResearchOSSource(client)))
+    # Through the TOOL LAYER for every alias. Calling the service directly would
+    # only prove the service DEFAULT is verbose=True, not that the aliases omit
+    # the argument -- so "tidying" server.py to pass verbose=False would leave
+    # this green while every installed client started receiving compacted
+    # payloads, which is the precise breakage aliases exist to prevent.
+    full_envelope = {
+        "schema_version", "as_of", "scope", "capabilities",
+        "data", "evidence", "completeness", "next_cursor",
+    }
+    calls = {
+        "research_search": {"query": "q"},
+        "research_context": {"task": "t"},
+        "research_resolve": {"name": "a"},
+    }
+    for tool, args in calls.items():
+        out = _call_tool(server, tool, args)
+        assert full_envelope <= set(out), f"{tool} alias lost {full_envelope - set(out)}"
+
+    # ...and the NEW surface is compact by contrast, which is the whole point.
+    lean = _call_tool(server, "search_knowledge", {"query": "q"})
+    assert "schema_version" not in lean
+    assert "completeness" in lean
+
+
+def test_project_scope_refuses_a_backend_that_ignores_it(client, app):
+    """A backend predating server-side project scope must not answer silently.
+
+    SearchRequest does not forbid extra body fields, so an older server accepts
+    `project_id`, ignores it, and returns TENANT-WIDE results with
+    state="complete". An agent then attributes another project's runs to this
+    one -- worse than any error, because it is confident and unmarked.
+
+    The echo is the only available signal, so its absence is treated as
+    unsupported. A false refusal is loud and correctable; a false answer is not.
+    """
+    app.search_response = _search_response()
+    app.echoes_project_scope = False
     service = ResearchReadService(ResearchOSSource(client))
-    # research_search's alias calls straight through with no verbose argument.
-    out = service.search_knowledge("q")
-    for kept in ("schema_version", "as_of", "scope", "capabilities", "evidence"):
-        assert kept in out, f"alias path lost {kept}"
+
+    with pytest.raises(errors.CapabilityUnavailable):
+        service.search_knowledge("q", project_id="p-1")
+
+    # Unscoped searches are unaffected -- the gate is about the scope, not the
+    # backend version in general.
+    assert service.search_knowledge("q")["data"]["query"] == "q"
+
+    # And an echoing backend answers normally.
+    app.echoes_project_scope = True
+    assert service.search_knowledge("q", project_id="p-1")["data"]["query"] == "q"

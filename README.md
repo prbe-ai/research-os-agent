@@ -181,42 +181,57 @@ artifact upload exists, transcript portability remains explicitly false.
 
 ## Read-only MCP server
 
-Run the stdio server with `probe-research-mcp`. It exposes exactly five tools:
+Run the stdio server with `probe-research-mcp`. It exposes **three** tools, plus five
+deprecated aliases that are removed next release:
 
-| Tool | Function |
+| Tool | Answers |
 |---|---|
-| `research_context` | Project/session bootstrap, prior experiments, active runs, capability warnings |
-| `research_search` | One-index exact+semantic backend search (`POST /v1/search`, corpora: assets/procedures → files, documents → github+files, transcripts → transcripts); keyword fallback on pre-search backends |
-| `research_get` | One entity through a purpose-shaped `view` — see below |
-| `research_compare` | Server-side comparison of runs, experiments, and asset versions |
-| `research_resolve` | Compatible asset resolution against the live registry |
+| `browse_research` | "What exists here?" — the structured project → experiment → run tree |
+| `search_knowledge` | "Find things about X" — one-index exact+semantic search with per-result provenance |
+| `get_entity` | "Show me this thing" — one entity through a purpose-shaped `view` |
 
-**Thin harness, fat skills.** Coverage grows through `research_get`'s `view` and `filters`
-parameters, never through more tools — fewer tools means less tool-selection confusion, and
-capability that lives inside a tool is code-enforced rather than smeared across entrypoints.
-Which view to ask for when is taught in `skills/track-experiment`.
+`research_context`, `research_search`, `research_get`, `research_compare` and
+`research_resolve` still answer, with their OLD signatures and OLD payloads. They exist
+because MCP tools are served by the SERVER and `.mcp.json` pins one url for every plugin
+version, so renaming a tool breaks every installed client the moment the image rolls — a
+plugin version bump is not a cutover mechanism. Migrate off them; they go next release.
 
-`research_get(ref, view=..., filters=..., token_budget=..., cursor=...)`, where `ref` is
-`run:<id>`, `experiment:<id>`, `project:<id>`, `group:<id>`, or a bare id:
+**Thin harness, fat skills.** Coverage grows through `get_entity`'s `view` and `filters`
+parameters, never through more tools. `browse_research` is the one addition that cleared
+that bar: it answers a question the others structurally cannot, because search ranks by
+relevance to a query and therefore needs you to already know what to search for.
+
+`get_entity(ref, view=..., filters=..., token_budget=..., cursor=...)`, where `ref` is
+`run:<id>`, `experiment:<id>`, `asset:<name>`, `project:<id>`, `group:<id>`, or a bare id:
 
 | Kind | Views |
 |---|---|
 | run | `card` · `trajectory` · `metrics` · `artifacts` · `reproduce` · `handoff` · `lineage` · `events` |
 | experiment | `card` · `artifacts` · `lineage` · `groups` · `versions` |
+| asset | `card` · `versions` |
 | project, group | `card` |
 
-`trajectory` reads a run's spans (the run bundle carries span_type *counts* only, so this is
-the only way to read one). `metrics` returns series summaries, and `filters={"key": "<key>"}`
-drills to raw points. `reproduce` resolves `env_ref` through its execution record. `groups`
-lists an experiment's sweeps; read one with `ref="group:<id>"`. `token_budget` bounds the
-row-shaped part of a view and hands back a `next_cursor`; `reproduce` is atomic and reports
+`card` (the default) returns `available_views` for that entity, so one call tells you what
+else you can ask for — the matrix above is documentation, not something to memorise.
+
+Assets resolve by NAME, because the reuse check has a name and not an id.
+`get_entity(ref="asset:<name>", view="versions", filters={"requirement": ">=2"})` is where
+`research_resolve` went. A name that does not exist raises not-found; a name that exists
+with no satisfying version returns `state="no_match"` **with the versions that do exist**,
+so you can see the real ceiling. Requirements match monotonic integers and labels, not
+semver — `">=2.0"` is rejected rather than silently matching nothing.
+
+`trajectory` reads a run's spans (the run bundle carries span_type *counts* only). `metrics`
+returns series summaries, and `filters={"key": "<key>"}` drills to raw points. `reproduce`
+resolves `env_ref` through its execution record. `token_budget` bounds the row-shaped part
+of a view and hands back a `next_cursor`; `reproduce` is atomic and reports
 `token_budget_exceeded` rather than truncating a manifest into something that reproduces
 nothing.
 
-There is no `research_trace_file`: no backend trace index has ever existed, so it answered
+There is no trace-file tool: no backend trace index has ever existed, so it answered
 `matches: []` to every query, which agents read as "this file has no lineage". To trace a
-path/URI/hash, use `research_search` (its exact channel matches artifacts) and follow
-`research_get view="lineage"`.
+path/URI/hash, use `search_knowledge` (its exact channel matches artifacts) and follow
+`get_entity(view="lineage")`.
 
 MCP reads through the Probe Research API—never directly from Postgres or R2. Its
 logical sources are control identity/tenant scope, the structured experiment

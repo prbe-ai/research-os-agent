@@ -119,3 +119,23 @@ def test_no_skill_names_a_tool_that_does_not_exist() -> None:
     for skill, names in referenced.items():
         unknown = sorted(n for n in names if n not in declared)
         assert not unknown, f"{skill} names tools that do not exist: {unknown}"
+
+
+def test_user_facing_docs_do_not_advertise_the_retired_surface() -> None:
+    """The README and the setup command are what a NEW user reads first.
+
+    The skills guard above covers `skills/`, which is why this slipped: the
+    README and `plugins/*/commands/` were pointing new users at the five names
+    that disappear next release. Deprecated names may be MENTIONED (they still
+    answer), but not presented as the surface.
+    """
+    for rel in ("README.md", "plugins/probe-research/commands/probe-research-setup.md"):
+        text = (_ROOT / rel).read_text()
+        assert "browse_research" in text, f"{rel} does not mention the current surface"
+        assert "search_knowledge" in text, f"{rel} does not mention the current surface"
+        assert "get_entity" in text, f"{rel} does not mention the current surface"
+        # If it names a deprecated tool it must say so within a few lines.
+        if "research_resolve" in text:
+            assert "deprecat" in text.lower(), (
+                f"{rel} names retired tools without marking them deprecated"
+            )

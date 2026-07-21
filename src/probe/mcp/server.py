@@ -230,8 +230,10 @@ def create_server(
             Bad:  "why did the SQL agent stop improving?"
 
         corpora: omit for everything. Narrow with any of
-            experiments | files | github | transcripts. Experiments are NOT
-            special-cased any more -- you can exclude them.
+            experiments | assets | procedures | documents | transcripts.
+            `documents` covers indexed GitHub docs and workspace files.
+            Experiments are always included; narrowing adds corpora rather than
+            replacing them.
         project_id / workspace_id: scope both channels. Applied server-side, so
             semantic retrieval keeps working (it used to be switched off).
         top_k: your recall dial. If results look thin, RAISE IT before deciding
@@ -289,8 +291,10 @@ def create_server(
         how you check whether an official script, scorer, dataset, transform,
         config or image already exists -- duplicate asset identities are the
         most expensive avoidable error in this system. `filters={"requirement":
-        ">=2.0"}` asks whether a version satisfies a constraint. A name that
-        does not exist is a validation error; a name that exists with no
+        ">=2"}` asks whether a version satisfies a constraint. Asset versions are
+        MONOTONIC INTEGERS with optional labels, not semver -- ">=2.0" is not a
+        version here and is rejected rather than silently matching nothing. A name that
+        does not exist raises not-found, like any other bad ref; a name that exists with no
         satisfying version returns state="no_match" PLUS the versions that DO
         exist, so you can see the real ceiling and decide.
 

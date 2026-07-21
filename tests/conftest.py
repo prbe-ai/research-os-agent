@@ -100,6 +100,17 @@ _DEFAULT_SLUG = "default"
 
 
 class FakeApp:
+    # Set False to model a backend PREDATING server-side project scope: it
+    # accepts the unknown `project_id` body field, ignores it, and answers
+    # tenant-wide. The echo is the only thing distinguishing the two, so the
+    # fake has to be able to be both.
+    echoes_project_scope = True
+
+    def _echo_scope(self, response: dict, body: dict | None) -> dict:
+        if not self.echoes_project_scope or not body or not body.get("project_id"):
+            return response
+        return {**response, "project_id": body["project_id"]}
+
     def _find_artifact(self, artifact_id: str) -> dict | None:
         """One artifact by id, whatever it hangs off — the fake's echo of the server's
         single anchor-aware confirm/delete core."""
@@ -248,10 +259,10 @@ class FakeApp:
             if body.get("workspace_id") in self.search_404_workspace_ids:
                 return httpx.Response(404, json={"detail": "not found"})
             if self.search_responses:
-                return httpx.Response(200, json=self.search_responses.pop(0))
+                return httpx.Response(200, json=self._echo_scope(self.search_responses.pop(0), body))
             if self.search_response is None:
                 return httpx.Response(404, json={"detail": "Not Found"})
-            return httpx.Response(200, json=self.search_response)
+            return httpx.Response(200, json=self._echo_scope(self.search_response, body))
         # -- tokens (mint is session-only, so it is NOT routed here: the CLI mints
         # via the device flow, which tests/test_device_login.py covers) --
         if path == "/v1/tokens" and method == "GET":

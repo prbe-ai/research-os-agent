@@ -108,6 +108,18 @@ def _section(response: Any, key: str) -> dict[str, Any]:
         "results": rows,
         "cursor": cursor if isinstance(cursor, str) else None,
         "error": error,
+        # Carried through so the tool can surface them. Type-guarded like
+        # everything else here: a malformed body must degrade, never raise.
+        "total_candidates": (
+            section["total_candidates"]
+            if isinstance(section.get("total_candidates"), int)
+            else None
+        ),
+        "active_runs_count": (
+            section["active_runs_count"]
+            if isinstance(section.get("active_runs_count"), int)
+            else None
+        ),
     }
 
 
@@ -455,14 +467,36 @@ def _compact(envelope: dict) -> dict:
         "data": envelope["data"],
         "completeness": envelope["completeness"],
     }
-    unavailable = {k: v for k, v in (envelope.get("capabilities") or {}).items() if not v}
-    if unavailable:
-        compacted["capabilities"] = unavailable
+    # ALWAYS emit the key, even when empty. Omitting it overloads absence to
+    # mean both "everything works" and "not reported", so a caller doing
+    # resp["capabilities"]["semantic_search"] would KeyError on a healthy
+    # backend and succeed on a degraded one -- the inverse of a useful failure
+    # mode. Empty dict means "nothing unavailable".
+    compacted["capabilities"] = {
+        k: v for k, v in (envelope.get("capabilities") or {}).items() if not v
+    }
     if envelope.get("next_cursor") is not None:
         compacted["next_cursor"] = envelope["next_cursor"]
     if envelope.get("evidence"):
         compacted["evidence"] = envelope["evidence"]
     return compacted
+
+
+def _echoes_project_scope(response: Any, project_id: str) -> bool:
+    """Did the backend confirm it applied `project_id`?
+
+    A server that supports the scope echoes it (research-os #103 returns it on
+    the request echo); one that predates it accepts the unknown body field,
+    ignores it, and answers tenant-wide. Absence of the echo is the only signal
+    available, so absence is treated as unsupported -- the failure that matters
+    is the silent one, and a false refusal is loud and correctable.
+    """
+    if not isinstance(response, dict):
+        return False
+    # Absence is treated as UNSUPPORTED, not as assent. The failure that matters
+    # is the silent one -- tenant-wide results wearing state="complete" -- and a
+    # false refusal is loud, immediate and correctable.
+    return str(response.get("project_id") or "") == str(project_id)
 
 
 def _satisfies(version: dict, requirement: str) -> bool:
@@ -477,19 +511,33 @@ def _satisfies(version: dict, requirement: str) -> bool:
     raw = str(version.get("version", ""))
     label = version.get("label")
     requirement = requirement.strip()
-    for op in (">=", "<=", ">", "<", "=="):
+    # Order matters: ">=" must be tested before ">", and "==" before "=".
+    for op in (">=", "<=", "==", ">", "<", "="):
         if requirement.startswith(op):
             operand = requirement[len(op):].strip()
             try:
                 have, want = int(raw), int(operand)
             except (TypeError, ValueError):
-                return False
+                # A malformed operand must NOT quietly answer "no version
+                # satisfies this". That is a THIRD kind of nothing, and it is
+                # indistinguishable from a real version ceiling: the caller sees
+                # state="no_match" with completeness="complete", believes the
+                # asset is too old, and registers a duplicate -- the exact
+                # outcome this view exists to prevent. ">=2.0" is the obvious
+                # way to write this and it is not a version here.
+                raise errors.ValidationError(
+                    f"asset versions are monotonic integers, not semver: "
+                    f"{requirement!r} does not name one (try '>=2', '<3', "
+                    f"'==1', or a bare label)",
+                    status=422,
+                ) from None
             return {
                 ">=": have >= want,
                 "<=": have <= want,
+                "==": have == want,
+                "=": have == want,
                 ">": have > want,
                 "<": have < want,
-                "==": have == want,
             }[op]
     # Bare value: exact match on version or label.
     return requirement == raw or requirement == label
@@ -748,6 +796,23 @@ class ResearchReadService:
 
         exact = _section(response, Channel.EXACT)
         semantic = _section(response, Channel.SEMANTIC)
+        if project_id is not None and not _echoes_project_scope(response, project_id):
+            # The backend did not confirm it applied the scope. SearchRequest
+            # does not forbid extra body fields, so a pre-#103 server accepts
+            # `project_id` and ignores it -- returning TENANT-WIDE results with
+            # state="complete". An agent then attributes another project's runs
+            # to this one, which is worse than any error: it is a confident wrong
+            # answer with no marker on it.
+            #
+            # Refuse rather than silently narrow client-side. The old
+            # client-side path could only filter the exact channel and had to
+            # gut the semantic one to stay honest; refusing tells the caller the
+            # truth in one line instead.
+            raise errors.CapabilityUnavailable(
+                Capability.PROJECT_SCOPED_SEARCH,
+                "this Probe Research backend predates project-scoped search; "
+                "drop project_id or upgrade the server",
+            )
         # Project scope is applied SERVER-SIDE now (research-os #103): the
         # backend re-resolves semantic hits against live rows and over-fetches
         # so the filter runs before the cap. The old client-side path emptied
@@ -779,6 +844,14 @@ class ResearchReadService:
                     Channel.EXACT.value: {"error": exact["error"]},
                     Channel.SEMANTIC.value: {"error": semantic["error"]},
                 },
+                # The recall hint the instructions tell the agent to check
+                # before concluding the lab has not tried something. It was
+                # instructed in two places and returned in none, which is worse
+                # than not mentioning it: the agent looks, finds nothing, and
+                # either gives up on the check or invents a number.
+                # None on backends that do not report it.
+                "total_candidates": semantic.get("total_candidates"),
+                "active_runs_count": exact.get("active_runs_count"),
                 "unsupported_corpora": unsupported,
             },
             state=(

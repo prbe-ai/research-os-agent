@@ -131,7 +131,17 @@ class AssetClient:
         if not cursor:
             return None
         for _ in range(self._SCAN_PAGE_CAP):
-            page = self.list(limit=self._PAGE, cursor=cursor)
+            # Carry the filters into the walk. Dropping them resumes from a
+            # cursor minted under a FILTERED query while sending an UNFILTERED
+            # one -- and if the backend's cursor is keyset rather than offset,
+            # page 2 starts from that key in a different ordering and skips
+            # every asset sorting before it. `_find` would then return None and
+            # get_by_name would report authoritative absence for an asset that
+            # exists, which is the failure this whole rewrite removed.
+            walk: dict[str, Any] = {"limit": self._PAGE, "cursor": cursor, "name": name}
+            if kind is not None:
+                walk["kind"] = kind
+            page = self.list(**walk)
             for asset in page.items:
                 if asset.get("name") == name and (kind is None or asset.get("kind") == kind):
                     return asset
@@ -143,8 +153,12 @@ class AssetClient:
     def get_by_name(self, name: str, *, kind: str | None = None) -> dict | None:
         """The asset with this exact name, or None if there is none.
 
-        None means ABSENT, not "gave up looking" -- the backend filters
-        server-side, so this is one request and the answer is authoritative.
+        On a backend with the server-side name filter this is ONE request and
+        None means ABSENT. Against a backend predating that filter it falls back
+        to a bounded page walk, where None can also mean "hit the page cap" --
+        so the guarantee is conditional on a server version this client still
+        deliberately supports. Do not read None as proof of absence without
+        knowing which backend answered.
         """
         return self._find(name, kind)
 

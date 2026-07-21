@@ -117,6 +117,10 @@ class Capability(StrEnum):
     # can have one and not the other.
     STRUCTURED_BROWSE = "structured_browse"
     UNIFIED_SEARCH = "unified_search"
+    # Server-side project scoping. Probed by ECHO rather than assumed: a backend
+    # that predates it accepts the unknown `project_id` body field, ignores it,
+    # and answers tenant-wide with state="complete".
+    PROJECT_SCOPED_SEARCH = "project_scoped_search"
     SEMANTIC_SEARCH = "semantic_search"
     KB_DOCUMENTS = "kb_documents"
     VERSIONED_ASSETS = "versioned_assets"
