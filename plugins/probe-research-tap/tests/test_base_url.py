@@ -12,6 +12,7 @@ no-op instead of erroring.
 
 from __future__ import annotations
 
+import base64
 import json
 import tempfile
 from pathlib import Path
@@ -19,6 +20,16 @@ from pathlib import Path
 import pytest
 
 from tap import config as cfg
+
+
+def _make_jwt(payload: dict) -> str:
+    """A structurally-valid JWT (unsigned). Only the payload's claims are read
+    locally; the signature is never verified by the plugin."""
+    def _seg(d: dict) -> str:
+        raw = json.dumps(d).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+    return f"{_seg({'alg': 'HS256', 'typ': 'JWT'})}.{_seg(payload)}.sig"
 
 
 @pytest.fixture(autouse=True)
@@ -278,3 +289,110 @@ def test_v1_flat_config_still_works():
     _write_probe_config({"base_url": "https://legacy.example", "ingest_token": "ros_ing_OLD"})
     assert cfg.api_base_url() == "https://legacy.example"
     assert cfg.load_token() == "ros_ing_OLD"
+
+
+# --- base URL derived from a pairing token's `iss` --------------------------
+
+
+def test_base_url_from_pairing_token_allows_research_host():
+    token = _make_jwt({"iss": "api.research.prbe.ai", "aud": "agent-tap"})
+    assert cfg.base_url_from_pairing_token(token) == "https://api.research.prbe.ai"
+
+
+def test_base_url_from_pairing_token_accepts_apex_and_strips_whitespace():
+    for iss, expected in [
+        ("prbe.ai", "https://prbe.ai"),
+        ("api.research.prbe.ai", "https://api.research.prbe.ai"),
+        ("https://api.research.prbe.ai/", "https://api.research.prbe.ai"),
+        ("  api.research.prbe.ai  ", "https://api.research.prbe.ai"),
+    ]:
+        assert cfg.base_url_from_pairing_token(_make_jwt({"iss": iss})) == expected
+
+
+def test_base_url_from_pairing_token_rejects_non_prbe_and_unsafe_hosts():
+    """The token is unsigned from our side, so `iss` must be constrained to an
+    https Probe host — otherwise a pasted/forged token could pin an attacker
+    host as the transcript/bearer upload target."""
+    hostile = [
+        "evil.com",                              # not a Probe host
+        "http://api.research.prbe.ai",           # TLS downgrade
+        "https://api.research.prbe.ai@evil.com", # userinfo confusion → real host evil.com
+        "https://evil.com",                      # foreign host, valid https
+        "https://notprbe.ai",                    # suffix without the dot boundary
+        "https://prbe.ai.evil.com",              # lookalike subdomain
+        "//evil.com",                            # scheme-relative → empty host
+        "ftp://api.research.prbe.ai",            # wrong scheme
+    ]
+    for iss in hostile:
+        with pytest.raises(ValueError):
+            cfg.base_url_from_pairing_token(_make_jwt({"iss": iss}))
+
+
+def test_base_url_from_pairing_token_missing_or_malformed_raises():
+    with pytest.raises(ValueError):
+        cfg.base_url_from_pairing_token(_make_jwt({"aud": "agent-tap"}))  # no iss
+    with pytest.raises(ValueError):
+        cfg.base_url_from_pairing_token("not-a-jwt")
+
+
+def test_pair_base_url_prefers_env_over_token(monkeypatch):
+    monkeypatch.setenv("PROBE_BASE_URL", "https://override.example")
+    token = _make_jwt({"iss": "api.research.prbe.ai"})
+    assert cfg.pair_base_url(token) == "https://override.example"
+
+
+# --- host pinned at pair time (plugin-local .config) ------------------------
+
+
+def test_persisted_pair_host_used_by_api_base_url():
+    cfg.persist_api_base_url("https://api.research.prbe.ai")
+    assert cfg.api_base_url() == "https://api.research.prbe.ai"
+
+
+def test_env_base_url_beats_pinned_pair_host(monkeypatch):
+    cfg.persist_api_base_url("https://pinned.example")
+    monkeypatch.setenv("PROBE_BASE_URL", "https://env.example")
+    assert cfg.api_base_url() == "https://env.example"
+
+
+def test_pinned_pair_host_beats_probe_config_base_url():
+    _write_probe_config({"base_url": "https://probe-cli.example", "ingest_token": "t"})
+    cfg.persist_api_base_url("https://pinned.example")
+    assert cfg.api_base_url() == "https://pinned.example"
+
+
+def test_persist_pair_host_merges_not_clobbers():
+    """Pinning the host must not wipe cadence knobs already in .config."""
+    cfg.config_file().parent.mkdir(parents=True, exist_ok=True)
+    cfg.config_file().write_text(json.dumps({"active_interval_seconds": 42}))
+    cfg.persist_api_base_url("https://api.research.prbe.ai")
+    data = json.loads(cfg.config_file().read_text())
+    assert data["active_interval_seconds"] == 42
+    assert data["api_base_url"] == "https://api.research.prbe.ai"
+
+
+# --- paired .token precedence over the manual/self-host sources -------------
+
+
+def test_token_file_takes_precedence_over_config_ingest_token():
+    """A paired device keeps shipping under its own token even when the probe
+    CLI is separately logged in with a different ingest_token."""
+    _write_probe_config({"ingest_token": "config-file-token"})
+    cfg.write_token("paired-device-token")
+    assert cfg.load_token() == "paired-device-token"
+
+
+def test_token_file_takes_precedence_over_env_ingest_token(monkeypatch):
+    monkeypatch.setenv("PROBE_INGEST_TOKEN", "env-token")
+    cfg.write_token("paired-device-token")
+    assert cfg.load_token() == "paired-device-token"
+
+
+def test_blank_token_file_falls_through_to_config_ingest_token():
+    """An empty/whitespace .token is treated as UNSET, not as "" masking the
+    next source — so a corrupt/empty file can't silently disable a self-host
+    fallback that is otherwise configured."""
+    _write_probe_config({"ingest_token": "config-file-token"})
+    cfg.token_file().parent.mkdir(parents=True, exist_ok=True)
+    cfg.token_file().write_text("   ")
+    assert cfg.load_token() == "config-file-token"

@@ -12,33 +12,65 @@ Zero runtime dependencies (stdlib only); Python 3.11+.
 
 ## Install
 
-This plugin is published through the `research-os-agent` marketplace:
+Add the marketplace, then install the plugin:
 
 ```
-claude plugin install probe-research-tap@research-os-agent
+/plugin marketplace add prbe-ai/research-os-agent
+/plugin install probe-research-tap@research-os-agent
 ```
 
-(or from inside Claude Code: `/plugin install probe-research-tap@research-os-agent`)
+(the CLI equivalents are `claude plugin marketplace add prbe-ai/research-os-agent`
+and `claude plugin install probe-research-tap@research-os-agent`.)
 
-## Auth
+## Pairing (setup)
 
-There is no pairing step. The plugin reuses the probe CLI's credentials:
+Pair this device with your Research OS workspace:
+
+1. In the dashboard, open **Integrations → Pair Claude Code**
+   (<https://research.prbe.ai/integrations>) and copy the pairing token.
+2. Run:
+
+   ```bash
+   python3 -m tap pair <token>
+   ```
+
+`tap pair` exchanges the pairing token for a device token, writes it to
+`~/.claude/plugins/probe-research-tap/.token` (mode 0600), and pins the backend
+host — read from the token's `iss` claim, so the daemon reaches the same backend
+with no hardcoded host. Re-running `pair` on an already-paired device rotates the
+token and retires the old device server-side. To unpair:
+
+```bash
+python3 -m tap revoke
+```
+
+which revokes the device server-side and wipes the local token, meta, and any
+queued outbox (offline-safe — local state is cleared even if the server is
+unreachable).
+
+### Advanced / self-host
+
+If you run the probe CLI, its credentials work without pairing:
 
 ```bash
 probe login
 ```
 
-which writes `base_url` and the ingest token (`ingest_token`) to
-`~/.config/probe/config.json`. The daemon resolves, in order:
+writes `base_url` and the ingest token (`ingest_token`) to
+`$XDG_CONFIG_HOME/probe/config.json` (default `~/.config/probe/config.json`;
+`PROBE_CONFIG_PATH` overrides the file path for tests/dev). You can also set
+`PROBE_INGEST_TOKEN` / `PROBE_BASE_URL` directly.
 
-- `PROBE_INGEST_TOKEN` / `PROBE_BASE_URL` environment variables
-- `ingest_token` / `base_url` in `$XDG_CONFIG_HOME/probe/config.json`
-  (default `~/.config/probe/config.json`; `PROBE_CONFIG_PATH` overrides
-  the file path for tests/dev)
+Resolution, highest precedence first:
 
-No ingest token → the hooks no-op (nothing to authenticate with). No
-`base_url` → the daemon refuses to start rather than guess a host; there
-is deliberately no hardcoded default.
+- **token:** `.token` (from `tap pair`) → `PROBE_INGEST_TOKEN` →
+  `ingest_token` in the probe CLI config
+- **base URL:** `PROBE_BASE_URL` → host pinned by `tap pair` → `base_url` in
+  the probe CLI config
+
+No token → the hooks no-op (nothing to authenticate with). No base URL → the
+daemon refuses to start rather than guess a host; there is deliberately no
+hardcoded default.
 
 ## How it works
 
@@ -72,24 +104,25 @@ strips Anthropic API metadata, CC bookkeeping events, full tool inputs,
 and full tool results before anything leaves the machine.
 
 The batch body is `{device_id, session_id, batch_seq, cwd, events:[{line_no,
-raw}]}`. `device_id` is minted locally (uuid4) on first daemon start and
-persisted; the backend passes it through to the engine as the device
-external id. Session completion is handled backend-side — the plugin sends
-no finalize message.
+raw}]}`. `device_id` comes from the pairing exchange (or is minted locally as
+a uuid4 on first daemon start when self-hosting without pairing) and persisted
+in meta; the backend passes it through to the engine as the device external id.
+Session completion is handled backend-side — the plugin sends no finalize
+message.
 
 ## State files
 
 State lives at `~/.claude/plugins/probe-research-tap/` (override via
 `PROBE_RESEARCH_TAP_PLUGIN_DIR`) — separate from the plugin code, which CC
-manages under its plugin cache. Credentials do NOT live here — they belong
-to the probe CLI's config file.
+manages under its plugin cache.
 
 | File | Purpose |
 |------|---------|
-| `.config` | JSON for cadence overrides — see below. |
+| `.token` | Device token written by `tap pair` (mode 0600). Absent for self-host users who auth via the probe CLI / env. |
+| `.config` | JSON: cadence overrides (see below) + the backend host pinned at pair time. |
 | `.disabled` | Presence disables the daemon entirely. |
 | `.disabled_paths` | Newline-separated cwd prefixes to skip. |
-| `state.db` | sqlite: file_offsets, outbox, meta (incl. device_id). |
+| `state.db` | sqlite: file_offsets, outbox, meta (device_id, customer_id, paired_at, …). |
 | `logs/<session_id>.log` | Per-session log file. |
 
 ## Cadence
@@ -157,8 +190,10 @@ touch ~/.claude/plugins/probe-research-tap/.disabled
 ## Subcommands
 
 ```bash
-python -m tap watch    # daemon (called by SessionStart hook)
-python -m tap status   # print local state
+python3 -m tap pair <token>   # exchange a dashboard pairing token for a device token
+python3 -m tap watch          # daemon (called by SessionStart hook)
+python3 -m tap status         # print local state
+python3 -m tap revoke         # revoke device server-side + wipe local state
 ```
 
 ## Development

@@ -27,8 +27,8 @@ LOG_FILE="${LOG_DIR}/${SESSION_ID}.log"
 # --- Version self-heal (runs on the first session after an install/update) ---
 # CC's marketplace owns install and the versioned cache/ path, but the state
 # dir (PLUGIN_DIR) persists across versions and can carry stale artifacts into
-# a new one. We never touch live state (.config, state.db, logs), and never
-# prune CC's cache (an older version may still back a concurrent session).
+# a new one. We never touch live state (.token, .config, state.db, logs), and
+# never prune CC's cache (an older version may still back a concurrent session).
 RUNNING_VER=""
 if [ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]; then
     RUNNING_VER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' \
@@ -66,12 +66,13 @@ if [ -f "$PLUGIN_DIR/.disabled" ]; then
     exit 0
 fi
 
-# Without an ingest token there's nothing to authenticate with. The token
-# comes from the PROBE_INGEST_TOKEN env or the probe CLI's config file
-# ($XDG_CONFIG_HOME/probe/config.json, default ~/.config/probe/config.json,
-# written by `probe login`; PROBE_CONFIG_PATH overrides for tests/dev).
-# Surface once and no-op — mirrors tap/config.py's load_token().
-if [ -z "${PROBE_INGEST_TOKEN:-}" ]; then
+# Without a token there's nothing to authenticate with. Resolution mirrors
+# tap/config.py's load_token(): a paired device token ($PLUGIN_DIR/.token,
+# written by `tap pair` — the primary path) OR the PROBE_INGEST_TOKEN env OR
+# the probe CLI's config file ($XDG_CONFIG_HOME/probe/config.json, default
+# ~/.config/probe/config.json, written by `probe login`; PROBE_CONFIG_PATH
+# overrides for tests/dev). Surface once and no-op when none is present.
+if [ ! -f "$PLUGIN_DIR/.token" ] && [ -z "${PROBE_INGEST_TOKEN:-}" ]; then
     HAS_TOKEN=$(python3 - <<'PYEOF' 2>/dev/null || echo ""
 import json
 import os
@@ -103,7 +104,7 @@ print("yes" if isinstance(tok, str) and tok.strip() else "")
 PYEOF
 )
     if [ -z "$HAS_TOKEN" ]; then
-        echo "[$(date -u +%FT%TZ)] probe-research-tap: no ingest token configured; skipping" >>"$LOG_FILE"
+        echo "[$(date -u +%FT%TZ)] probe-research-tap: no token configured; run 'python3 -m tap pair <token>' (or 'probe login'); skipping" >>"$LOG_FILE"
         printf '{"continue": true}\n'
         exit 0
     fi
