@@ -595,3 +595,24 @@ def test_asset_requirement_matches_integer_versions_not_semver(client, app):
             "asset:scorer", view="versions", filters={"requirement": requirement}
         )
         assert out["data"]["state"] == expect_state, requirement
+
+
+def test_card_advertises_exactly_the_views_that_kind_supports(client, app):
+    """`card` is the default, so one call tells you what else you can ask for.
+
+    Derived from `_VIEWS`, so it cannot advertise a view the very same matrix
+    would reject -- and both the get_entity description and the track-experiment
+    skill promise this, so it has to be true.
+    """
+    from probe.mcp.service import _supported_views
+
+    rid, experiment_id, group_id, _ = _populated(client, app)
+    service = _service(client)
+
+    for ref, kind in ((f"run:{rid}", "run"), (f"experiment:{experiment_id}", "experiment")):
+        card = service.get_entity(ref, view="card")
+        advertised = card["data"]["available_views"]
+        assert advertised == _supported_views(kind)
+        # Everything advertised actually answers.
+        for view in advertised:
+            service.get_entity(ref, view=view, token_budget=100_000)

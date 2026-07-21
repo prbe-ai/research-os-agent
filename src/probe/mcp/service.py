@@ -910,6 +910,12 @@ class ResearchReadService:
             "view": str(view),
             **result.payload,
         }
+        if view == View.CARD:
+            # The default view teaches what else you can ask for, DERIVED from
+            # the same matrix that validates the request. Discovery by failed
+            # call is a fine contract with four views; with eleven across five
+            # kinds it is a tax on every first look at an unfamiliar entity.
+            data["available_views"] = _supported_views(kind)
         missing = list(result.missing)
         next_cursor: str | None = None
 

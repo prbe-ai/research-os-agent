@@ -5,42 +5,62 @@ description: Box and track scientific training, evaluation, docking, scoring, sw
 
 # Track an experiment
 
-1. Call `research_context` with the task and current project before the first meaningful experiment action.
-2. Reuse the active run when its intent matches. Otherwise create a run with `probe run start`, an explicit hypothesis, and a deterministic external id.
-3. Before creating or materially changing a reusable script, method, dataset, config, image, checkpoint, or container definition, call `research_resolve`. Reuse an exact version or pin a new version of the same asset; only start a new identity when no compatible match exists (see the manage-research-asset workflow). Never edit a published version in place.
-4. Run `probe snapshot RUN_ID` before launch (captures code + env, pins `env_ref`). Record W&B, scheduler, pod, image, and storage ids with `probe link` as soon as they appear (they land on the run's `foreign_keys`).
-5. Upload metrics, spans, and outputs through `probe log` (use `--dim key=value` for per-actor / per-device series), `probe span add`, and `probe artifact add`. Capture meaningful intent, decisions, observations, failures, results, deviations, and next steps with `probe note add`.
-6. Read back what you recorded before you rely on it — `research_get view="trajectory"` for the spans themselves, `view="metrics"` for the series. What you wrote and what landed are different claims, and only the second one is evidence.
-7. Before handoff or completion, call `research_get` with `view="handoff"` or `view="reproduce"`. Report missing capture honestly: `completeness.missing` in the response is the answer, not your recollection of what you logged.
-8. Finish the run with its real lifecycle outcome (`completed` / `failed` / `crashed` / `canceled`). Mint an immutable experiment version only through the publication workflow.
+1. Orient before the first meaningful action. `browse_research` if you do not know
+   what is in this project yet; `search_knowledge` if you have terms and want prior
+   work on this specific thing. Check what is already RUNNING before you launch
+   anything — `browse_research` reports `active_run_count`, and duplicate GPU-hours
+   are the expensive mistake here.
+2. Reuse the active run when its intent matches. Otherwise create one with
+   `probe run start`, an explicit hypothesis, and a deterministic external id.
+3. **Reuse before you create.** Before writing or materially changing a reusable
+   script, scoring method, dataset, config, image, checkpoint or container
+   definition, call `get_entity(ref="asset:<name>", view="versions")`. Reuse an
+   exact version or pin a new version of the SAME asset; start a new identity only
+   when nothing compatible exists (see manage-research-asset). Never edit a
+   published version in place.
+   A name that does not exist errors. A name that exists with no version satisfying
+   your `filters={"requirement": ...}` returns `state="no_match"` **plus the
+   versions that do exist** — that is a real version ceiling, not an absent asset,
+   and the difference decides whether you pin, bump, or start fresh.
+4. Run `probe snapshot RUN_ID` before launch (captures code + env, pins `env_ref`).
+   Record W&B, scheduler, pod, image and storage ids with `probe link` as they
+   appear (they land on the run's `foreign_keys`).
+5. Upload metrics, spans and outputs through `probe log` (`--dim key=value` for
+   per-actor / per-device series), `probe span add`, `probe artifact add`. Capture
+   intent, decisions, observations, failures, results, deviations and next steps
+   with `probe note add`.
+6. **Read back what you recorded before relying on it** — `get_entity` with
+   `view="trajectory"` for the spans, `view="metrics"` for the series. What you
+   wrote and what landed are different claims, and only the second is evidence.
+7. Before handoff or completion, read `view="handoff"` or `view="reproduce"`.
+   Report missing capture honestly: `completeness.missing` is the answer, not your
+   recollection of what you logged.
+8. Finish the run with its real lifecycle outcome (`completed` / `failed` /
+   `crashed` / `canceled`). Mint an immutable experiment version only through the
+   publication workflow.
 
-Do not invoke `probe hook ...`; those commands are reserved for future deterministic coding-agent hooks.
+If the run reports liveness (`probe` heartbeats it), keep heartbeating for the whole
+run or not at all: a run that beats once and then stops is reaped as `crashed`.
 
-## Which `research_get` view to ask for
+Do not invoke `probe hook ...`; those are reserved for deterministic coding-agent hooks.
 
-`research_get(ref, view=..., filters=..., token_budget=..., cursor=...)` — one entity, one
-purpose-shaped payload. `ref` is `run:<id>`, `experiment:<id>`, `project:<id>`, `group:<id>`,
-or a bare id. Ask for the NARROWEST view that answers the question; asking for a view a kind
-does not have is an error that names the ones it does.
+## Choosing a view
 
-| What you want to know | Ask for |
-|---|---|
-| does it exist, what state is it in | `view="card"` (default, cheapest — start here) |
-| what the run actually DID (rollouts, tool calls, turns) | `view="trajectory"` on a run |
-| how the numbers moved | `view="metrics"`; add `filters={"key": "loss"}` for that series' raw points |
-| what came out of it | `view="artifacts"` (a run's also takes `filters={"kind": ..., "step_from": ..., "step_to": ...}`) |
-| can I re-run this exactly | `view="reproduce"` on a run — hypothesis + `env_ref` resolved to its execution record |
-| I am a new session, catch me up | `view="handoff"` on a run (its artifact list is bundle-capped — `missing: ["artifacts_beyond_bundle_limit"]` means read `view="artifacts"` for all of them) |
-| what produced or consumed this | `view="lineage"` (a run's ancestry; an experiment's edges) |
-| what happened to this run, in order | `view="events"` on a run |
-| what sweeps/ensembles exist | `view="groups"` on an experiment, then `ref="group:<id>"` for one |
-| what has been published | `view="versions"` on an experiment |
+`get_entity` carries the full view matrix in its own description, and `card` (the
+default) returns `available_views` for whatever you just fetched — so ask the tool,
+do not memorise a table that can go stale. This file deliberately does NOT repeat
+the matrix: it lived in three places, and the copies drifted.
 
-Narrow with `filters` rather than reading everything and skimming — trajectory takes
-`span_type` / `parent_span_id` / `step_from` / `step_to`, and they run server-side.
+The judgement that is not in the tool description:
+
+- Ask for the **narrowest** view that answers your question. `card` first; it is
+  cheapest and tells you what else exists.
+- Narrow with `filters` rather than reading everything and skimming — they run
+  server-side.
+- `handoff`'s `span_types` counts tell you whether a `trajectory` call is worth
+  making at all.
 
 **Trust the envelope over your own optimism.** `completeness.state="partial"` plus
-`missing[]` names exactly what you did not see; `handoff`'s `span_types` counts tell you
-whether a `trajectory` call is even worth making. When `next_cursor` is set there ARE more
-rows — pass it back with the SAME view to continue, or say you only read a prefix. Do not
-report "no spans" or "no lineage" when what you actually got was a partial envelope.
+`missing[]` names exactly what you did not see. When `next_cursor` is set there ARE
+more rows — pass it back with the SAME view, or say you read only a prefix. Never
+report "no spans" or "no lineage" when what you got was a partial envelope.

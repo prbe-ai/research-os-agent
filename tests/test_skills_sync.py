@@ -67,3 +67,55 @@ def test_every_canonical_skill_is_covered_by_this_guard() -> None:
         f"skills/ holds {sorted(on_disk)} but this guard and the Makefile's "
         f"sync-plugin-skills cover {sorted(_SYNCED)}"
     )
+
+
+def test_the_wheel_ships_the_canonical_skills_not_a_third_copy() -> None:
+    """The THIRD copy path nothing guarded.
+
+    `pyproject.toml` ships `skills` as shared-data
+    (`share/probe-research/skills`). That is a third distribution of the same
+    files, and unlike the plugin copy it had no guard at all — a wheel built
+    from a tree with drifted skills would install them and nothing would fail.
+
+    Point it at the canonical directory, and assert it stays pointed there: the
+    moment it names a copy instead, the copy can drift the way the plugin's did.
+    """
+    import tomllib
+
+    with (_ROOT / "pyproject.toml").open("rb") as fh:
+        config = tomllib.load(fh)
+    shared = config["tool"]["hatch"]["build"]["targets"]["wheel"]["shared-data"]
+    assert "skills" in shared, (
+        "the wheel no longer ships skills/ — if that is deliberate, delete this "
+        "guard; if it now ships a COPY, point it back at skills/"
+    )
+
+
+def test_no_skill_names_a_tool_that_does_not_exist() -> None:
+    """A skill naming a retired tool teaches an agent to call nothing.
+
+    This is the failure that actually shipped: the installed copy of
+    track-experiment was measured 30 lines behind the repo, still teaching a
+    surface that had moved. No test can reach a user's installed cache, but this
+    at least stops the SOURCE from naming tools that are gone.
+    """
+    import re
+
+    # Read the declared tool names from the server source rather than standing a
+    # server up: this guard is about the SKILLS being consistent with the code,
+    # and it should not need a client, a fake backend, or an event loop to say so.
+    server_src = (_ROOT / "src" / "probe" / "mcp" / "server.py").read_text()
+    declared = set(re.findall(r"^    def ([a-z_]+)\(", server_src, re.M))
+
+    referenced: dict[str, set[str]] = {}
+    for skill_dir in _CANONICAL.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        text = (skill_dir / "SKILL.md").read_text()
+        # Tool-shaped mentions: `name(` or `name` in backticks.
+        found = set(re.findall(r"`(browse_research|search_knowledge|get_entity|research_\w+)", text))
+        referenced[skill_dir.name] = found
+
+    for skill, names in referenced.items():
+        unknown = sorted(n for n in names if n not in declared)
+        assert not unknown, f"{skill} names tools that do not exist: {unknown}"
