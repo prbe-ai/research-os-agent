@@ -832,6 +832,12 @@ class ResearchReadService:
             missing.append(MissingMarker.SEMANTIC_SEARCH)
         if unsupported:
             missing.append(MissingMarker.KB_CORPORA)
+        if isinstance(response, dict) and response.get("truncated"):
+            # The backend trimmed the response onto its size budget, so an
+            # absent document is NOT evidence of absence. Surfacing this is the
+            # whole point of the backend emitting it -- a caller that cannot see
+            # the trim reads a short result set as a complete one.
+            missing.append(MissingMarker.TRUNCATED_BY_RESPONSE_BUDGET)
         backend_ok = (
             isinstance(response, dict) and response.get("state") == BackendSearchState.OK
         )

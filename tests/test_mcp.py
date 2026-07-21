@@ -1016,3 +1016,22 @@ def test_project_scope_refuses_a_backend_that_ignores_it(client, app):
     # And an echoing backend answers normally.
     app.echoes_project_scope = True
     assert service.search_knowledge("q", project_id="p-1")["data"]["query"] == "q"
+
+
+def test_backend_truncation_is_surfaced_not_swallowed(client, app):
+    """A trimmed response must not read as a complete one.
+
+    The backend drops chunks and whole results to fit its byte budget and says
+    so. If the tool swallows that, an agent reads a short result set as "the lab
+    has nothing else" -- the silent false negative this whole surface is built
+    to avoid.
+    """
+    app.search_response = {**_search_response(), "truncated": True}
+    service = ResearchReadService(ResearchOSSource(client))
+    out = service.search_knowledge("q")
+    assert out["completeness"]["state"] == "partial"
+    assert "truncated_by_response_budget" in out["completeness"]["missing"]
+
+    # ...and an untruncated response stays complete, so the marker means something.
+    app.search_response = _search_response()
+    assert service.search_knowledge("q")["completeness"]["state"] == "complete"

@@ -139,6 +139,11 @@ class MissingMarker(StrEnum):
     EXACT_SEARCH = "exact_search"
     SEMANTIC_SEARCH = "semantic_search"
     KB_CORPORA = "kb_corpora"
+    # The BACKEND trimmed the response onto its byte budget (dropped chunks or
+    # whole results). Distinct from truncated_by_token_budget, which is this
+    # tool's own row budget: one is the server shrinking the payload, the other
+    # is us. Either way an absent document is not evidence of absence.
+    TRUNCATED_BY_RESPONSE_BUDGET = "truncated_by_response_budget"
     # research_get
     TRUNCATED_BY_TOKEN_BUDGET = "truncated_by_token_budget"
     TOKEN_BUDGET_EXCEEDED = "token_budget_exceeded"
