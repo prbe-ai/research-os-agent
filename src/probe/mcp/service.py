@@ -108,6 +108,18 @@ def _section(response: Any, key: str) -> dict[str, Any]:
         "results": rows,
         "cursor": cursor if isinstance(cursor, str) else None,
         "error": error,
+        # Carried through so the tool can surface them. Type-guarded like
+        # everything else here: a malformed body must degrade, never raise.
+        "total_candidates": (
+            section["total_candidates"]
+            if isinstance(section.get("total_candidates"), int)
+            else None
+        ),
+        "active_runs_count": (
+            section["active_runs_count"]
+            if isinstance(section.get("active_runs_count"), int)
+            else None
+        ),
     }
 
 
@@ -402,6 +414,16 @@ _VIEWS: dict[tuple[str, str], str] = {
     (EntityType.EXPERIMENT, View.VERSIONS): "_view_versions",
     (EntityType.PROJECT, View.CARD): "_view_card",
     (EntityType.GROUP, View.CARD): "_view_card",
+    # Assets: the reuse-before-create seam. `versions` is where research_resolve
+    # went -- an asset lookup is a read of one entity, and it never needed a
+    # tool of its own.
+    (EntityType.ASSET, View.CARD): "_view_card",
+    (EntityType.ASSET, View.VERSIONS): "_view_asset_versions",
+    # NO asset lineage view. There is no backend route for it, so it could only
+    # ever answer `edges: []` -- and an agent reads that as "this asset has no
+    # lineage", a confident wrong answer. Exactly why research_trace_file was
+    # removed rather than left returning empty. Add the view when the route
+    # exists, not before.
 }
 
 # Filters each (kind, view) accepts, mapped onto the backend's REAL server-side
@@ -415,7 +437,110 @@ _VIEW_FILTERS: dict[tuple[str, str], set[str]] = {
     (EntityType.RUN, View.TRAJECTORY): {"span_type", "parent_span_id", "step_from", "step_to"},
     (EntityType.RUN, View.METRICS): {"key", "kind"},
     (EntityType.RUN, View.ARTIFACTS): {"kind", "step_from", "step_to"},
+    # `at` is deliberately absent: the SDK accepted it and never read it, and
+    # no backend as-of resolution exists. Advertising a parameter that silently
+    # does nothing is worse than not having one.
+    (EntityType.ASSET, View.VERSIONS): {"requirement"},
 }
+
+
+def _compact(envelope: dict) -> dict:
+    """Strip envelope bookkeeping an agent does not reason over.
+
+    What is KEPT and why is the interesting half -- a drop-list without one
+    rots into dropping something load-bearing:
+
+    - `completeness` ALWAYS survives. It is the only field that says what the
+      response could not cover, and stripping it would turn every partial answer
+      into a confident one.
+    - `capabilities` survives ONLY where it is False. A True flag is noise
+      repeated on every call; a False flag says this backend cannot do something
+      you may be about to rely on.
+    - `next_cursor` survives when set: without it there is no way to know the
+      result was a page rather than the whole answer.
+    - `scope`, `as_of`, `schema_version` go. They are constant per token and per
+      release; re-sending them on every call costs context and tells the agent
+      nothing it can act on.
+    - `evidence` goes when empty, stays when populated.
+    """
+    compacted = {
+        "data": envelope["data"],
+        "completeness": envelope["completeness"],
+    }
+    # ALWAYS emit the key, even when empty. Omitting it overloads absence to
+    # mean both "everything works" and "not reported", so a caller doing
+    # resp["capabilities"]["semantic_search"] would KeyError on a healthy
+    # backend and succeed on a degraded one -- the inverse of a useful failure
+    # mode. Empty dict means "nothing unavailable".
+    compacted["capabilities"] = {
+        k: v for k, v in (envelope.get("capabilities") or {}).items() if not v
+    }
+    if envelope.get("next_cursor") is not None:
+        compacted["next_cursor"] = envelope["next_cursor"]
+    if envelope.get("evidence"):
+        compacted["evidence"] = envelope["evidence"]
+    return compacted
+
+
+def _echoes_project_scope(response: Any, project_id: str) -> bool:
+    """Did the backend confirm it applied `project_id`?
+
+    A server that supports the scope echoes it (research-os #103 returns it on
+    the request echo); one that predates it accepts the unknown body field,
+    ignores it, and answers tenant-wide. Absence of the echo is the only signal
+    available, so absence is treated as unsupported -- the failure that matters
+    is the silent one, and a false refusal is loud and correctable.
+    """
+    if not isinstance(response, dict):
+        return False
+    # Absence is treated as UNSUPPORTED, not as assent. The failure that matters
+    # is the silent one -- tenant-wide results wearing state="complete" -- and a
+    # false refusal is loud, immediate and correctable.
+    return str(response.get("project_id") or "") == str(project_id)
+
+
+def _satisfies(version: dict, requirement: str) -> bool:
+    """Does this asset version satisfy `requirement`?
+
+    Asset versions are MONOTONIC INTEGERS with optional labels, not semver --
+    so this supports exactly what the data supports: an exact label/version
+    match, or `>=N` / `>N` / `<=N` / `<N` against the integer. Pretending to
+    understand semver ranges over integer versions would answer confidently and
+    wrongly, which is the failure mode this whole view exists to prevent.
+    """
+    raw = str(version.get("version", ""))
+    label = version.get("label")
+    requirement = requirement.strip()
+    # Order matters: ">=" must be tested before ">", and "==" before "=".
+    for op in (">=", "<=", "==", ">", "<", "="):
+        if requirement.startswith(op):
+            operand = requirement[len(op):].strip()
+            try:
+                have, want = int(raw), int(operand)
+            except (TypeError, ValueError):
+                # A malformed operand must NOT quietly answer "no version
+                # satisfies this". That is a THIRD kind of nothing, and it is
+                # indistinguishable from a real version ceiling: the caller sees
+                # state="no_match" with completeness="complete", believes the
+                # asset is too old, and registers a duplicate -- the exact
+                # outcome this view exists to prevent. ">=2.0" is the obvious
+                # way to write this and it is not a version here.
+                raise errors.ValidationError(
+                    f"asset versions are monotonic integers, not semver: "
+                    f"{requirement!r} does not name one (try '>=2', '<3', "
+                    f"'==1', or a bare label)",
+                    status=422,
+                ) from None
+            return {
+                ">=": have >= want,
+                "<=": have <= want,
+                "==": have == want,
+                "=": have == want,
+                ">": have > want,
+                "<": have < want,
+            }[op]
+    # Bare value: exact match on version or label.
+    return requirement == raw or requirement == label
 
 
 def _supported_views(kind: str) -> list[str]:
@@ -454,9 +579,10 @@ class ResearchReadService:
         missing: list[str] | None = None,
         next_cursor: str | None = None,
         capabilities: dict[str, bool] | None = None,
+        verbose: bool = True,
     ) -> dict:
         identity = self.source.identity()
-        return {
+        envelope = {
             "schema_version": "1.0",
             "as_of": _now(),
             "scope": {
@@ -469,6 +595,7 @@ class ResearchReadService:
             "completeness": {"state": state, "missing": missing or []},
             "next_cursor": next_cursor,
         }
+        return envelope if verbose else _compact(envelope)
 
     def research_context(
         self,
@@ -560,7 +687,7 @@ class ResearchReadService:
             capabilities=capabilities,
         )
 
-    def research_browse(
+    def browse_research(
         self,
         scope: str | None = None,
         depth: int = 1,
@@ -606,35 +733,46 @@ class ResearchReadService:
             next_cursor=payload.get("cursor"),
         )
 
-    def research_search(
+    def search_knowledge(
         self,
         query: str,
         corpora: list[str] | None = None,
-        filters: dict[str, Any] | None = None,
-        collapse: str | None = "experiment",
-        limit: int = 8,
-        cursor: str | None = None,
+        project_id: str | None = None,
         workspace_id: str | None = None,
+        top_k: int = 8,
+        collapse: str | None = "experiment",
+        verbose: bool = True,
+        cursor: str | None = None,
     ) -> dict:
+        """Ranked retrieval across the lab.
+
+        `verbose` defaults True HERE because the deprecation aliases call
+        straight through and must keep returning the old envelope -- an alias
+        that returns a different shape is a breaking change wearing a
+        compatibility label. The new tools pass verbose=False explicitly.
+
+        Scopes are TYPED parameters, not an untyped `filters` dict. The dict
+        accepted exactly one documented key while looking like it accepted many,
+        and a per-key cost (project scope used to disable semantic retrieval)
+        cannot be documented on a `dict[str, Any]`.
+        """
         if collapse is not None and collapse != EntityType.EXPERIMENT:
             raise errors.ValidationError(
                 f'unknown collapse value {collapse!r}: pass "experiment" or null',
                 status=422,
             )
-        filters = filters or {}
-        workspace_id = workspace_id or filters.get("workspace_id")
-        project_id = filters.get("project_id")
         corpus, unsupported = _map_corpora(corpora)
         exact_cursor, semantic_cursor = _split_cursor(cursor)
         # Split the budget per channel with NO post-merge truncation: every row
         # the backend hands us is emitted, so the per-channel cursors we return
         # never point past rows the caller has not seen.
-        per_channel = max(1, min(-(-limit // 2), _BACKEND_CHANNEL_CAP))
+        per_channel = max(1, min(-(-top_k // 2), _BACKEND_CHANNEL_CAP))
         try:
             response = self.source.search(
                 query,
                 corpus=corpus,
                 workspace_id=workspace_id,
+                project_id=project_id,
                 top_k=per_channel,
                 exact_limit=per_channel,
                 exact_cursor=exact_cursor,
@@ -652,22 +790,44 @@ class ResearchReadService:
                     "upgrade the server",
                     status=422,
                 ) from None
-            return self._keyword_search(query, corpora, filters, collapse, limit)
+            return self._keyword_search(
+                query, corpora, project_id, collapse, top_k, verbose=verbose
+            )
 
         exact = _section(response, Channel.EXACT)
         semantic = _section(response, Channel.SEMANTIC)
-        if project_id is not None:
-            # The backend has no project filter; scope client-side instead of
-            # silently returning tenant-wide hits. Exact rows carry project_id
-            # (rows without a project linkage are conservatively dropped). The
-            # semantic channel cannot be project-scoped cheaply, so it is
-            # excluded and marked — never pretended to cover the project.
-            exact["results"] = [row for row in exact["results"] if _in_project(row, project_id)]
+        scoped_server_side = project_id is None or _echoes_project_scope(
+            response, project_id
+        )
+        if not scoped_server_side:
+            # The backend did not confirm it applied the scope. SearchRequest
+            # does not forbid extra body fields, so a server predating
+            # server-side project scope accepts `project_id`, ignores it, and
+            # returns TENANT-WIDE results -- a confident wrong answer with no
+            # marker on it, which is worse than any error.
+            #
+            # Degrade rather than refuse. Refusing would be honest but would
+            # also remove a capability that works today; filtering client-side
+            # is equally honest and still useful. The exact channel carries
+            # project_id per row so it can be narrowed here; the semantic
+            # channel cannot be, so it is EMPTIED and marked rather than passed
+            # through unscoped. A caller gets fewer results and is told why.
+            exact["results"] = [
+                row for row in exact["results"] if _in_project(row, project_id)
+            ]
             semantic = {
                 "results": [],
                 "cursor": None,
                 "error": ChannelError.PROJECT_SCOPE_UNSUPPORTED,
+                "total_candidates": None,
+                "active_runs_count": None,
             }
+        # Project scope is applied SERVER-SIDE now (research-os #103): the
+        # backend re-resolves semantic hits against live rows and over-fetches
+        # so the filter runs before the cap. The old client-side path emptied
+        # the semantic channel outright and reported
+        # project_scope_unsupported -- a scoped search silently became
+        # trigram-only. Nothing to do here but pass the scope through.
         results = _interleave(
             [_exact_result(row) for row in exact["results"]],
             [_semantic_result(row) for row in semantic["results"]],
@@ -681,6 +841,12 @@ class ResearchReadService:
             missing.append(MissingMarker.SEMANTIC_SEARCH)
         if unsupported:
             missing.append(MissingMarker.KB_CORPORA)
+        if isinstance(response, dict) and response.get("truncated"):
+            # The backend trimmed the response onto its size budget, so an
+            # absent document is NOT evidence of absence. Surfacing this is the
+            # whole point of the backend emitting it -- a caller that cannot see
+            # the trim reads a short result set as a complete one.
+            missing.append(MissingMarker.TRUNCATED_BY_RESPONSE_BUDGET)
         backend_ok = (
             isinstance(response, dict) and response.get("state") == BackendSearchState.OK
         )
@@ -693,6 +859,14 @@ class ResearchReadService:
                     Channel.EXACT.value: {"error": exact["error"]},
                     Channel.SEMANTIC.value: {"error": semantic["error"]},
                 },
+                # The recall hint the instructions tell the agent to check
+                # before concluding the lab has not tried something. It was
+                # instructed in two places and returned in none, which is worse
+                # than not mentioning it: the agent looks, finds nothing, and
+                # either gives up on the check or invents a number.
+                # None on backends that do not report it.
+                "total_candidates": semantic.get("total_candidates"),
+                "active_runs_count": exact.get("active_runs_count"),
                 "unsupported_corpora": unsupported,
             },
             state=(
@@ -702,22 +876,23 @@ class ResearchReadService:
             ),
             missing=sorted(set(missing)),
             next_cursor=_join_cursor(exact["cursor"], semantic["cursor"]),
+            verbose=verbose,
         )
 
     def _keyword_search(
         self,
         query: str,
         corpora: list[str] | None,
-        filters: dict[str, Any],
+        project_id: str | None,
         collapse: str | None,
-        limit: int,
+        top_k: int,
+        verbose: bool = True,
     ) -> dict:
         """Pre-/v1/search behavior: keyword match over experiment cards only
         (project-scoped via filters.project_id). This path cannot paginate, so
         any incoming cursor is ignored and next_cursor is always None — echoing
         a packed /v1/search cursor here would make cursor-following consumers
         loop forever on version skew."""
-        project_id = filters.get("project_id")
         experiments = self.source.experiments(project_id=project_id, limit=100)
         terms = set(query.lower().split())
         results = []
@@ -747,9 +922,10 @@ class ResearchReadService:
         if corpora and any(c in _KB_TOOL_CORPORA for c in corpora):
             missing.append(MissingMarker.KB_CORPORA)
         return self._envelope(
-            {"query": query, "collapse": collapse, "results": results[:limit]},
+            {"query": query, "collapse": collapse, "results": results[:top_k]},
             state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
             missing=sorted(set(missing)),
+            verbose=verbose,
             next_cursor=None,
         )
 
@@ -791,13 +967,14 @@ class ResearchReadService:
         )
         raise errors.ValidationError(f"unknown filter(s) {unknown}: {detail}", status=422)
 
-    def research_get(
+    def get_entity(
         self,
         ref: str,
         view: str = View.CARD,
         token_budget: int = 2000,
         cursor: str | None = None,
         filters: dict[str, Any] | None = None,
+        verbose: bool = True,
     ) -> dict:
         """One entity, one purpose-shaped view. See `_VIEWS` for the real matrix.
 
@@ -821,6 +998,12 @@ class ResearchReadService:
             "view": str(view),
             **result.payload,
         }
+        if view == View.CARD:
+            # The default view teaches what else you can ask for, DERIVED from
+            # the same matrix that validates the request. Discovery by failed
+            # call is a fine contract with four views; with eleven across five
+            # kinds it is a tax on every first look at an unfamiliar entity.
+            data["available_views"] = _supported_views(kind)
         missing = list(result.missing)
         next_cursor: str | None = None
 
@@ -854,6 +1037,7 @@ class ResearchReadService:
             state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
             missing=missing,
             next_cursor=next_cursor,
+            verbose=verbose,
         )
 
     # -- view builders -------------------------------------------------------
@@ -1047,6 +1231,35 @@ class ResearchReadService:
         report missing:["versioned_assets"] and had never been implemented."""
         return _ViewData(
             rows=self.source.experiment_versions(str(entity["id"])), rows_key="versions"
+        )
+
+    def _view_asset_versions(self, entity: dict, request: _Req) -> _ViewData:
+        """An asset's versions, newest first, optionally constrained.
+
+        Two different empty answers must not look alike. A name that does not
+        exist never reaches here -- source.get raises NotFound, the same as any
+        other bad ref. Reaching here with nothing to show means the asset EXISTS
+        and no version satisfies the constraint, which is `state="no_match"`
+        PLUS the versions that do exist, so the caller can see the real ceiling
+        and decide whether to relax the constraint or publish a new version.
+        Collapsing the two would make a typo and a genuine version ceiling
+        indistinguishable, and an agent that reads "absent" writes a duplicate.
+        """
+        versions = self.source.asset_versions(str(entity["id"]))
+        requirement = request.filters.get("requirement")
+        if not requirement:
+            return _ViewData(rows=versions, rows_key="versions")
+        satisfying = [v for v in versions if _satisfies(v, requirement)]
+        return _ViewData(
+            rows=satisfying or versions,
+            rows_key="versions",
+            payload={
+                "requirement": requirement,
+                "state": "match" if satisfying else "no_match",
+                # On no_match the rows above are the FULL list, so the ceiling
+                # is visible rather than merely asserted.
+                "satisfying_count": len(satisfying),
+            },
         )
 
     def research_compare(

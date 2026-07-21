@@ -166,6 +166,7 @@ class ResearchOSSource:
         *,
         corpus: list[str] | None = None,
         workspace_id: str | None = None,
+        project_id: str | None = None,
         top_k: int | None = None,
         exact_limit: int | None = None,
         exact_cursor: str | None = None,
@@ -174,15 +175,16 @@ class ResearchOSSource:
         """POST /v1/search, raising :class:`errors.CapabilityUnavailable` when the
         backend predates the endpoint (so callers can fall back honestly).
 
-        404 / staleness policy (rolling deploys + oracle-safe workspace 404s):
+        404 / staleness policy (rolling deploys + oracle-safe SCOPE 404s):
         - a FRESH cached "unsupported" verdict short-circuits here, so a
           pre-search server does not eat a doomed POST per call; the verdict
           expires after ``_SUPPORT_RECHECK_SECONDS`` and is then re-checked.
         - any search 404 re-probes the endpoint itself (invalidating a cached
-          True). If the probe finds the endpoint: a workspace-scoped 404 means
-          the WORKSPACE was not found (surfaced as NotFound); otherwise the
-          search is retried once (we likely hit a stale pod mid-deploy) before
-          the 404 is surfaced.
+          True). If the probe finds the endpoint the search is retried ONCE
+          first (a stale pod mid-deploy 404s scoped and unscoped alike); only a
+          second 404 is attributed to the scope, and then a workspace- or
+          project-scoped one surfaces as NotFound because those are oracle-safe
+          404s.
         - if the probe cannot classify (transient error) the original 404 is
           surfaced without caching a verdict, so the next call re-checks.
         """
@@ -195,26 +197,43 @@ class ResearchOSSource:
                     query,
                     corpus=corpus,
                     workspace_id=workspace_id,
+                    project_id=project_id,
                     top_k=top_k,
                     exact_limit=exact_limit,
                     exact_cursor=exact_cursor,
                     semantic_cursor=semantic_cursor,
                 )
             except errors.NotFoundError:
+                if retried:
+                    # Second 404 with the endpoint already confirmed up. Now the
+                    # 404 is about the REQUEST, not the deployment: a scoped one
+                    # means that scope is absent (both scopes are oracle-safe
+                    # 404s), an unscoped one is a persistent server 404.
+                    raise
+                # First 404: is the endpoint there at all? Probe ONCE per call --
+                # re-probing on the retry too would cost four requests to answer
+                # one question.
                 self._search_supported = None
                 self._probe_search()
-                if self._search_supported is True:
-                    if workspace_id is not None:
-                        raise  # endpoint exists -> the workspace was not found
-                    if not retried:
-                        retried = True
-                        continue  # likely a stale pod during a rolling deploy
-                    raise  # endpoint present but this search persistently 404s
                 if self._search_supported is None:
                     raise  # probe could not classify; do not cache a verdict
-                raise self._capability_unavailable() from None
+                if self._search_supported is not True:
+                    raise self._capability_unavailable() from None
+                # Endpoint exists. RETRY BEFORE ATTRIBUTING: a stale pod
+                # mid-rolling-deploy 404s scoped and unscoped requests alike, and
+                # calling a scoped 404 "that project does not exist" without
+                # retrying turns a deploy into a wrong answer about the caller's
+                # own data. Project scope is the commoner of the two, so getting
+                # this wrong has a wider blast radius than the workspace-only
+                # version it replaced.
+                retried = True
+                continue
             self._record_search_response(response)
             return response
+
+    def asset_versions(self, asset_id: str) -> list[dict]:
+        """An asset's versions, newest first."""
+        return list(self.client.assets.versions(asset_id))
 
     def identity(self) -> dict:
         return self.client.me()
@@ -244,6 +263,16 @@ class ResearchOSSource:
             EntityType.PROJECT.value: self.client.get_project,
             EntityType.GROUP.value: self.client.get_group,
         }
+        if kind == EntityType.ASSET.value:
+            # Assets resolve by NAME, not id -- that is what makes them useful
+            # for the reuse check. Kept OUT of the bare-ref fallback below for
+            # the same reason: a bare id would then trigger a name lookup on
+            # every miss, and a typo would cost a registry round trip before
+            # erroring.
+            asset = self.client.assets.get_by_name(value)
+            if asset is None:
+                raise errors.NotFoundError(f"no asset named {value!r}")
+            return kind, asset
         if kind in getters:
             return kind, getters[kind](value)
         for candidate in getters:

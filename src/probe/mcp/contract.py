@@ -37,6 +37,9 @@ class EntityType(StrEnum):
     ARTIFACT = "artifact"
     RUN = "run"
     GROUP = "group"  # a sweep/ensemble: an experiment-shaped noun, reached by ref
+    # Reached by NAME, not id (`asset:<name>`): the reuse check asks "does an
+    # official X already exist", and you have the name, not an id.
+    ASSET = "asset"
     FILE = "file"
     DOCUMENT = "document"  # a semantic hit whose ref is null
 
@@ -114,6 +117,10 @@ class Capability(StrEnum):
     # can have one and not the other.
     STRUCTURED_BROWSE = "structured_browse"
     UNIFIED_SEARCH = "unified_search"
+    # Server-side project scoping. Probed by ECHO rather than assumed: a backend
+    # that predates it accepts the unknown `project_id` body field, ignores it,
+    # and answers tenant-wide with state="complete".
+    PROJECT_SCOPED_SEARCH = "project_scoped_search"
     SEMANTIC_SEARCH = "semantic_search"
     KB_DOCUMENTS = "kb_documents"
     VERSIONED_ASSETS = "versioned_assets"
@@ -132,6 +139,11 @@ class MissingMarker(StrEnum):
     EXACT_SEARCH = "exact_search"
     SEMANTIC_SEARCH = "semantic_search"
     KB_CORPORA = "kb_corpora"
+    # The BACKEND trimmed the response onto its byte budget (dropped chunks or
+    # whole results). Distinct from truncated_by_token_budget, which is this
+    # tool's own row budget: one is the server shrinking the payload, the other
+    # is us. Either way an absent document is not evidence of absence.
+    TRUNCATED_BY_RESPONSE_BUDGET = "truncated_by_response_budget"
     # research_get
     TRUNCATED_BY_TOKEN_BUDGET = "truncated_by_token_budget"
     TOKEN_BUDGET_EXCEEDED = "token_budget_exceeded"

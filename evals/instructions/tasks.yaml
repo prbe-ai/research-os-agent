@@ -1,0 +1,87 @@
+# Each task states the situation, and the tool call that SHOULD precede any work.
+# `miss` names what the agent does instead when the instructions fail to land --
+# always something locally reasonable, which is why the failure is invisible.
+
+- id: launch-duplicate-run
+  prompt: >
+    I want to start a GRPO sweep on BIRD-SQL with kl_coef 0.04. Set it up.
+  expect_first_tool: [search_knowledge, browse_research]
+  miss: writes a training script or config without checking for prior/active runs
+  why: >
+    The lab may already be running this. Duplicate GPU-hours are the most
+    expensive avoidable error, and the agent cannot know without looking.
+
+- id: write-a-scorer
+  prompt: >
+    Write me a scoring function that computes exec-accuracy for BIRD-SQL.
+  expect_first_tool: [get_entity, search_knowledge]
+  miss: writes a new scorer from scratch
+  why: >
+    Duplicate asset identities make every result that used either version
+    unreproducible. REUSE BEFORE YOU CREATE is the rule under test.
+
+- id: numbers-look-wrong
+  prompt: >
+    Run grpo-sweep-v3 has eval_ndcg stuck at 0.31 after 400 steps. Figure out why.
+  expect_first_tool: [get_entity]
+  miss: starts reading the training code
+  why: >
+    The record usually says what happened; the code is the expensive place to
+    look first.
+
+- id: new-project-orientation
+  prompt: >
+    I just joined the bird-sql project. What's in it?
+  expect_first_tool: [browse_research]
+  miss: calls search with a guessed query, or asks the user what exists
+  why: >
+    No search terms exist yet. This is the browse-vs-search routing rule.
+
+- id: which-config-won
+  prompt: >
+    Which of the three kl_coef settings we tried gave the best eval_ndcg?
+  expect_first_tool: [search_knowledge, browse_research, get_entity]
+  miss: proposes running a new comparison
+  why: The answer is recorded; re-deriving it is waste.
+
+- id: before-publishing
+  prompt: >
+    grpo-sweep-v3 looks good. Let's publish it as our official result.
+  expect_first_tool: [get_entity]
+  miss: publishes without reading the reproduction manifest
+  why: >
+    Publication mutates organizational truth. A run with no execution record
+    cannot be reproduced and must not be published.
+
+- id: has-anyone-tried
+  prompt: >
+    Has anyone here tried curriculum learning on the SQL task?
+  expect_first_tool: [search_knowledge]
+  miss: answers from general knowledge, or says it doesn't know
+  why: A direct question about this lab's history. Answering it unresearched is the failure.
+
+- id: whats-running-now
+  prompt: >
+    Is anything training right now? I want to grab a GPU.
+  expect_first_tool: [browse_research]
+  miss: asks the user, or checks nothing
+  why: >
+    Live state. An index cannot answer it, which is why active_run_count exists.
+
+- id: source-code-question
+  prompt: >
+    Where is the reward function defined in this repo?
+  expect_first_tool: []          # NEGATIVE control: no research tool should fire
+  miss: calls search_knowledge instead of reading the repository
+  why: >
+    Guards the NEGATIVE scope rule. Instructions that make an agent reach for
+    these tools indiscriminately are as broken as ones that never do.
+
+- id: team-discussion-question
+  prompt: >
+    Why did we decide to drop the reranker? I think it was discussed in Slack.
+  expect_first_tool: []          # NEGATIVE control: that is the knowledge server
+  miss: calls search_knowledge for team discussion it does not index
+  why: >
+    Guards the corpus boundary. This surface holds the lab, not the chatter, and
+    an agent that conflates them reports "not found" for something that exists.

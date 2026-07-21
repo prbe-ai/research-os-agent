@@ -47,7 +47,7 @@ def test_context_and_search_use_current_api_fallback(client, app):
     assert context["capabilities"]["semantic_search"] is False
     assert context["data"]["project"]["id"] == project["id"]
 
-    results = service.research_search("DockQ paths")
+    results = service.search_knowledge("DockQ paths")
     assert results["data"]["results"][0]["id"] == app.runs[run.id]["experiment_id"]
     assert results["completeness"]["state"] == "partial"
     assert "semantic_search" in results["completeness"]["missing"]
@@ -78,7 +78,7 @@ def test_search_maps_corpora_and_merges_channels(client, app):
         exact_cursor="exact-c1",
     )
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search(
+    out = service.search_knowledge(
         "adam sweep", corpora=["documents"], workspace_id="ws-1", collapse=None
     )
 
@@ -116,7 +116,7 @@ def test_search_maps_corpora_and_merges_channels(client, app):
     # encoding is nobody's business. See tests/test_mcp_tool_layer.py.
     with pytest.raises(json.JSONDecodeError):
         json.loads(out["next_cursor"])
-    service.research_search("adam sweep", cursor=out["next_cursor"])
+    service.search_knowledge("adam sweep", cursor=out["next_cursor"])
     assert app.search_requests[-1]["exact_cursor"] == "exact-c1"
     assert "semantic_cursor" not in app.search_requests[-1]
 
@@ -127,7 +127,7 @@ def test_search_transcripts_corpus_maps_to_backend(client, app):
     # unsupported kb_corpora miss.
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("q", corpora=["transcripts", "assets"])
+    out = service.search_knowledge("q", corpora=["transcripts", "assets"])
     assert app.search_requests[-1]["corpus"] == ["experiments", "files", "transcripts"]
     assert out["completeness"] == {"state": "complete", "missing": []}
     assert out["data"]["unsupported_corpora"] == []
@@ -144,7 +144,7 @@ def test_search_falls_back_to_keyword_on_pre_search_backend(client, app):
         name="eval-1",
     )
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("DockQ paths", corpora=["documents"])
+    out = service.search_knowledge("DockQ paths", corpora=["documents"])
     assert app.search_requests, "should try POST /v1/search first"
     assert out["data"]["results"][0]["why_matched"]["mode"] == "keyword_fallback"
     assert out["completeness"]["state"] == "partial"
@@ -167,7 +167,7 @@ def test_search_partial_passthrough_when_engine_down(client, app):
         semantic_error="engine_timeout",
     )
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("folding", collapse=None)
+    out = service.search_knowledge("folding", collapse=None)
     assert out["completeness"] == {"state": "partial", "missing": ["semantic_search"]}
     assert out["data"]["channels"]["semantic"]["error"] == "engine_timeout"
     assert [r["entity_type"] for r in out["data"]["results"]] == ["project"]
@@ -197,9 +197,13 @@ def test_search_unknown_workspace_is_not_found_not_fallback(client, app):
     app.search_404_workspace_ids.add("ws-missing")
     service = ResearchReadService(ResearchOSSource(client))
     with pytest.raises(errors.NotFoundError):
-        service.research_search("q", workspace_id="ws-missing")
-    # disambiguated via one extra probe without the workspace lens
-    assert len(app.search_requests) == 2
+        service.search_knowledge("q", workspace_id="ws-missing")
+    # original + capability probe + ONE retry. The retry costs a wasted request
+    # on a genuinely-absent scope, and buys a correct answer when the 404 came
+    # from a stale pod mid-deploy instead. Attributing a scoped 404 to the scope
+    # without retrying turns a rolling deploy into "your project does not
+    # exist", which is a wrong answer about the caller's own data.
+    assert len(app.search_requests) == 3  # original + ONE probe + ONE retry
 
 
 def test_search_emits_every_fetched_row_when_channels_overflow(client, app):
@@ -218,7 +222,7 @@ def test_search_emits_every_fetched_row_when_channels_overflow(client, app):
     ]
     app.search_response = _search_response(exact=exact, semantic=semantic)
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("q", limit=4, collapse=None)
+    out = service.search_knowledge("q", top_k=4, collapse=None)
     body = app.search_requests[-1]
     assert body["top_k"] == 2 and body["exact_limit"] == 2  # split budget
     assert len(out["data"]["results"]) == 6  # emitted == fetched, no truncation
@@ -244,9 +248,9 @@ def test_search_two_page_walk_skips_and_duplicates_nothing(client, app):
         _search_response(exact=[exact_row(2)], semantic=[semantic_row(2)]),
     ]
     service = ResearchReadService(ResearchOSSource(client))
-    page1 = service.research_search("q", limit=4, collapse=None)
+    page1 = service.search_knowledge("q", top_k=4, collapse=None)
     assert len(page1["data"]["results"]) == 4
-    page2 = service.research_search("q", limit=4, collapse=None, cursor=page1["next_cursor"])
+    page2 = service.search_knowledge("q", top_k=4, collapse=None, cursor=page1["next_cursor"])
     assert app.search_requests[-1]["exact_cursor"] == "ex-2"
     assert app.search_requests[-1]["semantic_cursor"] == "se-2"
     ids = [r["id"] for r in page1["data"]["results"] + page2["data"]["results"]]
@@ -278,7 +282,7 @@ def test_search_collapse_experiment_dedupes_across_channels(client, app):
 
     # default collapse="experiment": one deduped experiment-level result, keeping
     # the best-scoring representative's channel provenance (semantic, 0.9 > 0.7)
-    out = service.research_search("adam")
+    out = service.search_knowledge("adam")
     results = out["data"]["results"]
     assert [r["id"] for r in results] == ["e-1"]
     assert results[0]["entity_type"] == "experiment"
@@ -286,7 +290,7 @@ def test_search_collapse_experiment_dedupes_across_channels(client, app):
     assert results[0]["why_matched"]["score"] == 0.9
 
     # collapse=None keeps the heterogeneous merged view
-    out = service.research_search("adam", collapse=None)
+    out = service.search_knowledge("adam", collapse=None)
     assert {r["entity_type"] for r in out["data"]["results"]} == {
         "experiment", "project", "file",
     }
@@ -298,19 +302,19 @@ def test_search_workspace_scope_rejected_on_pre_search_backend(client, app):
     # results would be worse than failing loudly.
     service = ResearchReadService(ResearchOSSource(client))
     with pytest.raises(errors.ValidationError):
-        service.research_search("q", workspace_id="ws-1")
+        service.search_knowledge("q", workspace_id="ws-1")
 
 
 def test_keyword_fallback_ignores_incoming_cursor(client, app):
     # Version skew: a packed /v1/search cursor arrives at a pre-search server.
     # Echoing it back would make cursor-following consumers loop forever.
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("q", cursor='{"exact": "ex-2"}')
+    out = service.search_knowledge("q", cursor='{"exact": "ex-2"}')
     assert out["data"]["results"] == []
     assert out["next_cursor"] is None
 
 
-def test_search_project_filter_scopes_exact_and_marks_semantic(client, app):
+def test_search_forwards_project_scope_to_the_backend(client, app):
     app.search_response = _search_response(
         exact=[
             {"entity_type": "experiment", "id": "e-1", "name": "in", "slug": "in",
@@ -334,15 +338,21 @@ def test_search_project_filter_scopes_exact_and_marks_semantic(client, app):
         semantic_cursor="se-2",
     )
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("q", filters={"project_id": "p-1"}, collapse=None)
-    # only in-project exact hits survive (the un-linked artifact is dropped
-    # conservatively); the semantic channel is excluded and marked, and its
-    # cursor is NOT advanced past rows that were never emitted
-    assert [r["id"] for r in out["data"]["results"]] == ["e-1", "p-1"]
-    assert out["data"]["channels"]["semantic"]["error"] == "project_scope_unsupported"
-    assert "semantic_search" in out["completeness"]["missing"]
-    assert out["completeness"]["state"] == "partial"
-    assert out["next_cursor"] is None
+    out = service.search_knowledge("q", project_id="p-1", collapse=None)
+    # Project scope is the BACKEND's job now (research-os #103): it re-resolves
+    # semantic hits against live rows and over-fetches so the filter runs before
+    # the cap. The tool passes the scope through and keeps whatever comes back.
+    #
+    # This previously emptied the semantic channel client-side and reported
+    # project_scope_unsupported, so a scoped search silently degraded to trigram
+    # matching -- the single most natural way to search was also the most
+    # degraded.
+    assert app.search_requests[-1]["project_id"] == "p-1"
+    assert out["data"]["channels"]["semantic"]["error"] is None
+    assert "file:f-1" in [r["id"] for r in out["data"]["results"]] or any(
+        r["entity_type"] == "file" for r in out["data"]["results"]
+    )
+    assert out["completeness"]["state"] == "complete"
 
 
 def test_keyword_fallback_scopes_by_project(client, app):
@@ -352,7 +362,7 @@ def test_keyword_fallback_scopes_by_project(client, app):
     client.run(project="proj-one", experiment="exp-one", hypothesis="h1", name="r1")
     client.run(project="proj-two", experiment="exp-two", hypothesis="h2", name="r2")
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("exp", filters={"project_id": p1["id"]})
+    out = service.search_knowledge("exp", project_id=p1["id"])
     names = [r["card"]["name"] for r in out["data"]["results"]]
     assert names == ["exp-one"]
 
@@ -372,7 +382,7 @@ def test_why_matched_shape_is_uniform_across_channels(client, app):
         ],
     )
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("adam", collapse=None)
+    out = service.search_knowledge("adam", collapse=None)
     assert out["data"]["results"]
     for row in out["data"]["results"]:
         assert set(row["why_matched"]) == expected_keys
@@ -385,7 +395,7 @@ def test_why_matched_shape_is_uniform_across_channels(client, app):
     client2.ensure_project("p")
     client2.run(project="p", experiment="kw-exp", hypothesis="h", name="r")
     service2 = ResearchReadService(ResearchOSSource(client2))
-    rows = service2.research_search("kw-exp")["data"]["results"]
+    rows = service2.search_knowledge("kw-exp")["data"]["results"]
     assert rows
     for row in rows:
         assert set(row["why_matched"]) == expected_keys
@@ -397,16 +407,16 @@ def test_unsupported_verdict_short_circuits_then_expires(client, app):
     service = ResearchReadService(ResearchOSSource(client))
     source = service.source
 
-    service.research_search("q")  # 404 -> probe 404 -> cached unsupported
+    service.search_knowledge("q")  # 404 -> probe 404 -> cached unsupported
     assert len(app.search_requests) == 2
-    service.research_search("q")  # fresh verdict short-circuits: no doomed POST
+    service.search_knowledge("q")  # fresh verdict short-circuits: no doomed POST
     assert len(app.search_requests) == 2
 
     # after the recheck window the verdict expires and the upgrade is noticed
     app.search_response = _search_response()
     source._search_checked_at -= 301
-    out = service.research_search("q")
-    assert len(app.search_requests) == 3
+    out = service.search_knowledge("q")
+    assert len(app.search_requests) == 3  # original + ONE probe + ONE retry
     assert out["capabilities"]["unified_search"] is True
 
 
@@ -419,9 +429,9 @@ def test_search_retries_once_on_stale_pod_404(client, app):
         ],
     )
     service = ResearchReadService(ResearchOSSource(client))
-    service.research_search("q")  # establishes supported=True (1 request)
+    service.search_knowledge("q")  # establishes supported=True (1 request)
     app.search_404_once = True  # one stale pod mid rolling deploy
-    out = service.research_search("q")  # 404 -> probe ok -> retried once
+    out = service.search_knowledge("q")  # 404 -> probe ok -> retried once
     assert len(app.search_requests) == 4
     assert [r["id"] for r in out["data"]["results"]] == ["e-1"]
     assert out["capabilities"]["unified_search"] is True
@@ -431,9 +441,9 @@ def test_malformed_cursor_raises_validation_error(client, app):
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
     with pytest.raises(errors.ValidationError):
-        service.research_search("q", cursor="not-a-packed-cursor")
+        service.search_knowledge("q", cursor="not-a-packed-cursor")
     with pytest.raises(errors.ValidationError):
-        service.research_search("q", cursor='["wrong-shape"]')
+        service.search_knowledge("q", cursor='["wrong-shape"]')
 
 
 def test_search_unknown_collapse_rejected(client, app):
@@ -442,7 +452,7 @@ def test_search_unknown_collapse_rejected(client, app):
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
     with pytest.raises(errors.ValidationError):
-        service.research_search("q", collapse="run")
+        service.search_knowledge("q", collapse="run")
     assert app.search_requests == []  # rejected before any backend call
 
 
@@ -497,7 +507,7 @@ def test_search_malformed_response_degrades_to_partial(client, app):
     # A broken proxy/server returning garbage must degrade, never AttributeError.
     app.search_response = {"state": "ok", "exact": "broken", "semantic": ["nope"]}
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.research_search("q", collapse=None)
+    out = service.search_knowledge("q", collapse=None)
     assert out["data"]["results"] == []
     assert out["completeness"]["state"] == "partial"
     assert out["data"]["channels"]["exact"]["error"] == "malformed_response"
@@ -510,14 +520,14 @@ def test_search_malformed_response_degrades_to_partial(client, app):
                                     "slug": "x", "score": 1.0}], "cursor": 7, "error": None},
         "semantic": {"results": [], "cursor": None, "error": None},
     }
-    out = service.research_search("q", collapse=None)
+    out = service.search_knowledge("q", collapse=None)
     assert [r["id"] for r in out["data"]["results"]] == ["e-1"]
     assert out["data"]["channels"]["exact"]["error"] == "malformed_response"
     assert out["next_cursor"] is None  # the non-string cursor is dropped
 
     # an entirely non-dict body degrades the same way
     app.search_response = ["garbage"]
-    out = service.research_search("q", collapse=None)
+    out = service.search_knowledge("q", collapse=None)
     assert out["data"]["results"] == []
     assert out["completeness"]["state"] == "partial"
 
@@ -536,7 +546,7 @@ def test_capability_cache_shared_across_token_factory_calls(client, app):
         first = server_mod._service_from_token()
         first.research_context("anything")
         second = server_mod._service_from_token()
-        second.research_get("run:some-run")
+        second.get_entity("run:some-run")
         assert first.source is second.source
         assert len(app.search_requests) == 1  # one probe total, not per call
     finally:
@@ -572,15 +582,61 @@ def test_server_exposes_exactly_the_read_tools(client):
     server = create_server(service)
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    assert names == {
-        "research_browse",
-        "research_context",
-        "research_search",
-        "research_get",
-        "research_compare",
-        "research_resolve",
-    }
+    # The real surface is THREE. The other five are deprecation aliases that
+    # exist for exactly one release, because MCP tools are served by the SERVER
+    # and .mcp.json pins one url for every plugin version -- so renaming a tool
+    # breaks every installed client the instant the image rolls.
+    # (Comparing NEW_SURFACE/ALIASES to their own literals would be a tautology;
+    # the load-bearing assertion is that the SERVER exposes exactly their union.)
+    assert names == NEW_SURFACE | ALIASES
     assert not any(name.startswith(("create", "update", "promote", "upload")) for name in names)
+
+
+NEW_SURFACE = {"browse_research", "search_knowledge", "get_entity"}
+ALIASES = {
+    "research_context",
+    "research_search",
+    "research_get",
+    "research_compare",
+    "research_resolve",
+}
+
+
+def test_every_alias_still_answers(client, app):
+    """An alias that 404s is not a deprecation window, it is an outage.
+
+    These keep the OLD signatures and the OLD payloads deliberately: an alias
+    returning a different shape is a breaking change wearing a compatibility
+    label.
+    """
+    import asyncio as _asyncio
+
+    app.search_response = _search_response()
+    service = ResearchReadService(ResearchOSSource(client))
+    server = create_server(service)
+    tools = {t.name for t in _asyncio.run(server.list_tools())}
+    assert ALIASES <= tools
+
+    # Through the TOOL LAYER, not the service: the translation being tested
+    # lives in the alias closure, and calling the service directly would exercise
+    # none of it. The earlier version of this test called
+    # service.search_knowledge(project_id=...) -- with the typed parameter
+    # already applied -- and would have passed with the alias body replaced by
+    # `return {}`.
+    out = _call_tool(
+        server, "research_search", {"query": "q", "filters": {"project_id": "p-1"}}
+    )
+    assert app.search_requests[-1]["project_id"] == "p-1"
+    assert out["data"]["query"] == "q"
+
+    # `limit` -> `top_k`, and workspace_id from either place.
+    _call_tool(
+        server,
+        "research_search",
+        {"query": "q", "limit": 4, "filters": {"workspace_id": "ws-9"}},
+    )
+    assert app.search_requests[-1]["workspace_id"] == "ws-9"
+    assert app.search_requests[-1]["exact_limit"] == 2  # ceil(4/2) per channel
 
 
 # -- hosted HTTP mode: per-request auth + health -----------------------------
@@ -672,7 +728,7 @@ def test_browse_annotates_nodes_with_ref_and_available_views(app, client):
     research_get validates against, so the two cannot disagree."""
     app.browse_response = _browse_payload()
     service = ResearchReadService(ResearchOSSource(client))
-    envelope = service.research_browse()
+    envelope = service.browse_research()
 
     [node] = envelope["data"]["projects"]
     assert node["ref"] == "project:11111111-1111-1111-1111-111111111111"
@@ -709,7 +765,7 @@ def test_browse_available_views_track_the_real_view_matrix(app, client):
         ],
     }
     service = ResearchReadService(ResearchOSSource(client))
-    [run] = service.research_browse(scope="experiment:x")["data"]["runs"]
+    [run] = service.browse_research(scope="experiment:x")["data"]["runs"]
     assert run["available_views"] == _supported_views("run")
     assert "trajectory" in run["available_views"]
 
@@ -722,7 +778,7 @@ def test_browse_on_an_old_backend_reports_missing_not_empty(app, client):
     """
     app.browse_response = None  # route 404s, as a pre-browse backend does
     service = ResearchReadService(ResearchOSSource(client))
-    envelope = service.research_browse()
+    envelope = service.browse_research()
 
     assert envelope["completeness"]["state"] == "partial"
     assert "structured_browse" in envelope["completeness"]["missing"]
@@ -737,7 +793,7 @@ def test_browse_scoped_404_is_a_missing_scope_not_a_missing_route(app, client):
     app.browse_response = None
     service = ResearchReadService(ResearchOSSource(client))
     with pytest.raises(errors.NotFoundError):
-        service.research_browse(scope="project:does-not-exist")
+        service.browse_research(scope="project:does-not-exist")
 
 
 def test_browse_truncation_is_reported(app, client):
@@ -745,6 +801,257 @@ def test_browse_truncation_is_reported(app, client):
     otherwise look like evidence of absence."""
     app.browse_response = {**_browse_payload(), "truncated": True}
     service = ResearchReadService(ResearchOSSource(client))
-    envelope = service.research_browse(depth=2)
+    envelope = service.browse_research(depth=2)
     assert envelope["completeness"]["state"] == "partial"
     assert "truncated_by_token_budget" in envelope["completeness"]["missing"]
+
+
+# -- the prose contract ------------------------------------------------------
+# Two halves of this product are prose: the server `instructions` (ships with
+# the image, cannot go stale) and the tool docstrings (same). Both are load-
+# bearing -- they are the entire mechanism by which an agent decides to call
+# anything. These guard the claims that would silently rot.
+
+def _call_tool(server, tool: str, args: dict):
+    """Invoke a tool the way a real MCP client does, and unwrap the payload."""
+    import asyncio as _asyncio
+
+    result = _asyncio.run(server.call_tool(tool, args))
+    payload = result[1] if isinstance(result, tuple) else result
+    if isinstance(payload, dict) and "result" in payload:
+        return payload["result"]
+    if isinstance(payload, list):
+        return json.loads(payload[0].text)
+    return payload
+
+
+def _tool_docs(client) -> dict[str, str]:
+    import asyncio as _asyncio
+
+    server = create_server(ResearchReadService(ResearchOSSource(client)))
+    return {t.name: (t.description or "") for t in _asyncio.run(server.list_tools())}
+
+
+def test_routing_rule_is_stated_in_both_places_and_agrees(client):
+    """browse-vs-search must not become the new context-vs-search.
+
+    research_context rotted because nothing told an agent when to prefer it, so
+    agents defaulted to search. The rule that works is about what you HAVE, not
+    what you want -- and it is stated in the instructions AND at both call
+    sites, because an agent choosing a tool reads the docstring, not the
+    preamble. Stating it twice is a drift risk, which is what this test is for.
+    """
+    from probe.mcp.server import MCP_INSTRUCTIONS
+
+    docs = _tool_docs(client)
+
+    # The instructions carry the rule and name both tools.
+    assert "browse_research" in MCP_INSTRUCTIONS
+    assert "search_knowledge" in MCP_INSTRUCTIONS
+    assert "what you HAVE" in MCP_INSTRUCTIONS
+
+    # Each tool points at the other, so whichever one the agent reads first
+    # tells it when the other is the right call.
+    assert "search_knowledge" in docs["browse_research"]
+    assert "browse_research" in docs["search_knowledge"]
+    assert "what you HAVE" in docs["browse_research"]
+
+
+def test_query_formulation_is_taught_where_the_query_is_written(client):
+    """The Good/Bad pair must live on the tool that takes the query.
+
+    An agent forms the query at the call site; a rule that exists only in the
+    preamble is read once and forgotten by the time it matters.
+    """
+    from probe.mcp.server import MCP_INSTRUCTIONS
+
+    docs = _tool_docs(client)
+    for text in (MCP_INSTRUCTIONS, docs["search_knowledge"]):
+        assert "Good:" in text and "Bad:" in text
+        assert "kl_coef" in text  # a concrete, domain-real example
+
+
+def test_reuse_before_create_is_in_the_durable_half(client):
+    """The most valuable rule in the product must not live only in a skill.
+
+    It used to: track-experiment carried it, and the INSTALLED copy of that
+    skill was measured 30 lines behind the repo. The instructions ship with the
+    image and cannot drift, so the rule lives there and is repeated on the tool
+    that enforces it.
+    """
+    from probe.mcp.server import MCP_INSTRUCTIONS
+
+    docs = _tool_docs(client)
+    assert "REUSE BEFORE YOU CREATE" in MCP_INSTRUCTIONS
+    assert 'asset:<name>' in MCP_INSTRUCTIONS
+    assert "REUSE BEFORE YOU CREATE" in docs["get_entity"]
+
+
+def test_the_view_matrix_in_the_docstring_matches_the_real_one(client):
+    """The docstring advertises views; _VIEWS decides them.
+
+    A hand-written matrix is how documentation ends up naming views that no
+    longer exist -- an agent then asks for one, gets a validation error, and the
+    error contradicts the docs it just followed.
+    """
+    from probe.mcp.service import _VIEWS, _supported_views
+
+    doc = _tool_docs(client)["get_entity"]
+    for kind in sorted({k for k, _ in _VIEWS}):
+        line = next(
+            (ln for ln in doc.splitlines() if ln.strip().startswith(kind + " ")), None
+        )
+        assert line, f"get_entity docstring does not document kind {kind!r}"
+        advertised = {p.strip() for p in line.split(None, 1)[1].split("|")}
+        assert advertised == set(_supported_views(kind)), (
+            f"{kind}: docstring says {sorted(advertised)}, "
+            f"_VIEWS says {_supported_views(kind)}"
+        )
+
+
+def test_every_alias_is_marked_deprecated_in_its_own_docstring(client):
+    """An alias nobody knows is temporary becomes permanent."""
+    docs = _tool_docs(client)
+    for name in ALIASES:
+        assert "DEPRECATED" in docs[name], f"{name} does not say it is deprecated"
+        assert "next release" in docs[name], f"{name} does not say when it goes"
+
+
+def test_verbose_false_keeps_the_fields_an_agent_acts_on(client, app):
+    """Compaction must drop bookkeeping, never signal.
+
+    The interesting half of a drop-list is what it KEEPS: a list without stated
+    reasons rots into dropping something load-bearing.
+    """
+    app.search_response = _search_response(
+        exact=[
+            {"entity_type": "experiment", "id": "e-1", "name": "n", "slug": "s",
+             "workspace_id": None, "project_id": None, "experiment_id": None,
+             "run_id": None, "score": 0.9},
+        ],
+        semantic_error="engine_timeout",
+    )
+    service = ResearchReadService(ResearchOSSource(client))
+    full = service.search_knowledge("q", verbose=True)
+    lean = service.search_knowledge("q", verbose=False)
+
+    # Constant-per-token bookkeeping goes.
+    for gone in ("schema_version", "as_of", "scope"):
+        assert gone in full and gone not in lean
+
+    # completeness ALWAYS survives: it is the only field saying what the
+    # response could not cover. Stripping it turns a partial answer into a
+    # confident one.
+    assert lean["completeness"]["state"] == "partial"
+    assert "semantic_search" in lean["completeness"]["missing"]
+    assert lean["data"]["results"] == full["data"]["results"]
+
+
+def test_verbose_false_keeps_only_the_capabilities_that_are_false(client, app):
+    """A True capability is noise repeated on every call. A False one says this
+    backend cannot do something you may be about to rely on."""
+    service = ResearchReadService(ResearchOSSource(client))
+    lean = service.search_knowledge("q", verbose=False)
+    # The key is ALWAYS present -- omitting it would overload absence to mean
+    # both "all good" and "not reported", so a caller indexing into it would
+    # KeyError on a healthy backend and succeed on a degraded one.
+    assert "capabilities" in lean
+    # This fake predates /v1/search, so several capabilities are genuinely False,
+    # and ONLY the false ones survive compaction.
+    assert lean["capabilities"]
+    assert all(v is False for v in lean["capabilities"].values())
+    assert "unified_search" in lean["capabilities"]
+
+
+def test_aliases_still_return_the_full_envelope(client, app):
+    """The whole point of an alias is that nothing changes for its callers."""
+    app.search_response = _search_response()
+    server = create_server(ResearchReadService(ResearchOSSource(client)))
+    # Through the TOOL LAYER for every alias. Calling the service directly would
+    # only prove the service DEFAULT is verbose=True, not that the aliases omit
+    # the argument -- so "tidying" server.py to pass verbose=False would leave
+    # this green while every installed client started receiving compacted
+    # payloads, which is the precise breakage aliases exist to prevent.
+    full_envelope = {
+        "schema_version", "as_of", "scope", "capabilities",
+        "data", "evidence", "completeness", "next_cursor",
+    }
+    calls = {
+        "research_search": {"query": "q"},
+        "research_context": {"task": "t"},
+        "research_resolve": {"name": "a"},
+    }
+    for tool, args in calls.items():
+        out = _call_tool(server, tool, args)
+        assert full_envelope <= set(out), f"{tool} alias lost {full_envelope - set(out)}"
+
+    # ...and the NEW surface is compact by contrast, which is the whole point.
+    lean = _call_tool(server, "search_knowledge", {"query": "q"})
+    assert "schema_version" not in lean
+    assert "completeness" in lean
+
+
+def test_project_scope_degrades_on_a_backend_that_ignores_it(client, app):
+    """A backend predating server-side project scope must not answer silently.
+
+    SearchRequest does not forbid extra body fields, so an older server accepts
+    `project_id`, ignores it, and returns TENANT-WIDE results with
+    state="complete". An agent then attributes another project's runs to this
+    one -- worse than any error, because it is confident and unmarked.
+
+    The echo is the only available signal, so its absence is treated as
+    unsupported. A false refusal is loud and correctable; a false answer is not.
+    """
+    app.search_response = _search_response(
+        exact=[
+            {"entity_type": "experiment", "id": "e-1", "name": "in", "slug": "in",
+             "workspace_id": None, "project_id": "p-1", "experiment_id": None,
+             "run_id": None, "score": 0.9},
+            {"entity_type": "experiment", "id": "e-2", "name": "out", "slug": "out",
+             "workspace_id": None, "project_id": "p-OTHER", "experiment_id": None,
+             "run_id": None, "score": 0.8},
+        ],
+        semantic=[
+            {"doc_id": "file:f-1", "title": "d", "snippet": "s", "score": 0.9,
+             "source_system": "workspace", "source_url": None,
+             "ref": {"kind": "file", "id": "f-1"}},
+        ],
+    )
+    app.echoes_project_scope = False
+    service = ResearchReadService(ResearchOSSource(client))
+    out = service.search_knowledge("q", project_id="p-1", collapse=None)
+
+    # Out-of-project rows are removed rather than passed through: the whole
+    # danger is tenant-wide results wearing a project scope.
+    assert [r["id"] for r in out["data"]["results"]] == ["e-1"]
+    # The semantic channel cannot be scoped client-side, so it is EMPTIED and
+    # marked -- never passed through unscoped.
+    assert out["data"]["channels"]["semantic"]["error"] == "project_scope_unsupported"
+    assert out["completeness"]["state"] == "partial"
+    assert "semantic_search" in out["completeness"]["missing"]
+
+    # An echoing backend keeps its semantic channel, which is the point of the
+    # backend change: scoping stops costing you semantic retrieval.
+    app.echoes_project_scope = True
+    ok = service.search_knowledge("q", project_id="p-1", collapse=None)
+    assert ok["data"]["channels"]["semantic"]["error"] is None
+    assert any(r["entity_type"] == "file" for r in ok["data"]["results"])
+
+
+def test_backend_truncation_is_surfaced_not_swallowed(client, app):
+    """A trimmed response must not read as a complete one.
+
+    The backend drops chunks and whole results to fit its byte budget and says
+    so. If the tool swallows that, an agent reads a short result set as "the lab
+    has nothing else" -- the silent false negative this whole surface is built
+    to avoid.
+    """
+    app.search_response = {**_search_response(), "truncated": True}
+    service = ResearchReadService(ResearchOSSource(client))
+    out = service.search_knowledge("q")
+    assert out["completeness"]["state"] == "partial"
+    assert "truncated_by_response_budget" in out["completeness"]["missing"]
+
+    # ...and an untruncated response stays complete, so the marker means something.
+    app.search_response = _search_response()
+    assert service.search_knowledge("q")["completeness"]["state"] == "complete"
