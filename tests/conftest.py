@@ -193,6 +193,10 @@ class FakeApp:
         self.search_response: dict | None = None
         self.search_responses: list[dict] = []
         self.search_requests: list[dict] = []
+        # GET /v1/browse. `browse_response = None` models a backend that predates
+        # the route, so the source's capability probe has something to discover.
+        self.browse_requests: list[dict] = []
+        self.browse_response: dict | None = None
         self.search_404_workspace_ids: set[str] = set()
         self.search_404_once = False
         self.fail_next_uploads = False
@@ -229,6 +233,12 @@ class FakeApp:
 
         if path == "/v1/tokens/current" and method == "DELETE":
             return httpx.Response(204)
+
+        if path == "/v1/browse" and method == "GET":
+            self.browse_requests.append(dict(request.url.params))
+            if self.browse_response is None:
+                return httpx.Response(404, json={"detail": "Not Found"})
+            return httpx.Response(200, json=self.browse_response)
 
         if path == "/v1/search" and method == "POST":
             self.search_requests.append(body)

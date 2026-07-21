@@ -322,7 +322,24 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
 # Keep this dict. An empty debt ledger is the healthy state, not a dead structure:
 # the next backend fold that lands ahead of the client goes here, with a pointer to
 # what will close it, instead of being quietly absorbed into "not our job".
-PENDING: dict[Op, str] = {}
+PENDING: dict[Op, str] = {
+    # Surfaced 2026-07-21 by the first `make dump-openapi` in a while: these
+    # routes shipped on the backend while the checked-in schema sat stale, so
+    # this guard could not see them. They are not new debt, only newly VISIBLE
+    # debt -- which is the guard working as designed.
+    #
+    # Device pairing (backend v0.17.0.0). The pairing flow lives in the
+    # dashboard and the imsg/agent-tap plugin; whether `probe` should also drive
+    # it from the CLI is an open product question, not a wiring oversight.
+    ("POST", "/agent-tap/pair"): "device pairing; dashboard + agent-tap plugin surface today",
+    ("POST", "/agent-tap/revoke"): "device pairing; dashboard + agent-tap plugin surface today",
+    ("POST", "/v1/pairing-tokens"): "device pairing; mint flow is dashboard-driven today",
+    ("GET", "/v1/devices"): "paired-device list; dashboard surface today",
+    ("DELETE", "/v1/devices/{}"): "unpair; dashboard surface today",
+    # Operator actions with no CLI story yet.
+    ("POST", "/v1/integrations/ingestion/retry-dlq"): "operator action; no CLI verb designed yet",
+    ("DELETE", "/v1/workspaces/{}/files/{}"): "workspace file delete; `probe` has no file-rm verb yet",
+}
 
 _ALLOWED: dict[Op, str] = {**NOT_CLIENT_SURFACE, **PENDING}
 

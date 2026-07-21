@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import sys
 
-import pytest
 
-from probe import errors
 
 
 def test_research_note_is_normal_experiment_upload(client, app):

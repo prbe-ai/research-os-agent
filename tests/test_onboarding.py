@@ -8,7 +8,6 @@ import pytest
 
 from probe import cli
 from probe.sdk import defaults
-from probe.sdk.config import Settings
 from tests.conftest import make_client
 
 
@@ -82,7 +81,6 @@ def _tokenless_client(app, tmp_path):
 
 
 def test_ensure_authenticated_mints_and_persists_token(app, tmp_path, monkeypatch):
-    import probe.sdk.client as client_mod
 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     calls = {}

@@ -10,7 +10,6 @@ kinder than the backend is a fake that certifies broken code.
 
 from __future__ import annotations
 
-import pytest
 
 from probe.mcp.service import ResearchReadService
 from probe.mcp.source import ResearchOSSource

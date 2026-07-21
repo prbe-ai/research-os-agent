@@ -422,6 +422,23 @@ def _supported_views(kind: str) -> list[str]:
     return sorted(str(view) for entity_kind, view in _VIEWS if entity_kind == kind)
 
 
+def _annotate(node: dict, kind: str) -> dict:
+    """Tag a browse node with its kind, ref, and the views it supports.
+
+    `available_views` is DERIVED from `_VIEWS`, never hand-written: the matrix
+    already lives there, and a second hand-maintained copy is how documentation
+    ends up describing views that no longer exist. It rides on browse so an
+    agent orienting through the tree learns what it can ask for WITHOUT
+    discovering it by making a call that fails.
+    """
+    return {
+        **node,
+        "entity_type": str(kind),
+        "ref": f"{kind}:{node.get('id')}",
+        "available_views": _supported_views(kind),
+    }
+
+
 class ResearchReadService:
     """Compact, provenance-bearing read model exposed through MCP."""
 
@@ -541,6 +558,52 @@ class ResearchReadService:
             state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
             missing=missing,
             capabilities=capabilities,
+        )
+
+    def research_browse(
+        self,
+        scope: str | None = None,
+        depth: int = 1,
+        status: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict:
+        """The structured tree: what EXISTS, as opposed to what MATCHES a query.
+
+        Every node carries the ids the other read tools consume, plus the views
+        available for that kind, so an agent orienting here already knows what
+        it can ask for next without discovering it by failed call.
+        """
+        try:
+            payload = self.source.browse(
+                scope=scope, depth=depth, status=status, limit=limit, cursor=cursor
+            )
+        except errors.CapabilityUnavailable:
+            # NOT an empty tree: "nothing exists" and "this server cannot tell
+            # you what exists" are opposite claims, and returning the first
+            # would stop an agent looking any further.
+            return self._envelope(
+                {"scope": scope, "projects": None, "experiments": None, "runs": None},
+                state=EnvelopeState.PARTIAL,
+                missing=[MissingMarker.STRUCTURED_BROWSE],
+            )
+        data: dict[str, Any] = {"scope": scope, "depth": payload.get("depth", depth)}
+        for level, kind in (
+            ("projects", EntityType.PROJECT),
+            ("experiments", EntityType.EXPERIMENT),
+            ("runs", EntityType.RUN),
+        ):
+            nodes = payload.get(level)
+            data[level] = None if nodes is None else [_annotate(n, kind) for n in nodes]
+        missing: list[str] = []
+        if payload.get("truncated"):
+            # The tree was cut, so an absent child is not evidence of absence.
+            missing.append(MissingMarker.TRUNCATED_BY_TOKEN_BUDGET)
+        return self._envelope(
+            data,
+            state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
+            missing=missing,
+            next_cursor=payload.get("cursor"),
         )
 
     def research_search(

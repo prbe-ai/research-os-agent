@@ -109,6 +109,10 @@ class Capability(StrEnum):
     """
 
     STRUCTURED_EXPERIMENTS = "structured_experiments"
+    # GET /v1/browse: enumerate structure without a query. Probed separately
+    # from UNIFIED_SEARCH -- they shipped in different releases, so a backend
+    # can have one and not the other.
+    STRUCTURED_BROWSE = "structured_browse"
     UNIFIED_SEARCH = "unified_search"
     SEMANTIC_SEARCH = "semantic_search"
     KB_DOCUMENTS = "kb_documents"
@@ -120,6 +124,10 @@ class Capability(StrEnum):
 class MissingMarker(StrEnum):
     """`completeness.missing` markers emitted by the read tools."""
 
+    # research_browse — the backend predates GET /v1/browse. Emitted INSTEAD of
+    # an empty tree: "nothing exists" and "this server cannot tell you what
+    # exists" are opposite claims, and the first would stop an agent looking.
+    STRUCTURED_BROWSE = "structured_browse"
     # research_search
     EXACT_SEARCH = "exact_search"
     SEMANTIC_SEARCH = "semantic_search"

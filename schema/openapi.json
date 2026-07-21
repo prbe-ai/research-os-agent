@@ -683,6 +683,80 @@
         "title": "Body_token_oauth_token_post",
         "type": "object"
       },
+      "BrowseResponse": {
+        "properties": {
+          "cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cursor"
+          },
+          "depth": {
+            "default": 1,
+            "title": "Depth",
+            "type": "integer"
+          },
+          "experiments": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ExperimentNode"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experiments"
+          },
+          "limit": {
+            "default": 50,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "projects": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ProjectNode"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Projects"
+          },
+          "runs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunNode"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runs"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "title": "BrowseResponse",
+        "type": "object"
+      },
       "ChannelError": {
         "description": "Machine-readable per-channel failure reasons (state:\"partial\").",
         "enum": [
@@ -1259,6 +1333,17 @@
       },
       "ExactSection": {
         "properties": {
+          "active_runs_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Active Runs Count"
+          },
           "cursor": {
             "anyOf": [
               {
@@ -1495,6 +1580,72 @@
           "hypothesis"
         ],
         "title": "ExperimentCreate",
+        "type": "object"
+      },
+      "ExperimentNode": {
+        "properties": {
+          "active_run_count": {
+            "default": 0,
+            "title": "Active Run Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "run_count": {
+            "default": 0,
+            "title": "Run Count",
+            "type": "integer"
+          },
+          "runs": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RunNode"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runs"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "project_id",
+          "created_at"
+        ],
+        "title": "ExperimentNode",
         "type": "object"
       },
       "ExperimentOut": {
@@ -2622,6 +2773,96 @@
         "title": "MetricSeriesOut",
         "type": "object"
       },
+      "PairRequest": {
+        "properties": {
+          "hostname": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "os": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Os"
+          },
+          "pairing_token": {
+            "minLength": 1,
+            "title": "Pairing Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pairing_token"
+        ],
+        "title": "PairRequest",
+        "type": "object"
+      },
+      "PairResponse": {
+        "properties": {
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "device_token": {
+            "title": "Device Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "device_token",
+          "customer_id"
+        ],
+        "title": "PairResponse",
+        "type": "object"
+      },
+      "PairingTokenRequest": {
+        "properties": {
+          "source": {
+            "default": "claude_code",
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "title": "PairingTokenRequest",
+        "type": "object"
+      },
+      "PairingTokenResponse": {
+        "properties": {
+          "expires_in_seconds": {
+            "title": "Expires In Seconds",
+            "type": "integer"
+          },
+          "pairing_token": {
+            "title": "Pairing Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "pairing_token",
+          "expires_in_seconds"
+        ],
+        "title": "PairingTokenResponse",
+        "type": "object"
+      },
       "ParentRelation": {
         "enum": [
           "fork",
@@ -2789,6 +3030,78 @@
           "name"
         ],
         "title": "ProjectCreate",
+        "type": "object"
+      },
+      "ProjectNode": {
+        "properties": {
+          "active_run_count": {
+            "default": 0,
+            "title": "Active Run Count",
+            "type": "integer"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "experiment_count": {
+            "default": 0,
+            "title": "Experiment Count",
+            "type": "integer"
+          },
+          "experiments": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/ExperimentNode"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experiments"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
+          "workspace_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Id"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "title": "ProjectNode",
         "type": "object"
       },
       "ProjectOut": {
@@ -3477,6 +3790,82 @@
         "title": "RunLineage",
         "type": "object"
       },
+      "RunNode": {
+        "properties": {
+          "alive": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Alive"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "ended_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ended At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "short_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Id"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "created_at"
+        ],
+        "title": "RunNode",
+        "type": "object"
+      },
       "RunOut": {
         "properties": {
           "config": {
@@ -3831,6 +4220,18 @@
             "title": "Exact Limit",
             "type": "integer"
           },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
+          },
           "query": {
             "maxLength": 500,
             "minLength": 1,
@@ -3876,6 +4277,11 @@
       },
       "SearchResponse": {
         "properties": {
+          "dropped_chunk_count": {
+            "default": 0,
+            "title": "Dropped Chunk Count",
+            "type": "integer"
+          },
           "exact": {
             "$ref": "#/components/schemas/ExactSection"
           },
@@ -3888,6 +4294,11 @@
           },
           "state": {
             "$ref": "#/components/schemas/SearchState"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3907,11 +4318,75 @@
         "title": "SearchState",
         "type": "string"
       },
+      "SemanticChunk": {
+        "description": "One MATCHED chunk of a document, full content.\n\nNot truncated to a fixed cap: when the response must shrink, the budget\ndrops whole chunks from the tail rather than clipping every chunk into\nuselessness. `graph_evidence` is empty for a text-only match, so its\nabsence is itself signal.",
+        "properties": {
+          "chunk_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chunk Id"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "graph_evidence": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Graph Evidence",
+            "type": "array"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          },
+          "why_relevant": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why Relevant"
+          }
+        },
+        "required": [
+          "content",
+          "score"
+        ],
+        "title": "SemanticChunk",
+        "type": "object"
+      },
       "SemanticHit": {
         "properties": {
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/SemanticChunk"
+            },
+            "title": "Chunks",
+            "type": "array"
+          },
           "doc_id": {
             "title": "Doc Id",
             "type": "string"
+          },
+          "matched_via": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Matched Via",
+            "type": "array"
           },
           "ref": {
             "anyOf": [
@@ -4003,6 +4478,20 @@
       },
       "SemanticSection": {
         "properties": {
+          "confidence_breakdown": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "integer"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Breakdown"
+          },
           "cursor": {
             "anyOf": [
               {
@@ -4013,6 +4502,11 @@
               }
             ],
             "title": "Cursor"
+          },
+          "dropped_chunk_count": {
+            "default": 0,
+            "title": "Dropped Chunk Count",
+            "type": "integer"
           },
           "error": {
             "anyOf": [
@@ -4030,6 +4524,17 @@
             },
             "title": "Results",
             "type": "array"
+          },
+          "total_candidates": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Candidates"
           }
         },
         "title": "SemanticSection",
@@ -5263,6 +5768,70 @@
         ]
       }
     },
+    "/agent-tap/pair": {
+      "post": {
+        "operationId": "pair_agent_tap_pair_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pair",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/agent-tap/revoke": {
+      "post": {
+        "operationId": "revoke_agent_tap_revoke_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Revoke Agent Tap Revoke Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Revoke",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
     "/auth/callback": {
       "get": {
         "description": "Verify the ID token, upsert the user, mint a session, 302 to dashboard.",
@@ -6472,6 +7041,42 @@
               "title": "Offset",
               "type": "integer"
             }
+          },
+          {
+            "description": "Exact asset name. Without it, resolving an asset by name means walking every page of the registry, and a client that gives up part-way cannot tell 'not found' from 'stopped looking' -- which is how duplicate asset identities get created.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact asset name. Without it, resolving an asset by name means walking every page of the registry, and a client that gives up part-way cannot tell 'not found' from 'stopped looking' -- which is how duplicate asset identities get created.",
+              "title": "Name"
+            }
+          },
+          {
+            "description": "Exact asset kind.",
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Exact asset kind.",
+              "title": "Kind"
+            }
           }
         ],
         "responses": {
@@ -6683,6 +7288,177 @@
         "summary": "Create Version",
         "tags": [
           "assets"
+        ]
+      }
+    },
+    "/v1/browse": {
+      "get": {
+        "description": "One query per level, never one per parent; `limit` applies PER level.",
+        "operationId": "browse_v1_browse_get",
+        "parameters": [
+          {
+            "description": "'project:<uuid>' or 'experiment:<uuid>'. Omit for the top level.",
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "'project:<uuid>' or 'experiment:<uuid>'. Omit for the top level.",
+              "title": "Scope"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 2,
+              "minimum": 1,
+              "title": "Depth",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Filter runs by status.",
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter runs by status.",
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowseResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Browse",
+        "tags": [
+          "browse"
+        ]
+      }
+    },
+    "/v1/devices": {
+      "get": {
+        "operationId": "list_devices_v1_devices_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "title": "Response List Devices V1 Devices Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Devices",
+        "tags": [
+          "pairing"
+        ]
+      }
+    },
+    "/v1/devices/{device_id}": {
+      "delete": {
+        "operationId": "disconnect_device_v1_devices__device_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "device_id",
+            "required": true,
+            "schema": {
+              "title": "Device Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disconnect Device",
+        "tags": [
+          "pairing"
         ]
       }
     },
@@ -8064,6 +8840,31 @@
         ]
       }
     },
+    "/v1/integrations/ingestion/retry-dlq": {
+      "post": {
+        "operationId": "retry_ingestion_dlq_v1_integrations_ingestion_retry_dlq_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "title": "Response Retry Ingestion Dlq V1 Integrations Ingestion Retry Dlq Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Retry Ingestion Dlq",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/v1/integrations/{source}/backfill": {
       "get": {
         "operationId": "get_backfill_status_v1_integrations__source__backfill_get",
@@ -8129,6 +8930,47 @@
         "summary": "Whoami",
         "tags": [
           "identity"
+        ]
+      }
+    },
+    "/v1/pairing-tokens": {
+      "post": {
+        "operationId": "mint_pairing_token_v1_pairing_tokens_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairingTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairingTokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mint Pairing Token",
+        "tags": [
+          "pairing"
         ]
       }
     },
@@ -9357,6 +10199,50 @@
         "summary": "List Run Events",
         "tags": [
           "events"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/heartbeat": {
+      "post": {
+        "description": "Report that a run's process is still alive.\n\nLiveness cannot be inferred from `status` alone: it is a plain column, so a\nrun whose process dies without a final PATCH stays 'running' forever. A\nclient calls this periodically (well inside `run_heartbeat_stale_seconds`)\nand the reaper flips anything that stops beating to 'crashed'.\n\nBeating is what makes a run REAPABLE -- rows that have never beat are left\nalone forever. So this is safe to adopt gradually: a client that never calls\nit keeps exactly the old behaviour.\n\nOnly a 'running' run is stamped. Beating a finished run would resurrect it\ninto the reaper's scan for no reason, and beating a soft-deleted one would\ncontradict the tombstone.",
+        "operationId": "heartbeat_run_v1_runs__run_id__heartbeat_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Heartbeat Run",
+        "tags": [
+          "runs"
         ]
       }
     },
@@ -10809,6 +11695,53 @@
           }
         },
         "summary": "Presign Workspace File Upload",
+        "tags": [
+          "workspaces"
+        ]
+      }
+    },
+    "/v1/workspaces/{workspace_id}/files/{artifact_id}": {
+      "delete": {
+        "description": "Soft-delete a file only while it is anchored to ``workspace_id``.\n\nThe workspace predicate is part of the UPDATE, not a client-side precheck:\nPostgreSQL rechecks it after a concurrent ownership move. A stale explorer\nrow therefore returns 404 instead of deleting the file from Shared (or from\nanother workspace). The index tombstone and audit event share the tenant tx.",
+        "operationId": "delete_workspace_file_v1_workspaces__workspace_id__files__artifact_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workspace_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Workspace Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Workspace File",
         "tags": [
           "workspaces"
         ]
