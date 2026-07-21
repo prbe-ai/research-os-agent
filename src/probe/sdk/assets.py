@@ -98,18 +98,40 @@ class AssetClient:
         return self.client.transport.get(f"/v1/assets/{asset_id}/versions")
 
     # GET /v1/assets caps `limit` at 200 (default 50). Page carries next_cursor but
-    # does NOT auto-follow, so a scan has to walk it.
+    # does NOT auto-follow, so the legacy scan has to walk it.
     _PAGE = 200
     _SCAN_PAGE_CAP = 200  # 40k assets; a sanity backstop, not a real bound
 
     def _find(self, name: str, kind: str | None) -> dict | None:
-        """First asset matching name (+kind), scanning EVERY page of the registry."""
-        cursor: str | None = None
+        """The asset matching name (+kind), or None.
+
+        ONE filtered request against the backend (research-os #103). The old
+        path walked the whole registry client-side because no filter existed,
+        capped at 200 pages, and returned the same bare None whether it had
+        exhausted the list or merely given up -- so a real asset on page 201
+        read as absent and the caller went and created a duplicate. Absence is
+        authoritative now.
+
+        The scan below remains ONLY for backends that predate the filter: they
+        ignore unknown query params, so an unfiltered first page comes back and
+        the client-side match still has to happen. Delete it once no such
+        backend is deployed.
+        """
+        params: dict[str, Any] = {"limit": self._PAGE, "name": name}
+        if kind is not None:
+            params["kind"] = kind
+        page = self.list(**params)
+        for asset in page.items:
+            if asset.get("name") == name and (kind is None or asset.get("kind") == kind):
+                return asset
+        # A filtering backend returning nothing means the asset does not exist.
+        # A pre-filter backend returns an unfiltered page instead, which is only
+        # distinguishable by there being MORE pages to walk.
+        cursor = page.next_cursor
+        if not cursor:
+            return None
         for _ in range(self._SCAN_PAGE_CAP):
-            params: dict[str, Any] = {"limit": self._PAGE}
-            if cursor:
-                params["cursor"] = cursor
-            page = self.list(**params)
+            page = self.list(limit=self._PAGE, cursor=cursor)
             for asset in page.items:
                 if asset.get("name") == name and (kind is None or asset.get("kind") == kind):
                     return asset
@@ -117,6 +139,14 @@ class AssetClient:
             if not cursor:
                 return None
         return None
+
+    def get_by_name(self, name: str, *, kind: str | None = None) -> dict | None:
+        """The asset with this exact name, or None if there is none.
+
+        None means ABSENT, not "gave up looking" -- the backend filters
+        server-side, so this is one request and the answer is authoritative.
+        """
+        return self._find(name, kind)
 
     # -- read / resolve (used by the read-only MCP) ------------------------
     def resolve(

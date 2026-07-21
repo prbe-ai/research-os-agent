@@ -737,6 +737,16 @@ class FakeApp:
             # told to register a duplicate. A fake kinder than the backend is a fake
             # that certifies broken code.
             rows = list(self.assets.values())
+            # Server-side name/kind filters (research-os #103). Modelled here
+            # because the client now RELIES on them: without them it would fall
+            # back to walking pages, and a fake that quietly ignores a filter
+            # certifies code that the real backend would break.
+            # name matches EXACTLY (stored verbatim, its uniqueness check is
+            # exact); kind is lowercased on write, so the filter lowercases too.
+            if (want_name := request.url.params.get("name")) is not None:
+                rows = [a for a in rows if a["name"] == want_name]
+            if (want_kind := request.url.params.get("kind")) is not None:
+                rows = [a for a in rows if a["kind"] == want_kind.strip().lower()]
             limit = min(int(request.url.params.get("limit") or 50), 200)
             start = int(request.url.params.get("cursor") or request.url.params.get("offset") or 0)
             window = rows[start : start + limit]

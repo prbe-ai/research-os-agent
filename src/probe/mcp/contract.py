@@ -37,6 +37,9 @@ class EntityType(StrEnum):
     ARTIFACT = "artifact"
     RUN = "run"
     GROUP = "group"  # a sweep/ensemble: an experiment-shaped noun, reached by ref
+    # Reached by NAME, not id (`asset:<name>`): the reuse check asks "does an
+    # official X already exist", and you have the name, not an id.
+    ASSET = "asset"
     FILE = "file"
     DOCUMENT = "document"  # a semantic hit whose ref is null
 

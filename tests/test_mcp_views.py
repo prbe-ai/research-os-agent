@@ -103,7 +103,7 @@ def test_trajectory_view_reads_the_actual_spans(client, app):
     """The gap that mattered most: the run bundle carries span_type COUNTS, so
     there was no way to read a trajectory through the MCP at all."""
     rid, _, _, _ = _populated(client, app, spans=3)
-    result = _service(client).research_get(f"run:{rid}", view="trajectory")
+    result = _service(client).get_entity(f"run:{rid}", view="trajectory")
 
     spans = result["data"]["spans"]
     assert [s["name"] for s in spans] == ["rollout-0", "rollout-1", "rollout-2"]
@@ -113,7 +113,7 @@ def test_trajectory_view_reads_the_actual_spans(client, app):
 
 def test_trajectory_filters_push_to_the_backend(client, app):
     rid, _, _, _ = _populated(client, app, spans=6)
-    result = _service(client).research_get(
+    result = _service(client).get_entity(
         f"run:{rid}", view="trajectory", filters={"span_type": "tool_call", "step_from": 3}
     )
     assert [s["step_index"] for s in result["data"]["spans"]] == [3, 5]
@@ -131,7 +131,7 @@ def test_every_run_view_returns_a_materially_different_payload(client, app):
     views = ["card", "trajectory", "metrics", "artifacts", "reproduce", "handoff",
              "lineage", "events"]
 
-    payloads = {view: service.research_get(f"run:{rid}", view=view)["data"] for view in views}
+    payloads = {view: service.get_entity(f"run:{rid}", view=view)["data"] for view in views}
     for view, data in payloads.items():
         assert data["view"] == view
 
@@ -152,12 +152,17 @@ def test_no_view_reports_missing_unconditionally(client, app):
     is always populated."""
     rid, experiment_id, group_id, _ = _populated(client, app)
     project_id = app.runs[rid].get("project_id") or client.list_projects().items[0]["id"]
+    # An asset WITH a version, so `versions` is exercised against a populated
+    # entity like every other view rather than being quietly exempted.
+    asset = client.assets.register("official-scorer", kind="method")
+    client.assets.add_version(asset["id"], content_hash="h1", uri="r2://b/1")
     refs = {"run": f"run:{rid}", "experiment": f"experiment:{experiment_id}",
-            "project": f"project:{project_id}", "group": f"group:{group_id}"}
+            "project": f"project:{project_id}", "group": f"group:{group_id}",
+            "asset": "asset:official-scorer"}
     service = _service(client)
 
     for kind, view in sorted(_VIEWS):
-        result = service.research_get(refs[kind], view=view, token_budget=100_000)
+        result = service.get_entity(refs[kind], view=view, token_budget=100_000)
         assert result["completeness"]["missing"] == [], (
             f"view={view!r} on a {kind} reports missing "
             f"{result['completeness']['missing']} against a fully-populated entity"
@@ -174,14 +179,14 @@ def test_deleted_phantom_views_are_rejected_by_name(client, app):
     service = _service(client)
     for view in ("contract", "usage"):
         with pytest.raises(errors.ValidationError) as excinfo:
-            service.research_get(f"run:{rid}", view=view)
+            service.get_entity(f"run:{rid}", view=view)
         assert "trajectory" in str(excinfo.value)  # names what a run really supports
 
 
 def test_view_not_available_for_this_kind_names_the_kinds_real_views(client, app):
     _, experiment_id, _, _ = _populated(client, app)
     with pytest.raises(errors.ValidationError) as excinfo:
-        _service(client).research_get(f"experiment:{experiment_id}", view="trajectory")
+        _service(client).get_entity(f"experiment:{experiment_id}", view="trajectory")
     message = str(excinfo.value)
     assert "experiment supports" in message and "groups" in message
 
@@ -192,7 +197,7 @@ def test_view_not_available_for_this_kind_names_the_kinds_real_views(client, app
 def test_reproduce_resolves_env_ref_through_its_execution_record(client, app):
     """This used to return a bundle and call that reproduction."""
     rid, _, _, content_hash = _populated(client, app)
-    data = _service(client).research_get(f"run:{rid}", view="reproduce")["data"]
+    data = _service(client).get_entity(f"run:{rid}", view="reproduce")["data"]
 
     assert data["hypothesis"] == "relative paths fix scoring"
     assert data["env_ref"] == content_hash
@@ -205,7 +210,7 @@ def test_reproduce_without_an_env_ref_reports_it_missing(client, app):
     """CONDITIONAL missing — the honest kind. This run captured no environment, so
     it genuinely cannot be reproduced from here."""
     run = client.run(project="folding", experiment="e", hypothesis="h", name="no-env")
-    result = _service(client).research_get(f"run:{run.id}", view="reproduce")
+    result = _service(client).get_entity(f"run:{run.id}", view="reproduce")
     assert result["completeness"]["missing"] == ["execution_record"]
     assert result["completeness"]["state"] == "partial"
 
@@ -219,10 +224,10 @@ def test_groups_are_reachable_by_view_and_by_ref(client, app):
     _, experiment_id, group_id, _ = _populated(client, app)
     service = _service(client)
 
-    listed = service.research_get(f"experiment:{experiment_id}", view="groups")["data"]
+    listed = service.get_entity(f"experiment:{experiment_id}", view="groups")["data"]
     assert [g["name"] for g in listed["groups"]] == ["lr-sweep"]
 
-    one = service.research_get(f"group:{group_id}")["data"]
+    one = service.get_entity(f"group:{group_id}")["data"]
     assert one["entity_type"] == "group"
     assert one["entity"]["spec"] == {"lr": [1, 2]}
 
@@ -230,7 +235,7 @@ def test_groups_are_reachable_by_view_and_by_ref(client, app):
 def test_versions_view_is_real_against_the_live_registry(client, app):
     """Was: unconditionally missing:["versioned_assets"], never implemented."""
     _, experiment_id, _, _ = _populated(client, app)
-    result = _service(client).research_get(f"experiment:{experiment_id}", view="versions")
+    result = _service(client).get_entity(f"experiment:{experiment_id}", view="versions")
     assert [v["label"] for v in result["data"]["versions"]] == ["v1"]
     assert result["completeness"]["missing"] == []
 
@@ -244,8 +249,8 @@ def test_token_budget_bounds_a_large_trajectory(client, app):
     rid, _, _, _ = _populated(client, app, spans=500)
     service = _service(client)
 
-    unbounded = service.research_get(f"run:{rid}", view="trajectory", token_budget=1_000_000)
-    bounded = service.research_get(f"run:{rid}", view="trajectory", token_budget=600)
+    unbounded = service.get_entity(f"run:{rid}", view="trajectory", token_budget=1_000_000)
+    bounded = service.get_entity(f"run:{rid}", view="trajectory", token_budget=600)
 
     assert 0 < len(bounded["data"]["spans"]) < len(unbounded["data"]["spans"])
     assert len(json.dumps(bounded["data"]["spans"])) // 4 <= 600
@@ -260,7 +265,7 @@ def test_a_bounded_fetch_window_never_passes_itself_off_as_the_whole_trajectory(
     tell the agent it had read the entire trajectory — the exact confident-wrong
     answer this whole change is about."""
     rid, _, _, _ = _populated(client, app, spans=500)
-    result = _service(client).research_get(
+    result = _service(client).get_entity(
         f"run:{rid}", view="trajectory", token_budget=1_000_000
     )
     assert len(result["data"]["spans"]) == 200  # _PAGE_FETCH, not 500
@@ -273,7 +278,7 @@ def test_a_budget_too_small_for_one_row_still_makes_progress(client, app):
     """Never return zero rows with a cursor: a walk would spin forever. Emit one
     and report the overflow instead."""
     rid, _, _, _ = _populated(client, app, spans=5)
-    result = _service(client).research_get(f"run:{rid}", view="trajectory", token_budget=1)
+    result = _service(client).get_entity(f"run:{rid}", view="trajectory", token_budget=1)
     assert len(result["data"]["spans"]) == 1
     assert result["completeness"]["state"] == "partial"
 
@@ -284,7 +289,7 @@ def test_reproduce_is_atomic_and_reports_overflow_instead_of_truncating(client, 
     rid, _, _, _ = _populated(client, app)
     app.runs[rid]["config"] = {f"hyperparam_{i}": "x" * 100 for i in range(50)}
 
-    result = _service(client).research_get(f"run:{rid}", view="reproduce", token_budget=50)
+    result = _service(client).get_entity(f"run:{rid}", view="reproduce", token_budget=50)
     assert result["completeness"]["missing"] == ["token_budget_exceeded"]
     assert result["completeness"]["state"] == "partial"
     assert result["next_cursor"] is None  # nothing to paginate
@@ -301,7 +306,7 @@ def test_cursor_walks_a_trajectory_without_skipping_or_duplicating(client, app):
     seen: list[str] = []
     cursor, pages = None, 0
     while True:
-        result = service.research_get(
+        result = service.get_entity(
             f"run:{rid}", view="trajectory", token_budget=400, cursor=cursor
         )
         seen.extend(s["id"] for s in result["data"]["spans"])
@@ -324,7 +329,7 @@ def test_backend_ceiling_marker_reflects_the_backend_not_the_offset(client, app)
     carry, so it is worse than no marker at all."""
     rid, _, _, _ = _populated(client, app, spans=3)
     cursor = json.dumps({"offset": 9_900, "view": "trajectory"}, sort_keys=True)
-    result = _service(client).research_get(f"run:{rid}", view="trajectory", cursor=cursor)
+    result = _service(client).get_entity(f"run:{rid}", view="trajectory", cursor=cursor)
 
     assert result["data"]["spans"] == []  # read past the end
     assert result["completeness"]["missing"] == []  # ... and says nothing is hidden
@@ -359,7 +364,7 @@ def test_at_the_backend_ceiling_a_view_never_claims_complete(
         for i in range(12)
     ]
 
-    result = _service(client).research_get(
+    result = _service(client).get_entity(
         f"run:{rid}", view=view, filters=filters, token_budget=1_000_000
     )
     assert len(result["data"][rows_key]) == 10  # the backend's ceiling, not the 12 that exist
@@ -377,7 +382,7 @@ def test_a_run_whose_experiment_cannot_be_read_says_so(client, app, monkeypatch)
         raise errors.NotFoundError("experiment not found")
 
     monkeypatch.setattr(service_module.ResearchOSSource, "experiment", staticmethod(_gone))
-    result = _service(client).research_get(f"run:{rid}", view="handoff", token_budget=100_000)
+    result = _service(client).get_entity(f"run:{rid}", view="handoff", token_budget=100_000)
 
     assert result["data"]["hypothesis"] is None
     assert "experiment" in result["completeness"]["missing"]
@@ -387,7 +392,7 @@ def test_a_run_whose_experiment_cannot_be_read_says_so(client, app, monkeypatch)
 def test_a_run_with_no_experiment_id_says_so_rather_than_reporting_no_hypothesis(client, app):
     rid, _, _, _ = _populated(client, app)
     app.runs[rid]["experiment_id"] = None
-    result = _service(client).research_get(f"run:{rid}", view="reproduce")
+    result = _service(client).get_entity(f"run:{rid}", view="reproduce")
     assert result["data"]["hypothesis"] is None
     assert "experiment" in result["completeness"]["missing"]
 
@@ -396,7 +401,7 @@ def test_an_empty_filter_value_is_dropped_not_echoed_as_applied(client, app):
     """`{"key": ""}` is falsy, so it fell through to the series path while echoing
     filters={"key": ""} back — a filter reported as applied that nothing honored."""
     rid, _, _, _ = _populated(client, app)
-    result = _service(client).research_get(f"run:{rid}", view="metrics", filters={"key": ""})
+    result = _service(client).get_entity(f"run:{rid}", view="metrics", filters={"key": ""})
     assert result["data"]["granularity"] == "series_summary"
     assert result["data"]["filters"] is None
 
@@ -406,24 +411,24 @@ def test_cursor_from_another_view_is_rejected_not_rebased(client, app):
     reinterpreting it would skip 40 events with no signal."""
     rid, _, _, _ = _populated(client, app, spans=40)
     service = _service(client)
-    cursor = service.research_get(f"run:{rid}", view="trajectory", token_budget=400)["next_cursor"]
+    cursor = service.get_entity(f"run:{rid}", view="trajectory", token_budget=400)["next_cursor"]
 
     with pytest.raises(errors.ValidationError) as excinfo:
-        service.research_get(f"run:{rid}", view="events", cursor=cursor)
+        service.get_entity(f"run:{rid}", view="events", cursor=cursor)
     assert "issued for view='trajectory'" in str(excinfo.value)
 
 
 def test_malformed_cursor_raises_validation_error(client, app):
     rid, _, _, _ = _populated(client, app)
     with pytest.raises(errors.ValidationError):
-        _service(client).research_get(f"run:{rid}", view="trajectory", cursor="not-json")
+        _service(client).get_entity(f"run:{rid}", view="trajectory", cursor="not-json")
 
 
 def test_atomic_view_cannot_be_paginated(client, app):
     rid, _, _, _ = _populated(client, app)
     cursor = json.dumps({"offset": 5, "view": "reproduce"}, sort_keys=True)
     with pytest.raises(errors.ValidationError) as excinfo:
-        _service(client).research_get(f"run:{rid}", view="reproduce", cursor=cursor)
+        _service(client).get_entity(f"run:{rid}", view="reproduce", cursor=cursor)
     assert "cannot be paginated" in str(excinfo.value)
 
 
@@ -435,7 +440,7 @@ def test_unknown_filter_is_rejected_with_the_supported_set(client, app):
     narrowed."""
     rid, _, _, _ = _populated(client, app)
     with pytest.raises(errors.ValidationError) as excinfo:
-        _service(client).research_get(f"run:{rid}", view="trajectory", filters={"nope": 1})
+        _service(client).get_entity(f"run:{rid}", view="trajectory", filters={"nope": 1})
     assert "span_type" in str(excinfo.value)
 
 
@@ -444,7 +449,7 @@ def test_filters_are_rejected_on_a_view_that_cannot_honor_them(client, app):
     run's artifacts and a lie on an experiment's."""
     _, experiment_id, _, _ = _populated(client, app)
     with pytest.raises(errors.ValidationError) as excinfo:
-        _service(client).research_get(
+        _service(client).get_entity(
             f"experiment:{experiment_id}", view="artifacts", filters={"kind": "figure"}
         )
     assert "accepts no filters" in str(excinfo.value)
@@ -456,11 +461,11 @@ def test_metrics_view_drills_from_series_summary_to_raw_points(client, app):
     rid, _, _, _ = _populated(client, app)
     service = _service(client)
 
-    summary = service.research_get(f"run:{rid}", view="metrics")["data"]
+    summary = service.get_entity(f"run:{rid}", view="metrics")["data"]
     assert summary["granularity"] == "series_summary"
     assert [s["key"] for s in summary["series"]] == ["loss"]
 
-    points = service.research_get(f"run:{rid}", view="metrics", filters={"key": "loss"})["data"]
+    points = service.get_entity(f"run:{rid}", view="metrics", filters={"key": "loss"})["data"]
     assert points["granularity"] == "points"
     assert [p["value"] for p in points["points"]] == [0.9, 0.3]
 
@@ -513,3 +518,80 @@ def test_research_context_token_budget_bounds_its_lists(client, app):
     assert "truncated_by_token_budget" in small["completeness"]["missing"]
     assert small["completeness"]["state"] == "partial"
     assert "token_budget" not in small["data"]  # the echo is gone, not decorated
+
+
+def test_asset_absent_and_asset_unsatisfiable_look_different(client, app):
+    """The two "nothing"s must not be confusable.
+
+    A name that does not exist is a bad ref, like any other bad ref. A name that
+    EXISTS with no version satisfying the constraint is a real answer: the asset
+    is there, the ceiling is just too low. Collapse them and an agent reads a
+    version ceiling as "no such asset" and writes a duplicate -- the exact
+    outcome the reuse check exists to prevent.
+    """
+    from probe.sdk import errors
+
+    asset = client.assets.register("bird-sql-scorer", kind="method")
+    client.assets.add_version(asset["id"], content_hash="h1", uri="r2://b/1")
+    service = _service(client)
+
+    # 1. Absent -> NotFound, same as any bad ref.
+    with pytest.raises(errors.NotFoundError):
+        service.get_entity("asset:does-not-exist", view="versions")
+
+    # 2. Exists, constraint satisfiable.
+    ok = service.get_entity(
+        "asset:bird-sql-scorer", view="versions", filters={"requirement": ">=1"}
+    )
+    assert ok["data"]["state"] == "match"
+    assert ok["data"]["satisfying_count"] == 1
+
+    # 3. Exists, constraint UNSATISFIABLE -> no_match, and the versions that DO
+    #    exist come back so the real ceiling is visible rather than asserted.
+    ceiling = service.get_entity(
+        "asset:bird-sql-scorer", view="versions", filters={"requirement": ">=2"}
+    )
+    assert ceiling["data"]["state"] == "no_match"
+    assert ceiling["data"]["satisfying_count"] == 0
+    assert [v["version"] for v in ceiling["data"]["versions"]] == [1]
+    # Not an error: the caller asked a well-formed question and got a true answer.
+    assert ceiling["completeness"]["state"] == "complete"
+
+
+def test_asset_lookup_is_one_filtered_request_not_a_registry_walk(client, app):
+    """Absence must be authoritative, not "we stopped looking".
+
+    The old path walked every page client-side and returned the same bare None
+    whether it exhausted the registry or hit its 200-page cap.
+    """
+    for i in range(60):  # more than one default page
+        client.assets.register(f"filler-{i}", kind="dataset")
+    client.assets.register("needle", kind="method")
+
+    before = len([r for r in app.requests if r.url.path == "/v1/assets"])
+    found = client.assets.get_by_name("needle")
+    after = len([r for r in app.requests if r.url.path == "/v1/assets"])
+
+    assert found is not None and found["name"] == "needle"
+    # ONE request, even though the needle sits past the first default page.
+    assert after - before == 1
+
+    assert client.assets.get_by_name("no-such-asset") is None
+
+
+def test_asset_requirement_matches_integer_versions_not_semver(client, app):
+    """Asset versions are monotonic integers with optional labels.
+
+    Pretending to understand semver ranges over integers would answer
+    confidently and wrongly, which is what this whole view exists to prevent.
+    """
+    asset = client.assets.register("scorer", kind="method")
+    for i in range(3):
+        client.assets.add_version(asset["id"], content_hash=f"h{i}", uri=f"r2://b/{i}")
+    service = _service(client)
+
+    for requirement, expect_state in ((">=3", "match"), (">3", "no_match"), ("<=1", "match")):
+        out = service.get_entity(
+            "asset:scorer", view="versions", filters={"requirement": requirement}
+        )
+        assert out["data"]["state"] == expect_state, requirement

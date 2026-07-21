@@ -166,6 +166,7 @@ class ResearchOSSource:
         *,
         corpus: list[str] | None = None,
         workspace_id: str | None = None,
+        project_id: str | None = None,
         top_k: int | None = None,
         exact_limit: int | None = None,
         exact_cursor: str | None = None,
@@ -195,6 +196,7 @@ class ResearchOSSource:
                     query,
                     corpus=corpus,
                     workspace_id=workspace_id,
+                    project_id=project_id,
                     top_k=top_k,
                     exact_limit=exact_limit,
                     exact_cursor=exact_cursor,
@@ -204,8 +206,10 @@ class ResearchOSSource:
                 self._search_supported = None
                 self._probe_search()
                 if self._search_supported is True:
-                    if workspace_id is not None:
-                        raise  # endpoint exists -> the workspace was not found
+                    if workspace_id is not None or project_id is not None:
+                        # Endpoint exists, so a scoped 404 means the SCOPE was
+                        # not found -- both scopes are oracle-safe 404s.
+                        raise
                     if not retried:
                         retried = True
                         continue  # likely a stale pod during a rolling deploy
@@ -215,6 +219,10 @@ class ResearchOSSource:
                 raise self._capability_unavailable() from None
             self._record_search_response(response)
             return response
+
+    def asset_versions(self, asset_id: str) -> list[dict]:
+        """An asset's versions, newest first."""
+        return list(self.client.assets.versions(asset_id))
 
     def identity(self) -> dict:
         return self.client.me()
@@ -244,6 +252,16 @@ class ResearchOSSource:
             EntityType.PROJECT.value: self.client.get_project,
             EntityType.GROUP.value: self.client.get_group,
         }
+        if kind == EntityType.ASSET.value:
+            # Assets resolve by NAME, not id -- that is what makes them useful
+            # for the reuse check. Kept OUT of the bare-ref fallback below for
+            # the same reason: a bare id would then trigger a name lookup on
+            # every miss, and a typo would cost a registry round trip before
+            # erroring.
+            asset = self.client.assets.get_by_name(value)
+            if asset is None:
+                raise errors.NotFoundError(f"no asset named {value!r}")
+            return kind, asset
         if kind in getters:
             return kind, getters[kind](value)
         for candidate in getters:

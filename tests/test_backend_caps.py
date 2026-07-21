@@ -47,7 +47,7 @@ def test_handoff_says_so_when_the_bundle_caps_its_artifact_list(client, app, mon
         }
 
     monkeypatch.setattr(ResearchOSSource, "bundle", staticmethod(_capped_bundle))
-    result = _service(client).research_get(f"run:{rid}", view="handoff", token_budget=1_000_000)
+    result = _service(client).get_entity(f"run:{rid}", view="handoff", token_budget=1_000_000)
 
     assert result["data"]["artifact_total"] == 5000
     assert len(result["data"]["artifacts"]) == 200
@@ -63,7 +63,7 @@ def test_handoff_is_complete_when_the_bundle_was_not_capped(client, app):
     change removed."""
     run = client.run(project="folding", experiment="e", hypothesis="h", name="r")
     app.artifacts[run.id] = [_artifact(run.id, 0)]
-    result = _service(client).research_get(f"run:{run.id}", view="handoff", token_budget=100_000)
+    result = _service(client).get_entity(f"run:{run.id}", view="handoff", token_budget=100_000)
     assert result["completeness"]["missing"] == []
     assert result["completeness"]["state"] == "complete"
 

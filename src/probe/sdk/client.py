@@ -963,6 +963,7 @@ class Client:
         *,
         corpus: list[str] | None = None,
         workspace_id: str | None = None,
+        project_id: str | None = None,
         top_k: int | None = None,
         exact_limit: int | None = None,
         exact_cursor: str | None = None,
@@ -978,6 +979,7 @@ class Client:
         optional = {
             "corpus": corpus,
             "workspace_id": workspace_id,
+            "project_id": project_id,
             "top_k": top_k,
             "exact_limit": exact_limit,
             "exact_cursor": exact_cursor,

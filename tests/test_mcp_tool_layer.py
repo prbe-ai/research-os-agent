@@ -1,6 +1,6 @@
 """Round-trip through the REAL MCP tool layer, not the service underneath it.
 
-Every other test calls `ResearchReadService.research_get(...)` directly. That skips
+Every other test calls `ResearchReadService.get_entity(...)` directly. That skips
 FastMCP entirely — and FastMCP is not a passthrough. Its `pre_parse_json` runs
 json.loads on every string argument and, when the result is not a scalar, REPLACES
 the argument with the parsed object. So a `json.dumps({...})` cursor arrives at the
@@ -146,5 +146,5 @@ def test_a_legacy_raw_json_cursor_is_still_honored(client, app):
     legacy = json.dumps({"offset": 2, "view": "trajectory"}, sort_keys=True)
     service = ResearchReadService(ResearchOSSource(client))
 
-    result = service.research_get(f"run:{rid}", view="trajectory", cursor=legacy)
+    result = service.get_entity(f"run:{rid}", view="trajectory", cursor=legacy)
     assert [s["id"] for s in result["data"]["spans"]][:1] == ["span-2"]
