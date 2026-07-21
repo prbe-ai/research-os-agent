@@ -991,7 +991,7 @@ def test_aliases_still_return_the_full_envelope(client, app):
     assert "completeness" in lean
 
 
-def test_project_scope_refuses_a_backend_that_ignores_it(client, app):
+def test_project_scope_degrades_on_a_backend_that_ignores_it(client, app):
     """A backend predating server-side project scope must not answer silently.
 
     SearchRequest does not forbid extra body fields, so an older server accepts
@@ -1002,20 +1002,40 @@ def test_project_scope_refuses_a_backend_that_ignores_it(client, app):
     The echo is the only available signal, so its absence is treated as
     unsupported. A false refusal is loud and correctable; a false answer is not.
     """
-    app.search_response = _search_response()
+    app.search_response = _search_response(
+        exact=[
+            {"entity_type": "experiment", "id": "e-1", "name": "in", "slug": "in",
+             "workspace_id": None, "project_id": "p-1", "experiment_id": None,
+             "run_id": None, "score": 0.9},
+            {"entity_type": "experiment", "id": "e-2", "name": "out", "slug": "out",
+             "workspace_id": None, "project_id": "p-OTHER", "experiment_id": None,
+             "run_id": None, "score": 0.8},
+        ],
+        semantic=[
+            {"doc_id": "file:f-1", "title": "d", "snippet": "s", "score": 0.9,
+             "source_system": "workspace", "source_url": None,
+             "ref": {"kind": "file", "id": "f-1"}},
+        ],
+    )
     app.echoes_project_scope = False
     service = ResearchReadService(ResearchOSSource(client))
+    out = service.search_knowledge("q", project_id="p-1", collapse=None)
 
-    with pytest.raises(errors.CapabilityUnavailable):
-        service.search_knowledge("q", project_id="p-1")
+    # Out-of-project rows are removed rather than passed through: the whole
+    # danger is tenant-wide results wearing a project scope.
+    assert [r["id"] for r in out["data"]["results"]] == ["e-1"]
+    # The semantic channel cannot be scoped client-side, so it is EMPTIED and
+    # marked -- never passed through unscoped.
+    assert out["data"]["channels"]["semantic"]["error"] == "project_scope_unsupported"
+    assert out["completeness"]["state"] == "partial"
+    assert "semantic_search" in out["completeness"]["missing"]
 
-    # Unscoped searches are unaffected -- the gate is about the scope, not the
-    # backend version in general.
-    assert service.search_knowledge("q")["data"]["query"] == "q"
-
-    # And an echoing backend answers normally.
+    # An echoing backend keeps its semantic channel, which is the point of the
+    # backend change: scoping stops costing you semantic retrieval.
     app.echoes_project_scope = True
-    assert service.search_knowledge("q", project_id="p-1")["data"]["query"] == "q"
+    ok = service.search_knowledge("q", project_id="p-1", collapse=None)
+    assert ok["data"]["channels"]["semantic"]["error"] is None
+    assert any(r["entity_type"] == "file" for r in ok["data"]["results"])
 
 
 def test_backend_truncation_is_surfaced_not_swallowed(client, app):

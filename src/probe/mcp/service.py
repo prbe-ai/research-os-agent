@@ -796,23 +796,32 @@ class ResearchReadService:
 
         exact = _section(response, Channel.EXACT)
         semantic = _section(response, Channel.SEMANTIC)
-        if project_id is not None and not _echoes_project_scope(response, project_id):
+        scoped_server_side = project_id is None or _echoes_project_scope(
+            response, project_id
+        )
+        if not scoped_server_side:
             # The backend did not confirm it applied the scope. SearchRequest
-            # does not forbid extra body fields, so a pre-#103 server accepts
-            # `project_id` and ignores it -- returning TENANT-WIDE results with
-            # state="complete". An agent then attributes another project's runs
-            # to this one, which is worse than any error: it is a confident wrong
-            # answer with no marker on it.
+            # does not forbid extra body fields, so a server predating
+            # server-side project scope accepts `project_id`, ignores it, and
+            # returns TENANT-WIDE results -- a confident wrong answer with no
+            # marker on it, which is worse than any error.
             #
-            # Refuse rather than silently narrow client-side. The old
-            # client-side path could only filter the exact channel and had to
-            # gut the semantic one to stay honest; refusing tells the caller the
-            # truth in one line instead.
-            raise errors.CapabilityUnavailable(
-                Capability.PROJECT_SCOPED_SEARCH,
-                "this Probe Research backend predates project-scoped search; "
-                "drop project_id or upgrade the server",
-            )
+            # Degrade rather than refuse. Refusing would be honest but would
+            # also remove a capability that works today; filtering client-side
+            # is equally honest and still useful. The exact channel carries
+            # project_id per row so it can be narrowed here; the semantic
+            # channel cannot be, so it is EMPTIED and marked rather than passed
+            # through unscoped. A caller gets fewer results and is told why.
+            exact["results"] = [
+                row for row in exact["results"] if _in_project(row, project_id)
+            ]
+            semantic = {
+                "results": [],
+                "cursor": None,
+                "error": ChannelError.PROJECT_SCOPE_UNSUPPORTED,
+                "total_candidates": None,
+                "active_runs_count": None,
+            }
         # Project scope is applied SERVER-SIDE now (research-os #103): the
         # backend re-resolves semantic hits against live rows and over-fetches
         # so the filter runs before the cap. The old client-side path emptied
