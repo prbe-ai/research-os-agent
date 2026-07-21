@@ -700,6 +700,25 @@ class Client:
         )
         return self.create_run(exp["id"], name, **run_kw)
 
+    def heartbeat_run(self, run_id: str) -> dict:
+        """``POST /v1/runs/{id}/heartbeat``: report that this run is still alive.
+
+        Liveness cannot be inferred from `status`: it is a plain column, so a run
+        whose process dies without a final PATCH stays 'running' forever and any
+        "what is active" count decays into noise. Call this periodically while a
+        run executes and the server's reaper marks anything that stops beating
+        as 'crashed'.
+
+        Beating is what makes a run REAPABLE -- a run that has never beat is
+        never reaped -- so adopting this is safe and gradual, but a run that
+        beats ONCE and then stops will eventually be marked crashed. Either beat
+        for the run's whole life or not at all.
+
+        Only a 'running' run is stamped; a late beat racing a normal completion
+        is a no-op rather than an error.
+        """
+        return self.transport.post(f"/v1/runs/{run_id}/heartbeat", None, idempotent=True)
+
     # -- runs (read) --------------------------------------------------------
     def get_run(self, run_id: str, *, include_deleted: bool = False) -> dict:
         params = {"include": "deleted"} if include_deleted else None
@@ -966,6 +985,36 @@ class Client:
         }
         body.update({key: value for key, value in optional.items() if value is not None})
         return self.transport.post("/v1/search", body, idempotent=True)
+
+    def browse(
+        self,
+        *,
+        scope: str | None = None,
+        depth: int | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> dict:
+        """``GET /v1/browse``: the structured "what exists" tree.
+
+        Where ``search`` ranks by relevance and needs a query, this enumerates
+        structure and needs nothing -- the cold-start read. Returns
+        ``{projects|experiments|runs, cursor, depth, limit, truncated}`` with
+        exactly one level populated at the top, decided by ``scope``.
+
+        A backend that predates the endpoint 404s; callers fall back honestly
+        rather than presenting an empty tree as "nothing exists".
+        """
+        params: dict[str, Any] = {}
+        optional = {
+            "scope": scope,
+            "depth": depth,
+            "status": status,
+            "limit": limit,
+            "cursor": cursor,
+        }
+        params.update({k: v for k, v in optional.items() if v is not None})
+        return self.transport.get("/v1/browse", params=params or None)
 
     # -- passive / batch push ----------------------------------------------
     def ingest(

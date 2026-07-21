@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import warnings
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any

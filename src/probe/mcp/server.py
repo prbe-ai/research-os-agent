@@ -122,6 +122,48 @@ def create_server(
     )
 
     @mcp.tool()
+    def research_browse(
+        scope: str | None = None,
+        depth: int = 1,
+        status: str | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> dict:
+        """List what EXISTS in this lab: projects, their experiments, their runs.
+
+        Reach for this when you do not yet have search terms. `research_search`
+        ranks things by relevance to a query and therefore needs you to already
+        know what to look for; this needs nothing and answers "what is here?".
+        The rule is about what you HAVE, not what you want: no terms yet means
+        browse, terms in hand means search.
+
+        Call it before starting work in an unfamiliar project, and whenever you
+        are about to launch a run and want to see what is already running.
+
+        scope: omit for top-level projects; "project:<id>" for that project's
+            experiments; "experiment:<id>" for that experiment's runs. Every
+            node carries a `ref` you can hand straight to `research_get`.
+        depth: 1 (default) lists one level; 2 also expands its children. Higher
+            is rejected, not clamped -- the tree grows multiplicatively and a
+            silent clamp would let you believe you saw more than you did.
+        status: filter runs by lifecycle status (e.g. "running").
+        limit: per level, not per response.
+
+        Each node carries `available_views`: exactly the views `research_get`
+        accepts for that kind, so you never have to discover them by guessing
+        wrong. `active_run_count` counts runs executing now; a run that reports
+        liveness and then stops is excluded, and `alive: null` means the client
+        does not report liveness at all -- unknown, not dead.
+
+        A backend without this endpoint returns completeness.missing =
+        ["structured_browse"] rather than an empty tree, because "nothing
+        exists" and "I cannot tell you what exists" are opposite claims.
+        """
+        return svc().research_browse(
+            scope=scope, depth=depth, status=status, limit=limit, cursor=cursor
+        )
+
+    @mcp.tool()
     def research_context(
         task: str,
         project_ref: str | None = None,

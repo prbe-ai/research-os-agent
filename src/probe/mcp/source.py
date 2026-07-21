@@ -37,6 +37,12 @@ class ResearchOSSource:
         self._search_supported: bool | None = None
         self._search_semantic_ok: bool = False
         self._search_checked_at: float = float("-inf")
+        # GET /v1/browse support, same tri-state and same reasoning. Tracked
+        # SEPARATELY from search: the two endpoints shipped in different
+        # releases, so a backend can have one and not the other, and inferring
+        # either from the other would report a capability the server lacks.
+        self._browse_supported: bool | None = None
+        self._browse_checked_at: float = float("-inf")
 
     def close(self) -> None:
         self.client.close()
@@ -62,6 +68,12 @@ class ResearchOSSource:
         supported = self._search_supported is True
         return {
             Capability.STRUCTURED_EXPERIMENTS: True,
+            # Reported from the cached verdict only: probing browse here would
+            # cost an extra request on every capabilities() call, and every
+            # envelope carries one. None (never probed) reports True optimistically
+            # -- browse itself raises CapabilityUnavailable if the route is absent,
+            # which is a truthful failure rather than a preemptive denial.
+            Capability.STRUCTURED_BROWSE: self._browse_supported is not False,
             Capability.UNIFIED_SEARCH: supported,
             Capability.SEMANTIC_SEARCH: supported and self._search_semantic_ok,
             Capability.KB_DOCUMENTS: supported and self._search_semantic_ok,
@@ -74,6 +86,48 @@ class ResearchOSSource:
 
     def _verdict_expired(self) -> bool:
         return (time.monotonic() - self._search_checked_at) > _SUPPORT_RECHECK_SECONDS
+
+    def _browse_verdict_expired(self) -> bool:
+        return (time.monotonic() - self._browse_checked_at) > _SUPPORT_RECHECK_SECONDS
+
+    def browse(
+        self,
+        *,
+        scope: str | None = None,
+        depth: int | None = None,
+        status: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+    ) -> dict:
+        """GET /v1/browse, raising CapabilityUnavailable on a backend without it.
+
+        A pre-browse backend must NOT degrade to an empty tree: "nothing exists
+        here" and "this server cannot tell you what exists" are opposite claims,
+        and the first one would stop an agent looking further.
+        """
+        if self._browse_supported is False and not self._browse_verdict_expired():
+            raise self._browse_unavailable()
+        try:
+            response = self.client.browse(
+                scope=scope, depth=depth, status=status, limit=limit, cursor=cursor
+            )
+        except errors.NotFoundError:
+            # A scoped 404 means the SCOPE was not found on a backend that has
+            # the route; only an unscoped 404 proves the route is missing.
+            if scope is not None:
+                raise
+            self._browse_supported = False
+            self._browse_checked_at = time.monotonic()
+            raise self._browse_unavailable() from None
+        self._browse_supported = True
+        self._browse_checked_at = time.monotonic()
+        return response
+
+    def _browse_unavailable(self) -> errors.CapabilityUnavailable:
+        return errors.CapabilityUnavailable(
+            Capability.STRUCTURED_BROWSE,
+            "this Probe Research backend predates GET /v1/browse",
+        )
 
     def _record_search_response(self, response: Any) -> None:
         self._search_supported = True

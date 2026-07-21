@@ -514,6 +514,35 @@ class MetricSeriesOut(BaseModel):
     x_axis: str | None = Field('step', title='X Axis')
 
 
+class Hostname(RootModel[str]):
+    root: str = Field(..., max_length=256, title='Hostname')
+
+
+class Os(RootModel[str]):
+    root: str = Field(..., max_length=64, title='Os')
+
+
+class PairRequest(BaseModel):
+    hostname: Hostname | None = Field(None, title='Hostname')
+    os: Os | None = Field(None, title='Os')
+    pairing_token: str = Field(..., min_length=1, title='Pairing Token')
+
+
+class PairResponse(BaseModel):
+    customer_id: str = Field(..., title='Customer Id')
+    device_id: str = Field(..., title='Device Id')
+    device_token: str = Field(..., title='Device Token')
+
+
+class PairingTokenRequest(BaseModel):
+    source: str | None = Field('claude_code', title='Source')
+
+
+class PairingTokenResponse(BaseModel):
+    expires_in_seconds: int = Field(..., title='Expires In Seconds')
+    pairing_token: str = Field(..., title='Pairing Token')
+
+
 class ParentRelation(StrEnum):
     fork = 'fork'
     resume = 'resume'
@@ -649,6 +678,17 @@ class RunGroupPatch(BaseModel):
     spec: dict[str, Any] | None = Field(None, title='Spec')
 
 
+class RunNode(BaseModel):
+    alive: bool | None = Field(None, title='Alive')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    ended_at: AwareDatetime | None = Field(None, title='Ended At')
+    id: UUID = Field(..., title='Id')
+    name: str = Field(..., title='Name')
+    short_id: str | None = Field(None, title='Short Id')
+    started_at: AwareDatetime | None = Field(None, title='Started At')
+    status: str = Field(..., title='Status')
+
+
 class RunStatus(StrEnum):
     created = 'created'
     running = 'running'
@@ -702,6 +742,7 @@ class SearchRequest(BaseModel):
     corpus: list[IndexCorpus] | None = Field(None, title='Corpus')
     exact_cursor: str | None = Field(None, title='Exact Cursor')
     exact_limit: int | None = Field(20, ge=1, le=50, title='Exact Limit')
+    project_id: UUID | None = Field(None, title='Project Id')
     query: str = Field(..., max_length=500, min_length=1, title='Query')
     semantic_cursor: str | None = Field(None, title='Semantic Cursor')
     top_k: int | None = Field(20, ge=1, le=50, title='Top K')
@@ -711,6 +752,23 @@ class SearchRequest(BaseModel):
 class SearchState(StrEnum):
     ok = 'ok'
     partial = 'partial'
+
+
+class SemanticChunk(BaseModel):
+    """
+    One MATCHED chunk of a document, full content.
+
+    Not truncated to a fixed cap: when the response must shrink, the budget
+    drops whole chunks from the tail rather than clipping every chunk into
+    uselessness. `graph_evidence` is empty for a text-only match, so its
+    absence is itself signal.
+    """
+
+    chunk_id: str | None = Field(None, title='Chunk Id')
+    content: str = Field(..., title='Content')
+    graph_evidence: list[dict[str, Any]] | None = Field(None, title='Graph Evidence')
+    score: float = Field(..., title='Score')
+    why_relevant: str | None = Field(None, title='Why Relevant')
 
 
 class SemanticRefKind(StrEnum):
@@ -1048,9 +1106,21 @@ class ExactHit(BaseModel):
 
 
 class ExactSection(BaseModel):
+    active_runs_count: int | None = Field(None, title='Active Runs Count')
     cursor: str | None = Field(None, title='Cursor')
     error: ChannelError | None = None
     results: list[ExactHit] | None = Field(None, title='Results')
+
+
+class ExperimentNode(BaseModel):
+    active_run_count: int | None = Field(0, title='Active Run Count')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    id: UUID = Field(..., title='Id')
+    name: str = Field(..., title='Name')
+    project_id: UUID = Field(..., title='Project Id')
+    run_count: int | None = Field(0, title='Run Count')
+    runs: list[RunNode] | None = Field(None, title='Runs')
+    slug: str | None = Field(None, title='Slug')
 
 
 class GitHubIntegrationOut(BaseModel):
@@ -1095,6 +1165,17 @@ class IngestRunRequest(BaseModel):
 
 class MetricBatch(BaseModel):
     points: list[MetricPointIn] = Field(..., max_length=50000, title='Points')
+
+
+class ProjectNode(BaseModel):
+    active_run_count: int | None = Field(0, title='Active Run Count')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    experiment_count: int | None = Field(0, title='Experiment Count')
+    experiments: list[ExperimentNode] | None = Field(None, title='Experiments')
+    id: UUID = Field(..., title='Id')
+    name: str = Field(..., title='Name')
+    slug: str | None = Field(None, title='Slug')
+    workspace_id: UUID | None = Field(None, title='Workspace Id')
 
 
 class RunDetailOut(BaseModel):
@@ -1202,6 +1283,16 @@ class SpanBatch(BaseModel):
     spans: list[SpanCreate] = Field(..., max_length=10000, title='Spans')
 
 
+class BrowseResponse(BaseModel):
+    cursor: str | None = Field(None, title='Cursor')
+    depth: int | None = Field(1, title='Depth')
+    experiments: list[ExperimentNode] | None = Field(None, title='Experiments')
+    limit: int | None = Field(50, title='Limit')
+    projects: list[ProjectNode] | None = Field(None, title='Projects')
+    runs: list[RunNode] | None = Field(None, title='Runs')
+    truncated: bool | None = Field(False, title='Truncated')
+
+
 class RunBundle(BaseModel):
     """
     One request: run + catalog + artifact index (bounded) + spans overview +
@@ -1218,7 +1309,9 @@ class RunBundle(BaseModel):
 
 
 class SemanticHit(BaseModel):
+    chunks: list[SemanticChunk] | None = Field(None, title='Chunks')
     doc_id: str = Field(..., title='Doc Id')
+    matched_via: list[dict[str, Any]] | None = Field(None, title='Matched Via')
     ref: SemanticRef | None = None
     score: float = Field(..., title='Score')
     snippet: str = Field(..., title='Snippet')
@@ -1228,13 +1321,20 @@ class SemanticHit(BaseModel):
 
 
 class SemanticSection(BaseModel):
+    confidence_breakdown: dict[str, int] | None = Field(
+        None, title='Confidence Breakdown'
+    )
     cursor: str | None = Field(None, title='Cursor')
+    dropped_chunk_count: int | None = Field(0, title='Dropped Chunk Count')
     error: ChannelError | None = None
     results: list[SemanticHit] | None = Field(None, title='Results')
+    total_candidates: int | None = Field(None, title='Total Candidates')
 
 
 class SearchResponse(BaseModel):
+    dropped_chunk_count: int | None = Field(0, title='Dropped Chunk Count')
     exact: ExactSection
     query: str = Field(..., title='Query')
     semantic: SemanticSection
     state: SearchState
+    truncated: bool | None = Field(False, title='Truncated')

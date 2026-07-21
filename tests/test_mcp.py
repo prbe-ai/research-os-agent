@@ -553,17 +553,27 @@ def test_asset_resolve_returns_no_match_when_not_found(client):
     assert result["data"]["state"] == "no_match"
 
 
-def test_server_exposes_only_the_five_read_tools(client):
+def test_server_exposes_exactly_the_read_tools(client):
     """Thin harness: coverage grows through research_get's `view`/`filters`, NEVER
     through more tools. Spans, groups, events, execution records and experiment
     versions all became reachable while the tool count went DOWN (trace_file, which
-    had no backend, was removed). If this number ever climbs, the fat-skills seam
-    was abandoned for a research_get_spans-shaped shortcut."""
+    had no backend, was removed). If this set grows, the fat-skills seam was
+    abandoned for a research_get_spans-shaped shortcut.
+
+    `research_browse` is the one addition that earns its place, and the bar it
+    cleared is worth recording. It is not another way to read an entity -- that
+    is research_get's job and no view of it enumerates the tree. It answers a
+    question the other tools structurally cannot: search ranks by relevance to a
+    query, so it requires you to already know what to search for, and nothing
+    answered "what exists here?" A `research_get_spans` would fail this bar,
+    because `research_get(view="trajectory")` already answers it.
+    """
     service = ResearchReadService(ResearchOSSource(client))
     server = create_server(service)
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
     assert names == {
+        "research_browse",
         "research_context",
         "research_search",
         "research_get",
@@ -631,3 +641,110 @@ def test_http_app_builds():
 
     app = http_app()  # FastMCP streamable-http + auth/health wrapper
     assert callable(app)
+
+
+def _browse_payload() -> dict:
+    return {
+        "projects": [
+            {
+                "id": "11111111-1111-1111-1111-111111111111",
+                "name": "bird-sql",
+                "slug": "bird-sql",
+                "workspace_id": None,
+                "created_at": "2026-07-01T00:00:00Z",
+                "experiment_count": 2,
+                "active_run_count": 1,
+                "experiments": None,
+            }
+        ],
+        "experiments": None,
+        "runs": None,
+        "cursor": None,
+        "depth": 1,
+        "limit": 50,
+        "truncated": False,
+    }
+
+
+def test_browse_annotates_nodes_with_ref_and_available_views(app, client):
+    """Every node carries what the NEXT call needs: a ref research_get accepts,
+    and the exact views valid for that kind -- derived from the same matrix
+    research_get validates against, so the two cannot disagree."""
+    app.browse_response = _browse_payload()
+    service = ResearchReadService(ResearchOSSource(client))
+    envelope = service.research_browse()
+
+    [node] = envelope["data"]["projects"]
+    assert node["ref"] == "project:11111111-1111-1111-1111-111111111111"
+    assert node["entity_type"] == "project"
+    # Derived, never hand-written: a project has exactly one view today.
+    assert node["available_views"] == ["card"]
+    assert envelope["completeness"]["state"] == "complete"
+    # Unexpanded levels stay None -- distinct from [] (expanded, empty).
+    assert envelope["data"]["experiments"] is None
+
+
+def test_browse_available_views_track_the_real_view_matrix(app, client):
+    """The views advertised must be the views research_get actually accepts.
+
+    A hand-maintained list is how docs end up naming views that no longer
+    exist, so this asserts the advertised set IS the validated set.
+    """
+    from probe.mcp.service import _supported_views
+
+    app.browse_response = {
+        **_browse_payload(),
+        "projects": None,
+        "runs": [
+            {
+                "id": "22222222-2222-2222-2222-222222222222",
+                "name": "r",
+                "short_id": None,
+                "status": "running",
+                "created_at": "2026-07-01T00:00:00Z",
+                "started_at": None,
+                "ended_at": None,
+                "alive": None,
+            }
+        ],
+    }
+    service = ResearchReadService(ResearchOSSource(client))
+    [run] = service.research_browse(scope="experiment:x")["data"]["runs"]
+    assert run["available_views"] == _supported_views("run")
+    assert "trajectory" in run["available_views"]
+
+
+def test_browse_on_an_old_backend_reports_missing_not_empty(app, client):
+    """"Nothing exists" and "I cannot tell you what exists" are opposite claims.
+
+    Returning an empty tree for a backend without the route would stop an agent
+    looking any further, so the envelope says the capability is missing instead.
+    """
+    app.browse_response = None  # route 404s, as a pre-browse backend does
+    service = ResearchReadService(ResearchOSSource(client))
+    envelope = service.research_browse()
+
+    assert envelope["completeness"]["state"] == "partial"
+    assert "structured_browse" in envelope["completeness"]["missing"]
+    assert envelope["data"]["projects"] is None
+    assert envelope["capabilities"]["structured_browse"] is False
+
+
+def test_browse_scoped_404_is_a_missing_scope_not_a_missing_route(app, client):
+    """A scoped 404 means the SCOPE was not found on a backend that HAS the
+    route. Treating it as "no browse endpoint" would blind the tool to the whole
+    tree because one id was wrong."""
+    app.browse_response = None
+    service = ResearchReadService(ResearchOSSource(client))
+    with pytest.raises(errors.NotFoundError):
+        service.research_browse(scope="project:does-not-exist")
+
+
+def test_browse_truncation_is_reported(app, client):
+    """A cut tree must not read as a complete one: an absent child would
+    otherwise look like evidence of absence."""
+    app.browse_response = {**_browse_payload(), "truncated": True}
+    service = ResearchReadService(ResearchOSSource(client))
+    envelope = service.research_browse(depth=2)
+    assert envelope["completeness"]["state"] == "partial"
+    assert "truncated_by_token_budget" in envelope["completeness"]["missing"]
