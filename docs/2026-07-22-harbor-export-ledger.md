@@ -6,7 +6,25 @@ an exporter recovery file, not a new backend telemetry model.
 
 ## Producer/exporter handoff
 
-Miles writes a `probe-harbor-export/1` bundle on durable storage:
+The stack calls the SDK producer API; Probe writes a
+`probe-harbor-export/1` bundle on durable storage:
+
+```python
+from probe.connectors.harbor import stage_trial_export
+
+export = stage_trial_export(
+    harbor_trial_dir,
+    capture_root / capture_id,
+    run_id=probe_run_id,       # optional while offline
+    step_index=rollout_id,
+    environment=environment,
+    correlation=native_ids,   # Miles/session/sample/trial identifiers
+    context=data_mix_context,  # opaque Osmosis/customer labels
+)
+```
+
+The caller supplies native values, not either JSON contract. This keeps Miles,
+Osmosis, and future stacks out of Probe's manifest/versioning details.
 
 ```text
 <capture>/<trial-id>/
@@ -16,15 +34,17 @@ Miles writes a `probe-harbor-export/1` bundle on durable storage:
 └── export-request.json    # target run + step + opaque correlation
 ```
 
-The producer writes `export-request.json` last. `probe trial export REQUEST`
-locks and atomically updates that descriptor, verifies the manifest against the
-staged bytes, uploads the raw trial files, publishes the `harbor_trial` manifest,
-and uploads the producer manifest as `kind=harbor_capture_manifest` before it
-marks the request complete. Failure sets `status=failed` and `last_error` without
-deleting anything. `probe trial drain ROOT` retries every unfinished request and
-continues past individual failures. The compressed archive remains the local
-recovery copy; its constituent regular files are the content-addressed remote
-records.
+`stage_trial_export()` copies and hashes through `stage_trial()`, creates the
+recovery archive and capture manifest, writes `export-request.json` last, then
+atomically renames the completed bundle into place. `probe trial export REQUEST`
+locks and atomically updates that descriptor, verifies the SDK manifest against
+the staged bytes, uploads the raw trial files, publishes the `harbor_trial`
+manifest, and uploads the producer manifest as `kind=harbor_capture_manifest`
+before it marks the request complete. Failure sets `status=failed` and
+`last_error` without deleting anything. `probe trial drain ROOT` retries every
+unfinished request and continues past individual failures. The compressed
+archive remains the local recovery copy; its constituent regular files are the
+content-addressed remote records.
 
 If Miles began while the API was unavailable, the descriptor can legitimately
 have no Probe run ID. After the run intent resolves, `probe trial drain ROOT
