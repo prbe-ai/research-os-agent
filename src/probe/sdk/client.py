@@ -13,6 +13,7 @@ import os
 import sys
 import warnings
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from . import defaults, errors
@@ -76,6 +77,7 @@ class Client:
         transport: Transport | None = None,
         fail_open: bool = True,
         spool: Spool | None = None,
+        spool_dir: str | Path | None = None,
     ):
         self.settings = settings or resolve(
             base_url=base_url,
@@ -85,7 +87,9 @@ class Client:
         )
         self.transport = transport or Transport(self.settings)
         self.fail_open = fail_open
-        self.spool = spool or Spool()
+        if spool is not None and spool_dir is not None:
+            raise ValueError("pass spool or spool_dir, not both")
+        self.spool = spool or Spool(Path(spool_dir).expanduser() if spool_dir else None)
         self._sessions = None
         self._events = None
         self._notes = None

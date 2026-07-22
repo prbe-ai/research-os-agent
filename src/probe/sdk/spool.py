@@ -11,13 +11,20 @@ ordering is preserved. It is not a high-throughput buffer; it is a safety net.
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
+import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Iterator
 
 
 def default_dir() -> Path:
+    configured = os.environ.get("PROBE_SPOOL_DIR")
+    if configured:
+        return Path(configured).expanduser()
     base = os.environ.get("XDG_STATE_HOME")
     root = Path(base) if base else Path.home() / ".local" / "state"
     return root / "probe" / "spool"
@@ -34,18 +41,60 @@ class Spool:
     def __init__(self, directory: Path | None = None):
         self.dir = directory or default_dir()
         self.file = self.dir / "pending.jsonl"
+        self.inflight_file = self.dir / "inflight.jsonl"
+        self.lock_file = self.dir / ".pending.lock"
+        self.flush_lock_file = self.dir / ".flush.lock"
+
+    @contextmanager
+    def _file_lock(self, path: Path) -> Iterator[None]:
+        self.dir.mkdir(parents=True, exist_ok=True)
+        with path.open("a+") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _locked(self) -> Iterator[None]:
+        return self._file_lock(self.lock_file)
+
+    def _flush_locked(self) -> Iterator[None]:
+        return self._file_lock(self.flush_lock_file)
+
+    def _fsync_dir(self) -> None:
+        try:
+            directory_fd = os.open(self.dir, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass
 
     def append(self, method: str, path: str, json_body: dict | None) -> None:
-        self.dir.mkdir(parents=True, exist_ok=True)
         line = json.dumps({"method": method, "path": path, "json": json_body})
-        with self.file.open("a") as fh:
-            fh.write(line + "\n")
+        with self._locked():
+            created = not self.file.exists()
+            with self.file.open("a", encoding="utf-8") as handle:
+                handle.write(line + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            if created:
+                self._fsync_dir()
 
     def pending(self) -> list[SpoolRecord]:
-        if not self.file.exists():
+        with self._locked():
+            # inflight is immutable while requests are replayed. Include it so a
+            # diagnostic never reports an empty queue merely because flush is active
+            # (or the previous process died after the atomic pending->inflight move).
+            return self._read_records(self.inflight_file) + self._read_records(self.file)
+
+    @staticmethod
+    def _read_records(path: Path) -> list[SpoolRecord]:
+        if not path.exists():
             return []
         out: list[SpoolRecord] = []
-        for line in self.file.read_text().splitlines():
+        for line in path.read_text().splitlines():
             line = line.strip()
             if not line:
                 continue
@@ -53,34 +102,72 @@ class Spool:
             out.append(SpoolRecord(rec["method"], rec["path"], rec.get("json")))
         return out
 
+    def _write_records_atomic(self, records: list[SpoolRecord]) -> None:
+        temporary = self.dir / f".pending.{uuid.uuid4().hex}.tmp"
+        try:
+            with temporary.open("x", encoding="utf-8") as handle:
+                for record in records:
+                    handle.write(
+                        json.dumps(
+                            {
+                                "method": record.method,
+                                "path": record.path,
+                                "json": record.json_body,
+                            }
+                        )
+                        + "\n"
+                    )
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.file)
+            self._fsync_dir()
+        finally:
+            temporary.unlink(missing_ok=True)
+
     def flush(self, transport) -> int:
         """Replay pending records in order. Returns the count successfully sent.
         Stops at the first failure and rewrites the queue with the remainder so a
         transient outage does not reorder or drop writes."""
-        records = self.pending()
-        if not records:
-            return 0
-        sent = 0
-        remaining: list[SpoolRecord] = []
-        failed = False
-        for rec in records:
-            if failed:
-                remaining.append(rec)
-                continue
-            try:
-                transport.request(rec.method, rec.path, json_body=rec.json_body)
-                sent += 1
-            except Exception:  # noqa: BLE001 - keep the rest queued on any failure
-                failed = True
-                remaining.append(rec)
-        if remaining:
-            self.file.write_text(
-                "\n".join(
-                    json.dumps({"method": r.method, "path": r.path, "json": r.json_body})
-                    for r in remaining
-                )
-                + "\n"
-            )
-        else:
-            self.file.unlink(missing_ok=True)
-        return sent
+        # Serialize flushers, but never hold the append lock over network I/O:
+        # a failing training-loop write must still enqueue while replay is slow.
+        with self._flush_locked():
+            with self._locked():
+                # At-least-once crash recovery. A process may die after moving the
+                # queue out of append's way; prepend that immutable batch on restart.
+                recovered = self._read_records(self.inflight_file)
+                queued = self._read_records(self.file)
+                if recovered:
+                    self._write_records_atomic(recovered + queued)
+                    self.inflight_file.unlink(missing_ok=True)
+                    self._fsync_dir()
+                if not self.file.exists():
+                    return 0
+                os.replace(self.file, self.inflight_file)
+                self._fsync_dir()
+                records = self._read_records(self.inflight_file)
+
+            sent = 0
+            remaining: list[SpoolRecord] = []
+            failed = False
+            for rec in records:
+                if failed:
+                    remaining.append(rec)
+                    continue
+                try:
+                    transport.request(rec.method, rec.path, json_body=rec.json_body)
+                    sent += 1
+                except Exception:  # noqa: BLE001 - keep the rest queued on any failure
+                    failed = True
+                    remaining.append(rec)
+            with self._locked():
+                # Appends made during replay are newer than every item in the
+                # immutable inflight batch, so failed remainder stays in front.
+                appended = self._read_records(self.file)
+                combined = remaining + appended
+                if combined:
+                    self._write_records_atomic(combined)
+                else:
+                    self.file.unlink(missing_ok=True)
+                self.inflight_file.unlink(missing_ok=True)
+                self._fsync_dir()
+            return sent

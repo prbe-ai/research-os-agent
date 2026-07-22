@@ -5,6 +5,7 @@ hooks, Python experiments, and passive platform integrations all build on it.
 """
 
 from .assets import AssetClient
+from .capture import CaptureLedger, CaptureState, stable_external_key, stable_span_id
 from .client import Client
 from .config import Settings, resolve
 from .events import EventsReadClient, NoteClient
@@ -13,6 +14,8 @@ from .sessions import SessionCaptureClient
 
 __all__ = [
     "AssetClient",
+    "CaptureLedger",
+    "CaptureState",
     "Client",
     "EventsReadClient",
     "NoteClient",
@@ -20,4 +23,6 @@ __all__ = [
     "SessionCaptureClient",
     "Settings",
     "resolve",
+    "stable_external_key",
+    "stable_span_id",
 ]
