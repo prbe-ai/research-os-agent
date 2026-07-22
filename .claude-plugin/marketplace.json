@@ -3,7 +3,7 @@
   "owner": { "name": "Probe", "url": "https://github.com/prbe-ai" },
   "metadata": {
     "description": "Probe Research client plugins (experiment tracking + read-only MCP + transcript capture).",
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "plugins": [
     {
