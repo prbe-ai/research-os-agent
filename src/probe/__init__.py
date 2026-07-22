@@ -14,9 +14,29 @@ from __future__ import annotations
 from importlib import metadata as _metadata
 
 from . import errors
-from .sdk import Client, Run, Settings, resolve
+from .sdk import (
+    CaptureLedger,
+    CaptureState,
+    Client,
+    Run,
+    Settings,
+    resolve,
+    stable_external_key,
+    stable_span_id,
+)
 
-__all__ = ["Client", "Run", "Settings", "resolve", "errors", "__version__"]
+__all__ = [
+    "CaptureLedger",
+    "CaptureState",
+    "Client",
+    "Run",
+    "Settings",
+    "resolve",
+    "stable_external_key",
+    "stable_span_id",
+    "errors",
+    "__version__",
+]
 
 # The distribution name, not the import name (`probe`). Renamed from `probe-agent` on
 # 2026-07-15: that name is an unrelated project on PyPI that we never owned, so
