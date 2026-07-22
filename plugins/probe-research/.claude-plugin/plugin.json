@@ -1,7 +1,7 @@
 {
   "name": "probe-research",
-  "version": "0.6.0",
-  "description": "Probe Research: experiment tracking for agentic ML/RL training. Skills for tracking runs, reusing/versioning assets, and publishing results, wired to a read-only Probe Research MCP server. Writes go through the `probe` CLI (installed via /probe-research-setup).",
+  "version": "0.7.0",
+  "description": "Probe Research: experiment tracking for agentic ML/RL training. Skills for tracking runs, reusing/versioning assets, and publishing results, wired to a read-only Probe Research MCP server. A SessionStart hook nudges you when the CLI or plugin is out of date. Writes go through the `probe` CLI (installed via /probe-research-setup).",
   "author": { "name": "Probe", "email": "team@prbe.ai" },
   "homepage": "https://github.com/prbe-ai/research-os-agent",
   "keywords": ["mlops", "experiment-tracking", "reinforcement-learning", "probe-research", "mcp"]
