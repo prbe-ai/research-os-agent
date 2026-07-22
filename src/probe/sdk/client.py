@@ -13,6 +13,7 @@ import os
 import sys
 import warnings
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from . import defaults, errors
@@ -779,6 +780,39 @@ class Client:
         return self.transport.post(
             "/v1/runs/gc", model.model_dump(mode="json", exclude_none=True)
         )
+
+    def presign_download(self, artifact_id: str) -> str:
+        """Presigned GET URL for an artifact's blob (``POST /v1/artifacts/{id}/download``).
+
+        The one home for this route literal: ``download_artifact*`` and the callers
+        that need the raw doc in memory (``trial expand``, ``asset materialize``) all
+        route through here, so the parity guard sees one reachable call site."""
+        return self.transport.post(f"/v1/artifacts/{artifact_id}/download", None)["download_url"]
+
+    def download_artifact(self, artifact_id: str) -> bytes:
+        """Fetch an artifact's bytes into memory. Use :meth:`download_artifact_to`
+        for anything large -- this holds the whole blob at once."""
+        return self.transport.get_url(self.presign_download(artifact_id))
+
+    def download_artifact_to(self, artifact_id: str, dest: str) -> dict:
+        """Stream an artifact's blob to ``dest`` without buffering it in memory.
+
+        Returns ``{artifact_id, dest, size_bytes, sha256}`` -- ``sha256`` is computed
+        over the bytes as they land, so the caller can check it against the
+        ``content_hash`` from a listing to prove the round trip (metadata match is not
+        blob existence). On a mid-stream failure the partial file is removed rather
+        than left behind as a truncated blob masquerading as the artifact -- the old
+        in-memory path buffered before writing, so it never wrote a partial, and this
+        preserves that guarantee."""
+        url = self.presign_download(artifact_id)
+        ok = False
+        try:
+            size, digest = self.transport.download_to(url, dest)
+            ok = True
+        finally:
+            if not ok:
+                Path(dest).unlink(missing_ok=True)
+        return {"artifact_id": artifact_id, "dest": str(dest), "size_bytes": size, "sha256": digest}
 
     def delete_artifact(self, artifact_id: str) -> None:
         """Delete an artifact row."""

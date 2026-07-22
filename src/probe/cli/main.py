@@ -1341,6 +1341,58 @@ def artifact_list(
         _print_json(c.list_anchored(anchor, anchor_id))
 
 
+@artifact_app.command("download")
+def artifact_download(
+    artifact_id: str = typer.Argument(..., help="artifact id (from `probe artifact list`)"),
+    output: str = typer.Option(
+        None, "--output", "-o", metavar="PATH",
+        help="write the bytes here; '-' forces stdout. Omit to write to stdout "
+             "(refused at a terminal).",
+    ),
+    sha256: str = typer.Option(
+        None, "--sha256", metavar="HEX",
+        help="expected content_hash; fail (deleting a written file) if the bytes differ",
+    ),
+) -> None:
+    """Download an artifact's bytes through a presigned GET.
+
+    To a PATH it streams straight to the file -- never buffering the whole blob,
+    which can be model weights -- and prints {dest, size_bytes, sha256}. To stdout it
+    buffers in memory so the hash can be checked before a byte is emitted. Pass
+    --sha256 to verify the round trip against the content_hash from
+    `probe artifact list`; a metadata match alone never proves the blob exists."""
+    to_stdout = output is None or output == "-"
+    with _client() as c:
+        if to_stdout:
+            if output is None and sys.stdout.isatty():
+                raise typer.BadParameter(
+                    "refusing to write binary to a terminal; pass -o PATH, or '-o -' / a "
+                    "redirect to force stdout"
+                )
+            data = c.download_artifact(artifact_id)
+            digest = hashlib.sha256(data).hexdigest()
+            if sha256 and digest != sha256:
+                typer.echo(
+                    f"sha256 mismatch: expected {sha256}, got {digest} ({len(data)} bytes)",
+                    err=True,
+                )
+                raise typer.Exit(1)
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+            typer.echo(f"{artifact_id}  {len(data)} bytes  sha256={digest}", err=True)
+            return
+        # download_artifact_to removes its own partial file on a mid-stream failure.
+        result = c.download_artifact_to(artifact_id, output)
+        if sha256 and result["sha256"] != sha256:
+            Path(output).unlink(missing_ok=True)
+            typer.echo(
+                f"sha256 mismatch: expected {sha256}, got {result['sha256']}; deleted {output}",
+                err=True,
+            )
+            raise typer.Exit(1)
+        _print_json(result)
+
+
 @artifact_app.command("delete")
 def artifact_delete(artifact_id: str = typer.Argument(...)) -> None:
     """Delete an artifact."""
@@ -1506,10 +1558,7 @@ def trial_expand(
         if traj_entry is None:
             typer.echo("manifest has no uploaded trajectory file", err=True)
             raise typer.Exit(1)
-        presigned = c.transport.post(
-            f"/v1/artifacts/{traj_entry['artifact_id']}/download", None
-        )
-        doc = json.loads(c.transport.get_url(presigned["download_url"]))
+        doc = json.loads(c.transport.get_url(c.presign_download(traj_entry["artifact_id"])))
         report = expand_trajectory(
             _run_handle(c, run),
             doc,
