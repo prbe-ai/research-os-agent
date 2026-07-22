@@ -13,7 +13,7 @@ from probe.connectors.harbor_export import consume_export_request, drain_export_
 from tests.conftest import make_client
 
 
-def _write_export(root: Path, run_id: str, *, bad_hash: bool = False) -> Path:
+def _write_export(root: Path, run_id: str | None, *, bad_hash: bool = False) -> Path:
     trial = root / "trial"
     trial.mkdir(parents=True)
     files = {
@@ -148,6 +148,27 @@ def test_drain_continues_after_one_failed_request(client, app, tmp_path):
     assert result["failed"][0]["path"].endswith("bad/export-request.json")
 
 
+def test_later_resolved_run_id_repairs_and_persists_offline_descriptor(client, tmp_path):
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    request = _write_export(tmp_path / "offline", None)
+
+    result = consume_export_request(client, request, run_id=run.id)
+
+    assert result["status"] == "completed"
+    persisted = json.loads(request.read_text())
+    assert persisted["target"]["run_id"] == run.id
+    assert persisted["correlation"]["probe_run_id"] == run.id
+
+
+def test_later_resolved_run_id_cannot_override_existing_target(client, tmp_path):
+    first = client.run(experiment="e", hypothesis="h", name="first")
+    second = client.run(experiment="e", hypothesis="h", name="second")
+    request = _write_export(tmp_path / "mismatch", first.id)
+
+    with pytest.raises(Exception, match="disagrees with descriptor run"):
+        consume_export_request(client, request, run_id=second.id)
+
+
 def test_cli_export_is_a_non_python_consumer(app, tmp_path, monkeypatch, capsys):
     client = make_client(app, tmp_spool=tmp_path / "spool")
     run = client.run(experiment="e", hypothesis="h", name="r")
@@ -165,12 +186,14 @@ def test_cli_export_is_a_non_python_consumer(app, tmp_path, monkeypatch, capsys)
 def test_cli_watch_once_drains_new_requests(app, tmp_path, monkeypatch, capsys):
     client = make_client(app, tmp_spool=tmp_path / "spool")
     run = client.run(experiment="e", hypothesis="h", name="r")
-    request = _write_export(tmp_path / "captures" / "trial-watch", run.id)
+    request = _write_export(tmp_path / "captures" / "trial-watch", None)
 
     monkeypatch.setattr(
         cli, "Client", lambda **_kwargs: make_client(app, tmp_spool=tmp_path / "watch-spool")
     )
-    assert cli.main(["trial", "watch", str(tmp_path / "captures"), "--once"]) == 0
+    assert cli.main(
+        ["trial", "watch", str(tmp_path / "captures"), "--once", "--run", run.id]
+    ) == 0
 
     output = json.loads(capsys.readouterr().out)
     assert output["counts"] == {"completed": 1, "failed": 0, "skipped": 0}

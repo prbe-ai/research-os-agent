@@ -26,6 +26,11 @@ continues past individual failures. The compressed archive remains the local
 recovery copy; its constituent regular files are the content-addressed remote
 records.
 
+If Miles began while the API was unavailable, the descriptor can legitimately
+have no Probe run ID. After the run intent resolves, `probe trial drain ROOT
+--run RUN` rejects conflicting identities and persists the resolved ID into
+each pending descriptor before export.
+
 Correlation such as Miles run/rollout/sample/group/session IDs and Osmosis data
 mix IDs is opaque data under `harbor_trial.meta.source.context`. Only the target
 Probe run ID, training step, and external span key have structural meaning.

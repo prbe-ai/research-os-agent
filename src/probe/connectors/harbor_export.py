@@ -95,7 +95,12 @@ def _descriptor_relative(base: Path, raw: Any, *, field: str) -> Path:
     return resolved
 
 
-def _validate_descriptor(descriptor: dict[str, Any], path: Path) -> tuple[str, dict, dict]:
+def _validate_descriptor(
+    descriptor: dict[str, Any],
+    path: Path,
+    *,
+    fallback_run_id: str | None = None,
+) -> tuple[str, dict, dict]:
     if descriptor.get("schema_version") != EXPORT_SCHEMA_VERSION:
         raise HarborExportError(
             f"unsupported export schema {descriptor.get('schema_version')!r}; "
@@ -114,7 +119,12 @@ def _validate_descriptor(descriptor: dict[str, Any], path: Path) -> tuple[str, d
     correlated_run = correlation.get("probe_run_id")
     if target_run and correlated_run and str(target_run) != str(correlated_run):
         raise HarborExportError("target.run_id and correlation.probe_run_id disagree")
-    run_id = target_run or correlated_run
+    descriptor_run_id = target_run or correlated_run
+    if fallback_run_id and descriptor_run_id and str(fallback_run_id) != str(descriptor_run_id):
+        raise HarborExportError(
+            f"fallback run {fallback_run_id} disagrees with descriptor run {descriptor_run_id}"
+        )
+    run_id = descriptor_run_id or fallback_run_id
     if not run_id:
         raise HarborExportError("export request has no Probe run id yet")
     if not correlation.get("external_key"):
@@ -167,7 +177,12 @@ def _capture_declarations(
     return manifest_path, manifest, declarations
 
 
-def consume_export_request(client: "Client", request_path: str | Path) -> dict[str, Any]:
+def consume_export_request(
+    client: "Client",
+    request_path: str | Path,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     """Publish one descriptor exactly once, or leave it retryable on failure."""
 
     path = Path(request_path).expanduser().resolve()
@@ -185,7 +200,16 @@ def consume_export_request(client: "Client", request_path: str | Path) -> dict[s
         _write_json_atomic(path, descriptor)
 
         try:
-            run_id, arguments, correlation = _validate_descriptor(descriptor, path)
+            run_id, arguments, correlation = _validate_descriptor(
+                descriptor,
+                path,
+                fallback_run_id=run_id,
+            )
+            # Persist a later-resolved run identity so subsequent retries no
+            # longer depend on the repair command's argument.
+            descriptor["target"]["run_id"] = run_id
+            descriptor["correlation"]["probe_run_id"] = run_id
+            _write_json_atomic(path, descriptor)
             trial_dir = _descriptor_relative(
                 path.parent, arguments["trial_dir"], field="arguments.trial_dir"
             )
@@ -317,7 +341,12 @@ def consume_export_request(client: "Client", request_path: str | Path) -> dict[s
             raise
 
 
-def drain_export_requests(client: "Client", capture_root: str | Path) -> dict[str, Any]:
+def drain_export_requests(
+    client: "Client",
+    capture_root: str | Path,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
     """Attempt every non-completed export request below a durable capture root."""
 
     root = Path(capture_root).expanduser().resolve()
@@ -332,7 +361,7 @@ def drain_export_requests(client: "Client", capture_root: str | Path) -> dict[st
             skipped.append(str(path))
             continue
         try:
-            consume_export_request(client, path)
+            consume_export_request(client, path, run_id=run_id)
             completed.append(str(path))
         except Exception as exc:
             failed.append({"path": str(path), "error": f"{type(exc).__name__}: {exc}"})

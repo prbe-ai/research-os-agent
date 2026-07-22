@@ -23,7 +23,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from uuid import UUID
 
 import typer
@@ -1542,13 +1542,14 @@ def trial_reconcile(
 @trial_app.command("export")
 def trial_export(
     request: str = typer.Argument(..., help="a probe-harbor-export/1 export-request.json"),
+    run: Optional[str] = typer.Option(None, "--run", help="later-resolved Probe run ID"),
 ) -> None:
     """Consume one durable Miles/Harbor export request; retry safe."""
     from ..connectors.harbor_export import consume_export_request
 
     try:
         with _client() as client:
-            result = consume_export_request(client, request)
+            result = consume_export_request(client, request, run_id=run)
     except Exception as exc:
         typer.echo(f"export failed (staged bytes retained): {type(exc).__name__}: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -1558,12 +1559,13 @@ def trial_export(
 @trial_app.command("drain")
 def trial_drain(
     capture_root: str = typer.Argument(..., help="root containing export-request.json files"),
+    run: Optional[str] = typer.Option(None, "--run", help="later-resolved Probe run ID"),
 ) -> None:
     """Retry every non-completed Miles/Harbor export request below a capture root."""
     from ..connectors.harbor_export import drain_export_requests
 
     with _client() as client:
-        result = drain_export_requests(client, capture_root)
+        result = drain_export_requests(client, capture_root, run_id=run)
     _print_json(result)
     if result["failed"]:
         raise typer.Exit(2)
@@ -1574,13 +1576,14 @@ def trial_watch(
     capture_root: str = typer.Argument(..., help="root containing export-request.json files"),
     interval: float = typer.Option(5.0, "--interval", min=0.1, help="poll interval in seconds"),
     once: bool = typer.Option(False, "--once", help="drain once and exit (deployment smoke check)"),
+    run: Optional[str] = typer.Option(None, "--run", help="later-resolved Probe run ID"),
 ) -> None:
     """Continuously export newly staged Harbor trials from a durable capture root."""
     from ..connectors.harbor_export import drain_export_requests
 
     with _client() as client:
         while True:
-            result = drain_export_requests(client, capture_root)
+            result = drain_export_requests(client, capture_root, run_id=run)
             counts = result["counts"]
             if once or counts["completed"] or counts["failed"]:
                 _print_json(result)

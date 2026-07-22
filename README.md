@@ -166,6 +166,8 @@ probe trial stage <host-trial-dir> --to /shared/probe/trial-601 \
 probe trial export /shared/probe/trial-601/export-request.json
 probe trial drain /shared/probe/captures
 probe trial watch /shared/probe/captures --interval 5
+# Bind descriptors produced during an offline run initialization:
+probe trial drain /shared/probe/captures --run "$PROBE_RUN_ID"
 # retroactively expand a stored trajectory (e.g. after a fork's parser ships);
 # deterministic span ids make this idempotent — re-runs upsert, never duplicate
 probe trial expand $RUN <manifest-artifact-id> --max-spans 0
