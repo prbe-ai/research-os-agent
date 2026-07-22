@@ -62,6 +62,68 @@ def test_child_command(wired, capsys):
     assert wired.runs[child]["parent_relation"] == "resume"
 
 
+def test_artifact_add_forwards_span_content_type_and_meta(wired, capsys, tmp_path):
+    cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+    artifact = tmp_path / "trace.jsonl"
+    artifact.write_text("{}\n")
+    span_id = "0c5d7c41-c6cf-47ad-97c2-3074e03d89fb"
+
+    assert cli.main(
+        [
+            "artifact",
+            "add",
+            run_id,
+            str(artifact),
+            "--kind",
+            "trajectory",
+            "--span",
+            span_id,
+            "--content-type",
+            "application/x-ndjson",
+            "--meta",
+            "format=native",
+            "--meta",
+            "attempt=2",
+        ]
+    ) == 0
+
+    presign = next(
+        request for request in wired.requests if request.url.path.endswith("/artifacts/uploads")
+    )
+    body = json.loads(presign.content)
+    assert body["span_id"] == span_id
+    assert body["content_type"] == "application/x-ndjson"
+    assert body["kind"] == "trajectory"
+    assert body["meta"] == {"format": "native", "attempt": 2}
+
+
+def test_global_spool_dir_reaches_the_sdk(app, tmp_path, monkeypatch, capsys):
+    captured = {}
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        return make_client(app, tmp_spool=tmp_path / "test-spool")
+
+    monkeypatch.setattr(cli, "Client", factory)
+    durable = tmp_path / "shared-pvc" / "spool"
+    assert cli.main(
+        [
+            "--spool-dir",
+            str(durable),
+            "run",
+            "start",
+            "--experiment",
+            "e",
+            "--hypothesis",
+            "h",
+            "--name",
+            "r1",
+        ]
+    ) == 0
+    assert captured["spool_dir"] == str(durable)
+
+
 @pytest.mark.parametrize(
     "argv",
     [

@@ -8,7 +8,15 @@ import pytest
 
 from probe.cli import main as _cli_main  # noqa: F401 - ensures CLI imports cleanly
 from probe import cli
-from probe.connectors.harbor import MANIFEST_KIND, capture_trial, parse_trial, role_for
+from probe.connectors.harbor import (
+    CAPTURE_LEDGER_NAME,
+    MANIFEST_KIND,
+    capture_trial,
+    parse_trial,
+    reconcile_staged_trial,
+    role_for,
+    stage_trial,
+)
 from tests.conftest import make_client
 
 
@@ -80,6 +88,93 @@ def test_role_mapping_is_fork_tolerant():
     assert role_for("output/report.pdf") == "output"
     assert role_for("fork-specific.bin") == "other"
     assert role_for("nested/config.json") == "other"  # only top-level contract files
+
+
+# -- durable host-output staging -------------------------------------------------
+def test_stage_trial_copies_hashes_and_scopes_completeness(tmp_path):
+    source = _write_trial(tmp_path / "live")
+    (source / ".host-control").write_text("private-fork state")
+    staged = stage_trial(source, tmp_path / "pvc" / "trial-600")
+
+    assert staged.durable_collection_complete is True
+    assert (staged.trial_dir / "result.json").read_bytes() == (source / "result.json").read_bytes()
+    assert (staged.trial_dir / CAPTURE_LEDGER_NAME).is_file()
+    report = staged.ledger.report()
+    assert report["scope"] == "host_trial_directory"
+    assert "undeclared sandbox state" in report["unknown"]
+    assert report["collection"] == {"state": "complete", "missing": []}
+    assert report["capture"]["state"] == "pending"
+    hidden = next(
+        item for item in staged.ledger.entries() if item["relative_path"] == ".host-control"
+    )
+    assert hidden["state"] == "hashed"
+    assert (staged.trial_dir / ".host-control").read_text() == "private-fork state"
+    file_entries = [entry for entry in staged.ledger.entries() if entry["required"]]
+    assert len(file_entries) == 8
+    assert all(len(entry["content_hash"]) == 64 for entry in file_entries)
+
+
+def test_stage_trial_reports_declared_output_that_harbor_did_not_materialize(tmp_path):
+    source = tmp_path / "live"
+    source.mkdir()
+    (source / "result.json").write_text("{}")
+    staged = stage_trial(
+        source,
+        tmp_path / "pvc" / "trial",
+        expected_paths=["result.json", "workspace-diff.tar"],
+    )
+
+    assert staged.durable_collection_complete is False
+    missing = staged.ledger.report()["collection"]["missing"]
+    assert missing == [
+        {
+            "key": missing[0]["key"],
+            "role": "other",
+            "relative_path": "workspace-diff.tar",
+            "state": "missing",
+            "error": "declared path was absent from the trial directory",
+        }
+    ]
+
+
+def test_capture_uses_staged_copy_after_original_disappears(client, app, tmp_path):
+    client.fail_open = False
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    source = _write_trial(tmp_path / "live")
+    staged = stage_trial(source, tmp_path / "pvc" / "trial")
+
+    # Simulate the host-side producer cleaning its transient output.  Capture no
+    # longer depends on that path once staging has returned.
+    import shutil
+
+    shutil.rmtree(source)
+    result = capture_trial(run, staged, step_index=600, expand=False, strict=True)
+
+    assert all(item["uploaded"] for item in result["files"])
+    assert result["capture"]["capture"]["state"] == "complete"
+    manifest = client.list_run_artifacts(run.id, kind=MANIFEST_KIND)[0]
+    assert manifest["meta"]["capture"]["scope"] == "host_trial_directory"
+    assert manifest["meta"]["capture"]["capture"]["state"] == "complete"
+
+
+def test_reconcile_retries_only_unconfirmed_staged_bytes(client, app, tmp_path):
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    source = tmp_path / "live"
+    source.mkdir()
+    (source / "only.txt").write_text("bytes")
+    staged = stage_trial(source, tmp_path / "pvc" / "trial")
+    app.fail_next_uploads = True
+
+    with pytest.warns(UserWarning, match="recorded as a reference"):
+        first = capture_trial(run, staged, step_index=5, expand=False)
+    assert first["capture"]["capture"]["state"] == "partial"
+    assert staged.ledger.pending_artifacts()[0]["state"] == "upload_failed"
+
+    metric_count = app.metrics_inserted
+    second = reconcile_staged_trial(run, staged)
+    assert second["capture"]["capture"]["state"] == "complete"
+    assert staged.ledger.pending_artifacts() == []
+    assert app.metrics_inserted == metric_count  # reconciliation never duplicates reward points
 
 
 # -- capture ---------------------------------------------------------------------
