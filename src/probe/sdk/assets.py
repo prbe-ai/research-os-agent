@@ -216,10 +216,12 @@ class AssetClient:
         """Copy a pinned asset version's bytes into ``dest`` (fold #16 download).
 
         Resolves the asset by name, picks the selected version (latest, or the one
-        matching ``requirement``), and downloads the artifact it was pinned from via
-        a presigned GET. Requires a version created from an artifact
+        matching ``requirement``), streams the artifact it was pinned from via a
+        presigned GET, and verifies the bytes against the version's pinned
+        ``content_hash`` before returning. Requires a version created from an artifact
         (``source_artifact_id``); a version pinned by ``content_hash`` alone has no
-        downloadable object. Returns ``{dest, artifact_id, version}``."""
+        downloadable object. Returns ``{dest, artifact_id, version, sha256}``; raises
+        (and deletes ``dest``) on a hash mismatch."""
         resolved = self.resolve(name, kind=kind, requirement=requirement)
         if resolved["state"] != "match":
             raise errors.NotFoundError(f"asset {name!r} not found")
@@ -232,9 +234,21 @@ class AssetClient:
                 f"asset version {version.get('version')} was pinned by content_hash only; "
                 "materialize needs a version created from an artifact (from_artifact_id)"
             )
-        presigned = self.client.transport.post(
-            f"/v1/artifacts/{source_artifact_id}/download", None
-        )
-        data = self.client.transport.get_url(presigned["download_url"])
-        Path(dest).write_bytes(data)
-        return {"dest": str(dest), "artifact_id": source_artifact_id, "version": version.get("version")}
+        # Stream to disk (an eval set or checkpoint can be large) and hash as it lands,
+        # then verify against the version's pinned content_hash. A silently corrupt or
+        # tampered download is exactly what a materialize-as-verification step must
+        # catch; writing the bytes without checking them made that impossible.
+        result = self.client.download_artifact_to(source_artifact_id, dest)
+        expected = version.get("content_hash")
+        if expected and result["sha256"] != expected:
+            Path(dest).unlink(missing_ok=True)
+            raise errors.TransportError(
+                f"asset {name!r} v{version.get('version')} content_hash mismatch: "
+                f"expected {expected}, got {result['sha256']} (deleted {dest})"
+            )
+        return {
+            "dest": str(dest),
+            "artifact_id": source_artifact_id,
+            "version": version.get("version"),
+            "sha256": result["sha256"],
+        }

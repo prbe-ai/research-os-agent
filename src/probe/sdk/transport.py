@@ -207,3 +207,41 @@ class Transport:
             if resp.status_code >= 400:
                 raise errors.error_for(resp.status_code, resp.text)
             return resp.content
+
+    def download_to(
+        self, url: str, dest: str, *, chunk_size: int = 1 << 20
+    ) -> tuple[int, str]:
+        """Stream a presigned-URL GET to ``dest``; return ``(size_bytes, sha256_hex)``.
+
+        The sibling of :meth:`get_url` for the bytes you do NOT want in memory: it
+        hashes while it writes, so a caller can verify the blob against a known
+        ``content_hash`` without a second pass, and never materialises the whole
+        object -- an anchored artifact can be model weights. No Authorization header;
+        the presigned URL carries its own signature. Idempotent, so a network blip or
+        a retryable status restarts the download from byte 0 (the ``open`` truncates
+        ``dest``). A partial file can be left behind only when retries are exhausted
+        mid-stream -- the caller owns cleanup on error, same as any failed write."""
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                with self._client.stream("GET", url) as resp:
+                    if resp.status_code in _RETRYABLE and attempt <= self.max_retries:
+                        time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                        continue
+                    if resp.status_code >= 400:
+                        resp.read()  # a streamed response has no .text until read
+                        raise errors.error_for(resp.status_code, resp.text)
+                    hasher = hashlib.sha256()
+                    size = 0
+                    with open(dest, "wb") as fh:
+                        for chunk in resp.iter_bytes(chunk_size):
+                            fh.write(chunk)
+                            hasher.update(chunk)
+                            size += len(chunk)
+                return size, hasher.hexdigest()
+            except httpx.HTTPError as exc:
+                if attempt <= self.max_retries:
+                    time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                    continue
+                raise errors.TransportError(f"GET {url}: {exc}") from exc
