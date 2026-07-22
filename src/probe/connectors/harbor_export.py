@@ -1,10 +1,10 @@
-"""Consume retryable ``probe-harbor-export/1`` requests from Miles/Harbor.
+"""Consume retryable SDK-owned ``probe-harbor-export/1`` Harbor requests.
 
-The producer owns durable collection and writes an export descriptor last.  The
-consumer owns network publication: it inventories and verifies ``trial/``, calls
-the normal Harbor connector, and atomically records completion or a retryable
-error in the same descriptor.  It never deletes the request, archive, manifest,
-or trial bytes.
+``probe.connectors.harbor.stage_trial_export`` owns durable collection and both
+wire manifests.  The consumer owns network publication: it inventories and
+verifies ``trial/``, calls the normal Harbor connector, and atomically records
+completion or a retryable error in the same descriptor.  It never deletes the
+request, archive, manifest, or trial bytes.
 """
 
 from __future__ import annotations
@@ -19,13 +19,16 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Iterator
 
-from .harbor import adopt_staged_trial, capture_trial
+from .harbor import (
+    EXPORT_CONNECTOR,
+    EXPORT_SCHEMA_VERSION,
+    adopt_staged_trial,
+    capture_trial,
+)
 
 if TYPE_CHECKING:
     from ..sdk.client import Client
 
-EXPORT_SCHEMA_VERSION = "probe-harbor-export/1"
-EXPORT_CONNECTOR = "probe.connectors.harbor.capture_trial"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -107,7 +110,9 @@ def _validate_descriptor(
             f"expected {EXPORT_SCHEMA_VERSION!r}"
         )
     if descriptor.get("connector") != EXPORT_CONNECTOR:
-        raise HarborExportError(f"unsupported export connector {descriptor.get('connector')!r}")
+        raise HarborExportError(
+            f"unsupported export connector {descriptor.get('connector')!r}"
+        )
     target = descriptor.get("target")
     arguments = descriptor.get("arguments")
     correlation = descriptor.get("correlation")
@@ -120,7 +125,11 @@ def _validate_descriptor(
     if target_run and correlated_run and str(target_run) != str(correlated_run):
         raise HarborExportError("target.run_id and correlation.probe_run_id disagree")
     descriptor_run_id = target_run or correlated_run
-    if fallback_run_id and descriptor_run_id and str(fallback_run_id) != str(descriptor_run_id):
+    if (
+        fallback_run_id
+        and descriptor_run_id
+        and str(fallback_run_id) != str(descriptor_run_id)
+    ):
         raise HarborExportError(
             f"fallback run {fallback_run_id} disagrees with descriptor run {descriptor_run_id}"
         )
@@ -131,9 +140,13 @@ def _validate_descriptor(
         raise HarborExportError("correlation.external_key is required")
     if arguments.get("trial_dir_base") != "descriptor_dir":
         raise HarborExportError("arguments.trial_dir_base must be 'descriptor_dir'")
-    _descriptor_relative(path.parent, arguments.get("trial_dir"), field="arguments.trial_dir")
+    _descriptor_relative(
+        path.parent, arguments.get("trial_dir"), field="arguments.trial_dir"
+    )
     if descriptor.get("archive"):
-        archive = _descriptor_relative(path.parent, descriptor["archive"], field="archive")
+        archive = _descriptor_relative(
+            path.parent, descriptor["archive"], field="archive"
+        )
         if not archive.is_file():
             raise HarborExportError(f"declared recovery archive is missing: {archive}")
     return str(run_id), arguments, correlation
@@ -145,7 +158,9 @@ def _capture_declarations(
     raw = descriptor.get("capture_manifest")
     if not raw:
         raise HarborExportError("capture_manifest is required")
-    manifest_path = _descriptor_relative(request_path.parent, raw, field="capture_manifest")
+    manifest_path = _descriptor_relative(
+        request_path.parent, raw, field="capture_manifest"
+    )
     manifest = _read_json(manifest_path)
     if manifest.get("schema_version") != "1.0":
         raise HarborExportError(
@@ -172,7 +187,9 @@ def _capture_declarations(
     completeness = (manifest.get("capture") or {}).get("completeness") or {}
     for item in completeness.get("expected") or []:
         if isinstance(item, dict) and item.get("required") and item.get("path"):
-            if not any(declaration.get("path") == item["path"] for declaration in declarations):
+            if not any(
+                declaration.get("path") == item["path"] for declaration in declarations
+            ):
                 declarations.append({"path": item["path"], "role": item.get("role")})
     return manifest_path, manifest, declarations
 
@@ -213,8 +230,8 @@ def consume_export_request(
             trial_dir = _descriptor_relative(
                 path.parent, arguments["trial_dir"], field="arguments.trial_dir"
             )
-            capture_manifest_path, producer_manifest, declarations = _capture_declarations(
-                descriptor, path
+            capture_manifest_path, producer_manifest, declarations = (
+                _capture_declarations(descriptor, path)
             )
             staged = adopt_staged_trial(trial_dir, expected_files=declarations)
             collection = staged.ledger.report()["collection"]
@@ -229,18 +246,22 @@ def consume_export_request(
             ledger_report = staged.ledger.report()
             ledger_context = staged.ledger.context
             if ledger_context.get("run_id") and str(ledger_context["run_id"]) != run_id:
-                raise HarborExportError("staged ledger is already bound to a different Probe run")
-            if (
-                ledger_context.get("rollout_external_key")
-                and ledger_context["rollout_external_key"] != correlation.get("external_key")
-            ):
-                raise HarborExportError("staged ledger is already bound to a different rollout")
+                raise HarborExportError(
+                    "staged ledger is already bound to a different Probe run"
+                )
+            if ledger_context.get("rollout_external_key") and ledger_context[
+                "rollout_external_key"
+            ] != correlation.get("external_key"):
+                raise HarborExportError(
+                    "staged ledger is already bound to a different rollout"
+                )
             publication = ledger_context.get("manifest_publication") or {}
             main_capture_confirmed = (
                 (ledger_report.get("capture") or {}).get("state") == "complete"
                 and publication.get("state") == "confirmed"
                 and str(ledger_context.get("run_id")) == run_id
-                and ledger_context.get("rollout_external_key") == correlation.get("external_key")
+                and ledger_context.get("rollout_external_key")
+                == correlation.get("external_key")
             )
 
             from ..sdk.run import Run
@@ -253,8 +274,12 @@ def consume_export_request(
                 and correlation_step is not None
                 and argument_step != correlation_step
             ):
-                raise HarborExportError("arguments.step_index and correlation.step_index disagree")
-            step_index = argument_step if argument_step is not None else correlation_step
+                raise HarborExportError(
+                    "arguments.step_index and correlation.step_index disagree"
+                )
+            step_index = (
+                argument_step if argument_step is not None else correlation_step
+            )
             if main_capture_confirmed:
                 capture = ledger_report
                 trial_name = ledger_context.get("trial_name")
@@ -276,9 +301,15 @@ def consume_export_request(
                 )
                 capture = result.get("capture") or {}
                 if (capture.get("capture") or {}).get("state") != "complete":
-                    raise HarborExportError(f"artifact byte capture is incomplete: {capture}")
-                if (capture.get("manifest_publication") or {}).get("state") != "confirmed":
-                    raise HarborExportError(f"manifest publication is not confirmed: {capture}")
+                    raise HarborExportError(
+                        f"artifact byte capture is incomplete: {capture}"
+                    )
+                if (capture.get("manifest_publication") or {}).get(
+                    "state"
+                ) != "confirmed":
+                    raise HarborExportError(
+                        f"manifest publication is not confirmed: {capture}"
+                    )
                 manifest = result.get("manifest") or {}
                 trial_name = result.get("trial")
                 span_id = result.get("span_id")
