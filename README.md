@@ -111,7 +111,10 @@ report = client.check_run(run.id)
 
 Data writes are **fail-open** by default: on failure they spool to disk
 (`~/.local/state/probe/spool`) and return, never blocking the training loop. `run.finish()`
-(or `probe flush`) replays the spool. Pass `strict=True` to make a write raise.
+(or `probe flush`) replays the spool. Appends and queue rewrites are fsync'd and
+atomic. On rented compute, put the queue on durable storage with
+`PROBE_SPOOL_DIR=/shared/probe/spool` or `probe --spool-dir /shared/probe/spool …`.
+Pass `strict=True` to make a write raise.
 
 ## SDK (install-once / passive push)
 
@@ -156,6 +159,13 @@ for status: what's shipped vs parked):
 # into turn/tool_call spans under the rollout span
 probe trial add $RUN jobs/my-job/trials/swe-fix__x1 --step 600 --env-type skypilot-fork
 probe trial add $RUN <dir> --step 601 --no-expand      # raw-only capture
+# Copy/checksum a host trial tree onto a durable volume without touching the network.
+probe trial stage <host-trial-dir> --to /shared/probe/trial-601 \
+  --expect result.json --expect lock.json
+# Retry one or every Miles bridge request. The descriptor supplies run/step/correlation.
+probe trial export /shared/probe/trial-601/export-request.json
+probe trial drain /shared/probe/captures
+probe trial watch /shared/probe/captures --interval 5
 # retroactively expand a stored trajectory (e.g. after a fork's parser ships);
 # deterministic span ids make this idempotent — re-runs upsert, never duplicate
 probe trial expand $RUN <manifest-artifact-id> --max-spans 0
@@ -165,6 +175,23 @@ Query it back: `client.list_run_artifacts(run_id, kind="harbor_trial",
 step_from=599, step_to=601)`. Fork parsers plug in via
 `probe.connectors.atif.register_trajectory_parser("their-format", fn)`;
 unknown formats are captured raw (never rejected) and expanded later.
+
+`probe trial stage` and the `probe-harbor-export/1` consumer keep an atomic
+`.probe-capture.json` beside the durable trial bytes. Its collection status is
+separate from remote-upload status, so an exporter outage leaves a precise,
+retryable list of unconfirmed files instead of losing their paths. Stable
+external keys and span IDs make retries update the same rollout; arbitrary
+Miles/Osmosis correlation fields are preserved under the `harbor_trial`
+manifest's `source.context`.
+
+The completeness claim is intentionally bounded: it covers declared regular
+files in the **host Harbor trial directory**. Public Harbor tears down the
+sandbox before `Trial.run()` returns, so a post-run SDK consumer cannot know
+about undeclared state Harbor never materialized. The ledger reports that state
+as unknown, inventories explicitly declared missing files, and treats hidden
+files/symlinks as visible skips. A true pre-teardown guarantee requires the
+producer or environment implementation to invoke durable collection from its
+lifecycle hook.
 
 The following commands are reserved for future hook configuration and are not
 part of the normal researcher workflow:

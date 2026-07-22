@@ -19,6 +19,7 @@ import json
 import os
 import shlex
 import sys
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -53,6 +54,7 @@ class Conn:
     token: str | None = None
     ingest_token: str | None = None
     hmac_secret: str | None = None
+    spool_dir: str | None = None
 
 
 _conn = Conn()
@@ -147,6 +149,7 @@ def _client() -> Client:
         token=_conn.token,
         ingest_token=_conn.ingest_token,
         hmac_secret=_conn.hmac_secret,
+        spool_dir=_conn.spool_dir,
     )
 
 
@@ -197,6 +200,9 @@ def _root(
     token: str = typer.Option(None, "--token"),
     ingest_token: str = typer.Option(None, "--ingest-token"),
     hmac_secret: str = typer.Option(None, "--hmac-secret"),
+    spool_dir: str = typer.Option(
+        None, "--spool-dir", help="durable fail-open queue directory (or PROBE_SPOOL_DIR)"
+    ),
     version: bool = typer.Option(
         False, "--version", callback=_version_cb, is_eager=True, help="show version"
     ),
@@ -205,6 +211,7 @@ def _root(
     _conn.token = token
     _conn.ingest_token = ingest_token
     _conn.hmac_secret = hmac_secret
+    _conn.spool_dir = spool_dir
 
 
 # -- auth -------------------------------------------------------------------
@@ -1233,7 +1240,9 @@ def artifact_add(
     name: str = typer.Option(None, "--name"),
     kind: str = typer.Option("file", "--kind", help="run anchor only"),
     step: int = typer.Option(None, "--step", help="run anchor only"),
+    span: str = typer.Option(None, "--span", help="associate with a run span UUID"),
     content_type: str = typer.Option(None, "--content-type"),
+    meta: list[str] = typer.Option(None, "--meta", metavar="k=v", help="run anchor only"),
     project: str = typer.Option(None, "--project", help="anchor to a project"),
     experiment: str = typer.Option(None, "--experiment", help="anchor to an experiment"),
     workspace: str = typer.Option(
@@ -1272,19 +1281,20 @@ def artifact_add(
         resolved = os.path.basename(path)
     if resolved is None:
         raise typer.BadParameter("artifact needs --name (or a path to derive it from)")
-
     if anchor is Anchor.RUN:
         with _client() as c:
             _run_handle(c, anchor_id).log_artifact(
                 resolved, path=path, uri=uri, kind=kind, step_index=step,
-                content_type=content_type,
+                span_id=span, content_type=content_type,
+                meta=_kv_pairs(meta) if meta else None,
             )
         print(f"artifact {resolved!r} recorded on {anchor_id}")
         return
 
-    if step is not None or kind != "file":
+    if step is not None or kind != "file" or span is not None or meta:
         raise typer.BadParameter(
-            f"--kind/--step are run-only; the {anchor.value} upload contract rejects them"
+            f"--kind/--step/--span/--meta are run-only; "
+            f"the {anchor.value} upload contract rejects them"
         )
     if uri is not None and anchor in _FILE_ANCHORS:
         # Caught here rather than in the SDK so it reads as a usage error instead of
@@ -1442,6 +1452,46 @@ trial_app = typer.Typer(no_args_is_help=True, help="capture Harbor sandbox trial
 app.add_typer(trial_app, name="trial")
 
 
+def _trial_result_summary(result: dict) -> dict:
+    manifest = result.get("manifest") or {}
+    return {
+        "trial": result["trial"],
+        "span_id": result["span_id"],
+        "reward": result["reward"],
+        "manifest_artifact_id": manifest.get("id") if isinstance(manifest, dict) else None,
+        "files": len(result["files"]),
+        "uploaded": sum(1 for item in result["files"] if item.get("uploaded")),
+        "trajectory": result.get("trajectory"),
+        "capture": result.get("capture"),
+    }
+
+
+@trial_app.command("stage")
+def trial_stage(
+    trial_dir: str = typer.Argument(..., help="live Harbor trial output directory"),
+    destination: str = typer.Option(
+        ..., "--to", help="durable destination outside the sandbox (for example a shared PVC)"
+    ),
+    expect: list[str] = typer.Option(
+        None, "--expect", metavar="RELATIVE_PATH", help="repeatable required producer output"
+    ),
+) -> None:
+    """Copy + checksum Harbor's host trial output; performs no network writes."""
+    from ..connectors.harbor import stage_trial
+
+    staged = stage_trial(trial_dir, destination, expected_paths=expect or ())
+    _print_json(
+        {
+            "trial_dir": str(staged.trial_dir),
+            "ledger": str(staged.ledger.path),
+            "durable_collection_complete": staged.durable_collection_complete,
+            "completeness": staged.ledger.report(),
+        }
+    )
+    if not staged.durable_collection_complete:
+        raise typer.Exit(2)
+
+
 @trial_app.command("add")
 def trial_add(
     run: str = typer.Argument(...),
@@ -1465,18 +1515,80 @@ def trial_add(
             expand=expand,
             max_trajectory_spans=max_spans,
         )
-    manifest = result.get("manifest") or {}
-    _print_json(
-        {
-            "trial": result["trial"],
-            "span_id": result["span_id"],
-            "reward": result["reward"],
-            "manifest_artifact_id": manifest.get("id") if isinstance(manifest, dict) else None,
-            "files": len(result["files"]),
-            "uploaded": sum(1 for f in result["files"] if f.get("uploaded")),
-            "trajectory": result.get("trajectory"),
-        }
-    )
+    _print_json(_trial_result_summary(result))
+
+
+@trial_app.command("reconcile")
+def trial_reconcile(
+    run: str = typer.Argument(...),
+    trial_dir: str = typer.Argument(..., help="a directory created by `probe trial stage`"),
+    step: int = typer.Option(None, "--step", help="override the step recorded in the ledger"),
+    env_type: str = typer.Option(None, "--env-type", help="opaque environment label"),
+) -> None:
+    """Retry unconfirmed staged bytes and publish the latest completeness manifest."""
+    from ..connectors.harbor import reconcile_staged_trial
+
+    kwargs: dict[str, Any] = {
+        "environment": {"type": env_type} if env_type else None,
+        "source_mode": "cli-reconcile",
+    }
+    if step is not None:
+        kwargs["step_index"] = step
+    with _client() as client:
+        result = reconcile_staged_trial(_run_handle(client, run), trial_dir, **kwargs)
+    _print_json(_trial_result_summary(result))
+
+
+@trial_app.command("export")
+def trial_export(
+    request: str = typer.Argument(..., help="a probe-harbor-export/1 export-request.json"),
+) -> None:
+    """Consume one durable Miles/Harbor export request; retry safe."""
+    from ..connectors.harbor_export import consume_export_request
+
+    try:
+        with _client() as client:
+            result = consume_export_request(client, request)
+    except Exception as exc:
+        typer.echo(f"export failed (staged bytes retained): {type(exc).__name__}: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    _print_json(result)
+
+
+@trial_app.command("drain")
+def trial_drain(
+    capture_root: str = typer.Argument(..., help="root containing export-request.json files"),
+) -> None:
+    """Retry every non-completed Miles/Harbor export request below a capture root."""
+    from ..connectors.harbor_export import drain_export_requests
+
+    with _client() as client:
+        result = drain_export_requests(client, capture_root)
+    _print_json(result)
+    if result["failed"]:
+        raise typer.Exit(2)
+
+
+@trial_app.command("watch")
+def trial_watch(
+    capture_root: str = typer.Argument(..., help="root containing export-request.json files"),
+    interval: float = typer.Option(5.0, "--interval", min=0.1, help="poll interval in seconds"),
+    once: bool = typer.Option(False, "--once", help="drain once and exit (deployment smoke check)"),
+) -> None:
+    """Continuously export newly staged Harbor trials from a durable capture root."""
+    from ..connectors.harbor_export import drain_export_requests
+
+    with _client() as client:
+        while True:
+            result = drain_export_requests(client, capture_root)
+            counts = result["counts"]
+            if once or counts["completed"] or counts["failed"]:
+                _print_json(result)
+            if once:
+                if result["failed"]:
+                    raise typer.Exit(2)
+                return
+            time.sleep(interval)
 
 
 @trial_app.command("expand")
