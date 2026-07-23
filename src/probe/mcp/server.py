@@ -28,6 +28,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 
 from ..sdk.client import Client
 from ..sdk.config import Settings, load_context, resolve
+from ..sdk.surface import Surface, tool_scope
 from .service import ResearchReadService
 from .source import ResearchOSSource
 
@@ -81,6 +82,7 @@ def _service_from_token() -> ResearchReadService:
                 client = Client(
                     settings=Settings(base_url=resolve().base_url, token=token),
                     fail_open=False,
+                    surface=Surface.MCP.value,
                 )
                 _clients[token] = client
             source = ResearchOSSource(client)
@@ -195,9 +197,10 @@ def create_server(
         because "nothing exists" and "I cannot tell you what exists" are
         opposite claims.
         """
-        return svc().browse_research(
-            scope=scope, depth=depth, status=status, limit=limit, cursor=cursor
-        )
+        with tool_scope("browse_research"):
+            return svc().browse_research(
+                scope=scope, depth=depth, status=status, limit=limit, cursor=cursor
+            )
 
     @mcp.tool()
     def search_knowledge(
@@ -248,16 +251,17 @@ def create_server(
         `ref` you can hand to `get_entity`. GitHub documents have no `ref` --
         they are a dead end for drill-down, by construction, not by omission.
         """
-        return svc().search_knowledge(
-            query,
-            corpora=corpora,
-            project_id=project_id,
-            workspace_id=workspace_id,
-            top_k=top_k,
-            collapse=collapse,
-            verbose=verbose,
-            cursor=cursor,
-        )
+        with tool_scope("search_knowledge"):
+            return svc().search_knowledge(
+                query,
+                corpora=corpora,
+                project_id=project_id,
+                workspace_id=workspace_id,
+                top_k=top_k,
+                collapse=collapse,
+                verbose=verbose,
+                cursor=cursor,
+            )
 
     @mcp.tool()
     def get_entity(
@@ -316,7 +320,8 @@ def create_server(
         manifest missing fields reproduces nothing, so it reports
         missing=["token_budget_exceeded"] instead.
         """
-        return svc().get_entity(ref, view, token_budget, cursor, filters, verbose=verbose)
+        with tool_scope("get_entity"):
+            return svc().get_entity(ref, view, token_budget, cursor, filters, verbose=verbose)
 
     # ------------------------------------------------------------------ aliases
     # DEPRECATED, removed next release. MCP tools are served by the SERVER and
@@ -342,7 +347,8 @@ def create_server(
         Bootstrap a research session with scoped prior work, active runs,
         official assets, and capability warnings.
         """
-        return svc().research_context(task, project_ref, session_id, token_budget)
+        with tool_scope("research_context"):
+            return svc().research_context(task, project_ref, session_id, token_budget)
 
     @mcp.tool()
     def research_search(
@@ -360,15 +366,16 @@ def create_server(
         project_id=x, and `limit` becomes `top_k`.
         """
         filters = filters or {}
-        return svc().search_knowledge(
-            query,
-            corpora=corpora,
-            project_id=filters.get("project_id"),
-            workspace_id=workspace_id or filters.get("workspace_id"),
-            top_k=limit,
-            collapse=collapse,
-            cursor=cursor,
-        )
+        with tool_scope("research_search"):
+            return svc().search_knowledge(
+                query,
+                corpora=corpora,
+                project_id=filters.get("project_id"),
+                workspace_id=workspace_id or filters.get("workspace_id"),
+                top_k=limit,
+                collapse=collapse,
+                cursor=cursor,
+            )
 
     @mcp.tool()
     def research_get(
@@ -379,7 +386,8 @@ def create_server(
         filters: dict[str, Any] | None = None,
     ) -> dict:
         """DEPRECATED -- use get_entity. Removed next release."""
-        return svc().get_entity(ref, view, token_budget, cursor, filters)
+        with tool_scope("research_get"):
+            return svc().get_entity(ref, view, token_budget, cursor, filters)
 
     @mcp.tool()
     def research_compare(refs: list[str], dimensions: list[str] | None = None) -> dict:
@@ -389,7 +397,8 @@ def create_server(
         payloads better than five fixed dimensions do, and the tool did nothing
         the caller could not.
         """
-        return svc().research_compare(refs, dimensions)
+        with tool_scope("research_compare"):
+            return svc().research_compare(refs, dimensions)
 
     @mcp.tool()
     def research_resolve(
@@ -405,7 +414,8 @@ def create_server(
         is accepted here and ignored, exactly as before, rather than silently
         starting to mean something.
         """
-        return svc().research_resolve(name, kind, requirement, at)
+        with tool_scope("research_resolve"):
+            return svc().research_resolve(name, kind, requirement, at)
 
     # NOTE: there is no research_trace_file. It was removed, not overlooked: no
     # /v1/artifacts/trace route has ever existed, so it answered `matches: []` to

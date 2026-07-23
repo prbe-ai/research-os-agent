@@ -45,6 +45,7 @@ from ..sdk.config import (
     use_context,
 )
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
+from ..sdk.surface import Surface
 
 
 # -- global connection state (set by the root callback) ---------------------
@@ -150,6 +151,7 @@ def _client() -> Client:
         ingest_token=_conn.ingest_token,
         hmac_secret=_conn.hmac_secret,
         spool_dir=_conn.spool_dir,
+        surface=Surface.CLI.value,
     )
 
 
@@ -268,7 +270,7 @@ def login(
         "hmac_secret": settings.hmac_secret or None,
     }
     if settings.token:
-        with Client(settings=settings) as c:
+        with Client(settings=settings, surface=Surface.CLI.value) as c:
             who = c.me()
         print(f"logged in to {settings.base_url} as {who.get('email', who)}")
     else:
@@ -348,7 +350,7 @@ def _verify(token: str, base_url: str) -> tuple[str, dict | None]:
     state: ``ok`` | ``rejected`` (definitive 401/403) | ``unreachable`` (blip).
     """
     try:
-        with Client(base_url=base_url, token=token, fail_open=False) as client:
+        with Client(base_url=base_url, token=token, fail_open=False, surface=Surface.CLI.value) as client:
             return "ok", client.me()
     except (errors.AuthError, errors.ScopeError):  # 401, 403 — both definitive
         return "rejected", None

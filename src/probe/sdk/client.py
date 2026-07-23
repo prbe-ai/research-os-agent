@@ -32,6 +32,7 @@ from ..models import (
 from .config import Settings, resolve
 from .hashing import fingerprint
 from .spool import Spool
+from .surface import Surface
 from .transport import Page, Transport
 
 
@@ -78,6 +79,7 @@ class Client:
         fail_open: bool = True,
         spool: Spool | None = None,
         spool_dir: str | Path | None = None,
+        surface: str = Surface.SDK.value,
     ):
         self.settings = settings or resolve(
             base_url=base_url,
@@ -85,7 +87,9 @@ class Client:
             ingest_token=ingest_token,
             hmac_secret=hmac_secret,
         )
-        self.transport = transport or Transport(self.settings)
+        # `surface` tags outbound requests for analytics attribution (cli/sdk/mcp).
+        # Ignored when an already-built `transport` is supplied — it carries its own.
+        self.transport = transport or Transport(self.settings, surface=surface)
         self.fail_open = fail_open
         if spool is not None and spool_dir is not None:
             raise ValueError("pass spool or spool_dir, not both")

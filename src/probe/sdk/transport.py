@@ -23,6 +23,7 @@ import httpx
 
 from . import errors
 from .config import Settings
+from .surface import SURFACE_HEADER, TOOL_HEADER, Surface, current_tool
 
 _RETRYABLE = {502, 503, 504}
 _DEFAULT_TIMEOUT = 30.0
@@ -45,9 +46,14 @@ class Transport:
         timeout: float = _DEFAULT_TIMEOUT,
         client: httpx.Client | None = None,
         max_retries: int = _MAX_RETRIES,
+        surface: str = Surface.SDK.value,
     ):
         self.settings = settings
         self.max_retries = max_retries
+        # Which product surface these requests came from (cli/sdk/mcp). Every
+        # backend request carries it as `X-Probe-Surface` so analytics can
+        # attribute events by surface — headers only, never a payload.
+        self.surface = surface
         self._client = client or httpx.Client(base_url=settings.base_url, timeout=timeout)
 
     # -- lifecycle ----------------------------------------------------------
@@ -94,6 +100,12 @@ class Transport:
         headers = self._auth_headers(path, raw_body)
         if json_body is not None:
             headers["Content-Type"] = "application/json"
+        # Surface attribution: tag every backend request with the originating
+        # product surface, and (MCP only) the tool being served. Headers only.
+        headers[SURFACE_HEADER] = self.surface
+        tool = current_tool()
+        if tool:
+            headers[TOOL_HEADER] = tool
 
         retry = idempotent if idempotent is not None else method.upper() in {"GET", "PUT"}
         attempt = 0
