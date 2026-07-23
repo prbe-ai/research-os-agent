@@ -1,34 +1,127 @@
 name: Release
 
-# Publishes to PyPI from a TAG, never from a branch. Installing `@main` means nobody
-# can say which build they are running — a bad property for a tool whose pitch is
-# reproducibility. A tag is the immutable thing users pin.
+# Publishes to PyPI. Two ways in, one publish path:
+#
+#   1. push a tag `v*`      — the original, immutable-tag release. A tag is the
+#                             thing users pin; publishing `@main` would make "which
+#                             build am I running" unanswerable.
+#   2. workflow_dispatch     — one-command release from chat/CLI: give a version and
+#                             this bumps pyproject (+ the client-version nudge
+#                             manifest), commits + tags on main, then builds and
+#                             publishes. Self-contained on purpose: a tag pushed by
+#                             this workflow's GITHUB_TOKEN does NOT start a new
+#                             `on: push tags` run (GitHub's recursion guard), so the
+#                             dispatch run must do its own build+publish. Same file =
+#                             the existing PyPI trusted-publisher config keeps working.
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, no leading v (e.g. 0.7.2)"
+        required: true
+        type: string
+      bump_manifest:
+        description: "Also set client-version.json cli.latest to this version"
+        type: boolean
+        default: true
+      dry_run:
+        description: "Build + test only; skip the commit, tag, and PyPI publish"
+        type: boolean
+        default: false
+
+concurrency: release # never two releases racing
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # the dispatch path pushes the release commit + tag; the tag path ignores it
     steps:
       - uses: actions/checkout@v4
+        with:
+          # dispatch releases from main; a tag build checks out the tag that triggered it
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+
+      # --- dispatch path only: bump -> commit -> tag on main, then fall through to
+      #     the same build the tag path runs. On a tag push this step is skipped. ---
+      - name: Bump, commit, and tag (workflow_dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          VERSION: ${{ inputs.version }}
+          BUMP_MANIFEST: ${{ inputs.bump_manifest }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
+            || { echo "::error::version must be MAJOR.MINOR.PATCH, got '$VERSION'"; exit 1; }
+          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::tag v$VERSION already exists"; exit 1
+          fi
+          if curl -sf "https://pypi.org/pypi/probe-research/$VERSION/json" >/dev/null 2>&1; then
+            echo "::error::probe-research $VERSION is already on PyPI"; exit 1
+          fi
+          # Bump pyproject, and (opt-in) the client-version nudge manifest, format-preserving.
+          python - <<'PY'
+          import os, re, pathlib
+          v = os.environ["VERSION"]
+          p = pathlib.Path("pyproject.toml"); t = p.read_text()
+          t2, n = re.subn(r'(?m)^version = "[^"]+"', f'version = "{v}"', t, count=1)
+          if n != 1:
+              raise SystemExit("::error::could not find the version line in pyproject.toml")
+          p.write_text(t2)
+          if os.environ.get("BUMP_MANIFEST") == "true":
+              m = pathlib.Path("client-version.json")
+              if m.exists():
+                  mt = m.read_text()
+                  mt2, mn = re.subn(
+                      r'("cli"\s*:\s*\{[^}]*?"latest"\s*:\s*")[^"]*(")',
+                      rf'\g<1>{v}\g<2>', mt, count=1)
+                  if mn == 1:
+                      m.write_text(mt2)
+                  else:
+                      print("::warning::client-version.json cli.latest not updated (pattern not found)")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml client-version.json
+          git commit -m "chore: release v$VERSION"
+          git tag -a "v$VERSION" -m "probe-research $VERSION"
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "DRY_RUN: built the release commit + tag locally, not pushing."
+          else
+            git push origin HEAD:main
+            git push origin "v$VERSION"
+          fi
+
       # The tag is the release's identity: if it disagrees with the version the build
       # would publish, stop. Publishing v0.6.0 from a tree that says 0.5.0 puts a
       # permanently wrong version on PyPI, and PyPI will not let you reuse the number.
+      # (On the dispatch path the tag was just created from this same version, so it
+      # matches by construction — the check still guards a hand-edited mismatch.)
       - name: Tag must match the packaged version
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
-          tag="${GITHUB_REF_NAME#v}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="$DISPATCH_VERSION"
+          else
+            tag="${GITHUB_REF_NAME#v}"
+          fi
           pkg="$(python -c 'import tomllib,pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
           if [ "$tag" != "$pkg" ]; then
-            echo "::error::tag $GITHUB_REF_NAME implies version $tag, but pyproject says $pkg"
+            echo "::error::tag $tag implies that version, but pyproject says $pkg"
             exit 1
           fi
           echo "releasing $pkg"
       - run: pip install -e ".[dev]"
-      - run: pytest -q
+      - run: pytest -q # gate: never publish a red tree
       - run: pip install build && python -m build
       - uses: actions/upload-artifact@v4
         with:
@@ -37,9 +130,13 @@ jobs:
 
   publish:
     needs: build
+    # Skip the actual PyPI upload on a dry run; every other path publishes.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     runs-on: ubuntu-latest
-    # A protected environment means a human approves each publish, and PyPI releases
-    # cannot be un-published — only yanked.
+    # `environment: pypi` scopes OIDC trusted publishing. NOTE: it has no required
+    # reviewer configured, so this is NOT a human-approval gate today — a dispatch or
+    # a tag publishes straight through. Add a required reviewer in the environment
+    # settings if you want a manual approve before each PyPI upload.
     environment: pypi
     permissions:
       id-token: write # PyPI trusted publishing (OIDC); no long-lived token in secrets

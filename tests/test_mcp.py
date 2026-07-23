@@ -474,7 +474,9 @@ def test_token_factory_evicts_oldest_pair_beyond_cap(monkeypatch):
     # The server builds its Client from an explicit Settings (so a missing mcp_token
     # can never fall back to the write token), so read the token off settings.
     monkeypatch.setattr(
-        server_mod, "Client", lambda *, settings, fail_open: FakeClient(settings.token)
+        server_mod,
+        "Client",
+        lambda *, settings, fail_open, surface=None: FakeClient(settings.token),
     )
 
     def resolve(token):
