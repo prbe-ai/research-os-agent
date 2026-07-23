@@ -1,33 +1,44 @@
 name: Release
 
-# Publishes to PyPI. Two ways in, one publish path:
+# Releases the CLI (probe-research on PyPI) and/or the plugin (plugin.json on the
+# marketplace). Two ways in:
 #
-#   1. push a tag `v*`      — the original, immutable-tag release. A tag is the
+#   1. push a tag `v*`      — the original immutable-tag CLI release. A tag is the
 #                             thing users pin; publishing `@main` would make "which
 #                             build am I running" unanswerable.
-#   2. workflow_dispatch     — one-command release from chat/CLI: give a version and
-#                             this bumps pyproject (+ the client-version nudge
-#                             manifest), commits + tags on main, then builds and
-#                             publishes. Self-contained on purpose: a tag pushed by
-#                             this workflow's GITHUB_TOKEN does NOT start a new
-#                             `on: push tags` run (GitHub's recursion guard), so the
-#                             dispatch run must do its own build+publish. Same file =
-#                             the existing PyPI trusted-publisher config keeps working.
+#   2. workflow_dispatch     — one-command release from chat/CLI. Give a CLI `version`
+#                             and/or a `plugin_version`; this bumps the right files
+#                             (pyproject / plugin.json + the client-version nudge
+#                             manifest), commits + tags on main, and — for a CLI
+#                             release — builds and publishes to PyPI. Self-contained on
+#                             purpose: a tag pushed by this workflow's GITHUB_TOKEN does
+#                             NOT start a new `on: push tags` run (GitHub's recursion
+#                             guard), so the dispatch run must do its own build+publish.
+#
+# CLI and plugin version INDEPENDENTLY — they are separate inputs. A plugin release is
+# just a version bump on main (the marketplace serves plugin.json from main); it never
+# touches PyPI, so the build/publish steps are skipped for a plugin-only release.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release, no leading v (e.g. 0.7.2)"
-        required: true
+        description: "CLI (probe-research) version to release, no leading v (e.g. 0.7.2). Blank = no CLI release."
+        required: false
         type: string
+        default: ""
+      plugin_version:
+        description: "Plugin version to release — bumps plugin.json + client-version.json plugin.latest. Blank = no plugin release."
+        required: false
+        type: string
+        default: ""
       bump_manifest:
-        description: "Also set client-version.json cli.latest to this version"
+        description: "For a CLI release, also set client-version.json cli.latest to this version"
         type: boolean
         default: true
       dry_run:
-        description: "Build + test only; skip the commit, tag, and PyPI publish"
+        description: "Build/bump locally; skip the commit, tag, push, and PyPI publish"
         type: boolean
         default: false
 
@@ -37,7 +48,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # the dispatch path pushes the release commit + tag; the tag path ignores it
+      contents: write # the dispatch path pushes the release commit + tag(s); the tag path ignores it
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,56 +60,89 @@ jobs:
         with:
           python-version: "3.13"
 
-      # --- dispatch path only: bump -> commit -> tag on main, then fall through to
-      #     the same build the tag path runs. On a tag push this step is skipped. ---
+      # --- dispatch path only: bump -> commit -> tag on main. Handles a CLI release,
+      #     a plugin release, or both in one commit. On a tag push this step is skipped. ---
       - name: Bump, commit, and tag (workflow_dispatch)
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           VERSION: ${{ inputs.version }}
+          PLUGIN_VERSION: ${{ inputs.plugin_version }}
           BUMP_MANIFEST: ${{ inputs.bump_manifest }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
           set -euo pipefail
-          echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
-            || { echo "::error::version must be MAJOR.MINOR.PATCH, got '$VERSION'"; exit 1; }
-          if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
-            echo "::error::tag v$VERSION already exists"; exit 1
+          if [ -z "$VERSION" ] && [ -z "$PLUGIN_VERSION" ]; then
+            echo "::error::provide 'version' (CLI release) and/or 'plugin_version' (plugin release)"; exit 1
           fi
-          if curl -sf "https://pypi.org/pypi/probe-research/$VERSION/json" >/dev/null 2>&1; then
-            echo "::error::probe-research $VERSION is already on PyPI"; exit 1
+          semver() {
+            echo "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$' \
+              || { echo "::error::$2 must be MAJOR.MINOR.PATCH, got '$1'"; exit 1; }
+          }
+          TAGS=""
+          if [ -n "$VERSION" ]; then
+            semver "$VERSION" "version"
+            if git rev-parse -q --verify "refs/tags/v$VERSION" >/dev/null; then
+              echo "::error::tag v$VERSION already exists"; exit 1
+            fi
+            if curl -sf "https://pypi.org/pypi/probe-research/$VERSION/json" >/dev/null 2>&1; then
+              echo "::error::probe-research $VERSION is already on PyPI"; exit 1
+            fi
+            TAGS="$TAGS v$VERSION"
           fi
-          # Bump pyproject, and (opt-in) the client-version nudge manifest, format-preserving.
+          if [ -n "$PLUGIN_VERSION" ]; then
+            semver "$PLUGIN_VERSION" "plugin_version"
+            if git rev-parse -q --verify "refs/tags/probe-research--v$PLUGIN_VERSION" >/dev/null; then
+              echo "::error::tag probe-research--v$PLUGIN_VERSION already exists"; exit 1
+            fi
+            TAGS="$TAGS probe-research--v$PLUGIN_VERSION"
+          fi
+          # Bump whichever versions were given, format-preserving (regex, so JSON/TOML
+          # layout + comments survive). One python pass drives both.
           python - <<'PY'
           import os, re, pathlib
-          v = os.environ["VERSION"]
-          p = pathlib.Path("pyproject.toml"); t = p.read_text()
-          t2, n = re.subn(r'(?m)^version = "[^"]+"', f'version = "{v}"', t, count=1)
-          if n != 1:
-              raise SystemExit("::error::could not find the version line in pyproject.toml")
-          p.write_text(t2)
-          if os.environ.get("BUMP_MANIFEST") == "true":
-              m = pathlib.Path("client-version.json")
-              if m.exists():
-                  mt = m.read_text()
-                  mt2, mn = re.subn(
-                      r'("cli"\s*:\s*\{[^}]*?"latest"\s*:\s*")[^"]*(")',
-                      rf'\g<1>{v}\g<2>', mt, count=1)
-                  if mn == 1:
-                      m.write_text(mt2)
-                  else:
-                      print("::warning::client-version.json cli.latest not updated (pattern not found)")
+          def sub(path, pattern, value, label):
+              p = pathlib.Path(path)
+              if not p.exists():
+                  print(f"::warning::{path} not found; skipped {label}"); return
+              text = p.read_text()
+              new, n = re.subn(pattern, lambda m: m.group(1) + value + m.group(2), text, count=1)
+              if n != 1:
+                  raise SystemExit(f"::error::{label}: pattern not found in {path}")
+              p.write_text(new)
+          v = os.environ.get("VERSION") or ""
+          pv = os.environ.get("PLUGIN_VERSION") or ""
+          if v:
+              sub("pyproject.toml", r'(?m)^(version = ")[^"]+(")', v, "pyproject version")
+              if os.environ.get("BUMP_MANIFEST") == "true":
+                  sub("client-version.json",
+                      r'("cli"\s*:\s*\{[^}]*?"latest"\s*:\s*")[^"]*(")', v, "manifest cli.latest")
+          if pv:
+              sub("plugins/probe-research/.claude-plugin/plugin.json",
+                  r'("version"\s*:\s*")[^"]*(")', pv, "plugin.json version")
+              sub("client-version.json",
+                  r'("plugin"\s*:\s*\{[^}]*?"latest"\s*:\s*")[^"]*(")', pv, "manifest plugin.latest")
           PY
+          if [ -n "$VERSION" ] && [ -n "$PLUGIN_VERSION" ]; then
+            MSG="chore: release cli v$VERSION + plugin $PLUGIN_VERSION"
+          elif [ -n "$VERSION" ]; then
+            MSG="chore: release v$VERSION"
+          else
+            MSG="chore(plugin): bump probe-research $PLUGIN_VERSION"
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml client-version.json
-          git commit -m "chore: release v$VERSION"
-          git tag -a "v$VERSION" -m "probe-research $VERSION"
+          git add pyproject.toml client-version.json plugins/probe-research/.claude-plugin/plugin.json
+          git commit -m "$MSG"
+          for t in $TAGS; do git tag -a "$t" -m "$t"; done
           if [ "$DRY_RUN" = "true" ]; then
-            echo "DRY_RUN: built the release commit + tag locally, not pushing."
+            echo "DRY_RUN: created commit + tag(s) [$TAGS] locally, not pushing."
           else
             git push origin HEAD:main
-            git push origin "v$VERSION"
+            for t in $TAGS; do git push origin "$t"; done
           fi
+
+      # Everything below is the CLI/PyPI publish path. It runs on a tag push or a CLI
+      # dispatch (inputs.version set); a plugin-only release skips it entirely.
 
       # The tag is the release's identity: if it disagrees with the version the build
       # would publish, stop. Publishing v0.6.0 from a tree that says 0.5.0 puts a
@@ -106,6 +150,7 @@ jobs:
       # (On the dispatch path the tag was just created from this same version, so it
       # matches by construction — the check still guards a hand-edited mismatch.)
       - name: Tag must match the packaged version
+        if: ${{ github.event_name == 'push' || inputs.version != '' }}
         env:
           DISPATCH_VERSION: ${{ inputs.version }}
         run: |
@@ -120,18 +165,23 @@ jobs:
             exit 1
           fi
           echo "releasing $pkg"
-      - run: pip install -e ".[dev]"
-      - run: pytest -q # gate: never publish a red tree
-      - run: pip install build && python -m build
-      - uses: actions/upload-artifact@v4
+      - if: ${{ github.event_name == 'push' || inputs.version != '' }}
+        run: pip install -e ".[dev]"
+      - if: ${{ github.event_name == 'push' || inputs.version != '' }}
+        run: pytest -q # gate: never publish a red tree
+      - if: ${{ github.event_name == 'push' || inputs.version != '' }}
+        run: pip install build && python -m build
+      - if: ${{ github.event_name == 'push' || inputs.version != '' }}
+        uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
 
   publish:
     needs: build
-    # Skip the actual PyPI upload on a dry run; every other path publishes.
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+    # Publish to PyPI only for a CLI release (tag push or dispatch with a version), and
+    # never on a dry run. A plugin-only release has nothing to publish.
+    if: ${{ (github.event_name == 'push' || inputs.version != '') && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     runs-on: ubuntu-latest
     # `environment: pypi` scopes OIDC trusted publishing. NOTE: it has no required
     # reviewer configured, so this is NOT a human-approval gate today — a dispatch or
