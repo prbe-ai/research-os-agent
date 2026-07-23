@@ -21,6 +21,11 @@ from typing import Any
 
 import httpx
 
+from ..client_headers import (
+    CLIENT_KIND_HEADER,
+    CLIENT_VERSION_HEADER,
+    client_version_headers,
+)
 from . import errors
 from .config import Settings
 from .surface import SURFACE_HEADER, TOOL_HEADER, Surface, current_tool
@@ -47,6 +52,7 @@ class Transport:
         client: httpx.Client | None = None,
         max_retries: int = _MAX_RETRIES,
         surface: str = Surface.SDK.value,
+        client_headers: Mapping[str, str] | None = None,
     ):
         self.settings = settings
         self.max_retries = max_retries
@@ -54,6 +60,11 @@ class Transport:
         # backend request carries it as `X-Probe-Surface` so analytics can
         # attribute events by surface — headers only, never a payload.
         self.surface = surface
+        supplied = client_headers or {}
+        self._client_headers = client_version_headers(
+            supplied.get(CLIENT_KIND_HEADER),
+            supplied.get(CLIENT_VERSION_HEADER),
+        )
         self._client = client or httpx.Client(base_url=settings.base_url, timeout=timeout)
 
     # -- lifecycle ----------------------------------------------------------
@@ -97,7 +108,7 @@ class Transport:
     ) -> httpx.Response:
         # Serialize ourselves so the HMAC signs the exact bytes we send.
         raw_body = b"" if json_body is None else json.dumps(json_body).encode()
-        headers = self._auth_headers(path, raw_body)
+        headers = {**self._client_headers, **self._auth_headers(path, raw_body)}
         if json_body is not None:
             headers["Content-Type"] = "application/json"
         # Surface attribution: tag every backend request with the originating

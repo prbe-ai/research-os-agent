@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
+import probe
 from probe import cli
+from probe.sdk.surface import Surface
 from tests.conftest import make_client
 
 
@@ -122,6 +124,26 @@ def test_global_spool_dir_reaches_the_sdk(app, tmp_path, monkeypatch, capsys):
         ]
     ) == 0
     assert captured["spool_dir"] == str(durable)
+
+
+def test_cli_client_construction_reports_the_installed_version(
+    app, tmp_path, monkeypatch, capsys
+):
+    captured = {}
+
+    def factory(**kwargs):
+        captured.update(kwargs)
+        return make_client(app, tmp_spool=tmp_path / "spool")
+
+    monkeypatch.setattr(cli, "Client", factory)
+    assert cli.main(["whoami"]) == 0
+    capsys.readouterr()
+
+    assert captured["client_headers"] == {
+        "X-Probe-Client": "cli",
+        "X-Probe-Client-Version": probe.__version__,
+    }
+    assert captured["surface"] == Surface.CLI.value
 
 
 @pytest.mark.parametrize(

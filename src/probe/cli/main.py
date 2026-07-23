@@ -30,6 +30,7 @@ import typer
 from pydantic import ValidationError
 
 from .. import __version__, errors
+from ..client_headers import client_version_headers
 from ..models import Scope
 from ..sdk.client import _FILE_ANCHORS, Anchor, Client
 from ..sdk.config import (
@@ -143,15 +144,24 @@ def _show_device_prompt(prompt: DevicePrompt) -> None:
     print(f"  code:  {prompt.user_code}")
 
 
+def _new_client(**kwargs: Any) -> Client:
+    """Construct a CLI-owned SDK client with bounded version telemetry."""
+
+    return Client(
+        surface=Surface.CLI.value,
+        client_headers=client_version_headers("cli", __version__),
+        **kwargs,
+    )
+
+
 def _client() -> Client:
     # `Client` is a module global so the CLI package can monkeypatch it in tests.
-    return Client(
+    return _new_client(
         base_url=_conn.base_url,
         token=_conn.token,
         ingest_token=_conn.ingest_token,
         hmac_secret=_conn.hmac_secret,
         spool_dir=_conn.spool_dir,
-        surface=Surface.CLI.value,
     )
 
 
@@ -270,7 +280,7 @@ def login(
         "hmac_secret": settings.hmac_secret or None,
     }
     if settings.token:
-        with Client(settings=settings, surface=Surface.CLI.value) as c:
+        with _new_client(settings=settings) as c:
             who = c.me()
         print(f"logged in to {settings.base_url} as {who.get('email', who)}")
     else:
@@ -350,7 +360,7 @@ def _verify(token: str, base_url: str) -> tuple[str, dict | None]:
     state: ``ok`` | ``rejected`` (definitive 401/403) | ``unreachable`` (blip).
     """
     try:
-        with Client(base_url=base_url, token=token, fail_open=False, surface=Surface.CLI.value) as client:
+        with _new_client(base_url=base_url, token=token, fail_open=False) as client:
             return "ok", client.me()
     except (errors.AuthError, errors.ScopeError):  # 401, 403 — both definitive
         return "rejected", None

@@ -45,6 +45,7 @@ on:
       # and imports the shared models, so sdk/ and the generated contract reach
       # the deployed service just as surely as mcp/ does.
       - "src/probe/__init__.py"
+      - "src/probe/client_headers.py"
       - "src/probe/errors.py"
       - "src/probe/models.py"
       - "src/probe/_generated/**"
