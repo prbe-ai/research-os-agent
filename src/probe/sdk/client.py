@@ -9,6 +9,7 @@ Every method maps onto a real v4 endpoint (Probe Research v0.4.0.0 ingestion fol
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import sys
 import warnings
@@ -80,6 +81,7 @@ class Client:
         spool: Spool | None = None,
         spool_dir: str | Path | None = None,
         surface: str = Surface.SDK.value,
+        client_headers: Mapping[str, str] | None = None,
     ):
         self.settings = settings or resolve(
             base_url=base_url,
@@ -89,7 +91,16 @@ class Client:
         )
         # `surface` tags outbound requests for analytics attribution (cli/sdk/mcp).
         # Ignored when an already-built `transport` is supplied — it carries its own.
-        self.transport = transport or Transport(self.settings, surface=surface)
+        if transport is not None and client_headers:
+            raise ValueError(
+                "client_headers configure the default Transport; pass them to "
+                "a custom Transport directly"
+            )
+        self.transport = transport or Transport(
+            self.settings,
+            surface=surface,
+            client_headers=client_headers,
+        )
         self.fail_open = fail_open
         if spool is not None and spool_dir is not None:
             raise ValueError("pass spool or spool_dir, not both")

@@ -25,8 +25,41 @@
 # Diagnostics go to stderr; stdout must be JSON and nothing else.
 set -eu
 
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)}"
+PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
+# The metadata is first-party and tiny, so a small sed pipeline is substantially
+# cheaper than starting the CLI. The extraction is followed by strict SemVer
+# validation; a missing or malformed file drops telemetry while leaving
+# Authorization untouched.
+PLUGIN_VERSION=""
+if [ -r "$PLUGIN_JSON" ]; then
+  PLUGIN_VERSION=$(sed -n \
+    's/.*"version"[[:space:]]*:[[:space:]]*"\([0-9][0-9A-Za-z]*\([._+-][0-9A-Za-z][0-9A-Za-z]*\)*\)".*/\1/p' \
+    "$PLUGIN_JSON" | sed -n '1p') || PLUGIN_VERSION=""
+  [ "${#PLUGIN_VERSION}" -le 64 ] || PLUGIN_VERSION=""
+  if [ -n "$PLUGIN_VERSION" ] && ! printf '%s\n' "$PLUGIN_VERSION" | grep -Eq \
+    '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?(\+[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$'
+  then
+    PLUGIN_VERSION=""
+  fi
+  version_without_build=${PLUGIN_VERSION%%+*}
+  case "$version_without_build" in
+    *-*)
+      prerelease=${version_without_build#*-}
+      if printf '%s\n' "$prerelease" | grep -Eq '(^|\.)0[0-9]+(\.|$)'; then
+        PLUGIN_VERSION=""
+      fi
+      ;;
+  esac
+fi
+
 emit() {
-  printf '{"Authorization": "Bearer %s"}\n' "$1"
+  if [ -n "$PLUGIN_VERSION" ]; then
+    printf '{"Authorization": "Bearer %s", "X-Probe-Client": "plugin", "X-Probe-Client-Version": "%s"}\n' \
+      "$1" "$PLUGIN_VERSION"
+  else
+    printf '{"Authorization": "Bearer %s"}\n' "$1"
+  fi
   exit 0
 }
 
@@ -61,8 +94,9 @@ for candidate in \
 do
   [ -n "$candidate" ] && [ -x "$candidate" ] || continue
   if out=$("$candidate" mcp headers 2>/dev/null) && [ -n "$out" ]; then
-    printf '%s\n' "$out"
-    exit 0
+    token=$(printf '%s\n' "$out" | sed -n \
+      's/.*"Authorization"[[:space:]]*:[[:space:]]*"Bearer \([^"]*\)".*/\1/p')
+    [ -n "$token" ] && emit "$token"
   fi
 done
 

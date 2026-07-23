@@ -250,6 +250,109 @@ def test_rotating_past_a_cached_rejection_is_not_delayed(monkeypatch) -> None:
     assert asyncio.run(server._upstream_rejects("probe_pat_new")) is False  # and not inherited
 
 
+def test_valid_plugin_version_headers_reach_the_backend_auth_probe(
+    monkeypatch, hosted_env
+) -> None:
+    """The MCP edge preserves only bounded telemetry alongside the bearer."""
+    import probe.mcp.server as server
+
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={})
+
+    real = httpx.AsyncClient
+
+    class Mocked(real):
+        def __init__(self, **kwargs):
+            kwargs.pop("base_url", None)
+            super().__init__(
+                transport=httpx.MockTransport(handle),
+                base_url="http://api.test",
+                **kwargs,
+            )
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", Mocked)
+    server._verify_cache.clear()
+    app = with_auth_and_health(
+        _inner_ok,
+        mcp_path="/mcp",
+        token_rejected=server._upstream_rejects,
+    )
+
+    response = _call(
+        app,
+        _bearer("probe_pat_good")
+        + [
+            (b"x-probe-client", b"plugin"),
+            (b"x-probe-client-version", b"0.7.0"),
+        ],
+    )
+
+    assert response["status"] == 200
+    assert seen[0].headers["X-Probe-Client"] == "plugin"
+    assert seen[0].headers["X-Probe-Client-Version"] == "0.7.0"
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        [(b"x-probe-client", b"plugin")],
+        [
+            (b"x-probe-client", b"unknown"),
+            (b"x-probe-client-version", b"0.7.0"),
+        ],
+        [
+            (b"x-probe-client", b"plugin"),
+            (b"x-probe-client-version", b"latest"),
+        ],
+        [
+            (b"x-probe-client", b"plugin"),
+            (b"x-probe-client-version", b"0.7.0\nx-evil: yes"),
+        ],
+        [
+            (b"x-probe-client", b"plugin"),
+            (b"x-probe-client-version", b"\xff"),
+        ],
+    ],
+)
+def test_bad_mcp_client_metadata_is_ignored(
+    monkeypatch, hosted_env, metadata
+) -> None:
+    """Malformed telemetry never rejects a valid MCP bearer and is not forwarded."""
+    import probe.mcp.server as server
+
+    seen: list[httpx.Request] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={})
+
+    real = httpx.AsyncClient
+
+    class Mocked(real):
+        def __init__(self, **kwargs):
+            kwargs.pop("base_url", None)
+            super().__init__(
+                transport=httpx.MockTransport(handle),
+                base_url="http://api.test",
+                **kwargs,
+            )
+
+    monkeypatch.setattr(server.httpx, "AsyncClient", Mocked)
+    server._verify_cache.clear()
+    app = with_auth_and_health(
+        _inner_ok,
+        mcp_path="/mcp",
+        token_rejected=server._upstream_rejects,
+    )
+
+    assert _call(app, _bearer("probe_pat_good") + metadata)["status"] == 200
+    assert "X-Probe-Client" not in seen[0].headers
+    assert "X-Probe-Client-Version" not in seen[0].headers
+
+
 def test_verification_disabled_wires_no_verifier(hosted_env) -> None:
     """PROBE_MCP_VERIFY_TOKEN=0 (set for the whole suite in conftest) skips the check.
 

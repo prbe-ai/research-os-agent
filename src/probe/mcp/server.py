@@ -26,6 +26,11 @@ import httpx
 from mcp.server.fastmcp import FastMCP
 from mcp.server.transport_security import TransportSecuritySettings
 
+from ..client_headers import (
+    CLIENT_KIND_HEADER,
+    CLIENT_VERSION_HEADER,
+    client_version_headers,
+)
 from ..sdk.client import Client
 from ..sdk.config import Settings, load_context, resolve
 from ..sdk.surface import Surface, tool_scope
@@ -34,6 +39,12 @@ from .source import ResearchOSSource
 
 # Per-request caller token (set by the HTTP auth middleware; None under stdio).
 _token_var: contextvars.ContextVar[str | None] = contextvars.ContextVar("probe_mcp_token", default=None)
+# Validated telemetry from the current hosted MCP request.  It is separate from
+# the token because it is untrusted, optional, and never participates in auth.
+_client_headers_var: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "probe_mcp_client_headers",
+    default=None,
+)
 
 # Reuse a client AND a source per distinct token: the client so we do not open
 # an httpx client per call, the source because it carries the /v1/search
@@ -474,8 +485,10 @@ async def _upstream_rejects(token: str) -> bool:
             return True
         del _verify_cache[key]
     try:
+        headers = {"Authorization": f"Bearer {token}"}
+        headers.update(_client_headers_var.get() or {})
         async with httpx.AsyncClient(base_url=resolve().base_url, timeout=5.0) as client:
-            response = await client.get("/v1/me", headers={"Authorization": f"Bearer {token}"})
+            response = await client.get("/v1/me", headers=headers)
     except httpx.HTTPError:
         return False
     if response.status_code not in (401, 403):
@@ -547,18 +560,32 @@ def with_auth_and_health(inner: Any, *, mcp_path: str = "/mcp", token_rejected: 
         headers = dict(scope.get("headers") or [])
         raw = headers.get(b"authorization", b"")
         token = raw[7:].decode() if raw[:7].lower() == b"bearer " else None
-        if path.startswith(mcp_path):
-            if discovery and token is None:
-                await _unauthorized(send)
-                return
-            if token and token_rejected is not None and await token_rejected(token):
-                await _unauthorized(send)
-                return
-        reset = _token_var.set(token)
         try:
-            await inner(scope, receive, send)
+            client_kind = headers.get(CLIENT_KIND_HEADER.lower().encode(), b"").decode("ascii")
+            client_version = headers.get(
+                CLIENT_VERSION_HEADER.lower().encode(),
+                b"",
+            ).decode("ascii")
+        except UnicodeDecodeError:
+            client_headers = {}
+        else:
+            client_headers = client_version_headers(client_kind, client_version)
+        client_headers_reset = _client_headers_var.set(client_headers)
+        try:
+            if path.startswith(mcp_path):
+                if discovery and token is None:
+                    await _unauthorized(send)
+                    return
+                if token and token_rejected is not None and await token_rejected(token):
+                    await _unauthorized(send)
+                    return
+            token_reset = _token_var.set(token)
+            try:
+                await inner(scope, receive, send)
+            finally:
+                _token_var.reset(token_reset)
         finally:
-            _token_var.reset(reset)
+            _client_headers_var.reset(client_headers_reset)
 
     return app
 
