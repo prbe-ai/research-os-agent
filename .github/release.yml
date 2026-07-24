@@ -1,0 +1,19 @@
+# Categorizes GitHub's auto-generated release notes (the "What's Changed" list the
+# release.yml `release-notes` job builds via the generate-notes API). Grouping is by PR
+# LABEL, so it only sharpens once PRs are labeled; until then everything falls into
+# "Other changes" -- still a complete, accurate PR list. The Claude-written Highlights
+# section sits above this and does the human synthesis regardless of labels.
+changelog:
+  exclude:
+    authors:
+      - github-actions
+      - dependabot
+  categories:
+    - title: 🚀 Features
+      labels: [enhancement, feature, feat]
+    - title: 🐛 Fixes
+      labels: [bug, fix, bugfix]
+    - title: 🧹 Maintenance & docs
+      labels: [chore, refactor, ci, docs, dependencies]
+    - title: Other changes
+      labels: ["*"]
