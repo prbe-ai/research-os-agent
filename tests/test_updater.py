@@ -99,15 +99,51 @@ def _record_run(monkeypatch):
     return calls
 
 
-def test_upgrade_uv_tool(monkeypatch):
+def _stub_installed(monkeypatch, versions):
+    """Feed _installed_cli_version() a sequence — what it reports after each upgrade."""
+    it = iter(versions)
+    monkeypatch.setattr(updater, "_installed_cli_version", lambda: next(it))
+
+
+def test_upgrade_uv_tool_advances(monkeypatch):
     calls = _record_run(monkeypatch)
-    res = updater.upgrade_cli(updater.Install(updater.Method.UV_TOOL))
-    assert res.ok and calls == [["uv", "tool", "upgrade", "probe-research"]]
+    _stub_installed(monkeypatch, ["0.8.2"])
+    res = updater.upgrade_cli(updater.Install(updater.Method.UV_TOOL), "0.8.1", "0.8.2")
+    assert res.ok and res.changed and res.after == "0.8.2"
+    assert calls == [["uv", "tool", "upgrade", "probe-research"]]
+
+
+def test_upgrade_uv_tool_pinned_noop_then_force(monkeypatch):
+    # `uv tool upgrade` no-ops on a version pin (exits 0, version unchanged) -> force @latest
+    calls = _record_run(monkeypatch)
+    _stub_installed(monkeypatch, ["0.8.1", "0.8.2"])  # after upgrade (no move), after force (moved)
+    res = updater.upgrade_cli(updater.Install(updater.Method.UV_TOOL), "0.8.1", "0.8.2")
+    assert res.ok and res.changed and res.after == "0.8.2"
+    assert calls == [
+        ["uv", "tool", "upgrade", "probe-research"],
+        ["uv", "tool", "install", "--force", "probe-research@latest"],
+    ]
+
+
+def test_upgrade_uv_tool_stuck_is_honest_not_a_lie(monkeypatch):
+    # even after the force reinstall the version never moves -> report failure, don't claim success
+    _record_run(monkeypatch)
+    _stub_installed(monkeypatch, ["0.8.1", "0.8.1"])
+    res = updater.upgrade_cli(updater.Install(updater.Method.UV_TOOL), "0.8.1", "0.8.2")
+    assert not res.ok and not res.changed and "still 0.8.1" in res.message
+
+
+def test_upgrade_uv_tool_already_latest(monkeypatch):
+    _record_run(monkeypatch)
+    _stub_installed(monkeypatch, ["0.8.2"])  # already at target, nothing moved
+    res = updater.upgrade_cli(updater.Install(updater.Method.UV_TOOL), "0.8.2", "0.8.2")
+    assert res.ok and not res.changed and "already" in res.message
 
 
 def test_upgrade_legacy_does_uninstall_then_install(monkeypatch):
     calls = _record_run(monkeypatch)
-    updater.upgrade_cli(updater.Install(updater.Method.UV_TOOL_LEGACY))
+    _stub_installed(monkeypatch, ["0.8.2"])
+    updater.upgrade_cli(updater.Install(updater.Method.UV_TOOL_LEGACY), "0.7.0", "0.8.2")
     assert calls == [
         ["uv", "tool", "uninstall", "probe-agent"],
         ["uv", "tool", "install", "--force", "probe-research"],
@@ -116,14 +152,15 @@ def test_upgrade_legacy_does_uninstall_then_install(monkeypatch):
 
 def test_upgrade_pipx(monkeypatch):
     calls = _record_run(monkeypatch)
-    updater.upgrade_cli(updater.Install(updater.Method.PIPX))
+    _stub_installed(monkeypatch, ["0.8.2"])
+    updater.upgrade_cli(updater.Install(updater.Method.PIPX), "0.8.1", "0.8.2")
     assert calls == [["pipx", "upgrade", "probe-research"]]
 
 
 @pytest.mark.parametrize("method", [updater.Method.EDITABLE, updater.Method.MANAGED, updater.Method.UNKNOWN])
 def test_upgrade_refuses_and_never_runs(monkeypatch, method):
     calls = _record_run(monkeypatch)
-    res = updater.upgrade_cli(updater.Install(method))
+    res = updater.upgrade_cli(updater.Install(method), "0.8.1", "0.8.2")
     assert not res.ran and calls == [] and res.message  # instruction, no mutation
 
 
