@@ -345,6 +345,33 @@
         "title": "ArtifactOut",
         "type": "object"
       },
+      "ArtifactPinImpact": {
+        "description": "What a delete would break (D7): the actual projects and experiments whose\nmanifests or lineage edges pin one of this artifact's versions.",
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "pinned": {
+            "title": "Pinned",
+            "type": "boolean"
+          },
+          "projects": {
+            "items": {
+              "$ref": "#/components/schemas/PinnedProject"
+            },
+            "title": "Projects",
+            "type": "array"
+          }
+        },
+        "required": [
+          "artifact_id",
+          "pinned"
+        ],
+        "title": "ArtifactPinImpact",
+        "type": "object"
+      },
       "ArtifactScope": {
         "description": "Which anchor levels a run's artifact listing spans.\n\nOWN (default) is the run's own artifacts only -- the historical behavior, so the\nrun bundle, dashboard, and `artifact_count` are untouched. INHERITED and ALL are\nopt-in reads for the live-run/CLI case where a run needs to see what has been\npromoted to its experiment/project. Inheritance is resolution/listing on THIS\nendpoint only; it never widens the run's own count surfaces.",
         "enum": [
@@ -354,6 +381,237 @@
         ],
         "title": "ArtifactScope",
         "type": "string"
+      },
+      "ArtifactVersionCreate": {
+        "description": "Append a version. Either PROMOTE from an existing artifact (`from_artifact_id`,\nzero-copy: the version pins that artifact's content_hash + full r2:// uri + size)\nOR supply the pointer identity directly.",
+        "properties": {
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "from_artifact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "From Artifact Id"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uri"
+          }
+        },
+        "title": "ArtifactVersionCreate",
+        "type": "object"
+      },
+      "ArtifactVersionOut": {
+        "properties": {
+          "artifact_id": {
+            "format": "uuid",
+            "title": "Artifact Id",
+            "type": "string"
+          },
+          "content_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Hash"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By"
+          },
+          "customer_id": {
+            "title": "Customer Id",
+            "type": "string"
+          },
+          "deleted_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted At"
+          },
+          "deleted_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deleted By"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "meta": {
+            "additionalProperties": true,
+            "title": "Meta",
+            "type": "object"
+          },
+          "origin": {
+            "title": "Origin",
+            "type": "string"
+          },
+          "size_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size Bytes"
+          },
+          "source_artifact_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Artifact Id"
+          },
+          "status": {
+            "default": "complete",
+            "title": "Status",
+            "type": "string"
+          },
+          "uri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Uri"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "customer_id",
+          "artifact_id",
+          "version",
+          "origin",
+          "created_at"
+        ],
+        "title": "ArtifactVersionOut",
+        "type": "object"
       },
       "AssetCreate": {
         "properties": {
@@ -2956,6 +3214,51 @@
           "created_at"
         ],
         "title": "PendingInviteOut",
+        "type": "object"
+      },
+      "PinnedExperiment": {
+        "properties": {
+          "experiment_id": {
+            "format": "uuid",
+            "title": "Experiment Id",
+            "type": "string"
+          },
+          "experiment_name": {
+            "title": "Experiment Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "experiment_id",
+          "experiment_name"
+        ],
+        "title": "PinnedExperiment",
+        "type": "object"
+      },
+      "PinnedProject": {
+        "properties": {
+          "experiments": {
+            "items": {
+              "$ref": "#/components/schemas/PinnedExperiment"
+            },
+            "title": "Experiments",
+            "type": "array"
+          },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
+          "project_name": {
+            "title": "Project Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project_id",
+          "project_name"
+        ],
+        "title": "PinnedProject",
         "type": "object"
       },
       "ProjectArtifactCreate": {
@@ -7053,6 +7356,50 @@
         ]
       }
     },
+    "/v1/artifacts/{artifact_id}/pin-impact": {
+      "get": {
+        "description": "Which projects -- and which experiments within them -- pin this artifact's\nversions (D7).\n\nThis is what a delete confirmation shows a human before they destroy\nsomething reproducible: not a count, but the actual work that would break.\nCounts lineage edges as well as published manifests, because a pin is born as\nan edge before any publish.",
+        "operationId": "get_artifact_pin_impact_v1_artifacts__artifact_id__pin_impact_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactPinImpact"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Artifact Pin Impact",
+        "tags": [
+          "artifact-versions"
+        ]
+      }
+    },
     "/v1/artifacts/{artifact_id}/preview": {
       "get": {
         "description": "Relay a bounded, allowlisted R2 blob as inert bytes for UI previews.",
@@ -7095,6 +7442,159 @@
         "summary": "Preview Artifact",
         "tags": [
           "artifacts"
+        ]
+      }
+    },
+    "/v1/artifacts/{artifact_id}/versions": {
+      "get": {
+        "description": "Version history, newest first. Force-deleted versions are omitted; they stay\nresolvable by number (as 410) so a pin never silently 404s.",
+        "operationId": "list_artifact_versions_v1_artifacts__artifact_id__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ArtifactVersionOut"
+                  },
+                  "title": "Response List Artifact Versions V1 Artifacts  Artifact Id  Versions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Artifact Versions",
+        "tags": [
+          "artifact-versions"
+        ]
+      },
+      "post": {
+        "description": "Append the next version of this artifact.\n\nA promotion (`from_artifact_id`) is ZERO-COPY: it pins the source artifact's\ncontent_hash + full r2:// uri + size; the R2 object is shared, never\nre-uploaded. Appending content identical to the artifact's CURRENT live\ncontent is a no-op that returns the existing version (200-style semantics on\na 201 route is deliberate: re-sending the same bytes is not an error).",
+        "operationId": "create_artifact_version_v1_artifacts__artifact_id__versions_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactVersionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactVersionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Artifact Version",
+        "tags": [
+          "artifact-versions"
+        ]
+      }
+    },
+    "/v1/artifacts/{artifact_id}/versions/{version}/download": {
+      "post": {
+        "description": "Presign a GET for one version's bytes -- the pin-resolution path (I1).\n\nA force-deleted version raises 410 WITH its deletion metadata (who, when), so\na reproduction manifest can tell \"deliberately destroyed\" apart from \"never\nexisted\"; `resolve_version` owns that distinction.",
+        "operationId": "presign_artifact_version_download_v1_artifacts__artifact_id__versions__version__download_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "version",
+            "required": true,
+            "schema": {
+              "title": "Version",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DownloadResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Presign Artifact Version Download",
+        "tags": [
+          "artifact-versions"
         ]
       }
     },
