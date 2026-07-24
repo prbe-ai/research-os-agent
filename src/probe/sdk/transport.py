@@ -31,6 +31,17 @@ from .config import Settings
 from .surface import SURFACE_HEADER, TOOL_HEADER, Surface, current_tool
 
 _RETRYABLE = {502, 503, 504}
+
+
+def _iter_file(fh, chunk_size: int):
+    """Yield an open binary file in fixed-size chunks -- a streaming upload body."""
+    while True:
+        chunk = fh.read(chunk_size)
+        if not chunk:
+            break
+        yield chunk
+
+
 _DEFAULT_TIMEOUT = 30.0
 _MAX_RETRIES = 3
 
@@ -199,6 +210,56 @@ class Transport:
             attempt += 1
             try:
                 resp = self._client.put(url, content=data, headers=request_headers)
+            except httpx.HTTPError as exc:
+                if attempt <= self.max_retries:
+                    time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                    continue
+                raise errors.TransportError(f"PUT {url}: {exc}") from exc
+            if resp.status_code in _RETRYABLE and attempt <= self.max_retries:
+                time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                continue
+            if resp.status_code >= 400:
+                raise errors.error_for(resp.status_code, resp.text)
+            return
+
+    def put_file(
+        self,
+        url: str,
+        path: str,
+        size: int,
+        *,
+        content_type: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        chunk_size: int = 1 << 20,
+    ) -> None:
+        """Stream a local file to a presigned URL without buffering it in memory.
+
+        The sibling of :meth:`put_url` for bytes you do NOT want in memory -- an
+        anchored artifact can be model weights, and reading the whole file into a
+        ``bytes`` before the PUT is what OOMs the training loop. ``size`` is sent as an
+        explicit ``Content-Length``: a generator body otherwise makes httpx use
+        ``Transfer-Encoding: chunked``, which a presigned R2/S3 PUT rejects (411). It
+        must be the same length that was fingerprinted for the presign.
+
+        Re-opens ``path`` on every attempt: httpx does not rewind a consumed body, so a
+        retry after a network blip or a retryable status must stream from byte 0 again
+        -- passing a spent file handle would send a truncated body that the server then
+        stores and confirms as complete. No Authorization header; the presigned URL
+        carries its own signature."""
+        request_headers = dict(headers or {})
+        if content_type:
+            request_headers.setdefault("Content-Type", content_type)
+        request_headers["Content-Length"] = str(size)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                with open(path, "rb") as fh:
+                    resp = self._client.put(
+                        url,
+                        content=_iter_file(fh, chunk_size),
+                        headers=request_headers,
+                    )
             except httpx.HTTPError as exc:
                 if attempt <= self.max_retries:
                     time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))

@@ -456,11 +456,12 @@ class Client:
         # so there is nothing to PUT. For a file anchor the swap to live also already
         # happened, in its own transaction.
         if not presign.get("have"):
-            with open(path, "rb") as handle:
-                data = handle.read()
-            self.transport.put_url(
+            # Stream the file (an anchored artifact can be model weights); never read
+            # it whole into memory. size is the fingerprinted length the presign signed.
+            self.transport.put_file(
                 presign["upload_url"],
-                data,
+                path,
+                size,
                 content_type=content_type or "application/octet-stream",
                 headers=presign.get("upload_headers") or presign.get("headers"),
             )

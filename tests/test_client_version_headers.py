@@ -125,3 +125,68 @@ def test_custom_transport_cannot_silently_drop_client_headers() -> None:
             )
     finally:
         transport.close()
+
+
+# -- streaming file upload (put_file) ---------------------------------------
+
+
+def _mock_transport(handle) -> Transport:
+    settings = Settings(base_url="http://api.test", token="probe_pat_test")
+    return Transport(
+        settings,
+        client=httpx.Client(
+            base_url=settings.base_url, transport=httpx.MockTransport(handle)
+        ),
+    )
+
+
+def test_put_file_streams_with_explicit_content_length(tmp_path) -> None:
+    """A file upload streams with a real Content-Length, never Transfer-Encoding:
+    chunked -- a presigned R2/S3 PUT rejects chunked (411)."""
+    payload = b"w" * (3 * (1 << 20) + 7)  # spans >3 one-MiB chunks, non-round size
+    blob = tmp_path / "weights.bin"
+    blob.write_bytes(payload)
+    seen: dict[str, object] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        seen["body"] = request.read()
+        seen["content_length"] = request.headers.get("content-length")
+        seen["transfer_encoding"] = request.headers.get("transfer-encoding")
+        return httpx.Response(200)
+
+    with _mock_transport(handle) as transport:
+        transport.put_file("https://storage.test/presigned", str(blob), len(payload))
+
+    assert seen["body"] == payload  # full bytes streamed, nothing truncated
+    assert seen["content_length"] == str(len(payload))
+    assert seen["transfer_encoding"] is None  # not chunked
+
+
+@pytest.mark.parametrize("trigger", ["retryable_status", "network_error"])
+def test_put_file_reopens_file_and_resends_full_bytes_on_retry(
+    tmp_path, monkeypatch, trigger: str
+) -> None:
+    """Both retry paths -- a retryable status (503) AND a raised network error -- must
+    re-open the file and resend the WHOLE body. A consumed handle would send truncated
+    bytes that the server stores and `confirm` records as a complete (corrupt) artifact.
+    """
+    monkeypatch.setattr("probe.sdk.transport.time.sleep", lambda *_: None)
+    payload = b"abcdefgh" * 200_000  # 1.6 MB, spans multiple 1 MiB chunks
+    blob = tmp_path / "big.bin"
+    blob.write_bytes(payload)
+    attempts: list[bytes] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if not attempts:  # first attempt fails at/before send
+            attempts.append(b"")
+            if trigger == "retryable_status":
+                return httpx.Response(503)
+            raise httpx.ConnectError("boom", request=request)
+        attempts.append(request.read())
+        return httpx.Response(200)
+
+    with _mock_transport(handle) as transport:
+        transport.put_file("https://storage.test/presigned", str(blob), len(payload))
+
+    assert len(attempts) == 2  # failed once, retried once
+    assert attempts[1] == payload  # the retry re-opened and streamed the full file
