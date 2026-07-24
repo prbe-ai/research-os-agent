@@ -11,14 +11,12 @@ ordering is preserved. It is not a high-throughput buffer; it is a safety net.
 
 from __future__ import annotations
 
-import fcntl
 import json
 import os
-import uuid
-from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+
+from .durable import file_lock, fsync_directory, write_text_atomic
 
 
 def default_dir() -> Path:
@@ -45,31 +43,11 @@ class Spool:
         self.lock_file = self.dir / ".pending.lock"
         self.flush_lock_file = self.dir / ".flush.lock"
 
-    @contextmanager
-    def _file_lock(self, path: Path) -> Iterator[None]:
-        self.dir.mkdir(parents=True, exist_ok=True)
-        with path.open("a+") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    def _locked(self):
+        return file_lock(self.lock_file)
 
-    def _locked(self) -> Iterator[None]:
-        return self._file_lock(self.lock_file)
-
-    def _flush_locked(self) -> Iterator[None]:
-        return self._file_lock(self.flush_lock_file)
-
-    def _fsync_dir(self) -> None:
-        try:
-            directory_fd = os.open(self.dir, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except OSError:
-            pass
+    def _flush_locked(self):
+        return file_lock(self.flush_lock_file)
 
     def append(self, method: str, path: str, json_body: dict | None) -> None:
         line = json.dumps({"method": method, "path": path, "json": json_body})
@@ -80,7 +58,7 @@ class Spool:
                 handle.flush()
                 os.fsync(handle.fileno())
             if created:
-                self._fsync_dir()
+                fsync_directory(self.dir)
 
     def pending(self) -> list[SpoolRecord]:
         with self._locked():
@@ -103,26 +81,14 @@ class Spool:
         return out
 
     def _write_records_atomic(self, records: list[SpoolRecord]) -> None:
-        temporary = self.dir / f".pending.{uuid.uuid4().hex}.tmp"
-        try:
-            with temporary.open("x", encoding="utf-8") as handle:
-                for record in records:
-                    handle.write(
-                        json.dumps(
-                            {
-                                "method": record.method,
-                                "path": record.path,
-                                "json": record.json_body,
-                            }
-                        )
-                        + "\n"
-                    )
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.file)
-            self._fsync_dir()
-        finally:
-            temporary.unlink(missing_ok=True)
+        text = "".join(
+            json.dumps(
+                {"method": record.method, "path": record.path, "json": record.json_body}
+            )
+            + "\n"
+            for record in records
+        )
+        write_text_atomic(self.file, text)
 
     def flush(self, transport) -> int:
         """Replay pending records in order. Returns the count successfully sent.
@@ -139,11 +105,11 @@ class Spool:
                 if recovered:
                     self._write_records_atomic(recovered + queued)
                     self.inflight_file.unlink(missing_ok=True)
-                    self._fsync_dir()
+                    fsync_directory(self.dir)
                 if not self.file.exists():
                     return 0
                 os.replace(self.file, self.inflight_file)
-                self._fsync_dir()
+                fsync_directory(self.dir)
                 records = self._read_records(self.inflight_file)
 
             sent = 0
@@ -169,5 +135,5 @@ class Spool:
                 else:
                     self.file.unlink(missing_ok=True)
                 self.inflight_file.unlink(missing_ok=True)
-                self._fsync_dir()
+                fsync_directory(self.dir)
             return sent

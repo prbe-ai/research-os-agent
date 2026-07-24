@@ -21,20 +21,16 @@ the producer never materialized.
 from __future__ import annotations
 
 import json
-import os
 import uuid
-from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from .durable import now_iso as _now, write_text_atomic
+
 SCHEMA_VERSION = "probe.capture/v1"
 _SPAN_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_DNS, "probe.capture.span")
-
-
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def stable_external_key(source: str, entity: str, *parts: object) -> str:
@@ -177,31 +173,12 @@ class CaptureLedger:
                 )
 
     def _persist(self) -> None:
+        # Atomic replace + directory fsync live in write_text_atomic; the ledger is
+        # a local run file, so it keeps the umask default mode (no 0o600 here).
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._data["updated_at"] = _now()
         payload = json.dumps(self._data, indent=2, sort_keys=True) + "\n"
-        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
-        try:
-            with temporary.open("x", encoding="utf-8") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, self.path)
-            # Persist the directory entry as well as the file contents.  Some PVC
-            # drivers ignore this, but local/ext4 recovery benefits and it is safe.
-            try:
-                directory_fd = os.open(self.path.parent, os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-            except OSError:
-                pass
-        finally:
-            try:
-                temporary.unlink()
-            except FileNotFoundError:
-                pass
+        write_text_atomic(self.path, payload)
 
     @property
     def source(self) -> str:
