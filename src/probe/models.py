@@ -19,6 +19,9 @@ from __future__ import annotations
 
 from ._generated.models import (
     ArtifactCreate,
+    ArtifactPinImpact,
+    ArtifactVersionCreate,
+    ArtifactVersionOut,
     AssetCreate,
     AssetOut,
     AssetVersionCreate,
@@ -67,6 +70,9 @@ from ._generated.models import (
 
 __all__ = [
     "ArtifactCreate",
+    "ArtifactPinImpact",
+    "ArtifactVersionCreate",
+    "ArtifactVersionOut",
     "AssetCreate",
     "AssetOut",
     "AssetVersionCreate",

@@ -108,6 +108,42 @@ class ArtifactScope(StrEnum):
     all = 'all'
 
 
+class ArtifactVersionCreate(BaseModel):
+    """
+    Append a version. Either PROMOTE from an existing artifact (`from_artifact_id`,
+    zero-copy: the version pins that artifact's content_hash + full r2:// uri + size)
+    OR supply the pointer identity directly.
+    """
+
+    content_hash: str | None = Field(None, title='Content Hash')
+    content_type: str | None = Field(None, title='Content Type')
+    from_artifact_id: UUID | None = Field(None, title='From Artifact Id')
+    label: str | None = Field(None, title='Label')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+    size_bytes: int | None = Field(None, title='Size Bytes')
+    uri: str | None = Field(None, title='Uri')
+
+
+class ArtifactVersionOut(BaseModel):
+    artifact_id: UUID = Field(..., title='Artifact Id')
+    content_hash: str | None = Field(None, title='Content Hash')
+    content_type: str | None = Field(None, title='Content Type')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    created_by: str | None = Field(None, title='Created By')
+    customer_id: str = Field(..., title='Customer Id')
+    deleted_at: AwareDatetime | None = Field(None, title='Deleted At')
+    deleted_by: str | None = Field(None, title='Deleted By')
+    id: UUID = Field(..., title='Id')
+    label: str | None = Field(None, title='Label')
+    meta: dict[str, Any] | None = Field(None, title='Meta')
+    origin: str = Field(..., title='Origin')
+    size_bytes: int | None = Field(None, title='Size Bytes')
+    source_artifact_id: UUID | None = Field(None, title='Source Artifact Id')
+    status: str | None = Field('complete', title='Status')
+    uri: str | None = Field(None, title='Uri')
+    version: int = Field(..., title='Version')
+
+
 class AssetCreate(BaseModel):
     description: str | None = Field(None, title='Description')
     kind: str | None = Field('dataset', title='Kind')
@@ -603,6 +639,17 @@ class PendingInviteOut(BaseModel):
     display_name: str = Field(..., title='Display Name')
     id: UUID = Field(..., title='Id')
     role: Role1 = Field(..., title='Role')
+
+
+class PinnedExperiment(BaseModel):
+    experiment_id: UUID = Field(..., title='Experiment Id')
+    experiment_name: str = Field(..., title='Experiment Name')
+
+
+class PinnedProject(BaseModel):
+    experiments: list[PinnedExperiment] | None = Field(None, title='Experiments')
+    project_id: UUID = Field(..., title='Project Id')
+    project_name: str = Field(..., title='Project Name')
 
 
 class ProjectArtifactCreate(BaseModel):
@@ -1102,6 +1149,17 @@ class WorkspacePatch(BaseModel):
     """
 
     name: str = Field(..., max_length=120, min_length=1, title='Name')
+
+
+class ArtifactPinImpact(BaseModel):
+    """
+    What a delete would break (D7): the actual projects and experiments whose
+    manifests or lineage edges pin one of this artifact's versions.
+    """
+
+    artifact_id: UUID = Field(..., title='Artifact Id')
+    pinned: bool = Field(..., title='Pinned')
+    projects: list[PinnedProject] | None = Field(None, title='Projects')
 
 
 class Scopes(RootModel[list[Scope]]):

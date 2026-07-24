@@ -1482,13 +1482,18 @@ def artifact_list(
 def artifact_download(
     artifact_id: str = typer.Argument(..., help="artifact id (from `probe artifact list`)"),
     output: str = typer.Option(
-        None, "--output", "-o", metavar="PATH",
+        None, "--output", "-o", "--to", metavar="PATH",
         help="write the bytes here; '-' forces stdout. Omit to write to stdout "
              "(refused at a terminal).",
     ),
     sha256: str = typer.Option(
         None, "--sha256", metavar="HEX",
         help="expected content_hash; fail (deleting a written file) if the bytes differ",
+    ),
+    version: int = typer.Option(
+        None, "--version", metavar="N",
+        help="fetch this version's bytes instead of the artifact's live content "
+             "(from `probe artifact versions`)",
     ),
 ) -> None:
     """Download an artifact's bytes through a presigned GET.
@@ -1497,7 +1502,10 @@ def artifact_download(
     which can be model weights -- and prints {dest, size_bytes, sha256}. To stdout it
     buffers in memory so the hash can be checked before a byte is emitted. Pass
     --sha256 to verify the round trip against the content_hash from
-    `probe artifact list`; a metadata match alone never proves the blob exists."""
+    `probe artifact list`; a metadata match alone never proves the blob exists.
+
+    --version resolves a pin: it fetches that exact version's bytes, which is what a
+    reproduction needs, rather than whatever the name points at today."""
     to_stdout = output is None or output == "-"
     if to_stdout and output is None and sys.stdout.isatty():
         raise typer.BadParameter(
@@ -1507,7 +1515,11 @@ def artifact_download(
     with _client() as c:
         try:
             if to_stdout:
-                data = c.download_artifact(artifact_id)
+                data = (
+                    c.download_artifact_version(artifact_id, version)
+                    if version is not None
+                    else c.download_artifact(artifact_id)
+                )
                 digest = hashlib.sha256(data).hexdigest()
                 if sha256 and digest != sha256:
                     typer.echo(
@@ -1519,8 +1531,12 @@ def artifact_download(
                 sys.stdout.buffer.flush()
                 typer.echo(f"{artifact_id}  {len(data)} bytes  sha256={digest}", err=True)
                 return
-            # download_artifact_to removes its own partial file on a mid-stream failure.
-            result = c.download_artifact_to(artifact_id, output)
+            # download_artifact*_to removes its own partial file on a mid-stream failure.
+            result = (
+                c.download_artifact_version_to(artifact_id, version, output)
+                if version is not None
+                else c.download_artifact_to(artifact_id, output)
+            )
             if sha256 and result["sha256"] != sha256:
                 Path(output).unlink(missing_ok=True)
                 typer.echo(
@@ -1534,17 +1550,99 @@ def artifact_download(
             # pointer so we can show the path instead of the raw error. Read it from
             # where it lives (e.g. the shared volume) -- Probe stores no bytes for it.
             detail = exc.detail if isinstance(exc.detail, dict) else {}
-            if getattr(exc, "status", None) != 409 or detail.get("reason") != "reference":
+            status = getattr(exc, "status", None)
+            # A force-deleted version answers 410 WITH who/when, so a reproduction can
+            # tell "deliberately destroyed" apart from "never existed". Say which.
+            if status == 410 and version is not None:
+                when = detail.get("deleted_at") or "(unknown time)"
+                who = detail.get("deleted_by")
+                typer.echo(
+                    f"artifact {artifact_id} version {version} was deleted at {when}"
+                    + (f" by {who}" if who else "")
+                    + "\nThe version record survives; its bytes do not.",
+                    err=True,
+                )
+                raise typer.Exit(2)
+            if status != 409 or detail.get("reason") != "reference":
                 raise
             where = detail.get("local_path") or detail.get("uri") or "(unknown location)"
             host = detail.get("host")
+            what = f"artifact {artifact_id}" + (f" version {version}" if version is not None else "")
             typer.echo(
-                f"artifact {artifact_id} is a reference -> {where}"
+                f"{what} is a reference -> {where}"
                 + (f" on {host}" if host else "")
                 + "\nProbe stores no bytes for it; read it from that path.",
                 err=True,
             )
             raise typer.Exit(2)
+
+
+@artifact_app.command("versions")
+def artifact_versions(
+    artifact_id: str = typer.Argument(..., help="artifact id (from `probe artifact list`)"),
+) -> None:
+    """List an artifact's version chain.
+
+    An artifact is a named thing in a container; this is the content history behind
+    that name. `origin` says how each version got its bytes: `uploaded` (pushed
+    directly) or `pinned` (promoted zero-copy from another artifact). Immutability is
+    a property of the version, not the artifact -- renaming or moving the artifact
+    never breaks a pin."""
+    with _client() as c:
+        _print_json(c.list_artifact_versions(artifact_id))
+
+
+@artifact_app.command("pin-impact")
+def artifact_pin_impact(
+    artifact_id: str = typer.Argument(..., help="artifact id (from `probe artifact list`)"),
+) -> None:
+    """Show which projects and experiments pin this artifact's versions.
+
+    Run this before deleting anything: it reports the actual work that would break,
+    not a count. `pinned: false` means nothing published depends on it."""
+    with _client() as c:
+        _print_json(c.artifact_pin_impact(artifact_id))
+
+
+@artifact_app.command("version-add")
+def artifact_version_add(
+    artifact_id: str = typer.Argument(..., help="the artifact to append a version to"),
+    from_artifact: str = typer.Option(
+        None, "--from-artifact", metavar="ID",
+        help="promote another artifact's content ZERO-COPY: pins its hash, uri and "
+             "size; the stored object is shared, never re-uploaded",
+    ),
+    uri: str = typer.Option(
+        None, "--uri", help="name the pointer directly instead of promoting an artifact"
+    ),
+    sha256: str = typer.Option(
+        None, "--sha256", metavar="HEX", help="content_hash for --uri"
+    ),
+    size_bytes: int = typer.Option(None, "--size-bytes"),
+    content_type: str = typer.Option(None, "--content-type"),
+    label: str = typer.Option(
+        None, "--label", help="an alternate selector for this version (e.g. 'prod')"
+    ),
+) -> None:
+    """Append the next version of an artifact.
+
+    Exactly one source: --from-artifact (zero-copy promotion) or --uri. Appending
+    content identical to the artifact's current live content is a no-op that returns
+    the existing version, so this is safe to retry."""
+    if bool(from_artifact) == bool(uri):
+        raise typer.BadParameter("pass exactly one of --from-artifact or --uri")
+    with _client() as c:
+        _print_json(
+            c.create_artifact_version(
+                artifact_id,
+                from_artifact_id=from_artifact,
+                uri=uri,
+                content_hash=sha256,
+                size_bytes=size_bytes,
+                content_type=content_type,
+                label=label,
+            )
+        )
 
 
 @artifact_app.command("delete")

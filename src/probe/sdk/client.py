@@ -21,6 +21,7 @@ from typing import Any
 
 from . import defaults, errors
 from ..models import (
+    ArtifactVersionCreate,
     EdgeCreate,
     ExecutionRecordCreate,
     ExperimentVersionMint,
@@ -879,6 +880,94 @@ class Client:
             if not ok:
                 Path(dest).unlink(missing_ok=True)
         return {"artifact_id": artifact_id, "dest": str(dest), "size_bytes": size, "sha256": digest}
+
+    # -- artifact versions (an artifact's content history) ------------------
+    def list_artifact_versions(self, artifact_id: str) -> list[dict]:
+        """The artifact's version chain, newest first.
+
+        An artifact is a named thing in a container; this is the chain of immutable,
+        content-addressed versions behind that name. Immutability lives on the version,
+        never the artifact, so renames and moves do not break a pin."""
+        return self.transport.get(f"/v1/artifacts/{artifact_id}/versions")
+
+    def create_artifact_version(
+        self,
+        artifact_id: str,
+        *,
+        from_artifact_id: str | None = None,
+        uri: str | None = None,
+        content_hash: str | None = None,
+        size_bytes: int | None = None,
+        content_type: str | None = None,
+        label: str | None = None,
+        meta: dict | None = None,
+    ) -> dict:
+        """Append the next version. Exactly one source: promote an existing artifact
+        (``from_artifact_id``, zero-copy -- pins its hash + uri + size, the R2 object is
+        shared, never re-uploaded) or name a pointer directly (``uri``).
+
+        Re-sending content identical to the artifact's current live content is a no-op
+        that returns the existing version, so this is safe to retry."""
+        if bool(from_artifact_id) == bool(uri):
+            raise ValueError(
+                "create_artifact_version needs exactly one of from_artifact_id or uri"
+            )
+        model = ArtifactVersionCreate(
+            from_artifact_id=from_artifact_id,
+            uri=uri,
+            content_hash=content_hash,
+            size_bytes=size_bytes,
+            content_type=content_type,
+            label=label,
+            meta=meta,
+        )
+        return self.transport.post(
+            f"/v1/artifacts/{artifact_id}/versions",
+            model.model_dump(mode="json", exclude_none=True),
+        )
+
+    def presign_version_download(self, artifact_id: str, version: int) -> str:
+        """Presigned GET for one version's bytes -- the pin-resolution path.
+
+        The one home for this route literal, mirroring :meth:`presign_download`, so the
+        parity guard sees a single reachable call site. A force-deleted version raises
+        410 WITH its deletion metadata, so a manifest can tell "deliberately destroyed"
+        apart from "never existed"."""
+        return self.transport.post(
+            f"/v1/artifacts/{artifact_id}/versions/{version}/download", None
+        )["download_url"]
+
+    def download_artifact_version(self, artifact_id: str, version: int) -> bytes:
+        """Fetch one version's bytes into memory. Use
+        :meth:`download_artifact_version_to` for anything large -- this holds the whole
+        blob at once."""
+        return self.transport.get_url(self.presign_version_download(artifact_id, version))
+
+    def download_artifact_version_to(self, artifact_id: str, version: int, dest: str) -> dict:
+        """Stream one version's bytes to ``dest``, hashing as they land. Same partial-file
+        guarantee as :meth:`download_artifact_to`: a mid-stream failure removes the file
+        rather than leaving a truncated blob that looks like the artifact."""
+        url = self.presign_version_download(artifact_id, version)
+        ok = False
+        try:
+            size, digest = self.transport.download_to(url, dest)
+            ok = True
+        finally:
+            if not ok:
+                Path(dest).unlink(missing_ok=True)
+        return {
+            "artifact_id": artifact_id,
+            "version": version,
+            "dest": str(dest),
+            "size_bytes": size,
+            "sha256": digest,
+        }
+
+    def artifact_pin_impact(self, artifact_id: str) -> dict:
+        """Which projects -- and which experiments within them -- pin this artifact's
+        versions. What a delete confirmation should show a human before destroying
+        something reproducible: not a count, but the work that would break."""
+        return self.transport.get(f"/v1/artifacts/{artifact_id}/pin-impact")
 
     def delete_artifact(self, artifact_id: str) -> None:
         """Delete an artifact row."""
