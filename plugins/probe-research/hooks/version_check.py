@@ -55,6 +55,10 @@ TTL = _int_env("PROBE_VERSION_TTL", 86400)          # reuse a good manifest this
 BACKOFF = _int_env("PROBE_VERSION_BACKOFF", 3600)   # min seconds between attempts after a failure
 TIMEOUT = _float_env("PROBE_VERSION_TIMEOUT", 3.0)
 DEFAULT_BASE = "https://api.research.prbe.ai"
+# The CLI release that introduced `probe update`. The nudge points at that one
+# command only for CLIs >= this; older ones get the raw commands (which get them
+# to a version that has it). CI keeps this == the released version (see release.yml).
+UPDATE_CMD_MIN_CLI = "0.8.1"
 
 
 def _emit(obj: dict) -> None:
@@ -231,8 +235,15 @@ def main() -> None:
     def _fmt(items):  # items: (label, current, target)
         return ", ".join(f"{label} {cur} → {target}" for label, cur, target in items)
 
-    cmds = ("uv tool upgrade probe-research && "
-            "claude plugin update probe-research@research-os-agent")
+    # Prefer the single `probe update` command, but only for CLIs new enough to have
+    # it; older CLIs get the raw sequence (which upgrades them to one that does).
+    local_cli = local.get("cli")
+    has_update_cmd = bool(local_cli) and not _remote_gt_local(local_cli, UPDATE_CMD_MIN_CLI)
+    cmds = "probe update" if has_update_cmd else (
+        "uv tool upgrade probe-research && "
+        "claude plugin marketplace update research-os-agent && "
+        "claude plugin update probe-research@research-os-agent"
+    )
     advisory = manifest.get("advisory")
 
     if below_min:
