@@ -321,8 +321,10 @@ def create_server(
 
         `filters` maps onto real server-side filters and is rejected if it does
         not apply -- trajectory takes span_type/parent_span_id/step_from/step_to,
-        metrics takes key/kind, a RUN's artifacts takes kind/step_from/step_to,
-        an asset's versions takes requirement.
+        metrics takes key/kind, a RUN's artifacts takes kind/step_from/step_to plus
+        name and scope=own|inherited|all (default own; inherited|all also return the
+        run's experiment/project artifacts, each tagged source_level, nearest-wins
+        ordered), an asset's versions takes requirement.
 
         `token_budget` bounds the row-shaped part of a view. When rows do not
         fit you get completeness.state="partial", missing=

@@ -990,16 +990,43 @@ class Client:
         kind: str | None = None,
         step_from: int | None = None,
         step_to: int | None = None,
+        name: str | None = None,
+        scope: str | None = None,
     ) -> list[dict]:
         """List a run's artifacts, optionally server-filtered by kind and/or an
         inclusive step window — e.g. sandbox states around a collapse:
-        ``list_run_artifacts(run_id, kind="sandbox_state", step_from=599, step_to=601)``."""
+        ``list_run_artifacts(run_id, kind="sandbox_state", step_from=599, step_to=601)``.
+
+        ``scope`` controls inheritance (default ``own`` = this run only): ``all`` also
+        returns the run's experiment- and project-level artifacts, ``inherited`` only
+        those parent levels. On a non-``own`` scope each row carries ``source_level`` and
+        rows are ordered nearest-wins, so a ``name`` lookup resolves to the closest level."""
         params = {
             key: value
-            for key, value in {"kind": kind, "step_from": step_from, "step_to": step_to}.items()
+            for key, value in {
+                "kind": kind,
+                "step_from": step_from,
+                "step_to": step_to,
+                "name": name,
+                "scope": scope,
+            }.items()
             if value is not None
         }
         return self.transport.get(f"/v1/runs/{run_id}/artifacts", params=params or None)
+
+    def move_artifact(
+        self, artifact_id: str, *, level: str, target_id: str | None = None
+    ) -> dict:
+        """Move an artifact vertically along its own run->experiment->project chain.
+
+        Promote up (``level`` above the artifact's current anchor) derives the target
+        from its chain; demote down needs a ``target_id`` that sits inside the current
+        subtree. A file (workspace/shared) or a lateral target is a 422; an identical
+        artifact already at the destination is a 409. The artifact keeps its id."""
+        body: dict = {"level": level}
+        if target_id is not None:
+            body["target_id"] = target_id
+        return self.transport.post(f"/v1/artifacts/{artifact_id}/move", body)
 
     def list_experiment_artifacts(self, experiment_id: str) -> list[dict]:
         return self.transport.get(f"/v1/experiments/{experiment_id}/artifacts")

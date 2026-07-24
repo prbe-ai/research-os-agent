@@ -436,7 +436,7 @@ _VIEWS: dict[tuple[str, str], str] = {
 _VIEW_FILTERS: dict[tuple[str, str], set[str]] = {
     (EntityType.RUN, View.TRAJECTORY): {"span_type", "parent_span_id", "step_from", "step_to"},
     (EntityType.RUN, View.METRICS): {"key", "kind"},
-    (EntityType.RUN, View.ARTIFACTS): {"kind", "step_from", "step_to"},
+    (EntityType.RUN, View.ARTIFACTS): {"kind", "step_from", "step_to", "name", "scope"},
     # `at` is deliberately absent: the SDK accepted it and never read it, and
     # no backend as-of resolution exists. Advertising a parameter that silently
     # does nothing is worse than not having one.
