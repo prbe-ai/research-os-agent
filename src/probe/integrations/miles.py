@@ -23,11 +23,20 @@ import re
 import threading
 import time
 import uuid
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+# Stdlib-only leaf: importing it does NOT pull httpx (see the lazy package init),
+# so a distributed actor keeps writing metric batches without the network stack.
+from ..sdk.durable import (
+    file_lock as _file_lock,
+    fsync_directory as _fsync_directory,
+    now_iso as _now,
+    read_json,
+    write_text_atomic,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -75,62 +84,16 @@ _JOB_ENV_LINKS = {
 }
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _fsync_directory(path: Path) -> None:
-    try:
-        descriptor = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-    except OSError:
-        # Some network filesystems reject directory fsync. File fsync plus atomic
-        # replacement still provides the strongest contract they expose.
-        pass
-
-
 def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
+    # Compact records + 0o700 dir / 0o600 file: the queue is commonly on a shared
+    # PVC and can carry scrubbed-but-sensitive config, so keep the tight perms.
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump(value, handle, sort_keys=True, separators=(",", ":"))
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
+    text = json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+    write_text_atomic(path, text, mode=0o600)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
-    value = json.loads(path.read_text())
-    if not isinstance(value, dict):
-        raise ValueError(f"queue record {path} must be a JSON object")
-    return value
-
-
-@contextmanager
-def _file_lock(path: Path):
-    """Serialize a narrow local metadata mutation across processes.
-
-    The queue is commonly hosted on a shared PVC. Atomic replacement prevents
-    torn reads, while this sidecar lock prevents two read/merge/write cycles from
-    silently overwriting one another. Callers must not hold it during network I/O.
-    """
-
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with path.open("a+", encoding="utf-8") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    return read_json(path)
 
 
 def _safe_component(value: str) -> str:
