@@ -319,11 +319,11 @@ class Run:
                 req.model_dump(mode="json", exclude_none=True),
             )
             if not presign.get("have"):
-                with open(path, "rb") as fh:
-                    data = fh.read()
-                self._client.transport.put_url(
+                # Stream the file (model weights fit here); never read it whole into
+                # memory. size_bytes is the fingerprinted length the presign signed.
+                self._client.transport.put_file(
                     presign["upload_url"],
-                    data,
+                    path,
                     content_type=content_type or "application/octet-stream",
                     headers=presign.get("upload_headers") or presign.get("headers"),
                 )

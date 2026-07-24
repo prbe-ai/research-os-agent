@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import time
 from dataclasses import dataclass
 from collections.abc import Mapping
@@ -31,6 +32,17 @@ from .config import Settings
 from .surface import SURFACE_HEADER, TOOL_HEADER, Surface, current_tool
 
 _RETRYABLE = {502, 503, 504}
+
+
+def _iter_file(fh, chunk_size: int):
+    """Yield an open binary file in fixed-size chunks -- a streaming upload body."""
+    while True:
+        chunk = fh.read(chunk_size)
+        if not chunk:
+            break
+        yield chunk
+
+
 _DEFAULT_TIMEOUT = 30.0
 _MAX_RETRIES = 3
 
@@ -199,6 +211,61 @@ class Transport:
             attempt += 1
             try:
                 resp = self._client.put(url, content=data, headers=request_headers)
+            except httpx.HTTPError as exc:
+                if attempt <= self.max_retries:
+                    time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                    continue
+                raise errors.TransportError(f"PUT {url}: {exc}") from exc
+            if resp.status_code in _RETRYABLE and attempt <= self.max_retries:
+                time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))
+                continue
+            if resp.status_code >= 400:
+                raise errors.error_for(resp.status_code, resp.text)
+            return
+
+    def put_file(
+        self,
+        url: str,
+        path: str,
+        *,
+        content_type: str | None = None,
+        headers: Mapping[str, str] | None = None,
+        chunk_size: int = 1 << 20,
+    ) -> None:
+        """Stream a local file to a presigned URL without buffering it in memory.
+
+        The sibling of :meth:`put_url` for bytes you do NOT want in memory -- an
+        anchored artifact can be model weights, and reading the whole file into a
+        ``bytes`` before the PUT is what OOMs the training loop.
+
+        Content-Length is measured from the open file on every attempt, never taken
+        from a caller-supplied size. A generator body otherwise makes httpx use
+        ``Transfer-Encoding: chunked`` (a presigned R2/S3 PUT rejects it, 411), and a
+        declared length that disagrees with the bytes actually streamed frames the PUT
+        wrong -- a short header truncates the stored object, a long one hangs the
+        connection waiting for bytes that never come. Deriving the length from the same
+        handle we stream keeps header and body structurally in lockstep, exactly as the
+        old buffered ``put_url(len(data))`` path did.
+
+        Re-opens ``path`` on every attempt: httpx does not rewind a consumed body, so a
+        retry after a network blip or a retryable status must stream from byte 0 again
+        -- passing a spent file handle would send a truncated body that the server then
+        stores and confirms as complete. No Authorization header; the presigned URL
+        carries its own signature."""
+        request_headers = dict(headers or {})
+        if content_type:
+            request_headers.setdefault("Content-Type", content_type)
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                with open(path, "rb") as fh:
+                    request_headers["Content-Length"] = str(os.fstat(fh.fileno()).st_size)
+                    resp = self._client.put(
+                        url,
+                        content=_iter_file(fh, chunk_size),
+                        headers=request_headers,
+                    )
             except httpx.HTTPError as exc:
                 if attempt <= self.max_retries:
                     time.sleep(min(2 ** (attempt - 1) * 0.2, 2.0))

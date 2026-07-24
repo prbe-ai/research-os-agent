@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import multiprocessing
+import stat
 import time
 from argparse import Namespace
 
@@ -268,9 +269,13 @@ def test_secondary_only_writes_shared_queue_and_never_imports_sdk(
 
     queue = probe_utils.DurableMetricQueue(args.probe_queue_dir)
     assert queue.report()["pending"] == 1
-    record = probe_utils._read_json(next(queue.pending.glob("*.json")))
+    record_path = next(queue.pending.glob("*.json"))
+    record = probe_utils._read_json(record_path)
     assert record["producer_id"].startswith("training:")
     assert record["producer_sequence"] == 1
+    # The queue can sit on a shared PVC and carry scrubbed-but-sensitive config, so
+    # records stay owner-only. Guards the durable-primitive fold against loosening it.
+    assert stat.S_IMODE(record_path.stat().st_mode) == 0o600
 
 
 def test_fail_open_queue_setup_failure_does_not_abort_training(tmp_path, monkeypatch):

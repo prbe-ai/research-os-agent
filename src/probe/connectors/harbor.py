@@ -38,7 +38,6 @@ import tarfile
 import tempfile
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
@@ -48,6 +47,11 @@ from ..sdk.capture import (
     CaptureState,
     stable_external_key,
     stable_span_id,
+)
+from ..sdk.durable import (
+    fsync_directory as _fsync_directory,
+    now_iso as _utc_now,
+    write_text_atomic,
 )
 
 if TYPE_CHECKING:
@@ -240,32 +244,8 @@ def _artifact_key(trial: str, relative_path: str) -> str:
     return stable_external_key("harbor", "artifact", trial, relative_path)
 
 
-def _fsync_directory(path: Path) -> None:
-    try:
-        directory_fd = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(directory_fd)
-        finally:
-            os.close(directory_fd)
-    except OSError:
-        pass
-
-
 def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+    write_text_atomic(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
 def _json_object(value: dict[str, Any] | None, *, field_name: str) -> dict[str, Any]:
@@ -275,10 +255,6 @@ def _json_object(value: dict[str, Any] | None, *, field_name: str) -> dict[str, 
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be JSON serializable") from exc
     return result
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
 
 
 def _copy_and_hash(source: Path, destination: Path) -> tuple[str, int]:

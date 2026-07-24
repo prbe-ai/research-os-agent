@@ -9,16 +9,12 @@ request, archive, manifest, or trial bytes.
 
 from __future__ import annotations
 
-import fcntl
 import json
-import os
 import re
-import uuid
-from contextlib import contextmanager
-from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, Iterator
+from typing import TYPE_CHECKING, Any
 
+from ..sdk.durable import file_lock, now_iso as _now, read_json, write_text_atomic
 from .harbor import (
     EXPORT_CONNECTOR,
     EXPORT_SCHEMA_VERSION,
@@ -36,53 +32,19 @@ class HarborExportError(RuntimeError):
     pass
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _read_json(path: Path) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise HarborExportError(f"invalid JSON {path}: {exc}") from exc
-    if not isinstance(value, dict):
-        raise HarborExportError(f"{path} must contain a JSON object")
-    return value
+    # error=HarborExportError preserves this consumer's exception contract: callers
+    # and the descriptor's last_error field expect HarborExportError, not ValueError.
+    return read_json(path, error=HarborExportError)
 
 
 def _write_json_atomic(path: Path, value: dict[str, Any]) -> None:
-    payload = json.dumps(value, indent=2, sort_keys=True) + "\n"
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("x", encoding="utf-8") as handle:
-            handle.write(payload)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-        try:
-            directory_fd = os.open(path.parent, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
-        except OSError:
-            pass
-    finally:
-        try:
-            temporary.unlink()
-        except FileNotFoundError:
-            pass
+    write_text_atomic(path, json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
-@contextmanager
-def _request_lock(path: Path) -> Iterator[None]:
-    lock_path = path.with_name(f".{path.name}.lock")
-    with lock_path.open("a+") as handle:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+def _request_lock(path: Path):
+    """flock a per-descriptor sidecar. Never held across network I/O."""
+    return file_lock(path.with_name(f".{path.name}.lock"))
 
 
 def _descriptor_relative(base: Path, raw: Any, *, field: str) -> Path:
