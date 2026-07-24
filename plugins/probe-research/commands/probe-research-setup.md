@@ -167,6 +167,15 @@ with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
 - The `track-experiment`, `manage-research-asset`, and `publish-experiment` skills are ready
   (plugin installs only).
 
+## Keeping it updated
+
+Run `probe update` — it detects how the CLI was installed (uv tool / pipx / pip), upgrades
+it, updates the plugin, and tells you to restart Claude Code (a plugin update only applies on
+restart). `probe update --check` reports staleness without changing anything (exit 10 = an
+update is available). A CLI old enough to predate `probe update` upgrades with
+`uv tool upgrade probe-research && claude plugin marketplace update research-os-agent &&
+claude plugin update probe-research@research-os-agent`, then a restart.
+
 ## Security notes
 
 - Both tokens land in plaintext in `~/.config/probe/config.json` (chmod `600`): `token`

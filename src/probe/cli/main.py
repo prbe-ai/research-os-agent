@@ -47,6 +47,7 @@ from ..sdk.config import (
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
 from ..sdk.hashing import reference_fields
 from ..sdk.surface import Surface
+from . import updater
 
 
 # -- global connection state (set by the root callback) ---------------------
@@ -312,6 +313,78 @@ def whoami() -> None:
     """Show the current principal."""
     with _client() as c:
         _print_json(c.me())
+
+
+@app.command()
+def update(
+    check: bool = typer.Option(
+        False,
+        "--check",
+        help="report whether a newer CLI is available and exit; changes nothing. "
+        "Exit 0 = current, 10 = update available, 1 = check failed.",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="skip the confirmation prompt"),
+    plugin: bool = typer.Option(
+        True,
+        "--plugin/--no-plugin",
+        help="also update the Claude Code plugin via `claude` (default: on)",
+    ),
+) -> None:
+    """Update the Probe Research CLI, and the Claude Code plugin, to the latest release.
+
+    Detects how ``probe`` was installed (uv tool / pipx / pip) and runs the right
+    upgrade, then updates the plugin and reminds you to restart Claude Code (a plugin
+    update only applies on restart, which ``probe`` cannot do for you). ``--check``
+    is a read-only staleness probe for scripts.
+    """
+    base = resolve(base_url=_conn.base_url).base_url
+
+    if check:
+        try:
+            manifest = updater.fetch_latest(base)
+        except Exception as exc:
+            print(f"update check failed: {exc}", file=sys.stderr)
+            raise typer.Exit(updater.CHECK_ERROR) from exc
+        latest = updater.cli_update_available(manifest, __version__)
+        if latest:
+            print(f"update available: CLI {__version__} → {latest}")
+            raise typer.Exit(updater.CHECK_BEHIND)
+        print(f"up to date: CLI {__version__}")
+        raise typer.Exit(updater.CHECK_CURRENT)
+
+    # Best-effort manifest for the plugin target; a failed check never blocks the upgrade.
+    try:
+        manifest = updater.fetch_latest(base)
+    except Exception:
+        manifest = {}
+    plugin_target = updater.plugin_latest(manifest)
+
+    install = updater.detect_install()
+    print(f"Probe Research CLI {__version__}  (installed via: {install.method})")
+
+    if install.method in (
+        updater.Method.EDITABLE,
+        updater.Method.MANAGED,
+        updater.Method.UNKNOWN,
+    ):
+        # Not safe to auto-run a package-manager upgrade here (H5/H6); instruct instead.
+        print(f"  skipping auto-upgrade: {updater.upgrade_cli(install).message}")
+    else:
+        if not yes and not typer.confirm("Upgrade the CLI now?", default=True):
+            raise typer.Exit(1)
+        res = updater.upgrade_cli(install)
+        print(f"  {res.message}" + ("." if res.ok else ""))
+
+    if plugin:
+        print("Claude Code plugin:")
+        pres = updater.update_plugin(plugin_target)
+        print(f"  {pres.message}")
+        if pres.confirmed and pres.changed:
+            print("\nRestart Claude Code to apply the plugin update.")
+        elif not pres.confirmed:
+            print("  update it manually, then restart Claude Code:")
+            for line in updater.manual_plugin_commands().split("\n"):
+                print(f"    {line}")
 
 
 # -- mcp read credential ----------------------------------------------------
