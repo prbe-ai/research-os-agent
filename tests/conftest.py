@@ -151,6 +151,7 @@ class FakeApp:
     def __init__(self):
         self.requests: list[httpx.Request] = []
         self.runs: dict[str, dict] = {}
+        self.run_heartbeats: dict[str, int] = {}
         self.experiments: dict[str, dict] = {}
         self.projects: dict[str, dict] = {}
         # Two personal workspaces so "mine first" ordering and the not-mine display
@@ -617,6 +618,19 @@ class FakeApp:
                 row["archived_at"] = None
             return httpx.Response(200, json=row)
 
+        m = re.match(r"^/v1/runs/([^/]+)/heartbeat$", path)
+        if m and method == "POST":
+            rid = m.group(1)
+            row = self.runs.get(rid)
+            if row is None:
+                return httpx.Response(404, json={"detail": "run not found"})
+            # Mirrors app/runs/router.py: only a 'running' run is stamped; a late
+            # beat racing a completion is a no-op, not an error.
+            if row.get("status") == "running" and not row.get("deleted_at"):
+                row["last_heartbeat_at"] = self._stamp()
+                self.run_heartbeats[rid] = self.run_heartbeats.get(rid, 0) + 1
+            return httpx.Response(200, json=row)
+
         m = re.match(r"^/v1/runs/([^/]+)/restore$", path)
         if m and method == "POST":
             rid = m.group(1)
@@ -1012,6 +1026,15 @@ def make_client(app: FakeApp, *, fail_open: bool = True, tmp_spool=None) -> Clie
 
     spool = Spool(tmp_spool) if tmp_spool else None
     return Client(settings=settings, transport=transport, fail_open=fail_open, spool=spool)
+
+
+@pytest.fixture(autouse=True)
+def _no_background_heartbeat(monkeypatch):
+    """create_run starts a heartbeat thread by default; a background beat landing
+    between an action and its `app.requests[-1]` assertion would make half this
+    suite flaky. Kill it globally; tests that exercise liveness re-enable it with
+    an explicit interval (the argument outranks the env var)."""
+    monkeypatch.setenv("PROBE_HEARTBEAT_SECONDS", "0")
 
 
 @pytest.fixture

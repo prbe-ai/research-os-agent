@@ -670,6 +670,7 @@ class Client:
         config: dict | None = None,
         tags: list[str] | None = None,
         metadata: dict | None = None,
+        heartbeat: bool = True,
     ) -> "Run":
         body: dict[str, Any] = {"name": name, "source": source}
         if external_id is not None:
@@ -686,7 +687,16 @@ class Client:
         if metadata is not None:
             body["metadata"] = metadata
         data = self.transport.post(f"/v1/experiments/{experiment_id}/runs", body)
-        return Run(self, data)
+        run = Run(self, data)
+        # A handle minted here is presumed to live and die with this process, so
+        # it beats by default and the server's reaper can flip it to 'crashed'
+        # when the process dies. Pass heartbeat=False when the run is DETACHED —
+        # created here but executed and finished from somewhere else (CLI
+        # `run start`, the miles exporter) — because beating briefly and then
+        # going silent gets a legitimately-running run reaped.
+        if heartbeat:
+            run.start_heartbeat()
+        return run
 
     def run(
         self,
@@ -732,6 +742,12 @@ class Client:
         never reaped -- so adopting this is safe and gradual, but a run that
         beats ONCE and then stops will eventually be marked crashed. Either beat
         for the run's whole life or not at all.
+
+        SDK handles beat automatically: ``create_run`` starts a background
+        thread (see :meth:`Run.start_heartbeat`) unless called with
+        ``heartbeat=False``. Call this method directly only for runs managed
+        outside the SDK — e.g. a workflow driver renewing the lease on a run it
+        opened with ``probe run start``.
 
         Only a 'running' run is stamped; a late beat racing a normal completion
         is a no-op rather than an error.

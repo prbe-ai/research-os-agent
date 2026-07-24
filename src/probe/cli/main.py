@@ -1071,6 +1071,10 @@ def run_start(
             external_id=external_id,
             config=_kv_pairs(config) if config else None,
             tags=tag or None,
+            # A CLI-opened run is detached: this process exits immediately and the
+            # run is closed later by `probe run end`. Beating here would stop the
+            # moment we exit and get the run reaped mid-flight (see heartbeat_run).
+            heartbeat=False,
         )
     print(run.id)
 
@@ -1093,6 +1097,7 @@ def run_child(
             parent_relation=relation.value,
             source=source,
             external_id=external_id,
+            heartbeat=False,  # detached, same as `run start`
         )
     print(child.id)
 
