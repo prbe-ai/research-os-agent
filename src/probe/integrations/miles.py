@@ -705,7 +705,9 @@ class ProbeTracker:
                         **{
                             key: value
                             for key, value in run_spec.items()
-                            if key not in {"links", "snapshot"}
+                            # "heartbeat" excluded so a spec key can never collide
+                            # with the explicit kwarg above.
+                            if key not in {"links", "snapshot", "heartbeat"}
                         }
                     )
                 except Exception as exc:
@@ -956,7 +958,9 @@ def drain_metric_queue(
             create_values = {
                 key: value
                 for key, value in spec.items()
-                if key not in {"links", "snapshot"}
+                # "heartbeat" excluded so a spec key can never collide with the
+                # explicit kwarg below.
+                if key not in {"links", "snapshot", "heartbeat"}
             }
             try:
                 # Sidecar lifetime, same as the create in export(): never beat.

@@ -10,6 +10,7 @@ silent gets a legitimately-running run reaped as crashed.
 
 from __future__ import annotations
 
+import gc
 import time
 
 from probe.sdk.run import Run
@@ -104,6 +105,33 @@ def test_beat_failures_do_not_kill_the_loop(client, app):
     app.runs[run.id] = row  # server "recovers"; beating resumes
     assert _wait_for(lambda: app.run_heartbeats[run.id] > baseline)
     run.stop_heartbeat()
+
+
+def test_dropping_the_handle_stops_the_beat(client, app):
+    """A run nobody holds a handle to can never be finished; the honest outcome
+    is beats stopping so the reaper flips it — not a leaked thread per run for
+    the life of a sweep process that hit an exception path."""
+    run = client.run(experiment="e", hypothesis="h", name="r", heartbeat=False)
+    run.start_heartbeat(0.01)
+    thread = run._hb_thread
+    rid = run.id  # captured up front so no closure below pins the handle
+    assert _wait_for(lambda: app.run_heartbeats.get(rid, 0) >= 1)
+    del run
+    gc.collect()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
+def test_client_close_stops_the_beat(client, app):
+    """Beats ride the client's transport: close() must take them down rather
+    than leave threads spinning against a closed httpx client."""
+    run = client.run(experiment="e", hypothesis="h", name="r", heartbeat=False)
+    run.start_heartbeat(0.01)
+    thread = run._hb_thread
+    assert _wait_for(lambda: app.run_heartbeats.get(run.id, 0) >= 1)
+    client.close()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
 
 
 def test_late_beat_racing_completion_is_a_noop(client, app):

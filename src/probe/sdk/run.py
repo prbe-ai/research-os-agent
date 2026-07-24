@@ -24,6 +24,7 @@ import socket
 import subprocess
 import threading
 import warnings
+import weakref
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -97,6 +98,7 @@ class Run:
         self._data = data
         self._hb_stop: threading.Event | None = None
         self._hb_thread: threading.Thread | None = None
+        self._hb_finalizer: weakref.finalize | None = None
 
     # -- identity -----------------------------------------------------------
     @property
@@ -508,9 +510,13 @@ class Run:
         whose run lives and dies with the current process; a run managed from
         outside (CLI ``run start``, the miles exporter) must never beat.
 
-        Precedence for the interval mirrors config.resolve: explicit argument,
-        then PROBE_HEARTBEAT_SECONDS, then the 60s default. Non-positive
-        disables.
+        Interval precedence: explicit argument, then PROBE_HEARTBEAT_SECONDS,
+        then the 60s default. Non-positive disables.
+
+        The thread also stops when this handle is garbage-collected (an
+        abandoned run's process may still be alive, but nobody can ever finish
+        it — letting the reaper flip it to 'crashed' is the honest outcome) and
+        when the owning ``Client`` closes (beats ride its transport).
         """
         if self._hb_thread is not None and self._hb_thread.is_alive():
             return
@@ -526,13 +532,20 @@ class Run:
         )
         self._hb_stop = stop
         self._hb_thread = thread
+        # finalize holds the Event (its callback arg), never the Run, so the
+        # handle stays collectable and its collection is what ends the beat.
+        self._hb_finalizer = weakref.finalize(self, stop.set)
+        self._client._register_run_heartbeat(stop)
         thread.start()
 
     def stop_heartbeat(self) -> None:
         if self._hb_stop is not None:
             self._hb_stop.set()
+        if self._hb_finalizer is not None:
+            self._hb_finalizer.detach()
         self._hb_stop = None
         self._hb_thread = None
+        self._hb_finalizer = None
 
     # -- lifecycle ----------------------------------------------------------
     def set_status(self, status: str, *, ended_at: str | None = None, summary: dict | None = None):

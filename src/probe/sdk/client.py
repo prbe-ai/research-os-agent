@@ -12,7 +12,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 import os
 import sys
+import threading
 import warnings
+import weakref
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -109,9 +111,20 @@ class Client:
         self._events = None
         self._notes = None
         self._assets = None
+        # Stop signals for every live run-heartbeat thread this client minted.
+        # Weak so a finished beat (its Run collected, its thread exited) doesn't
+        # accumulate here for the client's whole life.
+        self._run_heartbeat_stops: "weakref.WeakSet[threading.Event]" = weakref.WeakSet()
 
     # -- lifecycle ----------------------------------------------------------
+    def _register_run_heartbeat(self, stop: "threading.Event") -> None:
+        self._run_heartbeat_stops.add(stop)
+
     def close(self) -> None:
+        # Beats ride this client's transport; leaving them running would spin a
+        # thread per unfinished run against a closed httpx client every interval.
+        for stop in list(self._run_heartbeat_stops):
+            stop.set()
         self.transport.close()
 
     def __enter__(self) -> "Client":

@@ -63,6 +63,8 @@ Air-gap paste path: `probe login --token probe_pat_xxxxxxxx` (verified via `GET 
 Both write `~/.config/probe/config.json`.
 Or set env: `PROBE_BASE_URL`, `PROBE_TOKEN` (user token, `/v1`), `PROBE_INGEST_TOKEN`
 (ingest token, `/ingest`), `PROBE_HMAC_SECRET` (optional body-signature secret).
+SDK-created runs heartbeat every 60s so the server can reap crashed ones;
+`PROBE_HEARTBEAT_SECONDS` tunes the interval (`<=0` disables).
 
 You can also skip `probe login` entirely: the first `client.run()` /
 `probe run start` with no token triggers the same browser approval inline (TTY only)

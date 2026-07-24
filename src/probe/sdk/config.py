@@ -10,6 +10,8 @@ Env vars:
   PROBE_HMAC_SECRET   optional shared secret for the X-Signature body HMAC on /ingest
   PROBE_WORKSPACE     the active workspace id, overriding the context file
   PROBE_PROJECT       the active project id/slug, overriding the context file
+  PROBE_HEARTBEAT_SECONDS  run auto-heartbeat interval (default 60; <=0 disables —
+                      see Run.start_heartbeat; env only, not read from this file)
 
 Config file: $XDG_CONFIG_HOME/probe/config.json (default ~/.config/probe/config.json),
 written by ``probe login``. ``probe login --device`` captures the token via the browser
