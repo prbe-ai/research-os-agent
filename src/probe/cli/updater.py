@@ -233,7 +233,10 @@ def installed_plugin_version() -> str | None:
 @dataclass
 class CliResult:
     ran: bool
-    ok: bool
+    ok: bool          # the CLI is at (or past) the target after the attempt — VERIFIED
+    changed: bool     # the installed version actually moved
+    before: str | None
+    after: str | None
     message: str
 
 
@@ -246,44 +249,71 @@ def _run(cmd: list[str], timeout: float) -> subprocess.CompletedProcess | None:
         return subprocess.CompletedProcess(cmd, returncode=124)
 
 
-def upgrade_cli(install: Install) -> CliResult:
+def _installed_cli_version() -> str | None:
+    """Version of the `probe` on PATH, read via a FRESH subprocess so it reflects a
+    just-upgraded binary — the running process keeps its own stale __version__."""
+    probe_bin = shutil.which("probe") or "probe"
+    try:
+        r = subprocess.run([probe_bin, "--version"], capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and (r.stdout or "").strip():
+            return r.stdout.strip().split()[-1]  # "probe 0.8.2" -> "0.8.2"
+    except Exception:
+        return None
+    return None
+
+
+def _finalize(before: str | None, target: str | None, tool: str) -> CliResult:
+    """Post-condition — the CLI's H1: trust the observed version, not the upgrade's
+    exit code. A no-op upgrade (e.g. a ``uv tool install ==X`` version pin) exits 0
+    while changing nothing; only re-reading the version catches that."""
+    after = _installed_cli_version()
+    if is_newer(after, before):
+        return CliResult(True, True, True, before, after, f"CLI upgraded {before} → {after}")
+    if target and after and not is_newer(target, after):
+        return CliResult(True, True, False, before, after, f"CLI already at the latest ({after})")
+    return CliResult(
+        True, False, False, before, after,
+        f"`{tool}` reported success but the CLI is still {after or before} "
+        "(it may be version-pinned, or that release was yanked)",
+    )
+
+
+def upgrade_cli(install: Install, current: str | None, target: str | None) -> CliResult:
     m = install.method
-    if m == Method.UV_TOOL:
-        r = _run(["uv", "tool", "upgrade", DIST], _UPGRADE_TIMEOUT_S)
-        return _cli_result(r, "uv")
-    if m == Method.UV_TOOL_LEGACY:
-        # H3: the old probe-agent tool owns `probe`; `uv tool upgrade probe-research`
-        # is a no-op. Uninstall the old, install the new (which relinks `probe`).
-        r1 = _run(["uv", "tool", "uninstall", LEGACY_DIST], _UPGRADE_TIMEOUT_S)
-        if r1 is None:
-            return CliResult(False, False, "`uv` not found on PATH")
-        r2 = _run(["uv", "tool", "install", "--force", DIST], _UPGRADE_TIMEOUT_S)
-        return _cli_result(r2, "uv")
-    if m == Method.PIPX:
-        r = _run(["pipx", "upgrade", DIST], _UPGRADE_TIMEOUT_S)
-        return _cli_result(r, "pipx")
-    if m == Method.PIP:
-        r = _run([sys.executable, "-m", "pip", "install", "-U", DIST], _UPGRADE_TIMEOUT_S)
-        return _cli_result(r, "pip")
     if m == Method.EDITABLE:
-        return CliResult(False, False, "editable/source install — update with git, not a package manager")
+        return CliResult(False, False, False, current, current,
+                         "editable/source install — update with git, not a package manager")
     if m == Method.MANAGED:
-        return CliResult(
-            False, False,
-            "probe-research is a dependency of this project — bump it with your "
-            "dependency manager (e.g. `uv add probe-research@latest`) so the lockfile stays in sync",
-        )
-    return CliResult(False, False, "could not tell how probe was installed — update via your package manager")
+        return CliResult(False, False, False, current, current,
+                         "probe-research is a dependency of this project — bump it with your "
+                         "dependency manager (e.g. `uv add probe-research@latest`) so the lockfile stays in sync")
+    if m == Method.UNKNOWN:
+        return CliResult(False, False, False, current, current,
+                         "could not tell how probe was installed — update via your package manager")
+    if m == Method.UV_TOOL_LEGACY:
+        # H3: the old probe-agent tool owns `probe`; uninstall it, install the new.
+        if _run(["uv", "tool", "uninstall", LEGACY_DIST], _UPGRADE_TIMEOUT_S) is None:
+            return CliResult(False, False, False, current, current, "`uv` not found on PATH")
+        _run(["uv", "tool", "install", "--force", DIST], _UPGRADE_TIMEOUT_S)
+        return _finalize(current, target, "uv")
+    if m == Method.PIPX:
+        if _run(["pipx", "upgrade", DIST], _UPGRADE_TIMEOUT_S) is None:
+            return CliResult(False, False, False, current, current, "`pipx` not found on PATH")
+        return _finalize(current, target, "pipx")
+    if m == Method.PIP:
+        _run([sys.executable, "-m", "pip", "install", "-U", DIST], _UPGRADE_TIMEOUT_S)
+        return _finalize(current, target, "pip")
 
-
-def _cli_result(r: subprocess.CompletedProcess | None, tool: str) -> CliResult:
-    if r is None:
-        return CliResult(False, False, f"`{tool}` not found on PATH")
-    if r.returncode == 124:
-        return CliResult(True, False, f"`{tool}` upgrade timed out")
-    if r.returncode != 0:
-        return CliResult(True, False, f"`{tool}` upgrade failed (exit {r.returncode})")
-    return CliResult(True, True, "CLI upgraded")
+    # Method.UV_TOOL
+    if _run(["uv", "tool", "upgrade", DIST], _UPGRADE_TIMEOUT_S) is None:
+        return CliResult(False, False, False, current, current, "`uv` not found on PATH")
+    res = _finalize(current, target, "uv")
+    if res.ok:
+        return res
+    # `uv tool upgrade` no-ops on a version-pinned install (exits 0, changes nothing);
+    # force a clean reinstall of the latest, then re-verify.
+    _run(["uv", "tool", "install", "--force", f"{DIST}@latest"], _UPGRADE_TIMEOUT_S)
+    return _finalize(current, target, "uv")
 
 
 @dataclass

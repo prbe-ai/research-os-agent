@@ -361,6 +361,7 @@ def update(
 
     install = updater.detect_install()
     print(f"Probe Research CLI {__version__}  (installed via: {install.method})")
+    cli_target = updater.cli_latest(manifest)
 
     if install.method in (
         updater.Method.EDITABLE,
@@ -368,12 +369,12 @@ def update(
         updater.Method.UNKNOWN,
     ):
         # Not safe to auto-run a package-manager upgrade here (H5/H6); instruct instead.
-        print(f"  skipping auto-upgrade: {updater.upgrade_cli(install).message}")
+        print(f"  skipping auto-upgrade: {updater.upgrade_cli(install, __version__, cli_target).message}")
     else:
         if not yes and not typer.confirm("Upgrade the CLI now?", default=True):
             raise typer.Exit(1)
-        res = updater.upgrade_cli(install)
-        print(f"  {res.message}" + ("." if res.ok else ""))
+        res = updater.upgrade_cli(install, __version__, cli_target)
+        print(f"  {res.message}")
 
     if plugin:
         print("Claude Code plugin:")
