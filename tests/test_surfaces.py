@@ -96,15 +96,26 @@ def test_execute_propagates_run_id(client, app, tmp_path):
     assert app.spans_upserted == 2
 
 
-def test_run_check_distinguishes_local_reference_from_portable(client, app):
+def test_run_check_flags_failed_upload_not_intentional_reference(client, app):
     run = client.run(experiment="e", hypothesis="h", name="r")
     # env_ref (execution record) present -> launch capture is satisfied.
     run._data["metadata"] = {"env_ref": "sha256:abc"}
     app.runs[run.id]["metadata"] = run._data["metadata"]
     run.log_artifact("code-snapshot", uri="git:refs/probe/snapshots/x#abc", kind="code_snapshot")
-    run.log_artifact("local-output", kind="file", is_reference=True)
+    # An INTENTIONAL path reference names bytes that exist off-platform (a shared-volume
+    # checkpoint the agent resolves locally) -> NOT a capture gap.
+    run.log_artifact("ckpt.pt", path="/mnt/shared/ckpt.pt", reference=True, allow_missing=True)
     report = client.check_run(run.id)
-    assert report["state"] == "incomplete"
-    assert "portable_artifact_bytes" in report["missing"]
+    assert report["state"] == "complete"
+    assert "portable_artifact_bytes" not in report["missing"]
     assert "execution_record" not in report["missing"]
     assert "promotion_manifest_available" not in report
+    # A reference recorded because a managed upload FAILED (fail-open) IS a gap: its
+    # bytes never reached R2. Distinguished by meta.upload, not uri presence.
+    run.log_artifact(
+        "dropped.pt", kind="file", is_reference=True,
+        meta={"upload": "failed", "local_path": "/tmp/dropped.pt"},
+    )
+    failed = client.check_run(run.id)
+    assert failed["state"] == "incomplete"
+    assert "portable_artifact_bytes" in failed["missing"]
