@@ -697,11 +697,17 @@ class ProbeTracker:
                 run = Run(client, client.get_run(str(self._run_id)))
             else:
                 try:
+                    # The exporter is a sidecar: its lifetime is not the run's, so
+                    # it must not beat (a beat that stops when the exporter exits
+                    # would get a live training run reaped as crashed).
                     run = client.run(
+                        heartbeat=False,
                         **{
                             key: value
                             for key, value in run_spec.items()
-                            if key not in {"links", "snapshot"}
+                            # "heartbeat" excluded so a spec key can never collide
+                            # with the explicit kwarg above.
+                            if key not in {"links", "snapshot", "heartbeat"}
                         }
                     )
                 except Exception as exc:
@@ -952,10 +958,13 @@ def drain_metric_queue(
             create_values = {
                 key: value
                 for key, value in spec.items()
-                if key not in {"links", "snapshot"}
+                # "heartbeat" excluded so a spec key can never collide with the
+                # explicit kwarg below.
+                if key not in {"links", "snapshot", "heartbeat"}
             }
             try:
-                run = client.run(**create_values)
+                # Sidecar lifetime, same as the create in export(): never beat.
+                run = client.run(heartbeat=False, **create_values)
             except Exception as exc:
                 existing_id = getattr(exc, "existing_id", None)
                 if not existing_id or getattr(exc, "deleted", False):

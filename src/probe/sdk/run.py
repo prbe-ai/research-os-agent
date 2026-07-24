@@ -22,7 +22,9 @@ from __future__ import annotations
 import os
 import socket
 import subprocess
+import threading
 import warnings
+import weakref
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
@@ -48,10 +50,55 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+#: Statuses after which a run can never beat again. Mirrors the server's CHECK
+#: constraint minus 'created'/'running' (db/experiment/schema.sql in research-os).
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "crashed", "canceled"})
+
+#: The server reaps a beating run after `run_heartbeat_stale_seconds` of silence
+#: (default 900, floor 300 — app/core/config.py in research-os). 60s keeps many
+#: beats inside even the floor, so one dropped request never looks like death.
+_HEARTBEAT_INTERVAL_SECONDS = 60.0
+
+
+def _heartbeat_interval() -> float:
+    """Read PROBE_HEARTBEAT_SECONDS at call time, never at import time.
+
+    ``0`` (or any non-positive value) is the kill switch: no thread is started.
+    """
+    raw = os.environ.get("PROBE_HEARTBEAT_SECONDS")
+    if raw is None:
+        return _HEARTBEAT_INTERVAL_SECONDS
+    try:
+        return float(raw)
+    except ValueError:
+        return _HEARTBEAT_INTERVAL_SECONDS
+
+
+def _beat_forever(client: "Client", run_id: str, stop: threading.Event, interval: float) -> None:
+    """The heartbeat loop. A module function, not a bound method, so the thread
+    pins only the client and the run id — an abandoned Run handle stays collectable.
+
+    Failures are swallowed: a missed beat self-heals (the stale window is many
+    intervals wide) and liveness reporting must never take down the work it is
+    reporting on. Beats deliberately bypass the spool — replaying a stale "I was
+    alive" later would be a lie.
+    """
+    while True:
+        try:
+            client.heartbeat_run(run_id)
+        except Exception:
+            pass
+        if stop.wait(interval):
+            return
+
+
 class Run:
     def __init__(self, client: "Client", data: dict):
         self._client = client
         self._data = data
+        self._hb_stop: threading.Event | None = None
+        self._hb_thread: threading.Thread | None = None
+        self._hb_finalizer: weakref.finalize | None = None
 
     # -- identity -----------------------------------------------------------
     @property
@@ -450,8 +497,63 @@ class Run:
         )
         return {"git": git, "execution_record": exec_rec, "content_hash": content_hash}
 
+    # -- liveness -----------------------------------------------------------
+    def start_heartbeat(self, interval_seconds: float | None = None) -> None:
+        """Beat ``POST /v1/runs/{id}/heartbeat`` from a daemon thread until a
+        terminal :meth:`set_status` (or the process exits). Idempotent.
+
+        ``Client.create_run`` calls this for every handle it mints, so the rule
+        from :meth:`Client.heartbeat_run` — beat for the run's whole life or not
+        at all — holds by construction: the beats stop exactly when this process
+        stops, and a process that dies without finishing is precisely what the
+        server's reaper should flip to 'crashed'. Only start this on a handle
+        whose run lives and dies with the current process; a run managed from
+        outside (CLI ``run start``, the miles exporter) must never beat.
+
+        Interval precedence: explicit argument, then PROBE_HEARTBEAT_SECONDS,
+        then the 60s default. Non-positive disables.
+
+        The thread also stops when this handle is garbage-collected (an
+        abandoned run's process may still be alive, but nobody can ever finish
+        it — letting the reaper flip it to 'crashed' is the honest outcome) and
+        when the owning ``Client`` closes (beats ride its transport).
+        """
+        if self._hb_thread is not None and self._hb_thread.is_alive():
+            return
+        interval = _heartbeat_interval() if interval_seconds is None else float(interval_seconds)
+        if interval <= 0:
+            return
+        stop = threading.Event()
+        thread = threading.Thread(
+            target=_beat_forever,
+            args=(self._client, self.id, stop, interval),
+            name=f"probe-run-heartbeat-{self.id[:8]}",
+            daemon=True,
+        )
+        self._hb_stop = stop
+        self._hb_thread = thread
+        # finalize holds the Event (its callback arg), never the Run, so the
+        # handle stays collectable and its collection is what ends the beat.
+        self._hb_finalizer = weakref.finalize(self, stop.set)
+        self._client._register_run_heartbeat(stop)
+        thread.start()
+
+    def stop_heartbeat(self) -> None:
+        if self._hb_stop is not None:
+            self._hb_stop.set()
+        if self._hb_finalizer is not None:
+            self._hb_finalizer.detach()
+        self._hb_stop = None
+        self._hb_thread = None
+        self._hb_finalizer = None
+
     # -- lifecycle ----------------------------------------------------------
     def set_status(self, status: str, *, ended_at: str | None = None, summary: dict | None = None):
+        if status in _TERMINAL_STATUSES:
+            # Stop before the PATCH: once the intent is to end the run, a beat
+            # racing the flip is noise (the server no-ops late beats anyway), and
+            # if the PATCH itself fails the reaper finishing the job is correct.
+            self.stop_heartbeat()
         body: dict[str, Any] = {"status": status}
         if ended_at is not None:
             body["ended_at"] = ended_at
