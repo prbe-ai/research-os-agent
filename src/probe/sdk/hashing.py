@@ -11,6 +11,9 @@ contract is written against.
 from __future__ import annotations
 
 import hashlib
+import os
+import socket
+from pathlib import Path
 
 #: Read size for streaming a file. Bounded so a multi-GB artifact never has to fit
 #: in memory just to be hashed.
@@ -30,3 +33,47 @@ def fingerprint(path: str) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
+
+
+def local_file_uri(abspath: str) -> str:
+    """RFC 8089 ``file://`` URI for an absolute local path.
+
+    ``pathlib`` percent-encodes spaces, ``#``, ``%`` and non-ASCII, so the stored
+    pointer round-trips whatever characters the path contains and the client and
+    server agree on one encoding. The RAW path is kept separately in
+    ``meta.local_path`` -- that, not this URI, is what an agent resolves.
+    """
+    return Path(abspath).as_uri()
+
+
+def reference_fields(
+    path: str, *, hash_content: bool = False, allow_missing: bool = False
+) -> dict:
+    """Artifact fields for a local-PATH reference (bytes NOT uploaded).
+
+    Returns ``uri`` (a ``file://`` pointer), ``meta`` (the raw ``local_path`` plus the
+    ``host`` that recorded it), and ``size_bytes``/``content_hash`` when known. Only
+    ``os.stat`` runs by default -- recording a 16 GB checkpoint reference must not read
+    16 GB. ``hash_content`` opts into a full fingerprint (enables content dedup and a
+    later reference->managed adoption). Raises ``FileNotFoundError`` when the path is
+    missing unless ``allow_missing`` (it may live on a mount/host this machine cannot see).
+    """
+    local = os.path.abspath(path)
+    exists = os.path.exists(local)
+    if not exists and not allow_missing:
+        raise FileNotFoundError(
+            f"cannot reference '{local}': no such file. Pass allow_missing to record it "
+            "anyway (e.g. it lives on a mount or host this machine does not see)."
+        )
+    fields: dict = {
+        "uri": local_file_uri(local),
+        "meta": {"local_path": local, "host": socket.gethostname()},
+    }
+    if exists:
+        if hash_content:
+            digest, size = fingerprint(path)
+            fields["content_hash"] = digest
+            fields["size_bytes"] = size
+        else:
+            fields["size_bytes"] = os.path.getsize(local)
+    return fields

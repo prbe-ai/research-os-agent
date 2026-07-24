@@ -46,6 +46,7 @@ from ..sdk.config import (
     use_context,
 )
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
+from ..sdk.hashing import reference_fields
 from ..sdk.surface import Surface
 
 
@@ -1261,12 +1262,30 @@ def artifact_add(
         None, "--workspace", help="anchor to a workspace (a file, not an artifact)"
     ),
     shared: bool = typer.Option(False, "--shared", help="put it in the team Shared folder"),
+    reference: bool = typer.Option(
+        False,
+        "--reference",
+        help="record the file's PATH as a reference (file://) instead of uploading its "
+        "bytes — for large files on a shared volume the agent resolves locally",
+    ),
+    hash_content: bool = typer.Option(
+        False,
+        "--hash",
+        help="also fingerprint a --reference (reads the whole file; enables dedup)",
+    ),
+    allow_missing: bool = typer.Option(
+        False,
+        "--allow-missing",
+        help="record a --reference even if the path is not visible from this host",
+    ),
 ) -> None:
     """Record an artifact against a run, project, experiment, workspace, or Shared.
 
-    With a path and no --uri the real upload runs (fingerprint -> presign -> PUT ->
-    confirm). With --uri it records a metadata-only reference, which only the run,
-    project, and experiment anchors support — a file *is* its bytes.
+    With a path and no --uri/--reference the real upload runs (fingerprint -> presign ->
+    PUT -> confirm). With --reference the file's PATH is recorded (file://, bytes NOT
+    uploaded) — for a 16GB checkpoint or a shared-volume file an agent resolves locally.
+    With --uri it records a reference to an object already in a bucket. References are
+    run/project/experiment only — a workspace/Shared file *is* its bytes.
     """
     anchored = project or experiment or workspace or shared
     if anchored:
@@ -1293,11 +1312,21 @@ def artifact_add(
         resolved = os.path.basename(path)
     if resolved is None:
         raise typer.BadParameter("artifact needs --name (or a path to derive it from)")
+    if reference and uri is not None:
+        raise typer.BadParameter(
+            "--reference derives a file:// pointer from the path; pass --reference OR "
+            "--uri, not both"
+        )
+    if reference and not path:
+        raise typer.BadParameter("--reference needs a local file path")
+    if (hash_content or allow_missing) and not reference:
+        raise typer.BadParameter("--hash and --allow-missing only apply to --reference")
     if anchor is Anchor.RUN:
         with _client() as c:
             _run_handle(c, anchor_id).log_artifact(
-                resolved, path=path, uri=uri, kind=kind, step_index=step,
-                span_id=span, content_type=content_type,
+                resolved, path=path, uri=uri, reference=reference,
+                hash_content=hash_content, allow_missing=allow_missing,
+                kind=kind, step_index=step, span_id=span, content_type=content_type,
                 meta=_kv_pairs(meta) if meta else None,
             )
         print(f"artifact {resolved!r} recorded on {anchor_id}")
@@ -1308,23 +1337,31 @@ def artifact_add(
             f"--kind/--step/--span/--meta are run-only; "
             f"the {anchor.value} upload contract rejects them"
         )
-    if uri is not None and anchor in _FILE_ANCHORS:
+    if (uri is not None or reference) and anchor in _FILE_ANCHORS:
         # Caught here rather than in the SDK so it reads as a usage error instead of
         # an unhandled ValueError traceback: a file IS its bytes, so there is no
         # reference-without-bytes form and the backend declares no such route.
         raise typer.BadParameter(
-            f"--uri records a metadata-only reference, which a {anchor.value} file "
-            "cannot be. Pass a local path to upload the bytes instead."
+            f"a {anchor.value} file cannot be a reference (it IS its bytes). "
+            "Pass a local path to upload the bytes instead."
         )
     with _client() as c:
-        if uri is not None:
+        if reference:
+            fields = reference_fields(
+                path, hash_content=hash_content, allow_missing=allow_missing
+            )
+            body = {"name": resolved, "is_reference": True, **fields}
+            if content_type:
+                body["content_type"] = content_type
+            _print_json(c.create_anchored_reference(anchor, anchor_id, body))
+        elif uri is not None:
             body = {"name": resolved, "uri": uri, "is_reference": True}
             if content_type:
                 body["content_type"] = content_type
             _print_json(c.create_anchored_reference(anchor, anchor_id, body))
         else:
             if not path:
-                raise typer.BadParameter("needs a file path (or --uri)")
+                raise typer.BadParameter("needs a file path (--reference, or --uri)")
             _print_json(
                 c.upload_file(
                     anchor, anchor_id, resolved, path, content_type=content_type
@@ -1384,35 +1421,52 @@ def artifact_download(
     --sha256 to verify the round trip against the content_hash from
     `probe artifact list`; a metadata match alone never proves the blob exists."""
     to_stdout = output is None or output == "-"
+    if to_stdout and output is None and sys.stdout.isatty():
+        raise typer.BadParameter(
+            "refusing to write binary to a terminal; pass -o PATH, or '-o -' / a "
+            "redirect to force stdout"
+        )
     with _client() as c:
-        if to_stdout:
-            if output is None and sys.stdout.isatty():
-                raise typer.BadParameter(
-                    "refusing to write binary to a terminal; pass -o PATH, or '-o -' / a "
-                    "redirect to force stdout"
-                )
-            data = c.download_artifact(artifact_id)
-            digest = hashlib.sha256(data).hexdigest()
-            if sha256 and digest != sha256:
+        try:
+            if to_stdout:
+                data = c.download_artifact(artifact_id)
+                digest = hashlib.sha256(data).hexdigest()
+                if sha256 and digest != sha256:
+                    typer.echo(
+                        f"sha256 mismatch: expected {sha256}, got {digest} ({len(data)} bytes)",
+                        err=True,
+                    )
+                    raise typer.Exit(1)
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+                typer.echo(f"{artifact_id}  {len(data)} bytes  sha256={digest}", err=True)
+                return
+            # download_artifact_to removes its own partial file on a mid-stream failure.
+            result = c.download_artifact_to(artifact_id, output)
+            if sha256 and result["sha256"] != sha256:
+                Path(output).unlink(missing_ok=True)
                 typer.echo(
-                    f"sha256 mismatch: expected {sha256}, got {digest} ({len(data)} bytes)",
+                    f"sha256 mismatch: expected {sha256}, got {result['sha256']}; deleted {output}",
                     err=True,
                 )
                 raise typer.Exit(1)
-            sys.stdout.buffer.write(data)
-            sys.stdout.buffer.flush()
-            typer.echo(f"{artifact_id}  {len(data)} bytes  sha256={digest}", err=True)
-            return
-        # download_artifact_to removes its own partial file on a mid-stream failure.
-        result = c.download_artifact_to(artifact_id, output)
-        if sha256 and result["sha256"] != sha256:
-            Path(output).unlink(missing_ok=True)
+            _print_json(result)
+        except errors.RosError as exc:
+            # A reference has no managed blob to download; the server 409s with the
+            # pointer so we can show the path instead of the raw error. Read it from
+            # where it lives (e.g. the shared volume) -- Probe stores no bytes for it.
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            if getattr(exc, "status", None) != 409 or detail.get("reason") != "reference":
+                raise
+            where = detail.get("local_path") or detail.get("uri") or "(unknown location)"
+            host = detail.get("host")
             typer.echo(
-                f"sha256 mismatch: expected {sha256}, got {result['sha256']}; deleted {output}",
+                f"artifact {artifact_id} is a reference -> {where}"
+                + (f" on {host}" if host else "")
+                + "\nProbe stores no bytes for it; read it from that path.",
                 err=True,
             )
-            raise typer.Exit(1)
-        _print_json(result)
+            raise typer.Exit(2)
 
 
 @artifact_app.command("delete")

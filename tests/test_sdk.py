@@ -77,6 +77,46 @@ def test_artifact_with_uri(client, app):
     assert body["name"] == "final.sif"
 
 
+def test_artifact_path_reference_records_pointer_without_uploading(client, app, tmp_path):
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    f = tmp_path / "ckpt.pt"
+    f.write_bytes(b"x" * 2048)
+    run.log_artifact("ckpt.pt", path=str(f), reference=True)
+    req = app.requests[-1]
+    # Direct create door, NOT the presign /uploads flow -- no bytes are uploaded.
+    assert req.url.path == f"/v1/runs/{run.id}/artifacts"
+    body = json.loads(req.content)
+    assert body["is_reference"] is True
+    assert body["uri"].startswith("file://") and body["uri"].endswith("/ckpt.pt")
+    assert body["meta"]["local_path"] == str(f)
+    assert body["meta"]["host"]
+    assert body["size_bytes"] == 2048  # os.stat, not a read
+    assert "content_hash" not in body  # no --hash -> no whole-file read
+
+
+def test_artifact_path_reference_hash_opts_into_fingerprint(client, app, tmp_path):
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    f = tmp_path / "big.bin"
+    f.write_bytes(b"y" * 4096)
+    run.log_artifact("big.bin", path=str(f), reference=True, hash_content=True)
+    body = json.loads(app.requests[-1].content)
+    assert body["is_reference"] is True
+    assert len(body["content_hash"]) == 64  # sha256 hex
+    assert body["size_bytes"] == 4096
+
+
+def test_artifact_path_reference_missing_path_raises_unless_allowed(client, app):
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    with pytest.raises(FileNotFoundError):
+        run.log_artifact("gone.pt", path="/no/such/file.pt", reference=True)
+    # allow_missing records it anyway (it may live on a mount/host this machine lacks).
+    run.log_artifact("gone.pt", path="/mnt/shared/gone.pt", reference=True, allow_missing=True)
+    body = json.loads(app.requests[-1].content)
+    assert body["is_reference"] is True
+    assert body["uri"] == "file:///mnt/shared/gone.pt"
+    assert "size_bytes" not in body  # not stat-able here
+
+
 def test_finish_sets_status_and_ended_at(client, app):
     run = client.run(experiment="e", hypothesis="h", name="r")
     run.finish("completed")

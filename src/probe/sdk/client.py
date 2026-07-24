@@ -879,18 +879,24 @@ class Client:
             missing.append("execution_record")
         if not any(item.get("kind") == "code_snapshot" for item in artifacts):
             missing.append("code_snapshot_artifact")
-        local_only = [
+        # A reference recorded because a managed upload FAILED (fold #16 fail-open) is a
+        # real capture gap: its bytes never reached R2. An INTENTIONAL path reference (a
+        # shared-volume checkpoint the agent resolves locally) is NOT -- it names bytes
+        # that exist, just off-platform. Distinguish by meta.upload, not uri presence:
+        # both now carry a file:// uri, so the old `not uri` test would both miss the
+        # failure and false-flag every intentional reference.
+        failed_uploads = [
             item.get("id") or item.get("name")
             for item in artifacts
-            if item.get("is_reference") and not item.get("uri")
+            if item.get("is_reference") and (item.get("meta") or {}).get("upload") == "failed"
         ]
-        if local_only:
+        if failed_uploads:
             missing.append("portable_artifact_bytes")
         return {
             "run_id": run_id,
             "state": "complete" if not missing else "incomplete",
             "missing": missing,
-            "local_only_artifacts": local_only,
+            "local_only_artifacts": failed_uploads,
         }
 
     # -- lineage edges (fold #2) -------------------------------------------

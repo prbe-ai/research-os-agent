@@ -20,6 +20,7 @@ byte uploads and reference artifacts label identically — no gaps flagged.
 from __future__ import annotations
 
 import os
+import socket
 import subprocess
 import warnings
 from datetime import datetime, timezone
@@ -28,7 +29,7 @@ from uuid import UUID, uuid4
 
 from . import errors
 from . import snapshot as _snapshot
-from .hashing import fingerprint
+from .hashing import fingerprint, local_file_uri, reference_fields
 from ..models import (
     ArtifactCreate,
     ExecutionRecordCreate,
@@ -211,6 +212,9 @@ class Run:
         content_type: str | None = None,
         size_bytes: int | None = None,
         is_reference: bool | None = None,
+        reference: bool = False,
+        hash_content: bool = False,
+        allow_missing: bool = False,
         span_id: str | None = None,
         step_index: int | None = None,
         meta: dict | None = None,
@@ -218,15 +222,35 @@ class Run:
     ):
         """Record an artifact.
 
-        With ``path`` and no ``uri``: the real presign upload flow (fold #16) runs,
-        fingerprint -> presign -> PUT bytes to R2 -> confirm, carrying
-        ``kind``/``meta`` so the stored artifact is labeled (harbor_trial,
-        sandbox_state, ...) exactly like a reference artifact would be.
+        With ``path`` and no ``uri`` and no ``reference``: the real presign upload flow
+        (fold #16) runs, fingerprint -> presign -> PUT bytes to R2 -> confirm.
 
-        With ``uri`` (object already in a bucket) or no bytes: a metadata-only
-        reference artifact is recorded, as before."""
+        With ``reference=True`` and a ``path``: a PATH reference is recorded -- the file's
+        location is stored as a ``file://`` uri (raw path in ``meta.local_path``, recording
+        host in ``meta.host``) and its bytes are NOT uploaded. Only ``os.stat`` runs unless
+        ``hash_content`` asks for a fingerprint. This is the shared-volume case: a 16 GB
+        checkpoint or a TB of files an agent on the same volume resolves locally. Raises
+        ``FileNotFoundError`` if the path is missing unless ``allow_missing``.
+
+        With ``uri`` (object already in a bucket) or no bytes: a metadata-only reference
+        artifact is recorded, as before."""
         meta = dict(meta or {})
-        if path is not None and uri is None:
+        # Explicit path reference: record WHERE the bytes live (file://) instead of
+        # uploading them. Takes precedence over the upload branch so path + reference
+        # never force-uploads (the old code ignored is_reference for path+no-uri).
+        if reference and path is not None:
+            fields = reference_fields(
+                path, hash_content=hash_content, allow_missing=allow_missing
+            )
+            uri = uri or fields["uri"]
+            if content_hash is None:
+                content_hash = fields.get("content_hash")
+            if size_bytes is None:
+                size_bytes = fields.get("size_bytes")
+            for key, value in fields["meta"].items():
+                meta.setdefault(key, value)
+            is_reference = True
+        elif path is not None and uri is None:
             digest, size = _fingerprint(path)
             return self._upload_file(
                 name,
@@ -240,9 +264,8 @@ class Run:
                 meta=meta,
                 strict=strict,
             )
-
-        # Reference / uri path (no bytes uploaded).
-        if path is not None:
+        elif path is not None:
+            # A uri AND a local copy: fingerprint for metadata, keep uri as the pointer.
             digest, size = _fingerprint(path)
             content_hash = content_hash or digest
             size_bytes = size_bytes if size_bytes is not None else size
@@ -337,16 +360,23 @@ class Run:
                 f"artifact upload for '{name}' failed; recorded as a reference instead.",
                 stacklevel=3,
             )
+            local = os.path.abspath(path)
             fallback = ArtifactCreate(
                 kind=kind,
                 name=name,
+                uri=local_file_uri(local),
                 content_hash=content_hash,
                 size_bytes=size_bytes,
                 content_type=content_type,
                 is_reference=True,
                 span_id=span_id,
                 step_index=step_index,
-                meta={**meta, "local_path": os.path.abspath(path), "upload": "failed"},
+                meta={
+                    **meta,
+                    "local_path": local,
+                    "host": socket.gethostname(),
+                    "upload": "failed",
+                },
             )
             return self._client.write(
                 "POST",
