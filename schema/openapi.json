@@ -24,6 +24,16 @@
         "title": "AcceptInviteOut",
         "type": "object"
       },
+      "AnchorLevel": {
+        "description": "The three vertically-movable artifact anchors (workspace/shared-folder files\nmove via the share/unshare rails, not here). Ordered run < experiment < project\nso `move` can tell a promote (derive the target up the chain) from a demote\n(target_id required, and validated to sit inside the current subtree).",
+        "enum": [
+          "run",
+          "experiment",
+          "project"
+        ],
+        "title": "AnchorLevel",
+        "type": "string"
+      },
       "AnchorType": {
         "description": "What a summary (and a summary_refresh queue row) is about.",
         "enum": [
@@ -126,6 +136,31 @@
           "name"
         ],
         "title": "ArtifactCreate",
+        "type": "object"
+      },
+      "ArtifactMove": {
+        "description": "Move an artifact vertically along its own run->experiment->project chain.\n\n`target_id` is derived server-side for a promote (a run has exactly one\nexperiment, an experiment one project) and REQUIRED for a demote (a parent has\nmany children); a demote target is validated to sit inside the artifact's current\nsubtree, so this can never express a lateral move to a sibling.",
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/AnchorLevel"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          }
+        },
+        "required": [
+          "level"
+        ],
+        "title": "ArtifactMove",
         "type": "object"
       },
       "ArtifactOut": {
@@ -309,6 +344,16 @@
         ],
         "title": "ArtifactOut",
         "type": "object"
+      },
+      "ArtifactScope": {
+        "description": "Which anchor levels a run's artifact listing spans.\n\nOWN (default) is the run's own artifacts only -- the historical behavior, so the\nrun bundle, dashboard, and `artifact_count` are untouched. INHERITED and ALL are\nopt-in reads for the live-run/CLI case where a run needs to see what has been\npromoted to its experiment/project. Inheritance is resolution/listing on THIS\nendpoint only; it never widens the run's own count surfaces.",
+        "enum": [
+          "own",
+          "inherited",
+          "all"
+        ],
+        "title": "ArtifactScope",
+        "type": "string"
       },
       "AssetCreate": {
         "properties": {
@@ -6954,6 +6999,60 @@
         ]
       }
     },
+    "/v1/artifacts/{artifact_id}/move": {
+      "post": {
+        "description": "Move an artifact vertically along its own run->experiment->project chain.\n\nPromote (up) derives the target from the artifact's chain; demote (down) needs a\n`target_id` that sits inside the current subtree. Files (workspace/shared-folder\nanchored) move via share/unshare, not here (422). The row keeps its id, so every\nid-pinned referrer stays valid; `span_id`/`step_index` are dropped when the run\nanchor is left. Idempotent: moving to where it already sits returns it unchanged.",
+        "operationId": "move_artifact_v1_artifacts__artifact_id__move_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "artifact_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Artifact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ArtifactMove"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ArtifactOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Move Artifact",
+        "tags": [
+          "artifacts"
+        ]
+      }
+    },
     "/v1/artifacts/{artifact_id}/preview": {
       "get": {
         "description": "Relay a bounded, allowlisted R2 blob as inert bytes for UI previews.",
@@ -9876,7 +9975,7 @@
     },
     "/v1/runs/{run_id}/artifacts": {
       "get": {
-        "description": "List a run's artifacts, optionally filtered by kind, step range, or folder.\n\n``kind`` matches the normalized (lowercased) column. Step bounds are\ninclusive and compare against ``step_index``, so rows with no step are\nexcluded whenever either bound is set (SQL NULL comparison) \u2014 exactly what\nstep-scoped forensics (\"sandbox state at steps 599..601\") wants.\n\n``prefix`` scopes to one folder and everything under it (S3 prefix semantics\nover the derived ``path``): ``prefix=outputs`` returns ``outputs/loss.csv``\nand ``outputs/plots/fig.png``, but not ``config.json``. Omit it for the whole\nrun. ``limit`` is opt-in and left unset by default: this endpoint has always\nbeen unbounded, and capping it silently would truncate existing callers'\nresults with no way for them to notice.",
+        "description": "List a run's artifacts, optionally filtered by kind, step range, folder, or name.\n\n``kind`` matches the normalized (lowercased) column. Step bounds are\ninclusive and compare against ``step_index``, so rows with no step are\nexcluded whenever either bound is set (SQL NULL comparison) \u2014 exactly what\nstep-scoped forensics (\"sandbox state at steps 599..601\") wants.\n\n``prefix`` scopes to one folder and everything under it (S3 prefix semantics\nover the derived ``path``): ``prefix=outputs`` returns ``outputs/loss.csv``\nand ``outputs/plots/fig.png``, but not ``config.json``. Omit it for the whole\nrun. ``limit`` is opt-in and left unset by default: this endpoint has always\nbeen unbounded, and capping it silently would truncate existing callers'\nresults with no way for them to notice.\n\n``scope`` controls inheritance (default ``own`` = this run only, the historical\nbehavior \u2014 the run bundle/dashboard/``artifact_count`` are unaffected):\n``all`` also returns the run's experiment- and project-level artifacts, ``inherited``\nonly those parent levels. The parent ids are derived server-side from the run row\n(never client-asserted), so this stays RLS-oracle-safe. On an inherited scope each\nrow carries ``source_level`` and results are ordered nearest-wins (run, then\nexperiment, then project), so a ``name`` lookup resolves to the closest level at\nrow 0. ``name`` is an exact match (same canonical form as writes).",
         "operationId": "list_artifacts_v1_runs__run_id__artifacts_get",
         "parameters": [
           {
@@ -9951,6 +10050,31 @@
                 }
               ],
               "title": "Prefix"
+            }
+          },
+          {
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ArtifactScope",
+              "default": "own"
             }
           },
           {

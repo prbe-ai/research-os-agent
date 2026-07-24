@@ -20,6 +20,19 @@ class AcceptInviteOut(BaseModel):
     role: Role = Field(..., title='Role')
 
 
+class AnchorLevel(StrEnum):
+    """
+    The three vertically-movable artifact anchors (workspace/shared-folder files
+    move via the share/unshare rails, not here). Ordered run < experiment < project
+    so `move` can tell a promote (derive the target up the chain) from a demote
+    (target_id required, and validated to sit inside the current subtree).
+    """
+
+    run = 'run'
+    experiment = 'experiment'
+    project = 'project'
+
+
 class AnchorType(StrEnum):
     """
     What a summary (and a summary_refresh queue row) is about.
@@ -40,6 +53,20 @@ class ArtifactCreate(BaseModel):
     span_id: UUID | None = Field(None, title='Span Id')
     step_index: int | None = Field(None, title='Step Index')
     uri: str | None = Field(None, title='Uri')
+
+
+class ArtifactMove(BaseModel):
+    """
+    Move an artifact vertically along its own run->experiment->project chain.
+
+    `target_id` is derived server-side for a promote (a run has exactly one
+    experiment, an experiment one project) and REQUIRED for a demote (a parent has
+    many children); a demote target is validated to sit inside the artifact's current
+    subtree, so this can never express a lateral move to a sibling.
+    """
+
+    level: AnchorLevel
+    target_id: UUID | None = Field(None, title='Target Id')
 
 
 class ArtifactOut(BaseModel):
@@ -63,6 +90,22 @@ class ArtifactOut(BaseModel):
     step_index: int | None = Field(None, title='Step Index')
     uri: str | None = Field(None, title='Uri')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
+
+
+class ArtifactScope(StrEnum):
+    """
+    Which anchor levels a run's artifact listing spans.
+
+    OWN (default) is the run's own artifacts only -- the historical behavior, so the
+    run bundle, dashboard, and `artifact_count` are untouched. INHERITED and ALL are
+    opt-in reads for the live-run/CLI case where a run needs to see what has been
+    promoted to its experiment/project. Inheritance is resolution/listing on THIS
+    endpoint only; it never widens the run's own count surfaces.
+    """
+
+    own = 'own'
+    inherited = 'inherited'
+    all = 'all'
 
 
 class AssetCreate(BaseModel):

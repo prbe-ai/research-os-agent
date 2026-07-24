@@ -264,6 +264,28 @@ class Run:
             "POST", f"/v1/runs/{self.id}/artifacts", body, strict=strict
         )
 
+    def list_artifacts(self, *, scope: str = "all", **filters: Any) -> list[dict]:
+        """Artifacts visible to this run. Defaults to ``scope="all"`` -- the run's own
+        artifacts PLUS the ones promoted to its experiment and project, each tagged
+        ``source_level`` -- because during a run that inherited context is usually what
+        you want. Pass ``scope="own"`` to see only this run's, ``scope="inherited"`` for
+        just the parent levels. Extra kwargs (``kind``, ``step_from``, ``step_to``) filter
+        server-side."""
+        return self._client.list_run_artifacts(self.id, scope=scope, **filters)
+
+    def resolve_artifact(self, name: str, *, scope: str = "all") -> dict | None:
+        """The nearest artifact named ``name`` visible to this run, or ``None``. The
+        backend returns nearest-wins order (run before experiment before project), so a
+        run-level artifact shadows a same-named one promoted higher."""
+        rows = self._client.list_run_artifacts(self.id, name=name, scope=scope)
+        return rows[0] if rows else None
+
+    def promote_artifact(self, artifact_id: str, *, to: str) -> dict:
+        """Promote one of this run's artifacts up to its experiment or project so every
+        run under that scope can see it (``to="experiment"`` or ``"project"``). Sugar over
+        ``Client.move_artifact``; the target scope is derived from this run's chain."""
+        return self._client.move_artifact(artifact_id, level=to)
+
     def _upload_file(
         self,
         name: str,
