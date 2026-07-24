@@ -272,6 +272,98 @@ func TestWorkdirAndExcludesSkipped(t *testing.T) {
 	}
 }
 
+func TestFileToSymlinkRetypeIsModified(t *testing.T) {
+	root, work1, work2 := t.TempDir(), t.TempDir(), t.TempDir()
+	victim := filepath.Join(root, "config")
+	writeFile(t, victim, "real config")
+	runPhase(t, "begin", "--workdir", work1, "--root", root)
+
+	// Adversarial: replace a regular file with a symlink to a sensitive path.
+	if err := os.Remove(victim); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/passwd", victim); err != nil {
+		t.Fatal(err)
+	}
+	tr := runPhase(t, "end", "--workdir", work2, "--root", root,
+		"--begin-manifest", filepath.Join(work1, "begin-manifest.jsonl.gz"))
+
+	if tr.Stats["modified"] != 1 {
+		t.Fatalf("file->symlink retype must be modified, not hidden: %+v", tr.Stats)
+	}
+	members := deltaMembers(t, filepath.Join(work2, "end-delta.tar.gz"))
+	if _, ok := members[strings.TrimPrefix(victim, "/")]; !ok {
+		t.Fatalf("retyped symlink missing from delta: %v", members)
+	}
+}
+
+func TestSymlinkRetargetIsModified(t *testing.T) {
+	root, work1, work2 := t.TempDir(), t.TempDir(), t.TempDir()
+	link := filepath.Join(root, "link")
+	if err := os.Symlink("/original/target", link); err != nil {
+		t.Fatal(err)
+	}
+	runPhase(t, "begin", "--workdir", work1, "--root", root)
+
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/etc/shadow", link); err != nil {
+		t.Fatal(err)
+	}
+	tr := runPhase(t, "end", "--workdir", work2, "--root", root,
+		"--begin-manifest", filepath.Join(work1, "begin-manifest.jsonl.gz"))
+	if tr.Stats["modified"] != 1 {
+		t.Fatalf("symlink retarget must be modified: %+v", tr.Stats)
+	}
+}
+
+func TestInvalidUTF8PathRoundTrips(t *testing.T) {
+	root, work1, work2 := t.TempDir(), t.TempDir(), t.TempDir()
+	// A filename with an invalid UTF-8 byte — legal on Linux, mangled by naive
+	// JSON. It exists at begin and is untouched, so it must NOT show as churn.
+	bad := filepath.Join(root, "data-\xff-name")
+	if err := os.WriteFile(bad, []byte("x"), 0o644); err != nil {
+		t.Skipf("filesystem rejects invalid-UTF-8 names (dev APFS): %v", err)
+	}
+	runPhase(t, "begin", "--workdir", work1, "--root", root)
+
+	entries := readManifest(t, filepath.Join(work1, "begin-manifest.jsonl.gz"))
+	var found bool
+	for _, e := range entries {
+		if e.PathB64 != "" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("invalid-UTF-8 path should carry a pb (base64) field")
+	}
+
+	tr := runPhase(t, "end", "--workdir", work2, "--root", root,
+		"--begin-manifest", filepath.Join(work1, "begin-manifest.jsonl.gz"))
+	if tr.Stats["added"] != 0 || tr.Stats["deleted"] != 0 {
+		t.Fatalf("untouched invalid-UTF-8 file caused churn: %+v", tr.Stats)
+	}
+}
+
+func TestSymlinkBudgetEnforced(t *testing.T) {
+	root, work1, work2 := t.TempDir(), t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(root, "seed"), "s")
+	runPhase(t, "begin", "--workdir", work1, "--root", root)
+
+	for i := range 50 {
+		if err := os.Symlink("/some/target/path", filepath.Join(root, "link"+string(rune('a'+i)))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tr := runPhase(t, "end", "--workdir", work2, "--root", root,
+		"--begin-manifest", filepath.Join(work1, "begin-manifest.jsonl.gz"),
+		"--max-delta-bytes", "600")
+	if !tr.Truncated || tr.DroppedCount == 0 {
+		t.Fatalf("symlink flood must hit the budget: %+v", tr)
+	}
+}
+
 func TestTypeChangeIsModified(t *testing.T) {
 	root, work1, work2 := t.TempDir(), t.TempDir(), t.TempDir()
 	target := filepath.Join(root, "thing")

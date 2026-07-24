@@ -22,6 +22,7 @@ import (
 	"bufio"
 	"compress/gzip"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"flag"
@@ -35,6 +36,8 @@ import (
 	"sort"
 	"strings"
 	"syscall"
+	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -47,15 +50,16 @@ const (
 )
 
 type manifestEntry struct {
-	Path string  `json:"p"`
-	Type string  `json:"t"`
-	Size int64   `json:"s,omitempty"`
-	Mtim float64 `json:"m,omitempty"`
-	Mode string  `json:"mode,omitempty"`
-	UID  int64   `json:"u"`
-	GID  int64   `json:"g"`
-	Link string  `json:"lt,omitempty"`
-	Hash string  `json:"h,omitempty"`
+	Path    string  `json:"p"`
+	PathB64 string  `json:"pb,omitempty"` // base64(raw path); set iff Path is not valid UTF-8
+	Type    string  `json:"t"`
+	Size    int64   `json:"s,omitempty"`
+	Mtim    float64 `json:"m,omitempty"`
+	Mode    string  `json:"mode,omitempty"`
+	UID     int64   `json:"u"`
+	GID     int64   `json:"g"`
+	Link    string  `json:"lt,omitempty"`
+	Hash    string  `json:"h,omitempty"`
 }
 
 type outputFile struct {
@@ -83,6 +87,7 @@ type scanConfig struct {
 	hashFiles    bool
 	maxFiles     int64
 	oneFS        bool
+	deadline     time.Time // zero = no self-imposed deadline
 	rootDev      uint64
 	haveRootDev  bool
 	skippedMnts  []string
@@ -90,6 +95,7 @@ type scanConfig struct {
 	filesScanned int64
 	entries      int64
 	truncated    bool
+	deadlineHit  bool
 }
 
 func (c *scanConfig) recordErr(context string, err error) {
@@ -215,7 +221,19 @@ func (c *scanConfig) walk(visit func(manifestEntry, fs.FileInfo) error) error {
 			c.truncated = true
 			return fmt.Errorf("max_files guard reached (%d)", c.maxFiles)
 		}
+		// Self-deadline: bound in-container wall-clock so a pathological tree
+		// (or a symlink loop the walker somehow follows) can't outlive the
+		// bridge's exec timeout and leave a process running past the agent
+		// phase. Checked every 4096 entries to keep time.Now() off the hot path.
+		if !c.deadline.IsZero() && c.entries%4096 == 0 && time.Now().After(c.deadline) {
+			c.truncated = true
+			c.deadlineHit = true
+			return fmt.Errorf("scan deadline reached after %d entries", c.entries)
+		}
 		entry := manifestEntry{Path: path, Type: entryType(info.Mode())}
+		if !utf8.ValidString(path) {
+			entry.PathB64 = base64.StdEncoding.EncodeToString([]byte(path))
+		}
 		uid, gid, mode, mtime := statOwner(info)
 		entry.UID, entry.GID, entry.Mode, entry.Mtim = uid, gid, mode, mtime
 		if info.Mode().IsRegular() {
@@ -300,13 +318,35 @@ func (m *manifestWriter) close() (outputFile, error) {
 	return m.chw.sum(), nil
 }
 
-// beginIndex is the compact lookup the end phase diffs against: fnv64a(path)
-// -> (size, mtime). ~32 B/entry keeps 2M files near 100 MB. A 64-bit
-// collision (~2e-7 at 2M paths) would mask one modification — accepted and
-// documented in the plan.
+// beginEntry is what the end phase diffs each walked path against. Storing the
+// type letter and symlink target (not just size/mtime) lets classify catch a
+// file<->symlink/dir retype and a symlink retarget, which size/mtime alone miss.
+type beginEntry struct {
+	typ  string
+	size int64
+	mtim float64
+	link string
+}
+
+// beginIndex is the compact lookup the end phase diffs against, keyed by
+// fnv64a of the RAW path bytes. A 64-bit collision (~2e-7 at 2M paths) would
+// mask one modification — accepted and documented in the plan.
 type beginIndex struct {
-	entries map[uint64][2]float64 // [size, mtime]; dirs/symlinks store size -1
+	entries map[uint64]beginEntry
 	matched map[uint64]bool
+}
+
+// rawPath reconstructs the exact on-disk bytes of an entry: JSON marshaling
+// mangles invalid-UTF-8 paths to U+FFFD, so those carry a base64 `pb` field
+// that round-trips losslessly. Without this the begin/end keys diverge and
+// untouched non-UTF-8-named files show as spurious added+deleted churn.
+func rawPath(e manifestEntry) string {
+	if e.PathB64 != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(e.PathB64); err == nil {
+			return string(decoded)
+		}
+	}
+	return e.Path
 }
 
 func pathKey(p string) uint64 {
@@ -326,7 +366,7 @@ func loadBeginIndex(path string) (*beginIndex, error) {
 		return nil, err
 	}
 	defer gz.Close()
-	idx := &beginIndex{entries: map[uint64][2]float64{}, matched: map[uint64]bool{}}
+	idx := &beginIndex{entries: map[uint64]beginEntry{}, matched: map[uint64]bool{}}
 	scanner := bufio.NewScanner(gz)
 	scanner.Buffer(make([]byte, 1<<16), 1<<22) // paths can be ~4 MB of hostility
 	for scanner.Scan() {
@@ -334,28 +374,33 @@ func loadBeginIndex(path string) (*beginIndex, error) {
 		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
 			return nil, fmt.Errorf("begin manifest line: %w", err)
 		}
-		size := float64(e.Size)
-		if e.Type != "f" {
-			size = -1
+		idx.entries[pathKey(rawPath(e))] = beginEntry{
+			typ: e.Type, size: e.Size, mtim: e.Mtim, link: e.Link,
 		}
-		idx.entries[pathKey(e.Path)] = [2]float64{size, e.Mtim}
 	}
 	return idx, scanner.Err()
 }
 
 // classify returns "added", "modified", or "" (unchanged) for a walked entry.
 func (b *beginIndex) classify(e manifestEntry) string {
-	key := pathKey(e.Path)
+	key := pathKey(rawPath(e))
 	prev, ok := b.entries[key]
 	if !ok {
 		return "added"
 	}
 	b.matched[key] = true
-	if e.Type != "f" {
-		return "" // non-regular: presence match is enough; bytes never archived
+	if prev.typ != e.Type {
+		return "modified" // file<->symlink<->dir<->socket retype at the same path
 	}
-	if prev[0] != float64(e.Size) || prev[1] != e.Mtim {
-		return "modified"
+	switch e.Type {
+	case "f":
+		if prev.size != e.Size || prev.mtim != e.Mtim {
+			return "modified"
+		}
+	case "l":
+		if prev.link != e.Link {
+			return "modified" // symlink retargeted in place
+		}
 	}
 	return ""
 }
@@ -396,6 +441,13 @@ func (d *deltaWriter) drop(path string) {
 
 func (d *deltaWriter) add(e manifestEntry, info fs.FileInfo) error {
 	if e.Type == "l" {
+		// Symlink headers are tiny but unbounded in count; charge an estimate
+		// against the budget so a fork bomb of symlinks can't blow past the cap.
+		cost := int64(len(e.Path) + len(e.Link) + 512)
+		if d.written+cost > d.budget {
+			d.drop(e.Path)
+			return nil
+		}
 		hdr := &tar.Header{
 			Name:     strings.TrimPrefix(e.Path, "/"),
 			Typeflag: tar.TypeSymlink,
@@ -403,7 +455,11 @@ func (d *deltaWriter) add(e manifestEntry, info fs.FileInfo) error {
 			Mode:     0o777,
 			ModTime:  info.ModTime(),
 		}
-		return d.tw.WriteHeader(hdr)
+		if err := d.tw.WriteHeader(hdr); err != nil {
+			return err
+		}
+		d.written += cost
+		return nil
 	}
 	if e.Type != "f" {
 		return nil
@@ -428,18 +484,31 @@ func (d *deltaWriter) add(e manifestEntry, info fs.FileInfo) error {
 		return err
 	}
 	// The file can shrink/grow between stat and read (agent daemons); tar
-	// requires exactly hdr.Size bytes, so pad or cut to the declared size.
+	// requires exactly hdr.Size bytes. Cut a grown file (CopyN caps at
+	// hdr.Size) and zero-pad a shrunk one from a fixed buffer — never a single
+	// hdr.Size-wide allocation, which an agent could inflate to the budget.
 	n, err := io.CopyN(d.tw, f, hdr.Size)
-	if n < hdr.Size {
-		if _, werr := d.tw.Write(make([]byte, hdr.Size-n)); werr != nil {
-			return werr
-		}
-	}
 	if err != nil && err != io.EOF {
 		return err
 	}
+	if n < hdr.Size {
+		if _, werr := io.CopyN(d.tw, zeroReader{}, hdr.Size-n); werr != nil {
+			return werr
+		}
+	}
 	d.written += e.Size
 	return nil
+}
+
+// zeroReader is an infinite source of zero bytes, used to pad a file that
+// shrank between stat and read without allocating the gap up front.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = 0
+	}
+	return len(p), nil
 }
 
 func (d *deltaWriter) close() (outputFile, error) {
@@ -496,6 +565,7 @@ func run() error {
 	hashMode := flags.Bool("hash", false, "sha256 every regular file (slow, closes mtime-preserving edits)")
 	maxFiles := flags.Int64("max-files", defaultMaxFiles, "inventory guard")
 	maxDelta := flags.Int64("max-delta-bytes", defaultMaxDeltaBytes, "delta tar guard (further capped at 50% free space)")
+	maxSeconds := flags.Float64("max-seconds", 0, "self-imposed wall-clock deadline; 0 disables. Set below the caller's exec timeout so the process exits itself.")
 	if err := flags.Parse(os.Args[2:]); err != nil {
 		return err
 	}
@@ -523,6 +593,9 @@ func run() error {
 		hashFiles: *hashMode,
 		maxFiles:  *maxFiles,
 		oneFS:     true,
+	}
+	if *maxSeconds > 0 {
+		cfg.deadline = time.Now().Add(time.Duration(*maxSeconds * float64(time.Second)))
 	}
 
 	out := trailer{
@@ -612,6 +685,9 @@ func run() error {
 	out.Stats["files_scanned"] = cfg.filesScanned
 	out.SkippedMounts = cfg.skippedMnts
 	out.Errors = cfg.errs
+	if cfg.deadlineHit {
+		out.Errors = append(out.Errors, fmt.Sprintf("scan hit --max-seconds deadline after %d entries; manifest is partial", cfg.entries))
+	}
 	sort.Strings(out.SkippedMounts)
 
 	return emitTrailer(out)

@@ -334,6 +334,64 @@ proportional to agent work, not image size.
 | Hook raises for any other reason | swallowed in callback; container cleanup still attempted; error in capture_context |
 | Harbor upgrade changes hook API | pinned version + canary test fails in CI, loudly |
 
+## Adversarial review hardening (2026-07-24)
+
+A multi-agent adversarial review (21 agents) confirmed 15 findings; all
+blockers and correctness bugs are fixed, the rest documented below.
+
+Fixed:
+
+- **Unbounded `env.exec` could hang the trial.** Every container exec
+  (snapshot, `uname`, cleanup `rm -rf`) now passes `timeout_sec`; and the
+  snapshot binary takes `--max-seconds` (set ~10s below the exec timeout)
+  so the in-container process exits *itself* — Harbor's exec-on-timeout
+  only tears down the host-side client, so bounding the host wait alone
+  would leave a scan running past the agent phase.
+- **`docker compose cp` needs the parent dir.** The bridge now
+  `mkdir -p`s the workdir before uploading the binary, so Harbor's primary
+  upload path succeeds instead of silently falling back to a tar-based
+  path that requires `tar` in the image (which would break the
+  zero-dependency claim).
+- **Retype/retarget blindness.** The begin index now stores the entry
+  type and symlink target, so a file→symlink/dir retype or an in-place
+  symlink retarget classifies as `modified` (was silently "unchanged").
+- **Invalid-UTF-8 path churn.** Paths that are not valid UTF-8 carry a
+  base64 `pb` field; the diff keys off it so untouched non-UTF-8-named
+  files no longer show as spurious added+deleted, and near-duplicate raw
+  names no longer collide in the index.
+- **Symlink delta-budget bypass / pad allocation.** Symlink entries now
+  charge against the delta budget; a file that shrinks between stat and
+  read is zero-padded from a fixed buffer instead of one `hdr.Size`-wide
+  allocation.
+- **sha256 verify off the event loop** (`asyncio.to_thread`), so a
+  hundred-MB manifest hash does not stall concurrent trials.
+- **Packaging.** Version set to 0.9.1 (main released a binary-less 0.9.0 to
+  PyPI while this branch was open, so 0.9.1 keeps this build strictly above
+  every published wheel and a resolver can't silently downgrade a git
+  install); the capture requirements install probe-research from git
+  (binaries are committed, no Go toolchain at install time); the bridge
+  fails fast at startup if the binaries are missing rather than fail-open
+  per trial.
+
+Accepted / documented, not fixed in v1:
+
+- **Host-side `sort_manifest` materializes the manifest in memory.**
+  Bounded by `max_files` (~30 MB typical, ~300 MB at the 2M ceiling) on
+  the well-resourced head pod; the streaming-memory guarantee was always
+  about *container* memory. External-sort is the escape hatch if head-pod
+  pressure ever appears.
+- **Cancellation runs the end snapshot inline**, delaying `/flush` by up
+  to the end timeout. Bounded now by the exec timeouts; a cooperative
+  cancel-skip is a possible follow-up.
+- **`end-delta.tar.gz` carries agent-chosen symlink targets and setuid
+  modes.** Extraction is a downstream-consumer hazard; the contract
+  documents that consumers must extract without following symlinks and
+  must not honor setuid bits.
+- **`snapshot_binary_path` returns a Path from inside
+  `resources.as_file`.** Correct for directory-based wheel installs (the
+  Nebius path); a zip/pex install would need the returned handle kept
+  alive. Documented; not our deployment.
+
 ## Out of scope (v1)
 
 - `t_env` / setup-drift attribution and byte-level t0 reconstruction
