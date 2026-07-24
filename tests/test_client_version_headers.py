@@ -155,9 +155,10 @@ def test_put_file_streams_with_explicit_content_length(tmp_path) -> None:
         return httpx.Response(200)
 
     with _mock_transport(handle) as transport:
-        transport.put_file("https://storage.test/presigned", str(blob), len(payload))
+        transport.put_file("https://storage.test/presigned", str(blob))
 
     assert seen["body"] == payload  # full bytes streamed, nothing truncated
+    # Content-Length is measured from the file itself, so it always matches the body.
     assert seen["content_length"] == str(len(payload))
     assert seen["transfer_encoding"] is None  # not chunked
 
@@ -186,7 +187,7 @@ def test_put_file_reopens_file_and_resends_full_bytes_on_retry(
         return httpx.Response(200)
 
     with _mock_transport(handle) as transport:
-        transport.put_file("https://storage.test/presigned", str(blob), len(payload))
+        transport.put_file("https://storage.test/presigned", str(blob))
 
     assert len(attempts) == 2  # failed once, retried once
     assert attempts[1] == payload  # the retry re-opened and streamed the full file

@@ -80,9 +80,10 @@ def write_text_atomic(path: str | Path, text: str, *, mode: int | None = None) -
 def file_lock(path: str | Path) -> Iterator[None]:
     """Serialize a narrow cross-process critical section via an advisory ``flock``.
 
-    The lock is a sidecar file; its parent is created if missing. NEVER hold it across
-    network I/O -- ``flock`` is released only when the holder exits, so a hung holder
-    blocks every other writer indefinitely.
+    The lock is a sidecar file; its parent is created if missing (at the umask
+    default, NOT 0o700 -- a caller that needs a private directory must create it
+    itself first). NEVER hold it across network I/O -- ``flock`` is released only when
+    the holder exits, so a hung holder blocks every other writer indefinitely.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)

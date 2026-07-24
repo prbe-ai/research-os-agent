@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import os
 import time
 from dataclasses import dataclass
 from collections.abc import Mapping
@@ -226,7 +227,6 @@ class Transport:
         self,
         url: str,
         path: str,
-        size: int,
         *,
         content_type: str | None = None,
         headers: Mapping[str, str] | None = None,
@@ -236,10 +236,16 @@ class Transport:
 
         The sibling of :meth:`put_url` for bytes you do NOT want in memory -- an
         anchored artifact can be model weights, and reading the whole file into a
-        ``bytes`` before the PUT is what OOMs the training loop. ``size`` is sent as an
-        explicit ``Content-Length``: a generator body otherwise makes httpx use
-        ``Transfer-Encoding: chunked``, which a presigned R2/S3 PUT rejects (411). It
-        must be the same length that was fingerprinted for the presign.
+        ``bytes`` before the PUT is what OOMs the training loop.
+
+        Content-Length is measured from the open file on every attempt, never taken
+        from a caller-supplied size. A generator body otherwise makes httpx use
+        ``Transfer-Encoding: chunked`` (a presigned R2/S3 PUT rejects it, 411), and a
+        declared length that disagrees with the bytes actually streamed frames the PUT
+        wrong -- a short header truncates the stored object, a long one hangs the
+        connection waiting for bytes that never come. Deriving the length from the same
+        handle we stream keeps header and body structurally in lockstep, exactly as the
+        old buffered ``put_url(len(data))`` path did.
 
         Re-opens ``path`` on every attempt: httpx does not rewind a consumed body, so a
         retry after a network blip or a retryable status must stream from byte 0 again
@@ -249,12 +255,12 @@ class Transport:
         request_headers = dict(headers or {})
         if content_type:
             request_headers.setdefault("Content-Type", content_type)
-        request_headers["Content-Length"] = str(size)
         attempt = 0
         while True:
             attempt += 1
             try:
                 with open(path, "rb") as fh:
+                    request_headers["Content-Length"] = str(os.fstat(fh.fileno()).st_size)
                     resp = self._client.put(
                         url,
                         content=_iter_file(fh, chunk_size),

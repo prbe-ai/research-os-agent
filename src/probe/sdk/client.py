@@ -461,7 +461,6 @@ class Client:
             self.transport.put_file(
                 presign["upload_url"],
                 path,
-                size,
                 content_type=content_type or "application/octet-stream",
                 headers=presign.get("upload_headers") or presign.get("headers"),
             )
