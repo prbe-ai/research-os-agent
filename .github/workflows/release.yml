@@ -196,3 +196,102 @@ jobs:
           name: dist
           path: dist/
       - uses: pypa/gh-action-pypi-publish@release/v1
+
+  # Auto-document the release: a Claude-written Highlights section (best-effort) on top
+  # of GitHub's native PR-based "What's Changed" (the reliable backbone). Runs AFTER a
+  # successful publish, so this is strictly additive — a notes failure warns, it never
+  # red-Xes a release that already shipped. `needs: [publish]` also scopes it to exactly
+  # a CLI release that published (plugin-only / dry-run skip publish, so they skip here).
+  release-notes:
+    needs: [publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create/edit the GitHub Release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # dispatch pushed the release commit + tag to main; a tag build already has it
+          ref: ${{ github.event_name == 'workflow_dispatch' && 'main' || github.ref }}
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Write the GitHub Release (AI highlights + native PR notes)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          NOTES_MODEL: claude-haiku-4-5-20251001
+          DISPATCH_VERSION: ${{ inputs.version }}
+        run: |
+          set -uo pipefail  # deliberately NOT -e: the whole step is best-effort
+
+          # 1) the CLI tag we're documenting
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            TAG="v${DISPATCH_VERSION}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          echo "release-notes for $TAG"
+
+          # 2) previous CLI release: the NEAREST ANCESTOR v* tag (skip prereleases), not
+          #    the global max -- so a backport patch or a prerelease can't yield a
+          #    reversed/empty range. Empty for the first-ever release. Commit list is
+          #    capped so a first release doesn't dump all history into the AI prompt.
+          PREV="$(git describe --tags --abbrev=0 --match 'v*' --exclude '*-*' "${TAG}^" 2>/dev/null || true)"
+          if [ -n "$PREV" ]; then RANGE="${PREV}..${TAG}"; else RANGE="$TAG"; fi
+          COMMITS="$(git log --no-merges --pretty='- %s' "$RANGE" 2>/dev/null | head -200 || true)"
+          echo "range: ${RANGE}"
+
+          # Mark this release "Latest" ONLY when TAG is the highest non-prerelease v*
+          # tag -- otherwise a re-run against an old tag, or a backport, would wrongly
+          # move the repo's Latest pointer. A prerelease is flagged and never Latest.
+          HIGHEST="$(git tag -l 'v*' --sort=-v:refname | awk '!/-/' | head -1 || true)"
+          if [ "$TAG" = "$HIGHEST" ]; then REL_FLAGS="--latest"; else REL_FLAGS="--latest=false"; fi
+          case "$TAG" in *-*) REL_FLAGS="$REL_FLAGS --prerelease" ;; esac
+          echo "release flags: ${REL_FLAGS}"
+
+          # 3) Claude-written Highlights (best-effort; empty on no key / any failure)
+          HIGHLIGHTS=""
+          if [ -n "${ANTHROPIC_API_KEY:-}" ] && [ -n "$COMMITS" ]; then
+            PROMPT="Write a short \"## Highlights\" section (2-5 GitHub-markdown bullets) for release ${TAG} of the probe-research CLI/SDK, based ONLY on these commit subjects. Group and synthesize; say what changed and why it matters, in plain language. No hype, no invented features, no preamble -- output only the markdown under a \`## Highlights\` heading."
+            REQ="$(jq -n --arg model "$NOTES_MODEL" --arg p "$PROMPT" --arg c "$COMMITS" \
+              '{model:$model, max_tokens:700, messages:[{role:"user", content:($p + "\n\n" + $c)}]}')"
+            RESP="$(curl -sS --max-time 60 https://api.anthropic.com/v1/messages \
+              -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+              -H "anthropic-version: 2023-06-01" \
+              -H "content-type: application/json" \
+              -d "$REQ" 2>/dev/null || true)"
+            HIGHLIGHTS="$(printf '%s' "$RESP" | jq -r '.content[0].text // empty' 2>/dev/null || true)"
+            [ -n "$HIGHLIGHTS" ] && echo "AI highlights: ok" \
+              || echo "::warning::AI highlights unavailable; native notes only"
+          else
+            echo "no ANTHROPIC_API_KEY or no commits -> native notes only"
+          fi
+
+          # 4) GitHub's native, PR-based notes (categorized by .github/release.yml)
+          if [ -n "$PREV" ]; then
+            NATIVE="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG" -f previous_tag_name="$PREV" --jq '.body' 2>/dev/null || true)"
+          else
+            NATIVE="$(gh api -X POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+              -f tag_name="$TAG" --jq '.body' 2>/dev/null || true)"
+          fi
+
+          # 5) assemble Highlights + native, then create/refresh the release idempotently
+          : > /tmp/notes.md
+          [ -n "$HIGHLIGHTS" ] && printf '%s\n\n' "$HIGHLIGHTS" >> /tmp/notes.md
+          [ -n "$NATIVE" ] && printf '%s\n' "$NATIVE" >> /tmp/notes.md
+
+          if [ -s /tmp/notes.md ]; then
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release edit "$TAG" --verify-tag $REL_FLAGS --notes-file /tmp/notes.md \
+                || echo "::warning::could not update release $TAG"
+            else
+              gh release create "$TAG" --verify-tag $REL_FLAGS --title "$TAG" --notes-file /tmp/notes.md \
+                || echo "::warning::could not create release $TAG"
+            fi
+          else
+            # last-resort: let gh generate notes itself
+            gh release view "$TAG" >/dev/null 2>&1 \
+              || gh release create "$TAG" --verify-tag $REL_FLAGS --title "$TAG" --generate-notes \
+              || echo "::warning::could not create release $TAG"
+          fi
+          echo "release-notes: done"
