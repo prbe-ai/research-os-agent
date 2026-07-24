@@ -231,11 +231,22 @@ jobs:
           fi
           echo "release-notes for $TAG"
 
-          # 2) previous CLI release tag (highest v* that is not TAG) -> the commit range
-          PREV="$(git tag -l 'v*' --sort=-v:refname | grep -vx "$TAG" | head -1 || true)"
+          # 2) previous CLI release: the NEAREST ANCESTOR v* tag (skip prereleases), not
+          #    the global max -- so a backport patch or a prerelease can't yield a
+          #    reversed/empty range. Empty for the first-ever release. Commit list is
+          #    capped so a first release doesn't dump all history into the AI prompt.
+          PREV="$(git describe --tags --abbrev=0 --match 'v*' --exclude '*-*' "${TAG}^" 2>/dev/null || true)"
           if [ -n "$PREV" ]; then RANGE="${PREV}..${TAG}"; else RANGE="$TAG"; fi
-          COMMITS="$(git log --no-merges --pretty='- %s' "$RANGE" 2>/dev/null || true)"
+          COMMITS="$(git log --no-merges --pretty='- %s' "$RANGE" 2>/dev/null | head -200 || true)"
           echo "range: ${RANGE}"
+
+          # Mark this release "Latest" ONLY when TAG is the highest non-prerelease v*
+          # tag -- otherwise a re-run against an old tag, or a backport, would wrongly
+          # move the repo's Latest pointer. A prerelease is flagged and never Latest.
+          HIGHEST="$(git tag -l 'v*' --sort=-v:refname | awk '!/-/' | head -1 || true)"
+          if [ "$TAG" = "$HIGHEST" ]; then REL_FLAGS="--latest"; else REL_FLAGS="--latest=false"; fi
+          case "$TAG" in *-*) REL_FLAGS="$REL_FLAGS --prerelease" ;; esac
+          echo "release flags: ${REL_FLAGS}"
 
           # 3) Claude-written Highlights (best-effort; empty on no key / any failure)
           HIGHLIGHTS=""
@@ -271,16 +282,16 @@ jobs:
 
           if [ -s /tmp/notes.md ]; then
             if gh release view "$TAG" >/dev/null 2>&1; then
-              gh release edit "$TAG" --verify-tag --latest --notes-file /tmp/notes.md \
+              gh release edit "$TAG" --verify-tag $REL_FLAGS --notes-file /tmp/notes.md \
                 || echo "::warning::could not update release $TAG"
             else
-              gh release create "$TAG" --verify-tag --latest --title "$TAG" --notes-file /tmp/notes.md \
+              gh release create "$TAG" --verify-tag $REL_FLAGS --title "$TAG" --notes-file /tmp/notes.md \
                 || echo "::warning::could not create release $TAG"
             fi
           else
             # last-resort: let gh generate notes itself
             gh release view "$TAG" >/dev/null 2>&1 \
-              || gh release create "$TAG" --verify-tag --latest --title "$TAG" --generate-notes \
+              || gh release create "$TAG" --verify-tag $REL_FLAGS --title "$TAG" --generate-notes \
               || echo "::warning::could not create release $TAG"
           fi
           echo "release-notes: done"
