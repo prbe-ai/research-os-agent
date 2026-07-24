@@ -19,7 +19,6 @@ import json
 import os
 import shlex
 import sys
-import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -1644,18 +1643,15 @@ def trial_watch(
 ) -> None:
     """Continuously export newly staged Harbor trials from a durable capture root."""
     from ..connectors.harbor_export import drain_export_requests
+    from ._watch import watch
 
     with _client() as client:
-        while True:
-            result = drain_export_requests(client, capture_root, run_id=run)
-            counts = result["counts"]
-            if once or counts["completed"] or counts["failed"]:
-                _print_json(result)
-            if once:
-                if result["failed"]:
-                    raise typer.Exit(2)
-                return
-            time.sleep(interval)
+        watch(
+            lambda: drain_export_requests(client, capture_root, run_id=run),
+            interval=interval,
+            once=once,
+            report=_print_json,
+        )
 
 
 @trial_app.command("expand")
