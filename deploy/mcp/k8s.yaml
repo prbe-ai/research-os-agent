@@ -39,30 +39,43 @@ spec:
           livenessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 5
-          # 512Mi, not 256Mi: a replica was OOMKilled (exit 137) in the
-          # `research` namespace on 2026-07-25, and an OOMKilled MCP replica
-          # does not fail cleanly -- callers get an nginx 502 or a socket that
-          # hangs for minutes, which reads as "search is broken" while no
-          # request ever reaches the API. That misattribution is the expensive
-          # part; the memory is nearly free.
+          # WHY 1Gi, AND WHY NOT MORE.
           #
-          # Sized from measurement, not guessed: steady state is ~70MB
-          # (cgroup memory.current, both replicas), so 256Mi was never a
+          # Both replicas were OOMKilled (exit 137) in the `research` namespace
+          # on 2026-07-25 at the previous 256Mi. An OOMKilled MCP replica does
+          # not fail cleanly: callers get an nginx 502, or a socket that hangs
+          # for minutes, and NO request reaches the API. That presents as
+          # "search is broken" while the API logs show no search at all, and
+          # the misattribution costs far more than the memory ever will.
+          #
+          # A memory LIMIT reserves nothing -- only `requests` do -- so headroom
+          # above the working set is close to free, and "stay near observed
+          # usage" is a weak argument for a limit. What actually bounds this is
+          # the namespace ResourceQuota, which counts limits.memory across all
+          # workloads (2 replicas here):
+          #     512Mi/replica -> 13.0Gi / 16Gi   fine
+          #       1Gi/replica -> 14.0Gi / 16Gi   fine  <-- here
+          #       2Gi/replica -> 16.0Gi / 16Gi   EXHAUSTS THE QUOTA
+          # At 2Gi nothing else in `research` can schedule or deploy. THAT is
+          # the ceiling -- not comfort about the working set.
+          #
+          # Measured, not guessed: steady state is ~70MB on both replicas
+          # (cgroup memory.current; this cluster has no metrics-server, so
+          # `kubectl top` does not work). 256Mi was therefore never a
           # working-set problem -- something transiently allocated past 256MB.
-          # memory.peak resets on restart, so the offending spike is no longer
-          # observable; 512Mi is the namespace LimitRange default and what
-          # every sibling workload (API, reconciler, upload-reaper) already
-          # uses, and namespace quota has room (limits.memory 12Gi/16Gi).
+          # `memory.peak` resets on container restart, so the offending spike
+          # is not observable after the fact.
           #
-          # IF THIS OOMS AGAIN AT 512Mi, do not just raise it: ~70MB steady
-          # against a >512MB spike is a leak or an unbounded buffer, and the
-          # next step is profiling the request path, not more headroom.
+          # IF THIS OOMS AGAIN AT 1Gi: do not raise it -- you have nowhere to
+          # go without starving the namespace. ~70MB steady against a >1GB
+          # spike is a leak or an unbounded buffer, and the next step is
+          # profiling the request path.
           #
-          # requests stay at 128Mi -- comfortably above the ~70MB working set,
+          # requests stay at 128Mi: comfortably above the ~70MB working set,
           # and requests govern scheduling, not OOM.
           resources:
             requests: { cpu: 50m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 512Mi }
+            limits: { cpu: 500m, memory: 1Gi }
 ---
 apiVersion: v1
 kind: Service
