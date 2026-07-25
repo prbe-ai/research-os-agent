@@ -53,14 +53,14 @@ class ResearchOSSource:
         # re-checked after _SUPPORT_RECHECK_SECONDS); the rest still describe
         # the checked-in API contract statically.
         #
-        # versioned_assets and managed_artifact_upload were both hardcoded False
-        # and both were STALE — the routes are in schema/openapi.json and answer
-        # live (/v1/assets{,/{id},/{id}/versions}; /v1/runs/{id}/artifacts/uploads
-        # + /v1/artifacts/{id}/download). They were set in one stroke alongside a
-        # /v1/search change, never as an assets decision. Because research_context
-        # derives `missing` from this map, the two stale flags pinned EVERY context
+        # managed_artifact_upload was hardcoded False and STALE — the routes are in
+        # schema/openapi.json and answer live (/v1/runs/{id}/artifacts/uploads +
+        # /v1/artifacts/{id}/download). It was set in one stroke alongside a
+        # /v1/search change, never as a deliberate call. Because research_context
+        # derives `missing` from this map, that stale flag pinned EVERY context
         # envelope to state="partial" — the same "unconditionally missing" lie the
-        # contract/versions/usage views told.
+        # contract/versions/usage views told. (A `versioned_assets` flag sat here
+        # for the same reason; it went with the asset registry itself.)
         if self._search_supported is None or (
             self._search_supported is False and self._verdict_expired()
         ):
