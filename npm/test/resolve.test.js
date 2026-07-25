@@ -88,6 +88,23 @@ test("MIN_CLI actually exists on PyPI", () => {
   assert.equal(floor, "0.10.0", "0.10.0 introduced `probe wizard`");
 });
 
+test("every fallback refreshes, or users freeze on their first version", () => {
+  // uv caches the ENVIRONMENT it built for a requirement, so `>=0.10.0` keeps
+  // serving whatever it resolved the first time. Measured: after 0.10.1 was
+  // published, an unrefreshed run still returned 0.10.0 — meaning the launcher
+  // would silently never deliver another update.
+  //
+  // `--refresh-package` is NOT enough; it refreshes metadata and reuses the
+  // built environment. It has to be the full `--refresh`.
+  const uvCalls = source.match(/"tool",\s*"run",[^\]]+/g) || [];
+  assert.ok(uvCalls.length >= 2, "expected uv fallbacks");
+  for (const call of uvCalls) {
+    assert.ok(/"--refresh"/.test(call), `uv fallback must refresh: ${call}`);
+    assert.ok(!/--refresh-package/.test(call), "refresh-package is insufficient");
+  }
+  assert.ok(/"--no-cache"/.test(source), "pipx fallback must bypass its cache");
+});
+
 test("never falls back to a bare pip install", () => {
   // On a researcher's machine that usually means conda or system Python.
   assert.ok(!/pip3?\s+install/.test(source.replace(/^\s*\*.*$/gm, "")));
