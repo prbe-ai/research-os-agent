@@ -127,7 +127,7 @@ def _set_killswitch() -> bool:
     try:
         directory = tap_plugin_dir()
         directory.mkdir(parents=True, exist_ok=True)
-        (directory / ".disabled").write_text("disabled by `probe setup`\n")
+        (directory / ".disabled").write_text("disabled by the Probe Research wizard\n")
     except OSError:
         return False
     return True

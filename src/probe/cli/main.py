@@ -336,7 +336,7 @@ def update(
         None,
         "--channel",
         help="release channel to follow: latest, or stable to avoid a new CLI "
-        "landing mid-experiment (default: whatever `probe setup` configured)",
+        "landing mid-experiment (default: whatever the wizard configured)",
     ),
 ) -> None:
     """Update the Probe Research CLI, and the Claude Code plugin, to the latest release.
@@ -429,8 +429,8 @@ def doctor() -> None:
     print(doctor_impl.render(doctor_impl.collect()))
 
 
-@app.command()
-def setup(
+@app.command(name="wizard")
+def wizard(
     tracking: Optional[bool] = typer.Option(  # noqa: UP007 - typer needs Optional
         None,
         "--tracking/--no-tracking",
@@ -461,7 +461,7 @@ def setup(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="skip the menu and prompts"),
 ) -> None:
-    """Install and configure Probe Research on this device.
+    """Setup wizard: install and configure Probe Research on this device.
 
     Interactive by default. Every capability is also a flag, and THE FLAGS ARE
     THE CONTRACT -- the menu is a front end over them. An omitted flag preserves
@@ -481,6 +481,16 @@ def setup(
             file=sys.stderr,
         )
         raise typer.Exit(2) from None
+
+    # FIRST, before anything else. `npx probe-research` launches us through an
+    # EPHEMERAL `uv tool run` / `pipx run`, which leaves no binary behind — and
+    # everything below assumes one exists afterwards (`probe doctor`, the
+    # plugin's version-check hook, the MCP headers helper).
+    from probe.cli.bootstrap import ensure_persistent_install
+
+    boot = ensure_persistent_install()
+    if boot.message:
+        print(boot.message)
 
     caps = doctor_impl.collect()
     configured = caps.configured
@@ -603,6 +613,14 @@ def setup(
             print(message)
 
     print("\nRun `probe doctor` to confirm.")
+
+
+# `probe setup` must keep working: it is printed on the live connect page, in
+# shipped plugin copy, and in every PR description written before the rename.
+# Registering the SAME function under both names means the alias can never drift
+# from the real command's options -- a hand-written wrapper already did, losing
+# every flag the moment it was added.
+app.command(name="setup", hidden=True)(wizard)
 
 
 # -- mcp read credential ----------------------------------------------------

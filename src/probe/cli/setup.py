@@ -1,4 +1,4 @@
-"""`probe setup` — one command, a menu, and an end-to-end install.
+"""`probe wizard` — the setup wizard: one command, a menu, an end-to-end install.
 
 THE MENU IS THE POINT. It is not a config nicety, it is the consent gate that
 makes a single installer legitimate. Session capture ships every prompt, file
@@ -75,7 +75,7 @@ def resolve_selection(
         FRESH run  (nothing configured yet) -> omitted flag = FRESH_DEFAULTS
         RE-RUN     (something configured)   -> omitted flag = PRESERVE current
 
-    PRESERVE is the load-bearing half. Without it, `probe setup --yes` in CI --
+    PRESERVE is the load-bearing half. Without it, `probe wizard --yes` in CI --
     or any re-run that names one flag and not the others -- would silently
     revoke a developer's capture pairing or switch on auto-update behind their
     back. An omitted flag must never be read as "disable".
@@ -312,7 +312,7 @@ def apply_tracking(want: bool) -> list[str]:
     """Bring tracking to `want`.
 
     Turning it off removes the plugin but deliberately does NOT revoke the PAT
-    or log the CLI out: `probe setup` is not a logout command, and silently
+    or log the CLI out: the wizard is not a logout command, and silently
     destroying a credential the user may be scripting against would be a nasty
     surprise. `probe logout` remains the explicit way to do that.
     """

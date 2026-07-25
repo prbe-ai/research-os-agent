@@ -552,3 +552,97 @@ def test_self_host_notes_keep_the_hosted_endpoint_and_air_gap_path():
     assert "mcp.research.prbe.ai/mcp" in notes
     assert "PROBE_MCP_TOKEN=YOUR_READ_TOKEN" in notes
     assert "probe-research-mcp" in notes
+
+
+# --- the wizard must leave a real binary behind ---------------------------
+
+
+def test_ephemeral_launch_installs_the_cli_persistently(monkeypatch):
+    """`npx probe-research` runs us through an EPHEMERAL `uv tool run`, which
+    leaves nothing installed. Everything after the wizard assumes a real binary:
+    `probe doctor`, the plugin's version-check hook, the MCP headers helper."""
+    from probe.cli import bootstrap
+
+    calls = []
+    monkeypatch.setattr(bootstrap, "_resolves_on_path", lambda: False)
+    monkeypatch.setattr(
+        bootstrap.shutil, "which", lambda name: "/usr/bin/uv" if name == "uv" else None
+    )
+
+    class Done:
+        returncode = 0
+        stdout = ""
+        stderr = ""
+
+    monkeypatch.setattr(
+        bootstrap.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or Done()
+    )
+
+    result = bootstrap.ensure_persistent_install()
+
+    assert result.installed is True
+    install = [c for c in calls if "install" in c][0]
+    assert install[:4] == ["uv", "tool", "install", "--force"]
+    # The legacy distribution owns the same `probe` binary, so it must be
+    # removed FIRST or the old build keeps answering.
+    assert calls[0][:3] == ["uv", "tool", "uninstall"]
+
+
+def test_an_existing_install_is_left_alone(monkeypatch):
+    """A re-run must not reinstall on every invocation."""
+    from probe.cli import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_resolves_on_path", lambda: True)
+    result = bootstrap.ensure_persistent_install()
+    assert result.already_persistent is True
+    assert result.installed is False
+    assert result.message == ""
+
+
+def test_binary_outside_PATH_still_counts_as_installed(monkeypatch, tmp_path):
+    """Claude Code launched from the dock sources no profile, so ~/.local/bin
+    can be missing from PATH while the binary is right there. The plugin hook
+    checks the same fallbacks, so we must agree or we reinstall forever."""
+    from probe.cli import bootstrap
+
+    fake = tmp_path / ".local" / "bin" / "probe"
+    fake.parent.mkdir(parents=True)
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda _: None)
+    monkeypatch.setattr(bootstrap.os.path, "expanduser", lambda _: str(tmp_path))
+
+    assert bootstrap._resolves_on_path() is True
+
+
+def test_no_uv_or_pipx_warns_instead_of_silently_continuing(monkeypatch):
+    from probe.cli import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_resolves_on_path", lambda: False)
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda _: None)
+    result = bootstrap.ensure_persistent_install()
+    assert result.installed is False
+    assert "neither uv nor pipx" in result.message
+    assert "probe doctor" in result.message
+
+
+def test_never_falls_back_to_bare_pip(monkeypatch):
+    """On a researcher's machine bare pip usually means conda or system Python,
+    and mutating that to run an installer breaks training runs days later."""
+    from probe.cli import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_resolves_on_path", lambda: False)
+    monkeypatch.setattr(bootstrap.shutil, "which", lambda _: None)
+    result = bootstrap.ensure_persistent_install()
+    assert "pip install" not in result.message
+
+
+def test_setup_is_still_a_working_alias_for_wizard():
+    """`probe setup` is on the live connect page and in shipped plugin copy.
+    It is the SAME callable, so the alias can never lose a flag."""
+    from probe.cli.main import app
+
+    names = {c.name for c in app.registered_commands}
+    assert {"wizard", "setup"} <= names
+    by_name = {c.name: c for c in app.registered_commands}
+    assert by_name["setup"].callback is by_name["wizard"].callback

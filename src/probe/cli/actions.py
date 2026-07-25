@@ -75,7 +75,7 @@ def manual_steps(*, base_url: str) -> str:
     """
     return "\n".join(
         (
-            "# Everything `probe setup` does, as individual commands.",
+            "# Everything the Probe Research setup wizard does, as individual commands.",
             "# Run the ones you want. Needs network access and a browser to approve.",
             "",
             "# 1. Install the CLI (skip if you already have `probe`)",
@@ -141,7 +141,7 @@ def troubleshooting(caps: Capabilities) -> list[str]:
     if caps.tracking_plugin_installed and not caps.logged_in_as:
         notes.append(
             "The tracking plugin is installed but this device is not logged in, so "
-            "the MCP has no credential. Run `probe setup` and pick experiment tracking."
+            "the MCP has no credential. Run `probe wizard` and pick experiment tracking."
         )
     # The footgun that cannot heal itself: an exported token beats the stored one
     # forever, and nothing in the product can clear a variable in the user's shell.
