@@ -39,9 +39,30 @@ spec:
           livenessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 5
+          # 512Mi, not 256Mi: a replica was OOMKilled (exit 137) in the
+          # `research` namespace on 2026-07-25, and an OOMKilled MCP replica
+          # does not fail cleanly -- callers get an nginx 502 or a socket that
+          # hangs for minutes, which reads as "search is broken" while no
+          # request ever reaches the API. That misattribution is the expensive
+          # part; the memory is nearly free.
+          #
+          # Sized from measurement, not guessed: steady state is ~70MB
+          # (cgroup memory.current, both replicas), so 256Mi was never a
+          # working-set problem -- something transiently allocated past 256MB.
+          # memory.peak resets on restart, so the offending spike is no longer
+          # observable; 512Mi is the namespace LimitRange default and what
+          # every sibling workload (API, reconciler, upload-reaper) already
+          # uses, and namespace quota has room (limits.memory 12Gi/16Gi).
+          #
+          # IF THIS OOMS AGAIN AT 512Mi, do not just raise it: ~70MB steady
+          # against a >512MB spike is a leak or an unbounded buffer, and the
+          # next step is profiling the request path, not more headroom.
+          #
+          # requests stay at 128Mi -- comfortably above the ~70MB working set,
+          # and requests govern scheduling, not OOM.
           resources:
             requests: { cpu: 50m, memory: 128Mi }
-            limits: { cpu: 500m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
 ---
 apiVersion: v1
 kind: Service
