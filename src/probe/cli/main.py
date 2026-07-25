@@ -28,6 +28,8 @@ from uuid import UUID
 import typer
 from pydantic import ValidationError
 
+from probe.cli import autoupdate as autoupdate_mod
+
 from .. import __version__, errors
 from ..client_headers import client_version_headers
 from ..models import Scope
@@ -386,6 +388,124 @@ def update(
             print("  update it manually, then restart Claude Code:")
             for line in updater.manual_plugin_commands().split("\n"):
                 print(f"    {line}")
+
+
+@app.command()
+def doctor() -> None:
+    """Read-only diagnostic: what is installed, on, and whether auto-update works.
+
+    Prints the LAST UPDATE ATTEMPT, which is the only way to notice a detached
+    auto-updater that has been silently failing.
+    """
+    # Imported inside the body, not at module scope: cli/__init__ eagerly loads
+    # this module, and `probe log` runs inside training loops.
+    from probe.cli import doctor as doctor_impl
+
+    print(doctor_impl.render(doctor_impl.collect()))
+
+
+@app.command()
+def setup(
+    tracking: Optional[bool] = typer.Option(  # noqa: UP007 - typer needs Optional
+        None,
+        "--tracking/--no-tracking",
+        help="experiment tracking skills + read-only MCP search",
+    ),
+    capture: Optional[bool] = typer.Option(  # noqa: UP007
+        None,
+        "--capture/--no-capture",
+        help="stream this device's Claude Code sessions to the knowledgebase",
+    ),
+    auto_update: Optional[bool] = typer.Option(  # noqa: UP007
+        None, "--auto-update/--no-auto-update", help="keep the CLI and plugins current"
+    ),
+    channel: str = typer.Option(
+        str(autoupdate_mod.DEFAULT_CHANNEL),
+        "--channel",
+        help="auto-update channel: latest, or stable to avoid a new CLI mid-experiment",
+    ),
+    uninstall: bool = typer.Option(
+        False,
+        "--uninstall",
+        help="when turning capture off, also remove the plugin (default: keep it)",
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="skip the menu and prompts"),
+) -> None:
+    """Install and configure Probe Research on this device.
+
+    Interactive by default. Every capability is also a flag, and THE FLAGS ARE
+    THE CONTRACT -- the menu is a front end over them. An omitted flag preserves
+    whatever is already configured, so `--yes` in CI can never silently revoke
+    someone's capture pairing.
+    """
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli.capture import OffMode
+
+    try:
+        selected_channel = autoupdate_mod.Channel(channel)
+    except ValueError:
+        print(
+            f"unknown channel {channel!r}; expected one of: "
+            f"{', '.join(str(c) for c in autoupdate_mod.Channel)}",
+            file=sys.stderr,
+        )
+        raise typer.Exit(2) from None
+
+    caps = doctor_impl.collect()
+    configured = any(caps.enabled().values())
+    selection = wizard.resolve_selection(
+        caps,
+        tracking=tracking,
+        capture=capture,
+        auto_update=auto_update,
+        configured=configured,
+    )
+
+    explicit = any(flag is not None for flag in (tracking, capture, auto_update))
+    if not yes and not explicit and wizard.interactive():
+        chosen = wizard.run_menu(selection.as_map())
+        if chosen is None:
+            print("nothing changed")
+            raise typer.Exit(0)
+        selection = chosen
+
+    steps = wizard.plan(caps, selection)
+    if not steps:
+        print("Already set up the way you asked. Nothing to change.")
+        print("\nRun `probe doctor` to confirm.")
+        raise typer.Exit(0)
+
+    print("This run will:")
+    for step in steps:
+        print(f"  - {step}")
+    print()
+
+    messages: list[str] = []
+    if selection.tracking != caps.tracking_on:
+        messages.extend(wizard.apply_tracking(selection.tracking))
+    if selection.capture != caps.capture_on:
+        messages.extend(
+            wizard.apply_capture(
+                caps,
+                selection.capture,
+                mode=OffMode.UNINSTALL if uninstall else OffMode.DISABLE,
+            )
+        )
+    if selection.auto_update != caps.auto_update_enabled:
+        messages.extend(wizard.apply_auto_update(selection.auto_update, selected_channel))
+
+    for message in messages:
+        print(message)
+
+    grants = wizard.grants_for(selection)
+    if grants and not caps.logged_in_as:
+        print(
+            "\nNext: approve this device in your browser. One approval covers "
+            f"everything you ticked ({', '.join(grants)}):"
+        )
+        print(f"  probe login")
+    print(f"\nRun `probe doctor` to confirm.")
 
 
 # -- mcp read credential ----------------------------------------------------

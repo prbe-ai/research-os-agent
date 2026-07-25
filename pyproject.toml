@@ -33,6 +33,10 @@ dependencies = [
     # past 1.0 must be reviewed against test_usage_errors_exit_cleanly.
     "typer>=0.12,<1.0",
     "pydantic>=2.9",
+    # Checkbox menu for `probe setup`. Upper-bounded like typer: it is a thin
+    # layer over prompt_toolkit, whose internals a major bump can reshape.
+    # IMPORTED LAZILY inside the command body -- see cli/setup.py:run_menu.
+    "questionary>=2.0,<3",
 ]
 
 [project.optional-dependencies]
