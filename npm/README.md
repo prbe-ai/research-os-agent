@@ -1,7 +1,9 @@
 # probe-research
 
+The Probe Research setup wizard.
+
 ```bash
-npx probe-research setup
+npx probe-research
 ```
 
 Installs and configures [Probe Research](https://research.prbe.ai) for Claude Code.

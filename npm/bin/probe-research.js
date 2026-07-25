@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `npx probe-research setup` — the one command, from zero.
+ * `npx probe-research` — the setup wizard, from zero.
  *
  * Probe Research is a PYTHON CLI. This package exists only so the entry point
  * matches the shape people already have muscle memory for (`npx <tool>`), the
@@ -48,9 +48,9 @@ function run(cmd, args) {
 
 function main() {
   const args = process.argv.slice(2);
-  // `npx probe-research` with no arguments means setup — that is the entire
+  // `npx probe-research` with no arguments runs the wizard — that is the entire
   // reason this package exists, so it should not require remembering a verb.
-  const forwarded = args.length ? args : ["setup"];
+  const forwarded = args.length ? args : ["wizard"];
 
   if (has("probe")) return run("probe", forwarded);
   if (has("uv")) return run("uv", ["tool", "run", "--from", DIST, "probe", ...forwarded]);

@@ -1,6 +1,6 @@
 """What is actually installed and switched on for this device.
 
-ONE state struct with TWO renderings: `probe setup` shows it as a menu with
+ONE state struct with TWO renderings: `probe wizard` shows it as a menu with
 toggles, `probe doctor` prints it as a diagnostic. They must never disagree,
 which is why neither computes state of its own.
 
@@ -115,7 +115,7 @@ class Capabilities:
 
         Deliberately NOT `any(enabled)`. Someone who ran setup and turned
         everything OFF has still configured this machine, and treating that as
-        fresh would let `probe setup --yes` silently switch tracking and
+        fresh would let `probe wizard --yes` silently switch tracking and
         auto-update back on from the defaults. Evidence of installation is the
         right signal, not evidence of anything being enabled.
         """
