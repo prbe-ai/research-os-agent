@@ -43,16 +43,15 @@ class Action(StrEnum):
 ACTION_COPY: dict[Action, tuple[str, str]] = {
     Action.CONFIGURE: (
         "Set up or change what's enabled",
-        "Turn experiment tracking, session capture or auto-update on and off.",
+        "Turn tracking, session capture or auto-update on and off.",
     ),
     Action.DIAGNOSE: (
         "Diagnose a problem",
-        "What's installed, which credentials resolve, and whether the last "
-        "automatic update actually worked.",
+        "What's installed, which credentials resolve, whether updates work.",
     ),
     Action.UPDATE: (
         "Update to the latest version",
-        "Upgrades the CLI and the plugins, then tells you to restart Claude Code.",
+        "Upgrades the CLI and the plugins.",
     ),
     Action.MANUAL: (
         "Show the manual steps",
@@ -60,7 +59,7 @@ ACTION_COPY: dict[Action, tuple[str, str]] = {
     ),
     Action.REMOVE: (
         "Remove Probe from this device",
-        "Stops session capture, removes the plugins, and clears local credentials.",
+        "Stops capture, removes the plugins, clears local credentials.",
     ),
 }
 

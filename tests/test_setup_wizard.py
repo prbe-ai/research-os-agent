@@ -681,3 +681,44 @@ def test_turning_a_plugin_OFF_also_needs_a_restart():
     already = _caps(tracking_plugin_installed=True, logged_in_as="richard@prbe.ai")
     turning_off = setup.Selection(tracking=False, capture=False, auto_update=False)
     assert setup.restart_notice(already, turning_off) is not None
+
+
+# --- menu readability ------------------------------------------------------
+
+
+def test_menu_entries_are_separated():
+    """Without a blank row between them, one option's title sits directly under
+    the previous option's description at a similar indent, and the menu reads as
+    a paragraph rather than a list — exactly the thing you scan to choose."""
+    import inspect
+
+    for fn in (setup.run_action_menu, setup.run_menu):
+        source = inspect.getsource(fn)
+        assert "Separator" in source, f"{fn.__name__} must separate entries"
+        # Separator("") is FALSY, so questionary falls back to its dashed
+        # default line and you get `---------------` between every option.
+        assert 'Separator("")' not in source
+
+
+def test_every_menu_line_fits_a_narrow_terminal():
+    """80 columns, minus the 5-space description indent. A wrapped description
+    breaks mid-word and undoes the separation entirely."""
+    from probe.cli.actions import ACTION_COPY
+
+    for title, detail in ACTION_COPY.values():
+        assert len(title) + 5 <= 80, title
+        assert len(detail) + 5 <= 80, detail
+
+    for title, detail in setup.MENU_COPY.values():
+        assert len(title) + 5 <= 80, title
+        for line in detail:
+            assert len(line) + 5 <= 80, line
+
+
+def test_title_and_description_stay_together():
+    """The description belongs to its title, so they must be ONE choice — a
+    separator between them would orphan the description."""
+    import inspect
+
+    source = inspect.getsource(setup.run_action_menu)
+    assert 'title=f"{title}\\n' in source
