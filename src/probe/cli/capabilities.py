@@ -104,6 +104,28 @@ class Capabilities:
     def tracking_on(self) -> bool:
         return self.tracking_plugin_installed and self.logged_in_as is not None
 
+    @property
+    def configured(self) -> bool:
+        """Whether this device has been set up before.
+
+        Deliberately NOT `any(enabled)`. Someone who ran setup and turned
+        everything OFF has still configured this machine, and treating that as
+        fresh would let `probe setup --yes` silently switch tracking and
+        auto-update back on from the defaults. Evidence of installation is the
+        right signal, not evidence of anything being enabled.
+        """
+        return any(
+            (
+                self.tracking_plugin_installed,
+                self.capture_plugin_installed,
+                self.logged_in_as is not None,
+                bool(self.capture_token_sources),
+                self.capture_killswitched,
+                self.auto_update_enabled,
+                self.last_update_attempt is not None,
+            )
+        )
+
     def enabled(self) -> dict[Capability, bool]:
         return {
             Capability.TRACKING: self.tracking_on,
@@ -136,6 +158,27 @@ def _read_json(path: Path) -> dict:
     return loaded if isinstance(loaded, dict) else {}
 
 
+def probe_config_credentials() -> dict:
+    """The probe CLI config flattened the way the UPLOADER reads it.
+
+    This MUST mirror `tap/config.py:_read_probe_config()` exactly. The CLI writes
+    v2 (named contexts) as of the workspace-context pass, and when `contexts`
+    exists the uploader reads ONLY the active context -- it does not fall back to
+    the top level.
+
+    Reading just the top-level key would therefore miss the credential on every
+    modern config, and this function backs the off switch: a miss means we clear
+    nothing, re-verify nothing, and report "capture is off" while it keeps
+    shipping. The parity test in tests/test_setup_wizard.py guards the pairing.
+    """
+    raw = _read_json(probe_config_path())
+    contexts = raw.get("contexts")
+    if isinstance(contexts, dict):
+        active = contexts.get(raw.get("current_context") or "default")
+        return active if isinstance(active, dict) else {}
+    return raw
+
+
 def capture_token_sources() -> tuple[TokenSource, ...]:
     """Every place a capture credential currently resolves from, in the
     uploader's own precedence order.
@@ -154,7 +197,7 @@ def capture_token_sources() -> tuple[TokenSource, ...]:
         pass
     if (os.environ.get(ENV_INGEST_TOKEN) or "").strip():
         found.append(TokenSource.ENVIRONMENT)
-    if str(_read_json(probe_config_path()).get("ingest_token") or "").strip():
+    if str(probe_config_credentials().get("ingest_token") or "").strip():
         found.append(TokenSource.PROBE_CONFIG)
     return tuple(found)
 

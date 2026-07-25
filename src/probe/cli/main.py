@@ -453,7 +453,7 @@ def setup(
         raise typer.Exit(2) from None
 
     caps = doctor_impl.collect()
-    configured = any(caps.enabled().values())
+    configured = caps.configured
     selection = wizard.resolve_selection(
         caps,
         tracking=tracking,

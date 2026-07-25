@@ -249,3 +249,101 @@ def test_capture_menu_copy_says_what_leaves_the_machine():
     assert "file contents" in blob
     assert "tool output" in blob
     assert "stripped on the server" in blob
+
+
+# --- fixes from the adversarial review ------------------------------------
+
+
+def test_config_credentials_read_the_active_context_like_the_uploader(isolate):
+    """The uploader reads contexts[current_context] and does NOT fall back to
+    the top level. Reading only the top level would miss the credential on every
+    modern config, so teardown would clear nothing and still report success."""
+    from probe.cli.capabilities import probe_config_credentials
+
+    (isolate / "probe" / "config.json").write_text(
+        json.dumps(
+            {
+                "ingest_token": "ros_ing_v1_should_be_ignored",
+                "current_context": "work",
+                "contexts": {
+                    "work": {"ingest_token": "ros_ing_active"},
+                    "other": {"ingest_token": "ros_ing_inactive"},
+                },
+            }
+        )
+    )
+    assert probe_config_credentials()["ingest_token"] == "ros_ing_active"
+    assert TokenSource.PROBE_CONFIG in capture_token_sources()
+
+
+def test_off_clears_a_context_scoped_token_and_verifies(isolate):
+    (isolate / "probe" / "config.json").write_text(
+        json.dumps(
+            {
+                "current_context": "work",
+                "contexts": {"work": {"ingest_token": "ros_ing_active"}},
+            }
+        )
+    )
+    assert TokenSource.PROBE_CONFIG in capture_token_sources()
+    result = capture.turn_off(capture.OffMode.DISABLE)
+    assert result.verified is True
+    assert capture_token_sources() == ()
+
+
+def test_off_is_not_verified_when_the_killswitch_could_not_be_written(
+    isolate, monkeypatch
+):
+    """Credentials gone is not enough: without the killswitch the next session
+    respawns the uploader."""
+    monkeypatch.setattr(capture, "_set_killswitch", lambda: False)
+    result = capture.turn_off(capture.OffMode.DISABLE)
+    assert result.verified is False
+    assert "killswitch not set" in result.summary()
+
+
+def test_off_is_not_verified_while_an_uploader_survives(isolate, monkeypatch):
+    """A daemon that ignored SIGTERM still holds its bearer and its queue."""
+    monkeypatch.setattr(capture, "_stop_daemon", lambda: (False, ["still running"]))
+    result = capture.turn_off(capture.OffMode.DISABLE)
+    assert result.verified is False
+    assert "uploader still running" in result.summary()
+
+
+def test_a_planted_pid_file_cannot_get_an_unrelated_process_killed(
+    isolate, monkeypatch
+):
+    """/tmp is world-writable, so the PID files there are untrusted input."""
+    killed: list[int] = []
+    monkeypatch.setattr(capture.os, "kill", lambda pid, sig: killed.append(pid))
+    monkeypatch.setattr(capture, "_looks_like_the_uploader", lambda pid: False)
+    capture._stop_daemon()
+    assert killed == [], "signalled a process that is not the uploader"
+
+
+def test_an_all_off_install_is_not_mistaken_for_a_fresh_machine():
+    """Someone who ran setup and turned everything off has still configured this
+    machine. Treating it as fresh lets `--yes` switch things back on."""
+    all_off = _caps(capture_plugin_installed=True)
+    assert all_off.enabled() == {
+        Capability.TRACKING: False,
+        Capability.CAPTURE: False,
+        Capability.AUTO_UPDATE: False,
+    }
+    assert all_off.configured is True
+
+    selection = setup.resolve_selection(
+        all_off, tracking=None, capture=None, auto_update=None
+    )
+    assert selection.tracking is False
+    assert selection.auto_update is False
+
+
+def test_a_genuinely_fresh_machine_still_gets_defaults():
+    fresh = _caps()
+    assert fresh.configured is False
+    selection = setup.resolve_selection(
+        fresh, tracking=None, capture=None, auto_update=None
+    )
+    assert selection.tracking is True
+    assert selection.auto_update is True

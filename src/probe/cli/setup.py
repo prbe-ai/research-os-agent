@@ -82,7 +82,7 @@ def resolve_selection(
     """
     current = caps.enabled()
     if configured is None:
-        configured = any(current.values())
+        configured = caps.configured
     fallback = current if configured else FRESH_DEFAULTS
     explicit = {
         Capability.TRACKING: tracking,
