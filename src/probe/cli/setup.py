@@ -449,3 +449,28 @@ def remove_everything(caps: Capabilities) -> list[str]:
         "revoke this device's tokens in Settings if you also want those gone."
     )
     return messages
+
+
+def restart_notice(caps: Capabilities, selection: Selection) -> str | None:
+    """Tell the user to restart Claude Code, when it actually matters.
+
+    Plugin installs and the MCP wiring only take effect on restart -- Claude
+    Code reads them at session start and `probe` cannot restart it. Without this
+    line someone finishes the wizard, sees "done", and finds none of it working
+    in the session they are sitting in. That is the last mile of the exact
+    problem this whole feature exists to solve.
+
+    Only shown when a plugin actually changed, so a re-run that only flipped
+    auto-update does not send anyone off to restart for nothing.
+    """
+    current = caps.enabled()
+    plugin_changed = (
+        selection.tracking != current[Capability.TRACKING]
+        or selection.capture != current[Capability.CAPTURE]
+    )
+    if not plugin_changed:
+        return None
+    return (
+        "Restart Claude Code to finish. Plugins and the MCP are read at session "
+        "start, so this session will not see them until you do."
+    )

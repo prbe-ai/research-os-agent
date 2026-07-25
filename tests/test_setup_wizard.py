@@ -646,3 +646,38 @@ def test_setup_is_still_a_working_alias_for_wizard():
     assert {"wizard", "setup"} <= names
     by_name = {c.name: c for c in app.registered_commands}
     assert by_name["setup"].callback is by_name["wizard"].callback
+
+
+def test_installing_a_plugin_tells_you_to_restart_claude_code():
+    """Plugins and the MCP are read at session start, and `probe` cannot restart
+    Claude Code. Without this the wizard says "done" and nothing works in the
+    session the user is sitting in — the last mile of the exact problem this
+    feature exists to solve."""
+    fresh = _caps()
+    turning_on = setup.Selection(tracking=True, capture=False, auto_update=False)
+    notice = setup.restart_notice(fresh, turning_on)
+    assert notice and "Restart Claude Code" in notice
+
+
+def test_capture_alone_also_needs_a_restart():
+    notice = setup.restart_notice(
+        _caps(), setup.Selection(tracking=False, capture=True, auto_update=False)
+    )
+    assert notice is not None
+
+
+def test_an_auto_update_only_change_does_not_send_you_off_to_restart():
+    """No plugin moved, so there is nothing for a restart to pick up."""
+    already = _caps(
+        tracking_plugin_installed=True,
+        logged_in_as="richard@prbe.ai",
+        capture_token_sources=(TokenSource.PAIRED_FILE,),
+    )
+    same_plugins = setup.Selection(tracking=True, capture=True, auto_update=True)
+    assert setup.restart_notice(already, same_plugins) is None
+
+
+def test_turning_a_plugin_OFF_also_needs_a_restart():
+    already = _caps(tracking_plugin_installed=True, logged_in_as="richard@prbe.ai")
+    turning_off = setup.Selection(tracking=False, capture=False, auto_update=False)
+    assert setup.restart_notice(already, turning_off) is not None
