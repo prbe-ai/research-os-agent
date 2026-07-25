@@ -26,6 +26,19 @@ const { spawnSync } = require("node:child_process");
 const os = require("node:os");
 
 const DIST = "probe-research";
+
+/**
+ * The minimum CLI version this launcher needs — NOT this package's own version.
+ *
+ * npm and PyPI release INDEPENDENTLY. This package can take a launcher-only
+ * patch (as 0.10.1 did) with no corresponding CLI release, so pinning
+ * `probe-research==<our version>` resolves to a PyPI version that does not
+ * exist. That is exactly how 0.10.1 shipped broken.
+ *
+ * Bump this only when the launcher starts depending on a NEW CLI feature.
+ * 0.10.0 is the release that introduced `probe wizard`.
+ */
+const MIN_CLI = "0.10.0";
 const UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh";
 
 /** Compare dotted numeric versions. Returns true when `a` >= `b`. */
@@ -78,7 +91,7 @@ function main() {
   // `npx probe-research` with no arguments runs the wizard — that is the entire
   // reason this package exists, so it should not require remembering a verb.
   const forwarded = args.length ? args : ["wizard"];
-  const wanted = require("../package.json").version;
+  const wanted = MIN_CLI;
 
   // Only hand off to an existing install if it is at least as new as this
   // launcher. Otherwise fall through and let uv/pipx fetch a matching CLI.
@@ -90,9 +103,10 @@ function main() {
         `${wanted}; fetching ${wanted}…`,
     );
   }
-  // PIN the version. Unpinned, `uv tool run --from probe-research` happily
-  // reuses an already-installed 0.8.2 tool and we are back where we started.
-  const spec = `${DIST}==${wanted}`;
+  // A FLOOR, not an exact pin. Unpinned, `uv tool run --from probe-research`
+  // reuses an already-installed 0.8.2 tool; pinned exactly, it demands a PyPI
+  // version that may not exist. `>=` fixes both.
+  const spec = `${DIST}>=${wanted}`;
   if (has("uv")) return run("uv", ["tool", "run", "--from", spec, "probe", ...forwarded]);
   if (has("pipx")) return run("pipx", ["run", "--spec", spec, "probe", ...forwarded]);
 
@@ -115,7 +129,7 @@ function main() {
   // The installer drops uv in ~/.local/bin, which is not on THIS process's PATH
   // because it was resolved before the install ran.
   const uv = `${os.homedir()}/.local/bin/uv`;
-  return run(uv, ["tool", "run", "--from", `${DIST}==${wanted}`, "probe", ...forwarded]);
+  return run(uv, ["tool", "run", "--from", `${DIST}>=${wanted}`, "probe", ...forwarded]);
 }
 
 main();

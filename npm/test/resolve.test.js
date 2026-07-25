@@ -54,15 +54,38 @@ test("bin is executable and parses", () => {
   assert.ok(mode & 0o111, "bin must be executable in the published tarball");
 });
 
-test("every fallback pins the version", () => {
+test("every fallback constrains the version", () => {
   // Unpinned, `uv tool run --from probe-research` reuses an already-installed
   // old tool and the version gate above buys nothing.
   const fallbacks = source.match(/"tool", "run", "--from", [^\]]+/g) || [];
   assert.ok(fallbacks.length >= 2, "expected uv fallbacks");
   for (const f of fallbacks) {
-    assert.ok(/spec|==/.test(f), `unpinned uv fallback: ${f}`);
+    assert.ok(/spec|>=/.test(f), `unconstrained uv fallback: ${f}`);
   }
-  assert.ok(/"--spec", spec/.test(source), "pipx fallback must be pinned too");
+  assert.ok(/"--spec", spec/.test(source), "pipx fallback must be constrained too");
+});
+
+test("the CLI floor is NOT this package's own version", () => {
+  // npm and PyPI release independently. 0.10.1 was a launcher-only fix with no
+  // matching PyPI release, so pinning `==<our version>` asked for a version
+  // that does not exist and broke the command outright.
+  assert.ok(/const MIN_CLI = "/.test(source), "MIN_CLI must be its own constant");
+  assert.ok(
+    !/wanted\s*=\s*require\(.*package\.json.*\)\.version/.test(source),
+    "the resolved spec must not be derived from the npm package version",
+  );
+});
+
+test("the spec is a floor, never an exact pin", () => {
+  // `==` demands a PyPI release that may not exist for a launcher-only bump.
+  assert.ok(/\$\{DIST\}>=\$\{wanted\}/.test(source));
+  assert.ok(!/\$\{DIST\}==\$\{wanted\}/.test(source));
+});
+
+test("MIN_CLI actually exists on PyPI", () => {
+  // The floor has to name a real release or every fallback fails to resolve.
+  const floor = source.match(/const MIN_CLI = "([^"]+)"/)[1];
+  assert.equal(floor, "0.10.0", "0.10.0 introduced `probe wizard`");
 });
 
 test("never falls back to a bare pip install", () => {
