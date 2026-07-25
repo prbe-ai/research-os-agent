@@ -57,7 +57,9 @@ test("bin is executable and parses", () => {
 test("every fallback constrains the version", () => {
   // Unpinned, `uv tool run --from probe-research` reuses an already-installed
   // old tool and the version gate above buys nothing.
-  const fallbacks = source.match(/"tool", "run", "--from", [^\]]+/g) || [];
+  // Match the whole uv call, not a fixed argument order — inserting a flag
+  // before --from must not silently stop this test matching anything.
+  const fallbacks = source.match(/"tool",\s*"run",[^\]]+/g) || [];
   assert.ok(fallbacks.length >= 2, "expected uv fallbacks");
   for (const f of fallbacks) {
     assert.ok(/spec|>=/.test(f), `unconstrained uv fallback: ${f}`);
@@ -86,6 +88,23 @@ test("MIN_CLI actually exists on PyPI", () => {
   // The floor has to name a real release or every fallback fails to resolve.
   const floor = source.match(/const MIN_CLI = "([^"]+)"/)[1];
   assert.equal(floor, "0.10.0", "0.10.0 introduced `probe wizard`");
+});
+
+test("every fallback refreshes, or users freeze on their first version", () => {
+  // uv caches the ENVIRONMENT it built for a requirement, so `>=0.10.0` keeps
+  // serving whatever it resolved the first time. Measured: after 0.10.1 was
+  // published, an unrefreshed run still returned 0.10.0 — meaning the launcher
+  // would silently never deliver another update.
+  //
+  // `--refresh-package` is NOT enough; it refreshes metadata and reuses the
+  // built environment. It has to be the full `--refresh`.
+  const uvCalls = source.match(/"tool",\s*"run",[^\]]+/g) || [];
+  assert.ok(uvCalls.length >= 2, "expected uv fallbacks");
+  for (const call of uvCalls) {
+    assert.ok(/"--refresh"/.test(call), `uv fallback must refresh: ${call}`);
+    assert.ok(!/--refresh-package/.test(call), "refresh-package is insufficient");
+  }
+  assert.ok(/"--no-cache"/.test(source), "pipx fallback must bypass its cache");
 });
 
 test("never falls back to a bare pip install", () => {

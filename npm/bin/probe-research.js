@@ -100,15 +100,29 @@ function main() {
     if (found && atLeast(found, wanted)) return run("probe", forwarded);
     console.error(
       `probe-research: installed probe ${found || "(unknown version)"} is older than ` +
-        `${wanted}; fetching ${wanted}…`,
+        `${wanted}; fetching the latest…`,
     );
   }
   // A FLOOR, not an exact pin. Unpinned, `uv tool run --from probe-research`
   // reuses an already-installed 0.8.2 tool; pinned exactly, it demands a PyPI
   // version that may not exist. `>=` fixes both.
   const spec = `${DIST}>=${wanted}`;
-  if (has("uv")) return run("uv", ["tool", "run", "--from", spec, "probe", ...forwarded]);
-  if (has("pipx")) return run("pipx", ["run", "--spec", spec, "probe", ...forwarded]);
+  // REFRESH. uv caches the ENVIRONMENT it built for a requirement, so a range
+  // like `>=0.10.0` keeps serving whatever it resolved the FIRST time — every
+  // user frozen on the version they happened to run on day one, with the
+  // launcher silently never delivering another update.
+  //
+  // It has to be the full `--refresh`: `--refresh-package` only refreshes
+  // package METADATA and still reuses the built environment (measured — it
+  // kept returning 0.10.0 after 0.10.1 was published). The full refresh costs
+  // ~100ms, which is nothing for a command that only runs when there is no
+  // usable local install.
+  if (has("uv")) {
+    return run("uv", ["tool", "run", "--refresh", "--from", spec, "probe", ...forwarded]);
+  }
+  if (has("pipx")) {
+    return run("pipx", ["run", "--no-cache", "--spec", spec, "probe", ...forwarded]);
+  }
 
   if (process.platform === "win32") {
     console.error(
@@ -129,7 +143,9 @@ function main() {
   // The installer drops uv in ~/.local/bin, which is not on THIS process's PATH
   // because it was resolved before the install ran.
   const uv = `${os.homedir()}/.local/bin/uv`;
-  return run(uv, ["tool", "run", "--from", `${DIST}>=${wanted}`, "probe", ...forwarded]);
+  return run(uv, [
+    "tool", "run", "--refresh", "--from", `${DIST}>=${wanted}`, "probe", ...forwarded,
+  ]);
 }
 
 main();
