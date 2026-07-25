@@ -193,3 +193,69 @@ class TestWriteBundle:
         loaded = json.loads((bundle / "meta.json").read_text())
         assert loaded["status"]["end"].startswith("TimeoutError")
         assert loaded["end_at"] is None
+
+
+class TestValidateBundle:
+    """The SDK-owned validator (probe.connectors.sandbox_state.validate_bundle)."""
+
+    def _bundle(self, root: Path, *, meta: dict | None, manifests: bool = True) -> Path:
+        d = root / "trial" / "artifacts" / sandbox_state.BUNDLE_DIRNAME
+        d.mkdir(parents=True)
+        if manifests:
+            for name in (sandbox_state.BEGIN_MANIFEST, sandbox_state.END_MANIFEST):
+                _gzip_jsonl(d / name, [{"p": "/a", "t": "f"}])
+            (d / sandbox_state.END_DELTA).write_bytes(b"tar")
+        if meta is not None:
+            (d / "meta.json").write_text(json.dumps(meta))
+        return d
+
+    def _healthy_meta(self) -> dict:
+        return {
+            "schema": sandbox_state.SCHEMA,
+            "tool": {"arch": "amd64"},
+            "status": {"begin": "ok", "end": "ok"},
+            "summary": {"begin_files": 92, "added": 2, "modified": 1, "deleted": 0},
+            "integrity": {n: True for n in (sandbox_state.BEGIN_MANIFEST, sandbox_state.END_MANIFEST, sandbox_state.END_DELTA)},
+            "limits": {"truncated": False},
+        }
+
+    def test_healthy_bundle_is_ok(self, tmp_path):
+        d = self._bundle(tmp_path, meta=self._healthy_meta())
+        report = sandbox_state.validate_bundle(d, require_integrity=True)
+        assert report.ok and not report.problems
+        assert report.summary["added"] == 2
+
+    def test_missing_meta_is_a_hard_failure(self, tmp_path):
+        d = self._bundle(tmp_path, meta=None)
+        report = sandbox_state.validate_bundle(d)
+        assert not report.ok
+        assert any("never completed" in p for p in report.problems)
+
+    def test_integrity_mismatch_warns_then_fails_when_required(self, tmp_path):
+        meta = self._healthy_meta()
+        meta["integrity"][sandbox_state.END_DELTA] = False
+        d = self._bundle(tmp_path, meta=meta)
+        assert sandbox_state.validate_bundle(d).ok  # warn only
+        assert not sandbox_state.validate_bundle(d, require_integrity=True).ok
+
+    def test_bad_phase_status_fails(self, tmp_path):
+        meta = self._healthy_meta()
+        meta["status"]["end"] = "TimeoutError: end phase"
+        assert not sandbox_state.validate_bundle(self._bundle(tmp_path, meta=meta)).ok
+
+    def test_truncation_is_a_warning_not_a_failure(self, tmp_path):
+        meta = self._healthy_meta()
+        meta["limits"] = {"truncated": True, "dropped_count": 3}
+        report = sandbox_state.validate_bundle(self._bundle(tmp_path, meta=meta))
+        assert report.ok and any("truncated" in w for w in report.warnings)
+
+    def test_find_bundles_locates_incomplete_ones(self, tmp_path):
+        self._bundle(tmp_path, meta=None)  # bundle dir with no meta.json
+        found = sandbox_state.find_bundles(tmp_path)
+        assert len(found) == 1  # found despite missing meta -> reported as failed, not "not found"
+
+    def test_validate_captures_latest_and_empty(self, tmp_path):
+        assert sandbox_state.validate_captures(tmp_path / "nothing") == []
+        self._bundle(tmp_path, meta=self._healthy_meta())
+        reports = sandbox_state.validate_captures(tmp_path, latest=True)
+        assert len(reports) == 1 and reports[0].ok

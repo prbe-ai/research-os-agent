@@ -12,12 +12,14 @@ Design doc: ``docs/2026-07-23-sandbox-state-capture.md``.
 
 from __future__ import annotations
 
+import glob
 import gzip
 import hashlib
 import json
 import os
 import shutil
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from typing import Any
@@ -198,3 +200,113 @@ def write_bundle(
     tmp = bundle_dir / "meta.json.tmp"
     tmp.write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
     os.replace(tmp, bundle_dir / "meta.json")
+
+
+# --- Validation (the SDK owns "what makes a bundle valid") -------------------
+
+_REQUIRED_MANIFESTS = (BEGIN_MANIFEST, END_MANIFEST)
+
+
+@dataclass
+class BundleReport:
+    """The verdict for one ``probe.sandbox-state/1`` bundle directory."""
+
+    bundle_dir: str
+    ok: bool
+    problems: list[str] = field(default_factory=list)  # fail the bundle
+    warnings: list[str] = field(default_factory=list)  # noteworthy, not fatal
+    summary: dict[str, Any] = field(default_factory=dict)
+
+
+def _gzip_line_count(path: Path) -> int:
+    n = 0
+    with gzip.open(path, "rb") as handle:
+        for _ in handle:
+            n += 1
+    return n
+
+
+def find_bundles(root: Path | str) -> list[Path]:
+    """Find every ``probe-sandbox-state`` bundle dir under *root*.
+
+    Matches the directory (not ``meta.json``), so a bundle whose capture died
+    before writing ``meta.json`` is still found and reported as failed rather
+    than silently missing. If *root* itself is a bundle dir, returns just it.
+    """
+    root = Path(root)
+    if root.name == BUNDLE_DIRNAME:
+        return [root]
+    matches = glob.glob(str(root / "**" / BUNDLE_DIRNAME), recursive=True)
+    return sorted(Path(p) for p in matches if Path(p).is_dir())
+
+
+def validate_bundle(bundle_dir: Path | str, *, require_integrity: bool = False) -> BundleReport:
+    """Validate one bundle dir. ``ok`` is False iff there is a hard problem.
+
+    Checks: ``meta.json`` present + correct schema, both phases ``ok``, the
+    manifests present + non-empty, and (hard iff *require_integrity*) that every
+    integrity flag is true. A missing ``meta.json`` means the capture never
+    completed — a hard failure, not "not found".
+    """
+    bundle_dir = Path(bundle_dir)
+    report = BundleReport(bundle_dir=str(bundle_dir), ok=True)
+    meta_path = bundle_dir / "meta.json"
+    if not meta_path.is_file():
+        report.ok = False
+        report.problems.append("no meta.json (capture never completed)")
+        return report
+    try:
+        meta = json.loads(meta_path.read_text())
+    except (OSError, ValueError) as exc:
+        report.ok = False
+        report.problems.append(f"meta.json unreadable: {exc}")
+        return report
+
+    if meta.get("schema") != SCHEMA:
+        report.problems.append(f"schema={meta.get('schema')!r} (want {SCHEMA})")
+
+    status = meta.get("status") or {}
+    for phase in ("begin", "end"):
+        if status.get(phase) != "ok":
+            report.problems.append(f"{phase} phase status={status.get(phase)!r}")
+
+    integrity = meta.get("integrity") or {}
+    unverified = [name for name, ok in integrity.items() if not ok]
+    if unverified and require_integrity:
+        report.problems.append(f"integrity failed for {unverified}")
+    elif unverified:
+        report.warnings.append(f"integrity unverified for {unverified}")
+
+    for name in _REQUIRED_MANIFESTS:
+        path = bundle_dir / name
+        if not path.is_file():
+            report.problems.append(f"missing {name}")
+        elif _gzip_line_count(path) == 0:
+            report.problems.append(f"{name} is empty")
+
+    limits = meta.get("limits") or {}
+    if limits.get("truncated"):
+        dropped = limits.get("dropped_count") or len(limits.get("dropped", []))
+        report.warnings.append(f"scan truncated ({dropped} dropped) — capture is partial")
+
+    report.summary = {
+        "begin_files": meta.get("summary", {}).get("begin_files"),
+        "added": meta.get("summary", {}).get("added"),
+        "modified": meta.get("summary", {}).get("modified"),
+        "deleted": meta.get("summary", {}).get("deleted"),
+        "arch": meta.get("tool", {}).get("arch"),
+        "integrity": integrity,
+        "truncated": bool(limits.get("truncated")),
+    }
+    report.ok = not report.problems
+    return report
+
+
+def validate_captures(
+    root: Path | str, *, require_integrity: bool = False, latest: bool = False
+) -> list[BundleReport]:
+    """Validate every bundle under *root* (or only the most recent with ``latest``)."""
+    bundles = find_bundles(root)
+    if latest and bundles:
+        bundles = [max(bundles, key=lambda b: (b / "meta.json").stat().st_mtime if (b / "meta.json").is_file() else 0)]
+    return [validate_bundle(b, require_integrity=require_integrity) for b in bundles]

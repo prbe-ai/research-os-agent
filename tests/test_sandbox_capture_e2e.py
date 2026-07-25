@@ -158,11 +158,11 @@ def test_capture_pipeline_end_to_end(snapshot_bin, tmp_path):
     )
 
     # 7. the staged trial carries a complete, integrity-true bundle + a descriptor.
+    #    Validate through the SDK-owned validator (one definition of "valid").
+    reports = ss.validate_captures(capture_dir, require_integrity=True)
+    assert len(reports) == 1 and reports[0].ok, reports and reports[0].problems
+    assert reports[0].summary["added"] >= 3 and reports[0].summary["deleted"] >= 1
     staged_bundle = Path(staged.staged_trial.trial_dir) / "artifacts" / ss.BUNDLE_DIRNAME
-    staged_meta = json.loads((staged_bundle / "meta.json").read_text())
-    assert staged_meta["schema"] == ss.SCHEMA
-    assert staged_meta["status"] == {"begin": "ok", "end": "ok"}
-    assert all(staged_meta["integrity"].values())
     assert (staged_bundle / ss.END_DELTA).is_file()
     assert Path(staged.request_path).is_file()  # probe-harbor-export/1 descriptor
 
