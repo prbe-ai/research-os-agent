@@ -355,14 +355,19 @@ def run_menu(defaults: dict[Capability, bool]) -> Selection | None:
     except ImportError:  # pragma: no cover - dependency is declared
         return None
 
-    choices = [
-        questionary.Choice(
-            title="\n    ".join((title, *detail)),
-            value=capability,
-            checked=defaults[capability],
+    # Same problem, same fix: these entries are 3-4 lines each, so without a
+    # blank line between them the list is unreadable.
+    choices: list = []
+    for index, (capability, (title, detail)) in enumerate(MENU_COPY.items()):
+        if index:
+            choices.append(questionary.Separator(" "))
+        choices.append(
+            questionary.Choice(
+                title="\n     ".join((title, *detail)),
+                value=capability,
+                checked=defaults[capability],
+            )
         )
-        for capability, (title, detail) in MENU_COPY.items()
-    ]
     picked = questionary.checkbox(
         "What should Probe Research do on this device?",
         choices=choices,
@@ -392,12 +397,20 @@ def run_action_menu(caps: Capabilities):
     except ImportError:  # pragma: no cover - dependency is declared
         return Action.CONFIGURE
 
+    # A blank Separator between entries. Without it the title of one option and
+    # the description of the previous one sit on adjacent lines at similar
+    # indents, and the whole menu reads as a paragraph rather than a list --
+    # which is precisely the thing you have to scan quickly to choose.
+    choices: list = []
+    for index, (action, (title, detail)) in enumerate(ACTION_COPY.items()):
+        if index:
+            choices.append(questionary.Separator(" "))
+        choices.append(questionary.Choice(title=f"{title}\n     {detail}", value=action))
+
     picked = questionary.select(
         "What do you want to do?",
-        choices=[
-            questionary.Choice(title=f"{title}\n    {detail}", value=action)
-            for action, (title, detail) in ACTION_COPY.items()
-        ],
+        choices=choices,
+        instruction="(arrow keys, enter to choose)",
     ).ask()
     return picked
 
