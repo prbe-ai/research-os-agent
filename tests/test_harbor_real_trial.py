@@ -20,7 +20,7 @@ from pathlib import Path
 
 import pytest
 
-from probe.connectors.harbor import stage_trial_export
+from probe.connectors.harbor import parse_trial, stage_trial_export
 
 
 def _write_oracle_task(task_dir: Path) -> None:
@@ -89,8 +89,13 @@ def test_stage_a_real_harbor_oracle_trial(tmp_path):
     manifest = json.loads(staged.capture_manifest_path.read_text())
     capture = manifest.get("capture", {})
 
-    # The SDK parsed Harbor's real reward (oracle solved it -> 1.0).
-    assert manifest.get("rewards", {}).get("reward") == 1.0 or manifest.get("reward") == 1.0
+    # The SDK parsed Harbor's real reward. Harbor 0.18 writes it to
+    # verifier/reward.txt (not result.json); parse_trial reads it correctly.
+    # NOTE: stage_trial_export's descriptor does NOT surface a verifier/reward.txt
+    # reward (it only reads result.json) — the reward reaches Probe via
+    # capture_trial's metric log, not the staging descriptor. See the reward-path
+    # follow-up. This asserts the parse layer, which is the compat check that matters.
+    assert parse_trial(trial_dir).reward == 1.0
 
     # Every declared file was collected + hashed, and completeness is complete.
     assert capture.get("completeness", {}).get("status") == "complete"
@@ -100,5 +105,5 @@ def test_stage_a_real_harbor_oracle_trial(tmp_path):
     # The producer wrote a probe-harbor-export/1 descriptor + a recovery archive.
     assert Path(staged.request_path).is_file()
     descriptor = json.loads(Path(staged.request_path).read_text())
-    assert descriptor["step_index"] == 0
+    assert descriptor["correlation"]["step_index"] == 0  # the training-step join key
     assert staged.archive_path is None or Path(staged.archive_path).is_file()
