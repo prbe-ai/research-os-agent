@@ -454,6 +454,11 @@ def setup(
         "--uninstall",
         help="when turning capture off, also remove the plugin (default: keep it)",
     ),
+    action: Optional[str] = typer.Option(  # noqa: UP007
+        None,
+        "--action",
+        help="skip the menu: configure | diagnose | update | manual | remove",
+    ),
     yes: bool = typer.Option(False, "--yes", "-y", help="skip the menu and prompts"),
 ) -> None:
     """Install and configure Probe Research on this device.
@@ -479,6 +484,65 @@ def setup(
 
     caps = doctor_impl.collect()
     configured = caps.configured
+    explicit_flags = any(f is not None for f in (tracking, capture, auto_update))
+
+    from probe.cli import actions as actions_mod
+
+    # Everything the dashboard used to hide in collapsed sections lives here,
+    # next to the state it acts on. The action menu only appears on a RE-RUN: a
+    # fresh machine has nothing to diagnose, update or remove.
+    chosen_action = actions_mod.Action.CONFIGURE
+    if action is not None:
+        try:
+            chosen_action = actions_mod.Action(action)
+        except ValueError:
+            print(
+                f"unknown action {action!r}; expected one of: "
+                f"{', '.join(a.value for a in actions_mod.Action)}",
+                file=sys.stderr,
+            )
+            raise typer.Exit(2) from None
+    elif configured and not yes and not explicit_flags and wizard.interactive():
+        print("On this device:\n")
+        for line in wizard.describe_state(caps):
+            print(line)
+        print()
+        picked = wizard.run_action_menu(caps)
+        if picked is None:
+            raise typer.Exit(0)
+        chosen_action = picked
+
+    base_now = resolve(base_url=_conn.base_url).base_url
+    if chosen_action is actions_mod.Action.DIAGNOSE:
+        print(doctor_impl.render(caps))
+        notes = actions_mod.troubleshooting(caps)
+        if notes:
+            print("\nIf something is not working:")
+            for note in notes:
+                print(f"  - {note}")
+        raise typer.Exit(0)
+    if chosen_action is actions_mod.Action.UPDATE:
+        print("Run:\n  probe update")
+        raise typer.Exit(0)
+    if chosen_action is actions_mod.Action.MANUAL:
+        print(actions_mod.manual_steps(base_url=base_now))
+        print()
+        print(
+            actions_mod.self_host_notes(
+                base_url=base_now, mcp_endpoint="https://mcp.research.prbe.ai/mcp"
+            )
+        )
+        raise typer.Exit(0)
+    if chosen_action is actions_mod.Action.REMOVE:
+        if not yes and wizard.interactive():
+            if not typer.confirm(
+                "Remove Probe Research from this device?", default=False
+            ):
+                raise typer.Exit(0)
+        for message in wizard.remove_everything(caps):
+            print(message)
+        raise typer.Exit(0)
+
     selection = wizard.resolve_selection(
         caps,
         tracking=tracking,
@@ -487,8 +551,7 @@ def setup(
         configured=configured,
     )
 
-    explicit = any(flag is not None for flag in (tracking, capture, auto_update))
-    if not yes and not explicit and wizard.interactive():
+    if not yes and not explicit_flags and wizard.interactive():
         chosen = wizard.run_menu(selection.as_map())
         if chosen is None:
             print("nothing changed")

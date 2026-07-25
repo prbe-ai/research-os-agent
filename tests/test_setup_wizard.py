@@ -472,3 +472,83 @@ def test_device_authorize_omits_grants_entirely_when_not_asked(monkeypatch):
     with pytest.raises(device.DeviceLoginError):
         device.device_authorize("https://x", client=FakeClient(), open_browser=False)
     assert "grants" not in captured
+
+
+# --- the collapsed dashboard sections, now wizard actions ------------------
+
+
+def test_manual_steps_are_generated_from_the_same_constants_the_wizard_uses():
+    """The page's copy had already drifted from the commands printed beside it.
+    A script generated from the real constants cannot drift."""
+    from probe.cli.actions import manual_steps
+    from probe.cli.capabilities import MARKETPLACE_REPO, PLUGIN_ID, TAP_PLUGIN_ID
+
+    steps = manual_steps(base_url="https://api.research.prbe.ai")
+    assert f"claude plugin marketplace add {MARKETPLACE_REPO}" in steps
+    assert f"claude plugin install {PLUGIN_ID}" in steps
+    assert f"claude plugin install {TAP_PLUGIN_ID}" in steps
+    # `add` does not refresh an already-added marketplace; the update must be there.
+    assert "marketplace update" in steps
+    assert steps.index("marketplace add") < steps.index("marketplace update")
+    assert "probe login --base-url https://api.research.prbe.ai" in steps
+    # Never a credential, and never a git URL (a moving branch nobody can name).
+    assert "git+https://" not in steps
+    assert "--token" not in steps
+
+
+def test_troubleshooting_is_state_aware_not_a_static_list():
+    """A static list makes the reader work out which item applies. The wizard
+    already knows, so it should only say the relevant things."""
+    from probe.cli.actions import troubleshooting
+
+    no_claude = troubleshooting(_caps(cli_version="0.9.2"))
+    assert any("not on PATH" in note for note in no_claude)
+
+    healthy = troubleshooting(
+        _caps(cli_version="0.9.2", claude_available=True, logged_in_as="a@b.c")
+    )
+    assert not any("not on PATH" in note for note in healthy)
+
+    # The footgun that cannot heal itself is ALWAYS surfaced: nothing in the
+    # product can unset a variable in the user's shell.
+    for notes in (no_claude, healthy):
+        assert any("PROBE_MCP_TOKEN" in note and "SHADOWS" in note for note in notes)
+
+
+def test_installed_but_not_logged_in_is_called_out():
+    from probe.cli.actions import troubleshooting
+
+    notes = troubleshooting(
+        _caps(cli_version="0.9.2", claude_available=True, tracking_plugin_installed=True)
+    )
+    assert any("not logged in" in note for note in notes)
+
+
+def test_every_action_has_copy():
+    from probe.cli.actions import ACTION_COPY, Action
+
+    assert set(ACTION_COPY) == set(Action)
+    for title, detail in ACTION_COPY.values():
+        assert title and detail
+
+
+def test_state_summary_shows_the_killswitch_rather_than_a_bare_off(isolate):
+    """"off" and "off because you disabled it" are different situations."""
+    killswitched = _caps(
+        capture_token_sources=(TokenSource.PAIRED_FILE,), capture_killswitched=True
+    )
+    assert any("killswitch" in line for line in setup.describe_state(killswitched))
+    plain = _caps()
+    assert not any("killswitch" in line for line in setup.describe_state(plain))
+
+
+def test_self_host_notes_keep_the_hosted_endpoint_and_air_gap_path():
+    from probe.cli.actions import self_host_notes
+
+    notes = self_host_notes(
+        base_url="https://api.research.prbe.ai",
+        mcp_endpoint="https://mcp.research.prbe.ai/mcp",
+    )
+    assert "mcp.research.prbe.ai/mcp" in notes
+    assert "PROBE_MCP_TOKEN=YOUR_READ_TOKEN" in notes
+    assert "probe-research-mcp" in notes

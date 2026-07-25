@@ -376,3 +376,76 @@ def run_menu(defaults: dict[Capability, bool]) -> Selection | None:
         capture=Capability.CAPTURE in chosen,
         auto_update=Capability.AUTO_UPDATE in chosen,
     )
+
+
+def run_action_menu(caps: Capabilities):
+    """Pick a top-level action. Returns None if the user quits.
+
+    Only shown on a RE-RUN. A fresh machine has nothing to diagnose, update or
+    remove, so it goes straight to the capability picker instead of making
+    someone choose "set up" from a list where four options are no-ops.
+    """
+    from probe.cli.actions import ACTION_COPY, Action
+
+    try:
+        import questionary
+    except ImportError:  # pragma: no cover - dependency is declared
+        return Action.CONFIGURE
+
+    picked = questionary.select(
+        "What do you want to do?",
+        choices=[
+            questionary.Choice(title=f"{title}\n    {detail}", value=action)
+            for action, (title, detail) in ACTION_COPY.items()
+        ],
+    ).ask()
+    return picked
+
+
+def describe_state(caps: Capabilities) -> list[str]:
+    """A one-glance summary printed above the menu on a re-run.
+
+    The wizard already knows all of this, so showing it means the user picks an
+    action against real state rather than guessing which one they need.
+    """
+    lines = []
+    lines.append(
+        f"  Experiment tracking + MCP   {'on' if caps.tracking_on else 'off'}"
+        + (f"  ({caps.logged_in_as})" if caps.logged_in_as else "")
+    )
+    capture = "on" if caps.capture_on else "off"
+    if caps.capture_killswitched:
+        capture = "off (killswitch set)"
+    lines.append(f"  Session capture             {capture}")
+    auto = "on" if caps.auto_update_enabled else "off"
+    if caps.auto_update_enabled and caps.auto_update_channel:
+        auto = f"on ({caps.auto_update_channel})"
+    lines.append(f"  Automatic updates           {auto}")
+    if caps.last_update_attempt:
+        lines.append(f"  Last update attempt         {caps.last_update_attempt}")
+    return lines
+
+
+def remove_everything(caps: Capabilities) -> list[str]:
+    """Take this device back to nothing, and VERIFY the capture half.
+
+    Replaces the page's "Remove the plugin" section, which only told you to
+    uninstall -- and warned that uninstalling does not revoke credentials.
+    Doing it here means we can actually clear them and prove capture stopped,
+    rather than leaving the user to notice.
+    """
+    messages: list[str] = []
+    result = turn_off(OffMode.UNINSTALL)
+    messages.append(result.summary())
+    messages.extend(f"! {warning}" for warning in result.warnings)
+
+    ok, detail = uninstall_plugin(TRACKING_PLUGIN_NAME)
+    if not ok and "not found" not in detail.lower():
+        messages.append(f"! could not remove {TRACKING_PLUGIN_NAME}: {detail}")
+
+    autoupdate.save(enabled=False, channel=autoupdate.DEFAULT_CHANNEL)
+    messages.append(
+        "Removed. Your account and any data already sent are untouched — "
+        "revoke this device's tokens in Settings if you also want those gone."
+    )
+    return messages
