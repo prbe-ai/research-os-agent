@@ -30,18 +30,23 @@ exists (``probe trial expand``).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import json
+import logging
 import os
+import shlex
 import shutil
 import tarfile
 import tempfile
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from . import atif
+from . import atif, sandbox_state
 from ..sdk.capture import (
     CaptureLedger,
     CaptureState,
@@ -56,6 +61,8 @@ from ..sdk.durable import (
 
 if TYPE_CHECKING:
     from ..sdk.run import Run
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "1.0"
 MANIFEST_KIND = "harbor_trial"
@@ -1321,3 +1328,175 @@ def reconcile_staged_trial(
     kwargs.setdefault("step_index", staged.ledger.context.get("step_index"))
     kwargs.setdefault("expand", False)
     return capture_trial(run, staged, log_reward=False, **kwargs)
+
+
+_SANDBOX_STATE_OUTPUTS = {
+    "begin": (sandbox_state.BEGIN_MANIFEST,),
+    "end": (sandbox_state.END_MANIFEST, sandbox_state.END_DELTA),
+}
+
+
+class SandboxStateCapture:
+    """Register ephemeral begin/end sandbox-state capture on a Harbor Trial.
+
+    Framework-agnostic (any Harbor environment provider): at ``AGENT_START`` and
+    ``AGENT_END`` it uploads the static snapshot binary into a random ``/tmp``
+    workdir, execs it, downloads + sha256-verifies the outputs host-side, and
+    deletes the workdir — so the container is probe-free for the whole agent
+    phase. The ``probe.sandbox-state/1`` bundle is authored host-side into the
+    trial tree by :meth:`write_bundle` (call it after ``Trial.run`` returns),
+    where it rides the normal ``stage_trial_export`` capture.
+
+    Fail-open by contract: Harbor's ``_emit`` propagates hook exceptions and
+    ``AGENT_END`` fires in the agent phase's ``finally``, so every callback
+    swallows its own errors — a capture failure never masks the trial result.
+    ``asyncio.CancelledError`` (a BaseException) is deliberately not caught.
+
+    This is the SDK-owned home for the logic the Miles bridge used to carry;
+    a bridge should construct this instead of duplicating it.
+    """
+
+    def __init__(
+        self,
+        trial: Any,
+        host_dir: Path,
+        *,
+        begin_timeout_sec: float = 120.0,
+        end_timeout_sec: float = 300.0,
+        exclude: str = "",
+        hash_files: bool = False,
+    ) -> None:
+        self._trial = trial
+        self._host_dir = Path(host_dir)
+        self._begin_timeout = begin_timeout_sec
+        self._end_timeout = end_timeout_sec
+        self._exclude = exclude
+        self._hash = hash_files
+        self._arch: str | None = None
+        self._trailers: dict[str, dict[str, Any]] = {}
+        self._timestamps: dict[str, str] = {}
+        self._integrity: dict[str, bool] = {}
+        self._errors: list[str] = []
+        self.status: dict[str, str | None] = {"begin": None, "end": None}
+
+    def install(self) -> None:
+        """Register the AGENT_START/AGENT_END hooks (needs the harbor package)."""
+        from harbor.trial.hooks import TrialEvent
+
+        self._trial.add_hook(TrialEvent.AGENT_START, self._hook("begin"))
+        self._trial.add_hook(TrialEvent.AGENT_END, self._hook("end"))
+
+    def _timeout(self, phase: str) -> float:
+        return self._begin_timeout if phase == "begin" else self._end_timeout
+
+    def _hook(self, phase: str):
+        async def callback(_event: Any) -> None:
+            try:
+                await asyncio.wait_for(self._run_phase(phase), timeout=self._timeout(phase))
+                self.status[phase] = "ok"
+            except Exception as exc:  # noqa: BLE001 - fail-open into Harbor's _emit
+                logger.exception("sandbox-state %s snapshot failed", phase)
+                self.status[phase] = f"{type(exc).__name__}: {exc}"
+
+        return callback
+
+    async def _run_phase(self, phase: str) -> None:
+        if phase == "end" and self.status.get("begin") != "ok":
+            raise RuntimeError("begin snapshot unavailable; end delta skipped")
+        env = self._trial.agent_environment
+        # exec timeout bounds the HOST wait; the binary's own --max-seconds
+        # (set below it) bounds the in-CONTAINER process so a runaway scan exits
+        # itself rather than lingering past the agent phase.
+        exec_timeout = max(1, int(self._timeout(phase)))
+        self_deadline = max(1.0, self._timeout(phase) - 10)
+        workdir = f"/tmp/.psbx-{uuid.uuid4().hex}"
+        try:
+            if self._arch is None:
+                self._arch = await self._detect_arch(env)
+            # Pre-create the workdir so Harbor's primary `docker compose cp`
+            # upload path (no parent creation) succeeds without the tar fallback.
+            await env.exec(f"mkdir -p {shlex.quote(workdir)}", user="root", timeout_sec=exec_timeout)
+            await env.upload_file(sandbox_state.snapshot_binary_path(self._arch), f"{workdir}/snap")
+            command = (
+                f"chmod +x {workdir}/snap && {workdir}/snap {phase} "
+                f"--workdir {shlex.quote(workdir)} --max-seconds {self_deadline:.0f}"
+            )
+            if phase == "end":
+                await env.upload_file(self._host_dir / sandbox_state.BEGIN_MANIFEST, f"{workdir}/begin.jsonl.gz")
+                command += f" --begin-manifest {workdir}/begin.jsonl.gz"
+            if self._exclude:
+                command += f" --exclude {shlex.quote(self._exclude)}"
+            if self._hash:
+                command += " --hash"
+            result = await env.exec(command, user="root", timeout_sec=exec_timeout)
+            if result.return_code != 0:
+                raise RuntimeError(f"snapshot exited {result.return_code}: {(result.stderr or '').strip()[-500:]}")
+            trailer = sandbox_state.parse_trailer(result.stdout or "")
+            for name in _SANDBOX_STATE_OUTPUTS[phase]:
+                target = self._host_dir / name
+                await env.download_file(f"{workdir}/{name}", target)
+                declared = trailer.get("files", {}).get(name, {}).get("sha256")
+                digest = await asyncio.to_thread(sandbox_state.sha256_file, target)
+                self._integrity[name] = bool(declared) and digest == declared
+            self._trailers[phase] = trailer
+            self._timestamps[phase] = datetime.now(timezone.utc).isoformat()
+        finally:
+            # Leave the container probe-free even on failure; a dead environment
+            # makes this raise, which the timeout + suppress handle.
+            with contextlib.suppress(Exception):
+                await env.exec(f"rm -rf {shlex.quote(workdir)}", user="root", timeout_sec=exec_timeout)
+
+    async def _detect_arch(self, env: Any) -> str:
+        try:
+            result = await env.exec("uname -m", timeout_sec=30)
+            machine = (result.stdout or "").strip()
+        except Exception as exc:  # noqa: BLE001 - default arch keeps capture best-effort
+            self._errors.append(f"arch detection failed, assuming amd64: {exc}")
+            return "amd64"
+        arch = sandbox_state.machine_to_arch(machine)
+        if arch is None:
+            self._errors.append(f"unrecognized machine {machine!r}, assuming amd64")
+            return "amd64"
+        return arch
+
+    def record_install_failure(self, exc: Exception) -> None:
+        self._errors.append(f"hook install failed: {type(exc).__name__}: {exc}")
+
+    def attempted(self) -> bool:
+        return any(value is not None for value in self.status.values())
+
+    def write_bundle(self, trial_dir: Path) -> dict[str, Any]:
+        """Author the bundle host-side into ``trial_dir/artifacts/``; never raises."""
+        try:
+            if self.attempted():
+                meta = sandbox_state.build_meta(
+                    begin_trailer=self._trailers.get("begin"),
+                    end_trailer=self._trailers.get("end"),
+                    status=self.status,
+                    begin_at=self._timestamps.get("begin"),
+                    end_at=self._timestamps.get("end"),
+                    arch=self._arch,
+                    integrity=self._integrity,
+                    errors=self._errors,
+                )
+                sandbox_state.write_bundle(
+                    Path(trial_dir) / "artifacts" / sandbox_state.BUNDLE_DIRNAME,
+                    {name: self._host_dir / name for outputs in _SANDBOX_STATE_OUTPUTS.values() for name in outputs},
+                    meta,
+                )
+        except Exception as exc:  # noqa: BLE001 - bundle loss must not fail staging
+            logger.exception("sandbox-state bundle write failed")
+            self._errors.append(f"bundle write failed: {type(exc).__name__}: {exc}")
+        finally:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(self._host_dir, ignore_errors=True)
+        return self.summary()
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "schema": sandbox_state.SCHEMA,
+            "status": dict(self.status) if self.attempted() else "not_attempted",
+            "arch": self._arch,
+            "integrity": dict(self._integrity),
+            "errors": list(self._errors),
+        }
