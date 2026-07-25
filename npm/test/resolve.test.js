@@ -57,7 +57,9 @@ test("bin is executable and parses", () => {
 test("every fallback constrains the version", () => {
   // Unpinned, `uv tool run --from probe-research` reuses an already-installed
   // old tool and the version gate above buys nothing.
-  const fallbacks = source.match(/"tool", "run", "--from", [^\]]+/g) || [];
+  // Match the whole uv call, not a fixed argument order — inserting a flag
+  // before --from must not silently stop this test matching anything.
+  const fallbacks = source.match(/"tool",\s*"run",[^\]]+/g) || [];
   assert.ok(fallbacks.length >= 2, "expected uv fallbacks");
   for (const f of fallbacks) {
     assert.ok(/spec|>=/.test(f), `unconstrained uv fallback: ${f}`);
