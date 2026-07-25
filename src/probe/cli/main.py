@@ -19,6 +19,7 @@ import json
 import os
 import shlex
 import sys
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -331,6 +332,12 @@ def update(
         "--plugin/--no-plugin",
         help="also update the Claude Code plugin via `claude` (default: on)",
     ),
+    channel: str = typer.Option(
+        None,
+        "--channel",
+        help="release channel to follow: latest, or stable to avoid a new CLI "
+        "landing mid-experiment (default: whatever `probe setup` configured)",
+    ),
 ) -> None:
     """Update the Probe Research CLI, and the Claude Code plugin, to the latest release.
 
@@ -364,6 +371,7 @@ def update(
     install = updater.detect_install()
     print(f"Probe Research CLI {__version__}  (installed via: {install.method})")
     cli_target = updater.cli_latest(manifest)
+    res: updater.CliResult | None = None
 
     if install.method in (
         updater.Method.EDITABLE,
@@ -388,6 +396,23 @@ def update(
             print("  update it manually, then restart Claude Code:")
             for line in updater.manual_plugin_commands().split("\n"):
                 print(f"    {line}")
+
+    # Record the outcome. When this runs detached from the SessionStart hook
+    # there is nowhere else for a failure to surface -- an auto-updater that has
+    # silently failed for a month looks exactly like one that works. `probe
+    # doctor` prints this line.
+    autoupdate_mod.record_attempt(
+        autoupdate_mod.Attempt(
+            at=int(time.time()),
+            # No `res` means the install method was one we refuse to auto-upgrade
+            # (editable / managed / unknown). That is a deliberate skip, not a
+            # failure, so it records as ok with the reason.
+            ok=res.ok if res is not None else True,
+            detail="" if res is None or res.ok else res.message,
+            from_version=__version__,
+            to_version=(res.after if res is not None else None) or cli_target,
+        )
+    )
 
 
 @app.command()
@@ -498,14 +523,23 @@ def setup(
     for message in messages:
         print(message)
 
-    grants = wizard.grants_for(selection)
-    if grants and not caps.logged_in_as:
-        print(
-            "\nNext: approve this device in your browser. One approval covers "
-            f"everything you ticked ({', '.join(grants)}):"
+    # ONE browser approval covering everything ticked. Doing it HERE rather than
+    # telling the user to go run `probe login` is the difference between capture
+    # actually being on and the wizard merely claiming it is.
+    needs = wizard.needs_authorization(caps, selection)
+    if needs:
+        print(f"\nOne browser approval covers everything you ticked ({', '.join(needs)}).")
+        base = resolve(base_url=_conn.base_url).base_url
+        _, auth_messages = wizard.authorize(
+            needs,
+            base_url=base,
+            on_prompt=_show_device_prompt,
+            open_browser=True,
         )
-        print(f"  probe login")
-    print(f"\nRun `probe doctor` to confirm.")
+        for message in auth_messages:
+            print(message)
+
+    print("\nRun `probe doctor` to confirm.")
 
 
 # -- mcp read credential ----------------------------------------------------

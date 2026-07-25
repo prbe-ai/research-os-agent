@@ -186,6 +186,92 @@ def grants_for(selection: Selection) -> list[str]:
     return grants
 
 
+def needs_authorization(caps: Capabilities, selection: Selection) -> list[str]:
+    """The grants this run must actually obtain, skipping ones already held.
+
+    Re-running with everything already working must NOT drag the user through
+    another browser approval -- the wizard is a manager as well as an installer,
+    and a no-op re-run should be a no-op.
+    """
+    wanted = grants_for(selection)
+    if not wanted:
+        return []
+    have: set[str] = set()
+    if caps.logged_in_as:
+        have.add("api")
+    if caps.capture_token_sources:
+        have.add("capture")
+    # `mcp` has no cheap local signal, so it rides along with `api`: they are
+    # always requested together and always minted together.
+    if "api" in have:
+        have.add("mcp")
+    return [grant for grant in wanted if grant not in have]
+
+
+def authorize(
+    grants: list[str],
+    *,
+    base_url: str,
+    on_prompt=None,
+    open_browser: bool = True,
+) -> tuple[dict[str, dict], list[str]]:
+    """Run ONE browser approval covering everything the user ticked, and persist
+    every credential it mints.
+
+    This is the step that makes the whole feature true. Computing the grant set
+    and then telling the user to go run `probe login` would leave them with a
+    PAT and no capture credential -- capture would still be off after a setup
+    that said it turned it on.
+
+    All three credentials go into a single `save_context` write: it is one
+    locked read-modify-write, so a partial failure cannot leave the config with
+    a PAT but no ingest token (which reads as "logged in, capture silently
+    off"). `ingest_token` is exactly where the uploader looks.
+    """
+    from probe.sdk.config import resolve, save_context
+    from probe.sdk.device import DeviceLoginError, credentials_by_grant, device_authorize
+
+    if not grants:
+        return {}, []
+
+    try:
+        minted = device_authorize(
+            base_url,
+            grants=grants,
+            on_prompt=on_prompt,
+            open_browser=open_browser,
+        )
+    except DeviceLoginError as exc:
+        return {}, [f"browser approval failed: {exc}"]
+
+    by_grant = credentials_by_grant(minted)
+    messages: list[str] = []
+
+    updates: dict[str, str | None] = {"base_url": resolve(base_url=base_url).base_url}
+    if "api" in by_grant:
+        updates["token"] = by_grant["api"]["token"]
+    if "mcp" in by_grant:
+        updates["mcp_token"] = by_grant["mcp"]["token"]
+    if "capture" in by_grant:
+        updates["ingest_token"] = by_grant["capture"]["token"]
+
+    save_context(updates)
+
+    for grant in grants:
+        if grant not in by_grant:
+            # Approved, but the backend minted nothing for it. Say so rather
+            # than reporting a capability that will not work.
+            messages.append(
+                f"! the server did not return a '{grant}' credential — "
+                "that capability is NOT active"
+            )
+    if "capture" in by_grant:
+        messages.append(
+            f"Session capture paired (device {by_grant['capture'].get('device_id', '?')})."
+        )
+    return by_grant, messages
+
+
 def plan(caps: Capabilities, selection: Selection) -> list[str]:
     """A human-readable diff of what this run will change. Printed before
     anything is touched, so `--yes` in CI still leaves an audit trail."""

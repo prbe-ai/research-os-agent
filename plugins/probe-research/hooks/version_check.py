@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import subprocess
 import sys
 import time
@@ -195,6 +196,50 @@ def _local_plugin(plugin_json: str):
         return None
 
 
+# ---------------------------------------------------------------------------
+# Auto-update (opt-in via `probe setup`).
+#
+# The upgrade is spawned DETACHED and this hook returns immediately. The hook is
+# synchronous by contract -- its systemMessage cannot come from a background
+# process -- and `probe update` allows itself 300s, so applying inline would let
+# a Claude Code session hang for up to five minutes before you could type.
+# Nothing is lost by deferring: a plugin update only takes effect on restart
+# anyway, so a background upgrade lands for the NEXT session either way.
+#
+# `probe update --yes` records its own outcome, which is the only way a detached
+# run can report failure. `probe doctor` prints it.
+# ---------------------------------------------------------------------------
+
+
+def _autoupdate_settings() -> dict:
+    """Read the opt-in state written by `probe setup`. Fail-soft to OFF."""
+    base = os.environ.get("XDG_STATE_HOME")
+    root = pathlib.Path(base) if base else pathlib.Path.home() / ".local" / "state"
+    try:
+        data = json.loads((root / "probe" / "autoupdate.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _spawn_autoupdate(probe_bin: str) -> None:
+    """Fire the upgrade and forget it. Never raises into the hook."""
+    settings = _autoupdate_settings()
+    if not settings.get("enabled"):
+        return
+    channel = settings.get("channel") or "latest"
+    try:
+        subprocess.Popen(  # noqa: S603 - resolved binary, no shell
+            [probe_bin, "update", "--yes", "--channel", str(channel)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,  # survives this hook exiting
+        )
+    except (OSError, ValueError):
+        pass  # fail-open: a broken auto-update must never block a session
+
+
 def main() -> None:
     cache = _cache_path()
     manifest, fetched_at, ok = _read_cache(cache)
@@ -264,6 +309,11 @@ def main() -> None:
         "`claude plugin update probe-research@research-os-agent`, then restart "
         "Claude Code. Do not nag; only act if they ask."
     )
+
+    # An update exists. If the user opted in, apply it in the background; the
+    # nudge below still renders this session, because the upgrade only takes
+    # effect on the next one.
+    _spawn_autoupdate(os.environ.get("PROBE_BIN") or "probe")
 
     _emit({
         "systemMessage": sys_msg,

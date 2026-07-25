@@ -27,6 +27,10 @@ def isolate(tmp_path, monkeypatch):
     """Point every state path at a tmpdir so tests never touch a real install."""
     monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(tmp_path / "tap"))
     monkeypatch.setenv("PROBE_CONFIG_PATH", str(tmp_path / "probe" / "config.json"))
+    # BOTH conventions: the tap honours PROBE_CONFIG_PATH, the SDK honours
+    # XDG_CONFIG_HOME. They agree in production (~/.config/probe/config.json);
+    # a test that sets only one writes to the developer's REAL config.
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.delenv(ENV_INGEST_TOKEN, raising=False)
     (tmp_path / "tap").mkdir(parents=True, exist_ok=True)
@@ -347,3 +351,124 @@ def test_a_genuinely_fresh_machine_still_gets_defaults():
     )
     assert selection.tracking is True
     assert selection.auto_update is True
+
+
+# --- the pieces that make it actually work --------------------------------
+
+
+def test_setup_requests_only_the_grants_it_still_needs():
+    """A re-run where everything already works must not drag the user through
+    another browser approval."""
+    fully_set_up = _caps(
+        tracking_plugin_installed=True,
+        logged_in_as="richard@prbe.ai",
+        capture_token_sources=(TokenSource.PAIRED_FILE,),
+    )
+    everything = setup.Selection(tracking=True, capture=True, auto_update=True)
+    assert setup.needs_authorization(fully_set_up, everything) == []
+
+    # Logged in, but capture was never paired: ask for capture ALONE.
+    tracking_only = _caps(tracking_plugin_installed=True, logged_in_as="richard@prbe.ai")
+    assert setup.needs_authorization(tracking_only, everything) == ["capture"]
+
+    # Nothing yet: ask for all three in one approval.
+    assert setup.needs_authorization(_caps(), everything) == ["api", "mcp", "capture"]
+
+
+def test_authorize_persists_every_minted_credential(isolate, monkeypatch):
+    """The gap this closes: computing a grant set and never sending it left
+    capture off after a setup that said it turned it on."""
+    sent = {}
+
+    def fake_device_authorize(base_url, **kwargs):
+        sent.update(kwargs)
+        return {
+            "token": "probe_pat_api",
+            "id": "api-id",
+            "grants": [
+                {"grant": "api", "token": "probe_pat_api", "token_id": "api-id"},
+                {"grant": "mcp", "token": "probe_pat_mcp", "token_id": "mcp-id"},
+                {"grant": "capture", "token": "ros_ing_dev", "device_id": "dev-1"},
+            ],
+        }
+
+    monkeypatch.setattr("probe.sdk.device.device_authorize", fake_device_authorize)
+
+    by_grant, messages = setup.authorize(
+        ["api", "mcp", "capture"],
+        base_url="https://api.research.prbe.ai",
+        open_browser=False,
+    )
+
+    assert sent["grants"] == ["api", "mcp", "capture"]
+    assert set(by_grant) == {"api", "mcp", "capture"}
+    assert any("paired" in m for m in messages)
+
+    # The capture credential landed where the uploader actually looks for it.
+    assert TokenSource.PROBE_CONFIG in capture_token_sources()
+    from probe.cli.capabilities import probe_config_credentials
+
+    creds = probe_config_credentials()
+    assert creds["token"] == "probe_pat_api"
+    assert creds["mcp_token"] == "probe_pat_mcp"
+    assert creds["ingest_token"] == "ros_ing_dev"
+
+
+def test_authorize_says_so_when_the_server_returns_nothing_for_a_grant(
+    isolate, monkeypatch
+):
+    """Approved but not minted must not read as success."""
+    monkeypatch.setattr(
+        "probe.sdk.device.device_authorize",
+        lambda base_url, **kw: {"grants": [{"grant": "api", "token": "probe_pat_x"}]},
+    )
+    _, messages = setup.authorize(
+        ["api", "capture"], base_url="https://x", open_browser=False
+    )
+    assert any("capture" in m and "NOT active" in m for m in messages)
+
+
+def test_authorize_reports_a_failed_approval_instead_of_claiming_success(
+    isolate, monkeypatch
+):
+    from probe.sdk.device import DeviceLoginError
+
+    def boom(base_url, **kw):
+        raise DeviceLoginError("the user denied this request")
+
+    monkeypatch.setattr("probe.sdk.device.device_authorize", boom)
+    by_grant, messages = setup.authorize(
+        ["api"], base_url="https://x", open_browser=False
+    )
+    assert by_grant == {}
+    assert any("denied" in m for m in messages)
+
+
+def test_older_backend_without_grants_still_yields_the_api_credential():
+    """A backend that predates grants returns only the top-level PAT."""
+    from probe.sdk.device import credentials_by_grant
+
+    assert credentials_by_grant({"token": "probe_pat_old", "id": "t1"}) == {
+        "api": {"grant": "api", "token": "probe_pat_old", "token_id": "t1"}
+    }
+
+
+def test_device_authorize_omits_grants_entirely_when_not_asked(monkeypatch):
+    """Sending `grants: null` would fail validation on an older backend."""
+    import httpx
+
+    captured = {}
+
+    class FakeClient:
+        def post(self, path, json=None):
+            captured.update(json or {})
+            raise httpx.HTTPError("stop here")
+
+        def close(self):
+            pass
+
+    from probe.sdk import device
+
+    with pytest.raises(device.DeviceLoginError):
+        device.device_authorize("https://x", client=FakeClient(), open_browser=False)
+    assert "grants" not in captured
