@@ -152,13 +152,8 @@ def test_no_view_reports_missing_unconditionally(client, app):
     is always populated."""
     rid, experiment_id, group_id, _ = _populated(client, app)
     project_id = app.runs[rid].get("project_id") or client.list_projects().items[0]["id"]
-    # An asset WITH a version, so `versions` is exercised against a populated
-    # entity like every other view rather than being quietly exempted.
-    asset = client.assets.register("official-scorer", kind="method")
-    client.assets.add_version(asset["id"], content_hash="h1", uri="r2://b/1")
     refs = {"run": f"run:{rid}", "experiment": f"experiment:{experiment_id}",
-            "project": f"project:{project_id}", "group": f"group:{group_id}",
-            "asset": "asset:official-scorer"}
+            "project": f"project:{project_id}", "group": f"group:{group_id}"}
     service = _service(client)
 
     for kind, view in sorted(_VIEWS):
@@ -481,7 +476,6 @@ def test_research_context_can_finally_report_complete(client, app):
     _populated(client, app)
     result = _service(client).research_context("dockq")
 
-    assert result["capabilities"]["versioned_assets"] is True
     assert result["capabilities"]["managed_artifact_upload"] is True
     assert result["capabilities"]["portable_snapshots"] is False  # honest, and not "missing"
     assert "promotion_manifests" not in result["capabilities"]  # rejected, not "coming"
@@ -490,111 +484,21 @@ def test_research_context_can_finally_report_complete(client, app):
     assert result["data"]["warnings"] == []
 
 
-def test_research_context_reads_official_assets_instead_of_claiming_none(client, app):
-    """official_assets was hardcoded []. That was survivable only while a warning
-    said the registry was unavailable; with versioned_assets now True, an empty
-    list would read as "there are no official assets" — an answer nobody looked
-    for. The registry has been live the whole time."""
-    _populated(client, app)
-    asset = client.assets.register("dockq-scorer", kind="method")
-    client.assets.add_version(asset["id"], content_hash="sha256:abc", uri="s3://b/v1.py", label="v1")
-
-    result = _service(client).research_context("dockq", token_budget=100_000)
-    assert [a["name"] for a in result["data"]["official_assets"]] == ["dockq-scorer"]
-
-
 def test_research_context_token_budget_bounds_its_lists(client, app):
     """The other inert knob: research_context accepted token_budget and echoed it
     straight back into the payload, bounding nothing."""
     for i in range(30):
-        client.assets.register(f"asset-{i}", kind="dataset", description="x" * 200)
+        client.create_project(slug=f"budget-{i}", name="x" * 200)
     service = _service(client)
 
     big = service.research_context("dockq", token_budget=100_000)
     small = service.research_context("dockq", token_budget=400)
 
-    assert len(small["data"]["official_assets"]) < len(big["data"]["official_assets"])
+    assert len(small["data"]["projects"]) < len(big["data"]["projects"])
     assert len(json.dumps(small["data"], default=str)) // 4 <= 400 * 1.5
     assert "truncated_by_token_budget" in small["completeness"]["missing"]
     assert small["completeness"]["state"] == "partial"
     assert "token_budget" not in small["data"]  # the echo is gone, not decorated
-
-
-def test_asset_absent_and_asset_unsatisfiable_look_different(client, app):
-    """The two "nothing"s must not be confusable.
-
-    A name that does not exist is a bad ref, like any other bad ref. A name that
-    EXISTS with no version satisfying the constraint is a real answer: the asset
-    is there, the ceiling is just too low. Collapse them and an agent reads a
-    version ceiling as "no such asset" and writes a duplicate -- the exact
-    outcome the reuse check exists to prevent.
-    """
-    from probe.sdk import errors
-
-    asset = client.assets.register("bird-sql-scorer", kind="method")
-    client.assets.add_version(asset["id"], content_hash="h1", uri="r2://b/1")
-    service = _service(client)
-
-    # 1. Absent -> NotFound, same as any bad ref.
-    with pytest.raises(errors.NotFoundError):
-        service.get_entity("asset:does-not-exist", view="versions")
-
-    # 2. Exists, constraint satisfiable.
-    ok = service.get_entity(
-        "asset:bird-sql-scorer", view="versions", filters={"requirement": ">=1"}
-    )
-    assert ok["data"]["state"] == "match"
-    assert ok["data"]["satisfying_count"] == 1
-
-    # 3. Exists, constraint UNSATISFIABLE -> no_match, and the versions that DO
-    #    exist come back so the real ceiling is visible rather than asserted.
-    ceiling = service.get_entity(
-        "asset:bird-sql-scorer", view="versions", filters={"requirement": ">=2"}
-    )
-    assert ceiling["data"]["state"] == "no_match"
-    assert ceiling["data"]["satisfying_count"] == 0
-    assert [v["version"] for v in ceiling["data"]["versions"]] == [1]
-    # Not an error: the caller asked a well-formed question and got a true answer.
-    assert ceiling["completeness"]["state"] == "complete"
-
-
-def test_asset_lookup_is_one_filtered_request_not_a_registry_walk(client, app):
-    """Absence must be authoritative, not "we stopped looking".
-
-    The old path walked every page client-side and returned the same bare None
-    whether it exhausted the registry or hit its 200-page cap.
-    """
-    for i in range(60):  # more than one default page
-        client.assets.register(f"filler-{i}", kind="dataset")
-    client.assets.register("needle", kind="method")
-
-    before = len([r for r in app.requests if r.url.path == "/v1/assets"])
-    found = client.assets.get_by_name("needle")
-    after = len([r for r in app.requests if r.url.path == "/v1/assets"])
-
-    assert found is not None and found["name"] == "needle"
-    # ONE request, even though the needle sits past the first default page.
-    assert after - before == 1
-
-    assert client.assets.get_by_name("no-such-asset") is None
-
-
-def test_asset_requirement_matches_integer_versions_not_semver(client, app):
-    """Asset versions are monotonic integers with optional labels.
-
-    Pretending to understand semver ranges over integers would answer
-    confidently and wrongly, which is what this whole view exists to prevent.
-    """
-    asset = client.assets.register("scorer", kind="method")
-    for i in range(3):
-        client.assets.add_version(asset["id"], content_hash=f"h{i}", uri=f"r2://b/{i}")
-    service = _service(client)
-
-    for requirement, expect_state in ((">=3", "match"), (">3", "no_match"), ("<=1", "match")):
-        out = service.get_entity(
-            "asset:scorer", view="versions", filters={"requirement": requirement}
-        )
-        assert out["data"]["state"] == expect_state, requirement
 
 
 def test_card_advertises_exactly_the_views_that_kind_supports(client, app):

@@ -283,9 +283,7 @@ _PAGE_FETCH = 200
 _SPAN_BACKEND_MAX = 10_000  # GET /v1/runs/{id}/spans
 _METRIC_BACKEND_MAX = 100_000  # GET /v1/runs/{id}/metrics
 
-# Registry rows pulled for research_context's official_assets. GET /v1/assets caps
 # `limit` at 200; the token budget trims below this anyway.
-_CONTEXT_ASSET_LIMIT = 50
 
 
 def _tokens(value: Any) -> int:
@@ -417,8 +415,6 @@ _VIEWS: dict[tuple[str, str], str] = {
     # Assets: the reuse-before-create seam. `versions` is where research_resolve
     # went -- an asset lookup is a read of one entity, and it never needed a
     # tool of its own.
-    (EntityType.ASSET, View.CARD): "_view_card",
-    (EntityType.ASSET, View.VERSIONS): "_view_asset_versions",
     # NO asset lineage view. There is no backend route for it, so it could only
     # ever answer `edges: []` -- and an agent reads that as "this asset has no
     # lineage", a confident wrong answer. Exactly why research_trace_file was
@@ -440,7 +436,6 @@ _VIEW_FILTERS: dict[tuple[str, str], set[str]] = {
     # `at` is deliberately absent: the SDK accepted it and never read it, and
     # no backend as-of resolution exists. Advertising a parameter that silently
     # does nothing is worse than not having one.
-    (EntityType.ASSET, View.VERSIONS): {"requirement"},
 }
 
 
@@ -638,29 +633,16 @@ class ResearchReadService:
         # source, but a transient probe failure must not re-fire three times here).
         capabilities = self.source.capabilities()
 
-        # `official_assets` was hardcoded [] behind a warning that the registry was
-        # "unavailable on API v3". The registry is live, so the warning was the only
-        # thing keeping the empty list from reading as "there are no official
-        # assets" — an answer we had never actually looked for.
-        official_assets: list[dict] = []
+        # The separate asset registry is retired: a reusable asset IS an artifact
+        # now, so there is no second inventory to fetch and nothing here can be
+        # missing on its account.
         missing: list[str] = []
-        if capabilities[Capability.VERSIONED_ASSETS]:
-            try:
-                official_assets = self.source.assets(limit=_CONTEXT_ASSET_LIMIT)
-            except errors.RosError:
-                missing.append(Capability.VERSIONED_ASSETS)
-        else:
-            missing.append(Capability.VERSIONED_ASSETS)
 
         fixed: dict[str, Any] = {
             "task": task,
             "session_id": session_id,
             "project": project,
-            "warnings": (
-                ["versioned asset registry is unreachable; official_assets is not authoritative"]
-                if missing
-                else []
-            ),
+            "warnings": [],
         }
         # `missing` is what THIS response lacks, NOT an inventory of everything the
         # backend cannot do. Deriving it from every False capability is what pinned
@@ -671,7 +653,6 @@ class ResearchReadService:
             [
                 ("relevant_experiments", relevant),
                 ("active_runs", active_runs[:10]),
-                ("official_assets", official_assets),
                 ("projects", [] if project is not None else projects),
             ],
             max(0, token_budget - _tokens(fixed)),
@@ -1233,35 +1214,6 @@ class ResearchReadService:
             rows=self.source.experiment_versions(str(entity["id"])), rows_key="versions"
         )
 
-    def _view_asset_versions(self, entity: dict, request: _Req) -> _ViewData:
-        """An asset's versions, newest first, optionally constrained.
-
-        Two different empty answers must not look alike. A name that does not
-        exist never reaches here -- source.get raises NotFound, the same as any
-        other bad ref. Reaching here with nothing to show means the asset EXISTS
-        and no version satisfies the constraint, which is `state="no_match"`
-        PLUS the versions that do exist, so the caller can see the real ceiling
-        and decide whether to relax the constraint or publish a new version.
-        Collapsing the two would make a typo and a genuine version ceiling
-        indistinguishable, and an agent that reads "absent" writes a duplicate.
-        """
-        versions = self.source.asset_versions(str(entity["id"]))
-        requirement = request.filters.get("requirement")
-        if not requirement:
-            return _ViewData(rows=versions, rows_key="versions")
-        satisfying = [v for v in versions if _satisfies(v, requirement)]
-        return _ViewData(
-            rows=satisfying or versions,
-            rows_key="versions",
-            payload={
-                "requirement": requirement,
-                "state": "match" if satisfying else "no_match",
-                # On no_match the rows above are the FULL list, so the ceiling
-                # is visible rather than merely asserted.
-                "satisfying_count": len(satisfying),
-            },
-        )
-
     def research_compare(
         self,
         refs: list[str],
@@ -1280,19 +1232,3 @@ class ResearchReadService:
         }
         return self._envelope({"entities": rows, "comparison": comparison})
 
-    def research_resolve(
-        self,
-        name: str,
-        kind: str | None = None,
-        requirement: str | None = None,
-        at: str | None = None,
-    ) -> dict:
-        # The old `except CapabilityUnavailable` branch here was UNREACHABLE:
-        # source.resolve_asset -> client.assets.resolve never raises it (the only
-        # raisers are the /v1/search probe and run.env_ref). It returned a
-        # hardcoded no_match warning that "the asset registry is not implemented
-        # on API v3" — while /v1/assets has been live all along. assets.resolve
-        # already reports an honest state=match|no_match of its own.
-        return self._envelope(
-            self.source.resolve_asset(name=name, kind=kind, requirement=requirement, at=at)
-        )

@@ -18,7 +18,6 @@ from typing import TYPE_CHECKING
 
 # Public name -> the submodule that defines it. Keep in step with ``__all__``.
 _LAZY: dict[str, str] = {
-    "AssetClient": "assets",
     "CaptureLedger": "capture",
     "CaptureState": "capture",
     "stable_external_key": "capture",
@@ -47,7 +46,6 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at runtime
-    from .assets import AssetClient
     from .capture import (
         CaptureLedger,
         CaptureState,
@@ -62,7 +60,6 @@ if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at run
 
 
 __all__ = [
-    "AssetClient",
     "CaptureLedger",
     "CaptureState",
     "Client",

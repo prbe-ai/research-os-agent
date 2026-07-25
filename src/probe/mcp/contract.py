@@ -123,7 +123,6 @@ class Capability(StrEnum):
     PROJECT_SCOPED_SEARCH = "project_scoped_search"
     SEMANTIC_SEARCH = "semantic_search"
     KB_DOCUMENTS = "kb_documents"
-    VERSIONED_ASSETS = "versioned_assets"
     PORTABLE_SNAPSHOTS = "portable_snapshots"
     MANAGED_ARTIFACT_UPLOAD = "managed_artifact_upload"
 

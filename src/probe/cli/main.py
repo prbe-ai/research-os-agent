@@ -2158,60 +2158,6 @@ def hook_session_detach(
     _print_json(result)
 
 
-# -- reusable asset registry (fold #5) --------------------------------------
-asset_app = typer.Typer(no_args_is_help=True, help="named asset registry + zero-copy versions")
-app.add_typer(asset_app, name="asset")
-
-
-@asset_app.command("register")
-def asset_register(
-    name: str = typer.Argument(...),
-    kind: str = typer.Option("dataset", "--kind"),
-    description: str = typer.Option(None, "--description"),
-    tag: list[str] = typer.Option(None, "--tag"),
-) -> None:
-    """Create a named asset (409 if the name already exists)."""
-    with _client() as c:
-        result = c.assets.register(name, kind=kind, description=description, tags=tag or None)
-    _print_json(result)
-
-
-@asset_app.command("version")
-def asset_version(
-    asset_id: str = typer.Argument(...),
-    from_artifact: str = typer.Option(None, "--from-artifact", help="zero-copy from an artifact id"),
-    content_hash: str = typer.Option(None, "--content-hash"),
-    uri: str = typer.Option(None, "--uri"),
-    label: str = typer.Option(None, "--label"),
-) -> None:
-    """Pin a new immutable version (zero-copy from an artifact, or by content_hash)."""
-    with _client() as c:
-        result = c.assets.add_version(
-            asset_id, from_artifact_id=from_artifact, content_hash=content_hash, uri=uri, label=label
-        )
-    _print_json(result)
-
-
-@asset_app.command("list")
-def asset_list() -> None:
-    """List assets."""
-    with _client() as c:
-        _print_json(c.assets.list().items)
-
-
-@asset_app.command("materialize")
-def asset_materialize(
-    name: str = typer.Argument(...),
-    to: str = typer.Option(..., "--to", help="local destination path"),
-    kind: str = typer.Option(None, "--kind"),
-    requirement: str = typer.Option(None, "--requirement", help="exact version number or label"),
-) -> None:
-    """Download a pinned asset version's bytes to a local path."""
-    with _client() as c:
-        result = c.assets.materialize(name, to, kind=kind, requirement=requirement)
-    _print_json(result)
-
-
 # -- lineage edges (fold #2) ------------------------------------------------
 edge_app = typer.Typer(no_args_is_help=True, help="lineage edges (run/artifact/asset_version)")
 app.add_typer(edge_app, name="edge")

@@ -60,18 +60,6 @@ def test_hook_session_surface_attaches_checkpoints_and_detaches(client, app, tmp
     assert artifact["meta"]["portable"] is False
 
 
-def test_asset_registry_registers_and_versions(client, app):
-    client.fail_open = False
-    asset = client.assets.register("dockq-scorer", kind="script")
-    version = client.assets.add_version(asset["id"], content_hash="c" * 64, label="v1")
-    assert version["asset_id"] == asset["id"]
-    assert version["version"] == 1
-    # the aspirational fork/propose/promote-candidate surface was dropped (registry only);
-    # materialize (download a pinned version) is supported in Phase 2.
-    assert not any(hasattr(client.assets, m) for m in ("fork", "propose"))
-    assert hasattr(client.assets, "materialize")
-
-
 def test_experiment_version_replaces_run_promote(client, app):
     client.fail_open = False
     exp = client.ensure_experiment("dockq", "DockQ", "h")

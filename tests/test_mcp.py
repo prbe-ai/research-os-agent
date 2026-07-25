@@ -557,14 +557,6 @@ def test_capability_cache_shared_across_token_factory_calls(client, app):
         server_mod._sources.clear()
 
 
-def test_asset_resolve_returns_no_match_when_not_found(client):
-    # The registry exists now (fold #5); resolving an absent asset is an honest
-    # no_match over the real registry, not a missing-capability.
-    service = ResearchReadService(ResearchOSSource(client))
-    result = service.research_resolve("dockq-scorer", kind="script")
-    assert result["data"]["state"] == "no_match"
-
-
 def test_server_exposes_exactly_the_read_tools(client):
     """Thin harness: coverage grows through research_get's `view`/`filters`, NEVER
     through more tools. Spans, groups, events, execution records and experiment
@@ -600,7 +592,6 @@ ALIASES = {
     "research_search",
     "research_get",
     "research_compare",
-    "research_resolve",
 }
 
 
@@ -981,7 +972,6 @@ def test_aliases_still_return_the_full_envelope(client, app):
     calls = {
         "research_search": {"query": "q"},
         "research_context": {"task": "t"},
-        "research_resolve": {"name": "a"},
     }
     for tool, args in calls.items():
         out = _call_tool(server, tool, args)
