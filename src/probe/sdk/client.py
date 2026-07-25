@@ -111,7 +111,6 @@ class Client:
         self._sessions = None
         self._events = None
         self._notes = None
-        self._assets = None
         # Stop signals for every live run-heartbeat thread this client minted.
         # Weak so a finished beat (its Run collected, its thread exited) doesn't
         # accumulate here for the client's whole life.
@@ -1288,14 +1287,6 @@ class Client:
             self._events = EventsReadClient(self)
         return self._events
 
-    @property
-    def assets(self):
-        """Versioned-asset registry client (fold #5): register + zero-copy versions."""
-        if self._assets is None:
-            from .assets import AssetClient
-
-            self._assets = AssetClient(self)
-        return self._assets
 
 
 # Late import to avoid a cycle at module load (Run needs Client, Client returns Run).

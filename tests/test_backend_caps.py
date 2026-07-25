@@ -67,34 +67,3 @@ def test_handoff_is_complete_when_the_bundle_was_not_capped(client, app):
     assert result["completeness"]["missing"] == []
     assert result["completeness"]["state"] == "complete"
 
-
-def test_resolve_scans_past_the_first_page_of_the_registry(client, app):
-    """GET /v1/assets defaults to limit=50 and Page does NOT auto-follow, so
-    `self.list().items` saw ONE page. Asset 51+ resolved to "no_match" — and no_match
-    is exactly what licenses a caller to register a NEW identity, so a registry over
-    50 assets silently manufactured the duplicates it exists to prevent."""
-    for i in range(60):
-        client.assets.register(f"asset-{i:02d}", kind="dataset")
-    target = "asset-55"
-
-    result = client.assets.resolve(target, kind="dataset")
-    assert result["state"] == "match", "resolve missed an asset past the first page"
-    assert result["asset"]["name"] == target
-
-
-def test_resolve_still_reports_no_match_for_an_asset_that_is_really_absent(client, app):
-    for i in range(60):
-        client.assets.register(f"asset-{i:02d}", kind="dataset")
-    assert client.assets.resolve("nope", kind="dataset")["state"] == "no_match"
-
-
-def test_research_resolve_finds_a_late_asset_through_the_mcp(client, app):
-    """The same bug through the tool an agent actually calls."""
-    for i in range(60):
-        client.assets.register(f"asset-{i:02d}", kind="dataset")
-    asset = next(a for a in app.assets.values() if a["name"] == "asset-55")
-    client.assets.add_version(asset["id"], content_hash="sha256:abc", label="v1")
-
-    result = _service(client).research_resolve("asset-55", kind="dataset")
-    assert result["data"]["state"] == "match"
-    assert result["data"]["selected"]["label"] == "v1"

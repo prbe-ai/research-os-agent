@@ -77,7 +77,6 @@ class ResearchOSSource:
             Capability.UNIFIED_SEARCH: supported,
             Capability.SEMANTIC_SEARCH: supported and self._search_semantic_ok,
             Capability.KB_DOCUMENTS: supported and self._search_semantic_ok,
-            Capability.VERSIONED_ASSETS: True,
             # The one honest False: sdk/snapshot.py captures git/env LOCALLY and
             # there is no backend snapshot route to read one back.
             Capability.PORTABLE_SNAPSHOTS: False,
@@ -231,10 +230,6 @@ class ResearchOSSource:
             self._record_search_response(response)
             return response
 
-    def asset_versions(self, asset_id: str) -> list[dict]:
-        """An asset's versions, newest first."""
-        return list(self.client.assets.versions(asset_id))
-
     def identity(self) -> dict:
         return self.client.me()
 
@@ -263,16 +258,6 @@ class ResearchOSSource:
             EntityType.PROJECT.value: self.client.get_project,
             EntityType.GROUP.value: self.client.get_group,
         }
-        if kind == EntityType.ASSET.value:
-            # Assets resolve by NAME, not id -- that is what makes them useful
-            # for the reuse check. Kept OUT of the bare-ref fallback below for
-            # the same reason: a bare id would then trigger a name lookup on
-            # every miss, and a typo would cost a registry round trip before
-            # erroring.
-            asset = self.client.assets.get_by_name(value)
-            if asset is None:
-                raise errors.NotFoundError(f"no asset named {value!r}")
-            return kind, asset
         if kind in getters:
             return kind, getters[kind](value)
         for candidate in getters:
@@ -328,10 +313,3 @@ class ResearchOSSource:
     def experiment(self, experiment_id: str) -> dict:
         return self.client.get_experiment(experiment_id)
 
-    def assets(self, *, limit: int = 50) -> list[dict]:
-        """The versioned-asset registry — live since fold #5, and never once read
-        by research_context, which returned a hardcoded empty official_assets."""
-        return self.client.assets.list(limit=limit).items
-
-    def resolve_asset(self, **query: Any) -> dict:
-        return self.client.assets.resolve(**query)

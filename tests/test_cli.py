@@ -205,3 +205,38 @@ def test_help_separates_hook_adapter_from_experiment_upload(capsys):
     output = capsys.readouterr().out
     assert "upload structured research knowledge" in output
     assert "internal coding-agent adapter commands" in output
+
+
+def test_a_backend_error_exits_nonzero(wired, capsys, monkeypatch):
+    """A failed request must set a FAILING exit code, not print and exit 0.
+
+    A CLI that reports an error on stderr while exiting 0 is worse than one that
+    crashes: every `set -e` script, CI step, and agent loop treats it as success
+    and keeps going on data it never got. Locked in here because the asset-group
+    removal was prompted by exactly this shape of report.
+    """
+    import importlib
+
+    from probe.sdk import errors
+
+    # `probe.cli.main` the SUBMODULE, not `probe.cli.main` the re-exported function
+    # that shadows it on the package.
+    impl = importlib.import_module("probe.cli.main")
+
+    def boom(*_a, **_kw):
+        raise errors.error_for(404, "Not Found")
+
+    monkeypatch.setattr(impl, "_print_json", boom)
+    rc = cli.main(["artifact", "versions", "00000000-0000-4000-8000-000000000000"])
+    assert rc == 1, "a failed request must not exit 0"
+    # Reported on stderr, so stdout stays clean for callers piping JSON.
+    captured = capsys.readouterr()
+    assert captured.err.startswith("error: ")
+    assert captured.out == ""
+
+
+def test_the_asset_command_group_is_gone(wired):
+    """`probe asset ...` 404s against the backend now that /v1/assets is deleted,
+    so the group is removed rather than left to fail at runtime. An unknown
+    command is a usage error (exit 2), never a success."""
+    assert cli.main(["asset", "list"]) == 2

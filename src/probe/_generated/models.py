@@ -144,56 +144,6 @@ class ArtifactVersionOut(BaseModel):
     version: int = Field(..., title='Version')
 
 
-class AssetCreate(BaseModel):
-    description: str | None = Field(None, title='Description')
-    kind: str | None = Field('dataset', title='Kind')
-    metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: str = Field(..., min_length=1, title='Name')
-    tags: list[str] | None = Field(None, title='Tags')
-
-
-class AssetOut(BaseModel):
-    created_at: AwareDatetime = Field(..., title='Created At')
-    customer_id: str = Field(..., title='Customer Id')
-    description: str | None = Field(None, title='Description')
-    id: UUID = Field(..., title='Id')
-    kind: str = Field(..., title='Kind')
-    metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: str = Field(..., title='Name')
-    tags: list[str] | None = Field(None, title='Tags')
-
-
-class AssetVersionCreate(BaseModel):
-    """
-    Create a version. Either PROMOTE from an existing artifact (`from_artifact_id`,
-    zero-copy: the version copies the artifact's content_hash + full r2:// uri + size)
-    OR supply the pointer identity directly.
-    """
-
-    content_hash: str | None = Field(None, title='Content Hash')
-    content_type: str | None = Field(None, title='Content Type')
-    from_artifact_id: UUID | None = Field(None, title='From Artifact Id')
-    label: str | None = Field(None, title='Label')
-    meta: dict[str, Any] | None = Field(None, title='Meta')
-    size_bytes: int | None = Field(None, title='Size Bytes')
-    uri: str | None = Field(None, title='Uri')
-
-
-class AssetVersionOut(BaseModel):
-    asset_id: UUID = Field(..., title='Asset Id')
-    content_hash: str | None = Field(None, title='Content Hash')
-    content_type: str | None = Field(None, title='Content Type')
-    created_at: AwareDatetime = Field(..., title='Created At')
-    customer_id: str = Field(..., title='Customer Id')
-    id: UUID = Field(..., title='Id')
-    label: str | None = Field(None, title='Label')
-    meta: dict[str, Any] | None = Field(None, title='Meta')
-    size_bytes: int | None = Field(None, title='Size Bytes')
-    source_artifact_id: UUID | None = Field(None, title='Source Artifact Id')
-    uri: str | None = Field(None, title='Uri')
-    version: int = Field(..., title='Version')
-
-
 class BodyConsentOauthConsentPost(BaseModel):
     csrf: str = Field(..., title='Csrf')
     decision: str = Field(..., title='Decision')

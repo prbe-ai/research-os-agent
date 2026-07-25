@@ -413,23 +413,6 @@ def create_server(
         with tool_scope("research_compare"):
             return svc().research_compare(refs, dimensions)
 
-    @mcp.tool()
-    def research_resolve(
-        name: str,
-        kind: str | None = None,
-        requirement: str | None = None,
-        at: str | None = None,
-    ) -> dict:
-        """DEPRECATED -- use get_entity(ref="asset:<name>", view="versions",
-        filters={"requirement": ...}). Removed next release.
-
-        `at` was never implemented (the SDK accepted it and never read it); it
-        is accepted here and ignored, exactly as before, rather than silently
-        starting to mean something.
-        """
-        with tool_scope("research_resolve"):
-            return svc().research_resolve(name, kind, requirement, at)
-
     # NOTE: there is no research_trace_file. It was removed, not overlooked: no
     # /v1/artifacts/trace route has ever existed, so it answered `matches: []` to
     # every query and an agent read that as "this file has no lineage" — a

@@ -234,25 +234,6 @@ def test_artifact_reference_still_metadata_only(client, app):
     assert body["is_reference"] is True
 
 
-def test_asset_register_and_version(client, app):
-    client.fail_open = False
-    asset = client.assets.register("dockq-scorer", kind="script")
-    assert asset["name"] == "dockq-scorer"
-    v = client.assets.add_version(asset["id"], content_hash="a" * 64, label="v1")
-    assert v["version"] == 1
-    assert client.assets.versions(asset["id"])[0]["label"] == "v1"
-
-
-def test_asset_resolve_match_and_no_match(client, app):
-    client.fail_open = False
-    asset = client.assets.register("eval-set", kind="dataset")
-    client.assets.add_version(asset["id"], content_hash="b" * 64, label="v1")
-    hit = client.assets.resolve("eval-set")
-    assert hit["state"] == "match" and hit["selected"]["label"] == "v1"
-    miss = client.assets.resolve("nope")
-    assert miss["state"] == "no_match"
-
-
 def test_add_edge(client, app):
     client.fail_open = False
     run = client.run(experiment="e", hypothesis="h", name="train")
@@ -347,29 +328,6 @@ def test_snapshot_rejects_backend_that_drops_env_ref(client, app, tmp_path):
     run = client.run(experiment="e", hypothesis="h", name="r")
     with pytest.raises(errors.CapabilityUnavailable, match="run.env_ref"):
         run.snapshot(cwd=str(repo), include_env=False, include_gpu=False, strict=True)
-
-
-def test_asset_materialize_downloads_bytes(client, app, tmp_path):
-    client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
-    art = run.log_artifact("data.bin", uri="r2://b/data.bin", kind="artifact")
-    asset = client.assets.register("eval-set", kind="dataset")
-    client.assets.add_version(asset["id"], from_artifact_id=art["id"], label="v1")
-    dest = tmp_path / "out.bin"
-    result = client.assets.materialize("eval-set", str(dest))
-    assert dest.read_bytes() == b"ASSET-BYTES"
-    assert result["version"] == 1
-    assert app.gets, "expected a presigned GET for the download"
-
-
-def test_asset_materialize_requires_source_artifact(client, app, tmp_path):
-    import pytest as _pytest
-
-    client.fail_open = False
-    asset = client.assets.register("hashonly", kind="dataset")
-    client.assets.add_version(asset["id"], content_hash="a" * 64, label="v1")  # no source artifact
-    with _pytest.raises(ValueError):
-        client.assets.materialize("hashonly", str(tmp_path / "x"))
 
 
 def test_artifact_upload_carries_kind_and_meta(client, app, tmp_path):
