@@ -26,3 +26,9 @@ jobs:
       # probe-research-tap plugin tests (stdlib-only; own pyproject, so the root
       # pytest run does not collect them — see also `make test-tap`).
       - run: pytest -q plugins/probe-research-tap/tests
+
+      # The npx launcher's version gate. It shipped a bug that broke the command
+      # for every existing user, so it does not go untested again.
+      - name: npm launcher
+        run: node --test test/resolve.test.js
+        working-directory: npm

@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "description": "Setup wizard for Probe Research in Claude Code. Runs from zero with npx.",
   "bin": {
     "probe-research": "bin/probe-research.js"
@@ -22,5 +22,8 @@
     "mlops",
     "experiment-tracking",
     "probe-research"
-  ]
+  ],
+  "scripts": {
+    "test": "node --test test/resolve.test.js"
+  }
 }
