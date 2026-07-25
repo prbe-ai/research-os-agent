@@ -76,6 +76,7 @@ def device_authorize(
     base_url: str,
     *,
     scopes: list[str] | None = None,
+    grants: list[str] | None = None,
     token_name: str | None = None,
     open_browser: bool = True,
     on_prompt: Callable[[DevicePrompt], None] | None = None,
@@ -107,10 +108,17 @@ def device_authorize(
     owns_client = client is None
     http = client or httpx.Client(base_url=base_url, timeout=30.0)
     try:
-        start = http.post(
-            _START_PATH,
-            json={"token_name": token_name, "scopes": scopes, "code_challenge": challenge},
-        )
+        body: dict = {
+            "token_name": token_name,
+            "scopes": scopes,
+            "code_challenge": challenge,
+        }
+        # Omitted entirely when None, so an older backend that has never heard of
+        # grants still sees the request shape it has always seen. Sending
+        # `grants: null` would fail validation there.
+        if grants is not None:
+            body["grants"] = grants
+        start = http.post(_START_PATH, json=body)
         if start.status_code != 201:
             _code, desc = _error_code(start)
             raise DeviceLoginError(desc or f"could not start device login ({start.status_code})")
@@ -162,3 +170,22 @@ def device_login(base_url: str, **kwargs) -> str:
     also need the token's id (e.g. to print what to revoke later).
     """
     return device_authorize(base_url, **kwargs)["token"]
+
+
+def credentials_by_grant(minted: dict) -> dict[str, dict]:
+    """Index a mint response by grant name.
+
+    An older backend returns no ``grants`` array at all -- it only ever minted a
+    PAT -- so synthesise the ``api`` entry from the top-level fields. That keeps
+    `probe setup` working against a backend that predates grants instead of
+    silently finding nothing and reporting success.
+    """
+    entries = minted.get("grants") or []
+    by_grant = {entry["grant"]: entry for entry in entries if entry.get("grant")}
+    if not by_grant and minted.get("token"):
+        by_grant["api"] = {
+            "grant": "api",
+            "token": minted["token"],
+            "token_id": minted.get("id"),
+        }
+    return by_grant
