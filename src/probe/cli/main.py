@@ -570,6 +570,7 @@ def wizard(
 
     steps = wizard.plan(caps, selection)
     if not steps:
+        # Nothing changed, so nothing needs a restart.
         print("Already set up the way you asked. Nothing to change.")
         print("\nRun `probe doctor` to confirm.")
         raise typer.Exit(0)
@@ -612,6 +613,9 @@ def wizard(
         for message in auth_messages:
             print(message)
 
+    notice = wizard.restart_notice(caps, selection)
+    if notice:
+        print(f"\n{notice}")
     print("\nRun `probe doctor` to confirm.")
 
 
