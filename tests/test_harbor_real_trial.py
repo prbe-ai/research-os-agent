@@ -89,13 +89,15 @@ def test_stage_a_real_harbor_oracle_trial(tmp_path):
     manifest = json.loads(staged.capture_manifest_path.read_text())
     capture = manifest.get("capture", {})
 
-    # The SDK parsed Harbor's real reward. Harbor 0.18 writes it to
-    # verifier/reward.txt (not result.json); parse_trial reads it correctly.
-    # NOTE: stage_trial_export's descriptor does NOT surface a verifier/reward.txt
-    # reward (it only reads result.json) — the reward reaches Probe via
-    # capture_trial's metric log, not the staging descriptor. See the reward-path
-    # follow-up. This asserts the parse layer, which is the compat check that matters.
+    # The SDK captured Harbor's real reward (the oracle solved the task).
+    # parse_trial reads it from result.json's verifier_result (== 1.0), and
+    # stage_trial_export records it in the capture manifest at verifier.reward.
+    # The export-request DESCRIPTOR stores only reward_key (the metric name), not
+    # the value — by design: the reward is logged as a metric at capture/consume
+    # time (capture_trial), so it reaches Probe on both the direct and the durable
+    # stage->export->consume paths. No reward is dropped.
     assert parse_trial(trial_dir).reward == 1.0
+    assert manifest.get("verifier", {}).get("reward") == 1.0
 
     # Every declared file was collected + hashed, and completeness is complete.
     assert capture.get("completeness", {}).get("status") == "complete"
