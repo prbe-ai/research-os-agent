@@ -1,0 +1,12 @@
+{
+  "name": "probe-research",
+  "version": "0.9.2",
+  "description": "One command to set up Probe Research in Claude Code. Wraps the Python CLI so `npx probe-research setup` works from zero.",
+  "bin": { "probe-research": "bin/probe-research.js" },
+  "files": ["bin"],
+  "engines": { "node": ">=18" },
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "git+https://github.com/prbe-ai/research-os-agent.git" },
+  "homepage": "https://research.prbe.ai/connect",
+  "keywords": ["claude-code", "mlops", "experiment-tracking", "probe-research"]
+}

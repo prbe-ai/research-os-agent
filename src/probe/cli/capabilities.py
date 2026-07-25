@@ -28,6 +28,11 @@ TAP_PLUGIN_NAME = "probe-research-tap"
 TRACKING_PLUGIN_NAME = "probe-research"
 MARKETPLACE = "research-os-agent"
 MARKETPLACE_REPO = "prbe-ai/research-os-agent"
+#: PyPI distribution. NOT `probe-agent` -- that name belongs to an unrelated
+#: project already on PyPI, so installing it fetches a stranger's package.
+AGENT_INSTALL = "probe-research"
+PLUGIN_ID = f"{TRACKING_PLUGIN_NAME}@{MARKETPLACE}"
+TAP_PLUGIN_ID = f"{TAP_PLUGIN_NAME}@{MARKETPLACE}"
 
 ENV_INGEST_TOKEN = "PROBE_INGEST_TOKEN"
 ENV_TAP_PLUGIN_DIR = "PROBE_RESEARCH_TAP_PLUGIN_DIR"
