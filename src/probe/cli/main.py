@@ -2398,56 +2398,6 @@ def group_set(
     _print_json(result)
 
 
-# -- reserved hook adapter ABI (no hooks installed this release) -------------
-hook_app = typer.Typer(
-    no_args_is_help=True,
-    help="internal coding-agent adapter commands (hooks are not installed yet)",
-)
-session_app = typer.Typer(no_args_is_help=True, help="correlate/checkpoint coding-agent sessions")
-hook_app.add_typer(session_app, name="session")
-app.add_typer(hook_app, name="hook")
-
-
-@session_app.command("attach")
-def hook_session_attach(
-    run: str = typer.Argument(...),
-    session_id: str = typer.Option(..., "--session-id"),
-    agent: str = typer.Option("claude-code", "--agent"),
-    transcript_path: str = typer.Option(None, "--transcript-path"),
-    cwd: str = typer.Option(None, "--cwd"),
-) -> None:
-    with _client() as c:
-        result = c.sessions.attach(
-            run, session_id, agent=agent, transcript_path=transcript_path, cwd=cwd
-        )
-    _print_json(result)
-
-
-@session_app.command("checkpoint")
-def hook_session_checkpoint(
-    run: str = typer.Argument(...),
-    session_id: str = typer.Option(..., "--session-id"),
-    transcript_path: str = typer.Option(None, "--transcript-path"),
-    reason: str = typer.Option("checkpoint", "--reason"),
-) -> None:
-    with _client() as c:
-        result = c.sessions.checkpoint(
-            run, session_id, transcript_path=transcript_path, reason=reason
-        )
-    _print_json(result)
-
-
-@session_app.command("detach")
-def hook_session_detach(
-    run: str = typer.Argument(...),
-    session_id: str = typer.Option(..., "--session-id"),
-    reason: str = typer.Option("session_end", "--reason"),
-) -> None:
-    with _client() as c:
-        result = c.sessions.detach(run, session_id, reason=reason)
-    _print_json(result)
-
-
 # -- lineage edges (fold #2) ------------------------------------------------
 edge_app = typer.Typer(no_args_is_help=True, help="lineage edges (run/artifact/asset_version)")
 app.add_typer(edge_app, name="edge")

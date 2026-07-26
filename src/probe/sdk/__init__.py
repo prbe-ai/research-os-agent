@@ -28,7 +28,6 @@ _LAZY: dict[str, str] = {
     "EventsReadClient": "events",
     "NoteClient": "events",
     "Run": "run",
-    "SessionCaptureClient": "sessions",
 }
 
 
@@ -56,7 +55,6 @@ if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at run
     from .config import Settings, resolve
     from .events import EventsReadClient, NoteClient
     from .run import Run
-    from .sessions import SessionCaptureClient
 
 
 __all__ = [
@@ -66,7 +64,6 @@ __all__ = [
     "EventsReadClient",
     "NoteClient",
     "Run",
-    "SessionCaptureClient",
     "Settings",
     "resolve",
     "stable_external_key",

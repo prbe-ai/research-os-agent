@@ -108,7 +108,6 @@ class Client:
         if spool is not None and spool_dir is not None:
             raise ValueError("pass spool or spool_dir, not both")
         self.spool = spool or Spool(Path(spool_dir).expanduser() if spool_dir else None)
-        self._sessions = None
         self._events = None
         self._notes = None
         # Stop signals for every live run-heartbeat thread this client minted.
@@ -1260,15 +1259,6 @@ class Client:
         return self.write("POST", "/ingest/v1/runs", body, strict=strict)
 
     # -- composed SDK surfaces --------------------------------------------
-    @property
-    def sessions(self):
-        """Hook-facing session capture API; not an experiment telemetry API."""
-        if self._sessions is None:
-            from .sessions import SessionCaptureClient
-
-            self._sessions = SessionCaptureClient(self)
-        return self._sessions
-
     @property
     def notes(self):
         """Write structured research notes (intent/decision/observation) as artifacts."""
