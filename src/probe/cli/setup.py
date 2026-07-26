@@ -362,9 +362,7 @@ def run_menu(defaults: dict[Capability, bool]):
             choices.append(questionary.Separator(" "))
         choices.append(
             questionary.Choice(
-                title=f"\n{tui.choice_indent()}     ".join(
-                    (tui.choice_indent() + title, *detail)
-                ),
+                title=f"\n{tui.body_indent()}  ".join((title, *detail)),
                 value=capability,
                 checked=defaults[capability],
             )
@@ -400,7 +398,7 @@ def ask_auto_update(default: bool):
     tui.say()
     return tui.ask(
         questionary.confirm(
-            f"{tui.message_indent()}{title}",
+            f"{tui.qmark()[:-1]}{title}",
             default=default,
             style=tui.style(),
         )
@@ -419,17 +417,19 @@ def run_action_menu(caps: Capabilities):
     for index, (action, (title, detail)) in enumerate(ACTION_COPY.items()):
         if index:
             choices.append(questionary.Separator(" "))
-        pad = tui.choice_indent()
-        choices.append(
-            questionary.Choice(title=f"{pad}{title}\n{pad}     {detail}", value=action)
-        )
+        body = tui.body_indent()
+        choices.append(questionary.Choice(title=f"{title}\n{body}  {detail}", value=action))
+
+    from probe.cli import doctor as doctor_impl  # noqa: F401
 
     return tui.ask(
         questionary.select(
-            f"{tui.message_indent()}What do you want to do?",
+            tui.framed("On this device:", describe_state(caps), "What do you want to do?"),
             choices=choices,
             instruction="(arrow keys, enter to choose)",
             style=tui.style(),
+            qmark=tui.qmark(),
+            pointer=tui.pointer(),
         )
     )
 
