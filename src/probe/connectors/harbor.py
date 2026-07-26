@@ -30,18 +30,23 @@ exists (``probe trial expand``).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import hashlib
 import json
+import logging
 import os
+import shlex
 import shutil
 import tarfile
 import tempfile
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
-from . import atif
+from . import atif, sandbox_state
 from ..sdk.capture import (
     CaptureLedger,
     CaptureState,
@@ -56,6 +61,8 @@ from ..sdk.durable import (
 
 if TYPE_CHECKING:
     from ..sdk.run import Run
+
+logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = "1.0"
 MANIFEST_KIND = "harbor_trial"
@@ -1070,6 +1077,7 @@ def capture_trial(
     source_context: dict[str, Any] | None = None,
     reward_key: str = "reward",
     external_key: str | None = None,
+    correlation: dict[str, Any] | None = None,
     log_reward: bool = True,
     expand: bool = True,
     max_trajectory_spans: int | None = None,
@@ -1079,6 +1087,15 @@ def capture_trial(
 
     - ``step_index`` is the training step / Miles ``rollout_id`` — the join
       Osmosis is missing. Optional, but pass it whenever the trainer knows it.
+    - ``correlation`` carries the sub-run identity that distinguishes the many
+      rollouts batched under one ``step_index`` — ``sample_id`` / ``group_id`` /
+      ``task_id`` (and optionally a precomputed ``external_key``). It is stamped
+      onto the rollout span's attributes and every artifact's meta, and makes the
+      rollout-span id sample-distinct so two samples of the same trial/step do
+      not collapse onto one span. A staged trial inherits it from the ledger.
+      When ``sample_id`` marks a batched sample, the per-trial reward is left on
+      the span/manifest only (not emitted as a colliding step metric) — the
+      trainer owns the per-step aggregate reward curve.
     - ``environment`` is recorded opaquely on the manifest (e.g. ``{"type":
       "skypilot-fork"}``) — never structural, per the plan's agnosticism rule.
     - Uploads are fail-open like every SDK data write: a file that cannot reach
@@ -1102,7 +1119,41 @@ def capture_trial(
     if ledger is not None and ledger.context.get("trial_name"):
         parsed.name = str(ledger.context["trial_name"])
     status = "failed" if parsed.exception else "completed"
-    rollout_key = external_key or stable_external_key("harbor", "rollout", parsed.name)
+    # Sub-run identity (sample_id/group_id/task_id) distinguishes the rollouts
+    # batched under one training step. Prefer an explicit kwarg; otherwise inherit
+    # what stage_trial_export recorded on the durable ledger, so a staged consume
+    # is enriched without any caller change.
+    correlation = dict(
+        correlation
+        if correlation is not None
+        else (ledger.context.get("correlation") if ledger is not None else None)
+        or {}
+    )
+    identity = {
+        k: correlation[k]
+        for k in ("sample_id", "group_id", "task_id")
+        if correlation.get(k) is not None
+    }
+    # Rollout-span identity, made sample-distinct so two samples of the same trial
+    # at the same step do not collapse onto one span. Precedence: explicit kwarg >
+    # the key stage_trial_export already computed (on the ledger) > a fresh
+    # (trial, step, sample) key mirroring that derivation exactly > the legacy
+    # name-only key when there is no sub-run identity at all (unchanged behavior).
+    rollout_key = external_key or correlation.get("external_key")
+    if not rollout_key:
+        sample_id = correlation.get("sample_id")
+        trial_id = correlation.get("trial_id")
+        if sample_id is not None or trial_id is not None:
+            rollout_key = stable_external_key(
+                "harbor",
+                "rollout",
+                trial_id or parsed.name,
+                step_index if step_index is not None else "stepless",
+                sample_id if sample_id is not None else "single",
+            )
+        else:
+            rollout_key = stable_external_key("harbor", "rollout", parsed.name)
+    rollout_key = str(rollout_key)
     rollout_id = stable_span_id(run.id, rollout_key)
     if ledger is not None:
         ledger.update_context(
@@ -1125,11 +1176,25 @@ def capture_trial(
             "task_name": parsed.task_name,
             "agent": parsed.agent_info,
             "reward": parsed.reward,
+            **identity,
         },
         strict=strict,
     )
+    # Per-trial reward is per-sample event data: it is recorded on the rollout span
+    # (attributes.reward) and the manifest (verifier.reward), both sample-scoped.
+    # Emitting it as a step metric is only sound when this trial is the SOLE reward
+    # at its step. For a batched sample (sample_id present) N trials share
+    # (run, step, kind, key, dims_hash) and would collide/overwrite on
+    # metric_points_step_identity_uq, leaving one arbitrary sample's reward as "the"
+    # curve — so we skip the point and let the trainer log the per-step aggregate.
+    is_batched_sample = correlation.get("sample_id") is not None
     reward_already_logged = bool(ledger and ledger.context.get("reward_logged"))
-    if log_reward and parsed.reward is not None and not reward_already_logged:
+    if (
+        log_reward
+        and not is_batched_sample
+        and parsed.reward is not None
+        and not reward_already_logged
+    ):
         metric_result = run.log(
             {reward_key: parsed.reward}, step=step_index, strict=strict
         )
@@ -1182,7 +1247,7 @@ def capture_trial(
                     f"{parsed.name}/{rel}",
                     path=str(path),
                     kind="file",
-                    meta={"role": role, "trial": parsed.name, "path": rel},
+                    meta={"role": role, "trial": parsed.name, "path": rel, **identity},
                     span_id=span_id,
                     step_index=step_index,
                     strict=strict,
@@ -1235,7 +1300,7 @@ def capture_trial(
     manifest_capture = dict(capture_report) if capture_report is not None else None
     if manifest_capture is not None:
         manifest_capture["manifest_publication"] = {"state": "confirmed_by_presence"}
-    source_meta: dict[str, Any] = {"mode": source_mode, "rollout_id": step_index}
+    source_meta: dict[str, Any] = {"mode": source_mode, "rollout_id": step_index, **identity}
     if source_context:
         source_meta["context"] = dict(source_context)
     manifest_meta = {
@@ -1321,3 +1386,175 @@ def reconcile_staged_trial(
     kwargs.setdefault("step_index", staged.ledger.context.get("step_index"))
     kwargs.setdefault("expand", False)
     return capture_trial(run, staged, log_reward=False, **kwargs)
+
+
+_SANDBOX_STATE_OUTPUTS = {
+    "begin": (sandbox_state.BEGIN_MANIFEST,),
+    "end": (sandbox_state.END_MANIFEST, sandbox_state.END_DELTA),
+}
+
+
+class SandboxStateCapture:
+    """Register ephemeral begin/end sandbox-state capture on a Harbor Trial.
+
+    Framework-agnostic (any Harbor environment provider): at ``AGENT_START`` and
+    ``AGENT_END`` it uploads the static snapshot binary into a random ``/tmp``
+    workdir, execs it, downloads + sha256-verifies the outputs host-side, and
+    deletes the workdir — so the container is probe-free for the whole agent
+    phase. The ``probe.sandbox-state/1`` bundle is authored host-side into the
+    trial tree by :meth:`write_bundle` (call it after ``Trial.run`` returns),
+    where it rides the normal ``stage_trial_export`` capture.
+
+    Fail-open by contract: Harbor's ``_emit`` propagates hook exceptions and
+    ``AGENT_END`` fires in the agent phase's ``finally``, so every callback
+    swallows its own errors — a capture failure never masks the trial result.
+    ``asyncio.CancelledError`` (a BaseException) is deliberately not caught.
+
+    This is the SDK-owned home for the logic the Miles bridge used to carry;
+    a bridge should construct this instead of duplicating it.
+    """
+
+    def __init__(
+        self,
+        trial: Any,
+        host_dir: Path,
+        *,
+        begin_timeout_sec: float = 120.0,
+        end_timeout_sec: float = 300.0,
+        exclude: str = "",
+        hash_files: bool = False,
+    ) -> None:
+        self._trial = trial
+        self._host_dir = Path(host_dir)
+        self._begin_timeout = begin_timeout_sec
+        self._end_timeout = end_timeout_sec
+        self._exclude = exclude
+        self._hash = hash_files
+        self._arch: str | None = None
+        self._trailers: dict[str, dict[str, Any]] = {}
+        self._timestamps: dict[str, str] = {}
+        self._integrity: dict[str, bool] = {}
+        self._errors: list[str] = []
+        self.status: dict[str, str | None] = {"begin": None, "end": None}
+
+    def install(self) -> None:
+        """Register the AGENT_START/AGENT_END hooks (needs the harbor package)."""
+        from harbor.trial.hooks import TrialEvent
+
+        self._trial.add_hook(TrialEvent.AGENT_START, self._hook("begin"))
+        self._trial.add_hook(TrialEvent.AGENT_END, self._hook("end"))
+
+    def _timeout(self, phase: str) -> float:
+        return self._begin_timeout if phase == "begin" else self._end_timeout
+
+    def _hook(self, phase: str):
+        async def callback(_event: Any) -> None:
+            try:
+                await asyncio.wait_for(self._run_phase(phase), timeout=self._timeout(phase))
+                self.status[phase] = "ok"
+            except Exception as exc:  # noqa: BLE001 - fail-open into Harbor's _emit
+                logger.exception("sandbox-state %s snapshot failed", phase)
+                self.status[phase] = f"{type(exc).__name__}: {exc}"
+
+        return callback
+
+    async def _run_phase(self, phase: str) -> None:
+        if phase == "end" and self.status.get("begin") != "ok":
+            raise RuntimeError("begin snapshot unavailable; end delta skipped")
+        env = self._trial.agent_environment
+        # exec timeout bounds the HOST wait; the binary's own --max-seconds
+        # (set below it) bounds the in-CONTAINER process so a runaway scan exits
+        # itself rather than lingering past the agent phase.
+        exec_timeout = max(1, int(self._timeout(phase)))
+        self_deadline = max(1.0, self._timeout(phase) - 10)
+        workdir = f"/tmp/.psbx-{uuid.uuid4().hex}"
+        try:
+            if self._arch is None:
+                self._arch = await self._detect_arch(env)
+            # Pre-create the workdir so Harbor's primary `docker compose cp`
+            # upload path (no parent creation) succeeds without the tar fallback.
+            await env.exec(f"mkdir -p {shlex.quote(workdir)}", user="root", timeout_sec=exec_timeout)
+            await env.upload_file(sandbox_state.snapshot_binary_path(self._arch), f"{workdir}/snap")
+            command = (
+                f"chmod +x {workdir}/snap && {workdir}/snap {phase} "
+                f"--workdir {shlex.quote(workdir)} --max-seconds {self_deadline:.0f}"
+            )
+            if phase == "end":
+                await env.upload_file(self._host_dir / sandbox_state.BEGIN_MANIFEST, f"{workdir}/begin.jsonl.gz")
+                command += f" --begin-manifest {workdir}/begin.jsonl.gz"
+            if self._exclude:
+                command += f" --exclude {shlex.quote(self._exclude)}"
+            if self._hash:
+                command += " --hash"
+            result = await env.exec(command, user="root", timeout_sec=exec_timeout)
+            if result.return_code != 0:
+                raise RuntimeError(f"snapshot exited {result.return_code}: {(result.stderr or '').strip()[-500:]}")
+            trailer = sandbox_state.parse_trailer(result.stdout or "")
+            for name in _SANDBOX_STATE_OUTPUTS[phase]:
+                target = self._host_dir / name
+                await env.download_file(f"{workdir}/{name}", target)
+                declared = trailer.get("files", {}).get(name, {}).get("sha256")
+                digest = await asyncio.to_thread(sandbox_state.sha256_file, target)
+                self._integrity[name] = bool(declared) and digest == declared
+            self._trailers[phase] = trailer
+            self._timestamps[phase] = datetime.now(timezone.utc).isoformat()
+        finally:
+            # Leave the container probe-free even on failure; a dead environment
+            # makes this raise, which the timeout + suppress handle.
+            with contextlib.suppress(Exception):
+                await env.exec(f"rm -rf {shlex.quote(workdir)}", user="root", timeout_sec=exec_timeout)
+
+    async def _detect_arch(self, env: Any) -> str:
+        try:
+            result = await env.exec("uname -m", timeout_sec=30)
+            machine = (result.stdout or "").strip()
+        except Exception as exc:  # noqa: BLE001 - default arch keeps capture best-effort
+            self._errors.append(f"arch detection failed, assuming amd64: {exc}")
+            return "amd64"
+        arch = sandbox_state.machine_to_arch(machine)
+        if arch is None:
+            self._errors.append(f"unrecognized machine {machine!r}, assuming amd64")
+            return "amd64"
+        return arch
+
+    def record_install_failure(self, exc: Exception) -> None:
+        self._errors.append(f"hook install failed: {type(exc).__name__}: {exc}")
+
+    def attempted(self) -> bool:
+        return any(value is not None for value in self.status.values())
+
+    def write_bundle(self, trial_dir: Path) -> dict[str, Any]:
+        """Author the bundle host-side into ``trial_dir/artifacts/``; never raises."""
+        try:
+            if self.attempted():
+                meta = sandbox_state.build_meta(
+                    begin_trailer=self._trailers.get("begin"),
+                    end_trailer=self._trailers.get("end"),
+                    status=self.status,
+                    begin_at=self._timestamps.get("begin"),
+                    end_at=self._timestamps.get("end"),
+                    arch=self._arch,
+                    integrity=self._integrity,
+                    errors=self._errors,
+                )
+                sandbox_state.write_bundle(
+                    Path(trial_dir) / "artifacts" / sandbox_state.BUNDLE_DIRNAME,
+                    {name: self._host_dir / name for outputs in _SANDBOX_STATE_OUTPUTS.values() for name in outputs},
+                    meta,
+                )
+        except Exception as exc:  # noqa: BLE001 - bundle loss must not fail staging
+            logger.exception("sandbox-state bundle write failed")
+            self._errors.append(f"bundle write failed: {type(exc).__name__}: {exc}")
+        finally:
+            with contextlib.suppress(Exception):
+                shutil.rmtree(self._host_dir, ignore_errors=True)
+        return self.summary()
+
+    def summary(self) -> dict[str, Any]:
+        return {
+            "schema": sandbox_state.SCHEMA,
+            "status": dict(self.status) if self.attempted() else "not_attempted",
+            "arch": self._arch,
+            "integrity": dict(self._integrity),
+            "errors": list(self._errors),
+        }

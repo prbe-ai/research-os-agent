@@ -1045,3 +1045,25 @@ def app() -> FakeApp:
 @pytest.fixture
 def client(app: FakeApp, tmp_path) -> Client:
     return make_client(app, tmp_spool=tmp_path / "spool")
+
+
+def _harbor_available() -> bool:
+    import shutil
+
+    if shutil.which("docker") is None:
+        return False
+    try:
+        import harbor  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def pytest_collection_modifyitems(config, items):
+    """Auto-skip @pytest.mark.harbor tests unless Docker + harbor are present."""
+    if _harbor_available():
+        return
+    skip = pytest.mark.skip(reason="harbor tier: needs Docker + the harbor package (run on a Docker host)")
+    for item in items:
+        if "harbor" in item.keywords:
+            item.add_marker(skip)

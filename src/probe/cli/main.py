@@ -2089,6 +2089,40 @@ def trial_export(
     _print_json(result)
 
 
+@trial_app.command("verify")
+def trial_verify(
+    path: str = typer.Argument(..., help="a capture dir, trial dir, or probe-sandbox-state bundle dir"),
+    latest: bool = typer.Option(False, "--latest", help="check only the most recently written bundle"),
+    require_integrity: bool = typer.Option(
+        False, "--require-integrity", help="fail (not warn) on any integrity mismatch"
+    ),
+) -> None:
+    """Validate probe.sandbox-state/1 capture bundles. Exit 0 healthy / 1 invalid / 2 none found."""
+    from ..connectors.sandbox_state import validate_captures
+
+    reports = validate_captures(path, require_integrity=require_integrity, latest=latest)
+    if not reports:
+        typer.echo(f"no probe.sandbox-state/1 bundle found under {path}", err=True)
+        raise typer.Exit(2)
+    failures = 0
+    for report in reports:
+        summary = report.summary
+        print(f"[{'OK' if report.ok else 'FAIL'}] {report.bundle_dir}")
+        print(
+            f"        +{summary.get('added')}/~{summary.get('modified')}/-{summary.get('deleted')} "
+            f"begin_files={summary.get('begin_files')} integrity={summary.get('integrity')} "
+            f"truncated={summary.get('truncated')}"
+        )
+        for warning in report.warnings:
+            print(f"        WARNING {warning}")
+        for problem in report.problems:
+            print(f"        {problem}")
+        failures += not report.ok
+    print(f"\n{len(reports)} bundle(s): {len(reports) - failures} ok, {failures} failed")
+    if failures:
+        raise typer.Exit(1)
+
+
 @trial_app.command("drain")
 def trial_drain(
     capture_root: str = typer.Argument(..., help="root containing export-request.json files"),
