@@ -162,8 +162,8 @@ with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
 - The `probe-research` MCP tools (`browse_research`, `search_knowledge`, `get_entity`) are
   available **in a fresh session** — remind the user to restart if they were just added.
   The old five names (`research_context`, `research_search`, `research_get`,
-  `research_compare`, `research_resolve`) still answer as deprecated aliases and are
-  removed next release; point people at the three.
+  `research_compare`, `research_resolve`) were deprecated aliases and have now been
+  REMOVED -- they fail as unknown tools; point people at the three.
 - The `track-experiment`, `manage-research-asset`, and `publish-experiment` skills are ready
   (plugin installs only).
 
