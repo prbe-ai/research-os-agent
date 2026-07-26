@@ -27,8 +27,9 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 
 ## What's inside
 
-- **Skills:** `track-experiment` (track a run end to end), `manage-research-asset` (reuse /
-  version assets), `publish-experiment` (mint an immutable experiment version).
+- **Skills:** `start-research-work` (open a tracked project, experiment and run),
+  `track-research-work` (capture, verify and close it; asset versioning and
+  publication live in its `reference.md`).
 - **Requires Claude Code ≥ 2.1.195.** The MCP passes its credential through a headers
   helper addressed as `${CLAUDE_PLUGIN_ROOT}/bin/probe-mcp-headers`; that placeholder is
   only interpolated from 2.1.195 on. Older builds pass it through literally, the helper

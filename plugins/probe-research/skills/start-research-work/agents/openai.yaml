@@ -1,0 +1,4 @@
+interface:
+  display_name: "Start Research Work"
+  short_description: "Open a tracked project, experiment, and run"
+  default_prompt: "Use $start-research-work to open this run with prior context, an explicit hypothesis, and a code/env snapshot."
