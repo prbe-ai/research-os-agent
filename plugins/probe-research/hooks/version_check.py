@@ -11,9 +11,11 @@ Contract:
     never blocks a session. (session-start.sh is the outer backstop.)
   * SYNCHRONOUS. The comparison finishes before we print, because the
     systemMessage is only delivered if it is in this hook's stdout.
-  * THROTTLED. The network is hit at most once per TTL (default 24h) on success,
+  * THROTTLED. The network is hit at most once per TTL (default 15m) on success,
     and no more than once per BACKOFF (default 1h) after a failure — so an offline
-    machine does not re-hit the network every session. A cache file stores
+    machine does not re-hit the network every session. BACKOFF stays longer than
+    TTL on purpose: retrying something that just failed should be less eager than
+    refreshing something that worked. A cache file stores
     {fetched_at, ok, manifest}; within TTL we compare against the cached manifest
     (no network) so the nudge still renders every session until the user upgrades.
     A failed/invalid fetch keeps the last-good manifest (never evicts it) and
@@ -52,7 +54,13 @@ def _float_env(name: str, default: float) -> float:
         return default
 
 
-TTL = _int_env("PROBE_VERSION_TTL", 86400)          # reuse a good manifest this long
+# 15 minutes, not a day. A day was chosen to keep poll volume down, and the cost
+# it actually bought was invisibility: four releases went out one afternoon and a
+# machine that had cached the manifest that morning would have compared against a
+# `latest` OLDER than what it already had -- concluded it was ahead, said nothing,
+# and not looked again for another 21 hours. A 3s GET at session start is not
+# worth a day of blindness.
+TTL = _int_env("PROBE_VERSION_TTL", 900)            # reuse a good manifest this long
 BACKOFF = _int_env("PROBE_VERSION_BACKOFF", 3600)   # min seconds between attempts after a failure
 TIMEOUT = _float_env("PROBE_VERSION_TIMEOUT", 3.0)
 DEFAULT_BASE = "https://api.research.prbe.ai"
