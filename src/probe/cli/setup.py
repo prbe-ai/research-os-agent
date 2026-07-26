@@ -126,8 +126,7 @@ MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
 #: does and one was about how it maintains itself.
 AUTO_UPDATE_COPY = (
     "Keep it up to date automatically?  (recommended)",
-    "Upgrades the CLI and plugins in the background at Claude Code session "
-    "start. Off means you get a nudge and run the upgrade yourself.",
+    "Upgrades the CLI and plugins in the background at Claude Code session start.",
 )
 
 
