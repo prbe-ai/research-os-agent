@@ -248,13 +248,21 @@ def test_menu_rows_are_capabilities_not_plugin_names():
         assert not any("probe-research" in line for line in detail)
 
 
-def test_capture_menu_copy_says_what_leaves_the_machine():
+def test_capture_menu_copy_is_scoped_to_this_device():
+    """The picker says WHAT and WHERE, in one line.
+
+    The full disclosure -- prompts, file contents, tool output, server-side
+    secret stripping -- lives on the BROWSER APPROVAL screen, which is where
+    the grant is actually made and where research-os asserts it verbatim.
+    Repeating three lines of it here made the shortest menu in the product the
+    densest thing to read.
+    """
     _, detail = setup.MENU_COPY[Capability.CAPTURE]
     blob = " ".join(detail)
-    assert "prompts" in blob
-    assert "file contents" in blob
-    assert "tool output" in blob
-    assert "stripped on the server" in blob
+    assert "this device's" in blob, "scope must be explicit"
+    assert "Claude Code sessions" in blob
+    # One line, not a wall.
+    assert len(detail) == 1
 
 
 # --- fixes from the adversarial review ------------------------------------
