@@ -74,3 +74,50 @@ def test_probe_update_actually_runs(monkeypatch, tmp_path):
     result = CliRunner().invoke(app, ["update"])
     assert result.exit_code == 0, result.output + repr(result.exception)
     assert "TypeError" not in result.output
+
+
+def test_the_version_check_refetches_within_the_quarter_hour(tmp_path, monkeypatch):
+    """A day of cache bought nothing but invisibility: four releases went out in
+    one afternoon, and a machine that cached the manifest that morning would have
+    compared against a `latest` OLDER than what it already had — concluded it was
+    ahead, said nothing, and not looked again for 21 hours."""
+    import json
+    import time
+
+    import pytest
+
+    vc = _load_hook()
+    assert vc.TTL == 900, "15 minutes"
+    assert vc.BACKOFF > vc.TTL, "retrying a failure stays less eager than refreshing a success"
+
+    cache = tmp_path / "version-check.json"
+    monkeypatch.setenv("PROBE_VERSION_CACHE", str(cache))
+    monkeypatch.setattr(vc, "_local_cli", lambda b: "0.1.0")
+    monkeypatch.setattr(vc, "_local_plugin", lambda p: "0.1.0")
+
+    calls: list[str] = []
+
+    def _fetch(url):
+        calls.append(url)
+        return {"cli": {"latest": "9.9.9"}, "plugin": {"latest": "9.9.9"}}
+
+    monkeypatch.setattr(vc, "_fetch", _fetch)
+
+    def run(age_seconds: int) -> bool:
+        cache.write_text(
+            json.dumps(
+                {
+                    "fetched_at": int(time.time()) - age_seconds,
+                    "ok": True,
+                    "manifest": {"cli": {"latest": "0.0.1"}},
+                }
+            )
+        )
+        before = len(calls)
+        with pytest.raises(SystemExit):
+            vc.main()
+        return len(calls) > before
+
+    assert run(5 * 60) is False, "a fresh cache must not hit the network"
+    assert run(14 * 60) is False
+    assert run(16 * 60) is True, "past the TTL it must refetch"
