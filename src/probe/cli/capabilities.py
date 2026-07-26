@@ -90,7 +90,6 @@ class Capabilities:
     capture_device_id: str | None = None
 
     auto_update_enabled: bool = False
-    auto_update_channel: str | None = None
     last_update_attempt: str | None = None
 
     warnings: list[str] = field(default_factory=list)

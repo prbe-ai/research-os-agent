@@ -78,6 +78,7 @@ def perform_update(*, base_url: str, include_plugin: bool = True) -> UpdateOutco
         lines.append(f"  {res.message}")
 
     restart_needed = False
+    pres: updater.PluginResult | None = None
     if include_plugin:
         lines.append("Claude Code plugins:")
         pres = updater.update_plugin(plugin_target)
@@ -88,9 +89,19 @@ def perform_update(*, base_url: str, include_plugin: bool = True) -> UpdateOutco
             lines.append("  update them manually, then restart Claude Code:")
             lines.extend(f"    {line}" for line in updater.manual_plugin_commands().split("\n"))
 
+    # `attempted` is what separates "the plugin update failed" from "there was no
+    # Claude Code to update" -- a CLI-only user has no `claude` on PATH, and
+    # recording that as a failure every session would train everyone to ignore
+    # the one line that is supposed to mean something.
+    plugin_ok = True if pres is None else (pres.confirmed or not pres.attempted)
+    plugin_detail = "" if pres is None or pres.confirmed else pres.message
+    plugin_version = pres.after if pres is not None else None
+
     # The ONLY way a detached auto-update can report failure: it runs with no
     # terminal attached, so without this an updater that has been broken for a
     # month is indistinguishable from one that works. `probe doctor` prints it.
+    # BOTH halves are recorded -- the plugin's outcome used to live only in
+    # `lines`, which a detached run sends straight to /dev/null.
     autoupdate.record_attempt(
         autoupdate.Attempt(
             at=int(time.time()),
@@ -100,11 +111,16 @@ def perform_update(*, base_url: str, include_plugin: bool = True) -> UpdateOutco
             detail="" if res is None or res.ok else res.message,
             from_version=__version__,
             to_version=(res.after if res is not None else None) or cli_target,
+            plugin_ok=plugin_ok,
+            plugin_detail=plugin_detail,
+            plugin_version=plugin_version,
         )
     )
 
     return UpdateOutcome(
         lines=lines,
-        ok=res.ok if res is not None else True,
+        # Both halves, so `probe update`'s exit code means "the update worked",
+        # not "the CLI half worked".
+        ok=(res.ok if res is not None else True) and plugin_ok,
         restart_needed=restart_needed,
     )

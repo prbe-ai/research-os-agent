@@ -172,10 +172,22 @@ def test_killswitch_alone_means_capture_is_not_on(isolate):
 
 def test_auto_update_defaults_off_and_round_trips(isolate):
     assert autoupdate.load().enabled is False
-    autoupdate.save(enabled=True, channel=autoupdate.Channel.STABLE)
-    loaded = autoupdate.load()
-    assert loaded.enabled is True
-    assert loaded.channel is autoupdate.Channel.STABLE
+    autoupdate.save(enabled=True)
+    assert autoupdate.load().enabled is True
+
+
+def test_a_channel_written_by_an_older_cli_is_ignored_not_rejected(isolate):
+    """There is one channel. `stable` was stored, passed and validated, and read
+    by nothing — but the state file is also read by the plugin hook, which can
+    be older than the CLI, so an existing key must not break loading."""
+    autoupdate.save(enabled=True)
+    raw = json.loads(autoupdate.state_path().read_text())
+    raw["channel"] = "stable"
+    autoupdate.state_path().write_text(json.dumps(raw))
+
+    assert autoupdate.load().enabled is True
+    assert not hasattr(autoupdate.load(), "channel")
+    assert not hasattr(autoupdate, "Channel")
 
 
 def test_corrupt_state_reads_as_off_rather_than_guessing_on(isolate):
@@ -1265,3 +1277,137 @@ def test_piped_output_stays_flush_left(monkeypatch, capsys):
     tui.say("hello")
     tui.page(["one", "two"])
     assert capsys.readouterr().out == "hello\none\ntwo\n"
+
+
+# --- the plugin half of an auto-update -------------------------------------
+
+
+def _plugin_result(**kw):
+    from probe.cli import updater
+
+    base = dict(
+        attempted=True, confirmed=True, changed=False, before=None, after="0.8.0", message="ok"
+    )
+    return updater.PluginResult(**{**base, **kw})
+
+
+def _stub_cli_upgrade(monkeypatch, upgrading, updater):
+    monkeypatch.setattr(upgrading.updater, "fetch_latest", lambda base: {})
+    monkeypatch.setattr(
+        upgrading.updater, "detect_install", lambda: updater.Install(updater.Method.UV_TOOL)
+    )
+    monkeypatch.setattr(
+        upgrading.updater,
+        "upgrade_cli",
+        lambda i, c, t: updater.CliResult(
+            ran=True, ok=True, changed=False, before=c, after=c, message="already at the latest"
+        ),
+    )
+
+
+def test_a_failed_plugin_update_is_recorded(isolate, monkeypatch):
+    """It used to live only in the printed lines, which a DETACHED run sends to
+    /dev/null — so a plugin that had silently stopped updating looked exactly
+    like one that worked. That is the failure this record exists to prevent."""
+    from probe.cli import autoupdate, updater, upgrading
+
+    _stub_cli_upgrade(monkeypatch, upgrading, updater)
+    monkeypatch.setattr(
+        upgrading.updater,
+        "update_plugin",
+        lambda target: _plugin_result(
+            confirmed=False, after=None, message="`claude plugin update` did not complete"
+        ),
+    )
+
+    outcome = upgrading.perform_update(base_url="https://x", include_plugin=True)
+    attempt = autoupdate.load().last_attempt
+
+    assert attempt.plugin_ok is False
+    assert "did not complete" in attempt.plugin_detail
+    assert attempt.succeeded is False
+    assert "FAILED" in attempt.describe()
+    assert "did not complete" in attempt.describe()
+    # And the exit code means "the update worked", not "the CLI half worked".
+    assert outcome.ok is False
+
+
+def test_no_claude_on_path_is_not_a_plugin_failure(isolate, monkeypatch):
+    """A CLI-only user has no `claude`. Recording that as a failure every
+    session trains everyone to ignore the one line meant to mean something."""
+    from probe.cli import autoupdate, updater, upgrading
+
+    _stub_cli_upgrade(monkeypatch, upgrading, updater)
+    monkeypatch.setattr(
+        upgrading.updater,
+        "update_plugin",
+        lambda target: _plugin_result(
+            attempted=False,
+            confirmed=False,
+            after=None,
+            message="`claude` not found on PATH (skipping plugin update)",
+        ),
+    )
+
+    outcome = upgrading.perform_update(base_url="https://x", include_plugin=True)
+    attempt = autoupdate.load().last_attempt
+
+    assert attempt.plugin_ok is True
+    assert attempt.succeeded is True
+    assert outcome.ok is True
+    # Still SAID, though — silence about a skipped half is its own lie.
+    assert "not found on PATH" in attempt.describe()
+
+
+def test_a_successful_plugin_update_names_the_version(isolate, monkeypatch):
+    from probe.cli import autoupdate, updater, upgrading
+
+    _stub_cli_upgrade(monkeypatch, upgrading, updater)
+    monkeypatch.setattr(
+        upgrading.updater, "update_plugin", lambda target: _plugin_result(changed=True)
+    )
+
+    upgrading.perform_update(base_url="https://x", include_plugin=True)
+    described = autoupdate.load().last_attempt.describe()
+
+    assert described.startswith("success")
+    assert "plugin 0.8.0" in described
+
+
+def test_an_old_record_without_plugin_fields_still_reads_as_success(isolate):
+    """Records written before the plugin half was tracked must not start
+    reporting a failure the moment the CLI is upgraded."""
+    from probe.cli import autoupdate
+
+    autoupdate.state_dir().mkdir(parents=True, exist_ok=True)
+    autoupdate.state_path().write_text(
+        json.dumps(
+            {
+                "enabled": True,
+                "channel": "latest",
+                "last_attempt": {"at": 1_700_000_000, "ok": True, "to_version": "0.14.1"},
+            }
+        )
+    )
+    attempt = autoupdate.load().last_attempt
+    assert attempt.succeeded is True
+    assert attempt.describe().startswith("success -> CLI 0.14.1")
+
+
+def test_the_hook_no_longer_passes_a_channel(isolate):
+    """One channel, so the flag is gone from the spawn — but newer CLIs must
+    still ACCEPT it, because a plugin updates on the USER's schedule and older
+    copies of the hook are still out there passing it."""
+    import pathlib
+
+    hook = pathlib.Path("plugins/probe-research/hooks/version_check.py").read_text()
+    argv = hook.split("subprocess.Popen(")[1].split("stdin=")[0]
+    assert '"--action", "update"' in argv, "wrong call site"
+    assert "--channel" not in argv
+
+    from typer.testing import CliRunner
+
+    from probe.cli.main import app
+
+    result = CliRunner().invoke(app, ["wizard", "--action", "diagnose", "--channel", "stable"])
+    assert result.exit_code == 0, result.output + repr(result.exception)

@@ -29,7 +29,6 @@ import json
 import os
 import time
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 
 STATE_DIRNAME = "probe"
@@ -41,44 +40,76 @@ LOCK_FILENAME = "autoupdate.lock"
 STALE_LOCK_SECONDS = 900
 
 
-class Channel(StrEnum):
-    """Which releases auto-update follows.
-
-    Borrowed from Claude Code, and it earns its place here for a specific
-    reason: a researcher mid-experiment does not want a new CLI landing on them.
-    `stable` is a legible promise in a way that "auto-update is on" is not.
-    """
-
-    LATEST = "latest"
-    STABLE = "stable"
-
-
-DEFAULT_CHANNEL = Channel.LATEST
+# There was a `stable` channel here, meant as a legible promise that a new CLI
+# would not land on a researcher mid-experiment. It was stored, passed on the
+# command line and validated -- and never read by anything. `cli_latest()` always
+# returned `manifest["cli"]["latest"]`, and the manifest has no `stable` key, so
+# choosing it behaved exactly like `latest`. A setting that does nothing is worse
+# than an absent one: it answers a real worry with a promise nothing keeps.
+#
+# If the worry needs answering, it needs a `stable` field in the manifest and a
+# `cli_latest(manifest, channel)` that reads it -- not an enum.
 
 
 @dataclass(frozen=True)
 class Attempt:
-    """The outcome of one auto-update run, for `probe doctor` to print."""
+    """The outcome of one auto-update run, for `probe doctor` to print.
+
+    BOTH halves, because an auto-update is two upgrades. The plugin's outcome
+    used to live only in the printed lines, which a detached run sends to
+    /dev/null -- so a plugin that had silently stopped updating looked exactly
+    like one that worked. That is the failure mode this record exists to
+    prevent, one layer down.
+    """
 
     at: int
     ok: bool
     detail: str = ""
     from_version: str | None = None
     to_version: str | None = None
+    #: True when the plugin half has nothing to report -- it succeeded, or there
+    #: was no Claude Code to update. A missing `claude` is a legitimate state for
+    #: a CLI-only user, not an auto-update failure.
+    plugin_ok: bool = True
+    plugin_detail: str = ""
+    plugin_version: str | None = None
+
+    @property
+    def succeeded(self) -> bool:
+        return self.ok and self.plugin_ok
 
     def describe(self) -> str:
         when = time.strftime("%Y-%m-%d %H:%M", time.localtime(self.at))
-        if self.ok and self.to_version:
-            return f"success -> {self.to_version} ({when})"
-        if self.ok:
-            return f"success ({when})"
-        return f"FAILED ({when}): {self.detail or 'unknown error'}"
+        landed = ", ".join(
+            part
+            for part in (
+                f"CLI {self.to_version}" if self.to_version else "",
+                f"plugin {self.plugin_version}" if self.plugin_version else "",
+            )
+            if part
+        )
+        notes = "; ".join(
+            note
+            for note in (
+                "" if self.ok else (self.detail or "unknown error"),
+                f"plugin: {self.plugin_detail}" if self.plugin_detail else "",
+            )
+            if note
+        )
+        if self.succeeded:
+            out = f"success -> {landed} ({when})" if landed else f"success ({when})"
+            return f"{out}: {notes}" if notes else out
+        # On a failure the versions are where things are STUCK, not where they
+        # landed -- "FAILED -> plugin 0.1.0" reads like 0.1.0 was the goal.
+        out = f"FAILED ({when})"
+        if notes:
+            out += f": {notes}"
+        return f"{out} — still at {landed}" if landed else out
 
 
 @dataclass(frozen=True)
 class Settings:
     enabled: bool = False
-    channel: Channel = DEFAULT_CHANNEL
     last_attempt: Attempt | None = None
 
 
@@ -109,7 +140,6 @@ def load() -> Settings:
     because defaulting a data-egress-adjacent background process to ON when we
     cannot tell what the user chose is the wrong direction to guess."""
     raw = _read()
-    channel = raw.get("channel")
     attempt_raw = raw.get("last_attempt")
     attempt = None
     if isinstance(attempt_raw, dict):
@@ -120,14 +150,17 @@ def load() -> Settings:
                 detail=str(attempt_raw.get("detail", "")),
                 from_version=attempt_raw.get("from_version"),
                 to_version=attempt_raw.get("to_version"),
+                # Absent on records written before the plugin half was tracked.
+                # Defaulting to True keeps an old success reading as a success.
+                plugin_ok=bool(attempt_raw.get("plugin_ok", True)),
+                plugin_detail=str(attempt_raw.get("plugin_detail", "")),
+                plugin_version=attempt_raw.get("plugin_version"),
             )
         except (KeyError, TypeError, ValueError):
             attempt = None
-    return Settings(
-        enabled=bool(raw.get("enabled", False)),
-        channel=Channel(channel) if channel in tuple(Channel) else DEFAULT_CHANNEL,
-        last_attempt=attempt,
-    )
+    # A `channel` key written by an older CLI is ignored, not migrated away: the
+    # state file is also read by the plugin hook, which may be older than us.
+    return Settings(enabled=bool(raw.get("enabled", False)), last_attempt=attempt)
 
 
 def _write(payload: dict) -> None:
@@ -140,10 +173,9 @@ def _write(payload: dict) -> None:
     tmp.replace(state_path())
 
 
-def save(*, enabled: bool, channel: Channel) -> Settings:
+def save(*, enabled: bool) -> Settings:
     raw = _read()
     raw["enabled"] = bool(enabled)
-    raw["channel"] = str(channel)
     _write(raw)
     return load()
 
@@ -158,6 +190,9 @@ def record_attempt(attempt: Attempt) -> None:
         "detail": attempt.detail,
         "from_version": attempt.from_version,
         "to_version": attempt.to_version,
+        "plugin_ok": attempt.plugin_ok,
+        "plugin_detail": attempt.plugin_detail,
+        "plugin_version": attempt.plugin_version,
     }
     _write(raw)
 
