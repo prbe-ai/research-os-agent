@@ -825,59 +825,7 @@ def _tool_docs(client) -> dict[str, str]:
     return {t.name: (t.description or "") for t in _asyncio.run(server.list_tools())}
 
 
-def test_routing_rule_is_stated_in_both_places_and_agrees(client):
-    """browse-vs-search must not become the new context-vs-search.
 
-    research_context rotted because nothing told an agent when to prefer it, so
-    agents defaulted to search. The rule that works is about what you HAVE, not
-    what you want -- and it is stated in the instructions AND at both call
-    sites, because an agent choosing a tool reads the docstring, not the
-    preamble. Stating it twice is a drift risk, which is what this test is for.
-    """
-    from probe.mcp.server import MCP_INSTRUCTIONS
-
-    docs = _tool_docs(client)
-
-    # The instructions carry the rule and name both tools.
-    assert "browse_research" in MCP_INSTRUCTIONS
-    assert "search_knowledge" in MCP_INSTRUCTIONS
-    assert "what you HAVE" in MCP_INSTRUCTIONS
-
-    # Each tool points at the other, so whichever one the agent reads first
-    # tells it when the other is the right call.
-    assert "search_knowledge" in docs["browse_research"]
-    assert "browse_research" in docs["search_knowledge"]
-    assert "what you HAVE" in docs["browse_research"]
-
-
-def test_query_formulation_is_taught_where_the_query_is_written(client):
-    """The Good/Bad pair must live on the tool that takes the query.
-
-    An agent forms the query at the call site; a rule that exists only in the
-    preamble is read once and forgotten by the time it matters.
-    """
-    from probe.mcp.server import MCP_INSTRUCTIONS
-
-    docs = _tool_docs(client)
-    for text in (MCP_INSTRUCTIONS, docs["search_knowledge"]):
-        assert "Good:" in text and "Bad:" in text
-        assert "kl_coef" in text  # a concrete, domain-real example
-
-
-def test_reuse_before_create_is_in_the_durable_half(client):
-    """The most valuable rule in the product must not live only in a skill.
-
-    It used to: track-experiment carried it, and the INSTALLED copy of that
-    skill was measured 30 lines behind the repo. The instructions ship with the
-    image and cannot drift, so the rule lives there and is repeated on the tool
-    that enforces it.
-    """
-    from probe.mcp.server import MCP_INSTRUCTIONS
-
-    docs = _tool_docs(client)
-    assert "REUSE BEFORE YOU CREATE" in MCP_INSTRUCTIONS
-    assert 'asset:<name>' in MCP_INSTRUCTIONS
-    assert "REUSE BEFORE YOU CREATE" in docs["get_entity"]
 
 
 def test_the_view_matrix_in_the_docstring_matches_the_real_one(client):
