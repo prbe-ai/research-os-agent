@@ -35,7 +35,10 @@ AGENT_SESSION_HEADER = "X-Probe-Agent-Session"
 # escaped. Deliberately looser than a strict uuid match so a future agent that
 # uses a different id shape still works without a client release.
 _MAX_SESSION_LENGTH = 200
-_SESSION_RE = re.compile(r"^[A-Za-z0-9._:-]{8,200}$")
+# \A/\Z, not ^/$: `$` also matches just before a trailing newline, and this
+# exact string composes the cross-repo graph canonical_id, where a stray
+# newline yields a node that silently never merges with the transcript side.
+_SESSION_RE = re.compile(r"\A[A-Za-z0-9._:-]{8,200}\Z")
 
 # Leading semver out of a version string that may carry a suffix. Claude Code
 # reports "2.1.219 (Claude Code)", NOT a bare semver, so a strict parse finds
