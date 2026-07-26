@@ -11,12 +11,13 @@ the create; PATCH always updates).
 
 from __future__ import annotations
 
-import os
 import re
 import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .agent_session import detect_agent
 
 AUTO_HYPOTHESIS_PREFIX = "[auto]"
 
@@ -46,14 +47,16 @@ def _script_stem() -> str | None:
 
 
 def _agent_context() -> str | None:
-    """Best-effort marker for the coding agent driving this process, if any."""
-    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_ENTRYPOINT"):
-        return "Claude Code session"
-    if os.environ.get("CURSOR_TRACE_ID"):
-        return "Cursor session"
-    if os.environ.get("CODEX_SANDBOX") or os.environ.get("CODEX_THREAD_ID"):
-        return "Codex session"
-    return None
+    """Best-effort marker for the coding agent driving this process, if any.
+
+    Detection lives in `agent_session.AGENTS` so this and session attribution
+    cannot disagree about what counts as "running under Claude Code". Note the
+    two differ on purpose downstream: an agent is worth NAMING in a hypothesis
+    even when its transcripts are not captured, so this reports Cursor and
+    Codex while `resolve_agent_session` deliberately does not.
+    """
+    spec = detect_agent()
+    return spec.display if spec is not None else None
 
 
 def default_experiment_slug(cwd: str | None = None) -> str:

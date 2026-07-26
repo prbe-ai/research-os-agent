@@ -198,13 +198,28 @@ def test_version_resolves_from_the_installed_distribution():
     assert probe.__version__ == metadata.version("probe-research")
 
 
-def test_help_separates_hook_adapter_from_experiment_upload(capsys):
+def test_help_offers_upload_and_no_stale_hook_adapter(capsys):
+    """The `hook session` adapter is GONE; session linking is automatic now.
+
+    This used to assert the hook adapter appeared in help, separated from the
+    upload command. That adapter recorded a run's coding session into a
+    free-form metadata field which the ingest upsert overwrites wholesale on
+    re-push (`metadata = EXCLUDED.metadata`), so anything stored there silently
+    vanished. Attribution now rides a request header into runs.foreign_keys and
+    run_sessions, which merge instead. Kept as an inverted guard so the dead
+    command cannot quietly reappear alongside the automatic path.
+    """
     # typer/click return an exit code from main() rather than raising SystemExit.
     rc = cli.main(["--help"])
     assert rc == 0
     output = capsys.readouterr().out
     assert "upload structured research knowledge" in output
-    assert "internal coding-agent adapter commands" in output
+    assert "internal coding-agent adapter commands" not in output
+    # Invoking it must fail outright, not just be undocumented. Asserted by
+    # exit code rather than by scanning help text for "hook": rich wraps the
+    # help panel at terminal width, so substring checks there are width-
+    # dependent and fail for reasons that have nothing to do with the command.
+    assert cli.main(["hook", "session", "attach", "r", "--session-id", "s"]) != 0
 
 
 def test_a_backend_error_exits_nonzero(wired, capsys, monkeypatch):

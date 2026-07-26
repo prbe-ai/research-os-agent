@@ -29,6 +29,7 @@ from ..client_headers import (
 )
 from . import errors
 from .config import Settings
+from .agent_session import agent_session_headers
 from .surface import SURFACE_HEADER, TOOL_HEADER, Surface, current_tool
 
 _RETRYABLE = {502, 503, 504}
@@ -129,6 +130,12 @@ class Transport:
         tool = current_tool()
         if tool:
             headers[TOOL_HEADER] = tool
+        # Coding-agent session attribution. Read per-request rather than cached
+        # at construction: a long-lived client outlives any single session, and
+        # a stale id would attribute new runs to a finished conversation.
+        # Returns {} when there is no capturable session, so absent means NO
+        # header rather than an empty one.
+        headers.update(agent_session_headers())
 
         retry = idempotent if idempotent is not None else method.upper() in {"GET", "PUT"}
         attempt = 0

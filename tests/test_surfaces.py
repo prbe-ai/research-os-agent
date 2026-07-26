@@ -29,37 +29,6 @@ def test_events_read_surface_is_read_only(client, app):
     assert client.events.for_run(run.id) == []
 
 
-def test_hook_session_surface_attaches_checkpoints_and_detaches(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
-    transcript = tmp_path / "session.jsonl"
-    transcript.write_text('authorization: Bearer ros_pat_secretvalue\n{"message":"ok"}\n')
-
-    client.sessions.attach(
-        run.id,
-        "session-1",
-        transcript_path=str(transcript),
-        cwd=str(tmp_path),
-        strict=True,
-    )
-    checkpoint = client.sessions.checkpoint(
-        run.id,
-        "session-1",
-        transcript_path=str(transcript),
-        reason="pre_compact",
-        strict=True,
-    )
-    client.sessions.detach(run.id, "session-1", strict=True)
-
-    session = app.runs[run.id]["metadata"]["agent"]["sessions"][0]
-    assert session["state"] == "detached"
-    assert session["transcript_available"] is True
-    assert "transcript_path" not in session
-    assert checkpoint["portable"] is False
-    artifact = next(a for a in app.artifacts[run.id] if a["kind"] == "transcript_segment")
-    assert artifact["meta"]["redacted"] is True
-    assert artifact["meta"]["portable"] is False
-
-
 def test_experiment_version_replaces_run_promote(client, app):
     client.fail_open = False
     exp = client.ensure_experiment("dockq", "DockQ", "h")
