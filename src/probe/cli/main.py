@@ -318,40 +318,26 @@ def whoami() -> None:
         _print_json(c.me())
 
 
-@app.command()
-def update(
-    check: bool = typer.Option(
-        False,
-        "--check",
-        help="report whether a newer CLI is available and exit; changes nothing. "
-        "Exit 0 = current, 10 = update available, 1 = check failed.",
-    ),
-    yes: bool = typer.Option(False, "--yes", "-y", help="skip the confirmation prompt"),
-    plugin: bool = typer.Option(
-        True,
-        "--plugin/--no-plugin",
-        help="also update the Claude Code plugin via `claude` (default: on)",
-    ),
-    channel: str = typer.Option(
-        None,
-        "--channel",
-        help="release channel to follow: latest, or stable to avoid a new CLI "
-        "landing mid-experiment (default: whatever the wizard configured)",
-    ),
+# `probe update` is HIDDEN, not deleted. The plugin's SessionStart hook spawns
+# it, and plugins update on the USER's schedule -- deleting it would silently
+# break auto-update on every machine whose plugin has not been refreshed yet.
+# New plugin versions call `probe wizard --action update` instead.
+@app.command(name="update", hidden=True)
+def update_compat(
+    check: bool = typer.Option(False, "--check"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+    plugin: bool = typer.Option(True, "--plugin/--no-plugin"),
+    channel: str = typer.Option(None, "--channel"),
 ) -> None:
-    """Update the Probe Research CLI, and the Claude Code plugin, to the latest release.
+    """Deprecated: use `probe wizard` and pick Update."""
+    from probe.cli import updater
+    from probe.cli.upgrading import perform_update
 
-    Detects how ``probe`` was installed (uv tool / pipx / pip) and runs the right
-    upgrade, then updates the plugin and reminds you to restart Claude Code (a plugin
-    update only applies on restart, which ``probe`` cannot do for you). ``--check``
-    is a read-only staleness probe for scripts.
-    """
     base = resolve(base_url=_conn.base_url).base_url
-
     if check:
         try:
             manifest = updater.fetch_latest(base)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             print(f"update check failed: {exc}", file=sys.stderr)
             raise typer.Exit(updater.CHECK_ERROR) from exc
         latest = updater.cli_update_available(manifest, __version__)
@@ -361,58 +347,12 @@ def update(
         print(f"up to date: CLI {__version__}")
         raise typer.Exit(updater.CHECK_CURRENT)
 
-    # Best-effort manifest for the plugin target; a failed check never blocks the upgrade.
-    try:
-        manifest = updater.fetch_latest(base)
-    except Exception:
-        manifest = {}
-    plugin_target = updater.plugin_latest(manifest)
-
-    install = updater.detect_install()
-    print(f"Probe Research CLI {__version__}  (installed via: {install.method})")
-    cli_target = updater.cli_latest(manifest)
-    res: updater.CliResult | None = None
-
-    if install.method in (
-        updater.Method.EDITABLE,
-        updater.Method.MANAGED,
-        updater.Method.UNKNOWN,
-    ):
-        # Not safe to auto-run a package-manager upgrade here (H5/H6); instruct instead.
-        print(f"  skipping auto-upgrade: {updater.upgrade_cli(install, __version__, cli_target).message}")
-    else:
-        if not yes and not typer.confirm("Upgrade the CLI now?", default=True):
-            raise typer.Exit(1)
-        res = updater.upgrade_cli(install, __version__, cli_target)
-        print(f"  {res.message}")
-
-    if plugin:
-        print("Claude Code plugin:")
-        pres = updater.update_plugin(plugin_target)
-        print(f"  {pres.message}")
-        if pres.confirmed and pres.changed:
-            print("\nRestart Claude Code to apply the plugin update.")
-        elif not pres.confirmed:
-            print("  update it manually, then restart Claude Code:")
-            for line in updater.manual_plugin_commands().split("\n"):
-                print(f"    {line}")
-
-    # Record the outcome. When this runs detached from the SessionStart hook
-    # there is nowhere else for a failure to surface -- an auto-updater that has
-    # silently failed for a month looks exactly like one that works. `probe
-    # doctor` prints this line.
-    autoupdate_mod.record_attempt(
-        autoupdate_mod.Attempt(
-            at=int(time.time()),
-            # No `res` means the install method was one we refuse to auto-upgrade
-            # (editable / managed / unknown). That is a deliberate skip, not a
-            # failure, so it records as ok with the reason.
-            ok=res.ok if res is not None else True,
-            detail="" if res is None or res.ok else res.message,
-            from_version=__version__,
-            to_version=(res.after if res is not None else None) or cli_target,
-        )
-    )
+    outcome = perform_update(base_url=base, include_plugin=plugin, confirm=None)
+    for line in outcome.lines:
+        print(line)
+    if outcome.restart_needed:
+        print("\nRestart Claude Code to apply the plugin update.")
+    raise typer.Exit(0 if outcome.ok else 1)
 
 
 @app.command()
@@ -532,8 +472,22 @@ def wizard(
                 print(f"  - {note}")
         raise typer.Exit(0)
     if chosen_action is actions_mod.Action.UPDATE:
-        print("Run:\n  probe update")
-        raise typer.Exit(0)
+        from probe.cli.upgrading import perform_update
+
+        outcome = perform_update(
+            base_url=base_now,
+            include_plugin=True,
+            confirm=(
+                None
+                if yes or not wizard.interactive()
+                else (lambda: typer.confirm("Upgrade the CLI now?", default=True))
+            ),
+        )
+        for line in outcome.lines:
+            print(line)
+        if outcome.restart_needed:
+            print("\nRestart Claude Code to apply the plugin update.")
+        raise typer.Exit(0 if outcome.ok else 1)
     if chosen_action is actions_mod.Action.MANUAL:
         print(actions_mod.manual_steps(base_url=base_now))
         print()
