@@ -617,17 +617,28 @@ def _run_wizard_action(
         print(message)
 
     needs = wizard.needs_authorization(caps, selection)
+    granted: dict = {}
     if needs:
         print(f"\nOne browser approval covers everything you ticked ({', '.join(needs)}).")
-        _, auth_messages = wizard.authorize(
+        granted, auth_messages = wizard.authorize(
             needs, base_url=base_now, on_prompt=_show_device_prompt, open_browser=True
         )
         for message in auth_messages:
             print(message)
 
-    notice = wizard.restart_notice(caps, selection)
-    if notice:
-        print(f"\n{notice}")
+    missing = [grant for grant in needs if grant not in granted]
+    if missing:
+        # "Restart Claude Code to finish" after a FAILED approval reads as
+        # success: the user restarts, finds the capability off, and has no idea
+        # why. Say what actually happened instead.
+        print(
+            f"\nNot finished — no credential for: {', '.join(missing)}. "
+            "Run the wizard again once you can approve in a browser."
+        )
+    else:
+        notice = wizard.restart_notice(caps, selection)
+        if notice:
+            print(f"\n{notice}")
 
 
 # `probe setup` must keep working: it is printed on the live connect page, in
