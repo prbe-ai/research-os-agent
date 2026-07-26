@@ -890,3 +890,34 @@ def test_bootstrap_upgrades_an_OLD_install_not_just_a_missing_one(monkeypatch):
 
     monkeypatch.setattr(bootstrap, "_version_of", lambda b: "99.0.0")
     assert bootstrap._resolves_on_path() is True
+
+
+def test_a_failed_approval_does_not_claim_the_install_finished():
+    """"Restart Claude Code to finish" after a FAILED approval reads as success.
+    The user restarts, finds the capability off, and has no idea why."""
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
+    # The restart notice must be reachable only when nothing is missing.
+    assert "missing = [grant for grant in needs if grant not in granted]" in source
+    assert "if missing:" in source
+    assert "Not finished" in source
+    # And it must sit in the else branch, not unconditionally after authorize().
+    after = source.split("if missing:")[1]
+    assert "restart_notice" in after, "the notice must be gated on success"
+
+
+def test_authorize_result_is_used_not_discarded():
+    """The bug was that authorize()'s return value was thrown away with `_`,
+    so nothing downstream could tell success from failure."""
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
+    assert "granted, auth_messages = wizard.authorize(" in source
+    assert "_, auth_messages = wizard.authorize(" not in source
