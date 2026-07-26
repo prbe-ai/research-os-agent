@@ -338,11 +338,11 @@ def apply_tracking(want: bool) -> list[str]:
     return messages
 
 
-def apply_auto_update(want: bool, channel: autoupdate.Channel) -> list[str]:
-    autoupdate.save(enabled=want, channel=channel)
+def apply_auto_update(want: bool) -> list[str]:
+    autoupdate.save(enabled=want)
     if not want:
         return ["Auto-update off. You'll still get a nudge when a release lands."]
-    return [f"Auto-update on, following the `{channel}` channel."]
+    return ["Auto-update on."]
 
 
 def run_menu(defaults: dict[Capability, bool]):
@@ -498,8 +498,6 @@ def describe_state(caps: Capabilities) -> list[str]:
         capture = "off (killswitch set)"
     lines.append(f"  Session capture             {capture}")
     auto = "on" if caps.auto_update_enabled else "off"
-    if caps.auto_update_enabled and caps.auto_update_channel:
-        auto = f"on ({caps.auto_update_channel})"
     lines.append(f"  Automatic updates           {auto}")
     if caps.last_update_attempt:
         lines.append(f"  Last update attempt         {caps.last_update_attempt}")
@@ -523,7 +521,7 @@ def remove_everything(caps: Capabilities) -> list[str]:
     if not ok and "not found" not in detail.lower():
         messages.append(f"! could not remove {TRACKING_PLUGIN_NAME}: {detail}")
 
-    autoupdate.save(enabled=False, channel=autoupdate.DEFAULT_CHANNEL)
+    autoupdate.save(enabled=False)
     messages.append(
         "Removed. Your account and any data already sent are untouched — "
         "revoke this device's tokens in Settings if you also want those gone."

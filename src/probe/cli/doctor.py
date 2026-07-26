@@ -85,7 +85,6 @@ def render(caps: Capabilities) -> str:
 
     lines.append("Auto-update")
     lines.append(_row("Enabled", "yes" if caps.auto_update_enabled else "no"))
-    lines.append(_row("Channel", caps.auto_update_channel or str(autoupdate.DEFAULT_CHANNEL)))
     lines.append(
         _row("Last attempt", caps.last_update_attempt or "never run on this device")
     )
@@ -161,7 +160,6 @@ def collect() -> Capabilities:
         capture_killswitched=(tap_plugin_dir() / ".disabled").exists(),
         capture_device_id=capture_device_id(),
         auto_update_enabled=settings_autoupdate.enabled,
-        auto_update_channel=str(settings_autoupdate.channel),
         last_update_attempt=(
             settings_autoupdate.last_attempt.describe()
             if settings_autoupdate.last_attempt

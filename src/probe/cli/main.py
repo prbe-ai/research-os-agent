@@ -327,7 +327,7 @@ def update_compat(
     check: bool = typer.Option(False, "--check"),
     yes: bool = typer.Option(False, "--yes", "-y"),
     plugin: bool = typer.Option(True, "--plugin/--no-plugin"),
-    channel: str = typer.Option(None, "--channel"),
+    channel: str = typer.Option(None, "--channel", hidden=True),  # noqa: ARG001 - ignored
 ) -> None:
     """Deprecated: use `probe wizard` and pick Update."""
     from probe.cli import updater
@@ -384,10 +384,11 @@ def wizard(
     auto_update: Optional[bool] = typer.Option(  # noqa: UP007
         None, "--auto-update/--no-auto-update", help="keep the CLI and plugins current"
     ),
-    channel: str = typer.Option(
-        str(autoupdate_mod.DEFAULT_CHANNEL),
+    channel: str = typer.Option(  # noqa: ARG001 - compat, see below
+        None,
         "--channel",
-        help="auto-update channel: latest, or stable to avoid a new CLI mid-experiment",
+        hidden=True,
+        help="accepted and ignored; there is only one channel",
     ),
     uninstall: bool = typer.Option(
         False,
@@ -413,15 +414,11 @@ def wizard(
     from probe.cli import tui
     from probe.cli.capture import OffMode
 
-    try:
-        selected_channel = autoupdate_mod.Channel(channel)
-    except ValueError:
-        print(
-            f"unknown channel {channel!r}; expected one of: "
-            f"{', '.join(str(c) for c in autoupdate_mod.Channel)}",
-            file=sys.stderr,
-        )
-        raise typer.Exit(2) from None
+    # `--channel` is accepted and ignored. Plugins update on the USER's schedule,
+    # so a machine whose plugin has not been refreshed still spawns
+    # `probe wizard --action update --yes --channel latest`; rejecting the flag
+    # would break auto-update on exactly the machines that are behind.
+    del channel
 
     # FIRST, before anything else. `npx probe-research` launches us through an
     # EPHEMERAL `uv tool run` / `pipx run`, which leaves no binary behind — and
@@ -486,7 +483,6 @@ def wizard(
             tracking=tracking,
             capture=capture,
             auto_update=auto_update,
-            channel=channel,
             uninstall=uninstall,
             configured=configured,
         )
@@ -526,7 +522,6 @@ def _run_wizard_action(
     tracking,
     capture,
     auto_update,
-    channel: str,
     uninstall: bool,
     configured: bool,
 ) -> list[str]:
@@ -634,9 +629,7 @@ def _run_wizard_action(
             )
         )
     if selection.auto_update != caps.auto_update_enabled:
-        messages.extend(
-            wizard.apply_auto_update(selection.auto_update, autoupdate_mod.Channel(channel))
-        )
+        messages.extend(wizard.apply_auto_update(selection.auto_update))
     for message in messages:
         tui.say(message)
 

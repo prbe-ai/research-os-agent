@@ -227,12 +227,14 @@ def _spawn_autoupdate(probe_bin: str) -> None:
     settings = _autoupdate_settings()
     if not settings.get("enabled"):
         return
-    channel = settings.get("channel") or "latest"
+    # No `--channel`: there is one channel, and the flag it used to pass did
+    # nothing. Newer CLIs still ACCEPT it (hidden and ignored) because a plugin
+    # updates on the user's schedule, so older copies of this file keep working.
     try:
         subprocess.Popen(  # noqa: S603 - resolved binary, no shell
             # `wizard --action update`, not the deprecated `probe update`.
             # Old CLIs do not have the wizard, so fall back below.
-            [probe_bin, "wizard", "--action", "update", "--yes", "--channel", str(channel)],
+            [probe_bin, "wizard", "--action", "update", "--yes"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
