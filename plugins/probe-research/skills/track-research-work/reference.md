@@ -21,6 +21,15 @@ pinned from an uploaded run artifact; versions are never edited in place.
 without being read into memory. With a local path and no `--uri` it runs the real
 presign → PUT → confirm byte upload; `--uri` records a reference only.
 
+In a script, `run.log_artifact(name, path=…)` is that same streamed upload and
+`run.log_artifact(name, uri=…)` that same reference; `reference=True` with a path
+records WHERE the bytes are without moving them, which is the shared-volume case for
+a checkpoint too big to be worth uploading. The rest of the table maps onto
+`client.list_artifact_versions` / `create_artifact_version` /
+`download_artifact_version_to`, and `run.list_artifacts()` /
+`run.resolve_artifact(name)` read what this run can see, including artifacts promoted
+to its experiment or project.
+
 What the reuse check resolved to decides the next command:
 
 - **exact compatible version exists** → download it. Record consumption; do not copy

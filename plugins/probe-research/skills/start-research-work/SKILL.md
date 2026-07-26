@@ -1,57 +1,85 @@
 ---
 name: start-research-work
-description: Start tracked research — pick or create the project and experiment, then open the run. Use before launching any training, evaluation, sweep, docking, scoring, or simulation. Not for ordinary edits, installs, or unit tests.
+description: Start tracked research — pick the project and experiment, then open the run: SDK in-script, CLI from a shell. Use before any training, evaluation, sweep, docking, scoring, or simulation. Not for edits, installs, or unit tests.
 ---
 
 # Start research work
 
-`probe run start` creates the project, the experiment and the run in one call, so
-this is the only moment those identities get decided. What follows is the judgement
-that is expensive to reverse afterwards.
+Opening a run get-or-creates the project and the experiment in the same call, so this
+is the only moment those identities get decided — and the surface you open it with
+decides what the run can ever record. Both are expensive to reverse afterwards.
 
 1. **Orient first.** `browse_research` if you do not know what is in this project;
    `search_knowledge` if you have terms and want prior work on this specific thing.
    Check what is already RUNNING before you launch anything — `browse_research`
    reports `active_run_count`, and duplicate GPU-hours are the expensive mistake.
 
-2. **Reuse the active run** when its intent matches. Otherwise open one:
+2. **Reuse the active run** when its intent matches. Otherwise open one, with the
+   surface that fits where the code will execute.
+
+   **Writing or editing the training script → the SDK, in-process.** This is the
+   `wandb.init` / `wandb.log` shape, and it is the default whenever the script is
+   yours to touch:
+
+   ```python
+   import probe
+
+   client = probe.Client()          # token from env / `probe login`
+   run = client.run(experiment="dockq-sweep", project="folding",
+                    hypothesis="temp 0.7 beats 1.0", external_id="rp-9931")
+   run.snapshot()                                    # code + env, pins env_ref
+   for step, batch in enumerate(loader):
+       run.log({"loss": loss, "reward": reward}, step=step)      # the curve
+   run.finish()                     # or `with run:` — closes even on an exception
+   ```
+
+   The handle lives in the training process, so it heartbeats on its own (60s,
+   `PROBE_HEARTBEAT_SECONDS` tunes it), it can see every step, and `finish()` flushes
+   whatever spooled. Writes are fail-open: a network blip spools to disk rather than
+   raising inside the loop.
+
+   **In an agent shell, wrapping a script you are not editing → the CLI.**
 
    ```
    probe run start --project SLUG --experiment SLUG --hypothesis "..." --external-id ID
    ```
 
-   Four things in that line fail silently:
+   A CLI-opened run is DETACHED — this process exits at once, so the run does not
+   heartbeat and stays open until `probe run end`. You can `probe log` before, after
+   and around the script, but never from inside its loop.
+
+   **Step-level curves require the SDK.** From a shell you can only record what is
+   visible outside the process: a final eval, a checkpoint score, numbers scraped from
+   stdout. A per-step loss curve exists only inside the training loop, and only
+   `run.log(..., step=...)` called there records it. If the work needs a curve and the
+   script is editable, add those SDK lines to it instead of accepting the coarse
+   shape. If it genuinely is not editable, a small Python wrapper calling
+   `run.execute([...])` still gets you the run, the snapshot, a process span and the
+   real exit status.
+
+3. **Four identity arguments fail silently, on either surface:**
    - Project and experiment are get-or-create **by slug**. A typo does not error, it
      mints a second identity. Read back what you got before trusting it.
-   - `--project` takes a slug. Passing an id creates a project named after the UUID.
+   - The project takes a slug. Passing an id creates a project named after the UUID.
      Omit it entirely to use the ambient one from `probe project use`.
-   - `--hypothesis` is required knowledge for a NEW experiment. Omit it and the
+   - The hypothesis is required knowledge for a NEW experiment. Omit it and the
      experiment is minted with a marked `[auto]` placeholder that later runs never
      overwrite. Replace it with `probe experiment set EXP --hypothesis "..."`.
-   - `--external-id` should be deterministic. It is what makes a retried launch reuse
+   - The external id should be deterministic. It is what makes a retried launch reuse
      the run instead of duplicating it.
 
-3. **Reuse before you create.** Before writing or materially changing a reusable
+4. **Reuse before you create.** Before writing or materially changing a reusable
    script, scoring method, dataset, config, image, checkpoint or container
-   definition, call `get_entity(ref="asset:<name>", view="versions")`. The two empty
-   answers mean opposite things:
-   - **the name does not exist** → an error, like any bad ref. A new identity is
-     licensed.
-   - **`state="no_match"`** → the asset EXISTS and no version satisfies your
-     `filters={"requirement": ">=N"}`. The response carries the versions that DO
-     exist, so this is a real version ceiling, not an absent asset. Pin a new version
-     of the SAME asset; do not open a second identity.
-
-   Confusing those is how duplicate asset identities get created, the single most
+   definition, run `get_entity(ref="asset:<name>", view="versions")`. Its tool
+   description spells out what the two empty answers mean — they are opposites, and
+   confusing them is how duplicate asset identities get created, the single most
    expensive avoidable error here: two scorers with the same intent and different
-   behaviour make every result that used either one unreproducible. Requirements
-   match monotonic integers and labels (`>=3`, `v1.4-final`), not semver ranges.
-   Never edit a published version in place.
+   behaviour make every result that used either one unreproducible.
 
-4. **Snapshot before launch.** `probe snapshot RUN_ID` captures code + env and pins
-   `env_ref`. A run with no execution record cannot be reproduced and cannot be
-   published. Record W&B, scheduler, pod, image and storage ids with `probe link` as
-   they appear; they land on the run's `foreign_keys`.
+5. **Snapshot before launch.** `run.snapshot()` / `probe snapshot RUN_ID` captures
+   code + env and pins `env_ref`. A run with no execution record cannot be reproduced
+   and cannot be published. Record W&B, scheduler, pod, image and storage ids with
+   `run.link(...)` / `probe link` as they appear; they land on `foreign_keys`.
 
 Recording what the run does, and closing it, is `track-research-work`. Command syntax
 for artifacts, assets, publishing and project admin is in that skill's `reference.md`.
