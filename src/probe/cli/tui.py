@@ -69,9 +69,73 @@ def indent(text: str, pad: int | None = None) -> str:
     return "\n".join(prefix + line if line.strip() else line for line in text.splitlines())
 
 
+def wrap(text: str, width: int = CONTENT_WIDTH) -> list[str]:
+    """Break a paragraph at CONTENT_WIDTH so centring has something to centre.
+
+    A line wider than the block runs off the right edge once it carries the
+    left pad, and then wraps at whatever column the terminal happens to end at
+    -- which reads as a broken layout rather than a long sentence.
+
+    Leading indent is preserved. A bullet hangs two further, to clear its own
+    "- " marker; a plain paragraph stays flush, because indenting its second
+    line makes it look like a list item that lost its bullet.
+    """
+    import textwrap
+
+    lead = " " * (len(text) - len(text.lstrip()))
+    hang = lead + ("  " if text.lstrip().startswith("- ") else "")
+    return (
+        textwrap.wrap(text.strip(), width, initial_indent=lead, subsequent_indent=hang) or [""]
+    )
+
+
 def say(text: str = "") -> None:
-    """Print centred, so output lines up with the centred prompts."""
-    print(indent(text) if text else "")
+    """Print centred -- but only when there is a screen to centre in.
+
+    Piped output stays flush-left: an indent there is noise every log grep has
+    to strip, and the one consumer that never sees the layout is CI.
+    """
+    if not text:
+        print()
+    elif interactive():
+        print(indent(text))
+    else:
+        print(text)
+
+
+def page(lines: list[str], prompt: str | None = None) -> None:
+    """Show a block of OUTPUT as a centred page, like every prompt in the wizard.
+
+    Results used to print from column 0 at the top of the screen while every
+    prompt sat centred, so finishing an action visibly threw you out of the
+    wizard and back into a bare terminal. It is the same wizard; it should look
+    like it.
+
+    Plain prints, not prompt_toolkit: after clear() the cursor owns a blank
+    screen, so vertical centring is just N blank lines -- and unlike a
+    full-screen app, what it draws is still there after the wizard exits.
+    """
+    raw = "\n".join(lines).splitlines()
+    if not interactive():
+        # Verbatim: hard-wrapping piped output only breaks a grep.
+        print("\n".join(raw))
+        return
+    body: list[str] = []
+    for line in raw:
+        # Wrapped HERE, not by the terminal: a line that overflows the block
+        # wraps back to column 0, which breaks the centred column the whole
+        # page is built on.
+        body += wrap(line) if len(line) > CONTENT_WIDTH else [line]
+    clear()
+    # A block taller than the screen gets no spacer: centring it would only
+    # choose which end to amputate, and the top is the end with the verdict.
+    height = len(body) + (2 if prompt else 0)
+    print("\n" * max(0, (rows() - height) // 2), end="")
+    for line in body:
+        print(indent(line) if line.strip() else "")
+    if prompt is not None:
+        print()
+        input(indent(prompt))
 
 
 def style():
@@ -114,7 +178,7 @@ def use_checkmarks() -> None:
     common.INDICATOR_UNSELECTED = "○"
 
 
-def content_height(message: str, choices) -> int:
+def content_height(message: str, choices=()) -> int:
     """How many rows the prompt will occupy.
 
     Counted, not asked. `Container.preferred_height()` needs a running event
@@ -130,7 +194,10 @@ def content_height(message: str, choices) -> int:
             rows += 1
         else:
             rows += str(getattr(choice, "title", "")).count("\n") + 1
-    return rows + 1  # the instruction line
+    # Only a list prompt draws an instruction line. A confirm renders its
+    # answer inline on the last message row, so counting one for it would sit
+    # the whole page half a row high.
+    return rows + (1 if choices else 0)
 
 
 def center_vertically(question, height: int | None = None):

@@ -102,10 +102,9 @@ def resolve_selection(
 
 MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
     Capability.TRACKING: (
-        "Experiment tracking + MCP  (recommended)",
+        "CLI + MCP  (recommended)",
         (
             "Skills for tracking runs, and read-only search over your lab's history.",
-            "Sends: nothing automatically. You call it.",
         ),
     ),
     Capability.CAPTURE: (
@@ -397,20 +396,58 @@ def run_menu(defaults: dict[Capability, bool]):
 
 
 def ask_auto_update(default: bool):
-    """The follow-up step. Returns None, tui.BACK, or a bool."""
+    """The follow-up step. Returns None, tui.BACK, or a bool.
+
+    Built exactly like the capability picker, and for the same reason. The
+    detail used to be `print`ed and the confirm rendered underneath it, so
+    prompt_toolkit took a screen that already had two lines on it and the whole
+    step sat welded to the top while every other step was centred.
+    """
     import questionary
 
     from probe.cli import tui
 
     title, detail = AUTO_UPDATE_COPY
-    tui.say(detail)
-    tui.say()
+    message = tui.framed("Now, how Probe keeps itself current.", tui.wrap(detail), title)
     return tui.ask(
         questionary.confirm(
-            f"{tui.qmark()[:-1]}{title}",
+            message,
             default=default,
             style=tui.style(),
-        )
+            qmark=tui.qmark(),
+        ),
+        height=tui.content_height(message),
+    )
+
+
+def confirm_removal():
+    """The uninstall gate. Returns None, tui.BACK, or a bool.
+
+    A bare `typer.confirm` here was the one prompt in the wizard that printed
+    at column 0 -- and it guarded the single destructive action, which is the
+    worst place to look like a different program.
+    """
+    import questionary
+
+    from probe.cli import tui
+
+    message = tui.framed(
+        "Remove Probe Research from this device.",
+        tui.wrap(
+            "Uninstalls both Claude Code plugins, stops session capture and "
+            "clears the credentials stored on this machine. Nothing already "
+            "sent to your team's knowledgebase is touched."
+        ),
+        "Remove it?",
+    )
+    return tui.ask(
+        questionary.confirm(
+            message,
+            default=False,
+            style=tui.style(),
+            qmark=tui.qmark(),
+        ),
+        height=tui.content_height(message),
     )
 
 
@@ -453,7 +490,7 @@ def describe_state(caps: Capabilities) -> list[str]:
     """
     lines = []
     lines.append(
-        f"  Experiment tracking + MCP   {'on' if caps.tracking_on else 'off'}"
+        f"  CLI + MCP                   {'on' if caps.tracking_on else 'off'}"
         + (f"  ({caps.logged_in_as})" if caps.logged_in_as else "")
     )
     capture = "on" if caps.capture_on else "off"

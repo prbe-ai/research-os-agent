@@ -56,7 +56,7 @@ def render(caps: Capabilities) -> str:
     lines.append(_row("Endpoint", caps.base_url or "unknown"))
     lines.append("")
 
-    lines.append("Experiment tracking + MCP")
+    lines.append("CLI + MCP")
     lines.append(
         _row(
             "Plugin",

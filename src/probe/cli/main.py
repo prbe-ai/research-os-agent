@@ -347,7 +347,7 @@ def update_compat(
         print(f"up to date: CLI {__version__}")
         raise typer.Exit(updater.CHECK_CURRENT)
 
-    outcome = perform_update(base_url=base, include_plugin=plugin, confirm=None)
+    outcome = perform_update(base_url=base, include_plugin=plugin)
     for line in outcome.lines:
         print(line)
     if outcome.restart_needed:
@@ -410,6 +410,7 @@ def wizard(
     """
     from probe.cli import doctor as doctor_impl
     from probe.cli import setup as wizard
+    from probe.cli import tui
     from probe.cli.capture import OffMode
 
     try:
@@ -453,8 +454,6 @@ def wizard(
             )
             raise typer.Exit(2) from None
     elif configured and not yes and not explicit_flags and wizard.interactive():
-        from probe.cli import tui
-
         tui.clear()
         picked = wizard.run_action_menu(caps)
         if picked is None or picked is tui.BACK:
@@ -479,7 +478,7 @@ def wizard(
         if chosen_action is actions_mod.Action.EXIT:
             raise typer.Exit(0)
 
-        _run_wizard_action(
+        lines = _run_wizard_action(
             chosen_action,
             caps=caps,
             base_now=base_now,
@@ -492,14 +491,22 @@ def wizard(
             configured=configured,
         )
 
+        # Inside the menu loop this is a PAGE of the wizard, so it gets the
+        # same centred treatment as every prompt. A one-shot `--action` run is
+        # command output: printing it plainly leaves the user's scrollback
+        # alone, which clearing the screen for a single result would not.
+        paged = bool(lines) and looping and wizard.interactive()
+        if paged:
+            tui.page(lines, prompt="Press enter to return to the menu…")
+        elif lines:
+            print("\n".join(lines))
+
         if not looping:
             raise typer.Exit(0)
 
         # Re-read state: the action just changed it, and the next choice should
         # be made against what is true now, not what was true on entry.
-        from probe.cli import tui
-
-        if wizard.interactive():
+        if not paged and wizard.interactive():
             tui.say()
             input(tui.indent("Press enter to return to the menu…"))
         caps = doctor_impl.collect()
@@ -522,57 +529,55 @@ def _run_wizard_action(
     channel: str,
     uninstall: bool,
     configured: bool,
-) -> None:
-    """Perform ONE action. Never exits the process, so the caller can loop."""
+) -> list[str]:
+    """Perform ONE action and RETURN its output.
+
+    Returned, not printed, so the caller can decide whether this is a centred
+    page of the wizard or plain command output. An empty list means the action
+    already streamed (the configure path has to, because a browser approval
+    prints a URL you are meant to read while it waits).
+    """
     from probe.cli import actions as actions_mod
     from probe.cli import doctor as doctor_impl
     from probe.cli import setup as wizard
+    from probe.cli import tui
     from probe.cli.capture import OffMode
 
     if chosen_action is actions_mod.Action.DIAGNOSE:
-        print(doctor_impl.render(caps))
+        lines = doctor_impl.render(caps).splitlines()
         notes = actions_mod.troubleshooting(caps)
         if notes:
-            print("\nIf something is not working:")
-            for note in notes:
-                print(f"  - {note}")
-        return
+            lines += ["", "If something is not working:"]
+            lines += [f"  - {note}" for note in notes]
+        return lines
 
     if chosen_action is actions_mod.Action.UPDATE:
         from probe.cli.upgrading import perform_update
 
-        outcome = perform_update(
-            base_url=base_now,
-            include_plugin=True,
-            confirm=(
-                None
-                if yes or not wizard.interactive()
-                else (lambda: typer.confirm("Upgrade the CLI now?", default=True))
-            ),
-        )
-        for line in outcome.lines:
-            print(line)
+        # No "Upgrade the CLI now?" gate: picking "Update to the latest
+        # version" from the menu IS the answer to that question, and asking it
+        # again dropped a bare uncentred prompt into the middle of the wizard.
+        outcome = perform_update(base_url=base_now, include_plugin=True)
+        lines = list(outcome.lines)
         if outcome.restart_needed:
-            print("\nRestart Claude Code to apply the plugin update.")
-        return
+            lines += ["", "Restart Claude Code to apply the plugin update."]
+        return lines
 
     if chosen_action is actions_mod.Action.MANUAL:
-        print(actions_mod.manual_steps(base_url=base_now))
-        print()
-        print(
-            actions_mod.self_host_notes(
+        return [
+            *actions_mod.manual_steps(base_url=base_now).splitlines(),
+            "",
+            *actions_mod.self_host_notes(
                 base_url=base_now, mcp_endpoint="https://mcp.research.prbe.ai/mcp"
-            )
-        )
-        return
+            ).splitlines(),
+        ]
 
     if chosen_action is actions_mod.Action.UNINSTALL:
         if not yes and wizard.interactive():
-            if not typer.confirm("Remove Probe Research from this device?", default=False):
-                return
-        for message in wizard.remove_everything(caps):
-            print(message)
-        return
+            tui.clear()
+            if wizard.confirm_removal() is not True:
+                return []
+        return list(wizard.remove_everything(caps))
 
     # CONFIGURE
     selection = wizard.resolve_selection(
@@ -584,12 +589,10 @@ def _run_wizard_action(
     )
     explicit_flags = any(f is not None for f in (tracking, capture, auto_update))
     if not yes and not explicit_flags and wizard.interactive():
-        from probe.cli import tui
-
         tui.clear()
         chosen = wizard.run_menu(selection.as_map())
         if chosen is None or chosen is tui.BACK:
-            return  # Escape / Ctrl-C: back to the action menu, nothing applied.
+            return []  # Escape / Ctrl-C: back to the action menu, nothing applied.
         selection = chosen
 
         # Auto-update is asked SEPARATELY, after the capabilities: it is a
@@ -597,7 +600,7 @@ def _run_wizard_action(
         tui.clear()
         wants_updates = wizard.ask_auto_update(selection.auto_update)
         if wants_updates is None or wants_updates is tui.BACK:
-            return
+            return []
         selection = wizard.Selection(
             tracking=selection.tracking,
             capture=selection.capture,
@@ -606,13 +609,18 @@ def _run_wizard_action(
 
     steps = wizard.plan(caps, selection)
     if not steps:
-        print("Already set up the way you asked. Nothing to change.")
-        return
+        return ["Already set up the way you asked. Nothing to change."]
 
-    print("This run will:")
+    # From here it STREAMS. Installing a plugin can take a minute and a browser
+    # approval prints a URL you are meant to act on while it waits, so this is
+    # the one page that cannot be buffered and centred as a block -- it is
+    # written while it happens. Centred left-to-right, at least, so it stays in
+    # the same column as the prompt that led here.
+    tui.clear()
+    tui.say("This run will:")
     for step in steps:
-        print(f"  - {step}")
-    print()
+        tui.say(f"  - {step}")
+    tui.say()
 
     messages: list[str] = []
     if selection.tracking != caps.tracking_on:
@@ -630,31 +638,44 @@ def _run_wizard_action(
             wizard.apply_auto_update(selection.auto_update, autoupdate_mod.Channel(channel))
         )
     for message in messages:
-        print(message)
+        tui.say(message)
 
     needs = wizard.needs_authorization(caps, selection)
     granted: dict = {}
     if needs:
-        print(f"\nOne browser approval covers everything you ticked ({', '.join(needs)}).")
+        tui.say()
+        tui.say(f"One browser approval covers everything you ticked ({', '.join(needs)}).")
         granted, auth_messages = wizard.authorize(
-            needs, base_url=base_now, on_prompt=_show_device_prompt, open_browser=True
+            needs,
+            base_url=base_now,
+            # The wizard's own printer: the approval URL is the one line the
+            # user has to act on, and leaving it at column 0 while everything
+            # around it is centred reads as a rendering fault.
+            on_prompt=lambda prompt: (
+                tui.say(f"  visit: {prompt.verification_uri_complete}"),
+                tui.say(f"  code:  {prompt.user_code}"),
+            ),
+            open_browser=True,
         )
         for message in auth_messages:
-            print(message)
+            tui.say(message)
 
     missing = [grant for grant in needs if grant not in granted]
     if missing:
         # "Restart Claude Code to finish" after a FAILED approval reads as
         # success: the user restarts, finds the capability off, and has no idea
         # why. Say what actually happened instead.
-        print(
-            f"\nNot finished — no credential for: {', '.join(missing)}. "
+        tui.say()
+        tui.say(
+            f"Not finished — no credential for: {', '.join(missing)}. "
             "Run the wizard again once you can approve in a browser."
         )
     else:
         notice = wizard.restart_notice(caps, selection)
         if notice:
-            print(f"\n{notice}")
+            tui.say()
+            tui.say(notice)
+    return []
 
 
 # `probe setup` must keep working: it is printed on the live connect page, in

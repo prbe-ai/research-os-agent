@@ -36,3 +36,41 @@ def test_update_cmd_min_not_ahead_of_shipped_cli():
         f"before the released CLI has it. Set UPDATE_CMD_MIN_CLI to the release that "
         f"introduces the command (and cut that CLI release)."
     )
+
+
+def test_probe_update_actually_runs(monkeypatch, tmp_path):
+    """`probe update` is what the plugin's SessionStart hook spawns, so a
+    signature drift here breaks auto-update on every machine and reports
+    nothing: the hook runs detached, with no terminal to print a traceback to.
+
+    Nothing else executes this command's body — a `confirm=None` argument
+    outlived the parameter it was passed to and every test still went green.
+    """
+    from typer.testing import CliRunner
+
+    from probe.cli import updater
+    from probe.cli.main import app
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(updater, "fetch_latest", lambda base: {})
+    monkeypatch.setattr(
+        updater,
+        "detect_install",
+        lambda: updater.Install(method=updater.Method.EDITABLE),
+    )
+    monkeypatch.setattr(
+        updater,
+        "update_plugin",
+        lambda target: updater.PluginResult(
+            attempted=True,
+            confirmed=True,
+            changed=False,
+            before=None,
+            after=None,
+            message="already current",
+        ),
+    )
+
+    result = CliRunner().invoke(app, ["update"])
+    assert result.exit_code == 0, result.output + repr(result.exception)
+    assert "TypeError" not in result.output

@@ -27,17 +27,13 @@ class UpdateOutcome:
     restart_needed: bool
 
 
-def perform_update(
-    *,
-    base_url: str,
-    include_plugin: bool = True,
-    confirm=None,
-) -> UpdateOutcome:
+def perform_update(*, base_url: str, include_plugin: bool = True) -> UpdateOutcome:
     """Upgrade the CLI and (optionally) the plugins, and record the attempt.
 
-    `confirm` is an optional callable asked before touching the CLI. The wizard
-    passes None when running non-interactively; passing it keeps the old
-    command's "Upgrade the CLI now?" prompt available.
+    There is no confirmation hook. Both callers -- the wizard's Update action
+    and the plugin's SessionStart hook -- have already been told to update by
+    the time they get here, and the one that has a terminal must not stop to
+    ask a second time.
     """
     lines: list[str] = []
 
@@ -77,8 +73,6 @@ def perform_update(
             f"  skipping auto-upgrade: "
             f"{updater.upgrade_cli(install, __version__, cli_target).message}"
         )
-    elif confirm is not None and not confirm():
-        lines.append("  skipped.")
     else:
         res = updater.upgrade_cli(install, __version__, cli_target)
         lines.append(f"  {res.message}")
