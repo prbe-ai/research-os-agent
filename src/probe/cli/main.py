@@ -455,7 +455,7 @@ def wizard(
     elif configured and not yes and not explicit_flags and wizard.interactive():
         from probe.cli import tui
 
-        tui.header("On this device:", wizard.describe_state(caps))
+        tui.clear()
         picked = wizard.run_action_menu(caps)
         if picked is None or picked is tui.BACK:
             raise typer.Exit(0)
@@ -503,7 +503,7 @@ def wizard(
             tui.say()
             input(tui.indent("Press enter to return to the menu…"))
         caps = doctor_impl.collect()
-        tui.header("On this device:", wizard.describe_state(caps))
+        tui.clear()
         picked = wizard.run_action_menu(caps)
         if picked is None or picked is tui.BACK:
             raise typer.Exit(0)

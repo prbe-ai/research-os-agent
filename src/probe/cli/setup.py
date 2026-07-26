@@ -370,10 +370,16 @@ def run_menu(defaults: dict[Capability, bool]):
 
     picked = tui.ask(
         questionary.checkbox(
-            f"{tui.message_indent()}What should Probe Research do on this device?",
+            tui.framed(
+                "Choose what Probe does on this device.",
+                [],
+                "What should Probe Research do here?",
+            ),
             choices=choices,
             instruction="(space toggles, enter confirms, esc goes back)",
             style=tui.style(),
+            qmark=tui.qmark(),
+            pointer=tui.pointer(),
         )
     )
     if picked is None or picked is tui.BACK:

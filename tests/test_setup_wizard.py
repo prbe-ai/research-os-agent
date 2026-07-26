@@ -1043,3 +1043,80 @@ def test_both_recommended_options_say_so():
     assert "(recommended)" in setup.AUTO_UPDATE_COPY[0]
     # Capture is NOT recommended by default: it is the data-egress one.
     assert "(recommended)" not in setup.MENU_COPY[Capability.CAPTURE][0]
+
+
+# --- the interactive path, which unit tests never execute ------------------
+
+
+def test_every_tui_reference_resolves():
+    """The crash that shipped in 0.13.1: `tui.header` was deleted and one of
+    its TWO call sites updated. Nothing caught it, because every call sits
+    behind `interactive()`, which is False under pytest — so the only path real
+    users take is the one with no coverage.
+
+    This is a cheap static stand-in: every `tui.X(` in the package must name
+    something `tui` actually defines.
+    """
+    import pathlib
+    import re
+
+    from probe.cli import tui
+
+    src_root = pathlib.Path(tui.__file__).parent
+    referenced = set()
+    for path in src_root.glob("*.py"):
+        referenced |= set(re.findall(r"\btui\.([a-z_]+)\s*\(", path.read_text()))
+
+    missing = sorted(name for name in referenced if not hasattr(tui, name))
+    assert not missing, f"tui has no: {missing}"
+
+
+def test_the_interactive_wizard_starts_without_crashing():
+    """Actually run it on a pty. Every previous test stubbed `interactive()`
+    to False, so the branch that renders the menu was never executed once."""
+    import os
+    import pty
+    import re
+    import select
+    import shutil
+    import sys
+    import time
+
+    # THIS interpreter's probe, not whatever is on PATH — a stale global
+    # install would make the test report on code that is not under test.
+    probe = str(pathlib.Path(sys.executable).parent / "probe")
+    if not os.path.exists(probe):
+        probe = shutil.which("probe") or ""
+    if not probe or not os.path.exists(probe):
+        import pytest
+
+        pytest.skip("no probe binary on this machine")
+
+    pid, fd = pty.fork()
+    if pid == 0:  # pragma: no cover - child process
+        os.execve(probe, [probe, "wizard"], dict(os.environ, TERM="xterm-256color"))
+
+    out = b""
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if select.select([fd], [], [], 0.3)[0]:
+            try:
+                chunk = os.read(fd, 65536)
+            except OSError:
+                break
+            if not chunk:
+                break
+            out += chunk
+        if b"Exit" in out or b"Traceback" in out:
+            break
+    try:
+        os.write(fd, b"\x03")
+    except OSError:
+        pass
+
+    text = re.sub(rb"\x1b\[[0-9;?]*[a-zA-Z]", b"", out).decode("utf8", "replace")
+    assert "Traceback" not in text, text[-600:]
+    assert "AttributeError" not in text, text[-600:]
+
+
+import pathlib  # noqa: E402  (used by the pty test above)
