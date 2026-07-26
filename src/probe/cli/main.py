@@ -347,7 +347,7 @@ def update_compat(
         print(f"up to date: CLI {__version__}")
         raise typer.Exit(updater.CHECK_CURRENT)
 
-    outcome = perform_update(base_url=base, include_plugin=plugin, confirm=None)
+    outcome = perform_update(base_url=base, include_plugin=plugin)
     for line in outcome.lines:
         print(line)
     if outcome.restart_needed:
