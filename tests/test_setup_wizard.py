@@ -1173,3 +1173,95 @@ def test_the_prompt_goes_full_screen():
     from probe.cli import tui
 
     assert "full_screen = True" in inspect.getsource(tui.center_vertically)
+
+
+def test_every_prompt_in_the_wizard_is_a_centred_page():
+    """One step used to print its detail and render a bare confirm underneath,
+    so prompt_toolkit took a screen that already had two lines on it and the
+    whole step sat welded to the top while every other step was centred.
+
+    A prompt cannot be centred without a counted height, and it cannot own its
+    own layout unless the whole block is handed to it as the message.
+    """
+    import inspect
+
+    from probe.cli import setup as wizard
+
+    for prompt in (
+        wizard.run_menu,
+        wizard.run_action_menu,
+        wizard.ask_auto_update,
+        wizard.confirm_removal,
+    ):
+        source = inspect.getsource(prompt)
+        assert "tui.framed(" in source, f"{prompt.__name__} must hand the block to the prompt"
+        assert "height=tui.content_height(" in source, f"{prompt.__name__} renders uncentred"
+
+
+def test_the_wizard_never_drops_to_a_bare_prompt():
+    """`typer.confirm` prints at column 0 with no page around it — and the one
+    that guarded uninstall was the single destructive action in the product."""
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    assert "typer.confirm" not in inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
+
+
+def test_a_confirm_does_not_count_an_instruction_row():
+    """Only a list prompt draws one. Counting it for a confirm sits the page
+    half a row high."""
+    from probe.cli import tui
+
+    assert tui.content_height("a\nb\nc") == 3
+
+
+def test_output_pages_are_centred_like_the_prompts(monkeypatch, capsys):
+    """Results used to print from column 0 at the top of the screen while every
+    prompt sat centred, so finishing an action visibly threw you out of the
+    wizard and back into a bare terminal."""
+    from probe.cli import tui
+
+    monkeypatch.setenv("COLUMNS", "120")
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    monkeypatch.setattr(tui, "clear", lambda: None)
+    monkeypatch.setattr(tui, "rows", lambda: 40)
+
+    tui.page(["one", "two"])
+    lines = capsys.readouterr().out.split("\n")
+    pad = " " * ((120 - tui.CONTENT_WIDTH) // 2)
+    assert lines.index(pad + "one") == (40 - 2) // 2, "vertical centring"
+    assert lines[lines.index(pad + "one") + 1] == pad + "two"
+
+
+def test_a_page_wraps_inside_its_block(monkeypatch, capsys):
+    """A line that overflows the block wraps back to column 0 in the terminal,
+    which breaks the centred column the whole page is built on."""
+    from probe.cli import tui
+
+    monkeypatch.setenv("COLUMNS", "120")
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    monkeypatch.setattr(tui, "clear", lambda: None)
+    monkeypatch.setattr(tui, "rows", lambda: 40)
+
+    tui.page(["  - " + "word " * 40])
+    body = [ln.strip() for ln in capsys.readouterr().out.split("\n") if ln.strip()]
+    assert len(body) > 1, "a long line must be broken up"
+    assert all(len(ln) <= tui.CONTENT_WIDTH for ln in body)
+    # The bullet hangs so the wrapped remainder does not read as a new item.
+    assert body[0].startswith("- ")
+    assert not body[1].startswith("- ")
+
+
+def test_piped_output_stays_flush_left(monkeypatch, capsys):
+    """An indent in a log is noise every grep has to strip, and CI is the one
+    consumer that never sees the layout."""
+    from probe.cli import tui
+
+    monkeypatch.setenv("COLUMNS", "120")
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+
+    tui.say("hello")
+    tui.page(["one", "two"])
+    assert capsys.readouterr().out == "hello\none\ntwo\n"
