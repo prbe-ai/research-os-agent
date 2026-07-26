@@ -368,19 +368,19 @@ def run_menu(defaults: dict[Capability, bool]):
             )
         )
 
+    message = tui.framed(
+        "Choose what Probe does on this device.", [], "What should Probe Research do here?"
+    )
     picked = tui.ask(
         questionary.checkbox(
-            tui.framed(
-                "Choose what Probe does on this device.",
-                [],
-                "What should Probe Research do here?",
-            ),
+            message,
             choices=choices,
             instruction="(space toggles, enter confirms, esc goes back)",
             style=tui.style(),
             qmark=tui.qmark(),
             pointer=tui.pointer(),
-        )
+        ),
+        height=tui.content_height(message, choices),
     )
     if picked is None or picked is tui.BACK:
         return picked
@@ -428,15 +428,17 @@ def run_action_menu(caps: Capabilities):
 
     from probe.cli import doctor as doctor_impl  # noqa: F401
 
+    message = tui.framed("On this device:", describe_state(caps), "What do you want to do?")
     return tui.ask(
         questionary.select(
-            tui.framed("On this device:", describe_state(caps), "What do you want to do?"),
+            message,
             choices=choices,
             instruction="(arrow keys, enter to choose)",
             style=tui.style(),
             qmark=tui.qmark(),
             pointer=tui.pointer(),
-        )
+        ),
+        height=tui.content_height(message, choices),
     )
 
 
