@@ -54,7 +54,19 @@ def perform_update(
     lines.append(f"Probe Research CLI {__version__}  (installed via: {install.method})")
 
     res: updater.CliResult | None = None
-    if install.method in (
+    if install.method is updater.Method.EPHEMERAL:
+        # Running via `npx probe-research` / uvx: this environment is discarded
+        # on exit, so there is nothing here to upgrade. The persistent install
+        # is what matters, and bootstrap owns that.
+        from probe.cli.bootstrap import ensure_persistent_install
+
+        boot = ensure_persistent_install()
+        lines.append(
+            "  running from a temporary environment — upgrading your installed copy instead"
+        )
+        if boot.message:
+            lines.append(f"  {boot.message}")
+    elif install.method in (
         updater.Method.EDITABLE,
         updater.Method.MANAGED,
         updater.Method.UNKNOWN,

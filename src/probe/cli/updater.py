@@ -53,6 +53,7 @@ class Method:
     UV_TOOL_LEGACY = "uv-tool-legacy"  # installed under the old probe-agent name (H3)
     PIPX = "pipx"
     PIP = "pip"
+    EPHEMERAL = "ephemeral"  # uvx / pipx run cache -- nothing to upgrade, no pip
     EDITABLE = "editable"  # -e / source checkout (H5)
     MANAGED = "managed"    # pip dep in a project with a lockfile (H6)
     UNKNOWN = "unknown"
@@ -140,6 +141,15 @@ def detect_install() -> Install:
         return Install(Method.UV_TOOL)
     if "/uv/tools/probe-agent/" in s:
         return Install(Method.UV_TOOL_LEGACY, detail="installed under the legacy probe-agent name")
+    # `npx probe-research` runs us through `uv tool run`, whose environment
+    # lives in the uv CACHE and has no pip. Without this it falls through to
+    # Method.PIP and the upgrade dies with "No module named pip" -- while there
+    # is nothing to upgrade anyway, because the env is thrown away on exit.
+    if "/uv/archive-v0/" in s or "/.cache/uv/" in s or "/pipx/.cache/" in s:
+        return Install(
+            Method.EPHEMERAL,
+            detail="running from a temporary uvx/pipx environment",
+        )
     pipx_home = os.environ.get("PIPX_HOME")
     if "/pipx/venvs/" in s or (pipx_home and s.startswith(str(Path(pipx_home).resolve()).replace(os.sep, "/"))):
         return Install(Method.PIPX)

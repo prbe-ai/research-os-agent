@@ -463,6 +463,71 @@ def wizard(
         chosen_action = picked
 
     base_now = resolve(base_url=_conn.base_url).base_url
+
+    # The menu comes BACK after each action. Dropping the user to a shell once
+    # one task finishes is the same "go do it yourself" failure as printing a
+    # command: after an update you want doctor, after a removal you often want
+    # to turn something else on.
+    looping = (
+        action is None
+        and configured
+        and not yes
+        and not explicit_flags
+        and wizard.interactive()
+    )
+
+    while True:
+        if chosen_action is actions_mod.Action.EXIT:
+            raise typer.Exit(0)
+
+        _run_wizard_action(
+            chosen_action,
+            caps=caps,
+            base_now=base_now,
+            yes=yes,
+            tracking=tracking,
+            capture=capture,
+            auto_update=auto_update,
+            channel=channel,
+            uninstall=uninstall,
+            configured=configured,
+        )
+
+        if not looping:
+            raise typer.Exit(0)
+
+        # Re-read state: the action just changed it, and the next choice should
+        # be made against what is true now, not what was true on entry.
+        caps = doctor_impl.collect()
+        print()
+        for line in wizard.describe_state(caps):
+            print(line)
+        print()
+        picked = wizard.run_action_menu(caps)
+        if picked is None:
+            raise typer.Exit(0)
+        chosen_action = picked
+
+
+def _run_wizard_action(
+    chosen_action,
+    *,
+    caps,
+    base_now: str,
+    yes: bool,
+    tracking,
+    capture,
+    auto_update,
+    channel: str,
+    uninstall: bool,
+    configured: bool,
+) -> None:
+    """Perform ONE action. Never exits the process, so the caller can loop."""
+    from probe.cli import actions as actions_mod
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli.capture import OffMode
+
     if chosen_action is actions_mod.Action.DIAGNOSE:
         print(doctor_impl.render(caps))
         notes = actions_mod.troubleshooting(caps)
@@ -470,7 +535,8 @@ def wizard(
             print("\nIf something is not working:")
             for note in notes:
                 print(f"  - {note}")
-        raise typer.Exit(0)
+        return
+
     if chosen_action is actions_mod.Action.UPDATE:
         from probe.cli.upgrading import perform_update
 
@@ -487,7 +553,8 @@ def wizard(
             print(line)
         if outcome.restart_needed:
             print("\nRestart Claude Code to apply the plugin update.")
-        raise typer.Exit(0 if outcome.ok else 1)
+        return
+
     if chosen_action is actions_mod.Action.MANUAL:
         print(actions_mod.manual_steps(base_url=base_now))
         print()
@@ -496,17 +563,17 @@ def wizard(
                 base_url=base_now, mcp_endpoint="https://mcp.research.prbe.ai/mcp"
             )
         )
-        raise typer.Exit(0)
+        return
+
     if chosen_action is actions_mod.Action.REMOVE:
         if not yes and wizard.interactive():
-            if not typer.confirm(
-                "Remove Probe Research from this device?", default=False
-            ):
-                raise typer.Exit(0)
+            if not typer.confirm("Remove Probe Research from this device?", default=False):
+                return
         for message in wizard.remove_everything(caps):
             print(message)
-        raise typer.Exit(0)
+        return
 
+    # CONFIGURE
     selection = wizard.resolve_selection(
         caps,
         tracking=tracking,
@@ -514,20 +581,17 @@ def wizard(
         auto_update=auto_update,
         configured=configured,
     )
-
+    explicit_flags = any(f is not None for f in (tracking, capture, auto_update))
     if not yes and not explicit_flags and wizard.interactive():
         chosen = wizard.run_menu(selection.as_map())
         if chosen is None:
-            print("nothing changed")
-            raise typer.Exit(0)
+            return
         selection = chosen
 
     steps = wizard.plan(caps, selection)
     if not steps:
-        # Nothing changed, so nothing needs a restart.
         print("Already set up the way you asked. Nothing to change.")
-        print("\nRun `probe doctor` to confirm.")
-        raise typer.Exit(0)
+        return
 
     print("This run will:")
     for step in steps:
@@ -546,23 +610,17 @@ def wizard(
             )
         )
     if selection.auto_update != caps.auto_update_enabled:
-        messages.extend(wizard.apply_auto_update(selection.auto_update, selected_channel))
-
+        messages.extend(
+            wizard.apply_auto_update(selection.auto_update, autoupdate_mod.Channel(channel))
+        )
     for message in messages:
         print(message)
 
-    # ONE browser approval covering everything ticked. Doing it HERE rather than
-    # telling the user to go run `probe login` is the difference between capture
-    # actually being on and the wizard merely claiming it is.
     needs = wizard.needs_authorization(caps, selection)
     if needs:
         print(f"\nOne browser approval covers everything you ticked ({', '.join(needs)}).")
-        base = resolve(base_url=_conn.base_url).base_url
         _, auth_messages = wizard.authorize(
-            needs,
-            base_url=base,
-            on_prompt=_show_device_prompt,
-            open_browser=True,
+            needs, base_url=base_now, on_prompt=_show_device_prompt, open_browser=True
         )
         for message in auth_messages:
             print(message)
@@ -570,14 +628,12 @@ def wizard(
     notice = wizard.restart_notice(caps, selection)
     if notice:
         print(f"\n{notice}")
-    print("\nRun `probe doctor` to confirm.")
 
 
 # `probe setup` must keep working: it is printed on the live connect page, in
 # shipped plugin copy, and in every PR description written before the rename.
 # Registering the SAME function under both names means the alias can never drift
-# from the real command's options -- a hand-written wrapper already did, losing
-# every flag the moment it was added.
+# from the real command's options.
 app.command(name="setup", hidden=True)(wizard)
 
 
