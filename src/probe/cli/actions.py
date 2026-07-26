@@ -38,6 +38,7 @@ class Action(StrEnum):
     UPDATE = "update"
     MANUAL = "manual"
     REMOVE = "remove"
+    EXIT = "exit"
 
 
 ACTION_COPY: dict[Action, tuple[str, str]] = {
@@ -60,6 +61,10 @@ ACTION_COPY: dict[Action, tuple[str, str]] = {
     Action.REMOVE: (
         "Remove Probe from this device",
         "Stops capture, removes the plugins, clears local credentials.",
+    ),
+    Action.EXIT: (
+        "Exit",
+        "Leave the wizard. Nothing else changes.",
     ),
 }
 

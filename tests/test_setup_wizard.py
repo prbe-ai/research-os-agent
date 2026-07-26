@@ -612,6 +612,10 @@ def test_binary_outside_PATH_still_counts_as_installed(monkeypatch, tmp_path):
     monkeypatch.setattr(bootstrap.shutil, "which", lambda _: None)
     monkeypatch.setattr(bootstrap.os.path, "expanduser", lambda _: str(tmp_path))
 
+    # Found outside PATH — the plugin hook checks these same fallbacks.
+    assert bootstrap._installed_binary() == str(fake)
+    # And a new-enough one counts as installed.
+    monkeypatch.setattr(bootstrap, "_version_of", lambda b: "99.0.0")
     assert bootstrap._resolves_on_path() is True
 
 
@@ -739,11 +743,13 @@ def test_every_action_acts_rather_than_printing_a_command():
     import probe.cli.main  # noqa: F401
     cli_main = sys.modules["probe.cli.main"]
 
-    source = inspect.getsource(cli_main.wizard)
+    source = inspect.getsource(cli_main.wizard) + inspect.getsource(
+        cli_main._run_wizard_action
+    )
     # The specific regression: a literal instruction to go run something.
     assert 'print("Run:' not in source
     assert "perform_update" in source, "Update must perform the update in-process"
-    assert "remove_everything" in source or "wizard.remove_everything" in source
+    assert "remove_everything" in source
 
 
 def test_update_command_is_hidden_but_still_works():
@@ -799,3 +805,88 @@ def test_the_auto_update_hook_targets_the_wizard():
 
     hook = pathlib.Path("plugins/probe-research/hooks/version_check.py").read_text()
     assert '"wizard", "--action", "update"' in hook
+
+
+# --- the wizard is a session, not a one-shot -------------------------------
+
+
+def test_there_is_an_exit_action():
+    from probe.cli.actions import ACTION_COPY, Action
+
+    assert Action.EXIT in ACTION_COPY
+    assert ACTION_COPY[Action.EXIT][0] == "Exit"
+
+
+def test_the_menu_comes_back_after_an_action():
+    """Dropping to a shell after one task is the same "go do it yourself"
+    failure as printing a command."""
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = inspect.getsource(sys.modules["probe.cli.main"].wizard)
+    assert "while True" in source, "the menu must loop"
+    assert "run_action_menu" in source, "and re-prompt after each action"
+
+
+def test_a_flagged_action_does_not_loop_forever():
+    """`--action manual` in a script must run once and exit."""
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = inspect.getsource(sys.modules["probe.cli.main"].wizard)
+    assert "if not looping:" in source
+
+
+def test_an_ephemeral_uvx_env_is_not_mistaken_for_a_pip_install(monkeypatch):
+    """`npx probe-research` runs us from uv's CACHE, which has no pip. Falling
+    through to Method.PIP made the upgrade die with "No module named pip" —
+    while there was nothing to upgrade anyway, since the env is discarded."""
+    from pathlib import Path
+
+    from probe.cli import updater
+
+    monkeypatch.setattr(
+        updater,
+        "_probe_pkg_dir",
+        lambda: Path("/Users/x/.cache/uv/archive-v0/abc123/lib/python3.13/site-packages/probe"),
+    )
+    assert updater.detect_install().method is updater.Method.EPHEMERAL
+
+
+def test_an_ephemeral_env_is_never_package_managed(monkeypatch):
+    from probe.cli import updater, upgrading
+
+    monkeypatch.setattr(
+        upgrading.updater,
+        "detect_install",
+        lambda: updater.Install(updater.Method.EPHEMERAL),
+    )
+    monkeypatch.setattr(upgrading.updater, "fetch_latest", lambda base: {})
+    monkeypatch.setattr(
+        "probe.cli.bootstrap.ensure_persistent_install",
+        lambda: __import__("probe.cli.bootstrap", fromlist=["x"]).BootstrapResult(
+            installed=True, already_persistent=False, message="Installed `probe` (uv tool)."
+        ),
+    )
+    outcome = upgrading.perform_update(base_url="https://x", include_plugin=False)
+    blob = " ".join(outcome.lines)
+    assert "temporary environment" in blob
+    assert "pip" not in blob
+
+
+def test_bootstrap_upgrades_an_OLD_install_not_just_a_missing_one(monkeypatch):
+    """Existence is not enough: every existing user has an old `probe`, and
+    checking only existence left them on it forever while the wizard ran a new
+    version ephemerally."""
+    from probe.cli import bootstrap
+
+    monkeypatch.setattr(bootstrap, "_installed_binary", lambda: "/usr/local/bin/probe")
+    monkeypatch.setattr(bootstrap, "_version_of", lambda b: "0.8.2")
+    assert bootstrap._resolves_on_path() is False
+
+    monkeypatch.setattr(bootstrap, "_version_of", lambda b: "99.0.0")
+    assert bootstrap._resolves_on_path() is True

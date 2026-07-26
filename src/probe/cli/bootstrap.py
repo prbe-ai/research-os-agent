@@ -38,24 +38,68 @@ class BootstrapResult:
     message: str
 
 
-def _resolves_on_path() -> bool:
-    """Whether a `probe` a future shell (or a plugin hook) could find exists.
+def _installed_binary() -> str | None:
+    """A `probe` a future shell (or a plugin hook) could actually find.
 
     PATH alone is not enough: Claude Code launched from the dock sources no
     profile, so ~/.local/bin may be missing from its environment even though the
     binary is there. The plugin hook checks those same fallbacks, so we must
     agree with it or we would reinstall on every run.
     """
-    if shutil.which("probe"):
-        return True
+    found = shutil.which("probe")
+    if found:
+        return found
     home = os.path.expanduser("~")
     for candidate in (
         f"{home}/.local/bin/probe",
         f"{home}/.local/share/uv/tools/{DIST}/bin/probe",
     ):
         if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return True
-    return False
+            return candidate
+    return None
+
+
+def _version_of(binary: str) -> str | None:
+    try:
+        completed = subprocess.run(  # noqa: S603 - resolved path, no shell
+            [binary, "--version"], capture_output=True, text=True, timeout=20, check=False
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    import re
+
+    match = re.search(r"(\d+\.\d+\.\d+(?:\.\d+)?)", completed.stdout)
+    return match.group(1) if match else None
+
+
+def _at_least(found: str, wanted: str) -> bool:
+    fa = [int(x) for x in found.split(".") if x.isdigit()]
+    wa = [int(x) for x in wanted.split(".") if x.isdigit()]
+    for i in range(max(len(fa), len(wa))):
+        a, b = (fa[i] if i < len(fa) else 0), (wa[i] if i < len(wa) else 0)
+        if a != b:
+            return a > b
+    return True
+
+
+def _resolves_on_path() -> bool:
+    """Whether a GOOD ENOUGH `probe` is installed.
+
+    Existence is not enough. A machine with an old `probe` -- every existing
+    user -- would otherwise keep it forever: the wizard runs the new version
+    ephemerally through uvx, decides nothing needs installing, and the user's
+    shell stays on the old one indefinitely. Same trap the npx launcher fell
+    into.
+    """
+    from probe import __version__
+
+    binary = _installed_binary()
+    if binary is None:
+        return False
+    found = _version_of(binary)
+    return bool(found and _at_least(found, __version__))
 
 
 def ensure_persistent_install(*, dry_run: bool = False) -> BootstrapResult:
