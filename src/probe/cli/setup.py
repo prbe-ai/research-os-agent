@@ -111,12 +111,15 @@ MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
     Capability.CAPTURE: (
         "Session capture -> knowledgebase",
         (
-            "Streams your Claude Code sessions so your team can search them.",
-            "Sends: your prompts, file contents and tool output. Secrets are",
-            "stripped on the server, not on your device. This device only.",
+            "Sends this device's Claude Code sessions so your team can search them.",
         ),
     ),
 }
+# The picker is a picker. The full disclosure of what leaves the machine --
+# prompts, file contents, tool output, server-side secret stripping -- lives on
+# the BROWSER APPROVAL screen, which is where the grant is actually made and
+# where research-os asserts the wording verbatim. Repeating three lines of it
+# here made the shortest menu in the product the densest thing to read.
 
 #: Asked as its OWN step, after the capabilities. It is not a capability -- it
 #: is a policy about the ones you just chose -- and mixing it into the same
