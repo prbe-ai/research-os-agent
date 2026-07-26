@@ -264,6 +264,12 @@ def create_server(
         `ref="asset:<name>"` with `view="versions"` is the reuse check before you
         create a script, scorer, dataset, config or image. Versions are monotonic
         integers, not semver -- constrain with `filters={"requirement": ">=2"}`.
+        Its two empty answers are OPPOSITES. An error means the name does not
+        exist, like any bad ref: a new identity is licensed. `state="no_match"`
+        means the asset EXISTS and no version satisfies your `requirement` -- the
+        response carries the versions that DO, so this is a real version ceiling,
+        not an absent asset: pin a new version of the SAME asset rather than
+        opening a second identity. Never edit a published version in place.
 
         `trajectory` = the run's actual spans, `reproduce` = hypothesis + resolved
         env_ref, `handoff` = what a new session needs; the other views are what

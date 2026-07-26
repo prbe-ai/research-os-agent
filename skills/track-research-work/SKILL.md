@@ -1,37 +1,54 @@
 ---
 name: track-research-work
-description: Record an open run — metrics, spans, artifacts, notes, asset versions, and its final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion, or publication.
+description: Record an open run — per-step metrics, spans, artifacts, notes, asset versions, and its final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion, or publication.
 ---
 
 # Track research work
 
-Opening the run is `start-research-work`. This is everything after.
+Opening the run is `start-research-work`, which is also where the SDK-or-CLI choice
+gets made. Record with the surface the run was opened with.
 
-1. **Capture as it happens.** `probe log` for metrics (`--dim key=value` for
-   per-actor / per-device series), `probe span add` for structure, `probe artifact
-   add` for outputs. Record intent, decisions, observations, failures, results,
-   deviations and next steps with `probe note add`.
+1. **Capture as it happens.**
+
+   | | in the script (SDK) | from a shell (CLI) |
+   |---|---|---|
+   | metrics | `run.log({"loss": l}, step=i)` | `probe log RUN loss=0.4 --step 100` |
+   | per-device / per-actor | `run.log_hw({"gpu_temp": 88}, device=3)` | `probe log RUN gpu_temp=88 --dim device=3` |
+   | structure | `run.span("rollout", ...)`, `run.step(i)` | `probe span add RUN --type rollout` |
+   | outputs | `run.log_artifact("ckpt", path=...)` | `probe artifact add RUN PATH --name ckpt` |
+   | notes | `client.notes.add(run.id, "decision", "…")` | `probe note add RUN --kind decision --statement "…"` |
+   | external ids | `run.link(wandb_run_id="abc")` | `probe link RUN --set wandb_run_id=abc` |
+   | sub-runs | `run.child("fold-2")` | `probe run child RUN --name fold-2` |
+
+   Only the left column can be called from inside the training loop, so `step=` is a
+   real curve there and a scattering of points anywhere else. Record intent,
+   decisions, observations, failures, results, deviations and next steps as notes
+   either way — that is the same record from both surfaces.
 
 2. **Read back what you recorded before relying on it.** `get_entity` with
    `view="trajectory"` for the spans, `view="metrics"` for the series. What you wrote
    and what landed are different claims, and only the second is evidence.
 
 3. **Version reusable outputs; do not copy them.** An asset is an artifact with a
-   version chain — upload with `probe artifact add`, pin with `probe artifact
-   version-add`. The reuse check that decides whether you are pinning a version or
-   opening a new identity is step 3 of `start-research-work`; the syntax is in
-   `reference.md`.
+   version chain — upload it (`run.log_artifact` / `probe artifact add`), then pin
+   with `probe artifact version-add`. The reuse check that decides whether you are
+   pinning a version or opening a new identity is step 4 of `start-research-work`;
+   the syntax is in `reference.md`.
 
 4. **Before handoff or completion**, read `view="handoff"` or `view="reproduce"`.
    Report missing capture honestly: `completeness.missing` is the answer, not your
    recollection of what you logged.
 
-5. **Close with the real outcome** — `completed` / `failed` / `crashed` / `canceled`.
+5. **Close with the real outcome** — `completed` / `failed` / `crashed` / `canceled`,
+   via `run.finish("failed")` or `probe run end RUN --status failed`. In-script,
+   `with run:` closes the run for you and records `failed` when the loop raises.
    Minting an immutable experiment version is a separate act the researcher asks for
    explicitly; see `reference.md`.
 
-If the run reports liveness (`probe` heartbeats it), keep heartbeating for the whole
-run or not at all: a run that beats once and then stops is reaped as `crashed`.
+Liveness follows the surface. An SDK handle beats for the life of its process and
+stops when you finish it, so there is nothing to do. A CLI-opened run is detached and
+does not beat at all — do not bolt a beat onto one you cannot keep beating for the
+whole run: a run that beats once and then goes quiet is reaped as `crashed`.
 
 Do not invoke `probe hook ...`; those are reserved for deterministic coding-agent hooks.
 
@@ -51,7 +68,8 @@ The judgement that is not in the tool description:
 - `handoff`'s `span_types` counts tell you whether a `trajectory` call is worth
   making at all.
 
-**Trust the envelope over your own optimism.** `completeness.state="partial"` plus
-`missing[]` names exactly what you did not see. When `next_cursor` is set there ARE
-more rows — pass it back with the SAME view, or say you read only a prefix. Never
-report "no spans" or "no lineage" when what you got was a partial envelope.
+**Trust the envelope over your own optimism.** What `completeness` and `next_cursor`
+mean is written in `get_entity`'s description and the server instructions; read it
+there rather than re-deriving it. What is not written there: when you cannot resolve
+a partial read, name the part you did not see in the same breath as the finding it
+qualifies, not in a caveat further down.
