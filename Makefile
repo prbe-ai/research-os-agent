@@ -41,7 +41,7 @@ regen: dump-openapi gen-models parity
 # shipping a plugin that teaches the old thing. Adding a skill? Update this list AND
 # _SYNCED in that test.
 sync-plugin-skills:
-	@for s in track-experiment manage-research-asset publish-experiment; do \
+	@for s in start-research-work track-research-work; do \
 	  rm -rf plugins/probe-research/skills/$$s; mkdir -p plugins/probe-research/skills/$$s; \
 	  cp -R skills/$$s/. plugins/probe-research/skills/$$s/; done
 	@echo "synced skills -> plugins/probe-research/skills"

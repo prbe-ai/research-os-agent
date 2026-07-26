@@ -1,0 +1,83 @@
+# Reference — artifacts, assets, publishing, project admin
+
+Syntax and the rules that only matter once you are already doing the thing. The
+judgement lives in the two SKILL.md files; this is the lookup table.
+
+## Artifacts and asset versions
+
+The registry is a named artifact with immutable, zero-copy versions. A version is
+pinned from an uploaded run artifact; versions are never edited in place.
+
+| what | command |
+|---|---|
+| upload an output | `probe artifact add RUN PATH --name N --kind KIND --step N` |
+| list a run's outputs | `probe artifact list RUN` |
+| download a pinned version | `probe artifact download ARTIFACT_ID --version N --to PATH` |
+| read the version chain | `probe artifact versions ARTIFACT_ID` |
+| pin a new version | `probe artifact version-add ARTIFACT_ID --from-artifact SOURCE_ID --label L` |
+| who depends on this | `probe artifact pin-impact ARTIFACT_ID` |
+
+`probe artifact add` streams to storage, so multi-GB weights or datasets upload
+without being read into memory. With a local path and no `--uri` it runs the real
+presign → PUT → confirm byte upload; `--uri` records a reference only.
+
+What the reuse check resolved to decides the next command:
+
+- **exact compatible version exists** → download it. Record consumption; do not copy
+  it into a new identity.
+- **same purpose, content must change** → produce the new content, upload it as a run
+  artifact, then `version-add` it to the SAME artifact. Read `versions` before and
+  after to show the compatibility impact.
+- **nothing compatible exists** → `probe artifact add` creates the new identity, and
+  its first version opens the chain. Record the concrete reason in the experiment.
+
+For datasets, pin provenance in the version meta: input asset versions, the transform
+script version, parameters, schema/statistics, and the output content hash.
+
+## Tracing a path, URI, or content hash
+
+`search_knowledge` with the path, URI, artifact id, or content hash as the query and
+`collapse=null` — its exact channel matches artifacts directly. Then follow
+`get_entity(view="lineage")` on the run that owns the hit.
+
+There is no trace-file tool. It was removed rather than fixed: no backend trace index
+has ever existed, so it answered "no matches" to every query, and "this file has no
+lineage" is a far more damaging answer than "I could not find it". If you cannot
+establish provenance, say so — do not infer absence from an empty result.
+
+## Publishing
+
+Only when the researcher explicitly asks to mark, publish, or approve. The published
+record is an immutable **experiment version** — a launch-time manifest of the
+experiment's runs — plus any reusable results pinned as artifact versions. There is
+no run-level "official" flag; never encode one as a filename or run metadata.
+
+1. `get_entity(view="reproduce")` on each candidate run. Verify the hypothesis, the
+   config, and that `env_ref` resolves — `missing: ["execution_record"]` means the run
+   captured no snapshot and cannot be reproduced. Add `view="trajectory"` when the
+   claim depends on what the run did rather than on its final numbers.
+2. `get_entity(view="versions")` on the experiment first: if a version already covers
+   this set, do not mint a second.
+3. Present the exact experiment + asset versions that would become the published
+   record and obtain explicit approval for that set. Metrics and exit status are not
+   approval.
+4. `probe artifact version-add ...` for each approved asset, then
+   `probe version create EXPERIMENT_ID --label LABEL`. Report the created version.
+
+Never publish a set that differs from what was approved. A `completeness.state` of
+`"partial"` on any view you based the decision on means you have not seen the whole
+record — resolve it (follow `next_cursor`, or raise `token_budget`) or say so before
+asking for approval. Publication mutates organizational truth; a partial read is not
+a basis for it.
+
+## Project and experiment admin
+
+Curation, not research — these fire when someone is tidying structure, not when work
+is happening.
+
+`probe project create | list | get | use | patch | move | archive | restore`
+`probe experiment set | archive | restore | edges`
+
+`probe project use SLUG` sets the ambient project that `run start` applies when
+`--project` is omitted. `probe experiment set EXP --hypothesis "..."` replaces an
+`[auto]` placeholder.

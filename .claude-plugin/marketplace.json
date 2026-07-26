@@ -3,13 +3,13 @@
   "owner": { "name": "Probe", "url": "https://github.com/prbe-ai" },
   "metadata": {
     "description": "Probe Research client plugins (experiment tracking + read-only MCP + transcript capture).",
-    "version": "0.8.0"
+    "version": "0.9.0"
   },
   "plugins": [
     {
       "name": "probe-research",
       "source": "./plugins/probe-research",
-      "description": "Experiment-tracking skills (probe-research:track-experiment, probe-research:manage-research-asset, probe-research:publish-experiment) wired to a read-only Probe Research MCP server; writes via the `probe` CLI."
+      "description": "Experiment-tracking skills (probe-research:start-research-work, probe-research:track-research-work) wired to a read-only Probe Research MCP server; writes via the `probe` CLI."
     },
     {
       "name": "probe-research-tap",

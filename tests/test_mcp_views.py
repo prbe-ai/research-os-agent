@@ -505,7 +505,7 @@ def test_card_advertises_exactly_the_views_that_kind_supports(client, app):
     """`card` is the default, so one call tells you what else you can ask for.
 
     Derived from `_VIEWS`, so it cannot advertise a view the very same matrix
-    would reject -- and both the get_entity description and the track-experiment
+    would reject -- and both the get_entity description and the track-research-work
     skill promise this, so it has to be true.
     """
     from probe.mcp.service import _supported_views

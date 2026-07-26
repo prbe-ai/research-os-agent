@@ -23,9 +23,8 @@ src/probe/
 ├── cli/       # `probe`: thin shell over the SDK
 └── mcp/       # `probe-research-mcp`: strictly read-only tools and resources
 skills/
-├── track-experiment/
-├── manage-research-asset/
-└── publish-experiment/
+├── start-research-work/
+└── track-research-work/
 ```
 
 The SDK is the implementation. The CLI, MCP source adapter, future hooks,
@@ -75,8 +74,8 @@ The MCP server prefers `PROBE_MCP_TOKEN`, which should be a separately minted
 read-only token. It falls back to `PROBE_TOKEN` for local development, but exposes
 no mutation tools.
 
-On rented compute (RunPod) with no standing config, the `/track-experiment` skill seeds
-`PROBE_TOKEN` at session start.
+On rented compute (RunPod) with no standing config, the `/start-research-work` skill
+seeds `PROBE_TOKEN` at session start.
 
 ## SDK (agent-driven / interactive)
 
@@ -274,13 +273,18 @@ identifiers and evidence first.
 
 ## Skills
 
-- `experiment` mentally boxes result-producing work and uploads concise evidence.
-- `manage-research-asset` resolves before create, reuses exact versions, forks
-  immutable bases, and proposes candidates without filename-based sprawl.
-- `publish-experiment` requires explicit approval and refuses to imitate official
-  promotion when manifest/asset capabilities are unavailable.
+Two skills, split by moment rather than by entity — `probe run start` creates the
+project, experiment and run in one call, so those are not separate workflows.
 
-Asset-reuse hooks are deliberately deferred. The track-experiment skill contains the
+- `start-research-work` covers that call: orient against what already exists and
+  what is already running, pick or create the identities explicitly, resolve assets
+  before creating them, and snapshot code + env before launch.
+- `track-research-work` covers everything after the run exists: metrics, spans,
+  artifacts, notes, version pinning, reading back what actually landed, and closing
+  with the real lifecycle outcome. Its `reference.md` holds the artifact/asset
+  command syntax, the publication sequence, and project admin.
+
+Asset-reuse hooks are deliberately deferred. `start-research-work` contains the
 reuse-before-create rule; deterministic enforcement can be added later without
 changing the SDK, CLI, MCP, or skill contracts.
 
