@@ -230,7 +230,9 @@ def _spawn_autoupdate(probe_bin: str) -> None:
     channel = settings.get("channel") or "latest"
     try:
         subprocess.Popen(  # noqa: S603 - resolved binary, no shell
-            [probe_bin, "update", "--yes", "--channel", str(channel)],
+            # `wizard --action update`, not the deprecated `probe update`.
+            # Old CLIs do not have the wizard, so fall back below.
+            [probe_bin, "wizard", "--action", "update", "--yes", "--channel", str(channel)],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -722,3 +722,80 @@ def test_title_and_description_stay_together():
 
     source = inspect.getsource(setup.run_action_menu)
     assert 'title=f"{title}\\n' in source
+
+
+# --- the wizard DOES things, it does not print commands --------------------
+
+
+def test_every_action_acts_rather_than_printing_a_command():
+    """The Update action used to print "Run: probe update" and exit. Bouncing
+    the user back to a shell to type a command themselves is exactly the
+    failure a wizard exists to remove."""
+    import inspect
+    import sys
+
+    # NOT `from probe.cli import main` -- probe/cli/__init__.py defines a main()
+    # FUNCTION that shadows the submodule of the same name.
+    import probe.cli.main  # noqa: F401
+    cli_main = sys.modules["probe.cli.main"]
+
+    source = inspect.getsource(cli_main.wizard)
+    # The specific regression: a literal instruction to go run something.
+    assert 'print("Run:' not in source
+    assert "perform_update" in source, "Update must perform the update in-process"
+    assert "remove_everything" in source or "wizard.remove_everything" in source
+
+
+def test_update_command_is_hidden_but_still_works():
+    """Deleting it outright would silently break auto-update on every machine
+    whose plugin has not been refreshed — plugins update on the USER's
+    schedule, not ours."""
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    app = sys.modules["probe.cli.main"].app
+
+    by_name = {c.name: c for c in app.registered_commands}
+    assert "update" in by_name, "the hook still spawns `probe update`"
+    assert by_name["update"].hidden is True, "but it must not be discoverable"
+
+
+def test_the_wizard_is_the_only_discoverable_entry_point():
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    app = sys.modules["probe.cli.main"].app
+
+    visible = {c.name for c in app.registered_commands if not c.hidden}
+    assert "wizard" in visible
+    assert "update" not in visible
+    assert "setup" not in visible
+
+
+def test_perform_update_records_the_attempt(isolate, monkeypatch):
+    """A detached auto-update has no terminal, so a recorded attempt is the only
+    way a month of silent failures becomes visible."""
+    from probe.cli import autoupdate, updater, upgrading
+
+    monkeypatch.setattr(upgrading.updater, "fetch_latest", lambda base: {})
+    monkeypatch.setattr(
+        upgrading.updater, "detect_install", lambda: updater.Install(updater.Method.EDITABLE)
+    )
+    monkeypatch.setattr(
+        upgrading.updater,
+        "upgrade_cli",
+        lambda i, c, t: updater.CliResult(
+            ran=False, ok=True, changed=False, before=c, after=c, message="skipped"
+        ),
+    )
+    outcome = upgrading.perform_update(base_url="https://x", include_plugin=False)
+    assert outcome.ok is True
+    assert autoupdate.load().last_attempt is not None
+
+
+def test_the_auto_update_hook_targets_the_wizard():
+    """New plugin versions must not depend on the deprecated command."""
+    import pathlib
+
+    hook = pathlib.Path("plugins/probe-research/hooks/version_check.py").read_text()
+    assert '"wizard", "--action", "update"' in hook
