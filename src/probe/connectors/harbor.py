@@ -1077,6 +1077,7 @@ def capture_trial(
     source_context: dict[str, Any] | None = None,
     reward_key: str = "reward",
     external_key: str | None = None,
+    correlation: dict[str, Any] | None = None,
     log_reward: bool = True,
     expand: bool = True,
     max_trajectory_spans: int | None = None,
@@ -1086,6 +1087,15 @@ def capture_trial(
 
     - ``step_index`` is the training step / Miles ``rollout_id`` — the join
       Osmosis is missing. Optional, but pass it whenever the trainer knows it.
+    - ``correlation`` carries the sub-run identity that distinguishes the many
+      rollouts batched under one ``step_index`` — ``sample_id`` / ``group_id`` /
+      ``task_id`` (and optionally a precomputed ``external_key``). It is stamped
+      onto the rollout span's attributes and every artifact's meta, and makes the
+      rollout-span id sample-distinct so two samples of the same trial/step do
+      not collapse onto one span. A staged trial inherits it from the ledger.
+      When ``sample_id`` marks a batched sample, the per-trial reward is left on
+      the span/manifest only (not emitted as a colliding step metric) — the
+      trainer owns the per-step aggregate reward curve.
     - ``environment`` is recorded opaquely on the manifest (e.g. ``{"type":
       "skypilot-fork"}``) — never structural, per the plan's agnosticism rule.
     - Uploads are fail-open like every SDK data write: a file that cannot reach
@@ -1109,7 +1119,41 @@ def capture_trial(
     if ledger is not None and ledger.context.get("trial_name"):
         parsed.name = str(ledger.context["trial_name"])
     status = "failed" if parsed.exception else "completed"
-    rollout_key = external_key or stable_external_key("harbor", "rollout", parsed.name)
+    # Sub-run identity (sample_id/group_id/task_id) distinguishes the rollouts
+    # batched under one training step. Prefer an explicit kwarg; otherwise inherit
+    # what stage_trial_export recorded on the durable ledger, so a staged consume
+    # is enriched without any caller change.
+    correlation = dict(
+        correlation
+        if correlation is not None
+        else (ledger.context.get("correlation") if ledger is not None else None)
+        or {}
+    )
+    identity = {
+        k: correlation[k]
+        for k in ("sample_id", "group_id", "task_id")
+        if correlation.get(k) is not None
+    }
+    # Rollout-span identity, made sample-distinct so two samples of the same trial
+    # at the same step do not collapse onto one span. Precedence: explicit kwarg >
+    # the key stage_trial_export already computed (on the ledger) > a fresh
+    # (trial, step, sample) key mirroring that derivation exactly > the legacy
+    # name-only key when there is no sub-run identity at all (unchanged behavior).
+    rollout_key = external_key or correlation.get("external_key")
+    if not rollout_key:
+        sample_id = correlation.get("sample_id")
+        trial_id = correlation.get("trial_id")
+        if sample_id is not None or trial_id is not None:
+            rollout_key = stable_external_key(
+                "harbor",
+                "rollout",
+                trial_id or parsed.name,
+                step_index if step_index is not None else "stepless",
+                sample_id if sample_id is not None else "single",
+            )
+        else:
+            rollout_key = stable_external_key("harbor", "rollout", parsed.name)
+    rollout_key = str(rollout_key)
     rollout_id = stable_span_id(run.id, rollout_key)
     if ledger is not None:
         ledger.update_context(
@@ -1132,11 +1176,25 @@ def capture_trial(
             "task_name": parsed.task_name,
             "agent": parsed.agent_info,
             "reward": parsed.reward,
+            **identity,
         },
         strict=strict,
     )
+    # Per-trial reward is per-sample event data: it is recorded on the rollout span
+    # (attributes.reward) and the manifest (verifier.reward), both sample-scoped.
+    # Emitting it as a step metric is only sound when this trial is the SOLE reward
+    # at its step. For a batched sample (sample_id present) N trials share
+    # (run, step, kind, key, dims_hash) and would collide/overwrite on
+    # metric_points_step_identity_uq, leaving one arbitrary sample's reward as "the"
+    # curve — so we skip the point and let the trainer log the per-step aggregate.
+    is_batched_sample = correlation.get("sample_id") is not None
     reward_already_logged = bool(ledger and ledger.context.get("reward_logged"))
-    if log_reward and parsed.reward is not None and not reward_already_logged:
+    if (
+        log_reward
+        and not is_batched_sample
+        and parsed.reward is not None
+        and not reward_already_logged
+    ):
         metric_result = run.log(
             {reward_key: parsed.reward}, step=step_index, strict=strict
         )
@@ -1189,7 +1247,7 @@ def capture_trial(
                     f"{parsed.name}/{rel}",
                     path=str(path),
                     kind="file",
-                    meta={"role": role, "trial": parsed.name, "path": rel},
+                    meta={"role": role, "trial": parsed.name, "path": rel, **identity},
                     span_id=span_id,
                     step_index=step_index,
                     strict=strict,
@@ -1242,7 +1300,7 @@ def capture_trial(
     manifest_capture = dict(capture_report) if capture_report is not None else None
     if manifest_capture is not None:
         manifest_capture["manifest_publication"] = {"state": "confirmed_by_presence"}
-    source_meta: dict[str, Any] = {"mode": source_mode, "rollout_id": step_index}
+    source_meta: dict[str, Any] = {"mode": source_mode, "rollout_id": step_index, **identity}
     if source_context:
         source_meta["context"] = dict(source_context)
     manifest_meta = {

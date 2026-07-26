@@ -15,6 +15,8 @@ from probe.connectors.harbor import (
     parse_trial,
     reconcile_staged_trial,
     role_for,
+    stable_external_key,
+    stable_span_id,
     stage_trial,
 )
 from tests.conftest import make_client
@@ -257,6 +259,66 @@ def test_capture_trial_fail_open_marks_unuploaded(client, app, tmp_path):
         result = capture_trial(run, root, step_index=5)
     (entry,) = result["files"]
     assert entry["uploaded"] is False  # fell back to a labeled reference
+
+
+def test_capture_trial_correlation_makes_samples_distinct(client, app, tmp_path):
+    """Sub-run identity splits the batch under one step into distinct rollout
+    spans and rides onto the span attributes + every artifact's meta."""
+    client.fail_open = False
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    trial = _write_trial(tmp_path / "t")
+
+    corr = lambda s: {"sample_id": s, "group_id": 2, "task_id": "swe-fix"}
+    r0 = capture_trial(run, trial, step_index=600, expand=False, strict=True, correlation=corr(0))
+    r1 = capture_trial(run, trial, step_index=600, expand=False, strict=True, correlation=corr(1))
+
+    # two samples of the SAME trial at the SAME step -> two distinct rollout spans
+    assert r0["span_id"] != r1["span_id"]
+    # route (b): a batched sample's reward stays on the span/manifest, NOT emitted
+    # as a step metric that would collide/overwrite across samples of the batch
+    assert app.metrics_inserted == 0
+    assert r0["reward"] == 0.75  # still surfaced on the result + span + manifest
+    # re-capturing the same sample is an upsert onto the same deterministic span
+    r0_again = capture_trial(run, trial, step_index=600, expand=False, strict=True, correlation=corr(0))
+    assert r0_again["span_id"] == r0["span_id"]
+
+    # the rollout span carries the sub-run identity as queryable attributes
+    span_bodies = [json.loads(r.content) for r in app.requests if r.url.path.endswith("/spans")]
+    attrs = {s["id"]: s["attributes"] for b in span_bodies for s in b["spans"]}
+    assert attrs[r0["span_id"]]["sample_id"] == 0 and attrs[r0["span_id"]]["group_id"] == 2
+    assert attrs[r1["span_id"]]["sample_id"] == 1
+    assert attrs[r0["span_id"]]["task_id"] == "swe-fix"
+
+    # every file artifact carries the identity in meta, per sample
+    files = client.list_run_artifacts(run.id, kind="file")
+    s0 = [a for a in files if a["meta"].get("sample_id") == 0]
+    s1 = [a for a in files if a["meta"].get("sample_id") == 1]
+    assert s0 and s1
+    assert all(a["meta"].get("group_id") == 2 for a in s0)
+
+    # the manifest's source echoes the identity too (one manifest per sample span)
+    sources = [
+        m["meta"]["source"]
+        for m in client.list_run_artifacts(run.id, kind=MANIFEST_KIND, step_from=600, step_to=600)
+    ]
+    src0 = next(s for s in sources if s.get("sample_id") == 0)
+    assert src0["group_id"] == 2 and src0["task_id"] == "swe-fix"
+
+
+def test_capture_trial_without_correlation_is_unchanged(client, app, tmp_path):
+    """No sub-run identity -> legacy name-only rollout key, no attr/meta additions."""
+    client.fail_open = False
+    run = client.run(experiment="e", hypothesis="h", name="r")
+    trial = _write_trial(tmp_path / "t")
+    result = capture_trial(run, trial, step_index=600, expand=False, strict=True)
+
+    parsed = parse_trial(trial)
+    expected = stable_span_id(run.id, stable_external_key("harbor", "rollout", parsed.name))
+    assert result["span_id"] == expected
+
+    span_body = json.loads(next(r for r in app.requests if r.url.path.endswith("/spans")).content)
+    attrs = span_body["spans"][0]["attributes"]
+    assert not ({"sample_id", "group_id", "task_id"} & set(attrs))
 
 
 # -- CLI ---------------------------------------------------------------------------
