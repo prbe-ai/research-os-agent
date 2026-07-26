@@ -1120,3 +1120,48 @@ def test_the_interactive_wizard_starts_without_crashing():
 
 
 import pathlib  # noqa: E402  (used by the pty test above)
+
+
+def test_content_height_is_counted_not_asked():
+    """`Container.preferred_height()` needs a running event loop and returns a
+    placeholder without one — which silently produced a 22-row spacer for 44
+    rows of content and pushed the BOTTOM off instead."""
+    import questionary
+
+    from probe.cli import tui
+
+    choices = [
+        questionary.Separator(" "),
+        questionary.Choice(title="one\n  detail", value="a"),
+        questionary.Separator(" "),
+        questionary.Choice(title="two\n  detail", value="b"),
+    ]
+    # 3 message lines + 2 separators + 2 two-line choices + 1 instruction
+    assert tui.content_height("a\nb\nc", choices) == 3 + 1 + 2 + 1 + 2 + 1
+
+
+def test_content_taller_than_the_screen_gets_no_spacer():
+    """Centring something that does not fit only chooses which end to
+    amputate — and the top is the end with the state block on it."""
+    from probe.cli import tui
+
+    def spacer_for(rows, height):
+        return 0 if height >= rows else (rows - height) // 2
+
+    assert spacer_for(20, 23) == 0
+    assert spacer_for(23, 23) == 0
+    assert spacer_for(60, 23) == 18
+    # And it never pushes the bottom off.
+    for rows in (24, 30, 45, 60, 120):
+        assert spacer_for(rows, 23) + 23 <= rows
+
+
+def test_the_prompt_goes_full_screen():
+    """Inline rendering grows down from the cursor, so anything taller than the
+    room below it scrolls — which is what kept eating the state block, and is
+    worse in a block terminal like Warp."""
+    import inspect
+
+    from probe.cli import tui
+
+    assert "full_screen = True" in inspect.getsource(tui.center_vertically)

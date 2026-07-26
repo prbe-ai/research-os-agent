@@ -114,6 +114,63 @@ def use_checkmarks() -> None:
     common.INDICATOR_UNSELECTED = "○"
 
 
+def content_height(message: str, choices) -> int:
+    """How many rows the prompt will occupy.
+
+    Counted, not asked. `Container.preferred_height()` needs a running event
+    loop and returns a placeholder without one, which silently produced a
+    22-row spacer for 44 rows of content and pushed the BOTTOM off instead --
+    the same bug wearing a different hat.
+    """
+    import questionary
+
+    rows = message.count("\n") + 1  # the message block, question included
+    for choice in choices:
+        if isinstance(choice, questionary.Separator):
+            rows += 1
+        else:
+            rows += str(getattr(choice, "title", "")).count("\n") + 1
+    return rows + 1  # the instruction line
+
+
+def center_vertically(question, height: int | None = None):
+    """Render the prompt FULL SCREEN and vertically centred.
+
+    questionary renders inline, growing downward from the cursor, so anything
+    taller than the room below it scrolls -- which is what kept eating the first
+    rows of the state block, and is worse in a block-based terminal like Warp
+    where the block boundary is not where a classic terminal's would be.
+
+    Full screen removes the problem outright: prompt_toolkit owns the viewport,
+    so there is no "above" to scroll into. It is also the only way centring
+    becomes possible at all.
+
+    Content taller than the screen gets NO spacer. Centring something that does
+    not fit only chooses which end to amputate.
+    """
+    try:
+        from prompt_toolkit.layout import HSplit, Layout, Window
+        from prompt_toolkit.layout.dimension import Dimension
+
+        app = question.application
+        inner = app.layout.container
+        focused = app.layout.current_window
+
+        def spacer() -> Dimension:
+            from prompt_toolkit.application import get_app
+
+            available = get_app().output.get_size().rows
+            if height is None or height >= available:
+                return Dimension.exact(0)
+            return Dimension.exact((available - height) // 2)
+
+        app.full_screen = True
+        app.layout = Layout(HSplit([Window(height=spacer), inner]), focused_element=focused)
+    except Exception:  # noqa: BLE001 - layout is cosmetic, never break the prompt
+        pass
+    return question
+
+
 def bind_escape(question):
     """Make Escape resolve the prompt to BACK.
 
@@ -133,9 +190,14 @@ def bind_escape(question):
     return question
 
 
-def ask(question):
-    """Run a prompt with Escape bound. Returns BACK, None (Ctrl-C), or a value."""
-    return bind_escape(question).ask()
+def ask(question, height: int | None = None):
+    """Run a prompt full-screen and centred, with Escape bound.
+
+    Returns BACK, None (Ctrl-C), or the chosen value. `height` is the counted
+    row total from content_height(); without it the prompt still renders
+    full-screen, just top-aligned.
+    """
+    return bind_escape(center_vertically(question, height)).ask()
 
 
 def rows() -> int:
