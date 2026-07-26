@@ -53,7 +53,7 @@ def _run_with_spans(client, app, count: int = 40):
     return run.id
 
 
-def test_research_get_cursor_round_trips_through_the_tool_layer(client, app):
+def test_get_entity_cursor_round_trips_through_the_tool_layer(client, app):
     """The bug this file exists for: a JSON-object cursor is coerced to a dict by
     FastMCP before validation, so passing back a next_cursor the tool JUST issued
     fails with "Input should be a valid string". Caught only by smoke-testing the
@@ -61,12 +61,12 @@ def test_research_get_cursor_round_trips_through_the_tool_layer(client, app):
     rid = _run_with_spans(client, app)
     server = _server(client)
 
-    page1 = _call(server, "research_get",
+    page1 = _call(server, "get_entity",
                   {"ref": f"run:{rid}", "view": "trajectory", "token_budget": 400})
     cursor = page1["next_cursor"]
     assert cursor is not None and isinstance(cursor, str)
 
-    page2 = _call(server, "research_get",
+    page2 = _call(server, "get_entity",
                   {"ref": f"run:{rid}", "view": "trajectory", "token_budget": 400,
                    "cursor": cursor})
     first = [s["id"] for s in page1["data"]["spans"]]
@@ -102,9 +102,10 @@ def test_full_trajectory_walk_through_the_tool_layer(client, app):
         args = {"ref": f"run:{rid}", "view": "trajectory", "token_budget": 400}
         if cursor:
             args["cursor"] = cursor
-        page = _call(server, "research_get", args)
+        page = _call(server, "get_entity", args)
         seen.extend(s["id"] for s in page["data"]["spans"])
-        cursor = page["next_cursor"]
+        # lean envelopes omit next_cursor on the last page rather than sending None
+        cursor = page.get("next_cursor")
         pages += 1
         if not cursor:
             break
@@ -113,9 +114,9 @@ def test_full_trajectory_walk_through_the_tool_layer(client, app):
     assert seen == [f"span-{i}" for i in range(40)]
 
 
-def test_research_search_cursor_round_trips_through_the_tool_layer(client, app):
-    """research_search had the SAME defect — same json.dumps({...}) format, same
-    coercion. It was never reachable from a service-level test."""
+def test_search_knowledge_cursor_round_trips_through_the_tool_layer(client, app):
+    """search_knowledge has the SAME defect surface — same json.dumps({...}) format,
+    same coercion. It is not reachable from a service-level test."""
     client.run(project="folding", experiment="dockq", hypothesis="h", name="r")
     app.search_responses = [
         {"query": "q", "state": "ok",
@@ -129,11 +130,11 @@ def test_research_search_cursor_round_trips_through_the_tool_layer(client, app):
     ]
     server = _server(client)
 
-    page1 = _call(server, "research_search", {"query": "dockq", "limit": 2})
+    page1 = _call(server, "search_knowledge", {"query": "dockq", "top_k": 2})
     cursor = page1["next_cursor"]
     assert isinstance(cursor, str) and cursor
 
-    page2 = _call(server, "research_search", {"query": "dockq", "limit": 2, "cursor": cursor})
+    page2 = _call(server, "search_knowledge", {"query": "dockq", "top_k": 2, "cursor": cursor})
     assert [r["id"] for r in page2["data"]["results"]] == ["e2"]
     # the packed token still carries the backend's own per-channel cursor
     assert app.search_requests[-1]["exact_cursor"] == "backend-exact-2"

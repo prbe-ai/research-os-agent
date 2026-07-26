@@ -222,10 +222,9 @@ deprecated aliases that are removed next release:
 | `get_entity` | "Show me this thing" — one entity through a purpose-shaped `view` |
 
 `research_context`, `research_search`, `research_get`, `research_compare` and
-`research_resolve` still answer, with their OLD signatures and OLD payloads. They exist
-because MCP tools are served by the SERVER and `.mcp.json` pins one url for every plugin
-version, so renaming a tool breaks every installed client the moment the image rolls — a
-plugin version bump is not a cutover mechanism. Migrate off them; they go next release.
+`research_resolve` have been REMOVED. They answered as deprecated aliases for one
+release; that window has closed. Calls to them now fail as unknown tools — use the
+three above.
 
 **Thin harness, fat skills.** Coverage grows through `get_entity`'s `view` and `filters`
 parameters, never through more tools. `browse_research` is the one addition that cleared
