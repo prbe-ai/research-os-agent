@@ -453,12 +453,11 @@ def wizard(
             )
             raise typer.Exit(2) from None
     elif configured and not yes and not explicit_flags and wizard.interactive():
-        print("On this device:\n")
-        for line in wizard.describe_state(caps):
-            print(line)
-        print()
+        from probe.cli import tui
+
+        tui.header("On this device:", wizard.describe_state(caps))
         picked = wizard.run_action_menu(caps)
-        if picked is None:
+        if picked is None or picked is tui.BACK:
             raise typer.Exit(0)
         chosen_action = picked
 
@@ -498,13 +497,15 @@ def wizard(
 
         # Re-read state: the action just changed it, and the next choice should
         # be made against what is true now, not what was true on entry.
+        from probe.cli import tui
+
+        if wizard.interactive():
+            tui.say()
+            input(tui.indent("Press enter to return to the menu…"))
         caps = doctor_impl.collect()
-        print()
-        for line in wizard.describe_state(caps):
-            print(line)
-        print()
+        tui.header("On this device:", wizard.describe_state(caps))
         picked = wizard.run_action_menu(caps)
-        if picked is None:
+        if picked is None or picked is tui.BACK:
             raise typer.Exit(0)
         chosen_action = picked
 
@@ -565,7 +566,7 @@ def _run_wizard_action(
         )
         return
 
-    if chosen_action is actions_mod.Action.REMOVE:
+    if chosen_action is actions_mod.Action.UNINSTALL:
         if not yes and wizard.interactive():
             if not typer.confirm("Remove Probe Research from this device?", default=False):
                 return
@@ -583,10 +584,25 @@ def _run_wizard_action(
     )
     explicit_flags = any(f is not None for f in (tracking, capture, auto_update))
     if not yes and not explicit_flags and wizard.interactive():
+        from probe.cli import tui
+
+        tui.clear()
         chosen = wizard.run_menu(selection.as_map())
-        if chosen is None:
-            return
+        if chosen is None or chosen is tui.BACK:
+            return  # Escape / Ctrl-C: back to the action menu, nothing applied.
         selection = chosen
+
+        # Auto-update is asked SEPARATELY, after the capabilities: it is a
+        # policy about them, not one of them.
+        tui.clear()
+        wants_updates = wizard.ask_auto_update(selection.auto_update)
+        if wants_updates is None or wants_updates is tui.BACK:
+            return
+        selection = wizard.Selection(
+            tracking=selection.tracking,
+            capture=selection.capture,
+            auto_update=bool(wants_updates),
+        )
 
     steps = wizard.plan(caps, selection)
     if not steps:

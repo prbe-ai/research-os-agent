@@ -240,7 +240,9 @@ def test_doctor_renders_on_a_bare_machine_without_raising():
 def test_menu_rows_are_capabilities_not_plugin_names():
     """Nobody knows what `probe-research-tap` is; the consent decision is about
     what the thing does."""
-    assert set(setup.MENU_COPY) == set(Capability)
+    # AUTO_UPDATE is asked separately now: it is a policy about the
+    # capabilities, not one of them.
+    assert set(setup.MENU_COPY) == {Capability.TRACKING, Capability.CAPTURE}
     for title, detail in setup.MENU_COPY.values():
         assert "probe-research" not in title
         assert not any("probe-research" in line for line in detail)
@@ -524,12 +526,27 @@ def test_installed_but_not_logged_in_is_called_out():
     assert any("not logged in" in note for note in notes)
 
 
-def test_every_action_has_copy():
+def test_every_menu_action_has_copy():
     from probe.cli.actions import ACTION_COPY, Action
 
-    assert set(ACTION_COPY) == set(Action)
+    # MANUAL is deliberately absent: reachable via `--action manual` for
+    # air-gapped users, but it is the rarest path and it made the menu longer
+    # for everyone else.
+    assert set(ACTION_COPY) == set(Action) - {Action.MANUAL}
     for title, detail in ACTION_COPY.values():
         assert title and detail
+
+
+def test_the_menu_reads_install_then_uninstall_then_the_rest():
+    """Install and Uninstall are the same decision in two directions; splitting
+    them across the list makes both harder to find."""
+    from probe.cli.actions import ACTION_COPY
+
+    titles = [t for t, _ in ACTION_COPY.values()]
+    assert titles[0].endswith("Install Probe") and titles[0].startswith("★")
+    assert titles[1] == "Uninstall Probe"
+    assert titles[-1] == "Exit"
+    assert not any("manual" in t.lower() for t in titles)
 
 
 def test_state_summary_shows_the_killswitch_rather_than_a_bare_off(isolate):
@@ -717,6 +734,7 @@ def test_every_menu_line_fits_a_narrow_terminal():
         assert len(title) + 5 <= 80, title
         for line in detail:
             assert len(line) + 5 <= 80, line
+    assert len(setup.AUTO_UPDATE_COPY[0]) + 5 <= 80
 
 
 def test_title_and_description_stay_together():
@@ -725,7 +743,9 @@ def test_title_and_description_stay_together():
     import inspect
 
     source = inspect.getsource(setup.run_action_menu)
-    assert 'title=f"{title}\\n' in source
+    # Padded for centring now, but title and detail must still be ONE choice —
+    # a separator between them would orphan the description from its title.
+    assert 'title=f"{pad}{title}\\n{pad}' in source
 
 
 # --- the wizard DOES things, it does not print commands --------------------
@@ -921,3 +941,85 @@ def test_authorize_result_is_used_not_discarded():
     source = inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
     assert "granted, auth_messages = wizard.authorize(" in source
     assert "_, auth_messages = wizard.authorize(" not in source
+
+
+# --- the wizard is a screen, not a transcript ------------------------------
+
+
+def test_escape_is_distinct_from_ctrl_c():
+    """"Go back one step" and "abandon the whole wizard" are different
+    intentions. Collapsing both to None would make Escape quit."""
+    from probe.cli import tui
+
+    assert tui.BACK is not None
+    import inspect
+
+    assert "escape" in inspect.getsource(tui.bind_escape)
+
+
+def test_clearing_never_fires_on_a_pipe(monkeypatch, capsys):
+    """Escape codes in a CI log or a captured pipe are noise, and there is no
+    screen to clear anyway."""
+    from probe.cli import tui
+
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    tui.clear()
+    assert capsys.readouterr().out == ""
+
+
+def test_centring_collapses_on_a_narrow_terminal(monkeypatch):
+    """Padding a block that already does not fit only makes it wrap."""
+    from probe.cli import tui
+
+    monkeypatch.setattr(tui, "columns", lambda: 60)
+    assert tui.left_pad() == 0
+    monkeypatch.setattr(tui, "columns", lambda: 120)
+    assert tui.left_pad() == (120 - tui.CONTENT_WIDTH) // 2
+
+
+def test_prompt_padding_accounts_for_what_questionary_prints_itself(monkeypatch):
+    """questionary prints `? ` and `» ` at column 0. Ignoring those two
+    characters puts the marker and its text on different left edges."""
+    from probe.cli import tui
+
+    monkeypatch.setattr(tui, "columns", lambda: 120)
+    assert len(tui.message_indent()) == tui.left_pad() - 2
+    assert len(tui.choice_indent()) == tui.left_pad() - 2
+
+
+def test_selected_is_green_and_the_highlight_is_not_inverted():
+    """The default inverts a whole entry into a block of background colour,
+    which on a three-line choice paints three solid lines."""
+    from probe.cli import tui
+
+    rules = {name: style for name, style in tui.style().style_rules}
+    assert "noreverse" in rules["highlighted"]
+    assert "#00af5f" in rules["selected"]
+
+
+def test_checkmarks_replace_the_dots():
+    from probe.cli import tui
+    from questionary.prompts import common
+
+    tui.use_checkmarks()
+    assert common.INDICATOR_SELECTED == "✔"
+
+
+def test_auto_update_is_asked_after_the_capabilities_not_inside_them():
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
+    assert "ask_auto_update" in source
+    assert source.index("run_menu") < source.index("ask_auto_update")
+
+
+def test_both_recommended_options_say_so():
+    from probe.cli.capabilities import Capability
+
+    assert "(recommended)" in setup.MENU_COPY[Capability.TRACKING][0]
+    assert "(recommended)" in setup.AUTO_UPDATE_COPY[0]
+    # Capture is NOT recommended by default: it is the data-egress one.
+    assert "(recommended)" not in setup.MENU_COPY[Capability.CAPTURE][0]

@@ -102,7 +102,7 @@ def resolve_selection(
 
 MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
     Capability.TRACKING: (
-        "Experiment tracking + MCP",
+        "Experiment tracking + MCP  (recommended)",
         (
             "Skills for tracking runs, and read-only search over your lab's history.",
             "Sends: nothing automatically. You call it.",
@@ -116,14 +116,17 @@ MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
             "stripped on the server, not on your device. This device only.",
         ),
     ),
-    Capability.AUTO_UPDATE: (
-        "Keep it up to date automatically",
-        (
-            "Upgrades the CLI and plugins in the background at session start.",
-            "Off means you keep a nudge and run the upgrade yourself.",
-        ),
-    ),
 }
+
+#: Asked as its OWN step, after the capabilities. It is not a capability -- it
+#: is a policy about the ones you just chose -- and mixing it into the same
+#: checkbox list made a three-item menu where two items were about what Probe
+#: does and one was about how it maintains itself.
+AUTO_UPDATE_COPY = (
+    "Keep it up to date automatically?  (recommended)",
+    "Upgrades the CLI and plugins in the background at Claude Code session "
+    "start. Off means you get a nudge and run the upgrade yourself.",
+)
 
 
 def interactive() -> bool:
@@ -340,79 +343,95 @@ def apply_auto_update(want: bool, channel: autoupdate.Channel) -> list[str]:
     return [f"Auto-update on, following the `{channel}` channel."]
 
 
-def run_menu(defaults: dict[Capability, bool]) -> Selection | None:
-    """The checkbox menu. Returns None if the user quits.
+def run_menu(defaults: dict[Capability, bool]):
+    """The capability checkbox. Returns None (quit), tui.BACK, or a Selection.
 
-    `questionary` is imported HERE, inside the call, and never at module scope.
-    `cli/__init__.py` eagerly imports `cli/main.py`, so a module-level import
-    would load a full terminal-UI stack on every `probe log` -- and `probe log`
-    runs inside training loops. (updater.py is the deliberate opposite case: it
-    is eager on purpose, because `uv tool upgrade` replaces the tree mid-command
-    and a deferred import would fail afterwards.)
+    questionary is imported HERE, inside the call, and never at module scope:
+    cli/__init__ eagerly imports cli/main, and `probe log` runs inside training
+    loops.
     """
-    try:
-        import questionary
-    except ImportError:  # pragma: no cover - dependency is declared
-        return None
+    import questionary
 
-    # Same problem, same fix: these entries are 3-4 lines each, so without a
-    # blank line between them the list is unreadable.
-    choices: list = []
+    from probe.cli import tui
+
+    tui.use_checkmarks()
+
+    choices: list = [questionary.Separator(" ")]
     for index, (capability, (title, detail)) in enumerate(MENU_COPY.items()):
         if index:
             choices.append(questionary.Separator(" "))
         choices.append(
             questionary.Choice(
-                title="\n     ".join((title, *detail)),
+                title=f"\n{tui.choice_indent()}     ".join(
+                    (tui.choice_indent() + title, *detail)
+                ),
                 value=capability,
                 checked=defaults[capability],
             )
         )
-    picked = questionary.checkbox(
-        "What should Probe Research do on this device?",
-        choices=choices,
-        instruction="(space toggles, enter confirms)",
-    ).ask()
-    if picked is None:  # Ctrl-C / Ctrl-D
-        return None
+
+    picked = tui.ask(
+        questionary.checkbox(
+            f"{tui.message_indent()}What should Probe Research do on this device?",
+            choices=choices,
+            instruction="(space toggles, enter confirms, esc goes back)",
+            style=tui.style(),
+        )
+    )
+    if picked is None or picked is tui.BACK:
+        return picked
     chosen = set(picked)
     return Selection(
         tracking=Capability.TRACKING in chosen,
         capture=Capability.CAPTURE in chosen,
-        auto_update=Capability.AUTO_UPDATE in chosen,
+        # Carried through untouched; ask_auto_update owns this one.
+        auto_update=defaults[Capability.AUTO_UPDATE],
+    )
+
+
+def ask_auto_update(default: bool):
+    """The follow-up step. Returns None, tui.BACK, or a bool."""
+    import questionary
+
+    from probe.cli import tui
+
+    title, detail = AUTO_UPDATE_COPY
+    tui.say(detail)
+    tui.say()
+    return tui.ask(
+        questionary.confirm(
+            f"{tui.message_indent()}{title}",
+            default=default,
+            style=tui.style(),
+        )
     )
 
 
 def run_action_menu(caps: Capabilities):
-    """Pick a top-level action. Returns None if the user quits.
+    """The top-level menu. Returns None (quit), tui.BACK, or an Action."""
+    import questionary
 
-    Only shown on a RE-RUN. A fresh machine has nothing to diagnose, update or
-    remove, so it goes straight to the capability picker instead of making
-    someone choose "set up" from a list where four options are no-ops.
-    """
-    from probe.cli.actions import ACTION_COPY, Action
+    from probe.cli import tui
+    from probe.cli.actions import ACTION_COPY
 
-    try:
-        import questionary
-    except ImportError:  # pragma: no cover - dependency is declared
-        return Action.CONFIGURE
-
-    # A blank Separator between entries. Without it the title of one option and
-    # the description of the previous one sit on adjacent lines at similar
-    # indents, and the whole menu reads as a paragraph rather than a list --
-    # which is precisely the thing you have to scan quickly to choose.
-    choices: list = []
+    # A leading blank row so the first option is not welded to the question.
+    choices: list = [questionary.Separator(" ")]
     for index, (action, (title, detail)) in enumerate(ACTION_COPY.items()):
         if index:
             choices.append(questionary.Separator(" "))
-        choices.append(questionary.Choice(title=f"{title}\n     {detail}", value=action))
+        pad = tui.choice_indent()
+        choices.append(
+            questionary.Choice(title=f"{pad}{title}\n{pad}     {detail}", value=action)
+        )
 
-    picked = questionary.select(
-        "What do you want to do?",
-        choices=choices,
-        instruction="(arrow keys, enter to choose)",
-    ).ask()
-    return picked
+    return tui.ask(
+        questionary.select(
+            f"{tui.message_indent()}What do you want to do?",
+            choices=choices,
+            instruction="(arrow keys, enter to choose)",
+            style=tui.style(),
+        )
+    )
 
 
 def describe_state(caps: Capabilities) -> list[str]:

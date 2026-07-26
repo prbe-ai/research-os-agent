@@ -26,47 +26,48 @@ from probe.cli.capabilities import (
 
 
 class Action(StrEnum):
-    """A top-level thing the wizard can do.
+    """A top-level thing the wizard can do, in menu order.
 
-    Shown as a menu only on a RE-RUN. A fresh machine has nothing to diagnose,
-    update or remove, so it goes straight to the capability picker rather than
-    making someone choose "set up" from a list of five when four are no-ops.
+    Install sits first because it is what most people arrive to do, and
+    Uninstall sits directly under it: they are the same decision in two
+    directions, so separating them across the list makes both harder to find.
     """
 
     CONFIGURE = "configure"
-    DIAGNOSE = "diagnose"
+    UNINSTALL = "uninstall"
     UPDATE = "update"
-    MANUAL = "manual"
-    REMOVE = "remove"
+    DIAGNOSE = "diagnose"
     EXIT = "exit"
+
+    #: Reachable via `--action manual`, deliberately NOT in the menu. The
+    #: dashboard points air-gapped users at it, but it is the rarest path and
+    #: it made the menu longer for everyone else.
+    MANUAL = "manual"
 
 
 ACTION_COPY: dict[Action, tuple[str, str]] = {
     Action.CONFIGURE: (
-        "Set up or change what's enabled",
-        "Turn tracking, session capture or auto-update on and off.",
+        "★ Install Probe",
+        "Set up experiment tracking, session capture and updates.",
     ),
-    Action.DIAGNOSE: (
-        "Diagnose a problem",
-        "What's installed, which credentials resolve, whether updates work.",
+    Action.UNINSTALL: (
+        "Uninstall Probe",
+        "Stops capture, removes the plugins, clears local credentials.",
     ),
     Action.UPDATE: (
         "Update to the latest version",
         "Upgrades the CLI and the plugins.",
     ),
-    Action.MANUAL: (
-        "Show the manual steps",
-        "Every command this wizard runs, printed so you can run them yourself.",
-    ),
-    Action.REMOVE: (
-        "Remove Probe from this device",
-        "Stops capture, removes the plugins, clears local credentials.",
+    Action.DIAGNOSE: (
+        "Diagnose a problem",
+        "What's installed, which credentials resolve, whether updates work.",
     ),
     Action.EXIT: (
         "Exit",
         "Leave the wizard. Nothing else changes.",
     ),
 }
+"""Menu order IS this dict's order. MANUAL is absent on purpose."""
 
 
 def manual_steps(*, base_url: str) -> str:
