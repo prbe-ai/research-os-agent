@@ -743,9 +743,10 @@ def test_title_and_description_stay_together():
     import inspect
 
     source = inspect.getsource(setup.run_action_menu)
-    # Padded for centring now, but title and detail must still be ONE choice —
-    # a separator between them would orphan the description from its title.
-    assert 'title=f"{pad}{title}\\n{pad}' in source
+    # The pointer carries the indent now, so only continuation lines are padded.
+    # Title and detail must still be ONE choice: a separator between them would
+    # orphan the description from its title.
+    assert 'title=f"{title}\\n{body}' in source
 
 
 # --- the wizard DOES things, it does not print commands --------------------
@@ -977,14 +978,33 @@ def test_centring_collapses_on_a_narrow_terminal(monkeypatch):
     assert tui.left_pad() == (120 - tui.CONTENT_WIDTH) // 2
 
 
-def test_prompt_padding_accounts_for_what_questionary_prints_itself(monkeypatch):
-    """questionary prints `? ` and `» ` at column 0. Ignoring those two
-    characters puts the marker and its text on different left edges."""
+def test_the_markers_carry_the_indent_not_the_text(monkeypatch):
+    """0.13.0 padded the MESSAGE instead, which left `?` stranded at column 0
+    with its text 78 columns away — it read as a rendering fault.
+
+    questionary emits (qmark)(space)(message) and, per row,
+    `" {pointer} "` or `" " * (2 + len(pointer))`. Both must land the text on
+    the same column as the framed body."""
     from probe.cli import tui
 
     monkeypatch.setattr(tui, "columns", lambda: 120)
-    assert len(tui.message_indent()) == tui.left_pad() - 2
-    assert len(tui.choice_indent()) == tui.left_pad() - 2
+    pad = tui.left_pad()
+    assert len(tui.qmark()) + 1 == pad + 2, "qmark must place the message at pad+2"
+    assert 1 + len(tui.pointer()) + 1 == pad + 2, "pointer must match it"
+    assert len(tui.body_indent()) == pad + 2, "and so must wrapped description lines"
+
+
+def test_state_and_question_render_as_one_prompt(monkeypatch):
+    """Printing the state separately let prompt_toolkit scroll it off the top.
+    Handing it the whole block means nothing can drift out of view."""
+    from probe.cli import tui
+
+    monkeypatch.setattr(tui, "columns", lambda: 120)
+    framed = tui.framed("On this device:", ["  Tracking   on"], "What now?")
+    assert framed.splitlines()[0] == "On this device:", "first line rides the qmark"
+    assert "What now?" in framed
+    # No leading blank lines: they would strand the qmark alone at the top.
+    assert not framed.startswith("\n")
 
 
 def test_selected_is_green_and_the_highlight_is_not_inverted():

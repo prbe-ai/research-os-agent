@@ -138,36 +138,61 @@ def ask(question):
     return bind_escape(question).ask()
 
 
-def header(title: str, lines: list[str]) -> None:
-    """The state block above the menu, centred, on a cleared screen."""
-    clear()
-    say(title)
-    say()
-    for line in lines:
-        say(line)
-    say()
+def rows() -> int:
+    try:
+        return shutil.get_terminal_size().lines
+    except OSError:
+        return 24
 
 
-def message_indent() -> str:
-    """Pad for the question text.
+# NOTE: no vertical centring. questionary emits the qmark BEFORE the message,
+# so leading newlines inside the message strand a lone `?` at the top of the
+# screen with the content pushed below it. Padding outside the prompt does not
+# work either -- prompt_toolkit renders relative to the cursor, so the padding
+# is what scrolls the top away. Vertically centred would be nice; wrong-looking
+# is worse than top-aligned.
 
-    questionary prints `? ` itself at column 0, so the message needs TWO FEWER
-    spaces than everything else or the marker and the text end up on different
-    left edges — which reads as a rendering bug rather than a layout.
+
+def framed(title: str, lines: list[str], question: str) -> str:
+    """State block + question as ONE prompt message.
+
+    Printing the state separately and letting questionary render underneath is
+    what cut the top off: prompt_toolkit takes the screen after the print, and
+    anything already emitted scrolls away. Handing it the whole block means it
+    owns the layout and nothing can drift out of view.
     """
-    return " " * max(0, left_pad() - 2)
+    block = [title, "", *lines, "", question]
+    padded = [(" " * left_pad() + ln if ln.strip() else "") for ln in block]
+    # The first line rides behind the qmark, which already carries the indent.
+    padded[0] = padded[0].lstrip()
+    return "\n".join(padded)
 
 
-def choice_indent() -> str:
-    """Pad for choice titles.
+def qmark() -> str:
+    """The `?` marker, carrying the indent itself.
 
-    questionary draws choices at column 0 regardless of the message, so
-    centring has to be baked into each title. Without this the header is
-    centred and the menu is flush left, which looks worse than not centring at
-    all.
-
-    Two fewer spaces again: questionary prepends the 2-character pointer
-    (`» `) before the title, so an un-adjusted pad pushes every option two
-    columns right of the header it is supposed to line up with.
+    Padding the MESSAGE instead leaves the marker stranded at column 0 with its
+    text 78 columns away, which is what shipped in 0.13.0 and looks like a
+    rendering fault. questionary emits `(qmark)(space)(message)`, so putting the
+    pad inside the marker moves the whole line together.
     """
-    return " " * max(0, left_pad() - 2)
+    return " " * left_pad() + "?"
+
+
+def pointer() -> str:
+    """The `»` marker, likewise carrying the indent.
+
+    questionary draws `" {pointer} "` on the highlighted row and
+    `" " * (2 + len(pointer))` on the others, so a padded pointer keeps every
+    row aligned -- selected and unselected end at the same column.
+    """
+    return " " * max(0, left_pad() - 1) + "»"
+
+
+def body_indent() -> str:
+    """Where a choice's continuation lines start.
+
+    The pointer prefix only exists on the FIRST line of a choice; wrapped
+    description lines get nothing, so they carry their own pad.
+    """
+    return " " * (left_pad() + 2)
