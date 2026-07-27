@@ -33,11 +33,11 @@ def _search_response(
 
 
 def test_context_and_search_use_current_api_fallback(client, app):
-    project = client.ensure_project("folding")
+    project = client.create_project("folding")
+    client.create_experiment("dockq-path", "dockq-path", "h", project_id=project["id"])
     run = client.run(
         project="folding",
         experiment="dockq-path",
-        hypothesis="relative paths fix scoring",
         name="eval-1",
     )
     service = ResearchReadService(ResearchOSSource(client))
@@ -136,11 +136,11 @@ def test_search_transcripts_corpus_maps_to_backend(client, app):
 def test_search_falls_back_to_keyword_on_pre_search_backend(client, app):
     # app.search_response stays None -> the fake 404s POST /v1/search like a
     # backend that predates the endpoint; the old keyword behavior must survive.
-    client.ensure_project("folding")
+    _p = client.create_project("folding")
+    client.create_experiment("dockq-path", "dockq-path", "h", project_id=_p["id"])
     client.run(
         project="folding",
         experiment="dockq-path",
-        hypothesis="relative paths fix scoring",
         name="eval-1",
     )
     service = ResearchReadService(ResearchOSSource(client))
@@ -357,10 +357,12 @@ def test_search_forwards_project_scope_to_the_backend(client, app):
 
 def test_keyword_fallback_scopes_by_project(client, app):
     # pre-search server (no search_response): the fallback keeps project scoping
-    p1 = client.ensure_project("proj-one")
-    client.ensure_project("proj-two")
-    client.run(project="proj-one", experiment="exp-one", hypothesis="h1", name="r1")
-    client.run(project="proj-two", experiment="exp-two", hypothesis="h2", name="r2")
+    p1 = client.create_project("proj-one")
+    p2 = client.create_project("proj-two")
+    client.create_experiment("exp-one", "exp-one", "h", project_id=p1["id"])
+    client.run(project="proj-one", experiment="exp-one", name="r1")
+    client.create_experiment("exp-two", "exp-two", "h", project_id=p2["id"])
+    client.run(project="proj-two", experiment="exp-two", name="r2")
     service = ResearchReadService(ResearchOSSource(client))
     out = service.search_knowledge("exp", project_id=p1["id"])
     names = [r["card"]["name"] for r in out["data"]["results"]]
@@ -392,8 +394,9 @@ def test_why_matched_shape_is_uniform_across_channels(client, app):
 
     app2 = FakeApp()
     client2 = make_client(app2)
-    client2.ensure_project("p")
-    client2.run(project="p", experiment="kw-exp", hypothesis="h", name="r")
+    _proj = client2.create_project("p")
+    client2.create_experiment("kw-exp", "kw-exp", "h", project_id=_proj["id"])
+    client2.run(project="p", experiment="kw-exp", name="r")
     service2 = ResearchReadService(ResearchOSSource(client2))
     rows = service2.search_knowledge("kw-exp")["data"]["results"]
     assert rows

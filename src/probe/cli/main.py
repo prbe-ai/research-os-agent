@@ -1111,15 +1111,15 @@ def _project_id(client: Client, ref: str) -> str:
 
 
 def _project_slug(client: Client, ref: str | None) -> str | None:
-    """The inverse of :func:`_project_id`, for the get-or-create paths.
+    """The inverse of :func:`_project_id`, for the slug-resolving paths.
 
-    ``Client.run`` takes a project *slug* and creates it if absent, so handing it an
-    id creates a junk project whose slug is a UUID string rather than resolving the
+    ``Client.run`` resolves a project by *slug* and raises when it is absent, so
+    handing it an id makes the lookup miss a project that genuinely exists rather than resolving the
     one you meant. The ambient anchor stores an id (stable across renames), so it has
     to be translated on the way in — as does an explicit ``--project <uuid>``.
 
-    A non-UUID passes through untouched: it is already a slug, and creating it when
-    missing is the documented behaviour of ``run start``.
+    A non-UUID passes through untouched: it is already a slug, and an absent one is
+    now an error from ``run start`` rather than a silent create.
     """
     if ref is None:
         return None
@@ -1326,13 +1326,8 @@ app.add_typer(run_app, name="run")
 
 @run_app.command("start")
 def run_start(
-    experiment: str = typer.Option(None, "--experiment", help="defaults to the git repo / script name"),
-    hypothesis: str = typer.Option(
-        None, "--hypothesis",
-        help="required knowledge for a NEW experiment; omitted -> a marked [auto] placeholder from context",
-    ),
+    experiment: str = typer.Option(..., "--experiment", help="slug of an EXISTING experiment"),
     name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
-    experiment_name: str = typer.Option(None, "--experiment-name"),
     project: str = typer.Option(
         None, "--project", help="project slug/id; defaults to the active one (`probe project use`)"
     ),
@@ -1342,7 +1337,12 @@ def run_start(
     config: list[str] = typer.Option(None, "--config", metavar="k=v"),
     tag: list[str] = typer.Option(None, "--tag"),
 ) -> None:
-    """Open a run (creating its experiment/project as needed)."""
+    """Open a run inside an EXISTING experiment.
+
+    This no longer creates the experiment or project. Create them first with
+    `probe project create` / `probe experiment create`; an unknown slug now errors
+    and names the closest existing ones instead of minting a second identity.
+    """
     # This is what makes `probe project use` mean something: without it the ambient
     # project would be stored and displayed but never actually applied to a write.
     # Explicit flag still wins, so scripts never depend on a developer's context.
@@ -1350,11 +1350,9 @@ def run_start(
     with _client() as c:
         run = c.run(
             experiment=experiment,
-            experiment_name=experiment_name,
-            hypothesis=hypothesis,
             name=name,
-            # run() get-or-creates by SLUG, so an id has to be translated first or it
-            # silently creates a second project named after the UUID.
+            # run() resolves by SLUG, so an id has to be translated first or the
+            # lookup misses and reports a real project as absent.
             project=_project_slug(c, resolved_project),
             group_id=group,
             source=source,
@@ -2312,14 +2310,53 @@ experiment_app = typer.Typer(no_args_is_help=True, help="experiment maintenance"
 app.add_typer(experiment_app, name="experiment")
 
 
+@experiment_app.command("create")
+def experiment_create(
+    slug: str = typer.Argument(...),
+    hypothesis: str = typer.Option(..., "--hypothesis", help="what you expect this to show"),
+    name: str = typer.Option(None, "--name", help="defaults to the slug"),
+    project: str = typer.Option(
+        None, "--project", help="project slug; defaults to the active one (`probe project use`)"
+    ),
+    description: str = typer.Option(None, "--description"),
+) -> None:
+    """Create an experiment.
+
+    The counterpart to `probe project create`. Both exist because `probe run start`
+    no longer creates its parents: it used to get-or-create the whole chain, so a
+    typo'd slug minted a second identity instead of erroring, and an omitted
+    hypothesis minted a permanent `[auto]` placeholder.
+
+    `--hypothesis` is required here for that reason — this is the moment you know
+    what you are testing, and nothing later goes back to fill it in.
+    """
+    resolved_project = resolve(project=project).project
+    with _client() as c:
+        project_id = None
+        if resolved_project:
+            found = c.resolve_project(_project_slug(c, resolved_project))
+            if found is None:
+                raise typer.BadParameter(f"no project with slug {resolved_project!r}")
+            project_id = found["id"]
+        _print_json(
+            c.create_experiment(
+                slug,
+                name,
+                hypothesis,
+                project_id=project_id,
+                description=description,
+            )
+        )
+
+
 @experiment_app.command("set")
 def experiment_set(
     experiment_id: str = typer.Argument(...),
-    hypothesis: str = typer.Option(None, "--hypothesis", help="replace the hypothesis (e.g. an [auto] placeholder)"),
+    hypothesis: str = typer.Option(None, "--hypothesis", help="replace the hypothesis"),
     name: str = typer.Option(None, "--name"),
     description: str = typer.Option(None, "--description"),
 ) -> None:
-    """Update experiment fields — the follow-up to an [auto]-generated hypothesis."""
+    """Amend an experiment's hypothesis, name, or description after creation."""
     if hypothesis is None and name is None and description is None:
         raise typer.BadParameter("pass at least one of --hypothesis/--name/--description")
     with _client() as c:

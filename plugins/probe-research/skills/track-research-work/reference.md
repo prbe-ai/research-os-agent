@@ -81,12 +81,13 @@ a basis for it.
 
 ## Project and experiment admin
 
-Curation, not research — these fire when someone is tidying structure, not when work
-is happening.
+`create` is part of starting work (see `start-research-work` step 2). The rest is
+curation — it fires when someone is tidying structure, not when work is happening.
 
 `probe project create | list | get | use | patch | move | archive | restore`
-`probe experiment set | archive | restore | edges`
+`probe experiment create | set | archive | restore | edges`
 
-`probe project use SLUG` sets the ambient project that `run start` applies when
-`--project` is omitted. `probe experiment set EXP --hypothesis "..."` replaces an
-`[auto]` placeholder.
+`probe project use SLUG` sets the ambient project. `run start` applies it when
+`--project` is omitted, and uses it to CHECK that the experiment belongs there —
+it no longer decides where anything gets filed, because `run start` no longer
+creates anything. `probe experiment set EXP --hypothesis "..."` amends a hypothesis.

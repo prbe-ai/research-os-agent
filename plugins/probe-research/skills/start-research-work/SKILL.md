@@ -1,20 +1,38 @@
 ---
 name: start-research-work
-description: Start tracked research — pick or create the project and experiment, then open the run. Use before any training, evaluation, sweep, docking, scoring, or simulation. Not for edits, installs, or unit tests.
+description: Start tracked research — create the project and experiment if new, then open a run in them. Use before any training, evaluation, sweep, docking, scoring, or simulation. Not for edits, installs, or unit tests.
 ---
 
 # Start research work
 
-Opening a run get-or-creates the project and the experiment in the same call, so this
-is the only moment those identities get decided — and the surface you open it with
-decides what the run can ever record. Both are expensive to reverse afterwards.
+Three identities, created in three explicit steps. Opening a run used to conjure its
+project and experiment in the same call, so a typo'd slug minted a second identity
+instead of erroring — two experiments where you thought you had one, and every later
+comparison silently reading them as different things. It does not do that any more:
+an unknown slug is an error naming the closest existing ones.
 
 1. **Orient first.** `browse_research` if you do not know what is in this project;
    `search_knowledge` if you have terms and want prior work on this specific thing.
    Check what is already RUNNING before you launch anything — `browse_research`
    reports `active_run_count`, and duplicate GPU-hours are the expensive mistake.
 
-2. **Reuse the active run** when its intent matches. Otherwise open one, with the
+2. **Create the project and experiment, if they are genuinely new.**
+
+   ```
+   probe project create folding
+   probe experiment create dockq-sweep --project folding --hypothesis "temp 0.7 beats 1.0"
+   ```
+
+   `client.create_project(...)` / `client.create_experiment(...)` from the SDK. Both
+   raise if the slug is taken, so re-running a setup script is a loud no-op rather
+   than a silent second identity.
+
+   **The hypothesis is required and is never synthesised.** This is the moment you
+   know what you are testing, and nothing goes back to fill it in later — an omitted
+   one used to become a permanent `[auto]` placeholder. `probe experiment set EXP
+   --hypothesis "..."` amends one afterwards.
+
+3. **Reuse the active run** when its intent matches. Otherwise open one, with the
    surface that fits where the code will execute.
 
    **Writing or editing the training script → the SDK, in-process.** This is the
@@ -26,7 +44,7 @@ decides what the run can ever record. Both are expensive to reverse afterwards.
 
    client = probe.Client()          # token from env / `probe login`
    run = client.run(experiment="dockq-sweep", project="folding",
-                    hypothesis="temp 0.7 beats 1.0", external_id="rp-9931")
+                    external_id="rp-9931")     # both must already exist
    run.snapshot()                                    # code + env, pins env_ref
    for step, batch in enumerate(loader):
        run.log({"loss": loss, "reward": reward}, step=step)      # the curve
@@ -41,7 +59,7 @@ decides what the run can ever record. Both are expensive to reverse afterwards.
    **In an agent shell, wrapping a script you are not editing → the CLI.**
 
    ```
-   probe run start --project SLUG --experiment SLUG --hypothesis "..." --external-id ID
+   probe run start --project SLUG --experiment SLUG --external-id ID
    ```
 
    A CLI-opened run is DETACHED — this process exits at once, so the run does not
@@ -53,16 +71,12 @@ decides what the run can ever record. Both are expensive to reverse afterwards.
    `run.execute([...])` still gets you the run, the snapshot, a process span and the
    real exit status.
 
-3. **Four identity arguments fail silently, on either surface:**
-   - Project and experiment are get-or-create **by slug**. A typo does not error, it
-     mints a second identity. Read back what you got before trusting it.
-   - The project takes a slug. Passing an id creates a project named after the UUID.
-     Omit it entirely to use the ambient one from `probe project use`.
-   - The hypothesis is required knowledge for a NEW experiment. Omit it and the
-     experiment is minted with a marked `[auto]` placeholder that later runs never
-     overwrite. Replace it with `probe experiment set EXP --hypothesis "..."`.
-   - The external id should be deterministic. It is what makes a retried launch reuse
-     the run instead of duplicating it.
+   Two arguments here still need judgement. `--external-id` should be DETERMINISTIC:
+   it is what makes a retried launch reuse its run instead of duplicating it, the one
+   reuse that survives, and it is opt-in because you name the id. `--project` no
+   longer decides where anything is filed — it now CHECKS that the experiment is in
+   the project you think it is, and errors if not. Omit it to use the ambient one
+   from `probe project use`.
 
 4. **Reuse before you create.** Before writing or materially changing a reusable
    script, scoring method, dataset, config, image, checkpoint or container

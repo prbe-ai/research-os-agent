@@ -7,25 +7,42 @@ import json
 import pytest
 
 from probe import errors
+from tests.conftest import open_run
 
 
-def test_run_high_level_creates_experiment_and_run(client, app):
-    run = client.run(experiment="dockq-sweep", hypothesis="temp 0.7 wins", name="run-1")
+def test_run_resolves_its_experiment_and_creates_only_the_run(client, app):
+    """The central claim of explicit creation: run() writes exactly ONE thing.
+
+    The old assertion checked that a POST /v1/experiments happened — which the
+    `open_run` HELPER now issues, not run(). It would have passed even if run()
+    never touched experiments at all, so it could not see the behaviour it was
+    named for. Snapshot the request trail AFTER the explicit create and assert
+    run() adds a run and nothing else.
+    """
+    client.create_experiment("dockq-sweep", "DockQ", "h")
+    before = len(app.requests)
+
+    run = client.run(experiment="dockq-sweep", name="run-1")
+
     assert run.id in app.runs
-    # one POST /v1/experiments, one POST .../runs
-    posts = [(r.method, r.url.path) for r in app.requests]
-    assert ("POST", "/v1/experiments") in posts
-    assert any(p[0] == "POST" and p[1].endswith("/runs") for p in posts)
+    after = [(r.method, r.url.path) for r in app.requests[before:]]
+    assert ("POST", "/v1/experiments") not in after, "run() created an experiment"
+    assert ("POST", "/v1/projects") not in after, "run() created a project"
+    posts = [p for p in after if p[0] == "POST"]
+    assert len(posts) == 1 and posts[0][1].endswith("/runs"), posts
 
 
-def test_ensure_experiment_conflict_fetches_existing(client, app):
+def test_creating_a_taken_slug_raises_instead_of_returning_the_existing_one(client, app):
+    """Inverted deliberately. Returning the existing row on conflict is what
+    'get-or-create' MEANT, and it is the behaviour that made `probe run start`
+    able to conjure a chain — so the conflict has to surface."""
     app.experiment_conflict_id = "existing-123"
-    exp = client.ensure_experiment("dockq", "DockQ", "h")
-    assert exp["id"] == "existing-123"
+    with pytest.raises(errors.ConflictError):
+        client.create_experiment("dockq", "DockQ", "h")
 
 
 def test_log_metrics(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     run.log({"loss": 0.42, "dockq": 0.71}, step=42)
     assert app.metrics_inserted == 2
     body = json.loads(app.requests[-1].content)
@@ -33,7 +50,7 @@ def test_log_metrics(client, app):
 
 
 def test_log_hw_sends_real_dimensions(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     run.log_hw({"gpu_temp": 88.0}, device=3, host="n1")
     body = json.loads(app.requests[-1].content)
     point = body["points"][0]
@@ -43,14 +60,14 @@ def test_log_hw_sends_real_dimensions(client, app):
 
 
 def test_log_dimensions_passthrough(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     run.log({"loss": 0.1}, step=1, dimensions={"rank": 0})
     body = json.loads(app.requests[-1].content)
     assert body["points"][0]["dimensions"] == {"rank": 0}
 
 
 def test_span_generates_uuid_and_posts(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     span_id = run.span("rollout", name="rollout-0", step_index=1)
     assert app.spans_upserted == 1
     body = json.loads(app.requests[-1].content)
@@ -59,7 +76,7 @@ def test_span_generates_uuid_and_posts(client, app):
 
 
 def test_link_writes_real_foreign_keys_column(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     run.link(wandb_run_id="abc", s3_prefix="s3://x/y")
     # real runs.foreign_keys column (not metadata), server-merged
     assert app.runs[run.id]["foreign_keys"] == {"wandb_run_id": "abc", "s3_prefix": "s3://x/y"}
@@ -70,7 +87,7 @@ def test_link_writes_real_foreign_keys_column(client, app):
 
 
 def test_artifact_with_uri(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     run.log_artifact("final.sif", uri="r2://bucket/final.sif", kind="artifact")
     body = json.loads(app.requests[-1].content)
     assert body["uri"] == "r2://bucket/final.sif"
@@ -78,7 +95,7 @@ def test_artifact_with_uri(client, app):
 
 
 def test_artifact_path_reference_records_pointer_without_uploading(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     f = tmp_path / "ckpt.pt"
     f.write_bytes(b"x" * 2048)
     run.log_artifact("ckpt.pt", path=str(f), reference=True)
@@ -95,7 +112,7 @@ def test_artifact_path_reference_records_pointer_without_uploading(client, app, 
 
 
 def test_artifact_path_reference_hash_opts_into_fingerprint(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     f = tmp_path / "big.bin"
     f.write_bytes(b"y" * 4096)
     run.log_artifact("big.bin", path=str(f), reference=True, hash_content=True)
@@ -106,7 +123,7 @@ def test_artifact_path_reference_hash_opts_into_fingerprint(client, app, tmp_pat
 
 
 def test_artifact_path_reference_missing_path_raises_unless_allowed(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     with pytest.raises(FileNotFoundError):
         run.log_artifact("gone.pt", path="/no/such/file.pt", reference=True)
     # allow_missing records it anyway (it may live on a mount/host this machine lacks).
@@ -118,7 +135,7 @@ def test_artifact_path_reference_missing_path_raises_unless_allowed(client, app)
 
 
 def test_finish_sets_status_and_ended_at(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     run.finish("completed")
     row = app.runs[run.id]
     assert row["status"] == "completed"
@@ -126,7 +143,7 @@ def test_finish_sets_status_and_ended_at(client, app):
 
 
 def test_context_manager_marks_failed_on_exception(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     with pytest.raises(ValueError):
         with run:
             raise ValueError("boom")
@@ -137,7 +154,7 @@ def test_fail_open_spools_on_error_then_flush(app, tmp_path):
     from tests.conftest import make_client
 
     c = make_client(app, tmp_spool=tmp_path / "spool")
-    run = c.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(c, experiment="e", name="r")
     app.fail_next_metrics = True
     # fail-open: the failing metrics call is spooled, does not raise
     run.log({"loss": 1.0}, step=1)
@@ -152,7 +169,7 @@ def test_strict_write_raises(app, tmp_path):
     from tests.conftest import make_client
 
     c = make_client(app, fail_open=False, tmp_spool=tmp_path / "spool")
-    run = c.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(c, experiment="e", name="r")
     app.fail_next_metrics = True
     with pytest.raises(errors.RosError):
         run.log({"loss": 1.0}, strict=True)
@@ -189,19 +206,21 @@ def test_ingest_validates_client_side(client, app):
 
 
 def test_error_mapping_409(app, tmp_path):
+    """A taken slug RAISES now. It used to be swallowed: create posted, caught the
+    409, and re-fetched the existing row — which is what made a typo silently
+    attach to (or mint) the wrong identity instead of failing."""
     from tests.conftest import make_client
 
     c = make_client(app, tmp_spool=tmp_path / "spool")
-    app.experiment_conflict_id = None
-    # force a 409 with existing_id by posting the same slug via a conflict knob
     app.experiment_conflict_id = "e-9"
-    exp = c.ensure_experiment("dup", "Dup", "h")
-    assert exp["id"] == "e-9"
+    with pytest.raises(errors.ConflictError) as caught:
+        c.create_experiment("dup", "Dup", "h")
+    assert caught.value.existing_id == "e-9"
 
 
 # -- v0.4 fold-in Phase 1 -----------------------------------------------------
 def test_artifact_presign_upload(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     f = tmp_path / "ckpt.bin"
     f.write_bytes(b"weights")
     client.fail_open = False  # strict: real upload path
@@ -215,7 +234,7 @@ def test_artifact_presign_upload(client, app, tmp_path):
 
 
 def test_artifact_presign_upload_sends_server_signed_headers(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     f = tmp_path / "ckpt.bin"
     f.write_bytes(b"weights")
     app.upload_headers = {"x-amz-checksum-sha256": "checksum"}
@@ -227,7 +246,7 @@ def test_artifact_presign_upload_sends_server_signed_headers(client, app, tmp_pa
 
 
 def test_artifact_reference_still_metadata_only(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     run.log_artifact("final.sif", uri="r2://bucket/final.sif", kind="artifact")
     body = json.loads(app.requests[-1].content)
     assert body["uri"] == "r2://bucket/final.sif"
@@ -236,8 +255,8 @@ def test_artifact_reference_still_metadata_only(client, app):
 
 def test_add_edge(client, app):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="train")
-    other = client.run(experiment="e", hypothesis="h", name="eval")
+    run = open_run(client, experiment="e", name="train")
+    other = open_run(client, experiment="e", name="eval")
     client.add_edge(
         source_type="run", source_id=run.id, relation="evaluates_on",
         target_type="run", target_id=other.id,
@@ -248,7 +267,7 @@ def test_add_edge(client, app):
 
 def test_experiment_version_create_and_list(client, app):
     client.fail_open = False
-    exp = client.ensure_experiment("dockq", "DockQ", "h")
+    exp = client.create_experiment("dockq", "DockQ", "h")
     v = client.experiment_version(exp["id"], label="launch-1")
     assert v["version"] == 1
     assert client.list_experiment_versions(exp["id"])[0]["label"] == "launch-1"
@@ -273,7 +292,7 @@ def test_ingest_execution_record_and_foreign_keys_passthrough(client, app):
 
 
 def test_run_exposes_short_id_and_foreign_keys(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     assert run.short_id and run.short_id.startswith("run-")
     assert run.foreign_keys == {}
 
@@ -293,7 +312,7 @@ def test_snapshot_pins_real_env_ref_column(client, app, tmp_path):
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
 
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     snap = run.snapshot(cwd=str(repo), include_env=False, include_gpu=False)
     assert snap["content_hash"]
     assert app.runs[run.id]["env_ref"] == snap["content_hash"]
@@ -325,14 +344,14 @@ def test_snapshot_rejects_backend_that_drops_env_ref(client, app, tmp_path):
 
     client.transport._client = httpx.Client(base_url="http://test", transport=httpx.MockTransport(drop_env_ref))
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     with pytest.raises(errors.CapabilityUnavailable, match="run.env_ref"):
         run.snapshot(cwd=str(repo), include_env=False, include_gpu=False, strict=True)
 
 
 def test_artifact_upload_carries_kind_and_meta(client, app, tmp_path):
     """Harbor-ownership Phase 0: byte uploads are labeled like reference artifacts."""
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     f = tmp_path / "trial.tar"
     f.write_bytes(b"sandbox-state")
     client.fail_open = False
@@ -357,7 +376,7 @@ def test_artifact_upload_carries_kind_and_meta(client, app, tmp_path):
 
 def test_artifact_upload_default_kind_stays_file(client, app, tmp_path):
     """A plain upload omits kind (None on the wire) so restages preserve labels."""
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     f = tmp_path / "ckpt.bin"
     f.write_bytes(b"weights")
     client.fail_open = False
@@ -372,7 +391,7 @@ def test_artifact_upload_default_kind_stays_file(client, app, tmp_path):
 
 def test_artifact_upload_fallback_keeps_kind_and_meta(client, app, tmp_path):
     """Fail-open fallback records the same label, not a bare 'file' reference."""
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     f = tmp_path / "trial.tar"
     f.write_bytes(b"sandbox-state")
     app.fail_next_uploads = True
@@ -389,7 +408,7 @@ def test_artifact_upload_fallback_keeps_kind_and_meta(client, app, tmp_path):
 
 def test_list_run_artifacts_filters(client, app):
     """kind + inclusive step-window filters pass through as query params."""
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     for step in (599, 600, 601):
         run.log_artifact(
             f"sandbox-{step}", uri=f"s3://lake/{step}", kind="sandbox_state", step_index=step

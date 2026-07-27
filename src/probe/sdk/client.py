@@ -9,8 +9,10 @@ Every method maps onto a real v4 endpoint (Probe Research v0.4.0.0 ingestion fol
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+import difflib
 import os
+import shlex
 import sys
 import threading
 import warnings
@@ -68,6 +70,28 @@ _SCOPED_ANCHORS = frozenset(
 #: REPLACES it via a confirm-time swap instead of adding a second version. They also
 #: have no metadata-only form — a file is its bytes.
 _FILE_ANCHORS = frozenset({Anchor.WORKSPACE, Anchor.SHARED})
+
+
+
+def _exactly(rows: list[dict], slug: str) -> dict | None:
+    """The row whose slug actually MATCHES, or None.
+
+    Never `rows[0]`. FastAPI silently drops a query parameter it does not
+    declare, so a backend without the `?slug=` filter (an older engine, a
+    rolled-back data plane, a self-hosted install) answers an unfiltered first
+    page — and taking `rows[0]` there attaches the caller to a real, arbitrary,
+    WRONG entity instead of erroring. That failure is worse than the
+    get-or-create it replaced: get-or-create at least made an isolated new
+    identity, where this appends your metrics to someone else's experiment.
+
+    The membership check in `run()` cannot catch it either, because it reads its
+    comparand from the same broken listing and so agrees with the bug. Verifying
+    the slug here is what makes an unfiltered response degrade to "not found".
+    """
+    for row in rows or ():
+        if row.get("slug") == slug:
+            return row
+    return None
 
 
 class Client:
@@ -272,8 +296,11 @@ class Client:
         description: str | None = None,
         metadata: dict | None = None,
     ) -> dict:
-        """Create a project. Raises ``ConflictError`` if the slug is taken —
-        use :meth:`ensure_project` for get-or-create."""
+        """Create a project. Raises ``ConflictError`` if the slug is taken.
+
+        Creation is always explicit: there is no get-or-create. A caller that
+        does not know whether the project exists asks :meth:`resolve_project`
+        first and decides."""
         body: dict[str, Any] = {"slug": slug, "name": name or slug}
         if workspace_id is not None:
             body["workspace_id"] = workspace_id
@@ -283,15 +310,13 @@ class Client:
             body["metadata"] = metadata
         return self.transport.post("/v1/projects", body)
 
-    def ensure_project(self, slug: str, name: str | None = None, **kw) -> dict:
-        try:
-            return self.transport.post(
-                "/v1/projects", {"slug": slug, "name": name or slug, **kw}
-            )
-        except errors.ConflictError as exc:
-            if exc.existing_id:
-                return self.transport.get(f"/v1/projects/{exc.existing_id}")
-            raise
+    def resolve_project(self, slug: str) -> dict | None:
+        """Look a project up by slug. ``None`` when it does not exist.
+
+        `(customer_id, slug)` is UNIQUE, so ``?slug=`` returns 0 or 1 row and an
+        empty result is an unambiguous "absent" rather than "not on this page"."""
+        rows = self.transport.get("/v1/projects", params={"slug": slug})
+        return _exactly(rows, slug)
 
     def get_project(self, project_id: str) -> dict:
         return self.transport.get(f"/v1/projects/{project_id}")
@@ -549,38 +574,44 @@ class Client:
         return self.transport.post(f"/v1/shared/files/{artifact_id}/confirm", None)
 
     # -- experiments --------------------------------------------------------
-    def ensure_experiment(
+    def create_experiment(
         self,
         slug: str,
-        name: str,
+        name: str | None = None,
         hypothesis: str | None = None,
         *,
         project_id: str | None = None,
         description: str | None = None,
         tags: list[str] | None = None,
     ) -> dict:
-        """Get-or-create. A create requires a hypothesis (422); an existing
-        experiment keeps its own (first-write-wins), so re-running is safe.
+        """Create an experiment. Raises ``ConflictError`` if the slug is taken.
 
-        ``hypothesis=None`` composes a marked ``[auto]`` placeholder from ambient
-        context (repo@branch, script, coding-agent session) — replace it later
-        with :meth:`update_experiment`. It only ever lands on a brand-new
-        experiment; an existing one is never overwritten by the fallback."""
-        if hypothesis is None:
-            hypothesis = defaults.auto_hypothesis(slug)
-        body: dict[str, Any] = {"slug": slug, "name": name, "hypothesis": hypothesis}
+        The hypothesis is REQUIRED and is not synthesised. This used to accept
+        ``None`` and compose a marked ``[auto]`` placeholder from ambient context,
+        which then became permanent: an existing experiment keeps its own
+        hypothesis first-write-wins, so nothing ever replaced the placeholder
+        unless a human noticed and ran ``probe experiment set``. Making creation
+        explicit means naming what you are testing at the moment you create it."""
+        if not hypothesis:
+            raise errors.ValidationError(
+                f"an experiment needs a hypothesis: what do you expect {slug} to show?"
+            )
+        body: dict[str, Any] = {"slug": slug, "name": name or slug, "hypothesis": hypothesis}
         if project_id:
             body["project_id"] = project_id
         if description is not None:
             body["description"] = description
         if tags is not None:
             body["tags"] = tags
-        try:
-            return self.transport.post("/v1/experiments", body)
-        except errors.ConflictError as exc:
-            if exc.existing_id:
-                return self.transport.get(f"/v1/experiments/{exc.existing_id}")
-            raise
+        return self.transport.post("/v1/experiments", body)
+
+    def resolve_experiment(self, slug: str) -> dict | None:
+        """Look an experiment up by slug. ``None`` when it does not exist.
+
+        Experiment slugs are UNIQUE per TENANT, not per project, so this needs no
+        project_id to disambiguate."""
+        rows = self.transport.get("/v1/experiments", params={"slug": slug})
+        return _exactly(rows, slug)
 
     def get_experiment(self, experiment_id: str) -> dict:
         return self.transport.get(f"/v1/experiments/{experiment_id}")
@@ -595,8 +626,8 @@ class Client:
         metadata: dict | None = None,
         summary: dict | None = None,
     ) -> dict:
-        """PATCH /v1/experiments/{id} — e.g. replace an ``[auto]`` hypothesis with
-        the real one once the experiment's intent is settled."""
+        """PATCH /v1/experiments/{id} — amend an experiment's hypothesis, name or
+        description after creation."""
         body = {
             key: value
             for key, value in {
@@ -720,26 +751,77 @@ class Client:
         experiment_name: str | None = None,
         **run_kw,
     ) -> "Run":
-        """High-level: ensure the experiment (and project) exist, then open a run.
-        This is the ``/experiment`` launch path.
+        """Open a run inside an experiment that ALREADY EXISTS.
 
-        Every identity argument now has an opinionated default so
-        ``client.run()`` alone works: no token triggers the one-time browser
-        device login (TTY only), ``experiment`` falls back to the git repo /
-        script name, ``name`` to a timestamp (the backend also mints a petname
-        ``short_id``), and a brand-new experiment gets a marked ``[auto]``
-        hypothesis composed from context — set the real one with
-        :meth:`update_experiment` / ``probe experiment set``."""
+        This resolves; it does not create. An unknown slug raises
+        ``NotFoundError`` naming the closest existing ones, because the failure
+        it replaces was silent: this call used to get-or-create the whole chain,
+        so a typo minted a second project or experiment rather than erroring, and
+        every later comparison read the two as genuinely different things.
+
+        Create the parents explicitly first — :meth:`create_project` and
+        :meth:`create_experiment`, or ``probe project create`` / ``probe
+        experiment create``. ``name`` still defaults to a timestamp, and the
+        backend still mints a petname ``short_id``; naming a RUN has never been
+        the ambiguous part."""
+        if hypothesis is not None or experiment_name is not None:
+            raise errors.ValidationError(
+                "run() no longer creates the experiment, so it cannot set its "
+                "hypothesis or name. Create it first with create_experiment("
+                f"{experiment!r}, hypothesis=...) and then open the run."
+            )
+        if not experiment:
+            raise errors.ValidationError(
+                "run() needs an experiment slug. It used to fall back to the git "
+                "repo or script name, which silently created an experiment named "
+                "after whatever directory you happened to be in."
+            )
         self.ensure_authenticated()
-        experiment = experiment or defaults.default_experiment_slug()
         name = name or defaults.default_run_name()
         project_id = None
         if project:
-            project_id = self.ensure_project(project)["id"]
-        exp = self.ensure_experiment(
-            experiment, experiment_name or experiment, hypothesis, project_id=project_id
-        )
+            found = self.resolve_project(project)
+            if found is None:
+                raise self._no_such(
+                    "project", project, self.list_projects(limit=200).items
+                )
+            project_id = found["id"]
+        exp = self.resolve_experiment(experiment)
+        if exp is None:
+            raise self._no_such(
+                "experiment", experiment, self.list_experiments(project_id=project_id, limit=200).items
+            )
+        # `project` used to decide where a NEW experiment got filed. Now that the
+        # experiment must already exist, the only honest job left for it is to
+        # CHECK that it is the one you think it is — otherwise naming a project
+        # would silently do nothing, which is its own quiet wrong answer.
+        if project_id and exp.get("project_id") not in (None, project_id):
+            raise errors.ValidationError(
+                f"experiment {experiment!r} is not in project {project!r}. "
+                "Drop --project, or name the project it actually belongs to."
+            )
         return self.create_run(exp["id"], name, **run_kw)
+
+    @staticmethod
+    def _no_such(kind: str, slug: str, existing: Iterable[dict]) -> errors.NotFoundError:
+        """A not-found that names near misses, so a typo says what you meant.
+
+        A mistyped slug is by definition CLOSE to a real one; a genuinely new
+        name is not. Suggesting neighbours turns the common case from "what do
+        you mean it does not exist" into an obvious one-character fix."""
+        slugs = [row["slug"] for row in existing if row.get("slug")]
+        near = difflib.get_close_matches(slug, slugs, n=3, cutoff=0.6)
+        hint = f" Did you mean: {', '.join(near)}?" if near else ""
+        # The suggested command has to actually RUN. `experiment create` requires
+        # --hypothesis, so omitting it would print a command that fails on the one
+        # field this whole change exists to force. The slug is quoted because it
+        # arrives from the caller and this string is presented as copy-pasteable.
+        extra = ' --hypothesis "..."' if kind == "experiment" else ""
+        return errors.NotFoundError(
+            f"no {kind} with slug {slug!r}.{hint} "
+            f"Create it with `probe {kind} create {shlex.quote(slug)}{extra}` "
+            "if it is genuinely new."
+        )
 
     def heartbeat_run(self, run_id: str) -> dict:
         """``POST /v1/runs/{id}/heartbeat``: report that this run is still alive.

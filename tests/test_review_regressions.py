@@ -27,6 +27,8 @@ def wired(app, tmp_path, monkeypatch):
         return make_client(app, tmp_spool=tmp_path / "spool")
 
     monkeypatch.setattr(cli, "Client", factory)
+    # `run start` resolves its experiment now instead of creating it.
+    app.seed_experiment("e")
     return app
 
 
@@ -138,15 +140,17 @@ def test_restore_finds_an_archived_project_by_slug(wired, client, capsys):
 def test_run_start_uses_the_active_project(wired, client, capsys):
     """`project use` stored and displayed the anchor but no write path applied it.
 
-    The context holds the project ID (stable across renames), while ``Client.run``
-    get-or-creates by SLUG — so this must store an id, exactly like `project use`
-    does. An earlier version of this test stored a slug and passed while the live
-    CLI silently created a second project named after the UUID.
+    It used to decide where a NEW experiment got filed. `run start` no longer
+    creates experiments, so the only honest job left is to CHECK the experiment is
+    in the project you think it is — a named project that quietly did nothing
+    would be its own wrong answer. The context holds the project ID (stable across
+    renames), so this must store an id exactly like `project use` does.
     """
     proj = client.create_project("ambient", workspace_id=_WS_MINE)
+    client.create_experiment("in-ambient", "In ambient", "h", project_id=proj["id"])
     save_context({"workspace": {"id": _WS_MINE, "project": proj["id"]}})
 
-    assert cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r"]) == 0
+    assert cli.main(["run", "start", "--experiment", "in-ambient", "--name", "r"]) == 0
 
     run_id = capsys.readouterr().out.strip()
     exp = client.get_experiment(client.get_run(run_id)["experiment_id"])
@@ -155,16 +159,28 @@ def test_run_start_uses_the_active_project(wired, client, capsys):
     assert [p["slug"] for p in client.list_projects().items] == ["ambient"]
 
 
+def test_run_start_refuses_an_experiment_from_another_project(wired, client, capsys):
+    """The check the ambient anchor now buys: naming the wrong project fails loudly
+    rather than filing the run somewhere you did not mean."""
+    ambient = client.create_project("ambient", workspace_id=_WS_MINE)
+    other = client.create_project("other", workspace_id=_WS_MINE)
+    client.create_experiment("elsewhere", "Elsewhere", "h", project_id=other["id"])
+    save_context({"workspace": {"id": _WS_MINE, "project": ambient["id"]}})
+
+    assert cli.main(["run", "start", "--experiment", "elsewhere", "--name", "r"]) != 0
+
+
 def test_an_explicit_project_still_beats_the_context(wired, client, capsys):
     """Ambient context is a convenience, never a requirement."""
     ambient = client.create_project("ambient", workspace_id=_WS_MINE)
     explicit = client.create_project("explicit", workspace_id=_WS_MINE)
-    save_context({"workspace": {"id": _WS_MINE, "project": ambient["slug"]}})
+    client.create_experiment("in-explicit", "In explicit", "h", project_id=explicit["id"])
+    save_context({"workspace": {"id": _WS_MINE, "project": ambient["id"]}})
 
-    cli.main([
-        "run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r",
+    assert cli.main([
+        "run", "start", "--experiment", "in-explicit", "--name", "r",
         "--project", "explicit",
-    ])
+    ]) == 0
 
     run_id = capsys.readouterr().out.strip()
     exp = client.get_experiment(client.get_run(run_id)["experiment_id"])

@@ -18,6 +18,7 @@ from probe.connectors.harbor import (
     stage_trial,
 )
 from tests.conftest import make_client
+from tests.conftest import open_run
 
 
 # -- fixture: an Osmosis-shaped trial directory --------------------------------
@@ -139,7 +140,7 @@ def test_stage_trial_reports_declared_output_that_harbor_did_not_materialize(tmp
 
 def test_capture_uses_staged_copy_after_original_disappears(client, app, tmp_path):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     source = _write_trial(tmp_path / "live")
     staged = stage_trial(source, tmp_path / "pvc" / "trial")
 
@@ -158,7 +159,7 @@ def test_capture_uses_staged_copy_after_original_disappears(client, app, tmp_pat
 
 
 def test_reconcile_retries_only_unconfirmed_staged_bytes(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     source = tmp_path / "live"
     source.mkdir()
     (source / "only.txt").write_text("bytes")
@@ -180,7 +181,7 @@ def test_reconcile_retries_only_unconfirmed_staged_bytes(client, app, tmp_path):
 # -- capture ---------------------------------------------------------------------
 def test_capture_trial_full(client, app, tmp_path):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     result = capture_trial(
         run, _write_trial(tmp_path / "t"), step_index=600,
         environment={"type": "skypilot-fork"}, strict=True,
@@ -216,7 +217,7 @@ def test_capture_trial_full(client, app, tmp_path):
 def test_capture_trial_bare_fork_dir_still_captures(client, app, tmp_path):
     """A private fork with zero contract files is captured, not rejected."""
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     root = tmp_path / "forked"
     root.mkdir()
     (root / "whatever.log").write_text("bytes")
@@ -230,7 +231,7 @@ def test_capture_trial_bare_fork_dir_still_captures(client, app, tmp_path):
 
 def test_capture_trial_failed_trial_marks_span(client, app, tmp_path):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     root = tmp_path / "t"
     root.mkdir()
     (root / "result.json").write_text(json.dumps({
@@ -248,7 +249,7 @@ def test_capture_trial_failed_trial_marks_span(client, app, tmp_path):
 
 def test_capture_trial_fail_open_marks_unuploaded(client, app, tmp_path):
     """Storage down mid-capture: the loop is not blocked, the manifest is honest."""
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     root = tmp_path / "t"
     root.mkdir()
     (root / "only.txt").write_text("x")
@@ -266,11 +267,13 @@ def wired(app, tmp_path, monkeypatch):
         return make_client(app, tmp_spool=tmp_path / "spool")
 
     monkeypatch.setattr(cli, "Client", factory)
+    # `run start` resolves its experiment now instead of creating it.
+    app.seed_experiment("e")
     return app
 
 
 def test_cli_trial_add(wired, capsys, tmp_path):
-    cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r"])
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
     run_id = capsys.readouterr().out.strip()
     trial = _write_trial(tmp_path / "t")
     rc = cli.main(["trial", "add", run_id, str(trial), "--step", "600", "--env-type", "skypilot-fork"])

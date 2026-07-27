@@ -37,12 +37,13 @@ def _populated(client, app, *, spans: int = 3):
     record = client.execution_record(
         code={"git_sha": "abc123"}, deps={"torch": "2.4"}, hardware={"gpu": "H100"}
     )
-    run = client.run(
-        project="folding",
-        experiment="dockq-path",
-        hypothesis="relative paths fix scoring",
-        name="eval-1",
+    # `run()` resolves its parents now instead of get-or-creating them, so they
+    # have to exist first — the same two commands a real user runs.
+    project = client.create_project("folding")
+    client.create_experiment(
+        "dockq-path", "dockq-path", "relative paths fix scoring", project_id=project["id"]
     )
+    run = client.run(project="folding", experiment="dockq-path", name="eval-1")
     rid = run.id
     experiment_id = app.runs[rid]["experiment_id"]
     app.runs[rid]["env_ref"] = record["content_hash"]
@@ -204,7 +205,9 @@ def test_reproduce_resolves_env_ref_through_its_execution_record(client, app):
 def test_reproduce_without_an_env_ref_reports_it_missing(client, app):
     """CONDITIONAL missing — the honest kind. This run captured no environment, so
     it genuinely cannot be reproduced from here."""
-    run = client.run(project="folding", experiment="e", hypothesis="h", name="no-env")
+    _proj = client.create_project("folding")
+    client.create_experiment("e", "e", "h", project_id=_proj["id"])
+    run = client.run(project="folding", experiment="e", name="no-env")
     result = _service(client).get_entity(f"run:{run.id}", view="reproduce")
     assert result["completeness"]["missing"] == ["execution_record"]
     assert result["completeness"]["state"] == "partial"

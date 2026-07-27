@@ -199,6 +199,41 @@ def _default_external_id(args) -> str:
     return f"miles:{uuid.uuid4()}"
 
 
+
+def _ensure_identities(client, spec: dict) -> None:
+    """Create the project + experiment the spec names, if they are new.
+
+    `client.run()` resolves its parents instead of get-or-creating them, so the
+    sidecar has to bring them into existence itself. Miles launches concurrently
+    (one exporter per job), so a ConflictError here means a sibling won the race
+    and the identity now exists — which is the outcome we wanted either way.
+    """
+    from ..sdk import errors as _errors
+
+    project_id = None
+    project = spec.get("project")
+    if project:
+        try:
+            project_id = client.create_project(project)["id"]
+        except _errors.ConflictError:
+            found = client.resolve_project(project)
+            project_id = found["id"] if found else None
+    experiment = spec.get("experiment")
+    if experiment:
+        try:
+            client.create_experiment(
+                experiment,
+                experiment,
+                spec.get("hypothesis") or "Miles telemetry capture.",
+                # Without this the experiment lands under the tenant default and
+                # `run(project=..., experiment=...)` then rejects the pair it was
+                # just handed -- a self-contradicting error on identities the
+                # sidecar created itself.
+                project_id=project_id,
+            )
+        except _errors.ConflictError:
+            pass
+
 def _default_run_name(args, external_id: str) -> str:
     configured = getattr(args, "probe_run_name", None) or getattr(
         args, "wandb_group", None
@@ -697,6 +732,7 @@ class ProbeTracker:
                 run = Run(client, client.get_run(str(self._run_id)))
             else:
                 try:
+                    _ensure_identities(client, run_spec)
                     # The exporter is a sidecar: its lifetime is not the run's, so
                     # it must not beat (a beat that stops when the exporter exits
                     # would get a live training run reaped as crashed).
@@ -707,7 +743,7 @@ class ProbeTracker:
                             for key, value in run_spec.items()
                             # "heartbeat" excluded so a spec key can never collide
                             # with the explicit kwarg above.
-                            if key not in {"links", "snapshot", "heartbeat"}
+                            if key not in {"links", "snapshot", "heartbeat", "hypothesis"}
                         }
                     )
                 except Exception as exc:
@@ -960,9 +996,10 @@ def drain_metric_queue(
                 for key, value in spec.items()
                 # "heartbeat" excluded so a spec key can never collide with the
                 # explicit kwarg below.
-                if key not in {"links", "snapshot", "heartbeat"}
+                if key not in {"links", "snapshot", "heartbeat", "hypothesis"}
             }
             try:
+                _ensure_identities(client, spec)
                 # Sidecar lifetime, same as the create in export(): never beat.
                 run = client.run(heartbeat=False, **create_values)
             except Exception as exc:

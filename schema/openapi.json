@@ -282,6 +282,17 @@
             ],
             "title": "Size Bytes"
           },
+          "source_level": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Level"
+          },
           "span_id": {
             "anyOf": [
               {
@@ -784,6 +795,15 @@
         "title": "ChannelError",
         "type": "string"
       },
+      "ClientKind": {
+        "description": "First-party clients that may report their installed version.",
+        "enum": [
+          "cli",
+          "plugin"
+        ],
+        "title": "ClientKind",
+        "type": "string"
+      },
       "ClientRegistrationIn": {
         "description": "RFC 7591 dynamic client registration request. We accept the standard\nmetadata but fix grant/response types and the (none) auth method ourselves.",
         "properties": {
@@ -863,6 +883,80 @@
         "title": "ClientRegistrationIn",
         "type": "object"
       },
+      "ClientStatusOut": {
+        "description": "Server-side update-banner decision for the authenticated user.",
+        "properties": {
+          "advisory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advisory"
+          },
+          "clients": {
+            "items": {
+              "$ref": "#/components/schemas/StaleClientOut"
+            },
+            "title": "Clients",
+            "type": "array"
+          },
+          "severity": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClientUpdateStatus"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "update_available": {
+            "default": false,
+            "title": "Update Available",
+            "type": "boolean"
+          }
+        },
+        "title": "ClientStatusOut",
+        "type": "object"
+      },
+      "ClientUpdateStatus": {
+        "description": "How urgently one observed client should be updated.",
+        "enum": [
+          "update",
+          "required"
+        ],
+        "title": "ClientUpdateStatus",
+        "type": "string"
+      },
+      "ClientVersionOut": {
+        "properties": {
+          "advisory": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Advisory"
+          },
+          "cli": {
+            "$ref": "#/components/schemas/VersionPair",
+            "default": {}
+          },
+          "plugin": {
+            "$ref": "#/components/schemas/VersionPair",
+            "default": {}
+          }
+        },
+        "title": "ClientVersionOut",
+        "type": "object"
+      },
       "DeviceAuthorizationDecision": {
         "properties": {
           "decision": {
@@ -907,6 +1001,13 @@
             "format": "date-time",
             "title": "Expires At",
             "type": "string"
+          },
+          "grants": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Grants",
+            "type": "array"
           },
           "scopes": {
             "anyOf": [
@@ -959,6 +1060,14 @@
             "pattern": "^[A-Za-z0-9_-]{43}$",
             "title": "Code Challenge",
             "type": "string"
+          },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/Grant"
+            },
+            "minItems": 1,
+            "title": "Grants",
+            "type": "array"
           },
           "scopes": {
             "anyOf": [
@@ -1027,12 +1136,61 @@
         "title": "DeviceAuthorizationStartOut",
         "type": "object"
       },
+      "DeviceGrantOut": {
+        "description": "One credential minted by an approval. `token` is plaintext, delivered ONCE.",
+        "properties": {
+          "device_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Device Id"
+          },
+          "grant": {
+            "$ref": "#/components/schemas/Grant"
+          },
+          "token": {
+            "title": "Token",
+            "type": "string"
+          },
+          "token_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Id"
+          }
+        },
+        "required": [
+          "grant",
+          "token"
+        ],
+        "title": "DeviceGrantOut",
+        "type": "object"
+      },
       "DeviceTokenCreated": {
+        "description": "Exchange result.\n\nThe inherited top-level fields carry the `api` PAT exactly as they always\nhave. That shape is FROZEN: older CLIs send no `grants`, get `{api}`, and\nmust see a byte-identical response.\n\n`grants` carries every credential the approval minted, including the api PAT\nagain, so a client that asked for a set does not have to special-case which\none landed on top.",
         "properties": {
           "created_at": {
-            "format": "date-time",
-            "title": "Created At",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
           },
           "expires_at": {
             "anyOf": [
@@ -1046,10 +1204,24 @@
             ],
             "title": "Expires At"
           },
+          "grants": {
+            "items": {
+              "$ref": "#/components/schemas/DeviceGrantOut"
+            },
+            "title": "Grants",
+            "type": "array"
+          },
           "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
           },
           "last_used_at": {
             "anyOf": [
@@ -1064,8 +1236,15 @@
             "title": "Last Used At"
           },
           "name": {
-            "title": "Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           },
           "scopes": {
             "anyOf": [
@@ -1082,12 +1261,26 @@
             "title": "Scopes"
           },
           "token": {
-            "title": "Token",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
           },
           "token_prefix": {
-            "title": "Token Prefix",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token Prefix"
           },
           "token_type": {
             "const": "Bearer",
@@ -1096,13 +1289,6 @@
             "type": "string"
           }
         },
-        "required": [
-          "id",
-          "name",
-          "token_prefix",
-          "created_at",
-          "token"
-        ],
         "title": "DeviceTokenCreated",
         "type": "object"
       },
@@ -1653,13 +1839,19 @@
               }
             ],
             "title": "Slug"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
           }
         },
         "required": [
           "id",
           "name",
           "project_id",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "title": "ExperimentNode",
         "type": "object"
@@ -1736,6 +1928,11 @@
             },
             "title": "Tags",
             "type": "array"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
           }
         },
         "required": [
@@ -1745,7 +1942,8 @@
           "slug",
           "name",
           "hypothesis",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "title": "ExperimentOut",
         "type": "object"
@@ -1869,18 +2067,18 @@
             "title": "Artifact Refs",
             "type": "array"
           },
-          "as_of": {
-            "format": "date-time",
-            "title": "As Of",
-            "type": "string"
-          },
-          "asset_version_refs": {
+          "artifact_version_refs": {
             "items": {
               "format": "uuid",
               "type": "string"
             },
-            "title": "Asset Version Refs",
+            "title": "Artifact Version Refs",
             "type": "array"
+          },
+          "as_of": {
+            "format": "date-time",
+            "title": "As Of",
+            "type": "string"
           },
           "created_at": {
             "format": "date-time",
@@ -2060,6 +2258,16 @@
           "installed"
         ],
         "title": "GitHubIntegrationState",
+        "type": "string"
+      },
+      "Grant": {
+        "description": "What ONE browser approval authorizes.\n\nA grant is a CAPABILITY, not a scope. `probe setup` asks for a set of them so\nthe human approves once and the consent screen shows every capability\ntogether, instead of three separate round-trips each showing a fragment.\n\nThe distinction matters most for CAPTURE. Scopes describe what an API caller\nmay do to research data; they cannot express \"stream this machine's prompts,\nfile contents and tool output off the device\". Rendering that as `read` on a\nconsent screen would actively misdescribe it, so it gets its own name.",
+        "enum": [
+          "api",
+          "mcp",
+          "capture"
+        ],
+        "title": "Grant",
         "type": "string"
       },
       "HTTPValidationError": {
@@ -2514,7 +2722,7 @@
         "enum": [
           "run",
           "artifact",
-          "asset_version"
+          "artifact_version"
         ],
         "title": "LineageEntityType",
         "type": "string"
@@ -3144,6 +3352,11 @@
             ],
             "title": "Slug"
           },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
           "workspace_id": {
             "anyOf": [
               {
@@ -3160,7 +3373,8 @@
         "required": [
           "id",
           "name",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "title": "ProjectNode",
         "type": "object"
@@ -3217,6 +3431,11 @@
             "title": "Slug",
             "type": "string"
           },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
           "workspace_id": {
             "anyOf": [
               {
@@ -3236,7 +3455,8 @@
           "workspace_id",
           "slug",
           "name",
-          "created_at"
+          "created_at",
+          "updated_at"
         ],
         "title": "ProjectOut",
         "type": "object"
@@ -3296,7 +3516,7 @@
         "type": "object"
       },
       "RunBundle": {
-        "description": "One request: run + catalog + artifact index (bounded) + spans overview +\nlineage refs. Raw points are excluded (fetch via /series/query).",
+        "description": "One request: run + coding sessions + catalog + artifact index (bounded) +\nspans overview + lineage refs. Raw points are excluded (fetch via\n/series/query).",
         "properties": {
           "artifact_total": {
             "title": "Artifact Total",
@@ -3337,6 +3557,13 @@
               "$ref": "#/components/schemas/MetricSeriesOut"
             },
             "title": "Series",
+            "type": "array"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/components/schemas/RunSessionOut"
+            },
+            "title": "Sessions",
             "type": "array"
           },
           "span_types": {
@@ -4172,6 +4399,31 @@
         "title": "RunPatch",
         "type": "object"
       },
+      "RunSessionOut": {
+        "description": "A coding-agent session that touched this run.\n\nOrdered by when we first saw it, so the first entry is the session the run\noriginated in \u2014 the same one recorded in\n`runs.foreign_keys.<agent>_session_id`.\n\n`captured` is deliberately NOT here. Whether a transcript exists is the\nengine's answer, not this database's: capture is a per-device permission a\nuser can switch off, so a recorded session with no transcript is an\nexpected state. The run page resolves it against the transcripts corpus at\nrender time and shows captured / pending / not-captured there. Asserting it\nhere would mean this endpoint lying whenever the engine disagreed.",
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "format": "date-time",
+            "title": "First Seen At",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "agent",
+          "first_seen_at"
+        ],
+        "title": "RunSessionOut",
+        "type": "object"
+      },
       "RunStatus": {
         "enum": [
           "created",
@@ -4281,6 +4533,11 @@
             "title": "Exact Limit",
             "type": "integer"
           },
+          "include_semantic": {
+            "default": true,
+            "title": "Include Semantic",
+            "type": "boolean"
+          },
           "project_id": {
             "anyOf": [
               {
@@ -4343,8 +4600,25 @@
             "title": "Dropped Chunk Count",
             "type": "integer"
           },
+          "dropped_result_count": {
+            "default": 0,
+            "title": "Dropped Result Count",
+            "type": "integer"
+          },
           "exact": {
             "$ref": "#/components/schemas/ExactSection"
+          },
+          "project_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Project Id"
           },
           "query": {
             "title": "Query",
@@ -4569,6 +4843,11 @@
             "title": "Dropped Chunk Count",
             "type": "integer"
           },
+          "dropped_result_count": {
+            "default": 0,
+            "title": "Dropped Result Count",
+            "type": "integer"
+          },
           "error": {
             "anyOf": [
               {
@@ -4585,6 +4864,11 @@
             },
             "title": "Results",
             "type": "array"
+          },
+          "stripped_graph_evidence_count": {
+            "default": 0,
+            "title": "Stripped Graph Evidence Count",
+            "type": "integer"
           },
           "total_candidates": {
             "anyOf": [
@@ -5086,6 +5370,45 @@
           "upserted"
         ],
         "title": "SpanUpsertResult",
+        "type": "object"
+      },
+      "StaleClientOut": {
+        "description": "One known, stale client included in the dashboard decision.",
+        "properties": {
+          "current": {
+            "title": "Current",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ClientKind"
+          },
+          "latest": {
+            "title": "Latest",
+            "type": "string"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ClientUpdateStatus"
+          }
+        },
+        "required": [
+          "kind",
+          "current",
+          "latest",
+          "min",
+          "status"
+        ],
+        "title": "StaleClientOut",
         "type": "object"
       },
       "StepCreate": {
@@ -5709,6 +6032,34 @@
         "title": "ValidationError",
         "type": "object"
       },
+      "VersionPair": {
+        "properties": {
+          "latest": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Latest"
+          },
+          "min": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min"
+          }
+        },
+        "title": "VersionPair",
+        "type": "object"
+      },
       "WorkspaceKind": {
         "description": "The closed workspace kind vocabulary (mirrors the DB CHECK).\n\n`SHARED` is RETIRED (decision 2026-07-16): app code never creates a shared\nworkspace anymore. It is kept here only so the API can still serialize a\nlegacy null-owner shared row on an existing install until it is retired by\n`app.workspaces.retire_shared` and a future contract migration drops the kind.",
         "enum": [
@@ -5831,6 +6182,8 @@
     },
     "/agent-tap/pair": {
       "post": {
+        "deprecated": true,
+        "description": "DEPRECATED alongside `/v1/pairing-tokens`, and kept working for the same\nreason: it is the manual fallback and every already-installed plugin uses it.\n\nDevices paired here leave `ingest_tokens.authorization_id` NULL, which is why\nthat column's unique index is partial.",
         "operationId": "pair_agent_tap_pair_post",
         "requestBody": {
           "content": {
@@ -5864,7 +6217,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Pair",
+        "summary": "DEPRECATED \u2014 superseded by the device-flow `capture` grant",
         "tags": [
           "pairing"
         ]
@@ -7421,6 +7774,50 @@
         ]
       }
     },
+    "/v1/client-status": {
+      "get": {
+        "description": "Dashboard update decision for the current user and active team.",
+        "operationId": "get_client_status_v1_client_status_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Client Status",
+        "tags": [
+          "client-version"
+        ]
+      }
+    },
+    "/v1/client-version": {
+      "get": {
+        "description": "Latest/min CLI + plugin versions. Public, cached, fail-open.\n\nAbsent/unreachable/malformed manifest -> 200 with null fields, never an error,\nso the hook and dashboard degrade quietly instead of surfacing a failure.",
+        "operationId": "get_client_version_v1_client_version_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientVersionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Client Version",
+        "tags": [
+          "client-version"
+        ]
+      }
+    },
     "/v1/devices": {
       "get": {
         "operationId": "list_devices_v1_devices_get",
@@ -7720,6 +8117,24 @@
               ],
               "description": "'archived' to include archived",
               "title": "Include"
+            }
+          },
+          {
+            "description": "exact slug; returns 0 or 1 row (slug is unique per tenant)",
+            "in": "query",
+            "name": "slug",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "exact slug; returns 0 or 1 row (slug is unique per tenant)",
+              "title": "Slug"
             }
           },
           {
@@ -8804,6 +9219,7 @@
     },
     "/v1/integrations/github/installations/{installation_id}": {
       "delete": {
+        "description": "Disconnect GitHub: purge everything it ingested, then release the claim.\n\nOrder matters and is the opposite of the obvious one. The claim row is\nwhat the UI reads as \"connected\" AND what makes this endpoint reachable,\nso it is released LAST \u2014 only after the engine reports a verified purge.\nAny failure in between leaves the integration connected, which means the\nadmin still has a disconnect button and re-clicking retries an idempotent\npurge. Releasing first would leave a \"disconnected\" integration whose data\nis still indexed and no longer has a control to clear it.",
         "operationId": "release_installation_v1_integrations_github_installations__installation_id__delete",
         "parameters": [
           {
@@ -8885,6 +9301,51 @@
         ]
       }
     },
+    "/v1/integrations/ingestion/{source}/devices": {
+      "get": {
+        "description": "Merge engine-owned counts with research-os pairing metadata.\n\nQueue depth intentionally remains on the parent source row: the engine's\ningestion queue has no device id, so breaking those numbers down would be\nguesswork.",
+        "operationId": "ingestion_device_stats_v1_integrations_ingestion__source__devices_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "title": "Source",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ingestion Device Stats V1 Integrations Ingestion  Source  Devices Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingestion Device Stats",
+        "tags": [
+          "integrations"
+        ]
+      }
+    },
     "/v1/integrations/{source}/backfill": {
       "get": {
         "operationId": "get_backfill_status_v1_integrations__source__backfill_get",
@@ -8955,6 +9416,8 @@
     },
     "/v1/pairing-tokens": {
       "post": {
+        "deprecated": true,
+        "description": "DEPRECATED. `probe setup` pairs through the device flow's `capture` grant,\nwhich needs no copy-pasted token.\n\nThis still WORKS and is not on a removal schedule. Older plugins and manual\nclients depend on it. The header and the log line below exist so we can see\nwhen real usage has actually stopped -- remove it on evidence, not on a date.",
         "operationId": "mint_pairing_token_v1_pairing_tokens_post",
         "requestBody": {
           "content": {
@@ -8988,7 +9451,7 @@
             "description": "Validation Error"
           }
         },
-        "summary": "Mint Pairing Token",
+        "summary": "DEPRECATED \u2014 superseded by the device-flow `capture` grant",
         "tags": [
           "pairing"
         ]
@@ -9034,6 +9497,24 @@
               ],
               "description": "only projects filed in this workspace",
               "title": "Workspace Id"
+            }
+          },
+          {
+            "description": "exact slug; returns 0 or 1 row (slug is unique per tenant)",
+            "in": "query",
+            "name": "slug",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "exact slug; returns 0 or 1 row (slug is unique per tenant)",
+              "title": "Slug"
             }
           },
           {
@@ -10817,7 +11298,7 @@
     },
     "/v1/runs/{run_ref}/bundle": {
       "get": {
-        "description": "The run-page JSON dump (D9): run + catalog + bounded artifact index +\nspan-type overview + lineage refs. Raw points come from /series/query.\n`run_ref` is a UUID or a petname short_id. 404 on a soft-deleted run;\nchild_run_ids + artifacts exclude deleted rows.",
+        "description": "The run-page JSON dump (D9): run + coding sessions + catalog + bounded\nartifact index + span-type overview + lineage refs. Raw points come from /series/query.\n`run_ref` is a UUID or a petname short_id. 404 on a soft-deleted run;\nchild_run_ids + artifacts exclude deleted rows.",
         "operationId": "get_bundle_v1_runs__run_ref__bundle_get",
         "parameters": [
           {
