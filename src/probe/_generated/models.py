@@ -50,8 +50,10 @@ class AnchorType(StrEnum):
 class ArtifactCreate(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
+    coords: dict[str, Any] | None = Field(None, title='Coords')
     is_reference: bool | None = Field(False, title='Is Reference')
     kind: str | None = Field('file', title='Kind')
+    labels: dict[str, Any] | None = Field(None, title='Labels')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
     size_bytes: int | None = Field(None, title='Size Bytes')
@@ -549,10 +551,12 @@ class IndexCorpus(StrEnum):
 class IngestArtifact(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
+    coords: dict[str, Any] | None = Field(None, title='Coords')
     external_span_key: str | None = Field(None, title='External Span Key')
     external_span_type: str | None = Field(None, title='External Span Type')
     is_reference: bool | None = Field(False, title='Is Reference')
     kind: str | None = Field('file', title='Kind')
+    labels: dict[str, Any] | None = Field(None, title='Labels')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
     size_bytes: int | None = Field(None, title='Size Bytes')
@@ -697,6 +701,8 @@ class MetricPointIn(BaseModel):
     dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     key: str = Field(..., title='Key')
     kind: str | None = Field('model', title='Kind')
+    labels: dict[str, Any] | None = Field(None, title='Labels')
+    span_id: UUID | None = Field(None, title='Span Id')
     step_index: int | None = Field(None, title='Step Index')
     value: float = Field(..., title='Value')
     wall_clock: AwareDatetime | None = Field(None, title='Wall Clock')
@@ -1067,6 +1073,7 @@ class SeriesSelector(BaseModel):
 
 class SpanCreate(BaseModel):
     attributes: dict[str, Any] | None = Field(None, title='Attributes')
+    coords: dict[str, Any] | None = Field(None, title='Coords')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     env_ref: str | None = Field(None, title='Env Ref')
     external_key: str | None = Field(None, title='External Key')

@@ -68,6 +68,11 @@
             ],
             "title": "Content Type"
           },
+          "coords": {
+            "additionalProperties": true,
+            "title": "Coords",
+            "type": "object"
+          },
           "is_reference": {
             "default": false,
             "title": "Is Reference",
@@ -77,6 +82,11 @@
             "default": "file",
             "title": "Kind",
             "type": "string"
+          },
+          "labels": {
+            "additionalProperties": true,
+            "title": "Labels",
+            "type": "object"
           },
           "meta": {
             "additionalProperties": true,
@@ -2629,6 +2639,11 @@
             "default": null,
             "title": "Content Type"
           },
+          "coords": {
+            "additionalProperties": true,
+            "title": "Coords",
+            "type": "object"
+          },
           "external_span_key": {
             "anyOf": [
               {
@@ -2662,6 +2677,11 @@
             "default": "file",
             "title": "Kind",
             "type": "string"
+          },
+          "labels": {
+            "additionalProperties": true,
+            "title": "Labels",
+            "type": "object"
           },
           "meta": {
             "additionalProperties": true,
@@ -3438,6 +3458,23 @@
             "default": "model",
             "title": "Kind",
             "type": "string"
+          },
+          "labels": {
+            "additionalProperties": true,
+            "title": "Labels",
+            "type": "object"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
           },
           "step_index": {
             "anyOf": [
@@ -5787,6 +5824,11 @@
           "attributes": {
             "additionalProperties": true,
             "title": "Attributes",
+            "type": "object"
+          },
+          "coords": {
+            "additionalProperties": true,
+            "title": "Coords",
             "type": "object"
           },
           "ended_at": {
