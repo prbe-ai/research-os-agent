@@ -9,7 +9,6 @@ Every method maps onto a real v4 endpoint (Probe Research v0.4.0.0 ingestion fol
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import difflib
 import os
 import shlex
@@ -17,11 +16,11 @@ import sys
 import threading
 import warnings
 import weakref
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from . import defaults, errors
 from ..models import (
     ArtifactVersionCreate,
     EdgeCreate,
@@ -35,6 +34,7 @@ from ..models import (
     UploadGcRequest,
     UploadRequest,
 )
+from . import defaults, errors
 from .config import Settings, resolve
 from .hashing import fingerprint
 from .spool import Spool
@@ -137,10 +137,10 @@ class Client:
         # Stop signals for every live run-heartbeat thread this client minted.
         # Weak so a finished beat (its Run collected, its thread exited) doesn't
         # accumulate here for the client's whole life.
-        self._run_heartbeat_stops: "weakref.WeakSet[threading.Event]" = weakref.WeakSet()
+        self._run_heartbeat_stops: weakref.WeakSet[threading.Event] = weakref.WeakSet()
 
     # -- lifecycle ----------------------------------------------------------
-    def _register_run_heartbeat(self, stop: "threading.Event") -> None:
+    def _register_run_heartbeat(self, stop: threading.Event) -> None:
         self._run_heartbeat_stops.add(stop)
 
     def close(self) -> None:
@@ -150,7 +150,7 @@ class Client:
             stop.set()
         self.transport.close()
 
-    def __enter__(self) -> "Client":
+    def __enter__(self) -> Client:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -755,7 +755,8 @@ class Client:
         tags: list[str] | None = None,
         metadata: dict | None = None,
         heartbeat: bool = True,
-    ) -> "Run":
+        labeled_point_budget: int | None = None,
+    ) -> Run:
         body: dict[str, Any] = {"name": name, "source": source}
         if external_id is not None:
             body["external_id"] = external_id
@@ -770,6 +771,10 @@ class Client:
             body["tags"] = tags
         if metadata is not None:
             body["metadata"] = metadata
+        # Per-run labeled-point budget (server 0061): a run that will log more
+        # per-sample points than the server default declares its plan up front.
+        if labeled_point_budget is not None:
+            body["labeled_point_budget"] = labeled_point_budget
         data = self.transport.post(f"/v1/experiments/{experiment_id}/runs", body)
         run = Run(self, data)
         # A handle minted here is presumed to live and die with this process, so
@@ -791,7 +796,7 @@ class Client:
         project: str | None = None,
         experiment_name: str | None = None,
         **run_kw,
-    ) -> "Run":
+    ) -> Run:
         """Open a run inside an experiment that ALREADY EXISTS.
 
         This resolves; it does not create. An unknown slug raises
@@ -1403,4 +1408,4 @@ class Client:
 
 
 # Late import to avoid a cycle at module load (Run needs Client, Client returns Run).
-from .run import Run  # noqa: E402
+from .run import Run
