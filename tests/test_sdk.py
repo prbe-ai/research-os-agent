@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 import pytest
 
@@ -66,6 +67,177 @@ def test_log_dimensions_passthrough(client, app):
     assert body["points"][0]["dimensions"] == {"rank": 0}
 
 
+# -- non-numeric values --------------------------------------------------------
+def _attrs(app, run, step=0):
+    return app.steps[run.id][step]["attributes"]
+
+
+def test_mixed_types_in_one_call_split_by_where_they_can_be_stored(client, app):
+    """`metric_points.value` is DOUBLE PRECISION NOT NULL, so this is a schema
+    boundary, not a preference. Numbers plot; everything else lands in that
+    step's record, at the same step index."""
+    run = open_run(client, experiment="e", name="r")
+    run.log({"loss": 0.4, "phase": "eval", "cfg": {"lr": 3e-4}}, step=7)
+
+    points = json.loads(app.requests[-2].content)["points"]
+    assert [(p["key"], p["value"]) for p in points] == [("loss", 0.4)]
+    assert _attrs(app, run, 7) == {"phase": "eval", "cfg": {"lr": 3e-4}}
+
+
+def test_a_string_no_longer_takes_its_numeric_neighbours_down(client, app):
+    """The real bug this fixes. `float()` ran while building MetricBatch — before
+    client.write()'s try/except — so one non-numeric key raised out of the
+    training loop AND discarded every numeric metric in the same call."""
+    run = open_run(client, experiment="e", name="r")
+    run.log({"loss": 0.4, "dockq": 0.8, "note": "converged"}, step=1)
+
+    points = json.loads(app.requests[-2].content)["points"]
+    assert {p["key"] for p in points} == {"loss", "dockq"}
+    assert _attrs(app, run, 1) == {"note": "converged"}
+
+
+def test_types_survive_the_round_trip(client, app):
+    run = open_run(client, experiment="e", name="r")
+    run.log({"s": "text", "d": {"a": 1}, "l": [1, 2], "n": None}, step=0)
+    assert _attrs(app, run) == {"s": "text", "d": {"a": 1}, "l": [1, 2], "n": None}
+
+
+def test_a_numeric_string_stays_a_string(client, app):
+    """`float("0.4")` parses, so coercing would silently make "0.4" and 0.4
+    indistinguishable afterwards. A caller who logged a string meant one."""
+    run = open_run(client, experiment="e", name="r")
+    run.log({"version": "0.4"}, step=0)
+    assert _attrs(app, run) == {"version": "0.4"}
+
+
+def test_bools_stay_plottable(client, app):
+    """W&B charts bools as 0/1, and a chart is what people log them for."""
+    run = open_run(client, experiment="e", name="r")
+    run.log({"converged": True, "diverged": False}, step=0)
+    points = json.loads(app.requests[-1].content)["points"]
+    assert {p["key"]: p["value"] for p in points} == {"converged": 1.0, "diverged": 0.0}
+    assert run.id not in app.steps
+
+
+def test_anything_with_a_float_dunder_is_a_metric(client, app):
+    """numpy scalars and 0-d torch tensors arrive this way and must not be
+    demoted to attributes just because they are not `float`."""
+
+    class Scalar:
+        def __float__(self):
+            return 0.25
+
+    run = open_run(client, experiment="e", name="r")
+    run.log({"loss": Scalar()}, step=0)
+    assert json.loads(app.requests[-1].content)["points"][0]["value"] == 0.25
+
+
+def test_an_unserialisable_value_is_kept_as_repr_not_raised(client, app):
+    """attributes is JSONB, so this would otherwise fail at encode time — inside
+    the loop, past the fail-open boundary. repr loses fidelity, never the loop."""
+    run = open_run(client, experiment="e", name="r")
+    with pytest.warns(UserWarning, match="not JSON-serialisable"):
+        run.log({"seen": {1, 2}}, step=0)
+    assert isinstance(_attrs(app, run)["seen"], str)
+
+
+def test_non_numeric_needs_a_step_and_says_so_when_there_is_none(client, app):
+    """A step record is keyed by step_index. `step=None` explicitly means "no step
+    axis", so there is nowhere to put these — but the numeric ones still land."""
+    run = open_run(client, experiment="e", name="r")
+    with pytest.warns(UserWarning, match="dropped non-numeric"):
+        run.log({"loss": 0.4, "phase": "eval"}, step=None)
+    points = json.loads(app.requests[-1].content)["points"]
+    assert {p["key"] for p in points} == {"loss"}
+    assert app.steps == {}
+
+
+def test_the_return_value_still_reports_the_metric_write(client, app):
+    """connectors/harbor.py keys "confirmed" vs "spooled" off this."""
+    run = open_run(client, experiment="e", name="r")
+    assert run.log({"loss": 0.4, "phase": "eval"}, step=0) is not None
+    # with nothing numeric to write, the step record's result stands in
+    assert run.log({"phase": "eval"}, step=1) is not None
+
+
+# -- auto-increment step -------------------------------------------------------
+def _points(app):
+    return json.loads(app.requests[-1].content)["points"]
+
+
+def test_a_bare_log_auto_increments_the_step(client, app):
+    """The ported W&B loop. `for batch in loader: run.log({"loss": l})` has to
+    produce a curve; without a counter every point arrives with no step at all and
+    lands on the wall-clock axis as an unordered pile."""
+    run = open_run(client, experiment="e", name="r")
+    steps = []
+    for loss in (0.5, 0.4, 0.3):
+        run.log({"loss": loss})
+        steps.append(_points(app)[0]["step_index"])
+    assert steps == [0, 1, 2]
+
+
+def test_every_key_in_one_call_shares_a_step(client, app):
+    run = open_run(client, experiment="e", name="r")
+    run.log({"loss": 0.5, "dockq": 0.7})
+    assert {p["step_index"] for p in _points(app)} == {0}
+    run.log({"loss": 0.4, "dockq": 0.8})
+    assert {p["step_index"] for p in _points(app)} == {1}
+
+
+def test_an_explicit_none_still_means_no_step(client, app):
+    """What the CLI, the Miles exporter and the Harbor importer all pass. Each
+    invocation of `probe log` is its own process, so a per-handle counter would
+    restart at 0 every time — worse than no step. Only an OMITTED step opts in."""
+    run = open_run(client, experiment="e", name="r")
+    run.log({"loss": 0.5}, step=None)
+    assert "step_index" not in _points(app)[0]
+
+
+def test_an_explicit_step_is_used_and_moves_the_counter_past_it(client, app):
+    """Mixing the two forms must not stack a second series on steps the loop
+    already used."""
+    run = open_run(client, experiment="e", name="r")
+    run.log({"loss": 0.5}, step=41)
+    assert _points(app)[0]["step_index"] == 41
+    run.log({"loss": 0.4})
+    assert _points(app)[0]["step_index"] == 42
+
+
+def test_hardware_and_model_counters_are_independent(client, app):
+    """A GPU sampler on its own thread must not shift the loss curve."""
+    run = open_run(client, experiment="e", name="r")
+    run.log({"loss": 0.5})           # model 0
+    run.log_hw({"gpu_temp": 88})     # hardware 0
+    run.log_hw({"gpu_temp": 89})     # hardware 1
+    assert _points(app)[0]["step_index"] == 1
+    run.log({"loss": 0.4})           # model 1, unaffected by the two hw points
+    assert _points(app)[0]["step_index"] == 1
+
+
+def test_concurrent_logging_never_reuses_a_step(client, app):
+    """Logging from several threads is ordinary — a sampler beside a training
+    loop — and two threads reading the counter unguarded would put two different
+    points on one step."""
+    run = open_run(client, experiment="e", name="r")
+    seen: list[int] = []
+    lock = threading.Lock()
+
+    def worker():
+        for _ in range(25):
+            step = run._next_step("model")
+            with lock:
+                seen.append(step)
+
+    threads = [threading.Thread(target=worker) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert sorted(seen) == list(range(100))
+
+
 def test_span_generates_uuid_and_posts(client, app):
     run = open_run(client, experiment="e", name="r")
     span_id = run.span("rollout", name="rollout-0", step_index=1)
@@ -73,6 +245,96 @@ def test_span_generates_uuid_and_posts(client, app):
     body = json.loads(app.requests[-1].content)
     assert body["spans"][0]["id"] == span_id
     assert body["spans"][0]["span_type"] == "rollout"
+
+
+# -- span scopes --------------------------------------------------------------
+def _last_state(app, run, span_id):
+    """The most recent upsert of one span. The fake appends rather than merging,
+    so an upserted span appears once per write."""
+    return [s for s in app.spans[run.id] if s["id"] == span_id][-1]
+
+
+def test_a_span_id_is_still_an_ordinary_string(client, app):
+    """SpanHandle subclasses str so the two-call form keeps working untouched —
+    callers store it, format it, and pass it back as `id=`."""
+    run = open_run(client, experiment="e", name="r")
+    span_id = run.span("rollout", name="rollout-0")
+    assert isinstance(span_id, str)
+    assert f"{span_id}" == str(span_id)
+    assert {span_id: 1}[span_id] == 1
+    run.span("rollout", id=span_id, status="completed", ended_at="2026-07-27T00:00:00Z")
+    assert _last_state(app, run, span_id)["status"] == "completed"
+
+
+def test_a_span_scope_closes_the_span_on_the_way_out(client, app):
+    run = open_run(client, experiment="e", name="r")
+    with run.span("rollout", name="rollout-0") as span:
+        assert _last_state(app, run, span)["status"] == "running"
+    final = _last_state(app, run, span)
+    assert final["status"] == "completed"
+    assert final["ended_at"] is not None
+    assert final["started_at"] is not None
+
+
+def test_a_raising_body_fails_the_span_rather_than_leaving_it_running(client, app):
+    """The reason this exists. Spans have no heartbeat and no server-side reaper,
+    so a span abandoned by a raise stays `running` forever with nothing to correct
+    it. The exception still propagates — the span records the failure, it does not
+    swallow it."""
+    run = open_run(client, experiment="e", name="r")
+    with pytest.raises(ValueError, match="rollout diverged"):
+        with run.span("rollout", name="rollout-0") as span:
+            raise ValueError("rollout diverged")
+    final = _last_state(app, run, span)
+    assert final["status"] == "failed"
+    assert final["ended_at"] is not None
+    assert final["attributes"]["error.type"] == "ValueError"
+    assert final["attributes"]["error.message"] == "rollout diverged"
+
+
+def test_attributes_set_inside_the_block_are_sent_on_close(client, app):
+    run = open_run(client, experiment="e", name="r")
+    with run.span("rollout", name="rollout-0", attributes={"task": "fold"}) as span:
+        span.attributes["reward"] = 0.8
+    final = _last_state(app, run, span)
+    assert final["attributes"] == {"task": "fold", "reward": 0.8}
+
+
+def test_spans_nest_without_threading_the_parent_by_hand(client, app):
+    run = open_run(client, experiment="e", name="r")
+    with run.span("rollout", name="rollout-0") as rollout:
+        with run.span("turn", name="turn-0") as turn:
+            tool = run.span("tool_call", name="search")
+        after_turn = run.span("turn", name="turn-1")
+    detached = run.span("rollout", name="rollout-1")
+
+    assert _last_state(app, run, rollout)["parent_span_id"] is None
+    assert _last_state(app, run, turn)["parent_span_id"] == str(rollout)
+    # a plain (non-scope) span still adopts the enclosing scope
+    assert _last_state(app, run, tool)["parent_span_id"] == str(turn)
+    # ...and the scope is popped on exit, so the next sibling re-parents correctly
+    assert _last_state(app, run, after_turn)["parent_span_id"] == str(rollout)
+    assert _last_state(app, run, detached)["parent_span_id"] is None
+
+
+def test_an_explicit_none_is_honoured_so_replays_are_not_fabricated(client, app):
+    """The ATIF expander and the Harbor importer replay STORED trajectories and
+    pass `started_at=<maybe None>` on purpose — a stored step may have no usable
+    timestamp. Defaulting those to now() would write a fabricated time into a
+    historical record, so only an OMITTED argument gets a default."""
+    run = open_run(client, experiment="e", name="r")
+    replayed = run.span("rollout", name="old", started_at=None, parent_span_id=None)
+    live = run.span("rollout", name="new")
+
+    assert _last_state(app, run, replayed)["started_at"] is None
+    assert _last_state(app, run, live)["started_at"] is not None
+
+
+def test_a_replayed_span_is_not_reparented_by_an_enclosing_scope(client, app):
+    run = open_run(client, experiment="e", name="r")
+    with run.span("rollout", name="rollout-0"):
+        replayed = run.span("turn", name="stored", parent_span_id=None)
+    assert _last_state(app, run, replayed)["parent_span_id"] is None
 
 
 def test_link_writes_real_foreign_keys_column(client, app):
@@ -421,3 +683,82 @@ def test_list_run_artifacts_filters(client, app):
     request = app.requests[-1]
     assert request.url.params["step_from"] == "601"
     assert len(client.list_run_artifacts(run.id)) == 4
+
+
+# -- regressions caught in pre-landing review ---------------------------------
+def test_a_span_id_survives_copy_and_pickle(client, app):
+    """Span ids were plain str before SpanHandle, and distributed training ships
+    them across process boundaries (Ray, multiprocessing, checkpoint state).
+    Reconstruction goes through __new__, which needs a live Run, so a handle has
+    to degrade to its plain id rather than raise."""
+    import copy
+    import pickle
+
+    run = open_run(client, experiment="e", name="r")
+    span_id = run.span("rollout", name="x")
+    assert copy.copy(span_id) == str(span_id)
+    assert copy.deepcopy(span_id) == str(span_id)
+    assert pickle.loads(pickle.dumps(span_id)) == str(span_id)
+    assert type(pickle.loads(pickle.dumps(span_id))) is str
+
+
+def test_the_two_call_close_does_not_rewrite_the_start_time(client, app):
+    """`id=` means upsert, and stamping now() there would move the span's start to
+    its close and collapse the duration to zero. Only a CREATE gets a start time;
+    the close must send none, leaving the stored one alone."""
+    run = open_run(client, experiment="e", name="r")
+    span_id = run.span("rollout", name="x")
+    assert _last_state(app, run, span_id)["started_at"] is not None, "create must stamp"
+
+    run.span("rollout", id=span_id, status="completed", ended_at="2026-07-27T00:00:09Z")
+    closed = _last_state(app, run, span_id)
+    assert closed["status"] == "completed"
+    assert closed["started_at"] is None, "the close fabricated a new start time"
+
+
+def test_the_with_form_still_sends_its_real_start_time(client, app):
+    """The counterpart: __exit__ re-sends the resolved start explicitly, so
+    scoping a span must NOT lose the timestamp the fix stops re-stamping."""
+    run = open_run(client, experiment="e", name="r")
+    with run.span("rollout", name="x") as span:
+        opened = _last_state(app, run, span)["started_at"]
+    closed = _last_state(app, run, span)
+    assert closed["started_at"] == opened
+    assert closed["ended_at"] is not None
+
+
+def test_a_spooled_metric_write_is_not_reported_as_confirmed(client, app):
+    """connectors/harbor.py keys "confirmed" vs "spooled" off this return value,
+    so a step record succeeding must not paper over numbers going to the spool."""
+    run = open_run(client, experiment="e", name="r")
+    app.fail_next_metrics = True
+    assert run.log({"loss": 0.4, "phase": "eval"}, step=0) is None
+
+
+def test_an_empty_log_does_not_burn_a_step(client, app):
+    """`if metrics: run.log(metrics)` guards get written the other way round; an
+    empty call must not shift the auto axis away from the loop index."""
+    run = open_run(client, experiment="e", name="r")
+    assert run.log({}) is None
+    run.log({"loss": 0.5})
+    assert _points(app)[0]["step_index"] == 0
+
+
+def test_non_numeric_hardware_values_do_not_overwrite_the_model_step(client, app):
+    """StepCreate has no `kind` — records are keyed on (run, step_index) alone —
+    so a hardware value at hardware-step 0 would land on the model loop's step 0."""
+    run = open_run(client, experiment="e", name="r")
+    run.log({"loss": 0.5, "phase": "train"})          # model step 0, writes a record
+    with pytest.warns(UserWarning, match="step records are keyed by step index"):
+        run.log_hw({"driver": "535.x"})               # hardware step 0, must NOT merge
+    assert app.steps[run.id][0]["attributes"] == {"phase": "train"}
+
+
+def test_a_span_does_not_adopt_a_parent_from_a_different_run(client, app):
+    """Spans are per-run, so parenting runB's span to runA's would write a
+    dangling FK — a worse record than no parent at all."""
+    run_a = open_run(client, experiment="e", name="a")
+    run_b = open_run(client, experiment="e", name="b")
+    with run_a.span("rollout", name="a-rollout"):
+        stray = run_b.span("turn", name="b-turn")
+    assert _last_state(app, run_b, stray)["parent_span_id"] is None

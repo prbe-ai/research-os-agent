@@ -3,15 +3,17 @@
 ``default_run_name`` remains the default for a run's name: naming a RUN has never
 been the ambiguous part, and a timestamp is a fine answer.
 
-``default_experiment_slug`` and ``auto_hypothesis`` have NO production caller.
-They existed so ``client.run()`` could invent an experiment from ambient context
-— git repo, then running script — and give it a marked ``[auto]`` hypothesis when
-none was supplied. Creation is explicit now: the slug must be named and the
-hypothesis is required at create time, because an experiment named after whatever
-directory you happened to be in, carrying a placeholder that first-write-wins made
-permanent, is a worse record than no record. Both are kept for one release so an
-external caller gets a deprecation rather than an AttributeError; they and their
-private helpers go next release.
+``default_experiment_slug`` is wired into ``client.run()`` again: it derives the
+slug from the git repo, then the running script, so a bare ``client.run()``
+works. What made that dangerous was never the derivation — it was that deriving
+also CREATED the experiment silently. Creating one now requires a hypothesis, so
+a derived slug that does not exist stops with an error instead of filing work
+under whatever directory you happened to be in.
+
+``auto_hypothesis`` and ``AUTO_HYPOTHESIS_PREFIX`` have NO production caller and
+are not coming back: the ``[auto]`` placeholder was first-write-wins, so it
+became permanent unless a human noticed. Kept one release so an external caller
+gets a deprecation rather than an AttributeError; they go next release.
 """
 
 from __future__ import annotations

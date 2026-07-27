@@ -14,14 +14,27 @@ gets made. Record with the surface the run was opened with.
    |---|---|---|
    | metrics | `run.log({"loss": l}, step=i)` | `probe log RUN loss=0.4 --step 100` |
    | per-device / per-actor | `run.log_hw({"gpu_temp": 88}, device=3)` | `probe log RUN gpu_temp=88 --dim device=3` |
-   | structure | `run.span("rollout", ...)`, `run.step(i)` | `probe span add RUN --type rollout` |
+   | structure | `with run.span("rollout", ...) as s:`, `run.step(i)` | `probe span add RUN --type rollout` |
    | outputs | `run.log_artifact("ckpt", path=...)` | `probe artifact add RUN PATH --name ckpt` |
    | notes | `client.notes.add(run.id, "decision", "…")` | `probe note add RUN --kind decision --statement "…"` |
    | external ids | `run.link(wandb_run_id="abc")` | `probe link RUN --set wandb_run_id=abc` |
    | sub-runs | `run.child("fold-2")` | `probe run child RUN --name fold-2` |
 
+   Prefer the `with` form for spans in live code: it takes both timestamps off one
+   clock, nests anything opened inside it, and closes the span as `failed` if the
+   body raises. Spans have no heartbeat and no reaper, so one abandoned by an
+   exception stays `running` forever otherwise.
+
    Only the left column can be called from inside the training loop, so `step=` is a
-   real curve there and a scattering of points anywhere else. Record intent,
+   real curve there and a scattering of points anywhere else. In the SDK, omitting
+   `step=` auto-increments (per metric kind), so a bare `run.log({"loss": l})` in a
+   loop still plots; pass `step=None` when there genuinely is no step and the points
+   belong on the wall-clock axis.
+
+   `run.log()` takes values of any type. Numbers plot; strings, dicts, lists and
+   None are stored on that step's record instead and come back under
+   `view="trajectory"`. So `run.log({"loss": l, "phase": "eval"})` is one call —
+   but a durable claim about the work still belongs in a note, not a metric key. Record intent,
    decisions, observations, failures, results, deviations and next steps as notes
    either way — that is the same record from both surfaces.
 

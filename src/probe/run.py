@@ -1,5 +1,5 @@
 """Compatibility import for ``probe.sdk.run``."""
 
-from .sdk.run import Run
+from .sdk.run import Run, SpanHandle
 
-__all__ = ["Run"]
+__all__ = ["Run", "SpanHandle"]

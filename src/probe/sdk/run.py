@@ -19,6 +19,8 @@ byte uploads and reference artifacts label identically — no gaps flagged.
 
 from __future__ import annotations
 
+import contextvars
+import json
 import os
 import socket
 import subprocess
@@ -50,6 +52,154 @@ if TYPE_CHECKING:
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _as_metric_value(value: Any) -> float | None:
+    """``value`` as a metric point, or None if it belongs in the step record.
+
+    ``metric_points.value`` is ``DOUBLE PRECISION NOT NULL`` (db/experiment/
+    schema.sql), so this is a hard contract boundary, not a preference.
+
+    Strings are excluded deliberately even though ``float("0.4")`` parses: a
+    caller who logged ``"0.4"`` meant the string, and quietly retyping it would
+    make it indistinguishable from the number afterwards. Bools DO become 1/0 —
+    they are plottable, and a chart is what people log them for. Anything with a
+    ``__float__`` (numpy scalars, 0-d torch tensors) coerces for free."""
+    if isinstance(value, (str, bytes, bytearray)):
+        return None
+    if isinstance(value, bool):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _json_safe(key: str, value: Any) -> Any:
+    """``value`` if it survives a JSON round trip, else its repr.
+
+    ``spans.attributes`` is JSONB, so an unserialisable object would fail at
+    encode time — INSIDE the training loop, past the fail-open boundary. Keeping
+    the repr loses fidelity but never the loop, and says so."""
+    try:
+        json.dumps(value)
+        return value
+    except (TypeError, ValueError):
+        warnings.warn(
+            f"metric {key!r} is not JSON-serialisable ({type(value).__name__}); "
+            "recording repr() instead.",
+            stacklevel=3,
+        )
+        return repr(value)
+
+
+#: "The caller did not pass this at all", as distinct from an explicit ``None``.
+#: Load-bearing for spans: the ATIF expander and the Harbor trial importer replay
+#: STORED trajectories and pass ``started_at=<maybe None>`` deliberately, because a
+#: stored step may have no usable timestamp. Defaulting those to ``now()`` would
+#: write a fabricated time into a historical record. Omitting the argument — which
+#: only live code does — is what opts into a default.
+_UNSET: Any = object()
+
+#: The span currently entered via ``with run.span(...)``, or None. A contextvar
+#: rather than an attribute on Run: concurrent rollouts in threads or asyncio
+#: tasks each get their own view, so they never adopt each other as parents. This
+#: is span NESTING, distinct from unit_context's coords/labels contextvar.
+_current_span: contextvars.ContextVar["SpanHandle | None"] = contextvars.ContextVar(
+    "probe_current_span", default=None
+)
+
+
+class SpanHandle(str):
+    """A span id that is also a context manager.
+
+    Subclasses ``str`` because a span's handle IS its id: existing callers do
+    ``span_id = run.span(...)`` and pass that string onward, so scope behaviour
+    has to arrive without changing what :meth:`Run.span` returns.
+
+        with run.span("rollout", name="rollout-0") as span:
+            span.attributes["reward"] = reward
+
+    Leaving the block upserts the same span id with ``ended_at``, a terminal
+    status, and whatever accumulated in ``attributes``. An exception sets status
+    ``failed`` and records its type and message.
+
+    That last part is the reason this exists. A span opened with the two-call
+    form and abandoned by a raise stays ``running`` forever: runs have a
+    heartbeat and a server-side reaper, spans have neither, so nothing ever
+    corrects it. The block closes the span on both paths.
+    """
+
+    def __new__(
+        cls,
+        span_id: str,
+        *,
+        run: "Run",
+        span_type: str,
+        fields: dict[str, Any],
+        attributes: dict[str, Any],
+    ) -> "SpanHandle":
+        # str is variable-length, so no __slots__ here — these live in __dict__.
+        self = super().__new__(cls, span_id)
+        self._run = run
+        self._span_type = span_type
+        self._fields = fields
+        self.attributes = attributes
+        self._token: contextvars.Token | None = None
+        return self
+
+    # A span id used to be a plain ``str``, and plain strings survive being
+    # copied, pickled, and shipped across a process boundary — which distributed
+    # training does routinely (Ray, multiprocessing, a checkpoint state dict).
+    # Reconstructing goes through ``__new__``, which needs a live Run and a
+    # thread lock, so without these a copy raises. Degrade to the plain id: the
+    # scope behaviour is meaningless in another process anyway.
+    def __reduce__(self):
+        return (str, (str(self),))
+
+    def __copy__(self) -> str:
+        return str(self)
+
+    def __deepcopy__(self, memo: dict) -> str:
+        return str(self)
+
+    def __enter__(self) -> "SpanHandle":
+        # No write here: `span()` already upserted the row as `running`, so the
+        # span is visible for the whole time the body runs rather than appearing
+        # only once it closes.
+        self._token = _current_span.set(self)
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        if self._token is not None:
+            _current_span.reset(self._token)
+            self._token = None
+        if exc_type is not None:
+            # setdefault: an explicit attribute the body already set about the
+            # failure is better information than the exception repr.
+            self.attributes.setdefault("error.type", exc_type.__name__)
+            message = str(exc)
+            if message:
+                self.attributes.setdefault("error.message", message)
+        # `_fields` carries the RESOLVED parent, start time and coords, so this
+        # upsert re-sends them verbatim instead of re-deriving them from a
+        # contextvar that has already been reset (which would re-parent to the
+        # grandparent). Re-sending an identical coords map is accepted — the
+        # server's set-once rule 409s only on a DIFFERENT one.
+        #
+        # `attributes` is re-sent, not the copy span() sanitised — the body has
+        # been assigning into it, so anything it added is unvetted. span() runs
+        # it through _json_safe again on the way.
+        self._run.span(
+            self._span_type,
+            id=str(self),
+            status="failed" if exc_type is not None else "completed",
+            ended_at=_now(),
+            attributes=self.attributes,
+            **self._fields,
+        )
+        # Returns None, so the exception keeps propagating. The span records that
+        # it failed; it does not swallow the failure.
 
 
 #: Statuses after which a run can never beat again. Mirrors the server's CHECK
@@ -101,6 +251,26 @@ class Run:
         self._hb_stop: threading.Event | None = None
         self._hb_thread: threading.Thread | None = None
         self._hb_finalizer: weakref.finalize | None = None
+        # Auto-step counters, per metric kind. Guarded because logging from
+        # several threads is ordinary (a sampler beside a training loop), and two
+        # threads reading the same counter would put two points on one step.
+        self._steps: dict[str, int] = {}
+        self._steps_lock = threading.Lock()
+
+    def _next_step(self, kind: str) -> int:
+        with self._steps_lock:
+            step = self._steps.get(kind, 0)
+            self._steps[kind] = step + 1
+            return step
+
+    def _note_step(self, kind: str, step: int) -> None:
+        """Move the auto counter past an explicitly-given step.
+
+        Without this, mixing ``log(step=i)`` with a bare ``log()`` would restart
+        the auto sequence at 0 and stack a second set of points on steps the loop
+        already used."""
+        with self._steps_lock:
+            self._steps[kind] = max(self._steps.get(kind, 0), step + 1)
 
     # -- identity -----------------------------------------------------------
     @property
@@ -179,9 +349,9 @@ class Run:
     # -- metrics ------------------------------------------------------------
     def log(
         self,
-        metrics: dict[str, float],
+        metrics: dict[str, Any],
         *,
-        step: int | None = None,
+        step: int | None = _UNSET,
         kind: str = "model",
         wall_clock: str | None = None,
         dimensions: dict[str, Any] | None = None,
@@ -207,38 +377,96 @@ class Run:
         resolves to the declared one, else mean; conflicting declarations 422).
         The producer knows whether a count sums or a loss averages; declaring it
         at the write is what saves every reader from guessing."""
+        numeric: dict[str, float] = {}
+        other: dict[str, Any] = {}
+        for key, value in metrics.items():
+            as_number = _as_metric_value(value)
+            if as_number is None:
+                other[key] = _json_safe(key, value)
+            else:
+                numeric[key] = as_number
+
+        # Split BEFORE drawing a step, so a call with nothing to write does not
+        # consume one. `if metrics: run.log(metrics)` guards get written the
+        # other way round, and burning an index there would drift the auto axis
+        # away from the loop index — the exact failure auto-increment prevents.
+        if not numeric and not other:
+            return None
+
+        if step is _UNSET:
+            step = self._next_step(kind)
+        elif step is not None:
+            step = int(step)
+            self._note_step(kind, step)
+
         dims, labs = unit_context.merged(dimensions, labels)
-        batch = MetricBatch(
-            points=[
-                MetricPointIn(
-                    key=key,
-                    kind=kind,
-                    value=float(value),
-                    step_index=step,
-                    wall_clock=wall_clock,
-                    dimensions=dims,
-                    labels=labs or None,
-                    span_id=span_id,
-                )
-                for key, value in metrics.items()
-            ]
-        )
-        body = batch.model_dump(mode="json", exclude_none=True)
+        result = None
+        if not numeric:
+            body = None
+        else:
+            batch = MetricBatch(
+                points=[
+                    MetricPointIn(
+                        key=key,
+                        kind=kind,
+                        value=value,
+                        step_index=step,
+                        wall_clock=wall_clock,
+                        dimensions=dims,
+                        labels=labs or None,
+                        span_id=span_id,
+                    )
+                    for key, value in numeric.items()
+                ]
+            )
+            body = batch.model_dump(mode="json", exclude_none=True)
         # The generated MetricPointIn predates the 0062 `agg` field, so the
         # declaration rides in after validation; None stays off the wire so a
         # declaration-less point is byte-identical to what it always was.
-        if agg is not None:
-            for point in body["points"]:
-                point["agg"] = agg
-        return self._client.write(
-            "POST", f"/v1/runs/{self.id}/metrics", body, strict=strict
-        )
+        if body is not None:
+            if agg is not None:
+                for point in body["points"]:
+                    point["agg"] = agg
+            # Returned even when a step record is also written: callers key off
+            # this to tell "confirmed" from "spooled" (connectors/harbor.py).
+            result = self._client.write(
+                "POST", f"/v1/runs/{self.id}/metrics", body, strict=strict
+            )
+
+        if other:
+            if step is None:
+                warnings.warn(
+                    f"dropped non-numeric {sorted(other)} — a step record needs a step "
+                    "index, and step=None was passed explicitly to mean no step axis. "
+                    "Omit step= to auto-increment, or pass one.",
+                    stacklevel=2,
+                )
+            elif kind != "model":
+                # StepCreate has no `kind` — a step record is keyed on
+                # (run, step_index) alone. So a hardware value at hardware-step 3
+                # would merge into the model loop's record at step 3. Numeric
+                # hardware metrics are unaffected: those are metric points, where
+                # kind IS part of the series identity.
+                warnings.warn(
+                    f"dropped non-numeric {sorted(other)} from a {kind!r} log — step "
+                    "records are keyed by step index alone, with no kind, so these "
+                    "would overwrite the model loop's record at the same step.",
+                    stacklevel=2,
+                )
+            else:
+                step_result = self.step(step, attributes=other, strict=strict)
+                # Only stand in when there was NOTHING numeric to write. A
+                # successful step record must never mask a metrics write that
+                # spooled: harbor.py reads None as "spooled".
+                if not numeric:
+                    result = step_result
+        return result
 
     def log_hw(
         self,
-        metrics: dict[str, float],
+        metrics: dict[str, Any],
         *,
-        step: int | None = None,
+        step: int | None = _UNSET,
         wall_clock: str | None = None,
         strict: bool | None = None,
         **dims: Any,
@@ -278,19 +506,19 @@ class Run:
         span_type: str,
         *,
         id: str | None = None,
-        parent_span_id: str | None = None,
+        parent_span_id: str | None = _UNSET,
         name: str | None = None,
         step_index: int | None = None,
         external_key: str | None = None,
         provider: str | None = None,
         status: str = "running",
-        started_at: str | None = None,
+        started_at: str | None = _UNSET,
         ended_at: str | None = None,
         attributes: dict | None = None,
         summary: dict | None = None,
         coords: dict[str, Any] | None = None,
         strict: bool | None = None,
-    ) -> str:
+    ) -> "SpanHandle":
         """Upsert one span (client-generated UUID). Returns the span id.
 
         ``coords`` is the span's below-run coordinate — the same bounded map
@@ -302,6 +530,30 @@ class Run:
         keeps the existing coordinate, and a different one is a 409."""
         span_id = id or str(uuid4())
         UUID(span_id)  # validate shape early
+        if parent_span_id is _UNSET:
+            enclosing = _current_span.get()
+            # Only adopt a parent from the SAME run. `with runA.span(...):` around
+            # a `runB.span(...)` would otherwise write runB a parent_span_id that
+            # does not exist in runB — spans are per-run, and a dangling FK is a
+            # worse record than no parent.
+            parent_span_id = (
+                str(enclosing)
+                if enclosing is not None and enclosing._run.id == self.id
+                else None
+            )
+        if started_at is _UNSET:
+            # Only when CREATING. An explicit `id=` means this is an upsert of an
+            # existing span — the documented two-call close does exactly that —
+            # and stamping now() there would rewrite the start time to the close
+            # time and collapse the span's duration to zero.
+            started_at = _now() if id is None else None
+        # Through _json_safe for the same reason log() is: `attributes` is JSONB,
+        # so an unserialisable value blows up in model_dump() BEFORE the strict/
+        # spool boundary — inside the training loop. Worse in the `with` form,
+        # where the raise happens during unwinding and displaces the body's own
+        # exception as the visible failure.
+        attrs = {key: _json_safe(key, value) for key, value in (attributes or {}).items()}
+        resolved_coords = unit_context.merged_coords(coords)
         span = SpanCreate(
             id=span_id,
             span_type=span_type,
@@ -313,20 +565,46 @@ class Run:
             status=status,
             started_at=started_at,
             ended_at=ended_at,
-            attributes=attributes or {},
+            attributes=attrs,
             summary=summary or {},
             # Always a dict, never None: the span body serializes without
             # exclude_none, and the server's coords field is non-nullable with
             # {} meaning "no coordinate stated" (keeps any existing one).
-            coords=unit_context.merged_coords(coords),
+            coords=resolved_coords,
         )
         body = SpanBatch(spans=[span]).model_dump(mode="json")
         self._client.write("POST", f"/v1/runs/{self.id}/spans", body, strict=strict)
-        return span_id
+        return SpanHandle(
+            span_id,
+            run=self,
+            span_type=span_type,
+            fields={
+                "parent_span_id": parent_span_id,
+                "name": name,
+                "step_index": step_index,
+                "external_key": external_key,
+                "provider": provider,
+                "started_at": started_at,
+                "summary": summary,
+                # The RESOLVED coordinate, so the close re-sends the same map the
+                # open did. Identical coords are accepted; the server's set-once
+                # rule 409s only on a different one.
+                "coords": resolved_coords,
+                "strict": strict,
+            },
+            attributes=attrs,
+        )
 
-    def step(self, step_index: int, *, name: str | None = None, **kw):
+    def step(self, step_index: int, *, name: str | None = None, strict: bool | None = None, **kw):
+        """Upsert the step record. The per-step home for anything that is not a
+        number, which is what :meth:`log` routes non-numeric values into.
+
+        ``strict`` is forwarded so this obeys fail-open like every other write —
+        it used to swallow the argument and always take the client default."""
         body = {"step_index": step_index, "name": name, **kw}
-        return self._client.write("POST", f"/v1/runs/{self.id}/steps", body)
+        return self._client.write(
+            "POST", f"/v1/runs/{self.id}/steps", body, strict=strict
+        )
 
     # -- artifacts ----------------------------------------------------------
     def log_artifact(
