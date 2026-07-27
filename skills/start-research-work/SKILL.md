@@ -1,6 +1,6 @@
 ---
 name: start-research-work
-description: Start tracked research — pick the project and experiment, then open the run: SDK in-script, CLI from a shell. Use before any training, evaluation, sweep, docking, scoring, or simulation. Not for edits, installs, or unit tests.
+description: Start tracked research — pick or create the project and experiment, then open the run. Use before any training, evaluation, sweep, docking, scoring, or simulation. Not for edits, installs, or unit tests.
 ---
 
 # Start research work
@@ -48,12 +48,8 @@ decides what the run can ever record. Both are expensive to reverse afterwards.
    heartbeat and stays open until `probe run end`. You can `probe log` before, after
    and around the script, but never from inside its loop.
 
-   **Step-level curves require the SDK.** From a shell you can only record what is
-   visible outside the process: a final eval, a checkpoint score, numbers scraped from
-   stdout. A per-step loss curve exists only inside the training loop, and only
-   `run.log(..., step=...)` called there records it. If the work needs a curve and the
-   script is editable, add those SDK lines to it instead of accepting the coarse
-   shape. If it genuinely is not editable, a small Python wrapper calling
+   **Step-level curves require the SDK**, so if the work needs one, make the script
+   editable. When it genuinely is not, a small Python wrapper calling
    `run.execute([...])` still gets you the run, the snapshot, a process span and the
    real exit status.
 
