@@ -13,6 +13,7 @@ from probe import cli
 from probe.connectors.harbor import stage_trial_export
 from probe.connectors.harbor_export import consume_export_request, drain_export_requests
 from tests.conftest import make_client
+from tests.conftest import open_run
 
 
 def _write_export(root: Path, run_id: str | None, *, bad_hash: bool = False) -> Path:
@@ -116,7 +117,7 @@ def _write_native_trial(root: Path) -> Path:
 
 
 def test_sdk_stages_and_owns_the_export_contract(client, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     source = _write_native_trial(tmp_path / "harbor" / "trial")
 
     exported = stage_trial_export(
@@ -216,7 +217,7 @@ def test_sdk_export_can_be_bound_to_a_run_after_offline_staging(client, tmp_path
     )
     assert exported.descriptor["target"]["run_id"] is None
 
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     completed = consume_export_request(client, exported.request_path, run_id=run.id)
 
     assert completed["status"] == "completed"
@@ -226,7 +227,7 @@ def test_sdk_export_can_be_bound_to_a_run_after_offline_staging(client, tmp_path
 
 
 def test_consume_export_request_verifies_and_publishes_raw_trial(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     request = _write_export(tmp_path / "capture" / "trial-1", run.id)
 
     result = consume_export_request(client, request)
@@ -262,7 +263,7 @@ def test_consume_export_request_verifies_and_publishes_raw_trial(client, app, tm
 def test_bad_declared_hash_fails_before_upload_and_preserves_bundle(
     client, app, tmp_path
 ):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     request = _write_export(tmp_path / "capture" / "trial-bad", run.id, bad_hash=True)
 
     with pytest.raises(Exception, match="durable trial collection is partial"):
@@ -278,7 +279,7 @@ def test_bad_declared_hash_fails_before_upload_and_preserves_bundle(
 
 
 def test_drain_continues_after_one_failed_request(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     _write_export(tmp_path / "good", run.id)
     _write_export(tmp_path / "bad", run.id, bad_hash=True)
 
@@ -291,7 +292,7 @@ def test_drain_continues_after_one_failed_request(client, app, tmp_path):
 def test_later_resolved_run_id_repairs_and_persists_offline_descriptor(
     client, tmp_path
 ):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     request = _write_export(tmp_path / "offline", None)
 
     result = consume_export_request(client, request, run_id=run.id)
@@ -303,8 +304,8 @@ def test_later_resolved_run_id_repairs_and_persists_offline_descriptor(
 
 
 def test_later_resolved_run_id_cannot_override_existing_target(client, tmp_path):
-    first = client.run(experiment="e", hypothesis="h", name="first")
-    second = client.run(experiment="e", hypothesis="h", name="second")
+    first = open_run(client, experiment="e", name="first")
+    second = open_run(client, experiment="e", name="second")
     request = _write_export(tmp_path / "mismatch", first.id)
 
     with pytest.raises(Exception, match="disagrees with descriptor run"):
@@ -313,7 +314,7 @@ def test_later_resolved_run_id_cannot_override_existing_target(client, tmp_path)
 
 def test_cli_export_is_a_non_python_consumer(app, tmp_path, monkeypatch, capsys):
     client = make_client(app, tmp_spool=tmp_path / "spool")
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     request = _write_export(tmp_path / "capture" / "trial-cli", run.id)
 
     monkeypatch.setattr(
@@ -329,7 +330,7 @@ def test_cli_export_is_a_non_python_consumer(app, tmp_path, monkeypatch, capsys)
 
 def test_cli_watch_once_drains_new_requests(app, tmp_path, monkeypatch, capsys):
     client = make_client(app, tmp_spool=tmp_path / "spool")
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     request = _write_export(tmp_path / "captures" / "trial-watch", None)
 
     monkeypatch.setattr(

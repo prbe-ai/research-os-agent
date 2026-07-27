@@ -148,6 +148,21 @@ class FakeApp:
             "upload_headers": getattr(self, "upload_headers", {}),
         })
 
+    def seed_experiment(self, slug: str, *, project_id: str | None = None) -> dict:
+        """Put an experiment straight into the fake, no HTTP.
+
+        `client.run()` resolves its parents instead of creating them, so tests
+        that are about something ELSE (auth, spans, artifacts) need one to exist
+        without going through the create path or its preconditions."""
+        eid = str(uuid.uuid4())
+        row = {
+            "id": eid, "customer_id": "lab-42", "slug": slug, "name": slug,
+            "hypothesis": "h", "project_id": project_id,
+            "created_at": _T0, "archived_at": None,
+        }
+        self.experiments[eid] = row
+        return row
+
     def __init__(self):
         self.requests: list[httpx.Request] = []
         self.runs: dict[str, dict] = {}
@@ -313,6 +328,11 @@ class FakeApp:
             wanted = request.url.params.get("workspace_id")
             if wanted:
                 rows = [r for r in rows if r.get("workspace_id") == wanted]
+            # Exact slug lookup, mirroring the engine: this is what lets a client
+            # RESOLVE a slug without being able to create one.
+            slug = request.url.params.get("slug")
+            if slug:
+                rows = [r for r in rows if r.get("slug") == slug]
             if request.url.params.get("include") != "archived":
                 rows = [r for r in rows if r.get("archived_at") is None]
             return httpx.Response(200, json=rows)
@@ -426,6 +446,10 @@ class FakeApp:
             project_id = request.url.params.get("project_id")
             if project_id:
                 rows = [row for row in rows if row.get("project_id") == project_id]
+            # Exact slug lookup, mirroring the engine (see the projects handler).
+            slug = request.url.params.get("slug")
+            if slug:
+                rows = [row for row in rows if row.get("slug") == slug]
             return httpx.Response(200, json=rows)
 
         if path == "/v1/runs" and method == "GET":
@@ -1045,3 +1069,20 @@ def app() -> FakeApp:
 @pytest.fixture
 def client(app: FakeApp, tmp_path) -> Client:
     return make_client(app, tmp_spool=tmp_path / "spool")
+
+
+def open_run(client: Client, *, experiment: str, name: str | None = None, **run_kw):
+    """Create the experiment, then open a run in it.
+
+    `client.run()` no longer creates its parents — that get-or-create is exactly
+    what made a typo'd slug mint a second identity instead of erroring. Tests
+    ABOUT identity resolution call create_experiment / run directly and assert on
+    the failure; this helper is for the many tests that only need *a run to
+    exist* and do not care how it got there."""
+    from probe import errors as _errors
+
+    try:
+        client.create_experiment(experiment, experiment, "h")
+    except _errors.ConflictError:
+        pass
+    return client.run(experiment=experiment, name=name, **run_kw)

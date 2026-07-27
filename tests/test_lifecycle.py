@@ -14,6 +14,7 @@ import typer
 
 from probe import cli, errors
 from tests.conftest import make_client
+from tests.conftest import open_run
 
 
 @pytest.fixture
@@ -22,6 +23,8 @@ def wired(app, tmp_path, monkeypatch):
         return make_client(app, tmp_spool=tmp_path / "spool")
 
     monkeypatch.setattr(cli, "Client", factory)
+    # `run start` resolves its experiment now instead of creating it.
+    app.seed_experiment("e")
     return app
 
 
@@ -110,7 +113,7 @@ def test_token_create_shows_the_secret_even_if_name_and_id_are_missing(wired, ca
 def test_group_create_then_run_start_can_reference_it(wired, capsys):
     """The dead-end this closes: create_run accepted a group_id the client had no
     way to obtain, because group creation was unreachable."""
-    cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r1"])
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
     run_id = capsys.readouterr().out.strip()
     experiment_id = wired.runs[run_id]["experiment_id"]
 
@@ -121,7 +124,7 @@ def test_group_create_then_run_start_can_reference_it(wired, capsys):
     assert group["kind"] == "sweep"
     assert group["spec"] == {"lr": [0.1, 0.01]}
 
-    rc = cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r2",
+    rc = cli.main(["run", "start", "--experiment", "e", "--name", "r2",
                    "--group", group["id"]])
     assert rc == 0
     grouped = capsys.readouterr().out.strip()
@@ -130,14 +133,14 @@ def test_group_create_then_run_start_can_reference_it(wired, capsys):
 
 def test_group_name_conflict_raises(client, app):
     client.fail_open = False
-    exp = client.ensure_experiment("e", "E", "h")
+    exp = client.create_experiment("e", "E", "h")
     client.create_group(exp["id"], "dupe")
     with pytest.raises(errors.ConflictError):
         client.create_group(exp["id"], "dupe")
 
 
 def test_update_group_is_field_replace(client, app):
-    exp = client.ensure_experiment("e", "E", "h")
+    exp = client.create_experiment("e", "E", "h")
     group = client.create_group(exp["id"], "sweep-1", spec={"lr": [0.1]})
     updated = client.update_group(group["id"], name="renamed")
     assert updated["name"] == "renamed"
@@ -153,7 +156,7 @@ def test_list_and_get_group_read_back(client, app):
     """list_groups/get_group had only reachability coverage — prove the calls are
     shaped right and the response reads back."""
     client.fail_open = False
-    exp = client.ensure_experiment("e", "E", "h")
+    exp = client.create_experiment("e", "E", "h")
     created = client.create_group(exp["id"], "sweep-x", spec={"lr": [0.1]})
     assert [g["id"] for g in client.list_groups(exp["id"])] == [created["id"]]
     fetched = client.get_group(created["id"])
@@ -164,7 +167,7 @@ def test_list_and_get_group_read_back(client, app):
 
 # -- lifecycle --------------------------------------------------------------
 def test_experiment_archive_is_idempotent_then_restores(client, app):
-    exp = client.ensure_experiment("e", "E", "h")
+    exp = client.create_experiment("e", "E", "h")
     first = client.archive_experiment(exp["id"])
     assert first["archived_at"]
     again = client.archive_experiment(exp["id"])
@@ -173,7 +176,7 @@ def test_experiment_archive_is_idempotent_then_restores(client, app):
 
 
 def test_run_delete_then_restore(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     assert client.delete_run(run.id)["deleted_at"]
     with pytest.raises(errors.NotFoundError):
         client.delete_run(run.id)  # already deleted
@@ -196,7 +199,7 @@ def test_gc_runs_rejects_an_empty_id_list(client, app):
 
 
 def test_gc_runs_purges_by_id(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     client.delete_run(run.id)
     assert client.gc_runs(run_ids=[run.id])["purged"] == 1
     assert run.id not in app.runs
@@ -204,13 +207,13 @@ def test_gc_runs_purges_by_id(client, app):
 
 def test_gc_runs_never_purges_a_live_run(client, app):
     """gc only ever reaps soft-deleted runs; naming a live one purges nothing."""
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     assert client.gc_runs(run_ids=[run.id])["purged"] == 0
     assert run.id in app.runs
 
 
 def test_gc_runs_honors_the_older_than_cutoff(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     client.delete_run(run.id)  # fake stamps deleted_at = 2026-07-15
     assert client.gc_runs(older_than="2026-01-01T00:00:00Z")["purged"] == 0
     assert client.gc_runs(older_than="2026-08-01T00:00:00Z")["purged"] == 1
@@ -241,7 +244,7 @@ def test_run_gc_cli_rejects_both_selectors(wired):
 
 
 def test_delete_artifact(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     run.log_artifact("out", uri="s3://b/k")
     artifact_id = app.artifacts[run.id][0]["id"]
     client.delete_artifact(artifact_id)
@@ -264,7 +267,7 @@ def test_delete_tolerates_a_non_json_2xx_body(client, app):
 
 
 def test_gc_uploads_only_sweeps_pending(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     blob = tmp_path / "w.bin"
     blob.write_bytes(b"bytes")
     run.log_artifact("confirmed", path=str(blob), strict=True)  # presign->PUT->confirm
@@ -278,7 +281,7 @@ def test_gc_uploads_only_sweeps_pending(client, app, tmp_path):
 
 
 def test_gc_uploads_honors_the_older_than_cutoff(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     app.artifacts[run.id] = [
         {"id": "a-recent", "status": "pending", "created_at": "2026-07-14T00:00:00Z"}
     ]
@@ -288,7 +291,7 @@ def test_gc_uploads_honors_the_older_than_cutoff(client, app):
 
 # -- reads ------------------------------------------------------------------
 def test_run_series_and_metrics_read_back(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     app.series[run.id] = [{"key": "loss", "kind": "model", "last_value": 0.1}]
     app.metric_points[run.id] = [
         {"key": "loss", "value": 0.5, "step_index": 1},
@@ -299,7 +302,7 @@ def test_run_series_and_metrics_read_back(client, app):
 
 
 def test_run_spans_and_get_span(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     app.spans[run.id] = [
         {"id": "s-1", "span_type": "rollout", "name": "a"},
         {"id": "s-2", "span_type": "eval", "name": "b"},
@@ -310,7 +313,7 @@ def test_run_spans_and_get_span(client, app):
 
 def test_experiment_edges_are_scoped_to_the_experiment(client, app):
     client.fail_open = False
-    mine = client.run(experiment="e", hypothesis="h", name="r")
+    mine = open_run(client, experiment="e", name="r")
     client.add_edge(
         source_type="run", source_id=mine.id, relation="produces",
         target_type="artifact", target_id=str(uuid.uuid4()),

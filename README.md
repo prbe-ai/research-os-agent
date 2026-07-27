@@ -277,7 +277,7 @@ Two skills, split by moment rather than by entity — `probe run start` creates 
 project, experiment and run in one call, so those are not separate workflows.
 
 - `start-research-work` covers that call: orient against what already exists and
-  what is already running, pick or create the identities explicitly, resolve assets
+  what is already running, create the project and experiment explicitly, resolve assets
   before creating them, and snapshot code + env before launch.
 - `track-research-work` covers everything after the run exists: metrics, spans,
   artifacts, notes, version pinning, reading back what actually landed, and closing

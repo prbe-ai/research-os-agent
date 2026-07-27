@@ -20,12 +20,17 @@ def wired(app, tmp_path, monkeypatch):
         return make_client(app, tmp_spool=tmp_path / "spool")
 
     monkeypatch.setattr(cli, "Client", factory)
+    # `run start` resolves its experiment instead of creating it, so the smoke
+    # tests below need one to exist. Seeding it through the CLI rather than the
+    # fake's dict keeps the precondition honest — and exercises `experiment
+    # create`, which is the command that replaced the implicit path.
+    cli.main(["experiment", "create", "e", "--hypothesis", "h"])
     return app
 
 
 def test_run_start_prints_id(wired, capsys):
     rc = cli.main(
-        ["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r1"]
+        ["run", "start", "--experiment", "e", "--name", "r1"]
     )
     assert rc == 0
     out = capsys.readouterr().out.strip()
@@ -34,7 +39,7 @@ def test_run_start_prints_id(wired, capsys):
 
 def test_log_command(wired, capsys):
     # make a run first
-    cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r1"])
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
     run_id = capsys.readouterr().out.strip()
     rc = cli.main(["log", run_id, "loss=0.42", "acc=0.9", "--step", "3"])
     assert rc == 0
@@ -44,7 +49,7 @@ def test_log_command(wired, capsys):
 
 
 def test_link_command(wired, capsys):
-    cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r1"])
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
     run_id = capsys.readouterr().out.strip()
     rc = cli.main(["link", run_id, "--set", "wandb_run_id=abc", "--set", "gpu_job=rp-1"])
     assert rc == 0
@@ -55,7 +60,7 @@ def test_link_command(wired, capsys):
 
 
 def test_child_command(wired, capsys):
-    cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r1"])
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
     parent = capsys.readouterr().out.strip()
     rc = cli.main(["run", "child", parent, "--name", "step-1", "--relation", "resume"])
     assert rc == 0
@@ -65,7 +70,7 @@ def test_child_command(wired, capsys):
 
 
 def test_artifact_add_forwards_span_content_type_and_meta(wired, capsys, tmp_path):
-    cli.main(["run", "start", "--experiment", "e", "--hypothesis", "h", "--name", "r1"])
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
     run_id = capsys.readouterr().out.strip()
     artifact = tmp_path / "trace.jsonl"
     artifact.write_text("{}\n")
@@ -108,6 +113,7 @@ def test_global_spool_dir_reaches_the_sdk(app, tmp_path, monkeypatch, capsys):
         return make_client(app, tmp_spool=tmp_path / "test-spool")
 
     monkeypatch.setattr(cli, "Client", factory)
+    app.seed_experiment("e")
     durable = tmp_path / "shared-pvc" / "spool"
     assert cli.main(
         [
@@ -117,8 +123,6 @@ def test_global_spool_dir_reaches_the_sdk(app, tmp_path, monkeypatch, capsys):
             "start",
             "--experiment",
             "e",
-            "--hypothesis",
-            "h",
             "--name",
             "r1",
         ]

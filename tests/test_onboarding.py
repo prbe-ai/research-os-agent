@@ -1,4 +1,4 @@
-"""First-run onboarding: lazy device auth, contextual defaults, [auto] hypothesis."""
+"""First-run onboarding: lazy device auth, contextual defaults, explicit creation."""
 
 from __future__ import annotations
 
@@ -6,9 +6,10 @@ import subprocess
 
 import pytest
 
-from probe import cli
+from probe import cli, errors
 from probe.sdk import defaults
 from tests.conftest import make_client
+from tests.conftest import open_run
 
 
 # -- defaults derivation ------------------------------------------------------
@@ -44,27 +45,44 @@ def test_auto_hypothesis_is_marked_and_contextual(tmp_path, monkeypatch):
 
 
 # -- SDK: run() defaults + experiment patching --------------------------------
-def test_run_with_no_identity_args_uses_defaults(app, client, monkeypatch):
+def test_run_with_no_experiment_refuses_rather_than_inventing_one(app, client, monkeypatch):
+    """The context fallback is gone, and its absence has to be LOUD.
+
+    It used to derive the slug from the git repo or script name and create it, so
+    running from the wrong directory silently filed work under a new experiment
+    named after that directory. Nothing failed; the record was just wrong."""
     monkeypatch.setattr(defaults, "default_experiment_slug", lambda cwd=None: "ctx-slug")
-    monkeypatch.setattr(defaults, "default_run_name", lambda now=None: "run-x")
-    run = client.run()
-    assert run.name == "run-x"
-    (experiment,) = app.experiments.values()
-    assert experiment["slug"] == "ctx-slug"
-    assert experiment["hypothesis"].startswith(defaults.AUTO_HYPOTHESIS_PREFIX)
+    with pytest.raises(errors.ValidationError, match="needs an experiment slug"):
+        client.run()
+    assert app.experiments == {}
 
 
-def test_explicit_hypothesis_is_never_replaced(app, client):
-    client.run(experiment="e1", hypothesis="temp 0.7 wins", name="r1")
+def test_run_names_near_misses_so_a_typo_is_obvious(app, client):
+    """A mistyped slug is by definition close to a real one; this is the whole
+    reason resolution beats get-or-create."""
+    client.create_experiment("dockq-sweep", "DockQ", "temp 0.7 wins")
+    with pytest.raises(errors.NotFoundError, match="dockq-sweep") as caught:
+        client.run(experiment="dockq-sweeep", name="r1")
+    assert "Did you mean" in str(caught.value)
+
+
+def test_an_explicit_hypothesis_survives(app, client):
+    client.create_experiment("e1", "E1", "temp 0.7 wins")
+    client.run(experiment="e1", name="r1")
     (experiment,) = app.experiments.values()
     assert experiment["hypothesis"] == "temp 0.7 wins"
 
 
-def test_update_experiment_replaces_auto_hypothesis(app, client):
-    run = client.run(experiment="e1", name="r1")  # auto hypothesis
-    exp_id = run.experiment_id
-    assert app.experiments[exp_id]["hypothesis"].startswith("[auto]")
-    updated = client.update_experiment(exp_id, hypothesis="dockq > 0.8 at temp 0.7")
+def test_creating_an_experiment_without_a_hypothesis_is_refused(client):
+    """No more `[auto]` placeholder. It was first-write-wins, so it became
+    permanent unless a human noticed and ran `probe experiment set`."""
+    with pytest.raises(errors.ValidationError, match="hypothesis"):
+        client.create_experiment("e1", "E1", None)
+
+
+def test_update_experiment_replaces_the_hypothesis(app, client):
+    exp = client.create_experiment("e1", "E1", "first guess")
+    updated = client.update_experiment(exp["id"], hypothesis="dockq > 0.8 at temp 0.7")
     assert updated["hypothesis"] == "dockq > 0.8 at temp 0.7"
 
 
@@ -136,7 +154,10 @@ def test_run_triggers_lazy_auth(app, tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "stdin", _FakeTty())
     monkeypatch.setattr(sys, "stderr", _FakeTty())
     client = _tokenless_client(app, tmp_path)
-    run = client.run(experiment="e1", hypothesis="h", name="r1")
+    # Seeded straight into the fake: `run()` is what self-authorizes, and going
+    # through create_experiment first would hit the auth wall before we got there.
+    app.seed_experiment("e1")
+    run = client.run(experiment="e1", name="r1")
     assert run.id in app.runs
     assert client.settings.token == "ros_pat_minted"
 
@@ -157,18 +178,26 @@ def wired(app, tmp_path, monkeypatch):
     return app
 
 
-def test_cli_run_start_without_identity_flags(wired, capsys, monkeypatch):
+def test_cli_run_start_requires_an_experiment(wired, capsys, monkeypatch):
+    """`--experiment` is required now, so the context fallback cannot fire."""
     monkeypatch.setattr(defaults, "default_experiment_slug", lambda cwd=None: "ctx-slug")
     rc = cli.main(["run", "start"])
-    assert rc == 0
-    out = capsys.readouterr().out.strip()
-    assert out in wired.runs
+    assert rc != 0
+    assert wired.experiments == {}
+
+
+def test_cli_experiment_create_then_run_start(wired, capsys):
+    """The two-command shape that replaced the implicit chain."""
+    assert cli.main(["experiment", "create", "e", "--hypothesis", "temp 0.7 wins"]) == 0
+    capsys.readouterr()
+    assert cli.main(["run", "start", "--experiment", "e", "--name", "r1"]) == 0
+    assert capsys.readouterr().out.strip() in wired.runs
     (experiment,) = wired.experiments.values()
-    assert experiment["hypothesis"].startswith("[auto]")
+    assert experiment["hypothesis"] == "temp 0.7 wins"
 
 
 def test_cli_experiment_set_hypothesis(wired, capsys):
-    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    cli.main(["experiment", "create", "e", "--hypothesis", "h"])
     capsys.readouterr()
     (exp_id,) = wired.experiments
     rc = cli.main(["experiment", "set", exp_id, "--hypothesis", "real hypothesis"])

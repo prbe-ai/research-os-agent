@@ -34,7 +34,9 @@ def test_handoff_says_so_when_the_bundle_caps_its_artifact_list(client, app, mon
     handoff used the bundle's artifacts as its rows with more_beyond=False, so a run
     with 5000 artifacts emitted 200 and reported state="complete" — the agent believes
     it saw every output the run produced."""
-    run = client.run(project="folding", experiment="e", hypothesis="h", name="r")
+    _proj = client.create_project("folding")
+    client.create_experiment("e", "e", "h", project_id=_proj["id"])
+    run = client.run(project="folding", experiment="e", name="r")
     rid = run.id
 
     # The backend hands back a capped list beside an honest total.
@@ -61,7 +63,9 @@ def test_handoff_says_so_when_the_bundle_caps_its_artifact_list(client, app, mon
 def test_handoff_is_complete_when_the_bundle_was_not_capped(client, app):
     """The marker must be CONDITIONAL — an unconditional one is the lie this whole
     change removed."""
-    run = client.run(project="folding", experiment="e", hypothesis="h", name="r")
+    _proj = client.create_project("folding")
+    client.create_experiment("e", "e", "h", project_id=_proj["id"])
+    run = client.run(project="folding", experiment="e", name="r")
     app.artifacts[run.id] = [_artifact(run.id, 0)]
     result = _service(client).get_entity(f"run:{run.id}", view="handoff", token_budget=100_000)
     assert result["completeness"]["missing"] == []

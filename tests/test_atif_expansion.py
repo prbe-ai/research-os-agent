@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 import pytest
+from tests.conftest import open_run
 
 from probe.connectors import atif
 from probe.connectors.atif import (
@@ -142,7 +143,7 @@ def _write_atif_trial(root, fixture: str):
 
 def test_capture_expands_atif_into_the_span_tree(client, app, tmp_path):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     result = capture_trial(
         run, _write_atif_trial(tmp_path / "t", "hello-world-invalid-json.trajectory.json"),
         step_index=600, strict=True,
@@ -171,7 +172,7 @@ def test_capture_expands_atif_into_the_span_tree(client, app, tmp_path):
 
 def test_capture_no_expand_flag(client, app, tmp_path):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     result = capture_trial(
         run, _write_atif_trial(tmp_path / "t", "hello-world-timeout.trajectory.json"),
         expand=False, strict=True,
@@ -182,7 +183,7 @@ def test_capture_no_expand_flag(client, app, tmp_path):
 
 def test_unknown_format_captures_raw_without_expansion(client, app, tmp_path):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     root = tmp_path / "t"
     root.mkdir()
     (root / "trajectory.json").write_text(json.dumps({"format": "osmosis-fork-v0", "events": []}))
@@ -201,7 +202,7 @@ def test_forks_can_register_their_own_parser(client, app, tmp_path):
     register_trajectory_parser("osmosis-fork", parse_osmosis)
     try:
         client.fail_open = False
-        run = client.run(experiment="e", hypothesis="h", name="r")
+        run = open_run(client, experiment="e", name="r")
         root = tmp_path / "t"
         root.mkdir()
         (root / "trajectory.json").write_text(json.dumps(
@@ -216,7 +217,7 @@ def test_forks_can_register_their_own_parser(client, app, tmp_path):
 
 def test_truncation_is_an_explicit_marker_never_silent(client, app, tmp_path):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     capture_trial(
         run, _write_atif_trial(tmp_path / "t", "hello-world-context-summarization.trajectory.json"),
         max_trajectory_spans=4, strict=True,
@@ -232,7 +233,7 @@ def test_truncation_is_an_explicit_marker_never_silent(client, app, tmp_path):
 
 def test_re_expansion_is_idempotent(client, app, tmp_path):
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     doc = _load(FIXTURES / "hello-world-timeout.trajectory.json")
     root = run.span("rollout", name="t")
     first = expand_trajectory(run, doc, root_span_id=root, trial="t__1", max_spans=0, strict=True)
@@ -248,7 +249,7 @@ def test_cli_trial_expand_retroactively(client, app, tmp_path, monkeypatch, caps
 
     cli_main = importlib.import_module("probe.cli.main")
     client.fail_open = False
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     # capture WITHOUT expansion — the "format had no parser yet" scenario
     result = capture_trial(
         run, _write_atif_trial(tmp_path / "t", "hello-world-invalid-json.trajectory.json"),

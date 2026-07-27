@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import sys
+from tests.conftest import open_run
 
 
 
 
 def test_research_note_is_normal_experiment_upload(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     result = client.notes.add(
         run.id,
         "decision",
@@ -23,7 +24,7 @@ def test_research_note_is_normal_experiment_upload(client, app):
 
 
 def test_events_read_surface_is_read_only(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     # client.events is the read surface (backend lifecycle log); no write method.
     assert not hasattr(client.events, "add")
     assert client.events.for_run(run.id) == []
@@ -31,7 +32,7 @@ def test_events_read_surface_is_read_only(client, app):
 
 def test_experiment_version_replaces_run_promote(client, app):
     client.fail_open = False
-    exp = client.ensure_experiment("dockq", "DockQ", "h")
+    exp = client.create_experiment("dockq", "DockQ", "h")
     version = client.experiment_version(exp["id"], label="launch")
     assert version["version"] == 1
     # run-level promote is gone (promotion_tier rejected upstream)
@@ -39,7 +40,7 @@ def test_experiment_version_replaces_run_promote(client, app):
 
 
 def test_execute_propagates_run_id(client, app, tmp_path):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     output = tmp_path / "run-id.txt"
     result = run.execute(
         [
@@ -54,7 +55,7 @@ def test_execute_propagates_run_id(client, app, tmp_path):
 
 
 def test_run_check_flags_failed_upload_not_intentional_reference(client, app):
-    run = client.run(experiment="e", hypothesis="h", name="r")
+    run = open_run(client, experiment="e", name="r")
     # env_ref (execution record) present -> launch capture is satisfied.
     run._data["metadata"] = {"env_ref": "sha256:abc"}
     app.runs[run.id]["metadata"] = run._data["metadata"]
