@@ -265,6 +265,47 @@ class Client:
         browser session AND owner/admin, so it 403s from the CLI (by design)."""
         self.transport.delete(f"/v1/tokens/{token_id}")
 
+    # -- client installations ----------------------------------------------
+    def register_client_capabilities(
+        self,
+        *,
+        auto_update: str,
+        mcp: str,
+        skills: str,
+    ) -> dict:
+        """Replace the complete allowlisted snapshot for this token's install.
+
+        The token identifies the installation; no token or installation id is
+        accepted in the body. Schema version 1 deliberately carries only three
+        coarse states, never paths, commands, environment variables, or secrets.
+        """
+        return self.transport.put(
+            "/v1/client-installations/current/capabilities",
+            {
+                "schema_version": 1,
+                "auto_update": auto_update,
+                "mcp": mcp,
+                "skills": skills,
+            },
+        )
+
+    def create_credential_attachment_grant(self, installation_id: str) -> dict:
+        """Mint a short-lived installation join grant with the linked API PAT."""
+        return self.transport.post(
+            f"/v1/client-installations/{installation_id}/credential-attachment-grants"
+        )
+
+    def attach_current_credential(self, installation_id: str, *, grant: str) -> dict:
+        """Consume an API-minted join grant using this read-only MCP PAT."""
+        return self.transport.put(
+            f"/v1/client-installations/{installation_id}/credentials/current",
+            {"grant": grant},
+        )
+
+    def list_client_installations(self) -> dict:
+        """Unified view of installs, API/MCP credentials, and capture devices."""
+        return self.transport.get("/v1/client-installations")
+
     # -- workspaces ---------------------------------------------------------
     def list_workspaces(self) -> list[dict]:
         """Every workspace I can see, as a plain list.

@@ -556,6 +556,10 @@ def _run_wizard_action(
         lines = list(outcome.lines)
         if outcome.restart_needed:
             lines += ["", "Restart Claude Code to apply the plugin update."]
+        lines += _register_local_capabilities(
+            doctor_impl.collect(),
+            settings=resolve(base_url=base_now),
+        )
         return lines
 
     if chosen_action is actions_mod.Action.MANUAL:
@@ -572,7 +576,15 @@ def _run_wizard_action(
             tui.clear()
             if wizard.confirm_removal() is not True:
                 return []
-        return list(wizard.remove_everything(caps))
+        # Preserve the credential in memory long enough to report the actual
+        # post-removal state; remove_everything clears it from disk.
+        settings_before_removal = resolve(base_url=base_now)
+        lines = list(wizard.remove_everything(caps))
+        lines += _register_local_capabilities(
+            doctor_impl.collect(),
+            settings=settings_before_removal,
+        )
+        return lines
 
     # CONFIGURE
     selection = wizard.resolve_selection(
@@ -604,7 +616,13 @@ def _run_wizard_action(
 
     steps = wizard.plan(caps, selection)
     if not steps:
-        return ["Already set up the way you asked. Nothing to change."]
+        return [
+            "Already set up the way you asked. Nothing to change.",
+            *_register_local_capabilities(
+                caps,
+                settings=resolve(base_url=base_now),
+            ),
+        ]
 
     # From here it STREAMS. Installing a plugin can take a minute and a browser
     # approval prints a URL you are meant to act on while it waits, so this is
@@ -668,7 +686,19 @@ def _run_wizard_action(
         if notice:
             tui.say()
             tui.say(notice)
+    for message in _register_local_capabilities(
+        doctor_impl.collect(),
+        settings=resolve(base_url=base_now),
+    ):
+        tui.say(message)
     return []
+
+
+def _register_local_capabilities(caps, *, settings=None) -> list[str]:
+    """Lazy wrapper so ordinary CLI startup never imports setup-only SDK work."""
+    from probe.cli.client_installation import register
+
+    return register(caps, settings=settings)
 
 
 # `probe setup` must keep working: it is printed on the live connect page, in

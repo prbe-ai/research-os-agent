@@ -181,6 +181,9 @@ class Transport:
     def patch(self, path: str, json_body: Any) -> Any:
         return self.request("PATCH", path, json_body=json_body).json()
 
+    def put(self, path: str, json_body: Any) -> Any:
+        return self.request("PUT", path, json_body=json_body, idempotent=True).json()
+
     def delete(self, path: str) -> Any:
         """Returns the parsed body when the route sends one (e.g. DELETE
         /v1/runs/{id} echoes the deleted run), and None on a 204."""

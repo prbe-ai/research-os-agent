@@ -35,10 +35,11 @@
         "type": "string"
       },
       "AnchorType": {
-        "description": "What a summary (and a summary_refresh queue row) is about.",
+        "description": "What a summary (and a summary_refresh queue row) is about.\n\nMirrors the `summary_refresh.anchor_type` CHECK constraint -- adding a member\nhere without widening that CHECK makes every enqueue for it fail (silently,\nsince `enqueue_summary_refresh` swallows to protect the domain write).",
         "enum": [
           "project",
-          "experiment"
+          "experiment",
+          "run"
         ],
         "title": "AnchorType",
         "type": "string"
@@ -784,6 +785,24 @@
         "title": "BrowseResponse",
         "type": "object"
       },
+      "CapabilityRegistrationOut": {
+        "properties": {
+          "capabilities": {
+            "$ref": "#/components/schemas/ClientCapabilitiesOut"
+          },
+          "installation_id": {
+            "format": "uuid",
+            "title": "Installation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "capabilities"
+        ],
+        "title": "CapabilityRegistrationOut",
+        "type": "object"
+      },
       "ChannelError": {
         "description": "Machine-readable per-channel failure reasons (state:\"partial\").",
         "enum": [
@@ -794,6 +813,194 @@
         ],
         "title": "ChannelError",
         "type": "string"
+      },
+      "ClientCapabilitiesIn": {
+        "additionalProperties": false,
+        "description": "The complete allowlisted local snapshot. Raw configuration is forbidden.",
+        "properties": {
+          "auto_update": {
+            "enum": [
+              "on",
+              "off",
+              "unknown"
+            ],
+            "title": "Auto Update",
+            "type": "string"
+          },
+          "mcp": {
+            "enum": [
+              "installed",
+              "absent",
+              "unknown"
+            ],
+            "title": "Mcp",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "skills": {
+            "enum": [
+              "installed",
+              "absent",
+              "unknown"
+            ],
+            "title": "Skills",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "auto_update",
+          "mcp",
+          "skills"
+        ],
+        "title": "ClientCapabilitiesIn",
+        "type": "object"
+      },
+      "ClientCapabilitiesOut": {
+        "additionalProperties": false,
+        "properties": {
+          "auto_update": {
+            "enum": [
+              "on",
+              "off",
+              "unknown"
+            ],
+            "title": "Auto Update",
+            "type": "string"
+          },
+          "mcp": {
+            "enum": [
+              "installed",
+              "absent",
+              "unknown"
+            ],
+            "title": "Mcp",
+            "type": "string"
+          },
+          "reported_at": {
+            "format": "date-time",
+            "title": "Reported At",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "skills": {
+            "enum": [
+              "installed",
+              "absent",
+              "unknown"
+            ],
+            "title": "Skills",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "auto_update",
+          "mcp",
+          "skills",
+          "reported_at"
+        ],
+        "title": "ClientCapabilitiesOut",
+        "type": "object"
+      },
+      "ClientInstallationOut": {
+        "properties": {
+          "capabilities": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClientCapabilitiesOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/InstallationCaptureOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "credentials": {
+            "items": {
+              "$ref": "#/components/schemas/InstallationCredentialOut"
+            },
+            "title": "Credentials",
+            "type": "array"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "credentials",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ClientInstallationOut",
+        "type": "object"
+      },
+      "ClientInstallationsOut": {
+        "properties": {
+          "installations": {
+            "items": {
+              "$ref": "#/components/schemas/ClientInstallationOut"
+            },
+            "title": "Installations",
+            "type": "array"
+          },
+          "standalone_captures": {
+            "items": {
+              "$ref": "#/components/schemas/InstallationCaptureOut"
+            },
+            "title": "Standalone Captures",
+            "type": "array"
+          },
+          "standalone_credentials": {
+            "items": {
+              "$ref": "#/components/schemas/StandaloneCredentialOut"
+            },
+            "title": "Standalone Credentials",
+            "type": "array"
+          }
+        },
+        "required": [
+          "installations",
+          "standalone_credentials",
+          "standalone_captures"
+        ],
+        "title": "ClientInstallationsOut",
+        "type": "object"
       },
       "ClientKind": {
         "description": "First-party clients that may report their installed version.",
@@ -955,6 +1162,70 @@
           }
         },
         "title": "ClientVersionOut",
+        "type": "object"
+      },
+      "CredentialAttachmentGrantOut": {
+        "properties": {
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "grant": {
+            "title": "Grant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant",
+          "expires_at"
+        ],
+        "title": "CredentialAttachmentGrantOut",
+        "type": "object"
+      },
+      "CredentialAttachmentIn": {
+        "additionalProperties": false,
+        "properties": {
+          "grant": {
+            "maxLength": 256,
+            "minLength": 32,
+            "title": "Grant",
+            "type": "string"
+          }
+        },
+        "required": [
+          "grant"
+        ],
+        "title": "CredentialAttachmentIn",
+        "type": "object"
+      },
+      "CredentialAttachmentOut": {
+        "properties": {
+          "installation_id": {
+            "format": "uuid",
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "api",
+              "mcp"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "token_id": {
+            "format": "uuid",
+            "title": "Token Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "token_id",
+          "role"
+        ],
+        "title": "CredentialAttachmentOut",
         "type": "object"
       },
       "DeviceAuthorizationDecision": {
@@ -1949,7 +2220,7 @@
         "type": "object"
       },
       "ExperimentPatch": {
-        "description": "Field-replace PATCH (D9). Only provided fields change; None = untouched.\n`hypothesis`/`name` carry min_length=1 so a PATCH can never re-blank them.",
+        "description": "Field-replace PATCH (D9). Only provided fields change; None = untouched.\n`hypothesis`/`name` carry min_length=1 so a PATCH can never re-blank them.\n\nNO `summary` field, deliberately. An experiment summary is GENERATED -- it\ncomes from the summary pipeline and lands in `metadata.summary`; there is no\nclient-writable door to it. The field used to exist (documented as \"the home\nfor eval/benchmark aggregates\"), but nothing in the CLI, SDK or ingest path\never wrote one, so all it did was let a client overwrite a generated\ndocument. Per-experiment aggregates belong on the runs that produced them.",
         "properties": {
           "description": {
             "anyOf": [
@@ -1997,18 +2268,6 @@
               }
             ],
             "title": "Name"
-          },
-          "summary": {
-            "anyOf": [
-              {
-                "additionalProperties": true,
-                "type": "object"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Summary"
           }
         },
         "title": "ExperimentPatch",
@@ -2149,6 +2408,56 @@
           "created_at"
         ],
         "title": "ExperimentVersionOut",
+        "type": "object"
+      },
+      "ExportPoint": {
+        "properties": {
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "integer"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "step_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Step Index"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          },
+          "wall_clock": {
+            "format": "date-time",
+            "title": "Wall Clock",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "key",
+          "value",
+          "wall_clock"
+        ],
+        "title": "ExportPoint",
         "type": "object"
       },
       "GitHubInstallationClaim": {
@@ -2597,6 +2906,147 @@
         "title": "IngestRunRequest",
         "type": "object"
       },
+      "InstallationCaptureOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "device_id": {
+            "title": "Device Id",
+            "type": "string"
+          },
+          "hostname": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Hostname"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "os": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Os"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          }
+        },
+        "required": [
+          "device_id",
+          "source",
+          "created_at"
+        ],
+        "title": "InstallationCaptureOut",
+        "type": "object"
+      },
+      "InstallationCredentialOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "role": {
+            "enum": [
+              "api",
+              "mcp"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes"
+          },
+          "token_prefix": {
+            "title": "Token Prefix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "token_prefix",
+          "created_at"
+        ],
+        "title": "InstallationCredentialOut",
+        "type": "object"
+      },
       "InviteCreate": {
         "properties": {
           "email": {
@@ -2658,6 +3108,164 @@
           "created_at"
         ],
         "title": "InviteOut",
+        "type": "object"
+      },
+      "LatestScalarOut": {
+        "description": "One series' scalar summary: its endpoint value + extent, no point scan.",
+        "properties": {
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "last_step_index": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Step Index"
+          },
+          "last_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Value"
+          },
+          "last_wall_clock": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Wall Clock"
+          },
+          "max_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Value"
+          },
+          "min_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Value"
+          },
+          "point_count": {
+            "title": "Point Count",
+            "type": "integer"
+          },
+          "run_id": {
+            "format": "uuid",
+            "title": "Run Id",
+            "type": "string"
+          },
+          "x_axis": {
+            "default": "step",
+            "title": "X Axis",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id",
+          "kind",
+          "key",
+          "point_count"
+        ],
+        "title": "LatestScalarOut",
+        "type": "object"
+      },
+      "LatestScalarsRequest": {
+        "description": "Cross-run scalar SUMMARY read \u2014 the foundation for run-table sort/filter by a\nfinal metric value (the MLflow `latest_metrics` / wandb Summary analog). Reads the\nderived `metric_series` catalog (which already holds last/min/max per series), so\nit never scans raw points.",
+        "properties": {
+          "keys": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Keys"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "run_ids": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Run Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "run_ids"
+        ],
+        "title": "LatestScalarsRequest",
+        "type": "object"
+      },
+      "LatestScalarsResult": {
+        "properties": {
+          "scalars": {
+            "items": {
+              "$ref": "#/components/schemas/LatestScalarOut"
+            },
+            "title": "Scalars",
+            "type": "array"
+          }
+        },
+        "required": [
+          "scalars"
+        ],
+        "title": "LatestScalarsResult",
         "type": "object"
       },
       "LineageEdgeOut": {
@@ -2758,11 +3366,55 @@
         "title": "MetricBatch",
         "type": "object"
       },
+      "MetricExportResult": {
+        "description": "Lossless, paginated raw-point export (item 5): every point exactly once, NO\ndownsampling for a stable committed dataset \u2014 the faithful-export counterpart to\n/series/query. Cursor on the stable metric_points id; pass `next_after_id` back as\n`after_id` for the next page (null means the last currently visible page).",
+        "properties": {
+          "next_after_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After Id"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ExportPoint"
+            },
+            "title": "Points",
+            "type": "array"
+          }
+        },
+        "required": [
+          "points"
+        ],
+        "title": "MetricExportResult",
+        "type": "object"
+      },
       "MetricInsertResult": {
         "properties": {
+          "deduped": {
+            "default": 0,
+            "title": "Deduped",
+            "type": "integer"
+          },
           "inserted": {
             "title": "Inserted",
             "type": "integer"
+          },
+          "series_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Series Count"
           }
         },
         "required": [
@@ -4887,6 +5539,17 @@
       },
       "SeriesPoint": {
         "properties": {
+          "smoothed": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smoothed"
+          },
           "step_index": {
             "anyOf": [
               {
@@ -4955,6 +5618,35 @@
               }
             ],
             "title": "Series"
+          },
+          "smoothing": {
+            "anyOf": [
+              {
+                "enum": [
+                  "ema",
+                  "sma"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smoothing"
+          },
+          "smoothing_factor": {
+            "default": 0.6,
+            "exclusiveMaximum": 1.0,
+            "minimum": 0.0,
+            "title": "Smoothing Factor",
+            "type": "number"
+          },
+          "smoothing_window": {
+            "default": 10,
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Smoothing Window",
+            "type": "integer"
           },
           "step_from": {
             "anyOf": [
@@ -5409,6 +6101,74 @@
           "status"
         ],
         "title": "StaleClientOut",
+        "type": "object"
+      },
+      "StandaloneCredentialOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "scopes": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scopes"
+          },
+          "token_prefix": {
+            "title": "Token Prefix",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "token_prefix",
+          "created_at"
+        ],
+        "title": "StandaloneCredentialOut",
         "type": "object"
       },
       "StepCreate": {
@@ -6058,6 +6818,99 @@
           }
         },
         "title": "VersionPair",
+        "type": "object"
+      },
+      "WideColumn": {
+        "description": "One column of a wide (step-indexed) metric table: a distinct series.",
+        "properties": {
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "key"
+        ],
+        "title": "WideColumn",
+        "type": "object"
+      },
+      "WideRow": {
+        "properties": {
+          "step_index": {
+            "title": "Step Index",
+            "type": "integer"
+          },
+          "values": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "title": "Values",
+            "type": "array"
+          }
+        },
+        "required": [
+          "step_index",
+          "values"
+        ],
+        "title": "WideRow",
+        "type": "object"
+      },
+      "WideSeriesResult": {
+        "description": "Step x metric table (item 4): the pivot clients would otherwise do by hand,\naligned by step_index. Only STEPPED points participate; wall-clock-only series are\nread via the long endpoints. Bounded to `max_rows` steps \u2014 `next_step` pages the\nremainder by passing it back as `step_from`.",
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/WideColumn"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/WideRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "columns",
+          "rows"
+        ],
+        "title": "WideSeriesResult",
         "type": "object"
       },
       "WorkspaceKind": {
@@ -7771,6 +8624,168 @@
         "summary": "Browse",
         "tags": [
           "browse"
+        ]
+      }
+    },
+    "/v1/client-installations": {
+      "get": {
+        "description": "One user-facing read model across API, MCP, capture, and capabilities.",
+        "operationId": "list_client_installations_v1_client_installations_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ClientInstallationsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Client Installations",
+        "tags": [
+          "client-installations"
+        ]
+      }
+    },
+    "/v1/client-installations/current/capabilities": {
+      "put": {
+        "description": "Replace the calling installation's complete, allowlisted snapshot.",
+        "operationId": "register_current_capabilities_v1_client_installations_current_capabilities_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ClientCapabilitiesIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapabilityRegistrationOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Current Capabilities",
+        "tags": [
+          "client-installations"
+        ]
+      }
+    },
+    "/v1/client-installations/{installation_id}/credential-attachment-grants": {
+      "post": {
+        "description": "Mint a short-lived join grant using this installation's API credential.",
+        "operationId": "create_credential_attachment_grant_v1_client_installations__installation_id__credential_attachment_grants_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "installation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Installation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialAttachmentGrantOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Credential Attachment Grant",
+        "tags": [
+          "client-installations"
+        ]
+      }
+    },
+    "/v1/client-installations/{installation_id}/credentials/current": {
+      "put": {
+        "description": "Consume an API-minted join grant with the calling read-only MCP PAT.",
+        "operationId": "attach_current_credential_v1_client_installations__installation_id__credentials_current_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "installation_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Installation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialAttachmentIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CredentialAttachmentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Attach Current Credential",
+        "tags": [
+          "client-installations"
         ]
       }
     },
@@ -10914,6 +11929,266 @@
         ]
       }
     },
+    "/v1/runs/{run_id}/metrics/export": {
+      "get": {
+        "description": "Lossless paginated raw-point export (item 5): every point exactly once, no\ndownsampling. Page by passing the returned `next_after_id` back as `after_id`.",
+        "operationId": "export_run_metrics_v1_runs__run_id__metrics_export_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "after_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 1000,
+              "maximum": 10000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricExportResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Export Run Metrics",
+        "tags": [
+          "metrics"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/metrics/wide": {
+      "get": {
+        "description": "Step x metric table for a run (item 4): DataFrame-friendly, aligned by step. The\nlong-format /metrics stays; this is the pivot a client would otherwise do by hand.",
+        "operationId": "get_metrics_wide_v1_runs__run_id__metrics_wide_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_rows",
+            "required": false,
+            "schema": {
+              "default": 10000,
+              "maximum": 50000,
+              "minimum": 1,
+              "title": "Max Rows",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WideSeriesResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Metrics Wide",
+        "tags": [
+          "metrics"
+        ]
+      }
+    },
     "/v1/runs/{run_id}/restore": {
       "post": {
         "description": "Un-delete a soft-deleted run. 404 if the run does not exist in-tenant;\na no-op (still 200) if it was already live.",
@@ -11234,6 +12509,105 @@
         ]
       }
     },
+    "/v1/runs/{run_id}/summary/generate": {
+      "post": {
+        "description": "Manual (re)generation for one run. Runs also enqueue THEMSELVES on the\ntransition into a terminal status, so this is the retry / backfill path for a\nrun that finished before the feature existed or whose generation failed.",
+        "operationId": "generate_run_summary_v1_runs__run_id__summary_generate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "See regenerate_project_summary.",
+            "in": "query",
+            "name": "immediate",
+            "required": false,
+            "schema": {
+              "default": true,
+              "description": "See regenerate_project_summary.",
+              "title": "Immediate",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Generate Run Summary",
+        "tags": [
+          "summaries"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/summary/status": {
+      "get": {
+        "operationId": "run_summary_status_v1_runs__run_id__summary_status_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryStatusOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Summary Status",
+        "tags": [
+          "summaries"
+        ]
+      }
+    },
     "/v1/runs/{run_ref}": {
       "get": {
         "description": "`run_ref` is a UUID or a petname short_id (fold #21); resolved unambiguously.",
@@ -11419,6 +12793,48 @@
         "summary": "Search",
         "tags": [
           "search"
+        ]
+      }
+    },
+    "/v1/series/latest": {
+      "post": {
+        "description": "Cross-run scalar SUMMARY (last/min/max per series) for run tables \u2014 reads the\nderived catalog, never raw points. Every run_id is validated in-tenant AND live\n(a soft-deleted run is hidden -> 404) before any read.",
+        "operationId": "post_series_latest_v1_series_latest_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LatestScalarsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LatestScalarsResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Post Series Latest",
+        "tags": [
+          "series"
         ]
       }
     },
