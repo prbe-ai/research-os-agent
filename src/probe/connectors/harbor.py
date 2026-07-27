@@ -103,6 +103,8 @@ def role_for(relative_path: str | PurePosixPath) -> str:
         if parts[1] == "verifier":
             return "verifier"
     if head == "agent":
+        if rel.as_posix() == "agent/trajectory.json":
+            return "trajectory"
         return "agent_log"
     if head == "verifier":
         return "verifier"
@@ -1043,7 +1045,13 @@ def parse_trial(trial_dir: str | Path) -> ParsedTrial:
             if reward is None and isinstance(rewards, dict) and rewards:
                 reward = _as_float(rewards.get("reward", next(iter(rewards.values()))))
 
-    trajectory = _load_json(root / "trajectory.json")
+    # Harbor's real emission contract: ATIF-supporting agents write into their
+    # logs dir, which the harness downloads to <trial>/agent/trajectory.json —
+    # the location Harbor's own viewer hardcodes (viewer/server.py). The
+    # trial-root fallback keeps staged, fork, and pre-contract layouts working.
+    trajectory = _load_json(root / "agent" / "trajectory.json")
+    if trajectory is None:
+        trajectory = _load_json(root / "trajectory.json")
     trajectory_format = atif.detect_trajectory_format(trajectory)
 
     name = None
