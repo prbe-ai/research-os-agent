@@ -42,7 +42,7 @@ def _call(server, tool: str, args: dict):
 
 def _run_with_spans(client, app, count: int = 40):
     _proj = client.create_project("folding")
-    client.create_experiment("e", "e", "h", project_id=_proj["id"])
+    client.create_experiment("e", "e", hypothesis="h", project_id=_proj["id"])
     run = client.run(project="folding", experiment="e", name="r")
     app.spans[run.id] = [
         {"id": f"span-{i}", "run_id": run.id, "span_type": "rollout", "name": f"n-{i}",
@@ -120,7 +120,7 @@ def test_search_knowledge_cursor_round_trips_through_the_tool_layer(client, app)
     """search_knowledge has the SAME defect surface — same json.dumps({...}) format,
     same coercion. It is not reachable from a service-level test."""
     _proj = client.create_project("folding")
-    client.create_experiment("dockq", "dockq", "h", project_id=_proj["id"])
+    client.create_experiment("dockq", "dockq", hypothesis="h", project_id=_proj["id"])
     client.run(project="folding", experiment="dockq", name="r")
     app.search_responses = [
         {"query": "q", "state": "ok",

@@ -40,8 +40,7 @@ def _populated(client, app, *, spans: int = 3):
     # `run()` resolves its parents now instead of get-or-creating them, so they
     # have to exist first — the same two commands a real user runs.
     project = client.create_project("folding")
-    client.create_experiment(
-        "dockq-path", "dockq-path", "relative paths fix scoring", project_id=project["id"]
+    client.create_experiment("dockq-path", "dockq-path", hypothesis="relative paths fix scoring", project_id=project["id"]
     )
     run = client.run(project="folding", experiment="dockq-path", name="eval-1")
     rid = run.id
@@ -206,7 +205,7 @@ def test_reproduce_without_an_env_ref_reports_it_missing(client, app):
     """CONDITIONAL missing — the honest kind. This run captured no environment, so
     it genuinely cannot be reproduced from here."""
     _proj = client.create_project("folding")
-    client.create_experiment("e", "e", "h", project_id=_proj["id"])
+    client.create_experiment("e", "e", hypothesis="h", project_id=_proj["id"])
     run = client.run(project="folding", experiment="e", name="no-env")
     result = _service(client).get_entity(f"run:{run.id}", view="reproduce")
     assert result["completeness"]["missing"] == ["execution_record"]

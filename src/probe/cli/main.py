@@ -2364,15 +2364,14 @@ def experiment_create(
     with _client() as c:
         project_id = None
         if resolved_project:
-            found = c.resolve_project(_project_slug(c, resolved_project))
-            if found is None:
-                raise typer.BadParameter(f"no project with slug {resolved_project!r}")
-            project_id = found["id"]
+            # Same resolver as `run start`, so "no such project" is one error with
+            # one exit code, and the message names the SLUG that was looked up
+            # rather than the raw ambient value (which is an id).
+            project_id = c.resolve_or_raise(
+                "project", _project_slug(c, resolved_project)
+            )["id"]
         _print_json(
-            c.create_experiment(
-                slug,
-                name,
-                hypothesis,
+            c.create_experiment(slug, name, hypothesis=hypothesis,
                 project_id=project_id,
                 description=description,
             )

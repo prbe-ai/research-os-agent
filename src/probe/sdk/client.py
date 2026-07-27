@@ -351,12 +351,22 @@ class Client:
             body["metadata"] = metadata
         return self.transport.post("/v1/projects", body)
 
-    def resolve_project(self, slug: str) -> dict | None:
+    def resolve_project(self, slug: str, *, include_archived: bool = False) -> dict | None:
         """Look a project up by slug. ``None`` when it does not exist.
 
         `(customer_id, slug)` is UNIQUE, so ``?slug=`` returns 0 or 1 row and an
-        empty result is an unambiguous "absent" rather than "not on this page"."""
-        rows = self.transport.get("/v1/projects", params={"slug": slug})
+        empty result is an unambiguous "absent" rather than "not on this page".
+
+        ``include_archived`` exists because the unique constraint does NOT ignore
+        archived rows: an archived slug reads as absent here, but creating it then
+        409s, so a caller that only asked the default question is told "does not
+        exist" and "already exists" about the same slug. The old get-or-create
+        recovered from that via the conflict's ``existing_id``; resolution has to
+        be able to SEE the archived row instead."""
+        params: dict[str, Any] = {"slug": slug}
+        if include_archived:
+            params["include"] = "archived"
+        rows = self.transport.get("/v1/projects", params=params)
         return _exactly(rows, slug)
 
     def get_project(self, project_id: str) -> dict:
@@ -619,8 +629,8 @@ class Client:
         self,
         slug: str,
         name: str | None = None,
-        hypothesis: str | None = None,
         *,
+        hypothesis: str | None = None,
         project_id: str | None = None,
         description: str | None = None,
         tags: list[str] | None = None,
@@ -646,12 +656,16 @@ class Client:
             body["tags"] = tags
         return self.transport.post("/v1/experiments", body)
 
-    def resolve_experiment(self, slug: str) -> dict | None:
+    def resolve_experiment(self, slug: str, *, include_archived: bool = False) -> dict | None:
         """Look an experiment up by slug. ``None`` when it does not exist.
 
         Experiment slugs are UNIQUE per TENANT, not per project, so this needs no
-        project_id to disambiguate."""
-        rows = self.transport.get("/v1/experiments", params={"slug": slug})
+        project_id to disambiguate. See :meth:`resolve_project` for why
+        ``include_archived`` has to exist."""
+        params: dict[str, Any] = {"slug": slug}
+        if include_archived:
+            params["include"] = "archived"
+        rows = self.transport.get("/v1/experiments", params=params)
         return _exactly(rows, slug)
 
     def get_experiment(self, experiment_id: str) -> dict:
@@ -821,17 +835,8 @@ class Client:
         name = name or defaults.default_run_name()
         project_id = None
         if project:
-            found = self.resolve_project(project)
-            if found is None:
-                raise self._no_such(
-                    "project", project, self.list_projects(limit=200).items
-                )
-            project_id = found["id"]
-        exp = self.resolve_experiment(experiment)
-        if exp is None:
-            raise self._no_such(
-                "experiment", experiment, self.list_experiments(project_id=project_id, limit=200).items
-            )
+            project_id = self.resolve_or_raise("project", project)["id"]
+        exp = self.resolve_or_raise("experiment", experiment, project_id=project_id)
         # `project` used to decide where a NEW experiment got filed. Now that the
         # experiment must already exist, the only honest job left for it is to
         # CHECK that it is the one you think it is — otherwise naming a project
@@ -842,6 +847,32 @@ class Client:
                 "Drop --project, or name the project it actually belongs to."
             )
         return self.create_run(exp["id"], name, **run_kw)
+
+    def resolve_or_raise(self, kind: str, slug: str, *, project_id: str | None = None) -> dict:
+        """Resolve a slug or raise the error that says what to do about it.
+
+        Three outcomes, three different remedies, and they must not be conflated:
+        present (return it), ARCHIVED (restore it — creating 409s, so "not found"
+        would be a lie that sends you into a dead end), absent (create it, with
+        near misses named). Both `run()` and the CLI go through here so the same
+        failure cannot exit 1 from one surface and 2 from the other."""
+        resolve = self.resolve_project if kind == "project" else self.resolve_experiment
+        found = resolve(slug)
+        if found is not None:
+            return found
+        archived = resolve(slug, include_archived=True)
+        if archived is not None:
+            raise errors.NotFoundError(
+                f"{kind} {slug!r} is ARCHIVED, not missing — creating it would "
+                f"conflict on the slug. Restore it with "
+                f"`probe {kind} restore {shlex.quote(slug)}`."
+            )
+        listing = (
+            self.list_projects(limit=200).items
+            if kind == "project"
+            else self.list_experiments(project_id=project_id, limit=200).items
+        )
+        raise self._no_such(kind, slug, listing)
 
     @staticmethod
     def _no_such(kind: str, slug: str, existing: Iterable[dict]) -> errors.NotFoundError:

@@ -224,7 +224,7 @@ def _ensure_identities(client, spec: dict) -> None:
             client.create_experiment(
                 experiment,
                 experiment,
-                spec.get("hypothesis") or "Miles telemetry capture.",
+                hypothesis=spec.get("hypothesis") or "Miles telemetry capture.",
                 # Without this the experiment lands under the tenant default and
                 # `run(project=..., experiment=...)` then rejects the pair it was
                 # just handed -- a self-contradicting error on identities the
