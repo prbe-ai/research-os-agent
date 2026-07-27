@@ -48,6 +48,12 @@ dev = [
 ]
 # Extra needed only to RUN the hosted HTTP MCP service (not for stdio/CLI users).
 mcp-http = ["uvicorn>=0.30"]
+# Extra for the library-mode instrumented trial runner (connectors.harbor_runner).
+# Trial-DIRECTORY parsing/capture needs nothing — this is only for owning the
+# Trial object in-process. Upper bound = the line verify_harbor_contract() is
+# pinned against. NB: litellm>=1.93 (a harbor dep) ships an sdist needing
+# rustc>=1.86 — add litellm<1.93 if the install fails to build.
+harbor = ["harbor>=0.20,<0.22"]
 
 [project.urls]
 Homepage = "https://github.com/prbe-ai/research-os-agent"
