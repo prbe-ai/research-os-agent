@@ -59,7 +59,7 @@ def test_run_with_no_experiment_refuses_rather_than_inventing_one(app, client, m
 def test_run_names_near_misses_so_a_typo_is_obvious(app, client):
     """A mistyped slug is by definition close to a real one; this is the whole
     reason resolution beats get-or-create."""
-    client.create_experiment("dockq-sweep", "DockQ", "temp 0.7 wins")
+    client.create_experiment("dockq-sweep", "DockQ", hypothesis="temp 0.7 wins")
     with pytest.raises(errors.NotFoundError, match="dockq-sweep") as caught:
         client.run(experiment="dockq-sweeep", name="r1")
     assert "Did you mean" in str(caught.value)
@@ -75,7 +75,7 @@ def test_an_unknown_project_raises_rather_than_being_created_or_ignored(app, cli
     asserts the branch itself.
     """
     client.create_project("folding")
-    client.create_experiment("dockq", "DockQ", "h")
+    client.create_experiment("dockq", "DockQ", hypothesis="h")
     before = len(client.list_projects().items)
 
     with pytest.raises(errors.NotFoundError, match="project"):
@@ -86,8 +86,38 @@ def test_an_unknown_project_raises_rather_than_being_created_or_ignored(app, cli
     assert app.runs == {}
 
 
+def test_an_archived_slug_says_archived_not_missing(app, client):
+    """Archived is a THIRD outcome, and conflating it with absent is a dead end.
+
+    The unique constraint does not ignore archived rows, so the plain lookup says
+    "does not exist" and the create that advice implies says "already exists" —
+    about the same slug. `ensure_project` used to escape that via the conflict's
+    existing_id; resolution has to be able to see the archived row instead.
+    """
+    proj = client.create_project("folding")
+    client.archive_project(proj["id"])
+
+    assert client.resolve_project("folding") is None
+    assert client.resolve_project("folding", include_archived=True)["id"] == proj["id"]
+
+    with pytest.raises(errors.NotFoundError, match="ARCHIVED") as caught:
+        client.run(project="folding", experiment="whatever", name="r1")
+    assert "probe project restore folding" in str(caught.value)
+
+
+def test_creating_an_experiment_with_a_positional_hypothesis_is_refused(client):
+    """`create_experiment("slug", "my hypothesis")` used to silently set the NAME.
+
+    hypothesis was the third positional with a None default, so the common
+    two-argument call bound a hypothesis to `name` and then failed the required-
+    hypothesis check for the wrong reason — or worse, passed with a nonsense name.
+    Keyword-only makes the mistake unrepresentable."""
+    with pytest.raises(TypeError):
+        client.create_experiment("e1", "E1", "temp 0.7 wins")
+
+
 def test_an_explicit_hypothesis_survives(app, client):
-    client.create_experiment("e1", "E1", "temp 0.7 wins")
+    client.create_experiment("e1", "E1", hypothesis="temp 0.7 wins")
     client.run(experiment="e1", name="r1")
     (experiment,) = app.experiments.values()
     assert experiment["hypothesis"] == "temp 0.7 wins"
@@ -97,11 +127,11 @@ def test_creating_an_experiment_without_a_hypothesis_is_refused(client):
     """No more `[auto]` placeholder. It was first-write-wins, so it became
     permanent unless a human noticed and ran `probe experiment set`."""
     with pytest.raises(errors.ValidationError, match="hypothesis"):
-        client.create_experiment("e1", "E1", None)
+        client.create_experiment("e1", "E1", hypothesis=None)
 
 
 def test_update_experiment_replaces_the_hypothesis(app, client):
-    exp = client.create_experiment("e1", "E1", "first guess")
+    exp = client.create_experiment("e1", "E1", hypothesis="first guess")
     updated = client.update_experiment(exp["id"], hypothesis="dockq > 0.8 at temp 0.7")
     assert updated["hypothesis"] == "dockq > 0.8 at temp 0.7"
 

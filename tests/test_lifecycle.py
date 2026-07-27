@@ -133,14 +133,14 @@ def test_group_create_then_run_start_can_reference_it(wired, capsys):
 
 def test_group_name_conflict_raises(client, app):
     client.fail_open = False
-    exp = client.create_experiment("e", "E", "h")
+    exp = client.create_experiment("e", "E", hypothesis="h")
     client.create_group(exp["id"], "dupe")
     with pytest.raises(errors.ConflictError):
         client.create_group(exp["id"], "dupe")
 
 
 def test_update_group_is_field_replace(client, app):
-    exp = client.create_experiment("e", "E", "h")
+    exp = client.create_experiment("e", "E", hypothesis="h")
     group = client.create_group(exp["id"], "sweep-1", spec={"lr": [0.1]})
     updated = client.update_group(group["id"], name="renamed")
     assert updated["name"] == "renamed"
@@ -156,7 +156,7 @@ def test_list_and_get_group_read_back(client, app):
     """list_groups/get_group had only reachability coverage — prove the calls are
     shaped right and the response reads back."""
     client.fail_open = False
-    exp = client.create_experiment("e", "E", "h")
+    exp = client.create_experiment("e", "E", hypothesis="h")
     created = client.create_group(exp["id"], "sweep-x", spec={"lr": [0.1]})
     assert [g["id"] for g in client.list_groups(exp["id"])] == [created["id"]]
     fetched = client.get_group(created["id"])
@@ -167,7 +167,7 @@ def test_list_and_get_group_read_back(client, app):
 
 # -- lifecycle --------------------------------------------------------------
 def test_experiment_archive_is_idempotent_then_restores(client, app):
-    exp = client.create_experiment("e", "E", "h")
+    exp = client.create_experiment("e", "E", hypothesis="h")
     first = client.archive_experiment(exp["id"])
     assert first["archived_at"]
     again = client.archive_experiment(exp["id"])

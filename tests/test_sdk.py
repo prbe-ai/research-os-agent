@@ -19,7 +19,7 @@ def test_run_resolves_its_experiment_and_creates_only_the_run(client, app):
     named for. Snapshot the request trail AFTER the explicit create and assert
     run() adds a run and nothing else.
     """
-    client.create_experiment("dockq-sweep", "DockQ", "h")
+    client.create_experiment("dockq-sweep", "DockQ", hypothesis="h")
     before = len(app.requests)
 
     run = client.run(experiment="dockq-sweep", name="run-1")
@@ -38,7 +38,7 @@ def test_creating_a_taken_slug_raises_instead_of_returning_the_existing_one(clie
     able to conjure a chain — so the conflict has to surface."""
     app.experiment_conflict_id = "existing-123"
     with pytest.raises(errors.ConflictError):
-        client.create_experiment("dockq", "DockQ", "h")
+        client.create_experiment("dockq", "DockQ", hypothesis="h")
 
 
 def test_log_metrics(client, app):
@@ -214,7 +214,7 @@ def test_error_mapping_409(app, tmp_path):
     c = make_client(app, tmp_spool=tmp_path / "spool")
     app.experiment_conflict_id = "e-9"
     with pytest.raises(errors.ConflictError) as caught:
-        c.create_experiment("dup", "Dup", "h")
+        c.create_experiment("dup", "Dup", hypothesis="h")
     assert caught.value.existing_id == "e-9"
 
 
@@ -267,7 +267,7 @@ def test_add_edge(client, app):
 
 def test_experiment_version_create_and_list(client, app):
     client.fail_open = False
-    exp = client.create_experiment("dockq", "DockQ", "h")
+    exp = client.create_experiment("dockq", "DockQ", hypothesis="h")
     v = client.experiment_version(exp["id"], label="launch-1")
     assert v["version"] == 1
     assert client.list_experiment_versions(exp["id"])[0]["label"] == "launch-1"

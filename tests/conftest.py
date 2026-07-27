@@ -459,6 +459,11 @@ class FakeApp:
             slug = request.url.params.get("slug")
             if slug:
                 rows = [row for row in rows if row.get("slug") == slug]
+            # The engine filters archived rows out of the default listing
+            # (`archived_at IS NULL` unless include=archived); the fake did not,
+            # so the archived-vs-absent distinction was invisible for experiments.
+            if request.url.params.get("include") != "archived":
+                rows = [row for row in rows if row.get("archived_at") is None]
             return httpx.Response(200, json=rows)
 
         if path == "/v1/runs" and method == "GET":
@@ -1091,7 +1096,7 @@ def open_run(client: Client, *, experiment: str, name: str | None = None, **run_
     from probe import errors as _errors
 
     try:
-        client.create_experiment(experiment, experiment, "h")
+        client.create_experiment(experiment, experiment, hypothesis="h")
     except _errors.ConflictError:
         pass
     return client.run(experiment=experiment, name=name, **run_kw)
