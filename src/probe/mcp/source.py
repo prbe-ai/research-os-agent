@@ -239,8 +239,23 @@ class ResearchOSSource:
     def experiments(self, *, project_id: str | None = None, limit: int = 100) -> list[dict]:
         return self.client.list_experiments(project_id=project_id, limit=limit).items
 
-    def runs(self, *, experiment_id: str | None = None, limit: int = 100) -> list[dict]:
-        return self.client.list_runs(experiment_id=experiment_id, limit=limit).items
+    def runs(
+        self,
+        *,
+        experiment_id: str | None = None,
+        project_id: str | None = None,
+        direct: bool = False,
+        limit: int = 100,
+    ) -> list[dict]:
+        """``project_id`` lists ALL the project's runs — project-direct and
+        experiment-attached (research-os 0054); ``direct=True`` narrows to
+        experiment-less runs server-side."""
+        return self.client.list_runs(
+            experiment_id=experiment_id,
+            project_id=project_id,
+            direct=direct,
+            limit=limit,
+        ).items
 
     def get(self, ref: str) -> tuple[str, dict]:
         """Resolve ``kind:value`` (or a bare id) to ``(kind, entity)``.

@@ -197,15 +197,21 @@ def _in_project(row: dict, project_id: str) -> bool:
 
 
 def _collapse_experiments(results: list[dict]) -> list[dict]:
-    """``collapse="experiment"``: experiment-level hits only, one per experiment
-    id, keeping the best-scoring representative's channel provenance."""
+    """``collapse="experiment"``: one hit per experiment id, keeping the
+    best-scoring representative's channel provenance.
+
+    RUN hits pass through (deduped by id) instead of being dropped: experiment
+    is OPTIONAL grouping now (research-os 0054), so a project-direct run has no
+    experiment-level hit to represent it — and the result rows carry no
+    experiment linkage to tell a direct run from an attached one."""
     best: dict[Any, dict] = {}
     for row in results:
-        if row.get("entity_type") != EntityType.EXPERIMENT:
+        if row.get("entity_type") not in (EntityType.EXPERIMENT, EntityType.RUN):
             continue
-        kept = best.get(row.get("id"))
+        key = (row.get("entity_type"), row.get("id"))
+        kept = best.get(key)
         if kept is None or _score(row) > _score(kept):
-            best[row.get("id")] = row  # replacement keeps first-seen order
+            best[key] = row  # replacement keeps first-seen order
     return list(best.values())
 
 
@@ -628,6 +634,25 @@ class ResearchReadService:
                 run
                 for run in self.source.runs(experiment_id=str(experiment["id"]), limit=10)
                 if run.get("status") in {"created", "running"}
+            )
+        if project is not None:
+            # PROJECT-DIRECT runs (research-os 0054) belong to no experiment, so
+            # the sweep above can never see them. direct=True filters server-side
+            # (so ten attached runs can't mask an active direct one); the
+            # client-side experiment_id filter stays as belt-and-braces, and the
+            # SDK's project_id guard raises on a pre-0054 backend that would
+            # have returned unscoped rows — degrade to the experiment sweep.
+            try:
+                direct_runs = self.source.runs(
+                    project_id=str(project["id"]), direct=True, limit=10
+                )
+            except errors.NotFoundError:
+                direct_runs = []
+            active_runs.extend(
+                run
+                for run in direct_runs
+                if run.get("status") in {"created", "running"}
+                and not run.get("experiment_id")
             )
         # One capability lookup per operation (the probe result is cached on the
         # source, but a transient probe failure must not re-fire three times here).
@@ -1117,10 +1142,17 @@ class ResearchReadService:
     def _hypothesis_of(self, entity: dict, missing: list[str]) -> str | None:
         """A run's hypothesis lives on its experiment. Appends to `missing` rather
         than raising: a run whose experiment vanished is still worth reading, and
-        the envelope is where that absence gets reported."""
+        the envelope is where that absence gets reported.
+
+        A PROJECT-DIRECT run (experiment_id null WITH a project_id, the W&B
+        shape) legitimately has no experiment — no hypothesis, and no missing
+        marker either: nothing failed to load. The marker is reserved for a run
+        that names an experiment this call could not read, and for old rows
+        that carry neither id (pre-project_id backends)."""
         experiment_id = entity.get("experiment_id")
         if not experiment_id:
-            missing.append(MissingMarker.EXPERIMENT)
+            if not entity.get("project_id"):
+                missing.append(MissingMarker.EXPERIMENT)
             return None
         try:
             return self.source.experiment(str(experiment_id)).get("hypothesis")

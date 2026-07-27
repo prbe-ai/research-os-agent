@@ -1562,7 +1562,7 @@ class IngestRunRequest(BaseModel):
     batch_id: str | None = Field(None, title='Batch Id')
     execution_record: ExecutionRecordCreate | None = None
     experiment_hypothesis: str | None = Field(None, title='Experiment Hypothesis')
-    experiment_slug: str = Field(..., title='Experiment Slug')
+    experiment_slug: str | None = Field(None, title='Experiment Slug')
     metrics: list[MetricPointIn] | None = Field(None, max_length=50000, title='Metrics')
     project_slug: str | None = Field(None, title='Project Slug')
     run: IngestRun
@@ -1576,6 +1576,7 @@ class MetricBatch(BaseModel):
 class ProjectNode(BaseModel):
     active_run_count: int | None = Field(0, title='Active Run Count')
     created_at: AwareDatetime = Field(..., title='Created At')
+    direct_run_count: int | None = Field(0, title='Direct Run Count')
     experiment_count: int | None = Field(0, title='Experiment Count')
     experiments: list[ExperimentNode] | None = Field(None, title='Experiments')
     id: UUID = Field(..., title='Id')
@@ -1591,7 +1592,8 @@ class RunDetailOut(BaseModel):
     absent from RunOut so the frozen ingest response stays byte-identical (the ingest
     route keeps response_model=RunOut, which filters these out). short_id (fold #21)
     is the human-facing petname the dashboard displays; created_by (fold #1), env_ref
-    (fold #7), and foreign_keys (fold #8) surface here for reads.
+    (fold #7), and foreign_keys (fold #8) surface here for reads. project_id
+    (0054) is likewise detail-only: the run's owning project, always set.
     """
 
     config: dict[str, Any] | None = Field(None, title='Config')
@@ -1602,7 +1604,7 @@ class RunDetailOut(BaseModel):
     deleted_at: AwareDatetime | None = Field(None, title='Deleted At')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     env_ref: str | None = Field(None, title='Env Ref')
-    experiment_id: UUID = Field(..., title='Experiment Id')
+    experiment_id: UUID | None = Field(..., title='Experiment Id')
     external_id: str | None = Field(None, title='External Id')
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     group_id: UUID | None = Field(None, title='Group Id')
@@ -1611,6 +1613,7 @@ class RunDetailOut(BaseModel):
     name: str = Field(..., title='Name')
     parent_relation: ParentRelation | None = None
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
+    project_id: UUID = Field(..., title='Project Id')
     short_id: str | None = Field(None, title='Short Id')
     source: str = Field(..., title='Source')
     started_at: AwareDatetime | None = Field(None, title='Started At')
@@ -1636,7 +1639,7 @@ class RunOut(BaseModel):
     customer_id: str = Field(..., title='Customer Id')
     deleted_at: AwareDatetime | None = Field(None, title='Deleted At')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
-    experiment_id: UUID = Field(..., title='Experiment Id')
+    experiment_id: UUID | None = Field(..., title='Experiment Id')
     external_id: str | None = Field(None, title='External Id')
     group_id: UUID | None = Field(None, title='Group Id')
     id: UUID = Field(..., title='Id')
