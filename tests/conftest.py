@@ -75,6 +75,7 @@ _RUN_BUNDLE = re.compile(r"^/v1/runs/([^/]+)/bundle$")
 _RUN_LINEAGE = re.compile(r"^/v1/runs/([^/]+)/lineage$")
 _RUN_ITEM = re.compile(r"^/v1/runs/([^/]+)$")
 _EXP_RUNS = re.compile(r"^/v1/experiments/([^/]+)/runs$")
+_PROJ_RUNS = re.compile(r"^/v1/projects/([^/]+)/runs$")
 _EXP_ITEM = re.compile(r"^/v1/experiments/([^/]+)$")
 _PROJ_ITEM = re.compile(r"^/v1/projects/([^/]+)$")
 _WS_ITEM = re.compile(r"^/v1/workspaces/([^/]+)$")
@@ -471,6 +472,10 @@ class FakeApp:
             experiment_id = request.url.params.get("experiment_id")
             if experiment_id:
                 rows = [row for row in rows if row.get("experiment_id") == experiment_id]
+            # project_id (0054): ALL of a project's runs — direct AND attached.
+            project_id = request.url.params.get("project_id")
+            if project_id:
+                rows = [row for row in rows if row.get("project_id") == project_id]
             return httpx.Response(200, json=rows)
 
         m = _EXP_ITEM.match(path)
@@ -488,7 +493,27 @@ class FakeApp:
         m = _EXP_RUNS.match(path)
         if m and method == "POST":
             rid = str(uuid.uuid4())
-            row = self._new_run(rid, m.group(1), body)
+            eid = m.group(1)
+            # Mirror the engine: an attached run inherits ITS EXPERIMENT'S
+            # project (0054).
+            row = self._new_run(
+                rid,
+                eid,
+                body,
+                project_id=(self.experiments.get(eid) or {}).get("project_id"),
+            )
+            return httpx.Response(201, json=row)
+
+        m = _PROJ_RUNS.match(path)
+        if m and method == "POST":
+            # PROJECT-DIRECT run (0054): no experiment; group_id is rejected
+            # like the engine does (run groups are experiment-anchored).
+            if body.get("group_id") is not None:
+                return httpx.Response(
+                    422, json={"detail": "group_id requires an experiment-attached run"}
+                )
+            rid = str(uuid.uuid4())
+            row = self._new_run(rid, None, body, project_id=m.group(1))
             return httpx.Response(201, json=row)
 
         m = _RUN_METRICS.match(path)
@@ -1025,11 +1050,21 @@ class FakeApp:
 
         return httpx.Response(404, json={"detail": f"no fake route for {method} {path}"})
 
-    def _new_run(self, rid: str, experiment_id: str, body: dict) -> dict:
-        # RunDetailOut shape (fold fields surfaced on /v1 reads).
+    def _new_run(
+        self,
+        rid: str,
+        experiment_id: str | None,
+        body: dict,
+        *,
+        project_id: str | None = None,
+    ) -> dict:
+        # RunDetailOut shape (fold fields surfaced on /v1 reads). project_id is
+        # always set on the real backend (0054); the fake defaults one so old
+        # seeds stay valid.
         row = {
             "id": rid,
             "experiment_id": experiment_id,
+            "project_id": project_id or str(uuid.uuid4()),
             "name": body.get("name", "run"),
             "status": "running",
             "source": body.get("source", "api"),
