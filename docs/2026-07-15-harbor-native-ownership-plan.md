@@ -20,6 +20,14 @@
   Prod-smoked (run `silver-heron-263`): capture-time + retroactive paths.
 
 **Not implemented (deliberate)**
+- TODO — native tracing (decision 2026-07-27): live SDK/OTel-style span
+  streaming from instrumented agent code — the W&B Weave / MLflow-Tracing
+  model, no file contract — as the second trajectory door alongside the
+  Harbor-first on-disk contract. The server's `turn`/`tool_call` span rails
+  and deterministic-id vocabulary already exist (Phase 2 expansion), so this
+  is an SDK-instrumentation arc (decorators/autopatch + an OTel GenAI ingest
+  adapter), not a schema change. Scope until then is deliberately the Harbor
+  framework (see the README "Trajectory sources" note).
 - S3 backfill importer (`probe ingest harbor-s3`) — parked to last by
   decision 2026-07-16: fresh runs matter more than history; "what we mainly
   care about is how it is after they start using it."
