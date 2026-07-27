@@ -191,6 +191,21 @@ external keys and span IDs make retries update the same rollout; arbitrary
 Miles/Osmosis correlation fields are preserved under the `harbor_trial`
 manifest's `source.context`.
 
+**Trajectory sources — Harbor-first, by decision.** Today trajectories enter
+Probe through Harbor's on-disk contract: ATIF-supporting agents write
+`trajectory.json` into their logs dir, the harness delivers it at
+`<trial_dir>/agent/trajectory.json` (the location Harbor's own viewer reads),
+and `parse_trial`/`capture_trial` pick it up from there — raw bytes always
+stored, recognized formats expanded into turn/tool_call spans, unknown formats
+expandable retroactively via `probe trial expand`. Emission is per-agent
+opt-in upstream (`SUPPORTS_ATIF`; e.g. the oracle agent emits nothing), so
+absence is a normal, captured state. "Traditional" trajectory tracking — live
+SDK/OTel-style span streaming from instrumented agent code, the W&B
+Weave/MLflow-Tracing model, with no file contract at all — is planned as the
+second door: the server-side turn/tool_call span rails it needs already exist,
+so it is an SDK-instrumentation arc, not a schema change. For now the scope is
+deliberately the Harbor framework.
+
 The completeness claim is intentionally bounded: it covers declared regular
 files in the **host Harbor trial directory**. Public Harbor tears down the
 sandbox before `Trial.run()` returns, so a post-run SDK consumer cannot know

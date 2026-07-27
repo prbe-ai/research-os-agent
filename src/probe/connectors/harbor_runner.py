@@ -420,9 +420,11 @@ async def run_trial(
 
     The out-of-the-box door: mirrors ``harbor run -p <task> -a <agent>`` for a
     single trial, except the per-trial hooks (which the CLI cannot attach) are
-    wired before ``Trial.run``.  Returns harbor's own ``TrialResult`` plus the
-    trial directory and the capture recorder; feed ``outcome.trial_dir`` to
-    ``capture_trial`` to publish everything — bundle included — to a run.
+    wired before ``Trial.run``.  ``agent`` accepts a built-in name (``oracle``)
+    or a custom import path (``my.module:MyAgentClass``), same as the CLI's
+    ``-a``.  Returns harbor's own ``TrialResult`` plus the trial directory and
+    the capture recorder; feed ``outcome.trial_dir`` to ``capture_trial`` to
+    publish everything — bundle included — to a run.
     """
     problems = verify_harbor_contract()
     if problems:
@@ -440,11 +442,14 @@ async def run_trial(
 
     task_path = Path(task_path)
     name = trial_name or f"{task_path.name}__probe-{uuid.uuid4().hex[:8]}"
+    agent_field = "import_path" if ":" in agent else "name"
     config = TrialConfig(
         task=TaskConfig(path=task_path),
         trial_name=name,
         trials_dir=Path(trials_dir),
-        agent=AgentConfig(name=agent, model_name=model_name, kwargs=agent_kwargs or {}),
+        agent=AgentConfig(
+            **{agent_field: agent}, model_name=model_name, kwargs=agent_kwargs or {}
+        ),
         environment=EnvironmentConfig(type=environment, kwargs=environment_kwargs or {}),
     )
     trial = await Trial.create(config)

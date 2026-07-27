@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from probe.cli import main as _cli_main  # noqa: F401 - ensures CLI imports cleanly
 from probe import cli
+from probe.cli import main as _cli_main  # noqa: F401 - ensures CLI imports cleanly
 from probe.connectors.harbor import (
     CAPTURE_LEDGER_NAME,
     MANIFEST_KIND,
@@ -17,8 +17,7 @@ from probe.connectors.harbor import (
     role_for,
     stage_trial,
 )
-from tests.conftest import make_client
-from tests.conftest import open_run
+from tests.conftest import make_client, open_run
 
 
 # -- fixture: an Osmosis-shaped trial directory --------------------------------
@@ -58,6 +57,18 @@ def test_parse_trial_reads_the_contract(tmp_path):
     assert trial.trajectory_format == "atif@1"
     assert trial.phases["agent_execution"]["started_at"] == "2026-07-15T01:01:00Z"
     assert len(trial.files) == 7
+
+
+def test_parse_trial_prefers_harbor_real_trajectory_location(tmp_path):
+    """agent/trajectory.json (what harbor's viewer reads) beats the root fallback."""
+    root = _write_trial(tmp_path / "trial")  # root decoy: {"schema": "atif@1"}
+    (root / "agent").mkdir()
+    (root / "agent" / "trajectory.json").write_text(
+        json.dumps({"schema_version": "ATIF-v1.7", "steps": []})
+    )
+    trial = parse_trial(root)
+    assert trial.trajectory_format == "ATIF-v1.7"
+    assert role_for("agent/trajectory.json") == "trajectory"
 
 
 def test_parse_trial_tolerates_a_bare_fork_dir(tmp_path):

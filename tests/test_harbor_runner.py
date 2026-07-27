@@ -360,3 +360,60 @@ class TestRealHarborLibraryMode:
         }
         for name in (BEGIN_MANIFEST, END_MANIFEST, END_DELTA, "meta.json"):
             assert f"artifacts/{BUNDLE_DIRNAME}/{name}" in parsed_rel
+
+    def test_atif_agent_trajectory_expands_end_to_end(
+        self, tmp_path, monkeypatch, client, app
+    ):
+        """Item 1 closed for real: a SUPPORTS_ATIF agent through the REAL harness.
+
+        The custom agent does exactly what claude-code/goose/terminus do — write
+        one of Harbor's own golden ATIF documents into its logs dir — so this
+        proves the whole chain: harness delivers the trajectory at the contract
+        location (agent/trajectory.json), parse_trial reads THAT location, and
+        capture_trial expands it into turn/tool_call spans on the wire.
+        """
+        pytest.importorskip("harbor", reason="harbor not installed")
+        import os
+        import pwd
+
+        from probe.connectors.harbor import capture_trial, parse_trial
+        from probe.connectors.harbor_runner import run_trial
+        from tests.conftest import open_run
+        from tests.miniatif_agent import GOLDEN_ATIF
+
+        real_docker_config = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".docker"
+        if real_docker_config.is_dir():
+            monkeypatch.setenv("DOCKER_CONFIG", str(real_docker_config))
+
+        outcome = asyncio.run(
+            run_trial(
+                _write_echo_task(tmp_path / "tasks"),
+                trials_dir=tmp_path / "trials",
+                agent="tests.miniatif_agent:MiniAtifAgent",
+            )
+        )
+        assert outcome.result.exception_info is None, outcome.result.exception_info
+        # The custom agent actually solved the task (verifier unaffected).
+        assert outcome.result.verifier_result.rewards["reward"] == pytest.approx(0.85)
+
+        # Harness delivered the trajectory at the REAL contract location.
+        emitted = outcome.trial_dir / "agent" / "trajectory.json"
+        assert emitted.is_file()
+        assert not (outcome.trial_dir / "trajectory.json").exists()
+        golden = json.loads(GOLDEN_ATIF.read_text())
+        parsed = parse_trial(outcome.trial_dir)
+        assert parsed.trajectory == json.loads(emitted.read_text()) == golden
+        assert parsed.trajectory_format == golden["schema_version"]  # ATIF-v1.7
+
+        # ...and capture expands it into turn/tool_call spans on the wire.
+        run = open_run(client, experiment="e", name="r")
+        result = capture_trial(run, outcome.trial_dir, step_index=7, strict=True)
+        assert result["trajectory"]["expanded"] is True
+        assert result["trajectory"]["spans"] >= len(golden["steps"])
+        posted_types = [
+            span.get("span_type")
+            for req in app.requests
+            if req.url.path.endswith("/spans")
+            for span in json.loads(req.content)["spans"]
+        ]
+        assert "turn" in posted_types
