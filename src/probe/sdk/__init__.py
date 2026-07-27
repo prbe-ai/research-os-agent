@@ -28,6 +28,7 @@ _LAZY: dict[str, str] = {
     "EventsReadClient": "events",
     "NoteClient": "events",
     "Run": "run",
+    "UnitContext": "unit_context",
 }
 
 
@@ -55,6 +56,7 @@ if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at run
     from .config import Settings, resolve
     from .events import EventsReadClient, NoteClient
     from .run import Run
+    from .unit_context import UnitContext
 
 
 __all__ = [
@@ -65,6 +67,7 @@ __all__ = [
     "NoteClient",
     "Run",
     "Settings",
+    "UnitContext",
     "resolve",
     "stable_external_key",
     "stable_span_id",
