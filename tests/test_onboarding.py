@@ -9,7 +9,6 @@ import pytest
 from probe import cli, errors
 from probe.sdk import defaults
 from tests.conftest import make_client
-from tests.conftest import open_run
 
 
 # -- defaults derivation ------------------------------------------------------
@@ -64,6 +63,27 @@ def test_run_names_near_misses_so_a_typo_is_obvious(app, client):
     with pytest.raises(errors.NotFoundError, match="dockq-sweep") as caught:
         client.run(experiment="dockq-sweeep", name="r1")
     assert "Did you mean" in str(caught.value)
+
+
+def test_an_unknown_project_raises_rather_than_being_created_or_ignored(app, client):
+    """Both halves of the resolve have to fail loudly, not just the experiment.
+
+    Mutation testing killed this file twice on the project branch alone: once by
+    swapping the raise for a silent `create_project`, once by substituting
+    `{"id": None}` so an unknown project was quietly dropped. Every other test
+    seeds the project it names, so both mutants survived a green suite. This
+    asserts the branch itself.
+    """
+    client.create_project("folding")
+    client.create_experiment("dockq", "DockQ", "h")
+    before = len(client.list_projects().items)
+
+    with pytest.raises(errors.NotFoundError, match="project"):
+        client.run(project="foldingg", experiment="dockq", name="r1")
+
+    # not created behind our back, and not silently ignored either
+    assert len(client.list_projects().items) == before
+    assert app.runs == {}
 
 
 def test_an_explicit_hypothesis_survives(app, client):

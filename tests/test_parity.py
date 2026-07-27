@@ -323,6 +323,12 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
 # the next backend fold that lands ahead of the client goes here, with a pointer to
 # what will close it, instead of being quietly absorbed into "not our job".
 PENDING: dict[Op, str] = {
+    # Surfaced 2026-07-26 by refreshing the snapshot for the `?slug=` filter
+    # (research-os#176). Pre-existing backend drift the stale schema was hiding,
+    # not debt this change introduced.
+    ("GET", "/v1/client-status"): "client version reporting; SessionStart hook reads it, not the SDK",
+    ("GET", "/v1/client-version"): "client version reporting; SessionStart hook reads it, not the SDK",
+    ("GET", "/v1/integrations/ingestion/{}/devices"): "connector device listing; dashboard surface today",
     # Surfaced 2026-07-21 by the first `make dump-openapi` in a while: these
     # routes shipped on the backend while the checked-in schema sat stale, so
     # this guard could not see them. They are not new debt, only newly VISIBLE

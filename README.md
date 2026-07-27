@@ -84,12 +84,15 @@ import probe
 
 client = probe.Client()  # resolves creds from env / `probe login`
 
-run = client.run(experiment="dockq-sweep", hypothesis="temp 0.7 wins", name="run-1",
+# The project and experiment must already exist — create them explicitly first.
+client.create_project("folding")
+client.create_experiment("dockq-sweep", hypothesis="temp 0.7 wins")
+
+run = client.run(experiment="dockq-sweep", name="run-1",
                  project="folding", source="runpod", external_id="rp-9931")
-# …or with zero identity args: `client.run()` defaults experiment to the git repo /
-# script name, name to a timestamp (the server adds a petname short_id), and a NEW
-# experiment gets a marked "[auto] …" hypothesis composed from context. Set the real
-# one later: client.update_experiment(id, hypothesis="…")  /  probe experiment set.
+# `name` still defaults to a timestamp (the server adds a petname short_id). An
+# unknown experiment slug raises, naming the closest existing ones, rather than
+# creating a second identity from a typo.
 
 run.snapshot()                                   # non-disruptive git + deps + GPU capture
 run.link(wandb_run_id="abc123", s3_prefix="s3://x/y")
@@ -134,7 +137,8 @@ One idempotent push (bearer ingest token + optional HMAC), keyed on
 ## CLI (`probe`)
 
 ```bash
-RUN=$(probe run start --experiment dockq --hypothesis "temp 0.7 wins" --name run-1 \
+RUN=$(probe experiment create dockq --hypothesis "temp 0.7 wins"
+probe run start --experiment dockq --name run-1 \
         --project folding --source runpod --external-id rp-9931)
 probe snapshot $RUN
 probe link $RUN --set wandb_run_id=abc --set gpu_job=rp-9931
@@ -273,8 +277,9 @@ identifiers and evidence first.
 
 ## Skills
 
-Two skills, split by moment rather than by entity — `probe run start` creates the
-project, experiment and run in one call, so those are not separate workflows.
+Two skills, split by moment rather than by entity. `probe run start` opens a run in
+an experiment that already exists; creating the project and experiment are explicit
+prior steps (`probe project create` / `probe experiment create`).
 
 - `start-research-work` covers that call: orient against what already exists and
   what is already running, create the project and experiment explicitly, resolve assets

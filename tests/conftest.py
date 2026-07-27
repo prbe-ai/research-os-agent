@@ -422,6 +422,15 @@ class FakeApp:
             return httpx.Response(200, json=self.workspaces[wid])
 
         if path == "/v1/experiments" and method == "POST":
+            # Mirror the projects handler and the real UNIQUE (customer_id, slug):
+            # without this the fake happily mints duplicate identities, so
+            # `create_experiment` never conflicts and a regression that put the
+            # POST-then-swallow-409 back inside run() would leave the suite green.
+            for _row in self.experiments.values():
+                if _row.get("slug") == (body or {}).get("slug"):
+                    return httpx.Response(409, json={"detail": {
+                        "message": "experiment with this slug already exists",
+                        "existing_id": _row["id"]}})
             if self.experiment_conflict_id:
                 return httpx.Response(
                     409,

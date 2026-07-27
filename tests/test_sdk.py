@@ -10,13 +10,26 @@ from probe import errors
 from tests.conftest import open_run
 
 
-def test_run_high_level_creates_experiment_and_run(client, app):
-    run = open_run(client, experiment="dockq-sweep", name="run-1")
+def test_run_resolves_its_experiment_and_creates_only_the_run(client, app):
+    """The central claim of explicit creation: run() writes exactly ONE thing.
+
+    The old assertion checked that a POST /v1/experiments happened — which the
+    `open_run` HELPER now issues, not run(). It would have passed even if run()
+    never touched experiments at all, so it could not see the behaviour it was
+    named for. Snapshot the request trail AFTER the explicit create and assert
+    run() adds a run and nothing else.
+    """
+    client.create_experiment("dockq-sweep", "DockQ", "h")
+    before = len(app.requests)
+
+    run = client.run(experiment="dockq-sweep", name="run-1")
+
     assert run.id in app.runs
-    # one POST /v1/experiments, one POST .../runs
-    posts = [(r.method, r.url.path) for r in app.requests]
-    assert ("POST", "/v1/experiments") in posts
-    assert any(p[0] == "POST" and p[1].endswith("/runs") for p in posts)
+    after = [(r.method, r.url.path) for r in app.requests[before:]]
+    assert ("POST", "/v1/experiments") not in after, "run() created an experiment"
+    assert ("POST", "/v1/projects") not in after, "run() created a project"
+    posts = [p for p in after if p[0] == "POST"]
+    assert len(posts) == 1 and posts[0][1].endswith("/runs"), posts
 
 
 def test_creating_a_taken_slug_raises_instead_of_returning_the_existing_one(client, app):

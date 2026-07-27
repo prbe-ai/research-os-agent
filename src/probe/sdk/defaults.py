@@ -1,12 +1,17 @@
-"""Opinionated first-run defaults: derive experiment / run-name / hypothesis from context.
+"""Contextual defaults for a launch. Only ``default_run_name`` is still wired in.
 
-W&B-style zero-decision launches without giving up the hypothesis-first model:
-the experiment slug falls back to the git repo (then the running script), run
-names are timestamped, and a brand-new experiment gets an explicitly-marked
-``[auto]`` hypothesis composed from the same context. The auto hypothesis is a
-placeholder by design — replace it with ``client.update_experiment(...)`` or
-``probe experiment set ID --hypothesis '...'`` (first-write-wins only applies to
-the create; PATCH always updates).
+``default_run_name`` remains the default for a run's name: naming a RUN has never
+been the ambiguous part, and a timestamp is a fine answer.
+
+``default_experiment_slug`` and ``auto_hypothesis`` have NO production caller.
+They existed so ``client.run()`` could invent an experiment from ambient context
+— git repo, then running script — and give it a marked ``[auto]`` hypothesis when
+none was supplied. Creation is explicit now: the slug must be named and the
+hypothesis is required at create time, because an experiment named after whatever
+directory you happened to be in, carrying a placeholder that first-write-wins made
+permanent, is a worse record than no record. Both are kept for one release so an
+external caller gets a deprecation rather than an AttributeError; they and their
+private helpers go next release.
 """
 
 from __future__ import annotations

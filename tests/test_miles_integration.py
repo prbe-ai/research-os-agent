@@ -58,7 +58,20 @@ class FakeClient:
         self.created_run = None
         self.closed = False
         self.run_calls = []
+        self.created_projects = []
+        self.created_experiments = []
         type(self).instances.append(self)
+
+    def create_project(self, slug, name=None, **kw):
+        self.created_projects.append(slug)
+        return {"id": f"proj-{slug}", "slug": slug}
+
+    def create_experiment(self, slug, name=None, hypothesis=None, **kw):
+        self.created_experiments.append((slug, hypothesis, kw.get("project_id")))
+        return {"id": f"exp-{slug}", "slug": slug, "project_id": kw.get("project_id")}
+
+    def resolve_project(self, slug):
+        return {"id": f"proj-{slug}", "slug": slug}
 
     def run(self, **kwargs):
         self.run_calls.append(kwargs)

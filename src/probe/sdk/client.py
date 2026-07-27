@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 import difflib
 import os
+import shlex
 import sys
 import threading
 import warnings
@@ -69,6 +70,28 @@ _SCOPED_ANCHORS = frozenset(
 #: REPLACES it via a confirm-time swap instead of adding a second version. They also
 #: have no metadata-only form — a file is its bytes.
 _FILE_ANCHORS = frozenset({Anchor.WORKSPACE, Anchor.SHARED})
+
+
+
+def _exactly(rows: list[dict], slug: str) -> dict | None:
+    """The row whose slug actually MATCHES, or None.
+
+    Never `rows[0]`. FastAPI silently drops a query parameter it does not
+    declare, so a backend without the `?slug=` filter (an older engine, a
+    rolled-back data plane, a self-hosted install) answers an unfiltered first
+    page — and taking `rows[0]` there attaches the caller to a real, arbitrary,
+    WRONG entity instead of erroring. That failure is worse than the
+    get-or-create it replaced: get-or-create at least made an isolated new
+    identity, where this appends your metrics to someone else's experiment.
+
+    The membership check in `run()` cannot catch it either, because it reads its
+    comparand from the same broken listing and so agrees with the bug. Verifying
+    the slug here is what makes an unfiltered response degrade to "not found".
+    """
+    for row in rows or ():
+        if row.get("slug") == slug:
+            return row
+    return None
 
 
 class Client:
@@ -293,7 +316,7 @@ class Client:
         `(customer_id, slug)` is UNIQUE, so ``?slug=`` returns 0 or 1 row and an
         empty result is an unambiguous "absent" rather than "not on this page"."""
         rows = self.transport.get("/v1/projects", params={"slug": slug})
-        return rows[0] if rows else None
+        return _exactly(rows, slug)
 
     def get_project(self, project_id: str) -> dict:
         return self.transport.get(f"/v1/projects/{project_id}")
@@ -588,7 +611,7 @@ class Client:
         Experiment slugs are UNIQUE per TENANT, not per project, so this needs no
         project_id to disambiguate."""
         rows = self.transport.get("/v1/experiments", params={"slug": slug})
-        return rows[0] if rows else None
+        return _exactly(rows, slug)
 
     def get_experiment(self, experiment_id: str) -> dict:
         return self.transport.get(f"/v1/experiments/{experiment_id}")
@@ -603,8 +626,8 @@ class Client:
         metadata: dict | None = None,
         summary: dict | None = None,
     ) -> dict:
-        """PATCH /v1/experiments/{id} — e.g. replace an ``[auto]`` hypothesis with
-        the real one once the experiment's intent is settled."""
+        """PATCH /v1/experiments/{id} — amend an experiment's hypothesis, name or
+        description after creation."""
         body = {
             key: value
             for key, value in {
@@ -759,12 +782,14 @@ class Client:
         if project:
             found = self.resolve_project(project)
             if found is None:
-                raise self._no_such("project", project, self.list_projects().items)
+                raise self._no_such(
+                    "project", project, self.list_projects(limit=200).items
+                )
             project_id = found["id"]
         exp = self.resolve_experiment(experiment)
         if exp is None:
             raise self._no_such(
-                "experiment", experiment, self.list_experiments(project_id=project_id).items
+                "experiment", experiment, self.list_experiments(project_id=project_id, limit=200).items
             )
         # `project` used to decide where a NEW experiment got filed. Now that the
         # experiment must already exist, the only honest job left for it is to
@@ -787,9 +812,15 @@ class Client:
         slugs = [row["slug"] for row in existing if row.get("slug")]
         near = difflib.get_close_matches(slug, slugs, n=3, cutoff=0.6)
         hint = f" Did you mean: {', '.join(near)}?" if near else ""
+        # The suggested command has to actually RUN. `experiment create` requires
+        # --hypothesis, so omitting it would print a command that fails on the one
+        # field this whole change exists to force. The slug is quoted because it
+        # arrives from the caller and this string is presented as copy-pasteable.
+        extra = ' --hypothesis "..."' if kind == "experiment" else ""
         return errors.NotFoundError(
             f"no {kind} with slug {slug!r}.{hint} "
-            f"Create it with `probe {kind} create {slug}` if it is genuinely new."
+            f"Create it with `probe {kind} create {shlex.quote(slug)}{extra}` "
+            "if it is genuinely new."
         )
 
     def heartbeat_run(self, run_id: str) -> dict:

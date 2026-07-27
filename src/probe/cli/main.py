@@ -1113,13 +1113,13 @@ def _project_id(client: Client, ref: str) -> str:
 def _project_slug(client: Client, ref: str | None) -> str | None:
     """The inverse of :func:`_project_id`, for the slug-resolving paths.
 
-    ``Client.run`` takes a project *slug* and creates it if absent, so handing it an
-    id creates a junk project whose slug is a UUID string rather than resolving the
+    ``Client.run`` resolves a project by *slug* and raises when it is absent, so
+    handing it an id makes the lookup miss a project that genuinely exists rather than resolving the
     one you meant. The ambient anchor stores an id (stable across renames), so it has
     to be translated on the way in — as does an explicit ``--project <uuid>``.
 
-    A non-UUID passes through untouched: it is already a slug, and creating it when
-    missing is the documented behaviour of ``run start``.
+    A non-UUID passes through untouched: it is already a slug, and an absent one is
+    now an error from ``run start`` rather than a silent create.
     """
     if ref is None:
         return None
@@ -2356,7 +2356,7 @@ def experiment_set(
     name: str = typer.Option(None, "--name"),
     description: str = typer.Option(None, "--description"),
 ) -> None:
-    """Update experiment fields — the follow-up to an [auto]-generated hypothesis."""
+    """Amend an experiment's hypothesis, name, or description after creation."""
     if hypothesis is None and name is None and description is None:
         raise typer.BadParameter("pass at least one of --hypothesis/--name/--description")
     with _client() as c:
