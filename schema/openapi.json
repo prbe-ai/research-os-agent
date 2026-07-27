@@ -4568,6 +4568,7 @@
         "required": [
           "id",
           "customer_id",
+          "experiment_id",
           "name",
           "status",
           "source",
@@ -4986,6 +4987,7 @@
         "required": [
           "id",
           "customer_id",
+          "experiment_id",
           "name",
           "status",
           "source",
@@ -11229,6 +11231,18 @@
               ],
               "description": "ALL runs in the project \u2014 project-direct AND experiment-attached",
               "title": "Project Id"
+            }
+          },
+          {
+            "description": "only PROJECT-DIRECT runs (experiment_id IS NULL); combine with project_id",
+            "in": "query",
+            "name": "direct",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "only PROJECT-DIRECT runs (experiment_id IS NULL); combine with project_id",
+              "title": "Direct",
+              "type": "boolean"
             }
           },
           {

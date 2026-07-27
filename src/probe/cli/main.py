@@ -1383,6 +1383,12 @@ def run_start(
     # project would be stored and displayed but never actually applied to a write.
     # Explicit flag still wins, so scripts never depend on a developer's context.
     resolved_project = resolve(project=project).project
+    if not experiment and not resolved_project:
+        # Fail in CLI vocabulary before the SDK's run()-phrased error can leak.
+        raise errors.ValidationError(
+            "pass --experiment for an experiment run, or --project for a "
+            "project-direct one (or set an active project with `probe project use`)"
+        )
     with _client() as c:
         run = c.run(
             experiment=experiment,
@@ -1427,8 +1433,17 @@ def run_child(
         )
         if parent.get("experiment_id"):
             child = c.create_run(parent["experiment_id"], name, **common)
-        else:
+        elif parent.get("project_id"):
             child = c.create_project_run(parent["project_id"], name, **common)
+        else:
+            # A pre-0054 backend's run rows carry no project_id field at all;
+            # a KeyError traceback here would say nothing actionable.
+            raise errors.ValidationError(
+                f"run {run} reports neither an experiment nor a project — this "
+                "research-os backend predates project-direct runs (0054). "
+                "Upgrade the backend, or open the child under an experiment "
+                "with `probe run start --experiment`."
+            )
     print(child.id)
 
 

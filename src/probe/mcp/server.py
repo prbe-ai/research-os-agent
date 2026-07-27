@@ -178,7 +178,8 @@ def create_server(
         project and may — but need not — sit inside an experiment.
 
         scope: omit for top-level projects; "project:<id>" for that project's
-            experiments PLUS its project-direct runs (returned as `runs`);
+            experiments PLUS its project-direct runs (returned as `runs` —
+            null on cursor pages and on backends that predate direct runs);
             "experiment:<id>" for that experiment's runs.
         depth: 1 lists one level; 2 also expands children. Higher is REJECTED,
             not clamped -- a silent clamp would let you believe you saw more

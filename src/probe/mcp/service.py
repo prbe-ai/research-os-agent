@@ -637,12 +637,20 @@ class ResearchReadService:
             )
         if project is not None:
             # PROJECT-DIRECT runs (research-os 0054) belong to no experiment, so
-            # the sweep above can never see them. The experiment_id filter also
-            # keeps this safe on an older backend that ignores the project_id
-            # param and returns every run: there, every row has an experiment.
+            # the sweep above can never see them. direct=True filters server-side
+            # (so ten attached runs can't mask an active direct one); the
+            # client-side experiment_id filter stays as belt-and-braces, and the
+            # SDK's project_id guard raises on a pre-0054 backend that would
+            # have returned unscoped rows — degrade to the experiment sweep.
+            try:
+                direct_runs = self.source.runs(
+                    project_id=str(project["id"]), direct=True, limit=10
+                )
+            except errors.NotFoundError:
+                direct_runs = []
             active_runs.extend(
                 run
-                for run in self.source.runs(project_id=str(project["id"]), limit=10)
+                for run in direct_runs
                 if run.get("status") in {"created", "running"}
                 and not run.get("experiment_id")
             )

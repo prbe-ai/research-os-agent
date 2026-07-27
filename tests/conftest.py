@@ -106,6 +106,11 @@ class FakeApp:
     # tenant-wide. The echo is the only thing distinguishing the two, so the
     # fake has to be able to be both.
     echoes_project_scope = True
+    # Set False to model a backend PREDATING project-direct runs (0054): the
+    # /v1/projects/{id}/runs route 404s FastAPI-style, GET /v1/runs ignores the
+    # project_id/direct params, and run rows carry NO project_id field — the
+    # exact shapes the SDK's old-backend guards key on.
+    supports_project_direct = True
 
     def _echo_scope(self, response: dict, body: dict | None) -> dict:
         if not self.echoes_project_scope or not body or not body.get("project_id"):
@@ -472,10 +477,18 @@ class FakeApp:
             experiment_id = request.url.params.get("experiment_id")
             if experiment_id:
                 rows = [row for row in rows if row.get("experiment_id") == experiment_id]
-            # project_id (0054): ALL of a project's runs — direct AND attached.
-            project_id = request.url.params.get("project_id")
-            if project_id:
-                rows = [row for row in rows if row.get("project_id") == project_id]
+            if self.supports_project_direct:
+                # project_id (0054): ALL of a project's runs — direct AND attached.
+                project_id = request.url.params.get("project_id")
+                if project_id:
+                    rows = [row for row in rows if row.get("project_id") == project_id]
+                if request.url.params.get("direct") == "true":
+                    rows = [row for row in rows if not row.get("experiment_id")]
+            else:
+                # Pre-0054: unknown params are ignored, rows have no project_id.
+                rows = [
+                    {k: v for k, v in row.items() if k != "project_id"} for row in rows
+                ]
             return httpx.Response(200, json=rows)
 
         m = _EXP_ITEM.match(path)
@@ -506,8 +519,15 @@ class FakeApp:
 
         m = _PROJ_RUNS.match(path)
         if m and method == "POST":
+            if not self.supports_project_direct:
+                # Pre-0054: the route does not exist — FastAPI's route-level 404,
+                # NOT the handler's "project not found".
+                return httpx.Response(404, json={"detail": "Not Found"})
             # PROJECT-DIRECT run (0054): no experiment; group_id is rejected
-            # like the engine does (run groups are experiment-anchored).
+            # like the engine does (run groups are experiment-anchored), and an
+            # unknown project is the handler's oracle-safe 404.
+            if m.group(1) not in self.projects:
+                return httpx.Response(404, json={"detail": "project not found"})
             if body.get("group_id") is not None:
                 return httpx.Response(
                     422, json={"detail": "group_id requires an experiment-attached run"}

@@ -857,8 +857,24 @@ class Client:
             tags=tags,
             metadata=metadata,
         )
-        # Literal call site: the tests/test_parity.py AST scan must see the route.
-        data = self.transport.post(f"/v1/projects/{project_id}/runs", body)
+        try:
+            # Literal call site: the tests/test_parity.py AST scan must see the route.
+            data = self.transport.post(f"/v1/projects/{project_id}/runs", body)
+        except errors.NotFoundError as exc:
+            # A pre-0054 backend has no such route, and its route-level 404
+            # ("Not Found") is indistinguishable from a missing project. The
+            # handler's own 404 says "project not found"; anything else means
+            # the backend predates the route — say so, and say what to do
+            # (the browse/search degraded-backend standard).
+            if "project" not in str(exc).lower():
+                raise errors.NotFoundError(
+                    "this research-os backend predates POST /v1/projects/{id}/runs "
+                    "(project-direct runs, 0054). Upgrade the backend, or open "
+                    "the run inside an experiment (--experiment / run(experiment=...)).",
+                    status=exc.status,
+                    detail=exc.detail,
+                ) from exc
+            raise
         return self._wrap_run(data, heartbeat=heartbeat)
 
     def run(
@@ -1337,16 +1353,35 @@ class Client:
         *,
         experiment_id: str | None = None,
         project_id: str | None = None,
+        direct: bool = False,
         **params,
     ) -> Page:
         """``project_id`` returns ALL the project's runs — project-direct AND
-        experiment-attached (0054)."""
+        experiment-attached (0054); ``direct=True`` narrows to experiment-less
+        runs only."""
         query = dict(params)
         if experiment_id is not None:
             query["experiment_id"] = experiment_id
         if project_id is not None:
             query["project_id"] = project_id
-        return self.transport.get_page("/v1/runs", params=query or None)
+        if direct:
+            query["direct"] = "true"
+        page = self.transport.get_page("/v1/runs", params=query or None)
+        # A pre-0054 backend IGNORES unknown query params and returns the
+        # unscoped list — a confident wrong answer presented as project-scoped.
+        # Its rows also predate the project_id field, which is how we can tell:
+        # refuse rather than mislabel. (An empty page proves nothing and passes.)
+        if (
+            (project_id is not None or direct)
+            and page.items
+            and "project_id" not in page.items[0]
+        ):
+            raise errors.NotFoundError(
+                "this research-os backend predates GET /v1/runs?project_id= "
+                "(0054): it ignored the filter and returned unscoped runs. "
+                "Upgrade the backend before relying on project-scoped listings."
+            )
+        return page
 
     def list_run_artifacts(
         self,
