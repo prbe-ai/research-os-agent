@@ -36,10 +36,15 @@ class AnchorLevel(StrEnum):
 class AnchorType(StrEnum):
     """
     What a summary (and a summary_refresh queue row) is about.
+
+    Mirrors the `summary_refresh.anchor_type` CHECK constraint -- adding a member
+    here without widening that CHECK makes every enqueue for it fail (silently,
+    since `enqueue_summary_refresh` swallows to protect the domain write).
     """
 
     project = 'project'
     experiment = 'experiment'
+    run = 'run'
 
 
 class ArtifactCreate(BaseModel):
@@ -85,6 +90,7 @@ class ArtifactOut(BaseModel):
     run_id: UUID | None = Field(None, title='Run Id')
     shared_folder_id: UUID | None = Field(None, title='Shared Folder Id')
     size_bytes: int | None = Field(None, title='Size Bytes')
+    source_level: str | None = Field(None, title='Source Level')
     span_id: UUID | None = Field(None, title='Span Id')
     status: str | None = Field('complete', title='Status')
     step_index: int | None = Field(None, title='Step Index')
@@ -169,6 +175,58 @@ class ChannelError(StrEnum):
     sql_budget_exceeded = 'sql_budget_exceeded'
 
 
+class AutoUpdate(StrEnum):
+    on = 'on'
+    off = 'off'
+    unknown = 'unknown'
+
+
+class Mcp(StrEnum):
+    installed = 'installed'
+    absent = 'absent'
+    unknown = 'unknown'
+
+
+class Skills(StrEnum):
+    installed = 'installed'
+    absent = 'absent'
+    unknown = 'unknown'
+
+
+class ClientCapabilitiesIn(BaseModel):
+    """
+    The complete allowlisted local snapshot. Raw configuration is forbidden.
+    """
+
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    auto_update: AutoUpdate = Field(..., title='Auto Update')
+    mcp: Mcp = Field(..., title='Mcp')
+    schema_version: Literal[1] = Field(..., title='Schema Version')
+    skills: Skills = Field(..., title='Skills')
+
+
+class ClientCapabilitiesOut(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    auto_update: AutoUpdate = Field(..., title='Auto Update')
+    mcp: Mcp = Field(..., title='Mcp')
+    reported_at: AwareDatetime = Field(..., title='Reported At')
+    schema_version: Literal[1] = Field(..., title='Schema Version')
+    skills: Skills = Field(..., title='Skills')
+
+
+class ClientKind(StrEnum):
+    """
+    First-party clients that may report their installed version.
+    """
+
+    cli = 'cli'
+    plugin = 'plugin'
+
+
 class ClientRegistrationIn(BaseModel):
     """
     RFC 7591 dynamic client registration request. We accept the standard
@@ -183,6 +241,38 @@ class ClientRegistrationIn(BaseModel):
     token_endpoint_auth_method: str | None = Field(
         None, title='Token Endpoint Auth Method'
     )
+
+
+class ClientUpdateStatus(StrEnum):
+    """
+    How urgently one observed client should be updated.
+    """
+
+    update = 'update'
+    required = 'required'
+
+
+class CredentialAttachmentGrantOut(BaseModel):
+    expires_at: AwareDatetime = Field(..., title='Expires At')
+    grant: str = Field(..., title='Grant')
+
+
+class CredentialAttachmentIn(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    grant: str = Field(..., max_length=256, min_length=32, title='Grant')
+
+
+class Role1(StrEnum):
+    api = 'api'
+    mcp = 'mcp'
+
+
+class CredentialAttachmentOut(BaseModel):
+    installation_id: UUID = Field(..., title='Installation Id')
+    role: Role1 = Field(..., title='Role')
+    token_id: UUID = Field(..., title='Token Id')
 
 
 class Decision(StrEnum):
@@ -214,6 +304,7 @@ class Status1(StrEnum):
 class DeviceAuthorizationOut(BaseModel):
     client_name: str = Field(..., title='Client Name')
     expires_at: AwareDatetime = Field(..., title='Expires At')
+    grants: list[str] | None = Field(None, title='Grants')
     scopes: list[str] | None = Field(None, title='Scopes')
     status: Status1 = Field(..., title='Status')
     token_name: str = Field(..., title='Token Name')
@@ -227,18 +318,6 @@ class DeviceAuthorizationStartOut(BaseModel):
     user_code: str = Field(..., title='User Code')
     verification_uri: str = Field(..., title='Verification Uri')
     verification_uri_complete: str = Field(..., title='Verification Uri Complete')
-
-
-class DeviceTokenCreated(BaseModel):
-    created_at: AwareDatetime = Field(..., title='Created At')
-    expires_at: AwareDatetime | None = Field(None, title='Expires At')
-    id: UUID = Field(..., title='Id')
-    last_used_at: AwareDatetime | None = Field(None, title='Last Used At')
-    name: str = Field(..., title='Name')
-    scopes: list[str] | None = Field(None, title='Scopes')
-    token: str = Field(..., title='Token')
-    token_prefix: str = Field(..., title='Token Prefix')
-    token_type: Literal['Bearer'] = Field('Bearer', title='Token Type')
 
 
 class DeviceTokenExchange(BaseModel):
@@ -319,6 +398,7 @@ class ExperimentOut(BaseModel):
     slug: str = Field(..., title='Slug')
     summary: dict[str, Any] | None = Field(None, title='Summary')
     tags: list[str] | None = Field(None, title='Tags')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
 
 
 class Hypothesis(RootModel[str]):
@@ -333,13 +413,19 @@ class ExperimentPatch(BaseModel):
     """
     Field-replace PATCH (D9). Only provided fields change; None = untouched.
     `hypothesis`/`name` carry min_length=1 so a PATCH can never re-blank them.
+
+    NO `summary` field, deliberately. An experiment summary is GENERATED -- it
+    comes from the summary pipeline and lands in `metadata.summary`; there is no
+    client-writable door to it. The field used to exist (documented as "the home
+    for eval/benchmark aggregates"), but nothing in the CLI, SDK or ingest path
+    ever wrote one, so all it did was let a client overwrite a generated
+    document. Per-experiment aggregates belong on the runs that produced them.
     """
 
     description: str | None = Field(None, title='Description')
     hypothesis: Hypothesis | None = Field(None, title='Hypothesis')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: Name | None = Field(None, title='Name')
-    summary: dict[str, Any] | None = Field(None, title='Summary')
 
 
 class ExperimentVersionMint(BaseModel):
@@ -356,8 +442,10 @@ class ExperimentVersionMint(BaseModel):
 
 class ExperimentVersionOut(BaseModel):
     artifact_refs: list[UUID] | None = Field(None, title='Artifact Refs')
+    artifact_version_refs: list[UUID] | None = Field(
+        None, title='Artifact Version Refs'
+    )
     as_of: AwareDatetime = Field(..., title='As Of')
-    asset_version_refs: list[UUID] | None = Field(None, title='Asset Version Refs')
     created_at: AwareDatetime = Field(..., title='Created At')
     customer_id: str = Field(..., title='Customer Id')
     excludes: dict[str, Any] | None = Field(None, title='Excludes')
@@ -368,6 +456,16 @@ class ExperimentVersionOut(BaseModel):
     meta: dict[str, Any] | None = Field(None, title='Meta')
     run_refs: list[UUID] | None = Field(None, title='Run Refs')
     version: int = Field(..., title='Version')
+
+
+class ExportPoint(BaseModel):
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    id: int = Field(..., title='Id')
+    key: str = Field(..., title='Key')
+    kind: str = Field(..., title='Kind')
+    step_index: int | None = Field(None, title='Step Index')
+    value: float = Field(..., title='Value')
+    wall_clock: AwareDatetime = Field(..., title='Wall Clock')
 
 
 class Code(RootModel[str]):
@@ -417,6 +515,25 @@ class GitHubIntegrationState(StrEnum):
     installed = 'installed'
 
 
+class Grant(StrEnum):
+    """
+    What ONE browser approval authorizes.
+
+    A grant is a CAPABILITY, not a scope. `probe setup` asks for a set of them so
+    the human approves once and the consent screen shows every capability
+    together, instead of three separate round-trips each showing a fragment.
+
+    The distinction matters most for CAPTURE. Scopes describe what an API caller
+    may do to research data; they cannot express "stream this machine's prompts,
+    file contents and tool output off the device". Rendering that as `read` on a
+    consent screen would actively misdescribe it, so it gets its own name.
+    """
+
+    api = 'api'
+    mcp = 'mcp'
+    capture = 'capture'
+
+
 class IndexCorpus(StrEnum):
     """
     The /v1/search corpus filter vocabulary (github.* and claude_code
@@ -443,7 +560,27 @@ class IngestArtifact(BaseModel):
     uri: str | None = Field(None, title='Uri')
 
 
-class Role1(StrEnum):
+class InstallationCaptureOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    device_id: str = Field(..., title='Device Id')
+    hostname: str | None = Field(None, title='Hostname')
+    label: str | None = Field(None, title='Label')
+    last_used_at: AwareDatetime | None = Field(None, title='Last Used At')
+    os: str | None = Field(None, title='Os')
+    source: str = Field(..., title='Source')
+
+
+class InstallationCredentialOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    expires_at: AwareDatetime | None = Field(None, title='Expires At')
+    id: UUID = Field(..., title='Id')
+    last_used_at: AwareDatetime | None = Field(None, title='Last Used At')
+    role: Role1 = Field(..., title='Role')
+    scopes: list[str] | None = Field(None, title='Scopes')
+    token_prefix: str = Field(..., title='Token Prefix')
+
+
+class Role3(StrEnum):
     admin = 'admin'
     member = 'member'
 
@@ -452,7 +589,7 @@ class InviteCreate(BaseModel):
     email: str = Field(
         ..., max_length=254, pattern='^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$', title='Email'
     )
-    role: Role1 | None = Field('member', title='Role')
+    role: Role3 | None = Field('member', title='Role')
 
 
 class InviteOut(BaseModel):
@@ -460,7 +597,46 @@ class InviteOut(BaseModel):
     customer_id: str = Field(..., title='Customer Id')
     email: str = Field(..., title='Email')
     id: UUID = Field(..., title='Id')
-    role: Role1 = Field(..., title='Role')
+    role: Role3 = Field(..., title='Role')
+
+
+class LatestScalarOut(BaseModel):
+    """
+    One series' scalar summary: its endpoint value + extent, no point scan.
+    """
+
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    key: str = Field(..., title='Key')
+    kind: str = Field(..., title='Kind')
+    last_step_index: int | None = Field(None, title='Last Step Index')
+    last_value: float | None = Field(None, title='Last Value')
+    last_wall_clock: AwareDatetime | None = Field(None, title='Last Wall Clock')
+    max_value: float | None = Field(None, title='Max Value')
+    min_value: float | None = Field(None, title='Min Value')
+    point_count: int = Field(..., title='Point Count')
+    run_id: UUID = Field(..., title='Run Id')
+    x_axis: str | None = Field('step', title='X Axis')
+
+
+class Keys(RootModel[list[str]]):
+    root: list[str] = Field(..., max_length=200, title='Keys')
+
+
+class LatestScalarsRequest(BaseModel):
+    """
+    Cross-run scalar SUMMARY read — the foundation for run-table sort/filter by a
+    final metric value (the MLflow `latest_metrics` / wandb Summary analog). Reads the
+    derived `metric_series` catalog (which already holds last/min/max per series), so
+    it never scans raw points.
+    """
+
+    keys: Keys | None = Field(None, title='Keys')
+    kind: str | None = Field(None, title='Kind')
+    run_ids: list[UUID] = Field(..., max_length=50, min_length=1, title='Run Ids')
+
+
+class LatestScalarsResult(BaseModel):
+    scalars: list[LatestScalarOut] = Field(..., title='Scalars')
 
 
 class LineageEdgeOut(BaseModel):
@@ -482,7 +658,7 @@ class LineageEntityType(StrEnum):
 
     run = 'run'
     artifact = 'artifact'
-    asset_version = 'asset_version'
+    artifact_version = 'artifact_version'
 
 
 class LineageRelation(StrEnum):
@@ -499,8 +675,22 @@ class LineageRelation(StrEnum):
     derived_from = 'derived_from'
 
 
+class MetricExportResult(BaseModel):
+    """
+    Lossless, paginated raw-point export (item 5): every point exactly once, NO
+    downsampling for a stable committed dataset — the faithful-export counterpart to
+    /series/query. Cursor on the stable metric_points id; pass `next_after_id` back as
+    `after_id` for the next page (null means the last currently visible page).
+    """
+
+    next_after_id: int | None = Field(None, title='Next After Id')
+    points: list[ExportPoint] = Field(..., title='Points')
+
+
 class MetricInsertResult(BaseModel):
+    deduped: int | None = Field(0, title='Deduped')
     inserted: int = Field(..., title='Inserted')
+    series_count: int | None = Field(None, title='Series Count')
 
 
 class MetricPointIn(BaseModel):
@@ -588,7 +778,7 @@ class PendingInviteOut(BaseModel):
     customer_id: str = Field(..., title='Customer Id')
     display_name: str = Field(..., title='Display Name')
     id: UUID = Field(..., title='Id')
-    role: Role1 = Field(..., title='Role')
+    role: Role3 = Field(..., title='Role')
 
 
 class PinnedExperiment(BaseModel):
@@ -634,6 +824,7 @@ class ProjectOut(BaseModel):
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     slug: str = Field(..., title='Slug')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
     workspace_id: UUID | None = Field(..., title='Workspace Id')
 
 
@@ -729,6 +920,27 @@ class RunNode(BaseModel):
     status: str = Field(..., title='Status')
 
 
+class RunSessionOut(BaseModel):
+    """
+    A coding-agent session that touched this run.
+
+    Ordered by when we first saw it, so the first entry is the session the run
+    originated in — the same one recorded in
+    `runs.foreign_keys.<agent>_session_id`.
+
+    `captured` is deliberately NOT here. Whether a transcript exists is the
+    engine's answer, not this database's: capture is a per-device permission a
+    user can switch off, so a recorded session with no transcript is an
+    expected state. The run page resolves it against the transcripts corpus at
+    render time and shows captured / pending / not-captured there. Asserting it
+    here would mean this endpoint lying whenever the engine disagreed.
+    """
+
+    agent: str = Field(..., title='Agent')
+    first_seen_at: AwareDatetime = Field(..., title='First Seen At')
+    session_id: str = Field(..., title='Session Id')
+
+
 class RunStatus(StrEnum):
     created = 'created'
     running = 'running'
@@ -782,6 +994,7 @@ class SearchRequest(BaseModel):
     corpus: list[IndexCorpus] | None = Field(None, title='Corpus')
     exact_cursor: str | None = Field(None, title='Exact Cursor')
     exact_limit: int | None = Field(20, ge=1, le=50, title='Exact Limit')
+    include_semantic: bool | None = Field(True, title='Include Semantic')
     project_id: UUID | None = Field(None, title='Project Id')
     query: str = Field(..., max_length=500, min_length=1, title='Query')
     semantic_cursor: str | None = Field(None, title='Semantic Cursor')
@@ -822,6 +1035,7 @@ class SemanticRefKind(StrEnum):
 
 
 class SeriesPoint(BaseModel):
+    smoothed: float | None = Field(None, title='Smoothed')
     step_index: int | None = Field(None, title='Step Index')
     value: float = Field(..., title='Value')
     wall_clock: AwareDatetime = Field(..., title='Wall Clock')
@@ -829,6 +1043,11 @@ class SeriesPoint(BaseModel):
 
 class MaxPoints(RootModel[int]):
     root: int = Field(..., ge=2, le=100000, title='Max Points')
+
+
+class Smoothing(StrEnum):
+    ema = 'ema'
+    sma = 'sma'
 
 
 class SeriesResult(BaseModel):
@@ -893,6 +1112,28 @@ class SpanUpsertResult(BaseModel):
     upserted: int = Field(..., title='Upserted')
 
 
+class StaleClientOut(BaseModel):
+    """
+    One known, stale client included in the dashboard decision.
+    """
+
+    current: str = Field(..., title='Current')
+    kind: ClientKind
+    latest: str = Field(..., title='Latest')
+    min: str | None = Field(..., title='Min')
+    status: ClientUpdateStatus
+
+
+class StandaloneCredentialOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    expires_at: AwareDatetime | None = Field(None, title='Expires At')
+    id: UUID = Field(..., title='Id')
+    last_used_at: AwareDatetime | None = Field(None, title='Last Used At')
+    name: str = Field(..., title='Name')
+    scopes: list[str] | None = Field(None, title='Scopes')
+    token_prefix: str = Field(..., title='Token Prefix')
+
+
 class StepCreate(BaseModel):
     attributes: dict[str, Any] | None = Field(None, title='Attributes')
     name: str | None = Field(None, title='Name')
@@ -935,7 +1176,7 @@ class TeamCreate(BaseModel):
     slug: str = Field(..., max_length=64, min_length=1, title='Slug')
 
 
-class Role4(StrEnum):
+class Role6(StrEnum):
     owner = 'owner'
     admin = 'admin'
     member = 'member'
@@ -950,11 +1191,11 @@ class TeamMemberOut(BaseModel):
     email: str = Field(..., title='Email')
     name: str | None = Field(None, title='Name')
     picture: str | None = Field(None, title='Picture')
-    role: Role4 = Field(..., title='Role')
+    role: Role6 = Field(..., title='Role')
     user_id: UUID = Field(..., title='User Id')
 
 
-class Role5(StrEnum):
+class Role7(StrEnum):
     admin = 'admin'
     member = 'member'
 
@@ -967,10 +1208,10 @@ class TeamMemberRoleUpdate(BaseModel):
     a team always retains the owner created during provisioning.
     """
 
-    role: Role5 = Field(..., title='Role')
+    role: Role7 = Field(..., title='Role')
 
 
-class Role6(StrEnum):
+class Role8(StrEnum):
     owner = 'owner'
     admin = 'admin'
     member = 'member'
@@ -979,7 +1220,7 @@ class Role6(StrEnum):
 class TeamOut(BaseModel):
     customer_id: str = Field(..., title='Customer Id')
     display_name: str | None = Field(None, title='Display Name')
-    role: Role6 = Field(..., title='Role')
+    role: Role8 = Field(..., title='Role')
 
 
 class TokenCreate(BaseModel):
@@ -1059,6 +1300,40 @@ class ValidationError(BaseModel):
     type: str = Field(..., title='Error Type')
 
 
+class VersionPair(BaseModel):
+    latest: str | None = Field(None, title='Latest')
+    min: str | None = Field(None, title='Min')
+
+
+class WideColumn(BaseModel):
+    """
+    One column of a wide (step-indexed) metric table: a distinct series.
+    """
+
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    key: str = Field(..., title='Key')
+    kind: str = Field(..., title='Kind')
+
+
+class WideRow(BaseModel):
+    step_index: int = Field(..., title='Step Index')
+    values: list[float | None] = Field(..., title='Values')
+
+
+class WideSeriesResult(BaseModel):
+    """
+    Step x metric table (item 4): the pivot clients would otherwise do by hand,
+    aligned by step_index. Only STEPPED points participate; wall-clock-only series are
+    read via the long endpoints. Bounded to `max_rows` steps — `next_step` pages the
+    remainder by passing it back as `step_from`.
+    """
+
+    columns: list[WideColumn] = Field(..., title='Columns')
+    next_step: int | None = Field(None, title='Next Step')
+    rows: list[WideRow] = Field(..., title='Rows')
+    truncated: bool | None = Field(False, title='Truncated')
+
+
 class WorkspaceKind(StrEnum):
     """
     The closed workspace kind vocabulary (mirrors the DB CHECK).
@@ -1112,6 +1387,48 @@ class ArtifactPinImpact(BaseModel):
     projects: list[PinnedProject] | None = Field(None, title='Projects')
 
 
+class CapabilityRegistrationOut(BaseModel):
+    capabilities: ClientCapabilitiesOut
+    installation_id: UUID = Field(..., title='Installation Id')
+
+
+class ClientInstallationOut(BaseModel):
+    capabilities: ClientCapabilitiesOut | None = None
+    capture: InstallationCaptureOut | None = None
+    created_at: AwareDatetime = Field(..., title='Created At')
+    credentials: list[InstallationCredentialOut] = Field(..., title='Credentials')
+    id: UUID = Field(..., title='Id')
+    name: str = Field(..., title='Name')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class ClientInstallationsOut(BaseModel):
+    installations: list[ClientInstallationOut] = Field(..., title='Installations')
+    standalone_captures: list[InstallationCaptureOut] = Field(
+        ..., title='Standalone Captures'
+    )
+    standalone_credentials: list[StandaloneCredentialOut] = Field(
+        ..., title='Standalone Credentials'
+    )
+
+
+class ClientStatusOut(BaseModel):
+    """
+    Server-side update-banner decision for the authenticated user.
+    """
+
+    advisory: str | None = Field(None, title='Advisory')
+    clients: list[StaleClientOut] | None = Field(None, title='Clients')
+    severity: ClientUpdateStatus | None = None
+    update_available: bool | None = Field(False, title='Update Available')
+
+
+class ClientVersionOut(BaseModel):
+    advisory: str | None = Field(None, title='Advisory')
+    cli: VersionPair | None = Field({}, validate_default=True)
+    plugin: VersionPair | None = Field({}, validate_default=True)
+
+
 class Scopes(RootModel[list[Scope]]):
     root: list[Scope] = Field(..., min_length=1, title='Scopes')
 
@@ -1128,10 +1445,47 @@ class DeviceAuthorizationStart(BaseModel):
     code_challenge: str = Field(
         ..., pattern='^[A-Za-z0-9_-]{43}$', title='Code Challenge'
     )
+    grants: list[Grant] | None = Field(None, min_length=1, title='Grants')
     scopes: Scopes | None = Field(None, title='Scopes')
     token_name: str | None = Field(
         'Research OS CLI', max_length=120, min_length=1, title='Token Name'
     )
+
+
+class DeviceGrantOut(BaseModel):
+    """
+    One credential minted by an approval. `token` is plaintext, delivered ONCE.
+    """
+
+    device_id: str | None = Field(None, title='Device Id')
+    grant: Grant
+    token: str = Field(..., title='Token')
+    token_id: UUID | None = Field(None, title='Token Id')
+
+
+class DeviceTokenCreated(BaseModel):
+    """
+    Exchange result.
+
+    The inherited top-level fields carry the `api` PAT exactly as they always
+    have. That shape is FROZEN: older CLIs send no `grants`, get `{api}`, and
+    must see a byte-identical response.
+
+    `grants` carries every credential the approval minted, including the api PAT
+    again, so a client that asked for a set does not have to special-case which
+    one landed on top.
+    """
+
+    created_at: AwareDatetime | None = Field(None, title='Created At')
+    expires_at: AwareDatetime | None = Field(None, title='Expires At')
+    grants: list[DeviceGrantOut] | None = Field(None, title='Grants')
+    id: UUID | None = Field(None, title='Id')
+    last_used_at: AwareDatetime | None = Field(None, title='Last Used At')
+    name: str | None = Field(None, title='Name')
+    scopes: list[str] | None = Field(None, title='Scopes')
+    token: str | None = Field(None, title='Token')
+    token_prefix: str | None = Field(None, title='Token Prefix')
+    token_type: Literal['Bearer'] = Field('Bearer', title='Token Type')
 
 
 class EdgeCreate(BaseModel):
@@ -1172,6 +1526,7 @@ class ExperimentNode(BaseModel):
     run_count: int | None = Field(0, title='Run Count')
     runs: list[RunNode] | None = Field(None, title='Runs')
     slug: str | None = Field(None, title='Slug')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
 
 
 class GitHubIntegrationOut(BaseModel):
@@ -1226,6 +1581,7 @@ class ProjectNode(BaseModel):
     id: UUID = Field(..., title='Id')
     name: str = Field(..., title='Name')
     slug: str | None = Field(None, title='Slug')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
 
 
@@ -1322,6 +1678,11 @@ class SeriesQueryRequest(BaseModel):
     max_points: MaxPoints | None = Field(None, title='Max Points')
     run_ids: list[UUID] = Field(..., max_length=50, min_length=1, title='Run Ids')
     series: Series | None = Field(None, title='Series')
+    smoothing: Smoothing | None = Field(None, title='Smoothing')
+    smoothing_factor: float | None = Field(
+        0.6, ge=0.0, lt=1.0, title='Smoothing Factor'
+    )
+    smoothing_window: int | None = Field(10, ge=1, le=5000, title='Smoothing Window')
     step_from: int | None = Field(None, title='Step From')
     step_to: int | None = Field(None, title='Step To')
 
@@ -1346,8 +1707,9 @@ class BrowseResponse(BaseModel):
 
 class RunBundle(BaseModel):
     """
-    One request: run + catalog + artifact index (bounded) + spans overview +
-    lineage refs. Raw points are excluded (fetch via /series/query).
+    One request: run + coding sessions + catalog + artifact index (bounded) +
+    spans overview + lineage refs. Raw points are excluded (fetch via
+    /series/query).
     """
 
     artifact_total: int = Field(..., title='Artifact Total')
@@ -1356,6 +1718,7 @@ class RunBundle(BaseModel):
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
     run: RunDetailOut
     series: list[MetricSeriesOut] = Field(..., title='Series')
+    sessions: list[RunSessionOut] | None = Field(None, title='Sessions')
     span_types: list[SpanTypeCount] = Field(..., title='Span Types')
 
 
@@ -1377,14 +1740,20 @@ class SemanticSection(BaseModel):
     )
     cursor: str | None = Field(None, title='Cursor')
     dropped_chunk_count: int | None = Field(0, title='Dropped Chunk Count')
+    dropped_result_count: int | None = Field(0, title='Dropped Result Count')
     error: ChannelError | None = None
     results: list[SemanticHit] | None = Field(None, title='Results')
+    stripped_graph_evidence_count: int | None = Field(
+        0, title='Stripped Graph Evidence Count'
+    )
     total_candidates: int | None = Field(None, title='Total Candidates')
 
 
 class SearchResponse(BaseModel):
     dropped_chunk_count: int | None = Field(0, title='Dropped Chunk Count')
+    dropped_result_count: int | None = Field(0, title='Dropped Result Count')
     exact: ExactSection
+    project_id: UUID | None = Field(None, title='Project Id')
     query: str = Field(..., title='Query')
     semantic: SemanticSection
     state: SearchState

@@ -964,6 +964,129 @@ def test_authorize_result_is_used_not_discarded():
     assert "_, auth_messages = wizard.authorize(" not in source
 
 
+def test_noop_wizard_rerun_still_refreshes_server_snapshot(monkeypatch):
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    caps = _caps(
+        tracking_plugin_installed=True,
+        logged_in_as="richard@prbe.ai",
+        auto_update_enabled=True,
+    )
+    seen = []
+    monkeypatch.setattr(
+        cli_main,
+        "_register_local_capabilities",
+        lambda current, **kwargs: seen.append((current, kwargs["settings"])) or [],
+    )
+
+    lines = cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=caps,
+        base_now="https://api.test",
+        yes=True,
+        tracking=True,
+        capture=False,
+        auto_update=True,
+        uninstall=False,
+        configured=True,
+    )
+
+    assert lines == ["Already set up the way you asked. Nothing to change."]
+    assert seen[0][0] is caps
+    assert seen[0][1].base_url == "https://api.test"
+
+
+def test_update_publishes_to_the_explicit_wizard_backend(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    updated_caps = _caps(tracking_plugin_installed=True)
+    seen = []
+    monkeypatch.setattr(
+        "probe.cli.upgrading.perform_update",
+        lambda **kwargs: SimpleNamespace(lines=["updated"], restart_needed=False),
+    )
+    monkeypatch.setattr(doctor, "collect", lambda: updated_caps)
+    monkeypatch.setattr(
+        cli_main,
+        "_register_local_capabilities",
+        lambda current, **kwargs: seen.append((current, kwargs["settings"])) or [],
+    )
+
+    lines = cli_main._run_wizard_action(
+        Action.UPDATE,
+        caps=_caps(),
+        base_now="https://self-hosted.test",
+        yes=True,
+        tracking=None,
+        capture=None,
+        auto_update=None,
+        uninstall=False,
+        configured=False,
+    )
+
+    assert lines == ["updated"]
+    assert seen[0][0] is updated_caps
+    assert seen[0][1].base_url == "https://self-hosted.test"
+
+
+def test_uninstall_preserves_token_and_explicit_backend_for_final_snapshot(
+    monkeypatch,
+):
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor, setup
+    from probe.cli.actions import Action
+    from probe.sdk.config import Settings
+
+    cli_main = sys.modules["probe.cli.main"]
+    before = _caps(tracking_plugin_installed=True)
+    after = _caps()
+    seen = []
+    monkeypatch.setattr(
+        cli_main,
+        "resolve",
+        lambda **kwargs: Settings(
+            base_url=kwargs["base_url"],
+            token="preserved-api-secret",
+        ),
+    )
+    monkeypatch.setattr(setup, "remove_everything", lambda caps: ["removed"])
+    monkeypatch.setattr(doctor, "collect", lambda: after)
+    monkeypatch.setattr(
+        cli_main,
+        "_register_local_capabilities",
+        lambda current, **kwargs: seen.append((current, kwargs["settings"])) or [],
+    )
+
+    lines = cli_main._run_wizard_action(
+        Action.UNINSTALL,
+        caps=before,
+        base_now="https://self-hosted.test",
+        yes=True,
+        tracking=None,
+        capture=None,
+        auto_update=None,
+        uninstall=True,
+        configured=True,
+    )
+
+    assert lines == ["removed"]
+    assert seen[0][0] is after
+    assert seen[0][1].base_url == "https://self-hosted.test"
+    assert seen[0][1].token == "preserved-api-secret"
+
+
 # --- the wizard is a screen, not a transcript ------------------------------
 
 

@@ -285,17 +285,21 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
     ("POST", "/v1/integrations/github/installations"): "browser OAuth install flow; dashboard surface",
     ("DELETE", "/v1/integrations/github/installations/{}"): "connector admin; dashboard surface",
     ("GET", "/v1/integrations/ingestion"): "connector status for the dashboard's Integrations page",
+    ("GET", "/v1/integrations/ingestion/{}/devices"): "per-device connector stats for the dashboard",
     ("GET", "/v1/integrations/{}/backfill"): "backfill progress for a dashboard spinner; carries no data the CLI lacks",
+    ("GET", "/v1/client-status"): "authenticated update-banner decision for the dashboard",
     # Summary generation machinery. DECISION (2026-07-16, re-verified 2026-07-17 against
-    # the v0.9.1.0 one-shot rewrite): these carry NO data. The generated summary persists
-    # to `projects.metadata.research_summary` and `experiments.summary`, both already
-    # readable through ProjectOut/ExperimentOut, which ARE wired. The routes are async
+    # the v0.29.0.0 run-anchor/storage rewrite): these carry NO data. The generated
+    # summary persists to the anchor entity's `metadata.summary`, already readable
+    # through ProjectOut/ExperimentOut/RunOut, which ARE wired. The routes are async
     # (202 + enqueue) whose fresh/generating/stale states drive a dashboard spinner, and
     # a `probe summary` group would invent a noun outside project->experiment->run.
     ("POST", "/v1/projects/{}/summary/regenerate"): "async generation machinery; the summary itself is on ProjectOut",
     ("GET", "/v1/projects/{}/summary/status"): "dashboard spinner state; carries no data",
     ("POST", "/v1/experiments/{}/summary/generate"): "async generation machinery; the summary itself is on ExperimentOut",
     ("GET", "/v1/experiments/{}/summary/status"): "dashboard spinner state; carries no data",
+    ("POST", "/v1/runs/{}/summary/generate"): "async generation machinery; the summary itself is on RunOut",
+    ("GET", "/v1/runs/{}/summary/status"): "dashboard spinner state; carries no data",
     # Relays bounded, allowlisted blob bytes inline for the dashboard's file viewer.
     # The CLI's door to real bytes is GET /v1/artifacts/{}/download, which IS wired.
     ("GET", "/v1/artifacts/{}/preview"): "inline UI viewer relay; the CLI uses /download",
@@ -326,9 +330,17 @@ PENDING: dict[Op, str] = {
     # Surfaced 2026-07-26 by refreshing the snapshot for the `?slug=` filter
     # (research-os#176). Pre-existing backend drift the stale schema was hiding,
     # not debt this change introduced.
-    ("GET", "/v1/client-status"): "client version reporting; SessionStart hook reads it, not the SDK",
-    ("GET", "/v1/client-version"): "client version reporting; SessionStart hook reads it, not the SDK",
-    ("GET", "/v1/integrations/ingestion/{}/devices"): "connector device listing; dashboard surface today",
+    #
+    # The update-status routes moved out of this ledger in the client-installation
+    # merge: /client-status is a permanent dashboard surface, while /client-version
+    # is now reached by the updater itself.
+    #
+    # research-os#162 added richer telemetry read shapes after the last agent
+    # snapshot. They belong in the SDK, but are separate from client installation
+    # reporting and need their own ergonomic API/CLI design.
+    ("GET", "/v1/runs/{}/metrics/export"): "telemetry export follow-up from research-os#162",
+    ("GET", "/v1/runs/{}/metrics/wide"): "wide telemetry read follow-up from research-os#162",
+    ("POST", "/v1/series/latest"): "cross-run scalar summary follow-up from research-os#162",
     # Surfaced 2026-07-21 by the first `make dump-openapi` in a while: these
     # routes shipped on the backend while the checked-in schema sat stale, so
     # this guard could not see them. They are not new debt, only newly VISIBLE

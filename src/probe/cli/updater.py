@@ -195,9 +195,14 @@ def is_newer(candidate: str | None, base: str | None) -> bool:
 
 def fetch_latest(base_url: str) -> dict:
     """GET the public client-version manifest. Raises on network/HTTP error."""
-    url = base_url.rstrip("/") + "/v1/client-version"
-    with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
-        resp = client.get(url, headers={"Accept": "application/json"})
+    with httpx.Client(
+        base_url=base_url.rstrip("/"),
+        timeout=_HTTP_TIMEOUT_S,
+    ) as client:
+        resp = client.get(
+            "/v1/client-version",
+            headers={"Accept": "application/json"},
+        )
     resp.raise_for_status()
     data = resp.json()
     if not isinstance(data, dict):
