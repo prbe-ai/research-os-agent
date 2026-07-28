@@ -229,7 +229,9 @@ def test_tracker_uses_existing_manager_contract_and_publishes_run_identity(
     assert args.probe_run_id == "probe-run-123"
     assert args.research_os_run_id == "probe-run-123"
     assert args.probe_capture_status == "queue_drained"
-    assert run.logs[0][0] == {"train/loss": 1.25, "train/step": 7.0}
+    # The step counter is the x-axis, not a series (folded from #93's
+    # reconciliation): train/step must never mint a catalog row.
+    assert run.logs[0][0] == {"train/loss": 1.25}
     assert run.logs[0][1]["step"] == 7
     assert run.logs[0][1]["kind"] == "model"
     assert run.logs[0][1]["wall_clock"]

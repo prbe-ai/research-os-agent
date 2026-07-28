@@ -244,6 +244,30 @@ def _default_run_name(args, external_id: str) -> str:
     return f"miles-{timestamp}-{external_id.rsplit(':', 1)[-1][:8]}"
 
 
+_LABELED_POINT_BUDGET_CEILING = 100_000_000  # mirrors the server-side ceiling
+
+
+def planned_labeled_points(args) -> int | None:
+    """The run's per-sample volume, straight from the rollout plan.
+
+    Declared at create time as the run's labeled_point_budget (server 0061) so
+    later per-sample capture against this run never trips the 2M default
+    mid-training: rollout_batch_size 512 x 4k rollouts is already 2.05M.
+    """
+    per_prompt = getattr(args, "n_samples_per_prompt", None) or 1
+    try:
+        planned = (
+            int(getattr(args, "num_rollout", None))
+            * int(getattr(args, "rollout_batch_size", None))
+            * int(per_prompt)
+        )
+    except (TypeError, ValueError):
+        return None
+    if planned <= 0:
+        return None
+    return min(planned, _LABELED_POINT_BUDGET_CEILING)
+
+
 def _run_spec(args, external_id: str) -> dict[str, Any]:
     links = {"miles_run_id": external_id}
     for attr in ("wandb_run_id", "mlflow_run_id"):
@@ -253,7 +277,7 @@ def _run_spec(args, external_id: str) -> dict[str, Any]:
         if value := os.environ.get(env_name):
             links[link_name] = value
     links.update(_parse_links(getattr(args, "probe_links", None)))
-    return {
+    spec = {
         "project": getattr(args, "probe_project", "miles"),
         "experiment": getattr(args, "probe_experiment", "miles"),
         "hypothesis": getattr(
@@ -279,6 +303,9 @@ def _run_spec(args, external_id: str) -> dict[str, Any]:
             "cwd": getattr(args, "probe_snapshot_cwd", None),
         },
     }
+    if planned := planned_labeled_points(args):
+        spec["labeled_point_budget"] = planned
+    return spec
 
 
 def _resolve_queue_dir(args, external_id: str, *, primary: bool) -> Path:
@@ -832,10 +859,13 @@ class ProbeTracker:
     def log(self, metrics: dict[str, Any], step: int | None = None, **kwargs) -> None:
         if self._queue is None:
             return
+        step_key = kwargs.get("step_key")
         scalar_metrics = {
             key: number
             for key, value in metrics.items()
-            if (number := _scalar(value)) is not None
+            # The step counter is the x-axis, not a series: logging it as a
+            # metric would mint train/step & rollout/step catalog rows.
+            if key != step_key and (number := _scalar(value)) is not None
         }
         if not scalar_metrics:
             return
