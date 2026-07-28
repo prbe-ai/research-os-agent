@@ -1286,7 +1286,6 @@ def test_content_height_is_counted_not_asked():
 def test_content_taller_than_the_screen_gets_no_spacer():
     """Centring something that does not fit only chooses which end to
     amputate — and the top is the end with the state block on it."""
-    from probe.cli import tui
 
     def spacer_for(rows, height):
         return 0 if height >= rows else (rows - height) // 2

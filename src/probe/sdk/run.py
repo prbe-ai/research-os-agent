@@ -187,6 +187,7 @@ class Run:
         dimensions: dict[str, Any] | None = None,
         labels: dict[str, Any] | None = None,
         span_id: str | None = None,
+        agg: str | None = None,
         strict: bool | None = None,
     ):
         """Append metric points. Fail-open by default (spools on failure).
@@ -199,7 +200,13 @@ class Run:
         site wins per key); a key in both maps raises ``ValueError``.
         Dimension-less points stay byte-identical. Built through the generated
         ``MetricBatch``/``MetricPointIn``, so schema drift fails here, not as a
-        server 422."""
+        server 422.
+
+        ``agg`` DECLARES the key's reduce fn (mean|sum|min|max|count) so a later
+        grouped read can omit its own (server 0062: an omitted read-side ``agg``
+        resolves to the declared one, else mean; conflicting declarations 422).
+        The producer knows whether a count sums or a loss averages; declaring it
+        at the write is what saves every reader from guessing."""
         dims, labs = unit_context.merged(dimensions, labels)
         batch = MetricBatch(
             points=[
@@ -217,6 +224,12 @@ class Run:
             ]
         )
         body = batch.model_dump(mode="json", exclude_none=True)
+        # The generated MetricPointIn predates the 0062 `agg` field, so the
+        # declaration rides in after validation; None stays off the wire so a
+        # declaration-less point is byte-identical to what it always was.
+        if agg is not None:
+            for point in body["points"]:
+                point["agg"] = agg
         return self._client.write(
             "POST", f"/v1/runs/{self.id}/metrics", body, strict=strict
         )
@@ -238,6 +251,26 @@ class Run:
             metrics, step=step, kind="hardware", wall_clock=wall_clock,
             dimensions=dims or None, strict=strict,
         )
+
+    # -- metrics / coordinates (read) ---------------------------------------
+    def grouped_metrics(self, key: str, **kw: Any) -> dict:
+        """Server-side reduce/group over this run's points; see
+        :meth:`Client.get_metrics_grouped` for the parameters and paging."""
+        return self._client.get_metrics_grouped(self.id, key, **kw)
+
+    def wide_metrics(self, **kw: Any) -> dict:
+        """Step x metric table for this run; see :meth:`Client.get_metrics_wide`."""
+        return self._client.get_metrics_wide(self.id, **kw)
+
+    def export_points(self, **kw: Any):
+        """Lossless raw-point generator for this run; see
+        :meth:`Client.export_metric_points`."""
+        return self._client.export_metric_points(self.id, **kw)
+
+    def coordinates(self) -> list[dict]:
+        """This run's coordinate catalog (0060); see
+        :meth:`Client.list_run_coordinates`."""
+        return self._client.list_run_coordinates(self.id)
 
     # -- trajectory (spans) -------------------------------------------------
     def span(

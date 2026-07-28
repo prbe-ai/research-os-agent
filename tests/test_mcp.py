@@ -561,33 +561,48 @@ def test_capability_cache_shared_across_token_factory_calls(client, app):
 
 
 def test_server_exposes_exactly_the_read_tools(client):
-    """Thin harness: coverage grows through research_get's `view`/`filters`, NEVER
-    through more tools. Spans, groups, events, execution records and experiment
-    versions all became reachable while the tool count went DOWN (trace_file, which
-    had no backend, was removed). If this set grows, the fat-skills seam was
-    abandoned for a research_get_spans-shaped shortcut.
+    """Thin harness: entity coverage grows through research_get's `view`/`filters`,
+    NEVER through more tools. Spans, groups, events, execution records and
+    experiment versions all became reachable while the tool count went DOWN
+    (trace_file, which had no backend, was removed). If this set grows, the bar
+    below applies.
 
-    `research_browse` is the one addition that earns its place, and the bar it
+    `research_browse` was the first addition to earn its place, and the bar it
     cleared is worth recording. It is not another way to read an entity -- that
     is research_get's job and no view of it enumerates the tree. It answers a
     question the other tools structurally cannot: search ranks by relevance to a
     query, so it requires you to already know what to search for, and nothing
     answered "what exists here?" A `research_get_spans` would fail this bar,
     because `research_get(view="trajectory")` already answers it.
+
+    The coordinate reads (B7) cleared the same bar. They are not entity reads
+    wearing new names: grouped is a server-side REDUCTION with its own algebra
+    (agg/by/where/step_bucket) whose parameters are the route's typed contract,
+    export pages by a keyset cursor that get_entity's offset cursor cannot
+    express without lying about stability, and the catalog is the enumeration
+    that makes grouped's axes discoverable. Folding those into `filters` dicts
+    on a view would hide a real contract behind an untyped bag.
     """
     service = ResearchReadService(ResearchOSSource(client))
     server = create_server(service)
     tools = asyncio.run(server.list_tools())
     names = {tool.name for tool in tools}
-    # The surface is THREE. The deprecation aliases are gone: they were kept
-    # for one release because MCP tools are served by the SERVER and .mcp.json
-    # pins one url for every plugin version, so renaming a tool breaks every
-    # installed client the instant the image rolls. That window has closed.
+    # The deprecation aliases are gone: they were kept for one release because
+    # MCP tools are served by the SERVER and .mcp.json pins one url for every
+    # plugin version, so renaming a tool breaks every installed client the
+    # instant the image rolls. That window has closed.
     assert names == NEW_SURFACE
     assert not any(name.startswith(("create", "update", "promote", "upload")) for name in names)
 
 
-NEW_SURFACE = {"browse_research", "search_knowledge", "get_entity"}
+NEW_SURFACE = {
+    "browse_research",
+    "search_knowledge",
+    "get_entity",
+    "get_metrics_grouped",
+    "get_run_coordinates",
+    "export_metric_points",
+}
 
 
 

@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # plugin, the `probe-research-mcp` binaries, and mcp.research.prbe.ai. The import
 # name (`probe`) and the CLI binary (`probe`) are unchanged.
 name = "probe-research"
-version = "0.20.0"
+version = "0.21.0"
 description = "CLI + SDK + read-only MCP client for Probe Research (experiment tracking)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -72,6 +72,19 @@ packages = ["src/probe"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src/probe", "skills", "tests", "README.md", "pyproject.toml"]
+
+# Pin the lint bar. There was no root config, so `ruff check` floated on whatever
+# rule set the invoking ruff version enables by default — and ruff 0.16's defaults
+# turned on opinionated sets this codebase's idioms deliberately reject (B008 flags
+# every typer.Option default, S110 the heartbeat loop's documented swallow). This is
+# the stable core ruff always enabled: real errors and dead code, which every file
+# here is expected to keep clean. The tap plugin keeps its own stricter config.
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

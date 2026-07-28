@@ -10,6 +10,7 @@ Every method maps onto a real v4 endpoint (Probe Research v0.4.0.0 ingestion fol
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import shlex
 import sys
@@ -27,6 +28,7 @@ from ..models import (
     ExecutionRecordCreate,
     ExperimentVersionMint,
     IngestRunRequest,
+    LatestScalarsRequest,
     RunGcRequest,
     RunGroupCreate,
     RunGroupPatch,
@@ -71,6 +73,50 @@ _SCOPED_ANCHORS = frozenset(
 #: have no metadata-only form — a file is its bytes.
 _FILE_ANCHORS = frozenset({Anchor.WORKSPACE, Anchor.SHARED})
 
+#: Iteration cap for the step-paged reads (metrics grouped/wide). The loop already
+#: stops when the server reports the read exhausted; the cap only exists so a server
+#: that keeps answering ``truncated`` with a non-advancing ``next_step`` cannot spin
+#: a notebook forever. Hitting it returns honestly: ``truncated`` stays True and
+#: ``next_step`` says where to resume.
+_MAX_STEPPED_PAGES = 100
+
+
+
+def _series_key(column: dict) -> tuple:
+    """A wide-read column's series identity: (key, kind, canonical dimensions)."""
+    return (
+        column.get("key"),
+        column.get("kind"),
+        json.dumps(column.get("dimensions") or {}, sort_keys=True),
+    )
+
+
+def _merge_wide_page(merged: dict, page: dict) -> None:
+    """Append one page of a wide read onto the merged result, in place.
+
+    Columns are per-window: a series with no point inside a page's step range is
+    absent from that page's ``columns``, so later pages can be wider (or narrower)
+    than the first. Positions therefore cannot be trusted across pages — values are
+    realigned by series identity, and a column new to the merge back-fills ``None``
+    into the rows already collected, exactly as the server would have emitted had
+    the whole range fit in one page."""
+    if page.get("columns") == merged["columns"]:
+        merged["rows"].extend(page.get("rows") or [])
+        return
+    positions = {_series_key(column): i for i, column in enumerate(merged["columns"])}
+    for column in page.get("columns") or []:
+        if _series_key(column) not in positions:
+            positions[_series_key(column)] = len(merged["columns"])
+            merged["columns"].append(column)
+            for row in merged["rows"]:
+                row["values"].append(None)
+    width = len(merged["columns"])
+    page_keys = [_series_key(column) for column in page.get("columns") or []]
+    for row in page.get("rows") or []:
+        values: list = [None] * width
+        for series, value in zip(page_keys, row.get("values") or []):
+            values[positions[series]] = value
+        merged["rows"].append({**row, "values": values})
 
 
 def _exactly(rows: list[dict], slug: str) -> dict | None:
@@ -1052,6 +1098,171 @@ class Client:
         """Per-series summary for a run (key/kind/dimensions + first/last/min/max)."""
         return self.transport.get(f"/v1/runs/{run_id}/series")
 
+    # -- coordinate reads (below-run coordinates, research-os 0059-0062) -----
+    def get_metrics_grouped(
+        self,
+        run_id: str,
+        key: str,
+        *,
+        kind: str | None = None,
+        agg: str | None = None,
+        by: list[str] | None = None,
+        where: dict[str, Any] | None = None,
+        step_bucket: int | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+        max_rows: int | None = None,
+    ) -> dict:
+        """Server-side reduce/group over one metric's stepped points (0059).
+
+        ``by`` names coordinate axes to split on (sent comma-joined; one cell per
+        combination of axis values); ``where`` is a coord filter dict (sent
+        JSON-encoded, matched by type-faithful containment). ``agg`` is one of
+        mean|sum|min|max|count — OPTIONAL since server 0062: omitted resolves to
+        the key's DECLARED reduce fn (see :meth:`Run.log`'s ``agg``), else mean;
+        conflicting declarations are a 422. An unknown ``by``/``where`` axis or a
+        kind-ambiguous key is a 422, never a silent empty reduction.
+
+        Paging is followed here: a truncated page's ``next_step`` is fed back as
+        ``step_from`` until the reduction is exhausted, so one call answers the
+        whole range. ``max_rows`` bounds the TOTAL cells returned — when it cuts
+        the read short (or ``_MAX_STEPPED_PAGES`` does), the result says so:
+        ``truncated`` is True and ``next_step`` is where to resume."""
+        merged: dict | None = None
+        remaining = max_rows
+        for _ in range(_MAX_STEPPED_PAGES):
+            params = {
+                param: value
+                for param, value in {
+                    "key": key,
+                    "kind": kind,
+                    "agg": agg,
+                    "by": ",".join(by) if by else None,
+                    "where": json.dumps(where) if where is not None else None,
+                    "step_bucket": step_bucket,
+                    "step_from": step_from,
+                    "step_to": step_to,
+                    "max_rows": remaining,
+                }.items()
+                if value is not None
+            }
+            page = self.transport.get(
+                f"/v1/runs/{run_id}/metrics/grouped", params=params
+            )
+            if merged is None:
+                merged = page
+            else:
+                merged["groups"].extend(page.get("groups") or [])
+                merged["truncated"] = page.get("truncated", False)
+                merged["next_step"] = page.get("next_step")
+            if remaining is not None:
+                remaining -= len(page.get("groups") or ())
+                if remaining <= 0:
+                    break
+            if not page.get("truncated") or page.get("next_step") is None:
+                break
+            step_from = page["next_step"]
+        return merged
+
+    def get_metrics_wide(
+        self,
+        run_id: str,
+        *,
+        key: list[str] | None = None,
+        kind: str | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+        max_rows: int | None = None,
+    ) -> dict:
+        """Step x metric table for a run — the DataFrame pivot, aligned by step.
+
+        Same paging treatment as :meth:`get_metrics_grouped`: ``next_step`` is
+        followed until the table is exhausted (rows realigned by series identity,
+        since a page's columns cover only its own step window), ``max_rows``
+        bounds the TOTAL step rows, and a short read reports ``truncated`` +
+        ``next_step``. ``key`` narrows to those metric keys (repeated query
+        param, matching the route's array parameter)."""
+        merged: dict | None = None
+        remaining = max_rows
+        for _ in range(_MAX_STEPPED_PAGES):
+            params = {
+                param: value
+                for param, value in {
+                    "key": key or None,
+                    "kind": kind,
+                    "step_from": step_from,
+                    "step_to": step_to,
+                    "max_rows": remaining,
+                }.items()
+                if value is not None
+            }
+            page = self.transport.get(
+                f"/v1/runs/{run_id}/metrics/wide", params=params or None
+            )
+            if merged is None:
+                merged = page
+            else:
+                _merge_wide_page(merged, page)
+                merged["truncated"] = page.get("truncated", False)
+                merged["next_step"] = page.get("next_step")
+            if remaining is not None:
+                remaining -= len(page.get("rows") or ())
+                if remaining <= 0:
+                    break
+            if not page.get("truncated") or page.get("next_step") is None:
+                break
+            step_from = page["next_step"]
+        return merged
+
+    def export_metric_points(
+        self,
+        run_id: str,
+        *,
+        key: str | None = None,
+        kind: str | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+        after_id: int | None = None,
+        limit: int | None = None,
+    ):
+        """Lossless raw-point export: every point exactly once, labels included,
+        no downsampling. A GENERATOR — the ``after_id`` keyset paging is followed
+        transparently, so callers just iterate; ``limit`` is the page size of the
+        walk, not a total bound. Pass ``after_id`` to resume a previous walk from
+        its last point id."""
+        while True:
+            params = {
+                param: value
+                for param, value in {
+                    "key": key,
+                    "kind": kind,
+                    "step_from": step_from,
+                    "step_to": step_to,
+                    "after_id": after_id,
+                    "limit": limit,
+                }.items()
+                if value is not None
+            }
+            page = self.transport.get(
+                f"/v1/runs/{run_id}/metrics/export", params=params or None
+            )
+            yield from page.get("points") or ()
+            next_after_id = page.get("next_after_id")
+            # None means the last currently visible page. The monotonic check is
+            # the loop's own guard: a cursor that fails to advance would replay
+            # the same page forever, and an infinite generator that yields
+            # duplicates is worse than stopping at the point already delivered.
+            if next_after_id is None or (after_id is not None and next_after_id <= after_id):
+                return
+            after_id = next_after_id
+
+    def list_run_coordinates(self, run_id: str) -> list[dict]:
+        """The run's coordinate catalog (0060): every non-empty coordinate any
+        fact has landed on, with which fact tables have it — enumeration for
+        split/overlay pickers without scanning points/spans/artifacts. Bounded by
+        the series cap's cardinality arithmetic, so no pagination."""
+        return self.transport.get(f"/v1/runs/{run_id}/coordinates")
+
     def run_spans(
         self,
         run_id: str,
@@ -1445,6 +1656,26 @@ class Client:
             "/v1/series/query", {"run_ids": run_ids, **kw}, idempotent=True
         )
 
+    def latest_scalars(
+        self,
+        run_ids: list[str],
+        *,
+        keys: list[str] | None = None,
+        kind: str | None = None,
+    ) -> dict:
+        """``POST /v1/series/latest``: cross-run scalar summary (last/min/max per
+        series) for run tables — reads the derived series catalog, never raw
+        points. POST-for-read, so it retries like a GET. Every run must be live
+        and in-tenant; a soft-deleted or unknown one is a 404 before any read.
+        Built through the generated ``LatestScalarsRequest``, so the caps (50
+        runs, 200 keys) fail client-side instead of as a server 422."""
+        model = LatestScalarsRequest(run_ids=run_ids, keys=keys, kind=kind)
+        return self.transport.post(
+            "/v1/series/latest",
+            model.model_dump(mode="json", exclude_none=True),
+            idempotent=True,
+        )
+
     def search(
         self,
         query: str,
@@ -1567,4 +1798,4 @@ class Client:
 
 
 # Late import to avoid a cycle at module load (Run needs Client, Client returns Run).
-from .run import Run
+from .run import Run  # noqa: E402

@@ -68,6 +68,10 @@ def _isolate_config_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> N
 
 
 _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")
+_RUN_METRICS_GROUPED = re.compile(r"^/v1/runs/([^/]+)/metrics/grouped$")
+_RUN_METRICS_WIDE = re.compile(r"^/v1/runs/([^/]+)/metrics/wide$")
+_RUN_METRICS_EXPORT = re.compile(r"^/v1/runs/([^/]+)/metrics/export$")
+_RUN_COORDINATES = re.compile(r"^/v1/runs/([^/]+)/coordinates$")
 _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
 _RUN_SERIES = re.compile(r"^/v1/runs/([^/]+)/series$")
 _RUN_ARTIFACTS = re.compile(r"^/v1/runs/([^/]+)/artifacts$")
@@ -116,6 +120,22 @@ class FakeApp:
         if not self.echoes_project_scope or not body or not body.get("project_id"):
             return response
         return {**response, "project_id": body["project_id"]}
+
+    def _stepped_points(self, rid: str, params, *, keys: list[str] | None = None) -> list[dict]:
+        """The stepped points a grouped/wide read draws from: key/kind/step-window
+        filtered, wall-clock-only points (no step_index) excluded."""
+        rows = [
+            r for r in self.metric_points.get(rid, []) if r.get("step_index") is not None
+        ]
+        if keys:
+            rows = [r for r in rows if r.get("key") in keys]
+        if params.get("kind") is not None:
+            rows = [r for r in rows if r.get("kind") == params["kind"]]
+        if params.get("step_from") is not None:
+            rows = [r for r in rows if r["step_index"] >= int(params["step_from"])]
+        if params.get("step_to") is not None:
+            rows = [r for r in rows if r["step_index"] <= int(params["step_to"])]
+        return rows
 
     def _find_artifact(self, artifact_id: str) -> dict | None:
         """One artifact by id, whatever it hangs off — the fake's echo of the server's
@@ -205,6 +225,16 @@ class FakeApp:
         # Separate from `metric_points`, which read-path tests seed by hand;
         # write-path tests assert on the captured wire payloads here.
         self.metric_points_posted: dict[str, list[dict]] = {}
+        # Coordinate catalog rows (0060), seeded by hand like `metric_points`.
+        self.coordinates: dict[str, list[dict]] = {}
+        # 0062 per-key declared reduce fns, as a seed knob. The grouped handler
+        # also honors `agg` fields on POSTED points, so the write-side
+        # declaration is exercisable end to end.
+        self.declared_aggs: dict[str, str] = {}
+        # Server-side per-page ceilings BELOW the requested max_rows, so the
+        # client's next_step/paging loops have something real to follow.
+        self.grouped_page_rows: int | None = None
+        self.wide_page_rows: int | None = None
         self.spans: dict[str, list[dict]] = {}
         self.assets: dict[str, dict] = {}
         self.asset_versions: dict[str, list[dict]] = {}
@@ -559,6 +589,160 @@ class FakeApp:
             if kind is not None:
                 rows = [r for r in rows if r.get("kind") == kind]
             return httpx.Response(200, json=rows[: int(limit)] if limit else rows)
+
+        # -- coordinate reads (0059-0062): grouped / wide / export / catalog --
+        m = _RUN_METRICS_GROUPED.match(path)
+        if m and method == "GET":
+            rid = m.group(1)
+            p = request.url.params
+            key = p.get("key")
+            rows = self._stepped_points(rid, p, keys=[key] if key else None)
+            agg = p.get("agg")
+            if agg is None:
+                # 0062: omitted agg resolves to the key's DECLARED reduce fn
+                # (else mean); conflicting declarations are a 422, mirroring
+                # the server. Declarations arrive on posted points or the
+                # `declared_aggs` seed knob.
+                declared = {
+                    q["agg"]
+                    for q in self.metric_points_posted.get(rid, [])
+                    if q.get("key") == key and q.get("agg")
+                }
+                if key in self.declared_aggs:
+                    declared.add(self.declared_aggs[key])
+                if len(declared) > 1:
+                    return httpx.Response(
+                        422, json={"detail": f"conflicting agg declarations for {key!r}"}
+                    )
+                agg = declared.pop() if declared else "mean"
+            by = [axis for axis in (p.get("by") or "").split(",") if axis]
+            where = json.loads(p["where"]) if "where" in p else None
+            if where:
+                rows = [
+                    r for r in rows
+                    if all((r.get("dimensions") or {}).get(k) == v for k, v in where.items())
+                ]
+            bucket = int(p.get("step_bucket") or 1)
+            max_rows = int(p.get("max_rows") or 10000)
+            if self.grouped_page_rows:
+                max_rows = min(max_rows, self.grouped_page_rows)
+            cells: dict[tuple, list[float]] = {}
+            for r in rows:
+                b = (r["step_index"] // bucket) * bucket
+                group = tuple(
+                    (axis, (r.get("dimensions") or {}).get(axis)) for axis in by
+                )
+                cells.setdefault((b, group), []).append(r["value"])
+            fns = {
+                "mean": lambda v: sum(v) / len(v),
+                "sum": sum, "min": min, "max": max, "count": len,
+            }
+            groups: list[dict] = []
+            truncated, next_step = False, None
+            for (b, group), values in sorted(
+                cells.items(), key=lambda cell: (cell[0][0], str(cell[0][1]))
+            ):
+                # Cut only at a bucket boundary, so next_step is a clean re-entry.
+                if len(groups) >= max_rows and b != groups[-1]["step_index"]:
+                    truncated, next_step = True, b
+                    break
+                groups.append({
+                    "step_index": b,
+                    # Group labels are each axis value's JSON text (int 1 vs "1").
+                    "group": {
+                        axis: (None if v is None else json.dumps(v)) for axis, v in group
+                    } or None,
+                    "value": float(fns[agg](values)),
+                    "n": len(values),
+                })
+            return httpx.Response(200, json={
+                "key": key, "kind": p.get("kind"), "agg": agg, "by": by or None,
+                "where": where, "step_bucket": bucket, "groups": groups,
+                "truncated": truncated, "next_step": next_step,
+            })
+
+        m = _RUN_METRICS_WIDE.match(path)
+        if m and method == "GET":
+            p = request.url.params
+            rows = self._stepped_points(m.group(1), p, keys=p.get_list("key") or None)
+            steps = sorted({r["step_index"] for r in rows})
+            max_rows = int(p.get("max_rows") or 10000)
+            if self.wide_page_rows:
+                max_rows = min(max_rows, self.wide_page_rows)
+            truncated = len(steps) > max_rows
+            next_step = steps[max_rows] if truncated else None
+            steps = steps[:max_rows]
+            # Columns cover THIS page's window only (a series with no point in
+            # the emitted steps is absent from `columns`), so a paging client
+            # must realign by series identity, never trust positions.
+            window = set(steps)
+            rows = [r for r in rows if r["step_index"] in window]
+            idents = sorted({
+                (r.get("key"), r.get("kind"),
+                 json.dumps(r.get("dimensions") or {}, sort_keys=True))
+                for r in rows
+            })
+            values = {
+                (r["step_index"],
+                 (r.get("key"), r.get("kind"),
+                  json.dumps(r.get("dimensions") or {}, sort_keys=True))): r["value"]
+                for r in rows
+            }
+            return httpx.Response(200, json={
+                "columns": [
+                    {"key": k, "kind": kd, "dimensions": json.loads(d)}
+                    for k, kd, d in idents
+                ],
+                "rows": [
+                    {"step_index": s, "values": [values.get((s, c)) for c in idents]}
+                    for s in steps
+                ],
+                "truncated": truncated,
+                "next_step": next_step,
+            })
+
+        m = _RUN_METRICS_EXPORT.match(path)
+        if m and method == "GET":
+            p = request.url.params
+            rows = sorted(
+                self.metric_points.get(m.group(1), []), key=lambda r: r.get("id", 0)
+            )
+            for param, field in (("key", "key"), ("kind", "kind")):
+                if p.get(param) is not None:
+                    rows = [r for r in rows if r.get(field) == p[param]]
+            if p.get("step_from") is not None:
+                rows = [r for r in rows if r.get("step_index") is not None
+                        and r["step_index"] >= int(p["step_from"])]
+            if p.get("step_to") is not None:
+                rows = [r for r in rows if r.get("step_index") is not None
+                        and r["step_index"] <= int(p["step_to"])]
+            if p.get("after_id") is not None:
+                rows = [r for r in rows if r["id"] > int(p["after_id"])]
+            limit = int(p.get("limit") or 1000)
+            page, rest = rows[:limit], rows[limit:]
+            return httpx.Response(200, json={
+                "points": page,
+                "next_after_id": page[-1]["id"] if rest else None,
+            })
+
+        m = _RUN_COORDINATES.match(path)
+        if m and method == "GET":
+            return httpx.Response(200, json=self.coordinates.get(m.group(1), []))
+
+        if path == "/v1/series/latest" and method == "POST":
+            scalars = []
+            for rid in body.get("run_ids", []):
+                row = self.runs.get(rid)
+                # Every run is validated in-tenant AND live before any read.
+                if row is None or row.get("deleted_at"):
+                    return httpx.Response(404, json={"detail": "run not found"})
+                for s in self.series.get(rid, []):
+                    if body.get("keys") and s.get("key") not in body["keys"]:
+                        continue
+                    if body.get("kind") and s.get("kind") != body["kind"]:
+                        continue
+                    scalars.append({**s, "run_id": rid})
+            return httpx.Response(200, json={"scalars": scalars})
 
         m = _RUN_SERIES.match(path)
         if m and method == "GET":
