@@ -13,6 +13,12 @@ setting the flag from your launcher IS the entire integration::
     from probe.connectors.miles import register
     register(args)          # before init_tracking(args)
 
+The per-sample rollout rail is re-exported here too, so pointing miles at
+``--custom-rollout-log-function-path
+probe.connectors.miles.per_sample_rollout_log`` streams one labeled point
+pair per rollout sample WITHOUT replacing miles' aggregate logging (the hook
+always returns False; see :func:`probe.integrations.miles.per_sample_rollout_log`).
+
 Reconciliation note (2026-07-27): an earlier duplicate backend class that
 lived here was retired in favor of the shipped integration. Its two genuine
 deltas were folded into ``probe.integrations.miles`` so every activation door
@@ -26,9 +32,19 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..integrations.miles import ProbeBackend, planned_labeled_points
+from ..integrations.miles import (
+    ProbeBackend,
+    per_sample_rollout_log,
+    planned_labeled_points,
+)
 
-__all__ = ["FLAG", "ProbeBackend", "planned_labeled_points", "register"]
+__all__ = [
+    "FLAG",
+    "ProbeBackend",
+    "per_sample_rollout_log",
+    "planned_labeled_points",
+    "register",
+]
 
 #: The args attribute TrackingManager checks (``getattr(args, flag, False)``).
 FLAG = "use_probe"

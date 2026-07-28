@@ -1017,6 +1017,171 @@ class ProbeBackend:
         self._tracker.finish(status=self._terminal_status)
 
 
+# -- per-sample rollout streaming hook ---------------------------------------
+#
+# miles' rollout metrics funnel (miles/ray/rollout/metrics.py:log_rollout_data)
+# calls a `--custom-rollout-log-function-path` hook before its own aggregate
+# logging, and SKIPS the aggregates when the hook returns truthy. This hook is
+# an ADDITIVE per-sample rail: it always returns False so the aggregate rail
+# keeps running, and it never raises into the rollout loop.
+
+#: One producer handle per queue root in this process. The durable queue is
+#: explicitly multi-producer (only the EXPORTER holds a lease — see
+#: _ExporterLease), so the hook produces alongside any ProbeTracker in the
+#: same or another process without contention. The module keeps no global
+#: tracker handle to borrow, so the hook builds its own producer-side handle
+#: from the SAME args/env resolution the tracker uses — never a second queue
+#: location.
+_HOOK_STATES: dict[str, "_PerSampleHookState"] = {}
+_hook_warned = False
+
+
+class _PerSampleHookState:
+    def __init__(self, root: Path, external_id: str) -> None:
+        self.queue = DurableMetricQueue(root)
+        self.external_id = external_id
+        # Same identity convention as ProbeTracker.init, with a role naming
+        # this rail so producer reports show where the records came from.
+        self.producer_id = (
+            f"rollout_hook:{os.uname().nodename}:{os.getpid()}:{uuid.uuid4().hex}"
+        )
+        self.sequence = 0
+        self.queue.register_producer(self.producer_id, role="rollout_hook", primary=False)
+
+
+def _hook_configured(args) -> bool:
+    """Is the Probe integration active for this process?
+
+    True when a tracker already resolved the queue on this args object, when
+    the backend flag (``--use-probe`` / connectors.miles.register) is set, or
+    when the PROBE_TOKEN credential the integration keys on is present.
+    """
+    return bool(
+        getattr(args, "probe_queue_resolved", False)
+        or getattr(args, "use_probe", False)
+        or os.environ.get("PROBE_TOKEN")
+    )
+
+
+def _hook_state(args, external_id: str) -> _PerSampleHookState:
+    root = _resolve_queue_dir(args, external_id, primary=False)
+    key = str(root)
+    state = _HOOK_STATES.get(key)
+    if state is None or state.external_id != external_id:
+        state = _PerSampleHookState(root, external_id)
+        _HOOK_STATES[key] = state
+    return state
+
+
+def _rollout_step(args, rollout_id) -> int:
+    """Mirror miles' ``compute_rollout_step`` without importing miles.
+
+    ``wandb_always_use_train_step`` maps a rollout id onto the train-step axis
+    (``rollout_id * rollout_batch_size * n_samples_per_prompt //
+    global_batch_size``); otherwise the rollout id IS the step. Missing or
+    invalid args fall back to the rollout id — a shifted x-axis is
+    recoverable, a raised hook is not.
+    """
+    try:
+        if getattr(args, "wandb_always_use_train_step", False):
+            return (
+                int(rollout_id)
+                * int(getattr(args, "rollout_batch_size", None))
+                * int(getattr(args, "n_samples_per_prompt", None))
+                // int(getattr(args, "global_batch_size", None))
+            )
+    except (TypeError, ValueError, ZeroDivisionError):
+        pass
+    return int(rollout_id)
+
+
+def _sample_reward(sample) -> float | None:
+    """The sample's reward scalar: a numeric ``reward`` directly, or a dict
+    reward's numeric ``"reward"`` entry; anything else has no scalar."""
+    reward = getattr(sample, "reward", None)
+    if isinstance(reward, dict):
+        reward = reward.get("reward")
+    return _scalar(reward)
+
+
+def _sample_response_length(sample) -> float | None:
+    """``effective_response_length`` (loss-masked) when it yields a number,
+    else raw ``response_length``."""
+    length = _scalar(getattr(sample, "effective_response_length", None))
+    if length is None:
+        length = _scalar(getattr(sample, "response_length", None))
+    return length
+
+
+def per_sample_rollout_log(
+    rollout_id, args, samples, rollout_extra_metrics, rollout_time
+) -> bool:
+    """Per-sample rollout rail for ``--custom-rollout-log-function-path``.
+
+    Pass ``probe.connectors.miles.per_sample_rollout_log`` to miles and every
+    rollout sample streams ``rollout/reward`` and ``rollout/response_length``
+    through the durable queue as label-identified points
+    (``labels={"sample": index, "group": group_index}`` — POINT identity,
+    never a series axis; no dimensions), at the same step miles' aggregate
+    rail logs at.
+
+    Runs inside miles' RolloutManager process. ALWAYS returns False so miles'
+    default aggregate logging still runs, and NEVER raises into miles: any
+    failure logs one warning and the rollout loop continues. Unconfigured
+    (no tracker, no ``use_probe`` flag, no PROBE_TOKEN) it is a silent no-op.
+    """
+    global _hook_warned
+    try:
+        if not _hook_configured(args):
+            return False
+        external_id = str(
+            getattr(args, "probe_external_id", None) or _default_external_id(args)
+        )
+        state = _hook_state(args, external_id)
+        run_id = getattr(args, "probe_run_id", None) or getattr(
+            args, "research_os_run_id", None
+        )
+        step = _rollout_step(args, rollout_id)
+        for sample in samples:
+            metrics: dict[str, float] = {}
+            if (reward := _sample_reward(sample)) is not None:
+                metrics["rollout/reward"] = reward
+            if (length := _sample_response_length(sample)) is not None:
+                metrics["rollout/response_length"] = length
+            index = getattr(sample, "index", None)
+            # `sample.index` is miles' unique per-sample id (assigned by the
+            # data source for every generated sample). Without it the point
+            # has no per-sample identity — a positional fallback could
+            # collide with real indices — so an id-less sample is skipped.
+            if not metrics or index is None:
+                continue
+            labels: dict[str, Any] = {"sample": index}
+            if (group := getattr(sample, "group_index", None)) is not None:
+                # The prompt group: unbounded cardinality, so a LABEL —
+                # never a dimension.
+                labels["group"] = group
+            state.sequence += 1
+            state.queue.enqueue_metrics(
+                metrics,
+                run_id=str(run_id) if run_id else None,
+                external_id=external_id,
+                step=step,
+                kind="model",
+                labels=labels,
+                producer_id=state.producer_id,
+                producer_sequence=state.sequence,
+            )
+        state.queue.update_producer(state.producer_id, sequence=state.sequence)
+    except Exception:
+        if not _hook_warned:
+            _hook_warned = True
+            logger.warning(
+                "Probe per-sample rollout hook failed; miles continues",
+                exc_info=True,
+            )
+    return False
+
+
 def drain_metric_queue(
     queue_dir: str | Path,
     run_id: str | None = None,
@@ -1152,6 +1317,7 @@ __all__ = [
     "ProbeTracker",
     "drain_metric_queue",
     "drain_miles_metric_queue",
+    "per_sample_rollout_log",
 ]
 
 

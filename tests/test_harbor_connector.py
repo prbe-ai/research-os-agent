@@ -206,6 +206,8 @@ def test_capture_trial_full(client, app, tmp_path):
     assert metric_body["points"][0] == {
         "key": "reward", "kind": "model", "value": 0.75,
         "step_index": 600, "dimensions": {},
+        # exemplar pointer: point -> trial resolves exactly, not heuristically
+        "span_id": result["span_id"],
     }
     # every file uploaded, labeled, step-keyed
     assert len(result["files"]) == 7
@@ -240,6 +242,7 @@ def test_capture_trial_stamps_the_below_run_coordinate(client, app, tmp_path):
     (point,) = app.metric_points_posted[run.id]
     assert point["dimensions"] == {"rank": 0}
     assert point["labels"] == {"sample": "bwrhe3y"}
+    assert point["span_id"] == span["id"]  # reward point binds its rollout span
     manifest = next(
         a for a in app.artifacts[run.id] if a.get("kind") == MANIFEST_KIND
     )

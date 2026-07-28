@@ -164,6 +164,9 @@ def test_capture_expands_atif_into_the_span_tree(client, app, tmp_path):
     turn_ids = {s["id"] for s in turns}
     assert all(s["parent_span_id"] in turn_ids for s in calls)
     assert all(s["step_index"] == 600 for s in turns + calls)
+    # coords is ALWAYS a dict on the wire ({} = no coordinate stated) — a null
+    # is the live-prod 422 (server 0059: non-nullable dict)
+    assert all(s["coords"] == {} for s in turns + calls)
     # manifest records the expansion outcome
     manifest = client.list_run_artifacts(run.id, kind=MANIFEST_KIND)[0]
     assert manifest["meta"]["trajectory"]["expanded"] is True
@@ -241,6 +244,72 @@ def test_re_expansion_is_idempotent(client, app, tmp_path):
     expand_trajectory(run, doc, root_span_id=root, trial="t__1", max_spans=0, strict=True)
     ids_twice = sorted({s["id"] for s in app.spans[run.id] if s["span_type"] != "rollout"})
     assert first["expanded"] and ids_twice == ids_once  # same UUIDs -> upserts, no duplicates
+
+
+# -- coords on expanded spans (live-prod 422 regression) -------------------------
+def test_expansion_span_bodies_never_serialize_null_coords(client, app):
+    """Regression for the live 422 against api.research.prbe.ai: the generated
+    SpanCreate defaults coords to None and the batch body serializes WITHOUT
+    exclude_none, so expansion sent ``"coords": null`` and the server (0059:
+    coords is a non-nullable dict) rejected the whole batch. Every serialized
+    span body must carry a dict."""
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    doc = _load(FIXTURES / "hello-world-timeout.trajectory.json")
+    root = run.span("rollout", name="t")
+    report = expand_trajectory(run, doc, root_span_id=root, trial="t__1", max_spans=0, strict=True)
+    assert report["expanded"] is True
+    bodies = [
+        span
+        for request in app.requests
+        if request.url.path.endswith("/spans") and request.method == "POST"
+        for span in json.loads(request.content)["spans"]
+    ]
+    assert len(bodies) == report["spans"] + 1  # + the rollout span itself
+    for span in bodies:
+        assert isinstance(span["coords"], dict)  # never null on the wire
+
+
+def test_expand_trajectory_stamps_coords_on_every_span_marker_included(client, app):
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    doc = _load(FIXTURES / "hello-world-context-summarization.trajectory.json")
+    root = run.span("rollout", name="t")
+    expand_trajectory(
+        run, doc, root_span_id=root, trial="t__1", max_spans=4,
+        coords={"rank": 3}, strict=True,
+    )
+    children = [s for s in app.spans[run.id] if s["span_type"] != "rollout"]
+    assert next(s for s in children if s["span_type"] == "marker")["coords"] == {"rank": 3}
+    assert children and all(s["coords"] == {"rank": 3} for s in children)
+
+
+def test_expand_trajectory_merges_the_ambient_unit_coords(client, app):
+    """Same invariant as Run.span: ambient run.unit coords resolve into the
+    batch, the explicit call site winning per key."""
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    doc = _load(FIXTURES / "hello-world-timeout.trajectory.json")
+    root = run.span("rollout", name="t")
+    with run.unit(coords={"rank": 1, "split": "train"}):
+        expand_trajectory(
+            run, doc, root_span_id=root, trial="t__1", max_spans=0,
+            coords={"rank": 2}, strict=True,
+        )
+    children = [s for s in app.spans[run.id] if s["span_type"] != "rollout"]
+    assert children
+    assert all(s["coords"] == {"rank": 2, "split": "train"} for s in children)
+
+
+def test_capture_threads_its_coords_into_expanded_child_spans(client, app, tmp_path):
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    capture_trial(
+        run, _write_atif_trial(tmp_path / "t", "hello-world-invalid-json.trajectory.json"),
+        step_index=600, coords={"rank": 2}, strict=True,
+    )
+    children = [s for s in app.spans[run.id] if s["span_type"] != "rollout"]
+    assert children and all(s["coords"] == {"rank": 2} for s in children)
 
 
 # -- retroactive expansion via the CLI -------------------------------------------

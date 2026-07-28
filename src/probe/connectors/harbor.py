@@ -1093,11 +1093,12 @@ def capture_trial(
     - ``coords``/``labels`` are the below-run coordinate maps (research-os#177):
       ``coords`` the bounded grouping axes the trial ran at (e.g. ``rank``),
       ``labels`` its per-sample ids (e.g. ``sample``). ``coords`` is stamped on
-      the rollout span; both thread into the reward metric point and the
-      trial's artifacts. They merge over any ambient ``run.unit(...)`` context
-      (these explicit maps win per key). File-byte uploads ride the presign
-      door, which has no coordinate fields — their rows carry coords/labels
-      only if the upload falls back to a reference.
+      the rollout span and every expanded trajectory span under it; both thread
+      into the reward metric point (which also carries the rollout span id as
+      its exemplar) and the trial's artifacts. They merge over any ambient
+      ``run.unit(...)`` context (these explicit maps win per key). File-byte
+      uploads ride the presign door, which has no coordinate fields — their
+      rows carry coords/labels only if the upload falls back to a reference.
     - ``environment`` is recorded opaquely on the manifest (e.g. ``{"type":
       "skypilot-fork"}``) — never structural, per the plan's agnosticism rule.
     - Uploads are fail-open like every SDK data write: a file that cannot reach
@@ -1164,6 +1165,9 @@ def capture_trial(
             step=step_index,
             dimensions=coords,
             labels=labels,
+            # Exemplar pointer to the rollout span, so a reader resolves
+            # point -> trial exactly instead of heuristically by step/labels.
+            span_id=rollout_id,
             strict=strict,
         )
         if ledger is not None:
@@ -1190,6 +1194,9 @@ def capture_trial(
             step_index=step_index,
             fmt=parsed.trajectory_format,
             max_spans=max_trajectory_spans,
+            # The already-merged trial coordinate: expanded child spans land
+            # where their rollout span did.
+            coords=coords,
             strict=strict,
         )
 

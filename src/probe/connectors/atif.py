@@ -36,6 +36,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 from ..models import SpanBatch, SpanCreate
+from ..sdk import unit_context
 
 if TYPE_CHECKING:
     from ..sdk.run import Run
@@ -295,6 +296,7 @@ def expand_trajectory(
     step_index: int | None = None,
     fmt: str | None = None,
     max_spans: int | None = None,
+    coords: dict[str, Any] | None = None,
     strict: bool | None = None,
 ) -> dict:
     """Expand one trajectory document into spans under ``root_span_id``.
@@ -303,6 +305,11 @@ def expand_trajectory(
     ``0`` -> unlimited). When the cap cuts the plan, an explicit ``marker``
     span records how many spans remain so truncation is visible, and a full
     re-expand later (idempotent ids) fills in the rest.
+
+    ``coords`` is the below-run coordinate stamped on every expanded span,
+    merged over the ambient :meth:`Run.unit` context (call site wins per key)
+    and resolved ONCE — the whole batch, truncation marker included, lands at
+    the coordinate that was ambient when expansion was requested.
 
     Returns ``{format, expanded, spans, truncated, remaining, final_metrics}``.
     """
@@ -330,6 +337,11 @@ def expand_trajectory(
             )
         )
 
+    # Always a dict, never None: the span body serializes without
+    # exclude_none, and the server's coords field is non-nullable with
+    # {} meaning "no coordinate stated" (keeps any existing one). Resolved
+    # ONCE, so every span in the batch carries the same coordinate.
+    resolved_coords = unit_context.merged_coords(coords)
     spans = []
     for plan in plans:
         parent = (
@@ -348,6 +360,7 @@ def expand_trajectory(
                 ended_at=plan.ended_at,
                 attributes=plan.attributes,
                 summary={},
+                coords=resolved_coords,
             )
         )
     for start in range(0, len(spans), _SPAN_POST_CHUNK):
