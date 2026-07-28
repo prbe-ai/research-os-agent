@@ -8,7 +8,7 @@ build-backend = "hatchling.build"
 # plugin, the `probe-research-mcp` binaries, and mcp.research.prbe.ai. The import
 # name (`probe`) and the CLI binary (`probe`) are unchanged.
 name = "probe-research"
-version = "0.17.0"
+version = "0.18.0"
 description = "CLI + SDK + read-only MCP client for Probe Research (experiment tracking)."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -48,6 +48,12 @@ dev = [
 ]
 # Extra needed only to RUN the hosted HTTP MCP service (not for stdio/CLI users).
 mcp-http = ["uvicorn>=0.30"]
+# Extra for the library-mode instrumented trial runner (connectors.harbor_runner).
+# Trial-DIRECTORY parsing/capture needs nothing — this is only for owning the
+# Trial object in-process. Upper bound = the line verify_harbor_contract() is
+# pinned against. NB: litellm>=1.93 (a harbor dep) ships an sdist needing
+# rustc>=1.86 — add litellm<1.93 if the install fails to build.
+harbor = ["harbor>=0.20,<0.22"]
 
 [project.urls]
 Homepage = "https://github.com/prbe-ai/research-os-agent"
