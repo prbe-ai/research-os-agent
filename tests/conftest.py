@@ -548,7 +548,17 @@ class FakeApp:
                 rows = [
                     {k: v for k, v in row.items() if k != "project_id"} for row in rows
                 ]
-            return httpx.Response(200, json=rows)
+            # Page it, like the real endpoint: limit defaults to 50 and caps at
+            # 200 (schema/openapi.json), with an opaque cursor. Serving every row
+            # regardless made any "does the client paginate?" test vacuous — a
+            # client that read one page and stopped passed identically.
+            limit = min(int(request.url.params.get("limit") or 50), 200)
+            start = int(request.url.params.get("cursor") or 0)
+            window = rows[start : start + limit]
+            headers = {}
+            if start + limit < len(rows):
+                headers["x-next-cursor"] = str(start + limit)
+            return httpx.Response(200, json=window, headers=headers)
 
         m = _EXP_ITEM.match(path)
         if m and method == "GET":

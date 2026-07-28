@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
+import warnings
 
 import pytest
 
@@ -222,20 +224,29 @@ def test_concurrent_logging_never_reuses_a_step(client, app):
     run = open_run(client, experiment="e", name="r")
     seen: list[int] = []
     lock = threading.Lock()
+    threads_n, per_thread = 8, 2000
 
     def worker():
-        for _ in range(25):
+        for _ in range(per_thread):
             step = run._next_step("model")
             with lock:
                 seen.append(step)
 
-    threads = [threading.Thread(target=worker) for _ in range(4)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
+    # Without this the test is vacuous: the critical section is three bytecodes,
+    # so at the default 5ms switch interval an UNLOCKED counter passes too —
+    # verified by deleting the lock and watching the suite stay green.
+    previous = sys.getswitchinterval()
+    sys.setswitchinterval(1e-6)
+    try:
+        threads = [threading.Thread(target=worker) for _ in range(threads_n)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        sys.setswitchinterval(previous)
 
-    assert sorted(seen) == list(range(100))
+    assert sorted(seen) == list(range(threads_n * per_thread))
 
 
 def test_span_generates_uuid_and_posts(client, app):
@@ -762,3 +773,36 @@ def test_a_span_does_not_adopt_a_parent_from_a_different_run(client, app):
     with run_a.span("rollout", name="a-rollout"):
         stray = run_b.span("turn", name="b-turn")
     assert _last_state(app, run_b, stray)["parent_span_id"] is None
+
+
+def test_span_attributes_never_raise_into_the_loop(client, app):
+    """`attributes` is JSONB, so an unserialisable value blows up in model_dump()
+    BEFORE the strict/spool boundary. In the `with` form the raise happens during
+    unwinding and displaces the body's own exception as the visible failure — and
+    the README promotes `span.attributes[...] = ...` as the primary idiom."""
+
+    class Opaque:
+        pass
+
+    run = open_run(client, experiment="e", name="r")
+    with pytest.warns(UserWarning, match="not JSON-serialisable"):
+        direct = run.span("rollout", attributes={"o": Opaque()})
+    assert isinstance(_last_state(app, run, direct)["attributes"]["o"], str)
+
+    with pytest.warns(UserWarning, match="not JSON-serialisable"):
+        with run.span("rollout") as scoped:
+            scoped.attributes["o"] = Opaque()
+    assert isinstance(_last_state(app, run, scoped)["attributes"]["o"], str)
+
+
+def test_the_body_exception_survives_an_unserialisable_attribute(client, app):
+    """The failure the caller needs to see is theirs, not a serialization error
+    raised while closing the span on the way out."""
+    run = open_run(client, experiment="e", name="r")
+    with pytest.raises(ValueError, match="rollout diverged"):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with run.span("rollout") as scoped:
+                scoped.attributes["o"] = object()
+                raise ValueError("rollout diverged")
+    assert _last_state(app, run, scoped)["status"] == "failed"

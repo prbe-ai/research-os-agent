@@ -425,14 +425,7 @@ class Client:
         found = self.resolve_project(slug)
         if found is not None:
             return found
-        archived = self.resolve_project(slug, include_archived=True)
-        if archived is not None:
-            raise errors.NotFoundError(
-                f"project {slug!r} is ARCHIVED, not missing — creating it would "
-                f"conflict on the slug. Restore it with "
-                f"`probe project restore {shlex.quote(slug)}`."
-            )
-        self._refuse_near_miss("project", slug, self.list_projects(limit=200).items)
+        self._guard_creatable("project", slug)
         try:
             return self.create_project(slug, name, **kw)
         except errors.ConflictError:
@@ -773,15 +766,7 @@ class Client:
         found = self.resolve_experiment(slug)
         if found is not None:
             return found
-        archived = self.resolve_experiment(slug, include_archived=True)
-        if archived is not None:
-            raise errors.NotFoundError(
-                f"experiment {slug!r} is ARCHIVED, not missing — creating it "
-                f"would conflict on the slug. Restore it with "
-                f"`probe experiment restore {shlex.quote(slug)}`."
-            )
-        existing = self.list_experiments(project_id=project_id, limit=200).items
-        self._refuse_near_miss("experiment", slug, existing)
+        self._guard_creatable("experiment", slug)
         try:
             return self.create_experiment(
                 slug, name, hypothesis=hypothesis, project_id=project_id, **kw
@@ -1062,8 +1047,24 @@ class Client:
                 "hypothesis= creates an experiment, so it needs an experiment "
                 "slug. A project-direct run has no experiment to hold one."
             )
+        if hypothesis is not None and not hypothesis.strip():
+            # `hypothesis=args.hypothesis or ""` is an ordinary way to get here.
+            # Creation gates on `is not None` while create_experiment gates on
+            # falsiness, so an empty string used to unlock the create path far
+            # enough to commit a PROJECT before failing on the experiment.
+            raise errors.ValidationError(
+                "hypothesis= is empty. Creating an experiment needs one that says "
+                "something: what do you expect this to show? Pass a real "
+                "hypothesis, or drop the argument to open an existing experiment."
+            )
         self.ensure_authenticated()
         name = name or defaults.default_run_name()
+        # Refuse an uncreatable experiment slug BEFORE any parent is committed.
+        # ensure_project runs first below, so without this a refused experiment
+        # leaves a brand-new orphan project behind — the exact stray identity the
+        # refusal exists to prevent.
+        if experiment and hypothesis is not None and self.resolve_experiment(experiment) is None:
+            self._guard_creatable("experiment", experiment)
         project_id = None
         if project:
             # The project follows the experiment: creation is unlocked only by a
@@ -1139,6 +1140,43 @@ class Client:
         slugs = [row["slug"] for row in existing if row.get("slug")]
         return difflib.get_close_matches(slug, slugs, n=3, cutoff=0.6)
 
+    def _all_slugs(self, kind: str) -> list[dict]:
+        """Every row of `kind`, following the cursor.
+
+        The near-miss guard leans on seeing the WHOLE namespace. `limit=200` is
+        the schema maximum, and page ordering is unspecified, so stopping at one
+        page means the guard silently stops firing past 200 rows — and it is the
+        older slugs that drop out of view, which are exactly the ones a typo is
+        likely to be a near-miss of. `analysis.compare()` follows the cursor for
+        the same reason."""
+        rows: list[dict] = []
+        cursor = None
+        lister = self.list_projects if kind == "project" else self.list_experiments
+        while True:
+            # Tenant-wide on purpose: experiment slugs are unique per TENANT, not
+            # per project (see resolve_experiment). Scoping this to a project
+            # would let a typo of an experiment filed elsewhere sail through.
+            page = lister(limit=200, cursor=cursor)
+            rows.extend(page.items)
+            cursor = page.next_cursor
+            if not cursor:
+                return rows
+
+    def _guard_creatable(self, kind: str, slug: str) -> None:
+        """Raise unless `slug` is safe to CREATE. Archived first, then near-miss.
+
+        Split out of ensure_* so `run()` can run it BEFORE it commits a parent:
+        otherwise a refused experiment leaves a brand-new project behind, which is
+        precisely the orphan identity this whole guard exists to prevent."""
+        resolve = self.resolve_project if kind == "project" else self.resolve_experiment
+        if resolve(slug, include_archived=True) is not None:
+            raise errors.NotFoundError(
+                f"{kind} {slug!r} is ARCHIVED, not missing — creating it would "
+                f"conflict on the slug. Restore it with "
+                f"`probe {kind} restore {shlex.quote(slug)}`."
+            )
+        self._refuse_near_miss(kind, slug, self._all_slugs(kind))
+
     def _refuse_near_miss(self, kind: str, slug: str, existing: Iterable[dict]) -> None:
         """Refuse to CREATE a slug that looks like a typo of an existing one.
 
@@ -1167,7 +1205,9 @@ class Client:
         raise errors.ValidationError(
             f"refusing to create {kind} {slug!r}: it is a near-miss of "
             f"{', '.join(repr(n) for n in near)}. If you meant the existing one, "
-            f"use that slug. If this really is new, create it explicitly with "
+            f"use that slug. If this really is new, create it explicitly — "
+            f"`client.create_{kind}({slug!r}"
+            f"{', hypothesis=...' if kind == 'experiment' else ''})` or "
             f"`probe {kind} create {shlex.quote(slug)}{hint}`."
         )
 

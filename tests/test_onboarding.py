@@ -402,3 +402,95 @@ def test_cli_run_start_cannot_create_an_unknown_experiment(wired, capsys):
     assert rc != 0
     assert wired.experiments == {}
     assert wired.runs == {}
+
+
+# -- guard holes found in pre-landing review ----------------------------------
+def test_a_near_miss_is_refused_even_when_it_lives_in_another_project(app, client):
+    """Experiment slugs are unique per TENANT, not per project. Scoping the
+    near-miss listing to the named project let a typo of an experiment filed
+    elsewhere sail straight through — verified before the fix."""
+    other = client.create_project("other")
+    client.create_experiment("dockq-sweep", "DockQ", hypothesis="h", project_id=other["id"])
+    with pytest.raises(errors.ValidationError, match="near-miss"):
+        client.run(project="folding", experiment="dockq-sweeep", hypothesis="h", name="r1")
+    assert len(app.experiments) == 1
+
+
+def test_a_refused_experiment_leaves_no_orphan_project(app, client):
+    """ensure_project runs before ensure_experiment, so the refusal has to happen
+    first — otherwise the guard against stray identities creates one itself."""
+    client.create_experiment("dockq-sweep", "DockQ", hypothesis="h")
+    before = len(client.list_projects().items)
+    with pytest.raises(errors.ValidationError, match="near-miss"):
+        client.run(project="brand-new", experiment="dockq-sweeep", hypothesis="h", name="r1")
+    assert len(client.list_projects().items) == before
+
+
+def test_an_empty_hypothesis_creates_nothing(app, client):
+    """`hypothesis=args.hypothesis or ""` is an ordinary way to get here. run()
+    gated on `is not None` while create_experiment gated on falsiness, so an
+    empty string committed a PROJECT before failing on the experiment."""
+    before = len(client.list_projects().items)
+    with pytest.raises(errors.ValidationError, match="empty"):
+        client.run(project="brand-new", experiment="brand-new-exp", hypothesis="", name="r1")
+    assert len(client.list_projects().items) == before
+    assert app.experiments == {}
+
+
+def test_an_archived_project_says_archived_on_the_create_path(app, client):
+    """The existing archived-project test passes no hypothesis, so it only ever
+    exercised resolve_or_raise — never ensure_project."""
+    proj = client.create_project("folding")
+    client.archive_project(proj["id"])
+    with pytest.raises(errors.NotFoundError, match="ARCHIVED"):
+        client.run(project="folding", experiment="dockq", hypothesis="h", name="r1")
+    assert app.experiments == {}
+
+
+def test_a_near_miss_project_is_refused_on_the_create_path(app, client):
+    client.create_project("folding-experiments")
+    with pytest.raises(errors.ValidationError, match="near-miss"):
+        client.run(project="folding-experimentss", experiment="dockq", hypothesis="h", name="r1")
+    assert len(client.list_projects().items) == 1
+
+
+def test_experiment_name_without_a_hypothesis_is_refused(app, client):
+    with pytest.raises(errors.ValidationError, match="experiment_name"):
+        client.run(experiment="e1", experiment_name="E One", name="r1")
+
+
+def test_experiment_name_titles_the_experiment_it_creates(app, client):
+    client.run(experiment="e1", experiment_name="E One", hypothesis="h", name="r1")
+    (experiment,) = app.experiments.values()
+    assert experiment["slug"] == "e1" and experiment["name"] == "E One"
+
+
+def test_the_near_miss_guard_sees_past_the_first_page(app, client):
+    """`limit=200` is the schema maximum and page order is unspecified, so a
+    single-page guard silently stops firing — and it is the OLDER slugs that drop
+    out of view, which are exactly what a typo is a near-miss of."""
+    client.create_experiment("dockq-sweep", "DockQ", hypothesis="h")
+    for i in range(220):
+        client.create_experiment(f"filler-{i:03d}", f"F{i}", hypothesis="h")
+    with pytest.raises(errors.ValidationError, match="near-miss"):
+        client.run(experiment="dockq-sweeep", hypothesis="h", name="r1")
+
+
+def test_a_slug_blind_backend_resolves_to_nothing_rather_than_the_wrong_row(app, client, monkeypatch):
+    """FastAPI silently drops a query param it does not declare, so a backend
+    without `?slug=` answers an unfiltered first page. Taking rows[0] there would
+    attach the caller to a real, arbitrary, WRONG experiment — worse than the
+    get-or-create it replaced, because it appends your metrics to someone else's."""
+    client.create_experiment("someone-elses", "X", hypothesis="h")
+    real_get = client.transport.get
+
+    def unfiltered(path, *, params=None):
+        if path in ("/v1/experiments", "/v1/projects"):
+            params = {k: v for k, v in (params or {}).items() if k != "slug"} or None
+        return real_get(path, params=params)
+
+    monkeypatch.setattr(client.transport, "get", unfiltered)
+    assert client.resolve_experiment("dockq-sweep") is None
+    with pytest.raises(errors.NotFoundError):
+        client.run(experiment="dockq-sweep", name="r1")
+    assert app.runs == {}
