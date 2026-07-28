@@ -46,7 +46,13 @@ from ..sdk.durable import (
 
 logger = logging.getLogger(__name__)
 
-QUEUE_SCHEMA_VERSION = "miles.probe.metrics/v1"
+# v2 adds optional per-record `dimensions` (bounded coordinate axes) and
+# `labels` (per-sample ids) so ANY producer process — a rank actor, a rollout
+# worker, a bridge — can emit coordinate-stamped points through the durable
+# queue. v1 records (no coordinate fields) stay drainable: they land on the
+# run's empty coordinate, exactly as they always did.
+QUEUE_SCHEMA_VERSION = "miles.probe.metrics/v2"
+_DRAINABLE_QUEUE_SCHEMAS = frozenset({"miles.probe.metrics/v1", QUEUE_SCHEMA_VERSION})
 _CREDENTIAL_URI = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
 _SENSITIVE_KEYS = {
     "api_key",
@@ -361,21 +367,28 @@ class DurableMetricQueue:
         external_id: str,
         step: int | None,
         kind: str,
+        dimensions: dict[str, Any] | None = None,
+        labels: dict[str, Any] | None = None,
         producer_id: str | None = None,
         producer_sequence: int | None = None,
     ) -> Path:
-        return self._enqueue(
-            {
-                "type": "metrics",
-                "run_id": run_id,
-                "external_id": external_id,
-                "step": step,
-                "kind": kind,
-                "metrics": metrics,
-                "producer_id": producer_id,
-                "producer_sequence": producer_sequence,
-            }
-        )
+        payload: dict[str, Any] = {
+            "type": "metrics",
+            "run_id": run_id,
+            "external_id": external_id,
+            "step": step,
+            "kind": kind,
+            "metrics": metrics,
+            "producer_id": producer_id,
+            "producer_sequence": producer_sequence,
+        }
+        # Below-run coordinate (server 0059): raw maps only — the SERVER is the
+        # sole canonicalization/hash authority, so the queue never normalizes.
+        if dimensions:
+            payload["dimensions"] = dict(dimensions)
+        if labels:
+            payload["labels"] = dict(labels)
+        return self._enqueue(payload)
 
     def enqueue_finish(
         self,
@@ -621,7 +634,7 @@ class _MetricExporter:
                     continue
                 try:
                     record = _read_json(path)
-                    if record.get("schema_version") != QUEUE_SCHEMA_VERSION:
+                    if record.get("schema_version") not in _DRAINABLE_QUEUE_SCHEMAS:
                         raise ValueError(
                             f"unsupported metric queue record {record.get('schema_version')!r}"
                         )
@@ -636,6 +649,8 @@ class _MetricExporter:
                             step=record.get("step"),
                             kind=record.get("kind") or "model",
                             wall_clock=record.get("created_at"),
+                            dimensions=record.get("dimensions"),
+                            labels=record.get("labels"),
                             strict=True,
                         )
                     elif record.get("type") == "finish":
@@ -865,6 +880,8 @@ class ProbeTracker:
         if self._queue is None:
             return
         step_key = kwargs.get("step_key")
+        dimensions = kwargs.get("dimensions")
+        labels = kwargs.get("labels")
         scalar_metrics = {
             key: number
             for key, value in metrics.items()
@@ -883,6 +900,8 @@ class ProbeTracker:
                 external_id=self._external_id,
                 step=int(step) if step is not None else None,
                 kind=kind,
+                dimensions=dimensions if isinstance(dimensions, dict) else None,
+                labels=labels if isinstance(labels, dict) else None,
                 producer_id=self._producer_id,
                 producer_sequence=self._producer_sequence,
             )

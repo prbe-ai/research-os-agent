@@ -124,3 +124,70 @@ class TestFoldedDeltas:
             key for metrics, _ in client.created_run.logs for key in metrics
         }
         assert delivered == {"train/actor-loss", "rollout/response_len/mean"}
+
+
+class TestQueueCoordinates:
+    """v2 queue records: any producer can emit coordinate-stamped points."""
+
+    def _tracker(self, monkeypatch, tmp_path, **arg_overrides):
+        monkeypatch.setattr(
+            integrations_miles, "_load_sdk", lambda: (FakeClient, FakeRun)
+        )
+        tracker = integrations_miles.ProbeTracker()
+        tracker.init(_args(tmp_path, **arg_overrides), primary=True)
+        return tracker
+
+    def test_dimensions_and_labels_ride_the_queue_to_run_log(
+        self, monkeypatch, tmp_path
+    ):
+        tracker = self._tracker(monkeypatch, tmp_path)
+        tracker.log(
+            {"train/step": 7, "rollout/reward": 0.85},
+            step=7,
+            step_key="train/step",
+            dimensions={"rank": 3},
+            labels={"sample": 12},
+        )
+        tracker.finish()
+        (client,) = FakeClient.instances
+        ((metrics, kwargs),) = [
+            entry for entry in client.created_run.logs if "rollout/reward" in entry[0]
+        ]
+        assert metrics == {"rollout/reward": 0.85}  # step counter still stripped
+        assert kwargs["dimensions"] == {"rank": 3}
+        assert kwargs["labels"] == {"sample": 12}
+
+    def test_v1_records_without_coordinates_still_drain(self, monkeypatch, tmp_path):
+        tracker = self._tracker(monkeypatch, tmp_path)
+        # A record written by a pre-coordinate producer: v1 schema, no fields.
+        path = tracker._queue.enqueue_metrics(
+            {"train/actor-loss": 1.0},
+            run_id=tracker._run_id,
+            external_id=tracker._external_id,
+            step=1,
+            kind="model",
+        )
+        import json as _json
+
+        record = _json.loads(path.read_text())
+        record["schema_version"] = "miles.probe.metrics/v1"
+        path.write_text(_json.dumps(record))
+        tracker.finish()
+        (client,) = FakeClient.instances
+        delivered = [m for m, _ in client.created_run.logs]
+        assert {"train/actor-loss": 1.0} in delivered  # drained at empty coordinate
+        ((_, kwargs),) = [e for e in client.created_run.logs if "train/actor-loss" in e[0]]
+        assert kwargs.get("dimensions") is None and kwargs.get("labels") is None
+
+    def test_non_dict_coordinates_are_ignored_not_fatal(self, monkeypatch, tmp_path):
+        tracker = self._tracker(monkeypatch, tmp_path)
+        tracker.log(
+            {"train/actor-loss": 1.0},
+            step=0,
+            dimensions="rank-3",  # a confused caller must not poison the queue
+            labels=7,
+        )
+        tracker.finish()
+        (client,) = FakeClient.instances
+        ((_, kwargs),) = client.created_run.logs
+        assert kwargs.get("dimensions") is None and kwargs.get("labels") is None
