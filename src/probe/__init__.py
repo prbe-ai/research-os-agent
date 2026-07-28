@@ -1,11 +1,20 @@
 """probe - CLI + SDK client for Probe Research (experiment tracking).
 
-Quick start (SDK):
+Quick start:
     import probe
+    probe.init(experiment="dockq-sweep", hypothesis="temp 0.7 wins")
+    probe.log({"loss": 0.42, "dockq": 0.71}, step=42)   # from anywhere, any thread
+    probe.finish()
+
+`probe.log()` reaches the run without a handle being threaded through call
+frames, which is what makes instrumenting code you do not own practical. The
+binding is a contextvar over a process default, so a second run started in a
+thread shadows rather than hijacks — see `probe.sdk.fluent`.
+
+The explicit API has no ambient state and is the implementation underneath:
     client = probe.Client()   # resolves token from env / `probe login`
-    run = client.run()        # no token -> one-time browser approval (TTY);
-                              # experiment/name/hypothesis default from context
-    run.log({"loss": 0.42, "dockq": 0.71}, step=42)
+    run = client.run(experiment="dockq-sweep")   # no token -> browser approval (TTY)
+    run.log({"loss": 0.42}, step=42)
     run.finish()
 """
 
@@ -28,7 +37,15 @@ _LAZY = {
     "Client",
     "Run",
     "Settings",
+    "SpanHandle",
+    "active_run",
+    "finish",
+    "init",
+    "log",
+    "log_artifact",
+    "log_hw",
     "resolve",
+    "span",
     "stable_external_key",
     "stable_span_id",
 }
@@ -53,7 +70,15 @@ if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at run
         Client,
         Run,
         Settings,
+        SpanHandle,
+        active_run,
+        finish,
+        init,
+        log,
+        log_artifact,
+        log_hw,
         resolve,
+        span,
         stable_external_key,
         stable_span_id,
     )
@@ -64,7 +89,15 @@ __all__ = [
     "Client",
     "Run",
     "Settings",
+    "SpanHandle",
+    "active_run",
+    "finish",
+    "init",
+    "log",
+    "log_artifact",
+    "log_hw",
     "resolve",
+    "span",
     "stable_external_key",
     "stable_span_id",
     "errors",

@@ -214,10 +214,16 @@ def _default_external_id(args) -> str:
 def _ensure_identities(client, spec: dict) -> None:
     """Create the project + experiment the spec names, if they are new.
 
-    `client.run()` resolves its parents instead of get-or-creating them, so the
-    sidecar has to bring them into existence itself. Miles launches concurrently
-    (one exporter per job), so a ConflictError here means a sibling won the race
-    and the identity now exists — which is the outcome we wanted either way.
+    `client.run()` get-or-creates its parents again, so this is no longer the only
+    way they come into existence — but it stays, because the exporter has a
+    hypothesis in its spec and `run()` is called here WITHOUT one (the spec's
+    `hypothesis` key is filtered out before it reaches run()). Creating the
+    experiment here is what carries the hypothesis through; leaving it to run()
+    would hit the "creating an experiment needs a hypothesis" guard instead.
+
+    Miles launches concurrently (one exporter per job), so a ConflictError here
+    means a sibling won the race and the identity now exists — the outcome we
+    wanted either way.
     """
     from ..sdk import errors as _errors
 

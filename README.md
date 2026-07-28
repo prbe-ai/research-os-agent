@@ -20,6 +20,8 @@ Same backend, two entry points: humans-in-code reach for the SDK/CLI; agents-in-
 ```text
 src/probe/
 ├── sdk/       # typed client, uploads, local capture, session adapter ABI
+│   ├── fluent.py    # probe.init/log/finish — ambient run, contextvar-bound
+│   └── analysis.py  # client.compare(): N runs aligned on step
 ├── cli/       # `probe`: thin shell over the SDK
 └── mcp/       # `probe-research-mcp`: strictly read-only tools and resources
 skills/
@@ -34,11 +36,12 @@ therefore have capability parity; they differ only in ergonomics.
 | Surface | SDK | CLI | Intended caller |
 |---|---|---|---|
 | Experiment upload | `Client.run`, `Run.log/span/log_artifact/snapshot/link/execute`, `Client.events`, `Client.promote` | `run`, `log`, `span`, `artifact`, `snapshot`, `link`, `exec`, `event`, `promote` | Researchers, agents, notebooks, training/platform code |
+| Ambient upload | `probe.init/log/log_hw/log_artifact/span/finish`, `probe.active_run` | n/a (a CLI call has no ambient run) | Training scripts, and library code with no handle to pass |
 | Session adapter | `Client.sessions.attach/checkpoint/detach` | `probe hook session ...` | **Future deterministic hooks/broker only** |
 | Asset read/selection | `Client.assets.resolve`, normally behind MCP | No normal read verb | Agent through read-only MCP |
 | Asset effects | `Client.assets.materialize/fork/propose/promote` | `probe asset ...` | Agent/researcher after selecting an exact asset ref |
 | Passive ingestion | `Client.ingest` | No convenience command yet | Install-once platform integration |
-| Read plane | SDK reads used by `probe.mcp` | `get`/`bundle` diagnostics | MCP for agents; CLI for humans/scripts |
+| Read plane | SDK reads used by `probe.mcp`; `Client.compare` for N-run analysis | `get`/`bundle` diagnostics | MCP for agents; CLI for humans/scripts |
 
 Session commands do not upload metrics or experiment outputs. They correlate a
 coding-agent session with a run and checkpoint redacted transcript metadata.
@@ -79,26 +82,69 @@ seeds `PROBE_TOKEN` at session start.
 
 ## SDK (agent-driven / interactive)
 
+Two forms, same implementation. The module-level one when you want to log from
+code that has no handle to pass around:
+
+```python
+import probe
+
+probe.init(experiment="dockq-sweep", hypothesis="temp 0.7 wins")
+probe.log({"loss": 0.42, "dockq": 0.71}, step=42)    # from anywhere, any thread
+probe.finish()
+```
+
+`probe.init()` takes everything `client.run()` does and returns the same `Run`
+handle, so `with probe.init(...) as run:` works and the rest of the API is one
+attribute away. The binding is a contextvar backed by a process default: a worker
+thread finds the run (a bare contextvar would not — threads start with an empty
+context), while a second `init()` inside a thread or block *shadows* rather than
+hijacking the outer one. That is the part of `wandb.init()`'s global that
+silently corrupts concurrent runs. `probe.active_run()` returns the current
+binding, and a script that exits without `finish()` is closed at exit as
+`completed` / `failed` / `canceled` rather than left to the crash reaper.
+
+The explicit form has no ambient state at all:
+
 ```python
 import probe
 
 client = probe.Client()  # resolves creds from env / `probe login`
 
-# The project and experiment must already exist — create them explicitly first.
-client.create_project("folding")
-client.create_experiment("dockq-sweep", hypothesis="temp 0.7 wins")
+# run() resolves by default. `hypothesis=` is the one opt-in to creation, so the
+# FIRST run in a new experiment says what you expect to see:
+run = client.run(experiment="dockq-sweep", hypothesis="temp 0.7 wins",
+                 name="run-1", project="folding",
+                 source="runpod", external_id="rp-9931")
 
-run = client.run(experiment="dockq-sweep", name="run-1",
-                 project="folding", source="runpod", external_id="rp-9931")
-# `name` still defaults to a timestamp (the server adds a petname short_id). An
-# unknown experiment slug raises, naming the closest existing ones, rather than
-# creating a second identity from a typo.
+# …and every run after that is bare — the experiment already exists, and its
+# hypothesis is first-write-wins so reopening never rewrites it:
+run = client.run(experiment="dockq-sweep")
+
+# No hypothesis and no experiment? That is a project-direct run, which is the honest
+# home for work with none — better than an experiment named after your cwd:
+run = client.run(project="folding")
+
+# `name` defaults to a timestamp (the server adds a petname short_id). A slug that is
+# a near-miss of an existing one is REFUSED, not created: a warning is invisible from
+# a training loop. Creation is SDK-only — `probe run start` never creates, because on
+# the CLI the slug is hand-typed every time, which is where typos come from.
 
 run.snapshot()                                   # non-disruptive git + deps + GPU capture
 run.link(wandb_run_id="abc123", s3_prefix="s3://x/y")
 
 for step in range(100):
     run.log({"loss": ..., "dockq": ...}, step=step)     # POST /v1/runs/{id}/metrics
+
+# Omit `step` and it auto-increments per metric kind, so the bare loop shape
+# still produces a curve. `step=None` explicitly means no step at all
+# (wall-clock axis) — that is what the CLI and the passive importers pass.
+for batch in loader:
+    run.log({"loss": loss})                             # steps 0, 1, 2, …
+
+# Values of any type are accepted. Numbers (and bools, numpy scalars, 0-d
+# tensors) become metric points and plot; strings, dicts, lists and None go into
+# that step's record and read back through the trajectory view.
+run.log({"loss": 0.4, "phase": "eval", "cfg": {"lr": 3e-4}})
 
 # Below-run coordinates: `coords` are bounded grouping axes (series identity:
 # rank/split/..., never a per-sample id), `labels` per-sample drill-down ids
@@ -107,7 +153,9 @@ for step in range(100):
 with run.unit(coords={"rank": 0}, labels={"sample": 3}):
     run.log({"reward": 0.71}, step=12)   # -> dimensions={"rank": 0}, labels={"sample": 3}
 
-sid = run.span("rollout", name="rollout-0", step_index=1)   # trajectory span
+with run.span("rollout", name="rollout-0", step_index=1) as span:  # trajectory span
+    span.attributes["reward"] = 0.8      # closes with ended_at + a terminal status,
+    ...                                  # `failed` if the body raises; nests inside
 run.log_artifact("final.sif", uri="r2://bucket/final.sif", kind="artifact")
 run.finish()                                     # flushes spool, sets status+ended_at
 ```
@@ -165,6 +213,28 @@ client.ingest(
 
 One idempotent push (bearer ingest token + optional HMAC), keyed on
 `(customer_id, source, external_id)`.
+
+## SDK (reading runs back for comparison)
+
+```python
+comparison = client.compare(experiment_id=exp_id, keys=["dockq"])
+aligned = comparison.aligned("dockq")
+
+for label, values in aligned.values.items():
+    plot(aligned.steps, values, label=label)     # or aligned.to_pandas()
+```
+
+Name the runs with `run_ids=[...]` or select them with the filters `list_runs`
+takes (`experiment_id=`, `group_id=`). One `POST /v1/series/query` per 50 runs —
+more than that batches rather than truncating, because silently dropping runs 51+
+reads as "these are all of them". Columns are labelled by the server's petname
+`short_id`; runs of differing length keep `None` holes rather than being cut to
+the shortest, since differing length is usually what is being compared. pandas is
+optional and only touched by `.to_pandas()`.
+
+There is no separate read client. `wandb.Api()` is a distinct object because W&B
+has two transports (a service process for writes, GraphQL for reads); one REST
+transport does not need the split, so this is a shaping layer on `Client`.
 
 ## CLI (`probe`)
 
@@ -325,8 +395,9 @@ identifiers and evidence first.
 ## Skills
 
 Two skills, split by moment rather than by entity. `probe run start` opens a run in
-an experiment that already exists; creating the project and experiment are explicit
-prior steps (`probe project create` / `probe experiment create`).
+an experiment that already exists, or project-direct with no experiment at all; it
+never creates. Creation on the CLI is always `probe project create` /
+`probe experiment create`.
 
 - `start-research-work` covers that call: orient against what already exists and
   what is already running, create the project and experiment explicitly, resolve assets
@@ -345,7 +416,7 @@ changing the SDK, CLI, MCP, or skill contracts.
 | Client call | Endpoint |
 |---|---|
 | `client.run()` / `run.child()` | `POST /v1/experiments`, `POST /v1/experiments/{id}/runs` |
-| `run.log()` / `run.log_hw()` | `POST /v1/runs/{id}/metrics` |
+| `run.log()` / `run.log_hw()` | `POST /v1/runs/{id}/metrics`, and `/steps` for non-numeric values |
 | `run.span()` / `run.step()` | `POST /v1/runs/{id}/spans` \| `/steps` |
 | `run.log_artifact()` | `POST /v1/runs/{id}/artifacts` |
 | `run.link()` | `PATCH /v1/runs/{id}` (merges `metadata.foreign_keys`) |

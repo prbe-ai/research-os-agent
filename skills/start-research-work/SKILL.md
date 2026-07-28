@@ -5,18 +5,22 @@ description: Start tracked research — create the project and experiment if new
 
 # Start research work
 
-Three identities, created in three explicit steps. Opening a run used to conjure its
-project and experiment in the same call, so a typo'd slug minted a second identity
-instead of erroring — two experiments where you thought you had one, and every later
-comparison silently reading them as different things. It does not do that any more:
-an unknown slug is an error naming the closest existing ones.
+Three identities: project, experiment, run. From the CLI, creation is always its own
+explicit step — `probe run start` opens runs and never creates. The expensive failure
+here is a typo'd slug minting a second identity: two experiments where you thought you
+had one, and every later comparison silently reading them as different things. On the
+CLI the slug is hand-typed on every invocation, which is exactly where that comes from.
+
+(The SDK does have a create-on-demand path — `client.run(experiment=..., hypothesis=...)`
+— because there the slug is written once in a file and code-reviewed. It refuses a
+near-miss of an existing slug rather than warning.)
 
 1. **Orient first.** `browse_research` if you do not know what is in this project;
    `search_knowledge` if you have terms and want prior work on this specific thing.
    Check what is already RUNNING before you launch anything — `browse_research`
    reports `active_run_count`, and duplicate GPU-hours are the expensive mistake.
 
-2. **Create the project and experiment, if they are genuinely new.**
+2. **Create the project and experiment.** Always explicit from the CLI.
 
    ```
    probe project create folding
@@ -27,10 +31,16 @@ an unknown slug is an error naming the closest existing ones.
    raise if the slug is taken, so re-running a setup script is a loud no-op rather
    than a silent second identity.
 
-   **The hypothesis is required and is never synthesised.** This is the moment you
-   know what you are testing, and nothing goes back to fill it in later — an omitted
-   one used to become a permanent `[auto]` placeholder. `probe experiment set EXP
-   --hypothesis "..."` amends one afterwards.
+   Work with no hypothesis does not need an experiment at all: open a
+   PROJECT-DIRECT run (`probe run start --project folding`, or
+   `client.run(project="folding")`). That is a better home for it than an
+   experiment named after whatever directory you happened to be in.
+
+   **The hypothesis is required to CREATE an experiment and is never synthesised.**
+   That is the moment you know what you are testing, and nothing goes back to fill it
+   in later — an omitted one used to become a permanent `[auto]` placeholder. An
+   experiment that already exists keeps its own (first-write-wins), so reopening one
+   never rewrites it; `probe experiment set EXP --hypothesis "..."` amends it.
 
 3. **Reuse the active run** when its intent matches. Otherwise open one, with the
    surface that fits where the code will execute.
@@ -44,7 +54,7 @@ an unknown slug is an error naming the closest existing ones.
 
    client = probe.Client()          # token from env / `probe login`
    run = client.run(experiment="dockq-sweep", project="folding",
-                    external_id="rp-9931")     # both must already exist
+                    external_id="rp-9931")     # hypothesis= here would CREATE it
    run.snapshot()                                    # code + env, pins env_ref
    for step, batch in enumerate(loader):
        run.log({"loss": loss, "reward": reward}, step=step)      # the curve

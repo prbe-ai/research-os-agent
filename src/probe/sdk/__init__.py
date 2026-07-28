@@ -22,12 +22,22 @@ _LAZY: dict[str, str] = {
     "CaptureState": "capture",
     "stable_external_key": "capture",
     "stable_span_id": "capture",
+    "Aligned": "analysis",
+    "Comparison": "analysis",
     "Client": "client",
     "Settings": "config",
     "resolve": "config",
     "EventsReadClient": "events",
     "NoteClient": "events",
+    "active_run": "fluent",
+    "finish": "fluent",
+    "init": "fluent",
+    "log": "fluent",
+    "log_artifact": "fluent",
+    "log_hw": "fluent",
+    "span": "fluent",
     "Run": "run",
+    "SpanHandle": "run",
     "UnitContext": "unit_context",
 }
 
@@ -46,6 +56,7 @@ def __dir__() -> list[str]:
 
 
 if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at runtime
+    from .analysis import Aligned, Comparison
     from .capture import (
         CaptureLedger,
         CaptureState,
@@ -55,20 +66,31 @@ if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at run
     from .client import Client
     from .config import Settings, resolve
     from .events import EventsReadClient, NoteClient
-    from .run import Run
+    from .fluent import active_run, finish, init, log, log_artifact, log_hw, span
+    from .run import Run, SpanHandle
     from .unit_context import UnitContext
 
 
 __all__ = [
+    "Aligned",
     "CaptureLedger",
     "CaptureState",
     "Client",
+    "Comparison",
     "EventsReadClient",
     "NoteClient",
     "Run",
     "Settings",
+    "SpanHandle",
     "UnitContext",
+    "active_run",
+    "finish",
+    "init",
+    "log",
+    "log_artifact",
+    "log_hw",
     "resolve",
+    "span",
     "stable_external_key",
     "stable_span_id",
 ]

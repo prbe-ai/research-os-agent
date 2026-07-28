@@ -73,6 +73,7 @@ _RUN_METRICS_WIDE = re.compile(r"^/v1/runs/([^/]+)/metrics/wide$")
 _RUN_METRICS_EXPORT = re.compile(r"^/v1/runs/([^/]+)/metrics/export$")
 _RUN_COORDINATES = re.compile(r"^/v1/runs/([^/]+)/coordinates$")
 _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
+_RUN_STEPS = re.compile(r"^/v1/runs/([^/]+)/steps$")
 _RUN_SERIES = re.compile(r"^/v1/runs/([^/]+)/series$")
 _RUN_ARTIFACTS = re.compile(r"^/v1/runs/([^/]+)/artifacts$")
 _RUN_BUNDLE = re.compile(r"^/v1/runs/([^/]+)/bundle$")
@@ -174,6 +175,25 @@ class FakeApp:
             "upload_headers": getattr(self, "upload_headers", {}),
         })
 
+    def seed_series(self, run_id: str, key: str, points: dict[int, float], *, kind: str = "model") -> None:
+        """Give a run a metric series that POST /v1/series/query will return.
+
+        `points` is {step_index: value}; runs deliberately need not share steps,
+        because differing length is usually the thing a comparison is about."""
+        self.series_points.setdefault(str(run_id), []).append(
+            {
+                "run_id": str(run_id),
+                "key": key,
+                "kind": kind,
+                "x_axis": "step",
+                "dimensions": {},
+                "points": [
+                    {"step_index": step, "value": value, "wall_clock": "2026-07-27T00:00:00Z"}
+                    for step, value in sorted(points.items())
+                ],
+            }
+        )
+
     def seed_experiment(self, slug: str, *, project_id: str | None = None) -> dict:
         """Put an experiment straight into the fake, no HTTP.
 
@@ -220,6 +240,9 @@ class FakeApp:
         self.tokens: dict[str, dict] = {}
         self.groups: dict[str, dict] = {}
         self.series: dict[str, list[dict]] = {}
+        #: run_id -> SeriesResult rows, served by POST /v1/series/query (compare()).
+        self.series_points: dict[str, list[dict]] = {}
+        self.series_queries: list[dict] = []
         self.metric_points: dict[str, list[dict]] = {}
         # Points as POSTED (coords/labels/span_id included), keyed by run id.
         # Separate from `metric_points`, which read-path tests seed by hand;
@@ -236,6 +259,8 @@ class FakeApp:
         self.grouped_page_rows: int | None = None
         self.wide_page_rows: int | None = None
         self.spans: dict[str, list[dict]] = {}
+        #: run_id -> {step_index: step record}. Where log() puts non-numeric values.
+        self.steps: dict[str, dict[int, dict]] = {}
         self.assets: dict[str, dict] = {}
         self.asset_versions: dict[str, list[dict]] = {}
         self.edges: list[dict] = []
@@ -523,7 +548,17 @@ class FakeApp:
                 rows = [
                     {k: v for k, v in row.items() if k != "project_id"} for row in rows
                 ]
-            return httpx.Response(200, json=rows)
+            # Page it, like the real endpoint: limit defaults to 50 and caps at
+            # 200 (schema/openapi.json), with an opaque cursor. Serving every row
+            # regardless made any "does the client paginate?" test vacuous — a
+            # client that read one page and stopped passed identically.
+            limit = min(int(request.url.params.get("limit") or 50), 200)
+            start = int(request.url.params.get("cursor") or 0)
+            window = rows[start : start + limit]
+            headers = {}
+            if start + limit < len(rows):
+                headers["x-next-cursor"] = str(start + limit)
+            return httpx.Response(200, json=window, headers=headers)
 
         m = _EXP_ITEM.match(path)
         if m and method == "GET":
@@ -747,6 +782,44 @@ class FakeApp:
         m = _RUN_SERIES.match(path)
         if m and method == "GET":
             return httpx.Response(200, json=self.series.get(m.group(1), []))
+
+        if path == "/v1/series/query" and method == "POST":
+            # Multi-run series read, backing client.compare(). Serves whatever
+            # seed_series() put in `series_points`, filtered the way the real
+            # endpoint filters: by run, by (key, kind) selector, and by step.
+            self.series_queries.append(body)
+            wanted = {(s["key"], s.get("kind", "model")) for s in (body.get("series") or [])}
+            step_from, step_to = body.get("step_from"), body.get("step_to")
+            out = []
+            for rid in body.get("run_ids", []):
+                for row in self.series_points.get(str(rid), []):
+                    if wanted and (row["key"], row.get("kind", "model")) not in wanted:
+                        continue
+                    points = [
+                        p
+                        for p in row["points"]
+                        if (step_from is None or p.get("step_index", 0) >= step_from)
+                        and (step_to is None or p.get("step_index", 0) <= step_to)
+                    ]
+                    out.append({**row, "run_id": str(rid), "points": points})
+            return httpx.Response(200, json={"series": out})
+
+        m = _RUN_STEPS.match(path)
+        if m and method == "POST":
+            # StepCreate{step_index, name, attributes, summary} -> SpanOut. The
+            # per-step record; log() routes non-numeric values into `attributes`.
+            # Upserts on (run, step_index), like the real endpoint.
+            rid, index = m.group(1), body["step_index"]
+            record = self.steps.setdefault(rid, {}).setdefault(
+                index, {"step_index": index, "attributes": {}, "summary": {}}
+            )
+            record["attributes"].update(body.get("attributes") or {})
+            record["summary"].update(body.get("summary") or {})
+            if body.get("name") is not None:
+                record["name"] = body["name"]
+            return httpx.Response(
+                201, json={"id": str(uuid.uuid4()), "span_type": "step", **record}
+            )
 
         m = _RUN_SPANS.match(path)
         if m and method == "POST":
@@ -1332,11 +1405,12 @@ def client(app: FakeApp, tmp_path) -> Client:
 def open_run(client: Client, *, experiment: str, name: str | None = None, **run_kw):
     """Create the experiment, then open a run in it.
 
-    `client.run()` no longer creates its parents — that get-or-create is exactly
-    what made a typo'd slug mint a second identity instead of erroring. Tests
+    `client.run()` does get-or-create its parents, so most of this is belt and
+    braces — but creating an experiment needs a hypothesis, and these callers have
+    no opinion about one. Seeding it here keeps every test that just needs *a run
+    to exist* from having to invent a hypothesis it does not care about. Tests
     ABOUT identity resolution call create_experiment / run directly and assert on
-    the failure; this helper is for the many tests that only need *a run to
-    exist* and do not care how it got there."""
+    the behaviour."""
     from probe import errors as _errors
 
     try:

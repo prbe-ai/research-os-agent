@@ -415,6 +415,33 @@ class Client:
         rows = self.transport.get("/v1/projects", params=params)
         return _exactly(rows, slug)
 
+    def ensure_project(self, slug: str, name: str | None = None, **kw) -> dict:
+        """Get-or-create a project by slug. SDK-only; see :meth:`run`.
+
+        :meth:`create_project` stays the explicit one, where a taken slug is an
+        error. This is for callers who do not care whether it existed, only that
+        it does now — but a slug that LOOKS like a typo of an existing one is
+        refused rather than created. See :meth:`_refuse_near_miss`."""
+        found = self.resolve_project(slug)
+        if found is not None:
+            return found
+        self._guard_creatable("project", slug)
+        try:
+            return self.create_project(slug, name, **kw)
+        except errors.ConflictError:
+            # Lost a create race with a concurrent process. Get-or-create promises
+            # the row exists afterwards, not that WE made it, so re-resolve rather
+            # than surface a conflict the caller cannot act on. Re-raise if it is
+            # still absent — then the 409 meant something else.
+            #
+            # NOT the swallow #87 removed. That one hid a TYPO behind a
+            # successful-looking create; this resolves a race between two
+            # processes asking for the same, correct, slug.
+            found = self.resolve_project(slug)
+            if found is None:
+                raise
+            return found
+
     def get_project(self, project_id: str) -> dict:
         return self.transport.get(f"/v1/projects/{project_id}")
 
@@ -714,6 +741,43 @@ class Client:
         rows = self.transport.get("/v1/experiments", params=params)
         return _exactly(rows, slug)
 
+    def ensure_experiment(
+        self,
+        slug: str,
+        name: str | None = None,
+        *,
+        hypothesis: str,
+        project_id: str | None = None,
+        **kw,
+    ) -> dict:
+        """Get-or-create an experiment by slug. SDK-only; see :meth:`run`.
+
+        ``hypothesis`` is REQUIRED and keyword-only: reaching this method means
+        creation is on the table, and an experiment is never created without one.
+        It is NOT applied to an experiment that already exists — those are
+        first-write-wins, so reopening never rewrites the hypothesis. Nothing is
+        synthesised; the ``[auto]`` placeholder was permanent unless a human
+        noticed it, which is why it is gone.
+
+        A slug that resolves to nothing but looks like a typo of an existing one
+        is REFUSED, not created — see :meth:`_refuse_near_miss`. Callers who want
+        the strict three-outcome error for an absent slug use
+        :meth:`resolve_or_raise` instead."""
+        found = self.resolve_experiment(slug)
+        if found is not None:
+            return found
+        self._guard_creatable("experiment", slug)
+        try:
+            return self.create_experiment(
+                slug, name, hypothesis=hypothesis, project_id=project_id, **kw
+            )
+        except errors.ConflictError:
+            # Lost a create race; see the note in ensure_project.
+            found = self.resolve_experiment(slug)
+            if found is None:
+                raise
+            return found
+
     def get_experiment(self, experiment_id: str) -> dict:
         return self.transport.get(f"/v1/experiments/{experiment_id}")
 
@@ -944,26 +1008,27 @@ class Client:
     ) -> Run:
         """Open a run inside an experiment — or straight under a project.
 
-        This resolves; it does not create. An unknown slug raises
-        ``NotFoundError`` naming the closest existing ones, because the failure
-        it replaces was silent: this call used to get-or-create the whole chain,
-        so a typo minted a second project or experiment rather than erroring, and
-        every later comparison read the two as genuinely different things.
+        With ``experiment``, the run opens inside that experiment (and ``project``,
+        if also given, is a cross-check). With only ``project`` (W&B shape), the run
+        attaches PROJECT-DIRECT — no experiment at all.
 
-        With ``experiment``, the run opens inside that experiment (and
-        ``project``, if also given, is a cross-check). With only ``project``
-        (W&B shape), the run attaches PROJECT-DIRECT — no experiment at all.
-        Create the parents explicitly first — :meth:`create_project` and
-        :meth:`create_experiment`, or ``probe project create`` / ``probe
-        experiment create``. ``name`` still defaults to a timestamp, and the
-        backend still mints a petname ``short_id``; naming a RUN has never been
-        the ambiguous part."""
-        if hypothesis is not None or experiment_name is not None:
-            raise errors.ValidationError(
-                "run() no longer creates the experiment, so it cannot set its "
-                "hypothesis or name. Create it first with create_experiment("
-                f"{experiment!r}, hypothesis=...) and then open the run."
-            )
+        Resolution is strict by default: an unknown slug raises, naming the closest
+        existing ones, and an ARCHIVED one says so rather than sending you into the
+        dead end where lookup says "missing" and create says "already exists".
+
+        ``hypothesis=`` is the ONE opt-in to creation. Pass it and an absent
+        experiment (and its project) is created; omit it and nothing is ever
+        created. Creation is gated this way because a hypothesis is the thing you
+        can only write when you know what you are testing — so the cost of a new
+        experiment is one sentence, and an accident cannot pay it.
+
+        That opt-in is SDK-only on purpose. Here the slug is written once in a file
+        and code-reviewed; on the CLI it is hand-typed on every invocation, which is
+        where typos come from — so ``probe run start`` cannot create at all. Use
+        ``probe experiment create`` / ``probe project create`` there.
+
+        For work with no hypothesis, the honest home is a project-direct run, not an
+        experiment named after whatever directory you happened to be in."""
         if not experiment and not project:
             raise errors.ValidationError(
                 "run() needs an experiment slug — or a project slug for a "
@@ -971,11 +1036,45 @@ class Client:
                 "script name, which silently created an experiment named after "
                 "whatever directory you happened to be in."
             )
+        if experiment_name is not None and hypothesis is None:
+            raise errors.ValidationError(
+                "experiment_name only titles an experiment run() CREATES, and "
+                "creation needs a hypothesis. Pass hypothesis=, or rename an "
+                "existing experiment with update_experiment()."
+            )
+        if hypothesis is not None and not experiment:
+            raise errors.ValidationError(
+                "hypothesis= creates an experiment, so it needs an experiment "
+                "slug. A project-direct run has no experiment to hold one."
+            )
+        if hypothesis is not None and not hypothesis.strip():
+            # `hypothesis=args.hypothesis or ""` is an ordinary way to get here.
+            # Creation gates on `is not None` while create_experiment gates on
+            # falsiness, so an empty string used to unlock the create path far
+            # enough to commit a PROJECT before failing on the experiment.
+            raise errors.ValidationError(
+                "hypothesis= is empty. Creating an experiment needs one that says "
+                "something: what do you expect this to show? Pass a real "
+                "hypothesis, or drop the argument to open an existing experiment."
+            )
         self.ensure_authenticated()
         name = name or defaults.default_run_name()
+        # Refuse an uncreatable experiment slug BEFORE any parent is committed.
+        # ensure_project runs first below, so without this a refused experiment
+        # leaves a brand-new orphan project behind — the exact stray identity the
+        # refusal exists to prevent.
+        if experiment and hypothesis is not None and self.resolve_experiment(experiment) is None:
+            self._guard_creatable("experiment", experiment)
         project_id = None
         if project:
-            project_id = self.resolve_or_raise("project", project)["id"]
+            # The project follows the experiment: creation is unlocked only by a
+            # hypothesis, so a project-direct run (which cannot carry one) always
+            # resolves strictly.
+            project_id = (
+                self.ensure_project(project)["id"]
+                if hypothesis is not None
+                else self.resolve_or_raise("project", project)["id"]
+            )
         if not experiment:
             # Project-direct (0054): the run attaches straight to the project.
             if run_kw.get("group_id") is not None:
@@ -986,15 +1085,22 @@ class Client:
                 )
             run_kw.pop("group_id", None)
             return self.create_project_run(project_id, name, **run_kw)
-        exp = self.resolve_or_raise("experiment", experiment, project_id=project_id)
-        # `project` used to decide where a NEW experiment got filed. Now that the
-        # experiment must already exist, the only honest job left for it is to
-        # CHECK that it is the one you think it is — otherwise naming a project
-        # would silently do nothing, which is its own quiet wrong answer.
+        if hypothesis is not None:
+            exp = self.ensure_experiment(
+                experiment,
+                experiment_name or experiment,
+                hypothesis=hypothesis,
+                project_id=project_id,
+            )
+        else:
+            exp = self.resolve_or_raise("experiment", experiment, project_id=project_id)
+        # Naming a project for an experiment that already lives somewhere else is a
+        # real mistake rather than a no-op: `project` would otherwise silently do
+        # nothing, which is its own quiet wrong answer.
         if project_id and exp.get("project_id") not in (None, project_id):
             raise errors.ValidationError(
                 f"experiment {experiment!r} is not in project {project!r}. "
-                "Drop --project, or name the project it actually belongs to."
+                "Drop the project argument, or name the one it actually belongs to."
             )
         return self.create_run(exp["id"], name, **run_kw)
 
@@ -1025,14 +1131,94 @@ class Client:
         raise self._no_such(kind, slug, listing)
 
     @staticmethod
+    def _near(slug: str, existing: Iterable[dict]) -> list[str]:
+        """Existing slugs close enough to ``slug`` to be what the caller meant.
+
+        A mistyped slug is by definition CLOSE to a real one; a genuinely new
+        name is not. That asymmetry is what lets one list serve both a hard
+        error (when we cannot proceed) and a warning (when we can)."""
+        slugs = [row["slug"] for row in existing if row.get("slug")]
+        return difflib.get_close_matches(slug, slugs, n=3, cutoff=0.6)
+
+    def _all_slugs(self, kind: str) -> list[dict]:
+        """Every row of `kind`, following the cursor.
+
+        The near-miss guard leans on seeing the WHOLE namespace. `limit=200` is
+        the schema maximum, and page ordering is unspecified, so stopping at one
+        page means the guard silently stops firing past 200 rows — and it is the
+        older slugs that drop out of view, which are exactly the ones a typo is
+        likely to be a near-miss of. `analysis.compare()` follows the cursor for
+        the same reason."""
+        rows: list[dict] = []
+        cursor = None
+        lister = self.list_projects if kind == "project" else self.list_experiments
+        while True:
+            # Tenant-wide on purpose: experiment slugs are unique per TENANT, not
+            # per project (see resolve_experiment). Scoping this to a project
+            # would let a typo of an experiment filed elsewhere sail through.
+            page = lister(limit=200, cursor=cursor)
+            rows.extend(page.items)
+            cursor = page.next_cursor
+            if not cursor:
+                return rows
+
+    def _guard_creatable(self, kind: str, slug: str) -> None:
+        """Raise unless `slug` is safe to CREATE. Archived first, then near-miss.
+
+        Split out of ensure_* so `run()` can run it BEFORE it commits a parent:
+        otherwise a refused experiment leaves a brand-new project behind, which is
+        precisely the orphan identity this whole guard exists to prevent."""
+        resolve = self.resolve_project if kind == "project" else self.resolve_experiment
+        if resolve(slug, include_archived=True) is not None:
+            raise errors.NotFoundError(
+                f"{kind} {slug!r} is ARCHIVED, not missing — creating it would "
+                f"conflict on the slug. Restore it with "
+                f"`probe {kind} restore {shlex.quote(slug)}`."
+            )
+        self._refuse_near_miss(kind, slug, self._all_slugs(kind))
+
+    def _refuse_near_miss(self, kind: str, slug: str, existing: Iterable[dict]) -> None:
+        """Refuse to CREATE a slug that looks like a typo of an existing one.
+
+        A warning was the obvious first answer and it is the wrong one. The two
+        places this fires — a detached ``probe run start`` process and a training
+        loop — are both places nobody reads warnings, and this repo has already
+        run that experiment: the ``[auto]`` hypothesis shipped WITH a fix
+        affordance (``probe experiment set``) and it went unused every time. An
+        invisible guard is not a guard.
+
+        Refusing costs a caller who genuinely wants a near-identical name one
+        explicit ``create_experiment``. Warning costs everyone else a second
+        identity that every later comparison reads as a different thing.
+
+        The 0.6 cutoff keeps short version-y names usable — ``v1`` vs ``v2``
+        scores 0.5 and passes — so what this catches is long, near-identical
+        slugs, which are far likelier to be typos than intent."""
+        # An EXACT match is not a typo, it is the row itself — reachable when the
+        # listing sees a slug the resolve did not (a create race, or a stale read
+        # replica). Refusing there would turn "someone just made this" into a hard
+        # error about a name that is already correct.
+        near = [n for n in self._near(slug, existing) if n != slug]
+        if not near:
+            return
+        hint = ' --hypothesis "..."' if kind == "experiment" else ""
+        raise errors.ValidationError(
+            f"refusing to create {kind} {slug!r}: it is a near-miss of "
+            f"{', '.join(repr(n) for n in near)}. If you meant the existing one, "
+            f"use that slug. If this really is new, create it explicitly — "
+            f"`client.create_{kind}({slug!r}"
+            f"{', hypothesis=...' if kind == 'experiment' else ''})` or "
+            f"`probe {kind} create {shlex.quote(slug)}{hint}`."
+        )
+
+    @staticmethod
     def _no_such(kind: str, slug: str, existing: Iterable[dict]) -> errors.NotFoundError:
         """A not-found that names near misses, so a typo says what you meant.
 
         A mistyped slug is by definition CLOSE to a real one; a genuinely new
         name is not. Suggesting neighbours turns the common case from "what do
         you mean it does not exist" into an obvious one-character fix."""
-        slugs = [row["slug"] for row in existing if row.get("slug")]
-        near = difflib.get_close_matches(slug, slugs, n=3, cutoff=0.6)
+        near = Client._near(slug, existing)
         hint = f" Did you mean: {', '.join(near)}?" if near else ""
         # The suggested command has to actually RUN. `experiment create` requires
         # --hypothesis, so omitting it would print a command that fails on the one
@@ -1675,6 +1861,28 @@ class Client:
             model.model_dump(mode="json", exclude_none=True),
             idempotent=True,
         )
+
+    def compare(self, **kw):
+        """Fetch several runs and their metric series together, aligned on step.
+
+        The read people actually want when they open a comparison: which of these
+        configs won. Name the runs with ``run_ids=[...]`` or select them with the
+        same filters :meth:`list_runs` takes (``experiment_id=``, ``group_id=``)::
+
+            comparison = client.compare(experiment_id=exp_id, keys=["dockq"])
+            aligned = comparison.aligned("dockq")
+            for label, values in aligned.values.items():
+                plot(aligned.steps, values, label=label)   # or .to_pandas()
+
+        Columns are labelled by the server's petname ``short_id``. Runs of
+        different lengths keep ``None`` holes rather than being truncated to the
+        shortest — differing length is usually the thing being compared.
+
+        A shaping layer over :meth:`query_series`, not a second client: see
+        :mod:`probe.sdk.analysis`."""
+        from .analysis import compare as _compare
+
+        return _compare(self, **kw)
 
     def search(
         self,
