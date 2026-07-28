@@ -207,6 +207,17 @@
             "title": "Customer Id",
             "type": "string"
           },
+          "dims_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dims Hash"
+          },
           "experiment_id": {
             "anyOf": [
               {
@@ -1172,6 +1183,52 @@
           }
         },
         "title": "ClientVersionOut",
+        "type": "object"
+      },
+      "CoordinateOut": {
+        "description": "One catalog row of the run's coordinate space (0060): a non-empty coordinate\nplus which fact tables have landed on it \u2014 coordinate enumeration without a\nfact-table scan.",
+        "properties": {
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "dims_hash": {
+            "title": "Dims Hash",
+            "type": "string"
+          },
+          "first_seen_at": {
+            "format": "date-time",
+            "title": "First Seen At",
+            "type": "string"
+          },
+          "has_artifacts": {
+            "title": "Has Artifacts",
+            "type": "boolean"
+          },
+          "has_metrics": {
+            "title": "Has Metrics",
+            "type": "boolean"
+          },
+          "has_spans": {
+            "title": "Has Spans",
+            "type": "boolean"
+          },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dims_hash",
+          "has_metrics",
+          "has_spans",
+          "has_artifacts",
+          "first_seen_at",
+          "last_seen_at"
+        ],
+        "title": "CoordinateOut",
         "type": "object"
       },
       "CredentialAttachmentGrantOut": {
@@ -2439,6 +2496,23 @@
             "title": "Kind",
             "type": "string"
           },
+          "labels": {
+            "additionalProperties": true,
+            "title": "Labels",
+            "type": "object"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
+          },
           "step_index": {
             "anyOf": [
               {
@@ -2588,6 +2662,136 @@
         ],
         "title": "Grant",
         "type": "string"
+      },
+      "GroupedPoint": {
+        "description": "One aggregated cell of a grouped read: a step bucket x one combination of the\n`by` axes' values. `group` maps each requested axis to its value's JSON text\n(None per axis when a point misses it \u2014 sparse coords collapse into one NULL\nbucket per axis by design), and is None entirely when no axis was requested (a\nfull reduction). `n` is the count of finite raw points folded into this cell,\nso a sparse or partially-logged coordinate is observable rather than silently\naveraged over.",
+        "properties": {
+          "group": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group"
+          },
+          "n": {
+            "title": "N",
+            "type": "integer"
+          },
+          "step_index": {
+            "title": "Step Index",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value",
+            "type": "number"
+          }
+        },
+        "required": [
+          "step_index",
+          "value",
+          "n"
+        ],
+        "title": "GroupedPoint",
+        "type": "object"
+      },
+      "GroupedSeriesResult": {
+        "description": "Server-side reduce/group over a run's stepped points (item 7). The aggregation\nis EXPLICIT \u2014 the caller names the fn; the server never guesses a reduction\n(declared per-key reduce fns arrive with the opt-in declaration layer). `by`\nechoes the requested axes in order; `where` echoes the canonical coord filter.\nBounded to `max_rows` cells; page the remainder by passing `next_step` back as\n`step_from`. Group labels are each axis value's JSON text, so the int 1 and the\nstring \"1\" (distinct coordinates) render as `1` and `\"1\"`.",
+        "properties": {
+          "agg": {
+            "title": "Agg",
+            "type": "string"
+          },
+          "by": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "By"
+          },
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/GroupedPoint"
+            },
+            "title": "Groups",
+            "type": "array"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "next_step": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Step"
+          },
+          "step_bucket": {
+            "default": 1,
+            "title": "Step Bucket",
+            "type": "integer"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "where": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Where"
+          }
+        },
+        "required": [
+          "key",
+          "agg",
+          "groups"
+        ],
+        "title": "GroupedSeriesResult",
+        "type": "object"
       },
       "HTTPValidationError": {
         "properties": {
@@ -3537,10 +3741,27 @@
             "title": "Kind",
             "type": "string"
           },
+          "labels": {
+            "additionalProperties": true,
+            "title": "Labels",
+            "type": "object"
+          },
           "run_id": {
             "format": "uuid",
             "title": "Run Id",
             "type": "string"
+          },
+          "span_id": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Span Id"
           },
           "step_index": {
             "anyOf": [
@@ -4355,6 +4576,19 @@
             ],
             "title": "Group Id"
           },
+          "labeled_point_budget": {
+            "anyOf": [
+              {
+                "maximum": 100000000.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labeled Point Budget"
+          },
           "metadata": {
             "additionalProperties": true,
             "title": "Metadata",
@@ -4522,6 +4756,17 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "labeled_point_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labeled Point Budget"
           },
           "metadata": {
             "additionalProperties": true,
@@ -4957,6 +5202,17 @@
             "format": "uuid",
             "title": "Id",
             "type": "string"
+          },
+          "labeled_point_budget": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Labeled Point Budget"
           },
           "metadata": {
             "additionalProperties": true,
@@ -5754,6 +6010,11 @@
             },
             "title": "Series",
             "type": "array"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
           }
         },
         "required": [
@@ -5996,6 +6257,22 @@
           "customer_id": {
             "title": "Customer Id",
             "type": "string"
+          },
+          "dimensions": {
+            "additionalProperties": true,
+            "title": "Dimensions",
+            "type": "object"
+          },
+          "dims_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dims Hash"
           },
           "ended_at": {
             "anyOf": [
@@ -11808,6 +12085,54 @@
         ]
       }
     },
+    "/v1/runs/{run_id}/coordinates": {
+      "get": {
+        "description": "The run's coordinate catalog (0060): every non-empty coordinate any fact has\nlanded on, with which fact tables have it \u2014 enumeration for split/overlay UIs\nand drill-across pickers without scanning metric_points/spans/artifacts.\nBounded by the series cap's cardinality arithmetic, so no pagination needed.",
+        "operationId": "list_run_coordinates_v1_runs__run_id__coordinates_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CoordinateOut"
+                  },
+                  "title": "Response List Run Coordinates V1 Runs  Run Id  Coordinates Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Run Coordinates",
+        "tags": [
+          "metrics"
+        ]
+      }
+    },
     "/v1/runs/{run_id}/edges": {
       "get": {
         "operationId": "list_run_edges_v1_runs__run_id__edges_get",
@@ -12220,6 +12545,183 @@
           }
         },
         "summary": "Export Run Metrics",
+        "tags": [
+          "metrics"
+        ]
+      }
+    },
+    "/v1/runs/{run_id}/metrics/grouped": {
+      "get": {
+        "description": "Server-side reduce/group over one metric's stepped points (item 7, 0059).\n\n`by` splits per coordinate-axis value \u2014 repeat it or comma-separate for\nmulti-axis cells (`by=rank,split` -> one group per (rank, split) combination;\npoints missing an axis share ONE null bucket per axis); omitting it reduces\nacross everything at each step bucket. `where` is a JSON object of coord\nfilters (`where={\"split\":\"train\"}`), matched by type-faithful containment on\nthe canonical map \u2014 so `{\"rank\": 1.0}` matches the stored int 1 and never the\nstring \"1\". `step_bucket=k` groups every k steps (\"per batch\" / \"every other\nstep\" are step arithmetic on the typed range axis). `agg` is always EXPLICIT \u2014\nthe server never guesses how to combine a metric. A `by` axis or `where` key\nthat names no known coordinate axis of the key is a 422, not a silent all-NULL\nreduction or an empty result; a key logged under several kinds needs an\nexplicit `kind` (one cell must never average across kind namespaces).",
+        "operationId": "get_metrics_grouped_v1_runs__run_id__metrics_grouped_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agg",
+            "required": false,
+            "schema": {
+              "default": "mean",
+              "enum": [
+                "mean",
+                "sum",
+                "min",
+                "max",
+                "count"
+              ],
+              "title": "Agg",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "by",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "By"
+            }
+          },
+          {
+            "in": "query",
+            "name": "where",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Where"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_bucket",
+            "required": false,
+            "schema": {
+              "default": 1,
+              "maximum": 1000000000,
+              "minimum": 1,
+              "title": "Step Bucket",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "step_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Step To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "max_rows",
+            "required": false,
+            "schema": {
+              "default": 10000,
+              "maximum": 50000,
+              "minimum": 1,
+              "title": "Max Rows",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GroupedSeriesResult"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Metrics Grouped",
         "tags": [
           "metrics"
         ]

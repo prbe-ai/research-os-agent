@@ -327,6 +327,11 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
 # the next backend fold that lands ahead of the client goes here, with a pointer to
 # what will close it, instead of being quietly absorbed into "not our job".
 PENDING: dict[Op, str] = {
+    # research-os#177 (below-run coordinates) landed ahead of the client; the
+    # two coordinate reads want the same ergonomic-API design pass as the
+    # existing telemetry read shapes in this ledger.
+    ("GET", "/v1/runs/{}/metrics/grouped"): "coordinate reduce/group read follow-up from research-os#177",
+    ("GET", "/v1/runs/{}/coordinates"): "coordinate catalog read follow-up from research-os#177",
     # Surfaced 2026-07-26 by refreshing the snapshot for the `?slug=` filter
     # (research-os#176). Pre-existing backend drift the stale schema was hiding,
     # not debt this change introduced.
