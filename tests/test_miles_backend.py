@@ -11,8 +11,10 @@ test_miles_integration so both files exercise the same seam.
 
 from __future__ import annotations
 
+import json
 import sys
 import types
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -27,6 +29,10 @@ def _clean(monkeypatch):
     FakeClient.instances.clear()
     for name in ("MILES_RUN_ID", "PROBE_RUN_ID", "RESEARCH_OS_RUN_ID", "PROBE_TOKEN"):
         monkeypatch.delenv(name, raising=False)
+    # The per-sample hook keeps one producer handle per queue root and a
+    # warn-once latch; both are process-global, so isolate them per test.
+    monkeypatch.setattr(integrations_miles, "_HOOK_STATES", {})
+    monkeypatch.setattr(integrations_miles, "_hook_warned", False)
 
 
 class TestRegister:
@@ -191,3 +197,155 @@ class TestQueueCoordinates:
         (client,) = FakeClient.instances
         ((_, kwargs),) = client.created_run.logs
         assert kwargs.get("dimensions") is None and kwargs.get("labels") is None
+
+
+def _sample(index=0, group=None, reward=1.0, response_length=10, effective=None):
+    """A miles Sample stand-in: the hook reads index / group_index / reward /
+    effective_response_length / response_length via getattr, nothing else."""
+    sample = SimpleNamespace(
+        index=index,
+        group_index=group,
+        reward=reward,
+        response_length=response_length,
+    )
+    if effective is not None:
+        sample.effective_response_length = effective
+    return sample
+
+
+def _queue_records(args):
+    """All durable records under the args-resolved queue root, enqueue order."""
+    root = Path(args.probe_queue_dir)
+    return [
+        json.loads(path.read_text())
+        for path in sorted((root / "pending").glob("*.json"))
+    ]
+
+
+class TestPerSampleRolloutHook:
+    """The zero-fork per-sample rail behind miles'
+    ``--custom-rollout-log-function-path probe.connectors.miles.per_sample_rollout_log``."""
+
+    def test_hook_is_reachable_at_the_documented_path(self):
+        from probe.connectors.miles import per_sample_rollout_log
+
+        assert per_sample_rollout_log is integrations_miles.per_sample_rollout_log
+
+    def test_hook_enqueues_per_sample_records_and_returns_false(self, tmp_path):
+        # No tracker in this process (a bare RolloutManager): the flag alone
+        # activates the rail and the records wait on the durable queue.
+        args = _args(tmp_path, use_probe=True)
+        samples = [
+            _sample(index=0, group=0, reward=1.0, response_length=10, effective=8),
+            _sample(index=1, group=0, reward=0.0, response_length=20),
+        ]
+        assert (
+            integrations_miles.per_sample_rollout_log(7, args, samples, {}, 3.5)
+            is False
+        )
+        records = _queue_records(args)
+        assert len(records) == 2
+        for record in records:
+            assert record["schema_version"] == integrations_miles.QUEUE_SCHEMA_VERSION
+            assert record["run_id"] is None  # no tracker ran: deferred to the drain
+            assert record["kind"] == "model"
+            assert record["step"] == 7  # no train-step mapping -> rollout id IS the step
+            assert record["producer_id"].startswith("rollout_hook:")
+            assert "dimensions" not in record  # labels only, no series axes
+        assert records[0]["metrics"] == {
+            "rollout/reward": 1.0,
+            "rollout/response_length": 8.0,  # effective (loss-masked) wins
+        }
+        assert records[0]["labels"] == {"sample": 0, "group": 0}
+        assert records[1]["metrics"] == {
+            "rollout/reward": 0.0,
+            "rollout/response_length": 20.0,
+        }
+        assert [r["producer_sequence"] for r in records] == [1, 2]
+
+    def test_hook_shares_the_trackers_queue_and_drains_to_run_log(
+        self, monkeypatch, tmp_path
+    ):
+        monkeypatch.setattr(
+            integrations_miles, "_load_sdk", lambda: (FakeClient, FakeRun)
+        )
+        args = _args(tmp_path)
+        tracker = integrations_miles.ProbeTracker()
+        tracker.init(args, primary=True)  # resolves the queue, publishes identity
+        try:
+            samples = [
+                _sample(index=0, group=0, reward=1.0, response_length=10, effective=8),
+                _sample(index=1, group=0, reward=0.0, response_length=20),
+            ]
+            assert (
+                integrations_miles.per_sample_rollout_log(7, args, samples, {}, 3.5)
+                is False
+            )
+        finally:
+            tracker.finish()
+        (client,) = FakeClient.instances
+        per_sample = [e for e in client.created_run.logs if e[1].get("labels")]
+        assert len(per_sample) == 2  # the live exporter drained the hook's records
+        metrics, kwargs = per_sample[0]
+        assert metrics == {"rollout/reward": 1.0, "rollout/response_length": 8.0}
+        assert kwargs["labels"] == {"sample": 0, "group": 0}
+        assert kwargs["step"] == 7 and kwargs["kind"] == "model"
+        (_, kwargs_1) = per_sample[1]
+        assert kwargs_1["labels"] == {"sample": 1, "group": 0}
+
+    def test_hook_computes_the_train_step_like_miles(self, tmp_path):
+        args = _args(
+            tmp_path,
+            use_probe=True,
+            wandb_always_use_train_step=True,
+            rollout_batch_size=16,
+            n_samples_per_prompt=2,
+            global_batch_size=8,
+        )
+        assert (
+            integrations_miles.per_sample_rollout_log(5, args, [_sample()], {}, 1.0)
+            is False
+        )
+        (record,) = _queue_records(args)
+        assert record["step"] == 5 * 16 * 2 // 8  # compute_rollout_step's arithmetic
+        assert record["run_id"] is None  # no tracker ran: deferred to the drain
+
+    def test_hook_is_fail_open_across_sample_shapes(self, tmp_path):
+        args = _args(tmp_path, use_probe=True)
+        samples = [
+            _sample(index=0, reward=None, response_length=5),  # no reward scalar
+            _sample(index=1, reward={"reward": 0.5, "cat": "x"}),  # dict reward
+            _sample(index=2, reward={"cat": "x"}),  # dict without a numeric reward
+            _sample(index=None, reward=1.0),  # id-less: no point identity -> skipped
+        ]
+        assert (
+            integrations_miles.per_sample_rollout_log(1, args, samples, {}, 1.0)
+            is False
+        )
+        by_sample = {r["labels"]["sample"]: r for r in _queue_records(args)}
+        assert set(by_sample) == {0, 1, 2}
+        assert "rollout/reward" not in by_sample[0]["metrics"]
+        assert by_sample[0]["metrics"]["rollout/response_length"] == 5.0
+        assert by_sample[1]["metrics"]["rollout/reward"] == 0.5
+        assert "rollout/reward" not in by_sample[2]["metrics"]
+        assert "group" not in by_sample[0]["labels"]  # group_index None stays off
+
+    def test_hook_never_raises_even_when_the_queue_cannot_open(self, tmp_path):
+        blocker = tmp_path / "blocked"
+        blocker.write_text("a FILE where the queue directory must go")
+        args = SimpleNamespace(
+            use_probe=True, probe_queue_dir=str(blocker), probe_external_id="x"
+        )
+        assert (
+            integrations_miles.per_sample_rollout_log(1, args, [_sample()], {}, 1.0)
+            is False
+        )
+
+    def test_hook_unconfigured_is_a_silent_noop(self, tmp_path):
+        # No tracker resolved a queue, no use_probe flag, no PROBE_TOKEN.
+        args = SimpleNamespace(save=str(tmp_path / "save"))
+        assert (
+            integrations_miles.per_sample_rollout_log(1, args, [_sample()], {}, 1.0)
+            is False
+        )
+        assert not (tmp_path / "save").exists()  # the queue was never created
