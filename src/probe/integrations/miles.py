@@ -23,7 +23,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -32,12 +32,17 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 # so a distributed actor keeps writing metric batches without the network stack.
 from ..sdk.durable import (
     file_lock as _file_lock,
+)
+from ..sdk.durable import (
     fsync_directory as _fsync_directory,
+)
+from ..sdk.durable import (
     now_iso as _now,
+)
+from ..sdk.durable import (
     read_json,
     write_text_atomic,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -240,7 +245,7 @@ def _default_run_name(args, external_id: str) -> str:
     )
     if configured:
         return str(configured)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"miles-{timestamp}-{external_id.rsplit(':', 1)[-1][:8]}"
 
 
@@ -647,7 +652,7 @@ class _MetricExporter:
                     self.queue.write_status(last_error=None, last_confirmed_at=_now())
                 except (
                     Exception
-                ) as exc:  # noqa: BLE001 - preserve every unconfirmed record
+                ) as exc:
                     self.queue.retry(path)
                     self.queue.write_status(last_error=f"{type(exc).__name__}: {exc}")
                     logger.warning(
@@ -797,14 +802,14 @@ class ProbeTracker:
             if client is not None:
                 try:
                     client.close()
-                except Exception:  # noqa: BLE001 - retain the initialization error
+                except Exception:
                     logger.exception("Probe client cleanup failed")
             try:
                 self._queue.write_status(last_error=f"{type(exc).__name__}: {exc}")
                 self._queue.write_intent(state="pending_run")
             except (
                 Exception
-            ):  # noqa: BLE001 - fail-open must not be defeated by status I/O
+            ):
                 logger.exception(
                     "Probe could not persist initialization failure status"
                 )
@@ -955,7 +960,7 @@ class ProbeTracker:
             if self._exporter is not None and self._exporter._thread.is_alive():
                 try:
                     self._exporter.drain_and_close(0)
-                except Exception:  # noqa: BLE001 - preserve the finalization error
+                except Exception:
                     logger.exception("Probe exporter cleanup failed")
             self._handle_error("finalize durable metric export", exc)
 
@@ -1120,12 +1125,12 @@ drain_miles_metric_queue = drain_metric_queue
 
 
 __all__ = [
+    "QUEUE_SCHEMA_VERSION",
     "DurableMetricQueue",
     "MilesMetricBackend",
     "MilesMetricTracker",
     "ProbeBackend",
     "ProbeTracker",
-    "QUEUE_SCHEMA_VERSION",
     "drain_metric_queue",
     "drain_miles_metric_queue",
 ]

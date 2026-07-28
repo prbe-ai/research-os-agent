@@ -9,7 +9,6 @@ Every method maps onto a real v4 endpoint (Probe Research v0.4.0.0 ingestion fol
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
 import difflib
 import os
 import shlex
@@ -17,11 +16,11 @@ import sys
 import threading
 import warnings
 import weakref
+from collections.abc import Iterable, Mapping
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from . import defaults, errors
 from ..models import (
     ArtifactVersionCreate,
     EdgeCreate,
@@ -35,6 +34,7 @@ from ..models import (
     UploadGcRequest,
     UploadRequest,
 )
+from . import defaults, errors
 from .config import Settings, resolve
 from .hashing import fingerprint
 from .spool import Spool
@@ -137,10 +137,10 @@ class Client:
         # Stop signals for every live run-heartbeat thread this client minted.
         # Weak so a finished beat (its Run collected, its thread exited) doesn't
         # accumulate here for the client's whole life.
-        self._run_heartbeat_stops: "weakref.WeakSet[threading.Event]" = weakref.WeakSet()
+        self._run_heartbeat_stops: weakref.WeakSet[threading.Event] = weakref.WeakSet()
 
     # -- lifecycle ----------------------------------------------------------
-    def _register_run_heartbeat(self, stop: "threading.Event") -> None:
+    def _register_run_heartbeat(self, stop: threading.Event) -> None:
         self._run_heartbeat_stops.add(stop)
 
     def close(self) -> None:
@@ -150,7 +150,7 @@ class Client:
             stop.set()
         self.transport.close()
 
-    def __enter__(self) -> "Client":
+    def __enter__(self) -> Client:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -789,7 +789,7 @@ class Client:
             body["labeled_point_budget"] = labeled_point_budget
         return body
 
-    def _wrap_run(self, data: dict, *, heartbeat: bool) -> "Run":
+    def _wrap_run(self, data: dict, *, heartbeat: bool) -> Run:
         run = Run(self, data)
         # A handle minted here is presumed to live and die with this process, so
         # it beats by default and the server's reaper can flip it to 'crashed'
@@ -816,7 +816,7 @@ class Client:
         metadata: dict | None = None,
         heartbeat: bool = True,
         labeled_point_budget: int | None = None,
-    ) -> "Run":
+    ) -> Run:
         body = self._run_create_body(
             name,
             source=source,
@@ -847,7 +847,7 @@ class Client:
         metadata: dict | None = None,
         heartbeat: bool = True,
         labeled_point_budget: int | None = None,
-    ) -> "Run":
+    ) -> Run:
         """POST /v1/projects/{id}/runs — open a PROJECT-DIRECT run (W&B shape).
 
         The experiment level is optional grouping; a run opened here attaches
@@ -895,7 +895,7 @@ class Client:
         project: str | None = None,
         experiment_name: str | None = None,
         **run_kw,
-    ) -> "Run":
+    ) -> Run:
         """Open a run inside an experiment — or straight under a project.
 
         This resolves; it does not create. An unknown slug raises
@@ -1567,4 +1567,4 @@ class Client:
 
 
 # Late import to avoid a cycle at module load (Run needs Client, Client returns Run).
-from .run import Run  # noqa: E402
+from .run import Run

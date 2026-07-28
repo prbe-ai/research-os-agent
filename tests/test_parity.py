@@ -343,13 +343,6 @@ PENDING: dict[Op, str] = {
     # research-os#162 added richer telemetry read shapes after the last agent
     # snapshot. They belong in the SDK, but are separate from client installation
     # reporting and need their own ergonomic API/CLI design.
-    # research-os#177 (below-run coordinates) and #182 (project-direct runs)
-    # landed ahead of the client; surfaced by the 2026-07-27 snapshot refresh
-    # that brought in the labeled_point_budget field. The two coordinate reads
-    # want the same ergonomic-API design pass as the #162 read shapes below.
-    ("GET", "/v1/runs/{}/metrics/grouped"): "coordinate reduce/group read follow-up from research-os#177",
-    ("GET", "/v1/runs/{}/coordinates"): "coordinate catalog read follow-up from research-os#177",
-    ("POST", "/v1/projects/{}/runs"): "project-direct run create follow-up from research-os#182",
     ("GET", "/v1/runs/{}/metrics/export"): "telemetry export follow-up from research-os#162",
     ("GET", "/v1/runs/{}/metrics/wide"): "wide telemetry read follow-up from research-os#162",
     ("POST", "/v1/series/latest"): "cross-run scalar summary follow-up from research-os#162",
