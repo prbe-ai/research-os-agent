@@ -31,7 +31,9 @@ from uuid import UUID, uuid4
 
 from . import errors
 from . import snapshot as _snapshot
+from . import unit_context
 from .hashing import fingerprint, local_file_uri, reference_fields
+from .unit_context import UnitContext
 from ..models import (
     ArtifactCreate,
     ExecutionRecordCreate,
@@ -150,6 +152,30 @@ class Run:
             **kw,
         )
 
+    # -- below-run coordinates ----------------------------------------------
+    def unit(
+        self,
+        *,
+        coords: dict[str, Any] | None = None,
+        labels: dict[str, Any] | None = None,
+    ) -> UnitContext:
+        """Ambient coordinate context for everything logged inside the block::
+
+            with run.unit(coords={"rank": 0}, labels={"sample": 3}):
+                run.log({"loss": 0.42}, step=12)   # dimensions/labels merged in
+                with run.unit(labels={"uid": "p1"}):
+                    ...                            # nested: child = parent ∪ child
+
+        ``coords`` are the bounded grouping axes (SERIES identity: rank/split/...,
+        never a per-sample id and never the step axis); ``labels`` are unbounded
+        per-sample drill-down ids (POINT identity only). Nested units merge with
+        the child winning per key; a key may not end up in both maps
+        (``ValueError``, mirroring the server's 422). The context is contextvar-
+        scoped: thread- and asyncio-task-local, restored on exit, and folded into
+        payloads at call time so spooled writes replay with the coordinate that
+        was ambient when the value was produced."""
+        return UnitContext(coords=coords, labels=labels)
+
     # -- metrics ------------------------------------------------------------
     def log(
         self,
@@ -159,15 +185,22 @@ class Run:
         kind: str = "model",
         wall_clock: str | None = None,
         dimensions: dict[str, Any] | None = None,
+        labels: dict[str, Any] | None = None,
+        span_id: str | None = None,
         strict: bool | None = None,
     ):
         """Append metric points. Fail-open by default (spools on failure).
 
         ``dimensions`` is a bounded flat label map (<=8 keys); it widens the series
-        identity to ``(run,kind,key,dims_hash)`` (fold #9). Dimension-less points stay
-        byte-identical. Built through the generated ``MetricBatch``/``MetricPointIn``,
-        so schema drift fails here, not as a server 422."""
-        dims = dimensions or {}
+        identity to ``(run,kind,key,dims_hash)`` (fold #9). ``labels`` is the
+        per-sample drill-down map (<=32 keys, POINT identity only) and ``span_id``
+        an optional exemplar pointer to the span the value was produced under.
+        Both maps merge over the ambient :meth:`unit` context (the explicit call
+        site wins per key); a key in both maps raises ``ValueError``.
+        Dimension-less points stay byte-identical. Built through the generated
+        ``MetricBatch``/``MetricPointIn``, so schema drift fails here, not as a
+        server 422."""
+        dims, labs = unit_context.merged(dimensions, labels)
         batch = MetricBatch(
             points=[
                 MetricPointIn(
@@ -177,6 +210,8 @@ class Run:
                     step_index=step,
                     wall_clock=wall_clock,
                     dimensions=dims,
+                    labels=labs or None,
+                    span_id=span_id,
                 )
                 for key, value in metrics.items()
             ]
@@ -220,9 +255,18 @@ class Run:
         ended_at: str | None = None,
         attributes: dict | None = None,
         summary: dict | None = None,
+        coords: dict[str, Any] | None = None,
         strict: bool | None = None,
     ) -> str:
-        """Upsert one span (client-generated UUID). Returns the span id."""
+        """Upsert one span (client-generated UUID). Returns the span id.
+
+        ``coords`` is the span's below-run coordinate — the same bounded map
+        metric points carry in ``dimensions`` — merged over the ambient
+        :meth:`unit` context (call site wins per key). Sent as the dedicated
+        ``coords`` field, never folded into ``attributes``: the server
+        canonicalizes + hashes it (and mirrors it for display) itself. A span's
+        coordinate is set-once server-side — a re-push may add one, an empty map
+        keeps the existing coordinate, and a different one is a 409."""
         span_id = id or str(uuid4())
         UUID(span_id)  # validate shape early
         span = SpanCreate(
@@ -238,6 +282,10 @@ class Run:
             ended_at=ended_at,
             attributes=attributes or {},
             summary=summary or {},
+            # Always a dict, never None: the span body serializes without
+            # exclude_none, and the server's coords field is non-nullable with
+            # {} meaning "no coordinate stated" (keeps any existing one).
+            coords=unit_context.merged_coords(coords),
         )
         body = SpanBatch(spans=[span]).model_dump(mode="json")
         self._client.write("POST", f"/v1/runs/{self.id}/spans", body, strict=strict)
@@ -265,9 +313,19 @@ class Run:
         span_id: str | None = None,
         step_index: int | None = None,
         meta: dict | None = None,
+        coords: dict[str, Any] | None = None,
+        labels: dict[str, Any] | None = None,
         strict: bool | None = None,
     ):
         """Record an artifact.
+
+        ``coords``/``labels`` are the below-run coordinate maps (same split as
+        :meth:`log`), merged over the ambient :meth:`unit` context and sent as
+        top-level ``ArtifactCreate`` fields — the server hashes coords into the
+        cross-table join key and mirrors both maps into ``meta`` for display, so
+        the client never folds them into ``meta`` itself. The presign *uploads*
+        door does not accept them (its request model has no such fields), so a
+        byte upload records them only if it falls back to a reference artifact.
 
         With ``path`` and no ``uri`` and no ``reference``: the real presign upload flow
         (fold #16) runs, fingerprint -> presign -> PUT bytes to R2 -> confirm.
@@ -282,6 +340,9 @@ class Run:
         With ``uri`` (object already in a bucket) or no bytes: a metadata-only reference
         artifact is recorded, as before."""
         meta = dict(meta or {})
+        # Resolve the coordinate at CALL time (the fail-open spool replays this
+        # payload later; the ambient unit must not be re-read at flush time).
+        coords, labels = unit_context.merged(coords, labels)
         # Explicit path reference: record WHERE the bytes live (file://) instead of
         # uploading them. Takes precedence over the upload branch so path + reference
         # never force-uploads (the old code ignored is_reference for path+no-uri).
@@ -309,6 +370,8 @@ class Run:
                 span_id=span_id,
                 step_index=step_index,
                 meta=meta,
+                coords=coords,
+                labels=labels,
                 strict=strict,
             )
         elif path is not None:
@@ -328,6 +391,8 @@ class Run:
             span_id=span_id,
             step_index=step_index,
             meta=meta,
+            coords=coords or None,
+            labels=labels or None,
         )
         body = artifact.model_dump(mode="json", exclude_none=True)
         return self._client.write(
@@ -368,10 +433,17 @@ class Run:
         span_id: str | None,
         step_index: int | None,
         meta: dict,
-        strict: bool | None,
+        coords: dict[str, Any] | None = None,
+        labels: dict[str, Any] | None = None,
+        strict: bool | None = None,
     ):
         """presign -> PUT -> confirm. Fail-open: on failure (and not strict) falls
-        back to recording a hash+metadata reference so the training loop is unblocked."""
+        back to recording a hash+metadata reference so the training loop is unblocked.
+
+        ``coords``/``labels`` (already merged with the ambient unit by the caller)
+        ride only the fallback ``ArtifactCreate``: the presign ``UploadRequest``
+        model has no coordinate fields server-side, so sending them there would be
+        silently dropped at best and a 422 on a stricter model at worst."""
         strict_resolved = (not self._client.fail_open) if strict is None else strict
         req = UploadRequest(
             name=name,
@@ -424,6 +496,8 @@ class Run:
                     "host": socket.gethostname(),
                     "upload": "failed",
                 },
+                coords=coords or None,
+                labels=labels or None,
             )
             return self._client.write(
                 "POST",

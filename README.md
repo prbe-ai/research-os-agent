@@ -100,6 +100,13 @@ run.link(wandb_run_id="abc123", s3_prefix="s3://x/y")
 for step in range(100):
     run.log({"loss": ..., "dockq": ...}, step=step)     # POST /v1/runs/{id}/metrics
 
+# Below-run coordinates: `coords` are bounded grouping axes (series identity:
+# rank/split/..., never a per-sample id), `labels` per-sample drill-down ids
+# (point identity only). Everything logged inside the unit carries them, and
+# nested units merge (child wins per key).
+with run.unit(coords={"rank": 0}, labels={"sample": 3}):
+    run.log({"reward": 0.71}, step=12)   # -> dimensions={"rank": 0}, labels={"sample": 3}
+
 sid = run.span("rollout", name="rollout-0", step_index=1)   # trajectory span
 run.log_artifact("final.sif", uri="r2://bucket/final.sif", kind="artifact")
 run.finish()                                     # flushes spool, sets status+ended_at

@@ -201,6 +201,10 @@ class FakeApp:
         self.groups: dict[str, dict] = {}
         self.series: dict[str, list[dict]] = {}
         self.metric_points: dict[str, list[dict]] = {}
+        # Points as POSTED (coords/labels/span_id included), keyed by run id.
+        # Separate from `metric_points`, which read-path tests seed by hand;
+        # write-path tests assert on the captured wire payloads here.
+        self.metric_points_posted: dict[str, list[dict]] = {}
         self.spans: dict[str, list[dict]] = {}
         self.assets: dict[str, dict] = {}
         self.asset_versions: dict[str, list[dict]] = {}
@@ -541,9 +545,10 @@ class FakeApp:
             if self.fail_next_metrics:
                 self.fail_next_metrics = False
                 return httpx.Response(503, json={"detail": "db down"})
-            n = len(body.get("points", []))
-            self.metrics_inserted += n
-            return httpx.Response(200, json={"inserted": n})
+            points = body.get("points", [])
+            self.metrics_inserted += len(points)
+            self.metric_points_posted.setdefault(m.group(1), []).extend(points)
+            return httpx.Response(200, json={"inserted": len(points)})
         if m and method == "GET":
             rows = self.metric_points.get(m.group(1), [])
             key = request.url.params.get("key")

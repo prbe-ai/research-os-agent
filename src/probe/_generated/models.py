@@ -50,8 +50,10 @@ class AnchorType(StrEnum):
 class ArtifactCreate(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
+    coords: dict[str, Any] | None = Field(None, title='Coords')
     is_reference: bool | None = Field(False, title='Is Reference')
     kind: str | None = Field('file', title='Kind')
+    labels: dict[str, Any] | None = Field(None, title='Labels')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
     size_bytes: int | None = Field(None, title='Size Bytes')
@@ -79,6 +81,7 @@ class ArtifactOut(BaseModel):
     content_type: str | None = Field(None, title='Content Type')
     created_at: AwareDatetime = Field(..., title='Created At')
     customer_id: str = Field(..., title='Customer Id')
+    dims_hash: str | None = Field(None, title='Dims Hash')
     experiment_id: UUID | None = Field(None, title='Experiment Id')
     id: UUID = Field(..., title='Id')
     is_reference: bool = Field(..., title='Is Reference')
@@ -250,6 +253,22 @@ class ClientUpdateStatus(StrEnum):
 
     update = 'update'
     required = 'required'
+
+
+class CoordinateOut(BaseModel):
+    """
+    One catalog row of the run's coordinate space (0060): a non-empty coordinate
+    plus which fact tables have landed on it — coordinate enumeration without a
+    fact-table scan.
+    """
+
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    dims_hash: str = Field(..., title='Dims Hash')
+    first_seen_at: AwareDatetime = Field(..., title='First Seen At')
+    has_artifacts: bool = Field(..., title='Has Artifacts')
+    has_metrics: bool = Field(..., title='Has Metrics')
+    has_spans: bool = Field(..., title='Has Spans')
+    last_seen_at: AwareDatetime = Field(..., title='Last Seen At')
 
 
 class CredentialAttachmentGrantOut(BaseModel):
@@ -463,6 +482,8 @@ class ExportPoint(BaseModel):
     id: int = Field(..., title='Id')
     key: str = Field(..., title='Key')
     kind: str = Field(..., title='Kind')
+    labels: dict[str, Any] | None = Field(None, title='Labels')
+    span_id: UUID | None = Field(None, title='Span Id')
     step_index: int | None = Field(None, title='Step Index')
     value: float = Field(..., title='Value')
     wall_clock: AwareDatetime = Field(..., title='Wall Clock')
@@ -534,6 +555,45 @@ class Grant(StrEnum):
     capture = 'capture'
 
 
+class GroupedPoint(BaseModel):
+    """
+    One aggregated cell of a grouped read: a step bucket x one combination of the
+    `by` axes' values. `group` maps each requested axis to its value's JSON text
+    (None per axis when a point misses it — sparse coords collapse into one NULL
+    bucket per axis by design), and is None entirely when no axis was requested (a
+    full reduction). `n` is the count of finite raw points folded into this cell,
+    so a sparse or partially-logged coordinate is observable rather than silently
+    averaged over.
+    """
+
+    group: dict[str, str | None] | None = Field(None, title='Group')
+    n: int = Field(..., title='N')
+    step_index: int = Field(..., title='Step Index')
+    value: float = Field(..., title='Value')
+
+
+class GroupedSeriesResult(BaseModel):
+    """
+    Server-side reduce/group over a run's stepped points (item 7). The aggregation
+    is EXPLICIT — the caller names the fn; the server never guesses a reduction
+    (declared per-key reduce fns arrive with the opt-in declaration layer). `by`
+    echoes the requested axes in order; `where` echoes the canonical coord filter.
+    Bounded to `max_rows` cells; page the remainder by passing `next_step` back as
+    `step_from`. Group labels are each axis value's JSON text, so the int 1 and the
+    string "1" (distinct coordinates) render as `1` and `"1"`.
+    """
+
+    agg: str = Field(..., title='Agg')
+    by: list[str] | None = Field(None, title='By')
+    groups: list[GroupedPoint] = Field(..., title='Groups')
+    key: str = Field(..., title='Key')
+    kind: str | None = Field(None, title='Kind')
+    next_step: int | None = Field(None, title='Next Step')
+    step_bucket: int | None = Field(1, title='Step Bucket')
+    truncated: bool | None = Field(False, title='Truncated')
+    where: dict[str, Any] | None = Field(None, title='Where')
+
+
 class IndexCorpus(StrEnum):
     """
     The /v1/search corpus filter vocabulary (github.* and claude_code
@@ -549,10 +609,12 @@ class IndexCorpus(StrEnum):
 class IngestArtifact(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
+    coords: dict[str, Any] | None = Field(None, title='Coords')
     external_span_key: str | None = Field(None, title='External Span Key')
     external_span_type: str | None = Field(None, title='External Span Type')
     is_reference: bool | None = Field(False, title='Is Reference')
     kind: str | None = Field('file', title='Kind')
+    labels: dict[str, Any] | None = Field(None, title='Labels')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
     size_bytes: int | None = Field(None, title='Size Bytes')
@@ -697,6 +759,8 @@ class MetricPointIn(BaseModel):
     dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     key: str = Field(..., title='Key')
     kind: str | None = Field('model', title='Kind')
+    labels: dict[str, Any] | None = Field(None, title='Labels')
+    span_id: UUID | None = Field(None, title='Span Id')
     step_index: int | None = Field(None, title='Step Index')
     value: float = Field(..., title='Value')
     wall_clock: AwareDatetime | None = Field(None, title='Wall Clock')
@@ -707,7 +771,9 @@ class MetricPointOut(BaseModel):
     id: int = Field(..., title='Id')
     key: str = Field(..., title='Key')
     kind: str = Field(..., title='Kind')
+    labels: dict[str, Any] | None = Field(None, title='Labels')
     run_id: UUID = Field(..., title='Run Id')
+    span_id: UUID | None = Field(None, title='Span Id')
     step_index: int | None = Field(None, title='Step Index')
     value: float = Field(..., title='Value')
     wall_clock: AwareDatetime = Field(..., title='Wall Clock')
@@ -852,12 +918,19 @@ class RunCounts(BaseModel):
     spans: int = Field(..., title='Spans')
 
 
+class LabeledPointBudget(RootModel[int]):
+    root: int = Field(..., ge=1, le=100000000, title='Labeled Point Budget')
+
+
 class RunCreate(BaseModel):
     config: dict[str, Any] | None = Field(None, title='Config')
     env_ref: str | None = Field(None, title='Env Ref')
     external_id: str | None = Field(None, title='External Id')
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     group_id: UUID | None = Field(None, title='Group Id')
+    labeled_point_budget: LabeledPointBudget | None = Field(
+        None, title='Labeled Point Budget'
+    )
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     parent_relation: ParentRelation | None = None
@@ -1067,6 +1140,7 @@ class SeriesSelector(BaseModel):
 
 class SpanCreate(BaseModel):
     attributes: dict[str, Any] | None = Field(None, title='Attributes')
+    coords: dict[str, Any] | None = Field(None, title='Coords')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     env_ref: str | None = Field(None, title='Env Ref')
     external_key: str | None = Field(None, title='External Key')
@@ -1085,6 +1159,8 @@ class SpanOut(BaseModel):
     attributes: dict[str, Any] | None = Field(None, title='Attributes')
     created_at: AwareDatetime = Field(..., title='Created At')
     customer_id: str = Field(..., title='Customer Id')
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    dims_hash: str | None = Field(None, title='Dims Hash')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     external_key: str | None = Field(None, title='External Key')
     id: UUID = Field(..., title='Id')
@@ -1609,6 +1685,7 @@ class RunDetailOut(BaseModel):
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     group_id: UUID | None = Field(None, title='Group Id')
     id: UUID = Field(..., title='Id')
+    labeled_point_budget: int | None = Field(None, title='Labeled Point Budget')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     parent_relation: ParentRelation | None = None
@@ -1643,6 +1720,7 @@ class RunOut(BaseModel):
     external_id: str | None = Field(None, title='External Id')
     group_id: UUID | None = Field(None, title='Group Id')
     id: UUID = Field(..., title='Id')
+    labeled_point_budget: int | None = Field(None, title='Labeled Point Budget')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     parent_relation: ParentRelation | None = None
@@ -1692,6 +1770,7 @@ class SeriesQueryRequest(BaseModel):
 
 class SeriesQueryResult(BaseModel):
     series: list[SeriesResult] = Field(..., title='Series')
+    truncated: bool | None = Field(False, title='Truncated')
 
 
 class SpanBatch(BaseModel):
