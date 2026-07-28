@@ -1356,7 +1356,11 @@ app.add_typer(run_app, name="run")
 
 @run_app.command("start")
 def run_start(
-    experiment: str = typer.Option(..., "--experiment", help="slug of an EXISTING experiment"),
+    experiment: str = typer.Option(
+        None,
+        "--experiment",
+        help="slug of an EXISTING experiment; omit for a PROJECT-DIRECT run (W&B shape)",
+    ),
     name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
     project: str = typer.Option(
         None, "--project", help="project slug/id; defaults to the active one (`probe project use`)"
@@ -1367,16 +1371,24 @@ def run_start(
     config: list[str] = typer.Option(None, "--config", metavar="k=v"),
     tag: list[str] = typer.Option(None, "--tag"),
 ) -> None:
-    """Open a run inside an EXISTING experiment.
+    """Open a run inside an EXISTING experiment, or directly under a project.
 
     This no longer creates the experiment or project. Create them first with
     `probe project create` / `probe experiment create`; an unknown slug now errors
     and names the closest existing ones instead of minting a second identity.
+    Without --experiment the run attaches straight to the project (--project or
+    the active one) with no experiment at all — the W&B model.
     """
     # This is what makes `probe project use` mean something: without it the ambient
     # project would be stored and displayed but never actually applied to a write.
     # Explicit flag still wins, so scripts never depend on a developer's context.
     resolved_project = resolve(project=project).project
+    if not experiment and not resolved_project:
+        # Fail in CLI vocabulary before the SDK's run()-phrased error can leak.
+        raise errors.ValidationError(
+            "pass --experiment for an experiment run, or --project for a "
+            "project-direct one (or set an active project with `probe project use`)"
+        )
     with _client() as c:
         run = c.run(
             experiment=experiment,
@@ -1405,18 +1417,33 @@ def run_child(
     source: str = typer.Option("api", "--source"),
     external_id: str = typer.Option(None, "--external-id"),
 ) -> None:
-    """Open a sub-run under an existing run."""
+    """Open a sub-run under an existing run.
+
+    The child inherits the parent's attachment: its experiment when it has one,
+    else its project (a project-direct parent begets a project-direct child).
+    """
     with _client() as c:
         parent = c.get_run(run)
-        child = c.create_run(
-            parent["experiment_id"],
-            name,
+        common = dict(
             parent_run_id=run,
             parent_relation=relation.value,
             source=source,
             external_id=external_id,
             heartbeat=False,  # detached, same as `run start`
         )
+        if parent.get("experiment_id"):
+            child = c.create_run(parent["experiment_id"], name, **common)
+        elif parent.get("project_id"):
+            child = c.create_project_run(parent["project_id"], name, **common)
+        else:
+            # A pre-0054 backend's run rows carry no project_id field at all;
+            # a KeyError traceback here would say nothing actionable.
+            raise errors.ValidationError(
+                f"run {run} reports neither an experiment nor a project — this "
+                "research-os backend predates project-direct runs (0054). "
+                "Upgrade the backend, or open the child under an experiment "
+                "with `probe run start --experiment`."
+            )
     print(child.id)
 
 
@@ -2364,15 +2391,14 @@ def experiment_create(
     with _client() as c:
         project_id = None
         if resolved_project:
-            found = c.resolve_project(_project_slug(c, resolved_project))
-            if found is None:
-                raise typer.BadParameter(f"no project with slug {resolved_project!r}")
-            project_id = found["id"]
+            # Same resolver as `run start`, so "no such project" is one error with
+            # one exit code, and the message names the SLUG that was looked up
+            # rather than the raw ambient value (which is an id).
+            project_id = c.resolve_or_raise(
+                "project", _project_slug(c, resolved_project)
+            )["id"]
         _print_json(
-            c.create_experiment(
-                slug,
-                name,
-                hypothesis,
+            c.create_experiment(slug, name, hypothesis=hypothesis,
                 project_id=project_id,
                 description=description,
             )

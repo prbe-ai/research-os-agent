@@ -133,7 +133,7 @@ def test_project_workspace_id_may_be_null_on_a_legacy_row(client):
 # -- the patch / move split --------------------------------------------------
 def test_move_reindexes_descendants(client, app):
     proj = client.create_project("movable", workspace_id=_WS_MINE)
-    exp = client.create_experiment("e1", "E1", "h", project_id=proj["id"])
+    exp = client.create_experiment("e1", "E1", hypothesis="h", project_id=proj["id"])
     app.experiments[exp["id"]]["project_id"] = proj["id"]
 
     client.move_project(proj["id"], _WS_OTHER)
@@ -144,7 +144,7 @@ def test_move_reindexes_descendants(client, app):
 def test_a_no_op_move_skips_the_fan_out(client, app):
     """The fan-out fires only when the workspace actually changes."""
     proj = client.create_project("stay", workspace_id=_WS_MINE)
-    exp = client.create_experiment("e1", "E1", "h", project_id=proj["id"])
+    exp = client.create_experiment("e1", "E1", hypothesis="h", project_id=proj["id"])
     app.experiments[exp["id"]]["project_id"] = proj["id"]
 
     client.move_project(proj["id"], _WS_MINE)

@@ -2884,8 +2884,16 @@
             "title": "Experiment Hypothesis"
           },
           "experiment_slug": {
-            "title": "Experiment Slug",
-            "type": "string"
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Experiment Slug"
           },
           "metrics": {
             "items": {
@@ -2920,7 +2928,6 @@
           }
         },
         "required": [
-          "experiment_slug",
           "run"
         ],
         "title": "IngestRunRequest",
@@ -4002,6 +4009,11 @@
             "title": "Created At",
             "type": "string"
           },
+          "direct_run_count": {
+            "default": 0,
+            "title": "Direct Run Count",
+            "type": "integer"
+          },
           "experiment_count": {
             "default": 0,
             "title": "Experiment Count",
@@ -4394,7 +4406,7 @@
         "type": "object"
       },
       "RunDetailOut": {
-        "description": "The /v1 read view of a run: RunOut plus the fold fields that are DELIBERATELY\nabsent from RunOut so the frozen ingest response stays byte-identical (the ingest\nroute keeps response_model=RunOut, which filters these out). short_id (fold #21)\nis the human-facing petname the dashboard displays; created_by (fold #1), env_ref\n(fold #7), and foreign_keys (fold #8) surface here for reads.",
+        "description": "The /v1 read view of a run: RunOut plus the fold fields that are DELIBERATELY\nabsent from RunOut so the frozen ingest response stays byte-identical (the ingest\nroute keeps response_model=RunOut, which filters these out). short_id (fold #21)\nis the human-facing petname the dashboard displays; created_by (fold #1), env_ref\n(fold #7), and foreign_keys (fold #8) surface here for reads. project_id\n(0054) is likewise detail-only: the run's owning project, always set.",
         "properties": {
           "config": {
             "additionalProperties": true,
@@ -4467,9 +4479,16 @@
             "title": "Env Ref"
           },
           "experiment_id": {
-            "format": "uuid",
-            "title": "Experiment Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experiment Id"
           },
           "external_id": {
             "anyOf": [
@@ -4535,6 +4554,11 @@
             ],
             "title": "Parent Run Id"
           },
+          "project_id": {
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
+          },
           "short_id": {
             "anyOf": [
               {
@@ -4585,7 +4609,8 @@
           "name",
           "status",
           "source",
-          "created_at"
+          "created_at",
+          "project_id"
         ],
         "title": "RunDetailOut",
         "type": "object"
@@ -4894,9 +4919,16 @@
             "title": "Ended At"
           },
           "experiment_id": {
-            "format": "uuid",
-            "title": "Experiment Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Experiment Id"
           },
           "external_id": {
             "anyOf": [
@@ -11051,6 +11083,60 @@
         ]
       }
     },
+    "/v1/projects/{project_id}/runs": {
+      "post": {
+        "description": "Create a PROJECT-DIRECT run (no experiment \u2014 W&B shape, 0054-0058).\n\nMirrors POST /v1/experiments/{id}/runs with experiment_id NULL; run groups\nare experiment-anchored, so group_id is rejected here (422).",
+        "operationId": "create_project_run_v1_projects__project_id__runs_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "project_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Project Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Project Run",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/v1/projects/{project_id}/summary/regenerate": {
       "post": {
         "operationId": "regenerate_project_summary_v1_projects__project_id__summary_regenerate_post",
@@ -11168,6 +11254,37 @@
                 }
               ],
               "title": "Experiment Id"
+            }
+          },
+          {
+            "description": "ALL runs in the project \u2014 project-direct AND experiment-attached",
+            "in": "query",
+            "name": "project_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "ALL runs in the project \u2014 project-direct AND experiment-attached",
+              "title": "Project Id"
+            }
+          },
+          {
+            "description": "only PROJECT-DIRECT runs (experiment_id IS NULL); combine with project_id",
+            "in": "query",
+            "name": "direct",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "only PROJECT-DIRECT runs (experiment_id IS NULL); combine with project_id",
+              "title": "Direct",
+              "type": "boolean"
             }
           },
           {

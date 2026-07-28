@@ -351,12 +351,22 @@ class Client:
             body["metadata"] = metadata
         return self.transport.post("/v1/projects", body)
 
-    def resolve_project(self, slug: str) -> dict | None:
+    def resolve_project(self, slug: str, *, include_archived: bool = False) -> dict | None:
         """Look a project up by slug. ``None`` when it does not exist.
 
         `(customer_id, slug)` is UNIQUE, so ``?slug=`` returns 0 or 1 row and an
-        empty result is an unambiguous "absent" rather than "not on this page"."""
-        rows = self.transport.get("/v1/projects", params={"slug": slug})
+        empty result is an unambiguous "absent" rather than "not on this page".
+
+        ``include_archived`` exists because the unique constraint does NOT ignore
+        archived rows: an archived slug reads as absent here, but creating it then
+        409s, so a caller that only asked the default question is told "does not
+        exist" and "already exists" about the same slug. The old get-or-create
+        recovered from that via the conflict's ``existing_id``; resolution has to
+        be able to SEE the archived row instead."""
+        params: dict[str, Any] = {"slug": slug}
+        if include_archived:
+            params["include"] = "archived"
+        rows = self.transport.get("/v1/projects", params=params)
         return _exactly(rows, slug)
 
     def get_project(self, project_id: str) -> dict:
@@ -619,8 +629,8 @@ class Client:
         self,
         slug: str,
         name: str | None = None,
-        hypothesis: str | None = None,
         *,
+        hypothesis: str | None = None,
         project_id: str | None = None,
         description: str | None = None,
         tags: list[str] | None = None,
@@ -646,12 +656,16 @@ class Client:
             body["tags"] = tags
         return self.transport.post("/v1/experiments", body)
 
-    def resolve_experiment(self, slug: str) -> dict | None:
+    def resolve_experiment(self, slug: str, *, include_archived: bool = False) -> dict | None:
         """Look an experiment up by slug. ``None`` when it does not exist.
 
         Experiment slugs are UNIQUE per TENANT, not per project, so this needs no
-        project_id to disambiguate."""
-        rows = self.transport.get("/v1/experiments", params={"slug": slug})
+        project_id to disambiguate. See :meth:`resolve_project` for why
+        ``include_archived`` has to exist."""
+        params: dict[str, Any] = {"slug": slug}
+        if include_archived:
+            params["include"] = "archived"
+        rows = self.transport.get("/v1/experiments", params=params)
         return _exactly(rows, slug)
 
     def get_experiment(self, experiment_id: str) -> dict:
@@ -741,6 +755,47 @@ class Client:
         return self.transport.patch(f"/v1/groups/{group_id}", body)
 
     # -- runs (create) ------------------------------------------------------
+    @staticmethod
+    def _run_create_body(
+        name: str,
+        *,
+        source: str,
+        external_id: str | None,
+        parent_run_id: str | None,
+        parent_relation: str | None,
+        group_id: str | None,
+        config: dict | None,
+        tags: list[str] | None,
+        metadata: dict | None,
+    ) -> dict[str, Any]:
+        body: dict[str, Any] = {"name": name, "source": source}
+        if external_id is not None:
+            body["external_id"] = external_id
+        if parent_run_id is not None:
+            body["parent_run_id"] = parent_run_id
+            body["parent_relation"] = parent_relation or "fork"
+        if group_id is not None:
+            body["group_id"] = group_id
+        if config is not None:
+            body["config"] = config
+        if tags is not None:
+            body["tags"] = tags
+        if metadata is not None:
+            body["metadata"] = metadata
+        return body
+
+    def _wrap_run(self, data: dict, *, heartbeat: bool) -> "Run":
+        run = Run(self, data)
+        # A handle minted here is presumed to live and die with this process, so
+        # it beats by default and the server's reaper can flip it to 'crashed'
+        # when the process dies. Pass heartbeat=False when the run is DETACHED —
+        # created here but executed and finished from somewhere else (CLI
+        # `run start`, the miles exporter) — because beating briefly and then
+        # going silent gets a legitimately-running run reaped.
+        if heartbeat:
+            run.start_heartbeat()
+        return run
+
     def create_run(
         self,
         experiment_id: str,
@@ -756,31 +811,71 @@ class Client:
         metadata: dict | None = None,
         heartbeat: bool = True,
     ) -> "Run":
-        body: dict[str, Any] = {"name": name, "source": source}
-        if external_id is not None:
-            body["external_id"] = external_id
-        if parent_run_id is not None:
-            body["parent_run_id"] = parent_run_id
-            body["parent_relation"] = parent_relation or "fork"
-        if group_id is not None:
-            body["group_id"] = group_id
-        if config is not None:
-            body["config"] = config
-        if tags is not None:
-            body["tags"] = tags
-        if metadata is not None:
-            body["metadata"] = metadata
+        body = self._run_create_body(
+            name,
+            source=source,
+            external_id=external_id,
+            parent_run_id=parent_run_id,
+            parent_relation=parent_relation,
+            group_id=group_id,
+            config=config,
+            tags=tags,
+            metadata=metadata,
+        )
+        # Literal call site: the tests/test_parity.py AST scan must see the route.
         data = self.transport.post(f"/v1/experiments/{experiment_id}/runs", body)
-        run = Run(self, data)
-        # A handle minted here is presumed to live and die with this process, so
-        # it beats by default and the server's reaper can flip it to 'crashed'
-        # when the process dies. Pass heartbeat=False when the run is DETACHED —
-        # created here but executed and finished from somewhere else (CLI
-        # `run start`, the miles exporter) — because beating briefly and then
-        # going silent gets a legitimately-running run reaped.
-        if heartbeat:
-            run.start_heartbeat()
-        return run
+        return self._wrap_run(data, heartbeat=heartbeat)
+
+    def create_project_run(
+        self,
+        project_id: str,
+        name: str,
+        *,
+        source: str = "api",
+        external_id: str | None = None,
+        parent_run_id: str | None = None,
+        parent_relation: str | None = None,
+        config: dict | None = None,
+        tags: list[str] | None = None,
+        metadata: dict | None = None,
+        heartbeat: bool = True,
+    ) -> "Run":
+        """POST /v1/projects/{id}/runs — open a PROJECT-DIRECT run (W&B shape).
+
+        The experiment level is optional grouping; a run opened here attaches
+        straight to the project. No ``group_id``: run groups are
+        experiment-anchored, so the backend rejects one on a direct run (422).
+        """
+        body = self._run_create_body(
+            name,
+            source=source,
+            external_id=external_id,
+            parent_run_id=parent_run_id,
+            parent_relation=parent_relation,
+            group_id=None,
+            config=config,
+            tags=tags,
+            metadata=metadata,
+        )
+        try:
+            # Literal call site: the tests/test_parity.py AST scan must see the route.
+            data = self.transport.post(f"/v1/projects/{project_id}/runs", body)
+        except errors.NotFoundError as exc:
+            # A pre-0054 backend has no such route, and its route-level 404
+            # ("Not Found") is indistinguishable from a missing project. The
+            # handler's own 404 says "project not found"; anything else means
+            # the backend predates the route — say so, and say what to do
+            # (the browse/search degraded-backend standard).
+            if "project" not in str(exc).lower():
+                raise errors.NotFoundError(
+                    "this research-os backend predates POST /v1/projects/{id}/runs "
+                    "(project-direct runs, 0054). Upgrade the backend, or open "
+                    "the run inside an experiment (--experiment / run(experiment=...)).",
+                    status=exc.status,
+                    detail=exc.detail,
+                ) from exc
+            raise
+        return self._wrap_run(data, heartbeat=heartbeat)
 
     def run(
         self,
@@ -792,7 +887,7 @@ class Client:
         experiment_name: str | None = None,
         **run_kw,
     ) -> "Run":
-        """Open a run inside an experiment that ALREADY EXISTS.
+        """Open a run inside an experiment — or straight under a project.
 
         This resolves; it does not create. An unknown slug raises
         ``NotFoundError`` naming the closest existing ones, because the failure
@@ -800,6 +895,9 @@ class Client:
         so a typo minted a second project or experiment rather than erroring, and
         every later comparison read the two as genuinely different things.
 
+        With ``experiment``, the run opens inside that experiment (and
+        ``project``, if also given, is a cross-check). With only ``project``
+        (W&B shape), the run attaches PROJECT-DIRECT — no experiment at all.
         Create the parents explicitly first — :meth:`create_project` and
         :meth:`create_experiment`, or ``probe project create`` / ``probe
         experiment create``. ``name`` still defaults to a timestamp, and the
@@ -811,27 +909,29 @@ class Client:
                 "hypothesis or name. Create it first with create_experiment("
                 f"{experiment!r}, hypothesis=...) and then open the run."
             )
-        if not experiment:
+        if not experiment and not project:
             raise errors.ValidationError(
-                "run() needs an experiment slug. It used to fall back to the git "
-                "repo or script name, which silently created an experiment named "
-                "after whatever directory you happened to be in."
+                "run() needs an experiment slug — or a project slug for a "
+                "project-direct run. It used to fall back to the git repo or "
+                "script name, which silently created an experiment named after "
+                "whatever directory you happened to be in."
             )
         self.ensure_authenticated()
         name = name or defaults.default_run_name()
         project_id = None
         if project:
-            found = self.resolve_project(project)
-            if found is None:
-                raise self._no_such(
-                    "project", project, self.list_projects(limit=200).items
+            project_id = self.resolve_or_raise("project", project)["id"]
+        if not experiment:
+            # Project-direct (0054): the run attaches straight to the project.
+            if run_kw.get("group_id") is not None:
+                raise errors.ValidationError(
+                    "a group needs an experiment: run groups are "
+                    "experiment-anchored, so a project-direct run cannot join "
+                    "one. Name the experiment or drop the group."
                 )
-            project_id = found["id"]
-        exp = self.resolve_experiment(experiment)
-        if exp is None:
-            raise self._no_such(
-                "experiment", experiment, self.list_experiments(project_id=project_id, limit=200).items
-            )
+            run_kw.pop("group_id", None)
+            return self.create_project_run(project_id, name, **run_kw)
+        exp = self.resolve_or_raise("experiment", experiment, project_id=project_id)
         # `project` used to decide where a NEW experiment got filed. Now that the
         # experiment must already exist, the only honest job left for it is to
         # CHECK that it is the one you think it is — otherwise naming a project
@@ -842,6 +942,32 @@ class Client:
                 "Drop --project, or name the project it actually belongs to."
             )
         return self.create_run(exp["id"], name, **run_kw)
+
+    def resolve_or_raise(self, kind: str, slug: str, *, project_id: str | None = None) -> dict:
+        """Resolve a slug or raise the error that says what to do about it.
+
+        Three outcomes, three different remedies, and they must not be conflated:
+        present (return it), ARCHIVED (restore it — creating 409s, so "not found"
+        would be a lie that sends you into a dead end), absent (create it, with
+        near misses named). Both `run()` and the CLI go through here so the same
+        failure cannot exit 1 from one surface and 2 from the other."""
+        resolve = self.resolve_project if kind == "project" else self.resolve_experiment
+        found = resolve(slug)
+        if found is not None:
+            return found
+        archived = resolve(slug, include_archived=True)
+        if archived is not None:
+            raise errors.NotFoundError(
+                f"{kind} {slug!r} is ARCHIVED, not missing — creating it would "
+                f"conflict on the slug. Restore it with "
+                f"`probe {kind} restore {shlex.quote(slug)}`."
+            )
+        listing = (
+            self.list_projects(limit=200).items
+            if kind == "project"
+            else self.list_experiments(project_id=project_id, limit=200).items
+        )
+        raise self._no_such(kind, slug, listing)
 
     @staticmethod
     def _no_such(kind: str, slug: str, existing: Iterable[dict]) -> errors.NotFoundError:
@@ -1222,11 +1348,40 @@ class Client:
     def get_experiment_version(self, experiment_id: str, version: int | str) -> dict:
         return self.transport.get(f"/v1/experiments/{experiment_id}/versions/{version}")
 
-    def list_runs(self, *, experiment_id: str | None = None, **params) -> Page:
+    def list_runs(
+        self,
+        *,
+        experiment_id: str | None = None,
+        project_id: str | None = None,
+        direct: bool = False,
+        **params,
+    ) -> Page:
+        """``project_id`` returns ALL the project's runs — project-direct AND
+        experiment-attached (0054); ``direct=True`` narrows to experiment-less
+        runs only."""
         query = dict(params)
         if experiment_id is not None:
             query["experiment_id"] = experiment_id
-        return self.transport.get_page("/v1/runs", params=query or None)
+        if project_id is not None:
+            query["project_id"] = project_id
+        if direct:
+            query["direct"] = "true"
+        page = self.transport.get_page("/v1/runs", params=query or None)
+        # A pre-0054 backend IGNORES unknown query params and returns the
+        # unscoped list — a confident wrong answer presented as project-scoped.
+        # Its rows also predate the project_id field, which is how we can tell:
+        # refuse rather than mislabel. (An empty page proves nothing and passes.)
+        if (
+            (project_id is not None or direct)
+            and page.items
+            and "project_id" not in page.items[0]
+        ):
+            raise errors.NotFoundError(
+                "this research-os backend predates GET /v1/runs?project_id= "
+                "(0054): it ignored the filter and returned unscoped runs. "
+                "Upgrade the backend before relying on project-scoped listings."
+            )
+        return page
 
     def list_run_artifacts(
         self,
