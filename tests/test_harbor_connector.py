@@ -225,6 +225,41 @@ def test_capture_trial_full(client, app, tmp_path):
     assert all(entry["artifact_id"] for entry in meta["files"])
 
 
+def test_capture_trial_stamps_the_below_run_coordinate(client, app, tmp_path):
+    """coords ride the rollout span; coords+labels ride the reward point and
+    the manifest artifact (file-byte uploads use the presign door, which has
+    no coordinate fields — deliberately unasserted here)."""
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    capture_trial(
+        run, _write_trial(tmp_path / "t"), step_index=600, expand=False,
+        coords={"rank": 0}, labels={"sample": "bwrhe3y"}, strict=True,
+    )
+    (span,) = app.spans[run.id]
+    assert span["coords"] == {"rank": 0}
+    (point,) = app.metric_points_posted[run.id]
+    assert point["dimensions"] == {"rank": 0}
+    assert point["labels"] == {"sample": "bwrhe3y"}
+    manifest = next(
+        a for a in app.artifacts[run.id] if a.get("kind") == MANIFEST_KIND
+    )
+    assert manifest["coords"] == {"rank": 0}
+    assert manifest["labels"] == {"sample": "bwrhe3y"}
+
+
+def test_capture_trial_inherits_the_ambient_unit(client, app, tmp_path):
+    """A trainer that wraps capture in run.unit() needs no per-call kwargs."""
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    with run.unit(coords={"rank": 1}):
+        capture_trial(
+            run, _write_trial(tmp_path / "t"), step_index=601, expand=False,
+            strict=True,
+        )
+    assert app.spans[run.id][0]["coords"] == {"rank": 1}
+    assert app.metric_points_posted[run.id][0]["dimensions"] == {"rank": 1}
+
+
 def test_capture_trial_bare_fork_dir_still_captures(client, app, tmp_path):
     """A private fork with zero contract files is captured, not rejected."""
     client.fail_open = False

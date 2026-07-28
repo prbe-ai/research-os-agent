@@ -41,6 +41,8 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
+from . import atif
+from ..sdk import unit_context
 from ..sdk.capture import (
     CaptureLedger,
     CaptureState,
@@ -49,14 +51,9 @@ from ..sdk.capture import (
 )
 from ..sdk.durable import (
     fsync_directory as _fsync_directory,
-)
-from ..sdk.durable import (
     now_iso as _utc_now,
-)
-from ..sdk.durable import (
     write_text_atomic,
 )
-from . import atif
 
 if TYPE_CHECKING:
     from ..sdk.run import Run
@@ -1073,7 +1070,7 @@ def parse_trial(trial_dir: str | Path) -> ParsedTrial:
 
 
 def capture_trial(
-    run: Run,
+    run: "Run",
     trial_dir: str | Path | StagedTrial,
     *,
     step_index: int | None = None,
@@ -1085,12 +1082,22 @@ def capture_trial(
     log_reward: bool = True,
     expand: bool = True,
     max_trajectory_spans: int | None = None,
+    coords: dict[str, Any] | None = None,
+    labels: dict[str, Any] | None = None,
     strict: bool | None = None,
 ) -> dict:
     """Capture one Harbor trial into ``run``, keyed by ``step_index``.
 
     - ``step_index`` is the training step / Miles ``rollout_id`` — the join
       Osmosis is missing. Optional, but pass it whenever the trainer knows it.
+    - ``coords``/``labels`` are the below-run coordinate maps (research-os#177):
+      ``coords`` the bounded grouping axes the trial ran at (e.g. ``rank``),
+      ``labels`` its per-sample ids (e.g. ``sample``). ``coords`` is stamped on
+      the rollout span; both thread into the reward metric point and the
+      trial's artifacts. They merge over any ambient ``run.unit(...)`` context
+      (these explicit maps win per key). File-byte uploads ride the presign
+      door, which has no coordinate fields — their rows carry coords/labels
+      only if the upload falls back to a reference.
     - ``environment`` is recorded opaquely on the manifest (e.g. ``{"type":
       "skypilot-fork"}``) — never structural, per the plan's agnosticism rule.
     - Uploads are fail-open like every SDK data write: a file that cannot reach
@@ -1103,6 +1110,11 @@ def capture_trial(
 
     Returns ``{trial, span_id, reward, manifest, files, trajectory}``.
     """
+    # Resolve the ambient run.unit(...) context ONCE, up front: every producer
+    # call below then carries the same fully-merged maps, and the ledger persists
+    # what was actually stamped (a reconcile may run in a process with no unit).
+    coords, labels = unit_context.merged(coords, labels)
+    coords, labels = (coords or None), (labels or None)
     staged = (
         trial_dir
         if isinstance(trial_dir, StagedTrial)
@@ -1122,6 +1134,10 @@ def capture_trial(
             span_id=rollout_id,
             rollout_external_key=rollout_key,
             step_index=step_index,
+            # Persisted like step_index so a reconcile from another process
+            # re-publishes the manifest at the same below-run coordinate.
+            coords=coords,
+            labels=labels,
         )
     span_id = run.span(
         "rollout",
@@ -1138,12 +1154,17 @@ def capture_trial(
             "agent": parsed.agent_info,
             "reward": parsed.reward,
         },
+        coords=coords,
         strict=strict,
     )
     reward_already_logged = bool(ledger and ledger.context.get("reward_logged"))
     if log_reward and parsed.reward is not None and not reward_already_logged:
         metric_result = run.log(
-            {reward_key: parsed.reward}, step=step_index, strict=strict
+            {reward_key: parsed.reward},
+            step=step_index,
+            dimensions=coords,
+            labels=labels,
+            strict=strict,
         )
         if ledger is not None:
             ledger.update_context(
@@ -1197,6 +1218,8 @@ def capture_trial(
                     meta={"role": role, "trial": parsed.name, "path": rel},
                     span_id=span_id,
                     step_index=step_index,
+                    coords=coords,
+                    labels=labels,
                     strict=strict,
                 )
             except Exception as exc:
@@ -1276,6 +1299,8 @@ def capture_trial(
             meta=manifest_meta,
             span_id=span_id,
             step_index=step_index,
+            coords=coords,
+            labels=labels,
             strict=strict,
         )
     except Exception as exc:
@@ -1309,7 +1334,7 @@ def capture_trial(
 
 
 def reconcile_staged_trial(
-    run: Run,
+    run: "Run",
     trial_dir: str | Path | StagedTrial,
     **kwargs: Any,
 ) -> dict:
@@ -1331,5 +1356,7 @@ def reconcile_staged_trial(
             f"{trial_dir} is not a staged trial (missing {CAPTURE_LEDGER_NAME})"
         )
     kwargs.setdefault("step_index", staged.ledger.context.get("step_index"))
+    kwargs.setdefault("coords", staged.ledger.context.get("coords"))
+    kwargs.setdefault("labels", staged.ledger.context.get("labels"))
     kwargs.setdefault("expand", False)
     return capture_trial(run, staged, log_reward=False, **kwargs)
