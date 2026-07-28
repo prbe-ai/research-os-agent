@@ -127,6 +127,31 @@ atomic. On rented compute, put the queue on durable storage with
 `PROBE_SPOOL_DIR=/shared/probe/spool` or `probe --spool-dir /shared/probe/spool …`.
 Pass `strict=True` to make a write raise.
 
+## Miles tracking backend (`probe.connectors.miles`)
+
+Drop-in wandb-parity backend for [Miles'](https://github.com/MoonshotAI/miles)
+`TrackingManager`. Zero miles commits: the registry is a plain dict checked
+against args flags at init, so activation is two lines in your launcher,
+before `init_tracking(args)`:
+
+```python
+from probe.connectors.miles import register
+register(args)          # registers the backend + sets args.use_probe
+```
+
+Every `TrackingManager.log()` lands with its own step counter (`train/step`
+and `rollout/step` map to `step_index` per key, the counter entry itself is
+stripped), values arrive after Miles' DP-rank reduction — exactly what wandb
+sees — and the run declares its labeled-point plan (`num_rollout x
+rollout_batch_size x n_samples_per_prompt`) so later per-sample capture never
+trips the server's default budget mid-training. Config: `PROBE_BASE_URL` /
+`PROBE_TOKEN`, optional `args.probe_experiment` / `args.probe_run_name`
+(fall back to the wandb names). Fail-open end to end: a broken tracker never
+costs a training step; non-finite values are dropped per-point. Per-rank and
+per-sample detail ride the capture-at-source arc (`run.unit` +
+`capture_trial`), not this backend. Upstreaming a native `--use-probe` flag
+into a miles fork is optional polish (registry docstring's own recipe).
+
 ## SDK (install-once / passive push)
 
 ```python

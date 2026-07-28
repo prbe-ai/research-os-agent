@@ -23,7 +23,7 @@ import re
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -32,12 +32,17 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 # so a distributed actor keeps writing metric batches without the network stack.
 from ..sdk.durable import (
     file_lock as _file_lock,
+)
+from ..sdk.durable import (
     fsync_directory as _fsync_directory,
+)
+from ..sdk.durable import (
     now_iso as _now,
+)
+from ..sdk.durable import (
     read_json,
     write_text_atomic,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -240,8 +245,32 @@ def _default_run_name(args, external_id: str) -> str:
     )
     if configured:
         return str(configured)
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return f"miles-{timestamp}-{external_id.rsplit(':', 1)[-1][:8]}"
+
+
+_LABELED_POINT_BUDGET_CEILING = 100_000_000  # mirrors the server-side ceiling
+
+
+def planned_labeled_points(args) -> int | None:
+    """The run's per-sample volume, straight from the rollout plan.
+
+    Declared at create time as the run's labeled_point_budget (server 0061) so
+    later per-sample capture against this run never trips the 2M default
+    mid-training: rollout_batch_size 512 x 4k rollouts is already 2.05M.
+    """
+    per_prompt = getattr(args, "n_samples_per_prompt", None) or 1
+    try:
+        planned = (
+            int(getattr(args, "num_rollout", None))
+            * int(getattr(args, "rollout_batch_size", None))
+            * int(per_prompt)
+        )
+    except (TypeError, ValueError):
+        return None
+    if planned <= 0:
+        return None
+    return min(planned, _LABELED_POINT_BUDGET_CEILING)
 
 
 def _run_spec(args, external_id: str) -> dict[str, Any]:
@@ -253,7 +282,7 @@ def _run_spec(args, external_id: str) -> dict[str, Any]:
         if value := os.environ.get(env_name):
             links[link_name] = value
     links.update(_parse_links(getattr(args, "probe_links", None)))
-    return {
+    spec = {
         "project": getattr(args, "probe_project", "miles"),
         "experiment": getattr(args, "probe_experiment", "miles"),
         "hypothesis": getattr(
@@ -279,6 +308,9 @@ def _run_spec(args, external_id: str) -> dict[str, Any]:
             "cwd": getattr(args, "probe_snapshot_cwd", None),
         },
     }
+    if planned := planned_labeled_points(args):
+        spec["labeled_point_budget"] = planned
+    return spec
 
 
 def _resolve_queue_dir(args, external_id: str, *, primary: bool) -> Path:
@@ -620,7 +652,7 @@ class _MetricExporter:
                     self.queue.write_status(last_error=None, last_confirmed_at=_now())
                 except (
                     Exception
-                ) as exc:  # noqa: BLE001 - preserve every unconfirmed record
+                ) as exc:
                     self.queue.retry(path)
                     self.queue.write_status(last_error=f"{type(exc).__name__}: {exc}")
                     logger.warning(
@@ -770,14 +802,14 @@ class ProbeTracker:
             if client is not None:
                 try:
                     client.close()
-                except Exception:  # noqa: BLE001 - retain the initialization error
+                except Exception:
                     logger.exception("Probe client cleanup failed")
             try:
                 self._queue.write_status(last_error=f"{type(exc).__name__}: {exc}")
                 self._queue.write_intent(state="pending_run")
             except (
                 Exception
-            ):  # noqa: BLE001 - fail-open must not be defeated by status I/O
+            ):
                 logger.exception(
                     "Probe could not persist initialization failure status"
                 )
@@ -832,10 +864,13 @@ class ProbeTracker:
     def log(self, metrics: dict[str, Any], step: int | None = None, **kwargs) -> None:
         if self._queue is None:
             return
+        step_key = kwargs.get("step_key")
         scalar_metrics = {
             key: number
             for key, value in metrics.items()
-            if (number := _scalar(value)) is not None
+            # The step counter is the x-axis, not a series: logging it as a
+            # metric would mint train/step & rollout/step catalog rows.
+            if key != step_key and (number := _scalar(value)) is not None
         }
         if not scalar_metrics:
             return
@@ -925,7 +960,7 @@ class ProbeTracker:
             if self._exporter is not None and self._exporter._thread.is_alive():
                 try:
                     self._exporter.drain_and_close(0)
-                except Exception:  # noqa: BLE001 - preserve the finalization error
+                except Exception:
                     logger.exception("Probe exporter cleanup failed")
             self._handle_error("finalize durable metric export", exc)
 
@@ -1090,12 +1125,12 @@ drain_miles_metric_queue = drain_metric_queue
 
 
 __all__ = [
+    "QUEUE_SCHEMA_VERSION",
     "DurableMetricQueue",
     "MilesMetricBackend",
     "MilesMetricTracker",
     "ProbeBackend",
     "ProbeTracker",
-    "QUEUE_SCHEMA_VERSION",
     "drain_metric_queue",
     "drain_miles_metric_queue",
 ]
