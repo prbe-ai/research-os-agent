@@ -60,6 +60,7 @@ from .sandbox_state import (
     BUNDLE_DIRNAME,
     END_DELTA,
     END_MANIFEST,
+    SCHEMA,
     build_meta,
     machine_to_arch,
     parse_trailer,
@@ -378,6 +379,36 @@ class SandboxStateRecorder:
             return Path(trial_dir)
         config = self._trial.config
         return Path(config.trials_dir) / config.trial_name
+
+    # -- reporting ------------------------------------------------------------
+    def record_install_failure(self, exc: BaseException) -> None:
+        """Record that the hooks never attached; ``summary()`` then says why.
+
+        Used by callers that install the hooks fail-open (the capture facade):
+        the trial still runs, no phase ever fires, and the summary carries the
+        reason instead of a silent ``not_attempted``.
+        """
+        self.errors.append(f"hook install failed: {type(exc).__name__}: {exc}")
+
+    def attempted(self) -> bool:
+        """True once either hook has actually fired."""
+        return any(value != "pending" for value in self.status.values())
+
+    def summary(self) -> dict[str, Any]:
+        """JSON-safe capture verdict for a bridge's ``context.sandbox_state``.
+
+        ``status`` collapses to the string ``"not_attempted"`` when no hook
+        ever fired (environment never started, install failed) so consumers
+        need no phase-by-phase probing to tell "off" from "broken" — the
+        ``errors`` list carries the why either way.
+        """
+        return {
+            "schema": SCHEMA,
+            "status": dict(self.status) if self.attempted() else "not_attempted",
+            "arch": self._arch,
+            "integrity": dict(self.integrity),
+            "errors": list(self.errors),
+        }
 
 
 def instrument_trial(

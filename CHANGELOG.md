@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.23.0 (unreleased)
+
+### Added
+
+- **`probe.connectors.harbor_capture`** — the SDK-owned capture facade for
+  Harbor bridges. Any bridge/server that owns a harbor `Trial` gets Probe
+  capture in ~3 lines:
+
+  ```python
+  from probe.connectors import harbor_capture
+
+  handle = harbor_capture.attach(trial, correlation={...}, context={...},
+                                 capture_mode="shadow",
+                                 sandbox_state=SandboxStateOptions())
+  try:
+      result = await trial.run()
+  finally:
+      capture = await handle.finalize(trial_dir)
+  ```
+
+  `attach()` installs the correlation hooks (logical `session_id` plus a
+  best-effort provider sandbox id read from stable string identifiers on the
+  per-backend private handles — Daytona/E2B `_sandbox`, Modal
+  `_sandbox.object_id`, Runloop `_devbox.id` — retained so they survive
+  Harbor nulling the environment handle) and, when `sandbox_state=` options
+  are given, the existing `probe.sandbox-state/1` recorder from
+  `harbor_runner`. `finalize()` stages the trial tree through
+  `stage_trial_export` and returns a `HarborCaptureResult` carrying the
+  staged paths, archive hash, external key, sandbox ids, and the
+  sandbox-state summary (also folded into the export's
+  `context.sandbox_state`).
+
+  Capture modes: `off` (no-op handle, harbor never imported), `shadow`
+  (best-effort — staging failures come back as `status="failed"`, never
+  raised), `required` (same staging, but the caller gates on
+  `capture.complete` / `capture.raise_if_incomplete()` to fail its
+  response). Harbor stays an optional lazy dependency behind
+  `verify_harbor_contract()`.
+
+- `SandboxStateRecorder` grew `summary()` (the JSON-safe verdict the facade
+  folds into capture context, `"not_attempted"` until a hook fires),
+  `attempted()`, and `record_install_failure()` for callers that install the
+  hooks fail-open.
+
 ## 0.22.0 (unreleased)
 
 ### Breaking
