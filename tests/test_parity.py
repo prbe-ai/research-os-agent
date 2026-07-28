@@ -327,25 +327,12 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
 # the next backend fold that lands ahead of the client goes here, with a pointer to
 # what will close it, instead of being quietly absorbed into "not our job".
 PENDING: dict[Op, str] = {
-    # research-os#177 (below-run coordinates) landed ahead of the client; the
-    # two coordinate reads want the same ergonomic-API design pass as the
-    # existing telemetry read shapes in this ledger.
-    ("GET", "/v1/runs/{}/metrics/grouped"): "coordinate reduce/group read follow-up from research-os#177",
-    ("GET", "/v1/runs/{}/coordinates"): "coordinate catalog read follow-up from research-os#177",
-    # Surfaced 2026-07-26 by refreshing the snapshot for the `?slug=` filter
-    # (research-os#176). Pre-existing backend drift the stale schema was hiding,
-    # not debt this change introduced.
+    # The five coordinate/telemetry read shapes (research-os#162 + #177:
+    # metrics grouped/wide/export, the coordinate catalog, /v1/series/latest)
+    # cleared this ledger in the coordinate read-surface pass (B7): they are
+    # now literal call sites in sdk/client.py, surfaced through the CLI's
+    # metrics/coordinates/series verbs and the read-only MCP tools.
     #
-    # The update-status routes moved out of this ledger in the client-installation
-    # merge: /client-status is a permanent dashboard surface, while /client-version
-    # is now reached by the updater itself.
-    #
-    # research-os#162 added richer telemetry read shapes after the last agent
-    # snapshot. They belong in the SDK, but are separate from client installation
-    # reporting and need their own ergonomic API/CLI design.
-    ("GET", "/v1/runs/{}/metrics/export"): "telemetry export follow-up from research-os#162",
-    ("GET", "/v1/runs/{}/metrics/wide"): "wide telemetry read follow-up from research-os#162",
-    ("POST", "/v1/series/latest"): "cross-run scalar summary follow-up from research-os#162",
     # Surfaced 2026-07-21 by the first `make dump-openapi` in a while: these
     # routes shipped on the backend while the checked-in schema sat stale, so
     # this guard could not see them. They are not new debt, only newly VISIBLE

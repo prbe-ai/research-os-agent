@@ -12,7 +12,6 @@ escape codes, and so all of it stays out of `probe log`'s import path.
 
 from __future__ import annotations
 
-import os
 import shutil
 import sys
 

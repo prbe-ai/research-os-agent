@@ -302,6 +302,19 @@ class ResearchOSSource:
     def run_metrics(self, run_id: str, **filters: Any) -> list[dict]:
         return self.client.run_metrics(run_id, **filters)
 
+    def run_metrics_grouped(self, run_id: str, key: str, **kw: Any) -> dict:
+        """Server-side reduce/group (0059/0062). The client follows `next_step`
+        paging; the service bounds the total through `max_rows`."""
+        return self.client.get_metrics_grouped(run_id, key, **kw)
+
+    def run_coordinates(self, run_id: str) -> list[dict]:
+        return self.client.list_run_coordinates(run_id)
+
+    def export_points(self, run_id: str, **kw: Any):
+        """The lossless raw-point generator; the service slices one bounded page
+        off it and hands the keyset cursor back to the agent."""
+        return self.client.export_metric_points(run_id, **kw)
+
     def run_artifacts(self, run_id: str, **filters: Any) -> list[dict]:
         return self.client.list_run_artifacts(run_id, **filters)
 

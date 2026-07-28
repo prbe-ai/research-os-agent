@@ -19,7 +19,6 @@ import json
 import os
 import shlex
 import sys
-import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -28,8 +27,6 @@ from uuid import UUID
 
 import typer
 from pydantic import ValidationError
-
-from probe.cli import autoupdate as autoupdate_mod
 
 from .. import __version__, errors
 from ..client_headers import client_version_headers
@@ -50,7 +47,6 @@ from ..sdk.config import (
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
 from ..sdk.hashing import reference_fields
 from ..sdk.surface import Surface
-from . import updater
 
 
 # -- global connection state (set by the root callback) ---------------------
@@ -86,6 +82,14 @@ class EndStatus(str, Enum):
     failed = "failed"
     crashed = "crashed"
     canceled = "canceled"
+
+
+class Agg(str, Enum):
+    mean = "mean"
+    sum = "sum"
+    min = "min"
+    max = "max"
+    count = "count"
 
 
 class EventKind(str, Enum):
@@ -412,7 +416,6 @@ def wizard(
     from probe.cli import doctor as doctor_impl
     from probe.cli import setup as wizard
     from probe.cli import tui
-    from probe.cli.capture import OffMode
 
     # `--channel` is accepted and ignored. Plugins update on the USER's schedule,
     # so a machine whose plugin has not been refreshed still spawns
@@ -1557,13 +1560,126 @@ def log(
     step: int = typer.Option(None, "--step"),
     kind: str = typer.Option("model", "--kind"),
     dim: list[str] = typer.Option(None, "--dim", metavar="k=v"),
+    agg: Agg = typer.Option(
+        None, "--agg", help="declare the key's reduce fn for grouped reads (0062)"
+    ),
 ) -> None:
     """Append metric points. --dim adds series dimensions (fold #9)."""
     metrics = _kv_pairs(metric, cast_float=True)
     dims = _kv_pairs(dim) if dim else None
     with _client() as c:
-        _run_handle(c, run).log(metrics, step=step, kind=kind, dimensions=dims)
+        _run_handle(c, run).log(
+            metrics, step=step, kind=kind, dimensions=dims, agg=agg.value if agg else None
+        )
     print(f"logged {len(metrics)} metric(s) to {run}")
+
+
+# -- coordinate reads (below-run coordinates, research-os 0059-0062) ---------
+metrics_app = typer.Typer(no_args_is_help=True, help="coordinate-aware metric reads")
+app.add_typer(metrics_app, name="metrics")
+
+
+@metrics_app.command("grouped")
+def metrics_grouped(
+    run: str = typer.Argument(...),
+    key: str = typer.Option(..., "--key"),
+    kind: str = typer.Option(None, "--kind"),
+    agg: Agg = typer.Option(
+        None, "--agg", help="omit for the key's declared reduce fn (else mean)"
+    ),
+    by: list[str] = typer.Option(
+        None, "--by", help="repeatable; one cell per combination of these coordinate axes"
+    ),
+    where: str = typer.Option(
+        None, "--where", metavar="JSON", help='coord filter, e.g. \'{"split": "train"}\''
+    ),
+    step_bucket: int = typer.Option(None, "--step-bucket"),
+    step_from: int = typer.Option(None, "--step-from"),
+    step_to: int = typer.Option(None, "--step-to"),
+    max_rows: int = typer.Option(None, "--max-rows"),
+) -> None:
+    """Server-side reduce/group over one metric's stepped points (paging followed)."""
+    with _client() as c:
+        _print_json(
+            c.get_metrics_grouped(
+                run,
+                key,
+                kind=kind,
+                agg=agg.value if agg else None,
+                by=by or None,
+                where=_json_value(where),
+                step_bucket=step_bucket,
+                step_from=step_from,
+                step_to=step_to,
+                max_rows=max_rows,
+            )
+        )
+
+
+@metrics_app.command("wide")
+def metrics_wide(
+    run: str = typer.Argument(...),
+    key: list[str] = typer.Option(None, "--key", help="repeatable; narrow to these keys"),
+    kind: str = typer.Option(None, "--kind"),
+    step_from: int = typer.Option(None, "--step-from"),
+    step_to: int = typer.Option(None, "--step-to"),
+    max_rows: int = typer.Option(None, "--max-rows"),
+) -> None:
+    """Step x metric table for a run (the DataFrame pivot; paging followed)."""
+    with _client() as c:
+        _print_json(
+            c.get_metrics_wide(
+                run,
+                key=key or None,
+                kind=kind,
+                step_from=step_from,
+                step_to=step_to,
+                max_rows=max_rows,
+            )
+        )
+
+
+@metrics_app.command("export")
+def metrics_export(
+    run: str = typer.Argument(...),
+    key: str = typer.Option(None, "--key"),
+    kind: str = typer.Option(None, "--kind"),
+    step_from: int = typer.Option(None, "--step-from"),
+    step_to: int = typer.Option(None, "--step-to"),
+    limit: int = typer.Option(None, "--limit", help="page size of the keyset walk"),
+) -> None:
+    """Lossless raw-point export, one JSON point per line.
+
+    NDJSON rather than one array on purpose: the export is the unbounded read,
+    and a stream that prints as it pages can be piped without buffering the run.
+    """
+    with _client() as c:
+        for point in c.export_metric_points(
+            run, key=key, kind=kind, step_from=step_from, step_to=step_to, limit=limit
+        ):
+            print(json.dumps(point, default=str))
+
+
+@app.command()
+def coordinates(run: str = typer.Argument(...)) -> None:
+    """The run's coordinate catalog: every coordinate any fact landed on."""
+    with _client() as c:
+        _print_json(c.list_run_coordinates(run))
+
+
+series_app = typer.Typer(no_args_is_help=True, help="cross-run series reads")
+app.add_typer(series_app, name="series")
+
+
+@series_app.command("latest")
+def series_latest(
+    runs: list[str] = typer.Argument(..., metavar="RUN..."),
+    key: list[str] = typer.Option(None, "--key", help="repeatable; narrow to these keys"),
+    kind: str = typer.Option(None, "--kind"),
+) -> None:
+    """Cross-run scalar summary (last/min/max per series) from the catalog."""
+    with _client() as c:
+        _print_json(c.latest_scalars(runs, keys=key or None, kind=kind))
 
 
 # -- spans ------------------------------------------------------------------

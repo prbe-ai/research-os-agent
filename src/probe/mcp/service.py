@@ -1,4 +1,4 @@
-"""Framework-independent implementation of the six read-only MCP operations."""
+"""Framework-independent implementation of the read-only MCP operations."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import binascii
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from itertools import islice
 from typing import Any
 
 from ..sdk import errors
@@ -288,6 +289,15 @@ _PAGE_FETCH = 200
 # `limit` ceilings from schema/openapi.json.
 _SPAN_BACKEND_MAX = 10_000  # GET /v1/runs/{id}/spans
 _METRIC_BACKEND_MAX = 100_000  # GET /v1/runs/{id}/metrics
+
+# Row bounds for the coordinate reads. Grouped cells are aggregates (one per step
+# bucket x group), so a few hundred already draws a chart; export points are raw
+# and unbounded, so the tool serves ONE keyset page and hands the cursor back.
+# Both are clamps, not defaults an agent can override past.
+_GROUPED_ROWS_MAX = 2_000
+_GROUPED_ROWS_DEFAULT = 500
+_EXPORT_PAGE_MAX = 1_000
+_EXPORT_PAGE_DEFAULT = 200
 
 # `limit` at 200; the token budget trims below this anyway.
 
@@ -1244,6 +1254,95 @@ class ResearchReadService:
         report missing:["versioned_assets"] and had never been implemented."""
         return _ViewData(
             rows=self.source.experiment_versions(str(entity["id"])), rows_key="versions"
+        )
+
+    # -- coordinate reads (below-run coordinates, 0059-0062) -----------------
+
+    def metrics_grouped(
+        self,
+        run_id: str,
+        key: str,
+        *,
+        kind: str | None = None,
+        agg: str | None = None,
+        by: list[str] | None = None,
+        where: dict[str, Any] | None = None,
+        step_bucket: int | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+        max_rows: int | None = None,
+    ) -> dict:
+        """One bounded server-side reduction. ``max_rows`` clamps to the tool's
+        row bound — grouped cells are aggregates, so the clamp cuts pathology,
+        not typical reads — and a cut read reports partial with the resume step
+        in ``next_cursor``."""
+        bound = min(max_rows or _GROUPED_ROWS_DEFAULT, _GROUPED_ROWS_MAX)
+        payload = self.source.run_metrics_grouped(
+            run_id,
+            key,
+            kind=kind,
+            agg=agg,
+            by=by,
+            where=where,
+            step_bucket=step_bucket,
+            step_from=step_from,
+            step_to=step_to,
+            max_rows=bound,
+        )
+        missing = [MissingMarker.ROWS_BEYOND_PAGE_BOUND] if payload.get("truncated") else []
+        next_step = payload.get("next_step")
+        return self._envelope(
+            {"run_id": run_id, **payload},
+            state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
+            missing=missing,
+            next_cursor=str(next_step) if missing and next_step is not None else None,
+        )
+
+    def run_coordinates(self, run_id: str) -> dict:
+        """The coordinate catalog is bounded by the series cap's cardinality
+        arithmetic (no pagination on the route), so this is one complete read."""
+        return self._envelope(
+            {"run_id": run_id, "coordinates": self.source.run_coordinates(run_id)}
+        )
+
+    def metrics_export(
+        self,
+        run_id: str,
+        *,
+        key: str | None = None,
+        kind: str | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+        after_id: int | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """ONE keyset page of the lossless export. The SDK generator would follow
+        the walk to the last point; a tool response cannot, so the page is sliced
+        off it here and the cursor handed back as ``next_cursor`` (pass it back
+        as ``after_id``)."""
+        bound = max(1, min(limit or _EXPORT_PAGE_DEFAULT, _EXPORT_PAGE_MAX))
+        filters = {
+            name: value
+            for name, value in {
+                "key": key,
+                "kind": kind,
+                "step_from": step_from,
+                "step_to": step_to,
+                "after_id": after_id,
+            }.items()
+            if value is not None
+        }
+        walk = self.source.export_points(run_id, limit=bound, **filters)
+        # Lookahead past the page bound, so "more points exist" is a fact rather
+        # than an inference from a full page (the _bounded contract).
+        points = list(islice(walk, bound + 1))
+        more = len(points) > bound
+        points = points[:bound]
+        return self._envelope(
+            {"run_id": run_id, "filters": filters or None, "points": points},
+            state=EnvelopeState.PARTIAL if more else EnvelopeState.COMPLETE,
+            missing=[MissingMarker.ROWS_BEYOND_PAGE_BOUND] if more else [],
+            next_cursor=str(points[-1]["id"]) if more else None,
         )
 
     def research_compare(

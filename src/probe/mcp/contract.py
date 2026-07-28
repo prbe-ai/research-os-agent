@@ -159,6 +159,11 @@ class MissingMarker(StrEnum):
     # So handoff cannot show the rest: it says so, and view="artifacts" (which reads
     # the uncapped route) is where the full list lives.
     ARTIFACTS_BEYOND_BUNDLE_LIMIT = "artifacts_beyond_bundle_limit"
+    # get_metrics_grouped / export_metric_points — the read was cut at the tool's
+    # own row bound. Unlike the *_beyond_backend_limit markers the rest IS
+    # reachable: `next_cursor` carries the resume position (pass it back as
+    # `step_from` for grouped, `after_id` for export).
+    ROWS_BEYOND_PAGE_BOUND = "rows_beyond_page_bound"
 
 
 class ChannelError(StrEnum):

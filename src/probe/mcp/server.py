@@ -286,6 +286,98 @@ def create_server(
         with tool_scope("get_entity"):
             return svc().get_entity(ref, view, token_budget, cursor, filters, verbose=verbose)
 
+    @mcp.tool()
+    def get_metrics_grouped(
+        run_id: str,
+        key: str,
+        kind: str | None = None,
+        agg: str | None = None,
+        by: list[str] | None = None,
+        where: dict[str, Any] | None = None,
+        step_bucket: int | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+        max_rows: int | None = None,
+    ) -> dict:
+        """Reduce/group ONE metric of a run over its coordinate axes, server-side.
+
+        Reach for this when a run logged per-coordinate points (rank, split,
+        seed, ...) and you want the reduced curve — never average exported raw
+        points yourself. "loss per rank": key="loss", by=["rank"]. "train-split
+        mean reward every 100 steps": key="reward", where={"split": "train"},
+        step_bucket=100.
+
+        agg: mean|sum|min|max|count. OMIT IT by default — the producer may have
+            declared the key's reduce fn at the write, and the server then uses
+            that (else mean). Name one only when you deliberately want a
+            different reduction.
+        by: coordinate axes to split on; one cell per combination of values.
+        where: coordinate filter, matched type-faithfully ({"rank": 1} matches
+            the int 1, never the string "1").
+        A `by` axis or `where` key naming no coordinate of this key is an error,
+        not an empty result; a key logged under several kinds needs `kind`.
+
+        A partial response was cut at the row bound: pass `next_cursor` back as
+        `step_from` to continue.
+        """
+        with tool_scope("get_metrics_grouped"):
+            return svc().metrics_grouped(
+                run_id,
+                key,
+                kind=kind,
+                agg=agg,
+                by=by,
+                where=where,
+                step_bucket=step_bucket,
+                step_from=step_from,
+                step_to=step_to,
+                max_rows=max_rows,
+            )
+
+    @mcp.tool()
+    def get_run_coordinates(run_id: str) -> dict:
+        """List a run's coordinate catalog: every coordinate (rank/split/seed
+        combination) any fact landed on, with which fact tables have it.
+
+        Call this BEFORE get_metrics_grouped when you do not know the run's
+        axes — it is the enumeration that makes `by`/`where` guesses
+        unnecessary, and it costs no fact-table scan. Each row carries the
+        coordinate map plus has_metrics/has_spans/has_artifacts flags.
+        """
+        with tool_scope("get_run_coordinates"):
+            return svc().run_coordinates(run_id)
+
+    @mcp.tool()
+    def export_metric_points(
+        run_id: str,
+        key: str | None = None,
+        kind: str | None = None,
+        step_from: int | None = None,
+        step_to: int | None = None,
+        after_id: int | None = None,
+        limit: int | None = None,
+    ) -> dict:
+        """Read a run's RAW metric points losslessly — every point exactly once,
+        labels included, no downsampling. One bounded page per call.
+
+        This is the drill-down after an aggregate looked wrong: grouped/series
+        reads collapse per-sample points, this shows them. Narrow with `key`
+        (and `kind`, plus a step window) rather than exporting everything.
+
+        A partial response has more points: pass `next_cursor` back as
+        `after_id`. `limit` caps the page and is clamped server-side.
+        """
+        with tool_scope("export_metric_points"):
+            return svc().metrics_export(
+                run_id,
+                key=key,
+                kind=kind,
+                step_from=step_from,
+                step_to=step_to,
+                after_id=after_id,
+                limit=limit,
+            )
+
     # NOTE: there is no research_trace_file. It was removed, not overlooked: no
     # /v1/artifacts/trace route has ever existed, so it answered `matches: []` to
     # every query and an agent read that as "this file has no lineage" — a
