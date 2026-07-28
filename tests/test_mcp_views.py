@@ -40,8 +40,7 @@ def _populated(client, app, *, spans: int = 3):
     # `run()` resolves its parents now instead of get-or-creating them, so they
     # have to exist first — the same two commands a real user runs.
     project = client.create_project("folding")
-    client.create_experiment(
-        "dockq-path", "dockq-path", "relative paths fix scoring", project_id=project["id"]
+    client.create_experiment("dockq-path", "dockq-path", hypothesis="relative paths fix scoring", project_id=project["id"]
     )
     run = client.run(project="folding", experiment="dockq-path", name="eval-1")
     rid = run.id
@@ -206,7 +205,7 @@ def test_reproduce_without_an_env_ref_reports_it_missing(client, app):
     """CONDITIONAL missing — the honest kind. This run captured no environment, so
     it genuinely cannot be reproduced from here."""
     _proj = client.create_project("folding")
-    client.create_experiment("e", "e", "h", project_id=_proj["id"])
+    client.create_experiment("e", "e", hypothesis="h", project_id=_proj["id"])
     run = client.run(project="folding", experiment="e", name="no-env")
     result = _service(client).get_entity(f"run:{run.id}", view="reproduce")
     assert result["completeness"]["missing"] == ["execution_record"]
@@ -387,9 +386,22 @@ def test_a_run_whose_experiment_cannot_be_read_says_so(client, app, monkeypatch)
     assert result["completeness"]["state"] == "partial"
 
 
-def test_a_run_with_no_experiment_id_says_so_rather_than_reporting_no_hypothesis(client, app):
+def test_a_project_direct_run_reports_no_hypothesis_without_a_missing_marker(client, app):
+    """experiment_id null WITH a project_id is the W&B shape (research-os 0054):
+    a legitimately experiment-less run, not a run whose experiment vanished."""
     rid, _, _, _ = _populated(client, app)
     app.runs[rid]["experiment_id"] = None
+    result = _service(client).get_entity(f"run:{rid}", view="reproduce")
+    assert result["data"]["hypothesis"] is None
+    assert "experiment" not in result["completeness"]["missing"]
+
+
+def test_a_run_with_no_parent_ids_at_all_still_says_the_experiment_is_missing(client, app):
+    """A pre-0054 row carrying neither id cannot be told apart from a broken
+    read, so the marker stays — absence of BOTH ids is still a gap."""
+    rid, _, _, _ = _populated(client, app)
+    app.runs[rid]["experiment_id"] = None
+    app.runs[rid]["project_id"] = None
     result = _service(client).get_entity(f"run:{rid}", view="reproduce")
     assert result["data"]["hypothesis"] is None
     assert "experiment" in result["completeness"]["missing"]

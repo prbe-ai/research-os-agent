@@ -174,8 +174,13 @@ def create_server(
         Call this before starting work in an unfamiliar project, and before
         launching a run so you can see what is already running.
 
+        Experiments are OPTIONAL grouping (the W&B shape): a run belongs to a
+        project and may — but need not — sit inside an experiment.
+
         scope: omit for top-level projects; "project:<id>" for that project's
-            experiments; "experiment:<id>" for that experiment's runs.
+            experiments PLUS its project-direct runs (returned as `runs` —
+            null on cursor pages and on backends that predate direct runs);
+            "experiment:<id>" for that experiment's runs.
         depth: 1 lists one level; 2 also expands children. Higher is REJECTED,
             not clamped -- a silent clamp would let you believe you saw more
             than you did.
@@ -219,9 +224,10 @@ def create_server(
         top_k: your recall dial. If results look thin, RAISE IT before deciding
             the lab has not tried something -- `total_candidates` tells you how
             many the engine considered before scoping cut them down.
-        collapse: "experiment" (default) rolls hits that belong to an experiment
-            up into it; things with no experiment parent (transcripts, GitHub
-            docs) pass through untouched. Pass null for a flat list.
+        collapse: "experiment" (default) dedupes experiment hits to one per
+            experiment; run hits pass through untouched — experiments are
+            optional grouping, so a project-direct run has no experiment hit
+            to represent it. Pass null for a flat list.
         verbose: false strips envelope bookkeeping you do not reason over.
 
         Every result carries `why_matched` {mode, channel, score, terms} and a

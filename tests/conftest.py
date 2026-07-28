@@ -75,6 +75,7 @@ _RUN_BUNDLE = re.compile(r"^/v1/runs/([^/]+)/bundle$")
 _RUN_LINEAGE = re.compile(r"^/v1/runs/([^/]+)/lineage$")
 _RUN_ITEM = re.compile(r"^/v1/runs/([^/]+)$")
 _EXP_RUNS = re.compile(r"^/v1/experiments/([^/]+)/runs$")
+_PROJ_RUNS = re.compile(r"^/v1/projects/([^/]+)/runs$")
 _EXP_ITEM = re.compile(r"^/v1/experiments/([^/]+)$")
 _PROJ_ITEM = re.compile(r"^/v1/projects/([^/]+)$")
 _WS_ITEM = re.compile(r"^/v1/workspaces/([^/]+)$")
@@ -105,6 +106,11 @@ class FakeApp:
     # tenant-wide. The echo is the only thing distinguishing the two, so the
     # fake has to be able to be both.
     echoes_project_scope = True
+    # Set False to model a backend PREDATING project-direct runs (0054): the
+    # /v1/projects/{id}/runs route 404s FastAPI-style, GET /v1/runs ignores the
+    # project_id/direct params, and run rows carry NO project_id field — the
+    # exact shapes the SDK's old-backend guards key on.
+    supports_project_direct = True
 
     def _echo_scope(self, response: dict, body: dict | None) -> dict:
         if not self.echoes_project_scope or not body or not body.get("project_id"):
@@ -463,6 +469,11 @@ class FakeApp:
             slug = request.url.params.get("slug")
             if slug:
                 rows = [row for row in rows if row.get("slug") == slug]
+            # The engine filters archived rows out of the default listing
+            # (`archived_at IS NULL` unless include=archived); the fake did not,
+            # so the archived-vs-absent distinction was invisible for experiments.
+            if request.url.params.get("include") != "archived":
+                rows = [row for row in rows if row.get("archived_at") is None]
             return httpx.Response(200, json=rows)
 
         if path == "/v1/runs" and method == "GET":
@@ -470,6 +481,18 @@ class FakeApp:
             experiment_id = request.url.params.get("experiment_id")
             if experiment_id:
                 rows = [row for row in rows if row.get("experiment_id") == experiment_id]
+            if self.supports_project_direct:
+                # project_id (0054): ALL of a project's runs — direct AND attached.
+                project_id = request.url.params.get("project_id")
+                if project_id:
+                    rows = [row for row in rows if row.get("project_id") == project_id]
+                if request.url.params.get("direct") == "true":
+                    rows = [row for row in rows if not row.get("experiment_id")]
+            else:
+                # Pre-0054: unknown params are ignored, rows have no project_id.
+                rows = [
+                    {k: v for k, v in row.items() if k != "project_id"} for row in rows
+                ]
             return httpx.Response(200, json=rows)
 
         m = _EXP_ITEM.match(path)
@@ -487,7 +510,34 @@ class FakeApp:
         m = _EXP_RUNS.match(path)
         if m and method == "POST":
             rid = str(uuid.uuid4())
-            row = self._new_run(rid, m.group(1), body)
+            eid = m.group(1)
+            # Mirror the engine: an attached run inherits ITS EXPERIMENT'S
+            # project (0054).
+            row = self._new_run(
+                rid,
+                eid,
+                body,
+                project_id=(self.experiments.get(eid) or {}).get("project_id"),
+            )
+            return httpx.Response(201, json=row)
+
+        m = _PROJ_RUNS.match(path)
+        if m and method == "POST":
+            if not self.supports_project_direct:
+                # Pre-0054: the route does not exist — FastAPI's route-level 404,
+                # NOT the handler's "project not found".
+                return httpx.Response(404, json={"detail": "Not Found"})
+            # PROJECT-DIRECT run (0054): no experiment; group_id is rejected
+            # like the engine does (run groups are experiment-anchored), and an
+            # unknown project is the handler's oracle-safe 404.
+            if m.group(1) not in self.projects:
+                return httpx.Response(404, json={"detail": "project not found"})
+            if body.get("group_id") is not None:
+                return httpx.Response(
+                    422, json={"detail": "group_id requires an experiment-attached run"}
+                )
+            rid = str(uuid.uuid4())
+            row = self._new_run(rid, None, body, project_id=m.group(1))
             return httpx.Response(201, json=row)
 
         m = _RUN_METRICS.match(path)
@@ -1025,11 +1075,21 @@ class FakeApp:
 
         return httpx.Response(404, json={"detail": f"no fake route for {method} {path}"})
 
-    def _new_run(self, rid: str, experiment_id: str, body: dict) -> dict:
-        # RunDetailOut shape (fold fields surfaced on /v1 reads).
+    def _new_run(
+        self,
+        rid: str,
+        experiment_id: str | None,
+        body: dict,
+        *,
+        project_id: str | None = None,
+    ) -> dict:
+        # RunDetailOut shape (fold fields surfaced on /v1 reads). project_id is
+        # always set on the real backend (0054); the fake defaults one so old
+        # seeds stay valid.
         row = {
             "id": rid,
             "experiment_id": experiment_id,
+            "project_id": project_id or str(uuid.uuid4()),
             "name": body.get("name", "run"),
             "status": "running",
             "source": body.get("source", "api"),
@@ -1096,7 +1156,7 @@ def open_run(client: Client, *, experiment: str, name: str | None = None, **run_
     from probe import errors as _errors
 
     try:
-        client.create_experiment(experiment, experiment, "h")
+        client.create_experiment(experiment, experiment, hypothesis="h")
     except _errors.ConflictError:
         pass
     return client.run(experiment=experiment, name=name, **run_kw)

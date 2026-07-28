@@ -147,7 +147,7 @@ def test_run_start_uses_the_active_project(wired, client, capsys):
     renames), so this must store an id exactly like `project use` does.
     """
     proj = client.create_project("ambient", workspace_id=_WS_MINE)
-    client.create_experiment("in-ambient", "In ambient", "h", project_id=proj["id"])
+    client.create_experiment("in-ambient", "In ambient", hypothesis="h", project_id=proj["id"])
     save_context({"workspace": {"id": _WS_MINE, "project": proj["id"]}})
 
     assert cli.main(["run", "start", "--experiment", "in-ambient", "--name", "r"]) == 0
@@ -164,7 +164,7 @@ def test_run_start_refuses_an_experiment_from_another_project(wired, client, cap
     rather than filing the run somewhere you did not mean."""
     ambient = client.create_project("ambient", workspace_id=_WS_MINE)
     other = client.create_project("other", workspace_id=_WS_MINE)
-    client.create_experiment("elsewhere", "Elsewhere", "h", project_id=other["id"])
+    client.create_experiment("elsewhere", "Elsewhere", hypothesis="h", project_id=other["id"])
     save_context({"workspace": {"id": _WS_MINE, "project": ambient["id"]}})
 
     assert cli.main(["run", "start", "--experiment", "elsewhere", "--name", "r"]) != 0
@@ -174,7 +174,7 @@ def test_an_explicit_project_still_beats_the_context(wired, client, capsys):
     """Ambient context is a convenience, never a requirement."""
     ambient = client.create_project("ambient", workspace_id=_WS_MINE)
     explicit = client.create_project("explicit", workspace_id=_WS_MINE)
-    client.create_experiment("in-explicit", "In explicit", "h", project_id=explicit["id"])
+    client.create_experiment("in-explicit", "In explicit", hypothesis="h", project_id=explicit["id"])
     save_context({"workspace": {"id": _WS_MINE, "project": ambient["id"]}})
 
     assert cli.main([

@@ -34,7 +34,7 @@ def _search_response(
 
 def test_context_and_search_use_current_api_fallback(client, app):
     project = client.create_project("folding")
-    client.create_experiment("dockq-path", "dockq-path", "h", project_id=project["id"])
+    client.create_experiment("dockq-path", "dockq-path", hypothesis="h", project_id=project["id"])
     run = client.run(
         project="folding",
         experiment="dockq-path",
@@ -137,7 +137,7 @@ def test_search_falls_back_to_keyword_on_pre_search_backend(client, app):
     # app.search_response stays None -> the fake 404s POST /v1/search like a
     # backend that predates the endpoint; the old keyword behavior must survive.
     _p = client.create_project("folding")
-    client.create_experiment("dockq-path", "dockq-path", "h", project_id=_p["id"])
+    client.create_experiment("dockq-path", "dockq-path", hypothesis="h", project_id=_p["id"])
     client.run(
         project="folding",
         experiment="dockq-path",
@@ -359,9 +359,9 @@ def test_keyword_fallback_scopes_by_project(client, app):
     # pre-search server (no search_response): the fallback keeps project scoping
     p1 = client.create_project("proj-one")
     p2 = client.create_project("proj-two")
-    client.create_experiment("exp-one", "exp-one", "h", project_id=p1["id"])
+    client.create_experiment("exp-one", "exp-one", hypothesis="h", project_id=p1["id"])
     client.run(project="proj-one", experiment="exp-one", name="r1")
-    client.create_experiment("exp-two", "exp-two", "h", project_id=p2["id"])
+    client.create_experiment("exp-two", "exp-two", hypothesis="h", project_id=p2["id"])
     client.run(project="proj-two", experiment="exp-two", name="r2")
     service = ResearchReadService(ResearchOSSource(client))
     out = service.search_knowledge("exp", project_id=p1["id"])
@@ -395,7 +395,7 @@ def test_why_matched_shape_is_uniform_across_channels(client, app):
     app2 = FakeApp()
     client2 = make_client(app2)
     _proj = client2.create_project("p")
-    client2.create_experiment("kw-exp", "kw-exp", "h", project_id=_proj["id"])
+    client2.create_experiment("kw-exp", "kw-exp", hypothesis="h", project_id=_proj["id"])
     client2.run(project="p", experiment="kw-exp", name="r")
     service2 = ResearchReadService(ResearchOSSource(client2))
     rows = service2.search_knowledge("kw-exp")["data"]["results"]
