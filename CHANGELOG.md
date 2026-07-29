@@ -44,6 +44,14 @@
   `attempted()`, and `record_install_failure()` for callers that install the
   hooks fail-open.
 
+### Fixed
+
+- The durable Harbor exporter now maps Miles `sample_id` and `group_id`
+  correlation onto Probe `sample` and `group` point labels. Multiple trials at
+  the same training step therefore retain distinct reward points and join
+  directly to their `harbor_trial` manifests without creating per-sample metric
+  series.
+
 ## 0.22.0 (unreleased)
 
 ### Breaking
