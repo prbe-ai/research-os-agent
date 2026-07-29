@@ -114,7 +114,7 @@ def _service_from_token() -> ResearchReadService:
 # call, with examples, does. This string is also the one half of the contract
 # that CANNOT go stale -- it ships with the image, unlike the plugin skills,
 # whose installed copies have been observed 30 lines behind the repo.
-MCP_INSTRUCTIONS = """Probe Research is this team's lab notebook: every research project, experiment, run, metric, and artifact. Use the Probe Research MCP for read access to the research data. Use the Probe Research CLI for writing and modifying the research data.
+MCP_INSTRUCTIONS = """Probe Research is this team's lab notebook: every research project, experiment, run, metric, and artifact. Use the Probe Research MCP for read access to the research data. Writing has TWO surfaces, and picking the wrong one loses data: the Probe Research CLI (`probe`) from a shell, and the Python SDK (`import probe`) in-process from a training or eval script. Step-level metric curves come from the SDK's in-process `run.log(..., step=...)` -- from a shell you can `probe log` around a script, but a shell is outside the training process and cannot see the per-step values inside its loop. When you are writing or editing the script yourself, use the SDK. Both ship in the PyPI distribution `probe-research` (`uv add probe-research` / `pip install probe-research`); the script's own environment needs that dependency for `import probe` to work, and installing anything else (`probe`, `probe-agent`) fetches an unrelated stranger's package.
 
 This is not a one-time startup check. Re-evaluate at every new research task, every shift in direction, and after any context compaction -- a lookup from earlier in the session only covers the question you were asking then.
 
