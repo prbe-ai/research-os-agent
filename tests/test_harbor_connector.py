@@ -11,11 +11,18 @@ from probe.cli import main as _cli_main  # noqa: F401 - ensures CLI imports clea
 from probe.connectors.harbor import (
     CAPTURE_LEDGER_NAME,
     MANIFEST_KIND,
+    ROLES,
     capture_trial,
     parse_trial,
     reconcile_staged_trial,
     role_for,
     stage_trial,
+)
+from probe.connectors.sandbox_state import (
+    BEGIN_MANIFEST,
+    BUNDLE_DIRNAME,
+    END_DELTA,
+    END_MANIFEST,
 )
 from tests.conftest import make_client, open_run
 
@@ -45,6 +52,16 @@ def _write_trial(root, *, with_result: bool = True):
     (root / "output").mkdir()
     (root / "output" / "report.pdf").write_bytes(b"%PDF-fake")
     (root / "fork-specific.bin").write_bytes(b"\x00private fork artifact")
+    return root
+
+
+def _write_sandbox_state_bundle(root):
+    bundle = root / "artifacts" / BUNDLE_DIRNAME
+    bundle.mkdir(parents=True)
+    (bundle / BEGIN_MANIFEST).write_bytes(b"begin")
+    (bundle / END_MANIFEST).write_bytes(b"end")
+    (bundle / END_DELTA).write_bytes(b"delta")
+    (bundle / "meta.json").write_text('{"schema":"probe.sandbox-state/1"}')
     return root
 
 
@@ -100,6 +117,22 @@ def test_role_mapping_is_fork_tolerant():
     assert role_for("output/report.pdf") == "output"
     assert role_for("fork-specific.bin") == "other"
     assert role_for("nested/config.json") == "other"  # only top-level contract files
+
+
+@pytest.mark.parametrize(
+    ("filename", "role"),
+    [
+        (BEGIN_MANIFEST, "sandbox_state_begin_manifest"),
+        (END_MANIFEST, "sandbox_state_end_manifest"),
+        (END_DELTA, "sandbox_state_delta"),
+        ("meta.json", "sandbox_state_metadata"),
+    ],
+)
+def test_role_mapping_recognizes_nested_sandbox_state_bundle(filename, role):
+    assert role in ROLES
+    assert role_for(f"artifacts/{BUNDLE_DIRNAME}/{filename}") == role
+    assert role_for(f"private/nested/{BUNDLE_DIRNAME}/{filename}") == role
+    assert role_for(f"artifacts/{BUNDLE_DIRNAME}/producer-extra.bin") == "other"
 
 
 # -- durable host-output staging -------------------------------------------------
@@ -225,6 +258,42 @@ def test_capture_trial_full(client, app, tmp_path):
     assert meta["environment"] == {"type": "skypilot-fork"}
     assert meta["source"] == {"mode": "local", "rollout_id": 600}
     assert all(entry["artifact_id"] for entry in meta["files"])
+
+
+def test_capture_trial_propagates_sandbox_state_roles(client, app, tmp_path):
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    trial_dir = _write_sandbox_state_bundle(_write_trial(tmp_path / "t"))
+
+    result = capture_trial(run, trial_dir, step_index=600, expand=False, strict=True)
+
+    expected = {
+        f"artifacts/{BUNDLE_DIRNAME}/{BEGIN_MANIFEST}": "sandbox_state_begin_manifest",
+        f"artifacts/{BUNDLE_DIRNAME}/{END_MANIFEST}": "sandbox_state_end_manifest",
+        f"artifacts/{BUNDLE_DIRNAME}/{END_DELTA}": "sandbox_state_delta",
+        f"artifacts/{BUNDLE_DIRNAME}/meta.json": "sandbox_state_metadata",
+    }
+    result_roles = {
+        entry["path"]: entry["role"] for entry in result["files"] if entry["path"] in expected
+    }
+    assert result_roles == expected
+
+    uploaded_files = {
+        artifact["meta"]["path"]: artifact["meta"]["role"]
+        for artifact in app.artifacts[run.id]
+        if artifact["kind"] == "file" and artifact["meta"]["path"] in expected
+    }
+    assert uploaded_files == expected
+
+    manifest = next(
+        artifact for artifact in app.artifacts[run.id] if artifact["kind"] == MANIFEST_KIND
+    )
+    manifest_roles = {
+        entry["path"]: entry["role"]
+        for entry in manifest["meta"]["files"]
+        if entry["path"] in expected
+    }
+    assert manifest_roles == expected
 
 
 def test_capture_trial_stamps_the_below_run_coordinate(client, app, tmp_path):

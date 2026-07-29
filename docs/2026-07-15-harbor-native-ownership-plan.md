@@ -191,15 +191,29 @@ rollout_id>`, `span_id=<rollout span>`, `meta`:
     { "role": "agent_log",  "path": "logs/agent/…",     "artifact_id": "…" },
     { "role": "verifier",   "path": "logs/verifier/…",  "artifact_id": "…" },
     { "role": "output",     "path": "output/report.pdf","artifact_id": "…" },
+    { "role": "sandbox_state_begin_manifest",
+      "path": "artifacts/probe-sandbox-state/begin-manifest.jsonl.gz",
+      "artifact_id": "…" },
+    { "role": "sandbox_state_end_manifest",
+      "path": "artifacts/probe-sandbox-state/end-manifest.jsonl.gz",
+      "artifact_id": "…" },
+    { "role": "sandbox_state_delta",
+      "path": "artifacts/probe-sandbox-state/end-delta.tar.gz",
+      "artifact_id": "…" },
+    { "role": "sandbox_state_metadata",
+      "path": "artifacts/probe-sandbox-state/meta.json",
+      "artifact_id": "…" },
     { "role": "other",      "path": "whatever-else",    "artifact_id": "…" }
   ]
 }
 ```
 
 Known roles: `config | lock | result | trajectory | reward | agent_log |
-verifier | output | other`. Child files upload as ordinary `kind="file"`
-artifacts (CAS-deduped, same `step_index`/`span_id`); the manifest references
-them by `artifact_id`. Nothing here depends on which provider ran the sandbox.
+verifier | output | sandbox_state_begin_manifest |
+sandbox_state_end_manifest | sandbox_state_delta | sandbox_state_metadata |
+other`. Child files upload as ordinary `kind="file"` artifacts (CAS-deduped,
+same `step_index`/`span_id`); the manifest references them by `artifact_id`.
+Nothing here depends on which provider ran the sandbox.
 
 ### Open questions
 
