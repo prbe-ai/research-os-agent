@@ -42,6 +42,12 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 from . import atif
+from .sandbox_state import (
+    BEGIN_MANIFEST,
+    BUNDLE_DIRNAME,
+    END_DELTA,
+    END_MANIFEST,
+)
 from ..sdk import unit_context
 from ..sdk.capture import (
     CaptureLedger,
@@ -78,6 +84,10 @@ ROLES = (
     "agent_log",
     "verifier",
     "output",
+    "sandbox_state_begin_manifest",
+    "sandbox_state_end_manifest",
+    "sandbox_state_delta",
+    "sandbox_state_metadata",
     "other",
 )
 
@@ -89,6 +99,13 @@ _TOP_LEVEL_ROLES = {
     "trajectory.json": "trajectory",
 }
 
+_SANDBOX_STATE_ROLES = {
+    BEGIN_MANIFEST: "sandbox_state_begin_manifest",
+    END_MANIFEST: "sandbox_state_end_manifest",
+    END_DELTA: "sandbox_state_delta",
+    "meta.json": "sandbox_state_metadata",
+}
+
 
 def role_for(relative_path: str | PurePosixPath) -> str:
     """Map a trial-relative path to a manifest role. Fork-tolerant: unknown -> other."""
@@ -96,6 +113,10 @@ def role_for(relative_path: str | PurePosixPath) -> str:
     parts = rel.parts
     if len(parts) == 1 and parts[0] in _TOP_LEVEL_ROLES:
         return _TOP_LEVEL_ROLES[parts[0]]
+    if len(parts) >= 2 and parts[-2] == BUNDLE_DIRNAME:
+        sandbox_role = _SANDBOX_STATE_ROLES.get(parts[-1])
+        if sandbox_role is not None:
+            return sandbox_role
     head = parts[0]
     if head == "logs" and len(parts) > 1:
         if parts[1] == "agent":
