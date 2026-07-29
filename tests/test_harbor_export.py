@@ -244,6 +244,15 @@ def test_consume_export_request_verifies_and_publishes_raw_trial(client, app, tm
     assert source["mode"] == "bridge-hook"
     assert source["context"]["miles_run_id"] == "miles-job-7"
     assert source["context"]["osmosis_mix_id"] == "customer-mix-a"
+    assert manifests[0]["labels"] == {
+        "sample": "sample-0",
+        "group": "mix-swe-70",
+    }
+    (reward,) = app.metric_points_posted[run.id]
+    assert reward["labels"] == {
+        "sample": "sample-0",
+        "group": "mix-swe-70",
+    }
     file_entries = {item["path"]: item for item in manifests[0]["meta"]["files"]}
     assert file_entries[".native-state"]["uploaded"] is True
     evidence = client.list_run_artifacts(run.id, kind="harbor_capture_manifest")
@@ -253,11 +262,55 @@ def test_consume_export_request_verifies_and_publishes_raw_trial(client, app, tm
     )
 
     request_count = len(app.requests)
+    metric_count = app.metrics_inserted
     again = consume_export_request(client, request)
     assert again["status"] == "completed"
     assert (
         len(app.requests) == request_count
     )  # completed descriptors are idempotent no-ops
+    assert app.metrics_inserted == metric_count
+
+
+def test_same_step_exports_keep_distinct_sample_reward_points(client, app, tmp_path):
+    run = open_run(client, experiment="e", name="r")
+    first = _write_export(tmp_path / "capture" / "sample-string", run.id)
+    second = _write_export(tmp_path / "capture" / "sample-numeric", run.id)
+    descriptor = json.loads(second.read_text())
+    descriptor["correlation"]["sample_id"] = 7
+    descriptor["correlation"]["group_id"] = 3
+    second.write_text(json.dumps(descriptor))
+
+    consume_export_request(client, first)
+    consume_export_request(client, second)
+
+    rewards = app.metric_points_posted[run.id]
+    assert len(rewards) == 2
+    assert {reward["step_index"] for reward in rewards} == {600}
+    assert [reward["labels"] for reward in rewards] == [
+        {"sample": "sample-0", "group": "mix-swe-70"},
+        {"sample": 7, "group": 3},
+    ]
+    manifests = client.list_run_artifacts(run.id, kind="harbor_trial")
+    assert [manifest["labels"] for manifest in manifests] == [
+        {"sample": "sample-0", "group": "mix-swe-70"},
+        {"sample": 7, "group": 3},
+    ]
+
+
+def test_export_without_sample_correlation_remains_unlabeled(client, app, tmp_path):
+    run = open_run(client, experiment="e", name="r")
+    request = _write_export(tmp_path / "capture" / "unlabeled", run.id)
+    descriptor = json.loads(request.read_text())
+    descriptor["correlation"].pop("sample_id")
+    descriptor["correlation"].pop("group_id")
+    request.write_text(json.dumps(descriptor))
+
+    consume_export_request(client, request)
+
+    (reward,) = app.metric_points_posted[run.id]
+    assert reward.get("labels") is None
+    (manifest,) = client.list_run_artifacts(run.id, kind="harbor_trial")
+    assert manifest.get("labels") is None
 
 
 def test_bad_declared_hash_fails_before_upload_and_preserves_bundle(

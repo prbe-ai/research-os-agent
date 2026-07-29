@@ -156,6 +156,17 @@ def _capture_declarations(
     return manifest_path, manifest, declarations
 
 
+def _correlation_labels(correlation: dict[str, Any]) -> dict[str, Any] | None:
+    """Promote native per-sample identities into Probe point labels."""
+
+    labels = {
+        label: correlation[field]
+        for field, label in (("sample_id", "sample"), ("group_id", "group"))
+        if correlation.get(field) is not None
+    }
+    return labels or None
+
+
 def consume_export_request(
     client: "Client",
     request_path: str | Path,
@@ -259,6 +270,7 @@ def consume_export_request(
                     reward_key=arguments.get("reward_key") or "reward",
                     expand=bool(arguments.get("expand", False)),
                     max_trajectory_spans=arguments.get("max_trajectory_spans"),
+                    labels=_correlation_labels(correlation),
                     strict=True,
                 )
                 capture = result.get("capture") or {}
