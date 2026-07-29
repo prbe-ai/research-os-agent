@@ -61,12 +61,10 @@ near-miss of an existing slug rather than warning.)
    run.finish()                     # or `with run:` — closes even on an exception
    ```
 
-   `import probe` needs the `probe-research` distribution in the SCRIPT'S OWN
-   environment — `uv add probe-research` (or `pip install probe-research`). The CLI
-   being on PATH does not provide it: the wizard installs the tool into an isolated
-   environment your training venv cannot import from. And the import name is not the
-   dist name — installing `probe` or `probe-agent` from PyPI fetches an unrelated
-   stranger's package.
+   `import probe` needs `probe-research` in the script's own environment
+   (`uv add probe-research` / `pip install probe-research`) — the wizard's CLI
+   install is isolated and not importable from your venv, and `probe`/`probe-agent`
+   on PyPI are unrelated packages.
 
    The handle lives in the training process, so it heartbeats on its own (60s,
    `PROBE_HEARTBEAT_SECONDS` tunes it), it can see every step, and `finish()` flushes
