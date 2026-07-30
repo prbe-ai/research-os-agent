@@ -429,6 +429,80 @@ class TestRealHarborLibraryMode:
         for name in (BEGIN_MANIFEST, END_MANIFEST, END_DELTA, "meta.json"):
             assert f"artifacts/{BUNDLE_DIRNAME}/{name}" in parsed_rel
 
+    def test_run_trial_with_begin_bytes_recovers_before_content(
+        self, tmp_path, monkeypatch
+    ):
+        """The begin-bytes slice against REAL harbor: the archive rides the
+        bundle, meta carries the sharing block, and the pre-agent bytes of the
+        sandbox are recoverable and hash-verified against the begin manifest —
+        while the trial itself (verifier, reward) is untouched."""
+        pytest.importorskip("harbor", reason="harbor not installed")
+        import hashlib as _hashlib
+        import os
+        import pwd
+
+        real_docker_config = Path(pwd.getpwuid(os.getuid()).pw_dir) / ".docker"
+        if real_docker_config.is_dir():
+            monkeypatch.setenv("DOCKER_CONFIG", str(real_docker_config))
+        from probe.connectors.harbor_runner import SandboxStateOptions, run_trial
+        from probe.connectors.sandbox_state import BEGIN_BYTES as _BB
+
+        outcome = asyncio.run(
+            run_trial(
+                _write_echo_task(tmp_path / "tasks"),
+                trials_dir=tmp_path / "trials",
+                agent="oracle",
+                options=SandboxStateOptions(
+                    begin_bytes=True,
+                    begin_bytes_ref="task-echo-reward-ci",
+                    hash_files=True,
+                ),
+            )
+        )
+        assert outcome.result.exception_info is None, outcome.result.exception_info
+        assert outcome.result.verifier_result.rewards["reward"] == pytest.approx(0.85)
+
+        rec = outcome.sandbox_state
+        assert rec.status == {"begin": "ok", "end": "ok"}
+        assert rec.integrity == {"begin_verified": True, "end_verified": True}
+        bundle = outcome.trial_dir / "artifacts" / BUNDLE_DIRNAME
+        meta = json.loads((bundle / "meta.json").read_text())
+        assert meta["begin_bytes"]["captured"] is True
+        assert meta["begin_bytes"]["ref"] == "task-echo-reward-ci"
+        assert meta["scan"]["hash_mode"] == "sha256"
+
+        # The agent's own footprint is END-only: answer.txt must be in the
+        # delta and absent from the begin archive.
+        with gzip.open(bundle / BEGIN_MANIFEST) as handle:
+            manifest = {record["p"]: record for record in map(json.loads, handle)}
+        with tarfile.open(bundle / _BB) as tar:
+            begin_names = set(tar.getnames())
+            assert not any(n.rstrip("/") == "app/answer.txt" for n in begin_names)
+            assert len(begin_names) > 100  # a real image, not a toy tree
+
+            # Per-file validity join on a sample of REGULAR files: the begin
+            # manifest's sha256 must equal the archived member's bytes — the
+            # exact check the server will run before serving shared
+            # before-content out of another trial's archive.
+            sampled = 0
+            for path, record in manifest.items():
+                if sampled >= 25 or record.get("t") != "f" or not record.get("h"):
+                    if sampled >= 25:
+                        break
+                    continue
+                member = tar.extractfile(path.lstrip("/"))
+                if member is None:
+                    continue
+                assert (
+                    _hashlib.sha256(member.read()).hexdigest() == record["h"]
+                ), path
+                sampled += 1
+            assert sampled == 25
+        with tarfile.open(bundle / END_DELTA) as tar:
+            assert any(
+                m.lstrip("/").rstrip("/") == "app/answer.txt" for m in tar.getnames()
+            )
+
     def test_atif_agent_trajectory_expands_end_to_end(
         self, tmp_path, monkeypatch, client, app
     ):
