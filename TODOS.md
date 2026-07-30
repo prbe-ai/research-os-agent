@@ -134,6 +134,55 @@ that stopped batching would only be caught by one count assertion.
 **Takes:** 422 on out-of-range values, the way the fake already does for
 `ScopedUploadRequest` extras.
 
+## P2 — backend cold-start latency (research-os, cross-repo)
+
+### First post-deploy search takes ~55s
+
+**What:** Profile why the first `search_knowledge` after a research-os backend
+deploy took ~55s (2026-07-30 incident, 05:54:59–05:55:54 UTC — the call that
+wedged an MCP pod into a liveness kill). Likely retrieval-service cold caches
+or lazy model/embedding load on the first request.
+
+**Why:** The MCP now survives slow backend calls (thread offload + probe
+tuning, PR from the 2026-07-30 rollout-hardening plan), but users still wait
+nearly a minute for the first post-deploy search. The slowness itself lives in
+research-os, not this repo — this entry is the cross-repo pointer so the
+context survives.
+
+**Context:** Incident evidence in the plan file
+(`~/.gstack/projects/prbe-ai-research-os-agent/2026-07-30-mcp-rollout-hardening-plan.md`)
+and the killed pod's log (healthz silent from the moment the CallToolRequest
+started). Start at the retrieval service's first-request path.
+
+**Effort:** M (profiling + a warm-up or eager-load fix in research-os)
+**Priority:** P2
+**Depends on:** nothing — independent of the MCP hardening PR.
+
+---
+
+## P3 — MCP CPU limit evaluation (trigger-conditioned)
+
+### Measure CFS throttling under threaded concurrency, then size the limit
+
+**What:** After the thread-offload MCP ships and has ~a week of real traffic,
+read throttling counters (`kubectl exec … cat /sys/fs/cgroup/cpu.stat` —
+`nr_throttled`/`throttled_usec`; no metrics-server on this cluster) on the
+`research-os-mcp` pods, check the `research` namespace ResourceQuota CPU
+headroom, and decide whether the 500m limit should be raised or dropped.
+
+**Why:** Up to 40 worker threads now share half a core; large tool-result
+serialization could throttle and stretch latencies invisibly. The
+2026-07-30 eng review deliberately deferred this rather than guess
+(plan NOT-in-scope) — this entry carries the trigger so the revisit happens.
+
+**Trigger:** any MCP latency complaint, or nonzero `throttled_usec` growth.
+
+**Effort:** S (measurement) + a one-line manifest change if warranted
+**Priority:** P3
+**Depends on:** the rollout-hardening PR shipping first.
+
+---
+
 ## Completed
 
 ### `defaults.auto_hypothesis` is dead

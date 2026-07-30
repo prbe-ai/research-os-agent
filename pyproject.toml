@@ -26,6 +26,9 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.27",
+    # Direct import in mcp/server.py (_tool thread offload + CapacityLimiter
+    # load shedding); mcp already requires it, declared for honesty.
+    "anyio>=4",
     "mcp>=1.23,<2",
     # Upper-bounded: cli/main.py resolves ClickException from typer's vendored
     # click via BadParameter.__mro__ (see the note there). A major typer that
