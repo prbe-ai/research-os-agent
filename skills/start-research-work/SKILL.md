@@ -61,6 +61,11 @@ near-miss of an existing slug rather than warning.)
    run.finish()                     # or `with run:` — closes even on an exception
    ```
 
+   `import probe` needs `probe-research` in the script's own environment
+   (`uv add probe-research` / `pip install probe-research`) — the wizard's CLI
+   install is isolated and not importable from your venv, and `probe`/`probe-agent`
+   on PyPI are unrelated packages.
+
    The handle lives in the training process, so it heartbeats on its own (60s,
    `PROBE_HEARTBEAT_SECONDS` tunes it), it can see every step, and `finish()` flushes
    whatever spooled. Writes are fail-open: a network blip spools to disk rather than

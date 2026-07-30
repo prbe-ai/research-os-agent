@@ -162,15 +162,18 @@ changes.**
 
 ```text
 probe-sandbox-state/
-├── begin-manifest.jsonl.gz   # scanned at AGENT_START
-├── end-manifest.jsonl.gz     # scanned at AGENT_END
-├── end-delta.tar.gz          # bytes of files added or modified during the agent phase
-└── meta.json                 # authored host-side; written last; its presence marks the bundle complete
+├── begin-manifest.jsonl.gz   # role=sandbox_state_begin_manifest; scanned at AGENT_START
+├── end-manifest.jsonl.gz     # role=sandbox_state_end_manifest; scanned at AGENT_END
+├── end-delta.tar.gz          # role=sandbox_state_delta; added/modified file bytes
+└── meta.json                 # role=sandbox_state_metadata; written last; marks completeness
 ```
 
 Renderer recognition is by path (`**/probe-sandbox-state/meta.json` with
 `schema == "probe.sandbox-state/1"`), mirroring how the dashboard
-recognizes `probe.capture/1` — no exporter or backend schema changes.
+recognizes `probe.capture/1`. The Harbor exporter assigns the stable roles
+shown above to both each file artifact's metadata and the corresponding
+`harbor_trial.meta.files` entry. Unknown bundle files remain `role=other`;
+no exporter or backend schema changes are required.
 
 ### Manifest format
 

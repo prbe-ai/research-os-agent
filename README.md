@@ -291,7 +291,10 @@ separate from remote-upload status, so an exporter outage leaves a precise,
 retryable list of unconfirmed files instead of losing their paths. Stable
 external keys and span IDs make retries update the same rollout; arbitrary
 Miles/Osmosis correlation fields are preserved under the `harbor_trial`
-manifest's `source.context`.
+manifest's `source.context`. The exporter additionally promotes `sample_id`
+and `group_id` to the Probe point labels `sample` and `group`, respectively,
+on the reward and `harbor_trial` manifest. Those labels preserve distinct
+same-step samples without creating a separate metric series.
 
 **Trajectory sources — Harbor-first, by decision.** Today trajectories enter
 Probe through Harbor's on-disk contract: ATIF-supporting agents write

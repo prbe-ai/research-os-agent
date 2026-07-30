@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.23.0 (unreleased)
+## 0.24.0 (unreleased)
 
 ### Breaking
 
@@ -20,6 +20,24 @@ A surviving legacy spool is imported automatically, in order, on first use.
 `Client(spool=...)` is gone; pass `journal=` or `spool_dir=`.
 
 ### Added
+
+- **Begin-state bytes** (`probe.sandbox-state/1`): the snapshot tool's `begin`
+  subcommand gains `--bytes`, teeing the manifest walk into a streamed
+  `begin-bytes.tar.gz` — the byte-level "before" state of the sandbox that the
+  bundle previously only described as metadata. Modified files get true
+  before/after diffs; deleted files' contents become recoverable. Guarded by
+  `--max-begin-bytes` (default 32 GiB, further capped at 50% of free space)
+  with the same drop accounting and PSBX1 trailer integrity as the end delta.
+- `SandboxStateOptions` grows `root` (plumbs the binary's existing scan-root
+  flag), `begin_bytes`, `begin_bytes_ref`, and `max_begin_bytes`. The sharing
+  model is per-task: the caller's ledger elects one trial per task
+  (`task_checksum`) to capture; every trial of the task stamps
+  `meta.json.begin_bytes = {captured, ref, budget_bytes, truncated,
+  dropped_count}` so renderers can resolve the shared archive and verify
+  per-file validity against the begin manifest's sha256s (design:
+  `docs/2026-07-29-begin-state-bytes.md`).
+- `begin_timeout_sec` now defaults to `None`, resolving to 120 s (600 s when
+  `begin_bytes` is on); explicit values are honored unchanged.
 
 **`--async` / `PROBE_ASYNC=1`: non-blocking writes.** `probe log`, `span add`,
 `note add`, `artifact add`, and `run end` queue to the local outbox and return
@@ -44,7 +62,65 @@ is auth-blocked, and `probe doctor` gained an Outbox section. `probe run end`
 is a run-scoped barrier: it delivers that run's queued items first and exits
 non-zero (without closing the run) while any cannot be delivered.
 
-## 0.22.0
+### Changed
+
+- The begin phase now downloads and sha256-verifies every file the trailer
+  names (previously just the manifest), so the begin archive inherits the
+  manifests' tamper-evidence.
+
+## 0.23.0 (unreleased)
+
+### Added
+
+- **`probe.connectors.harbor_capture`** — the SDK-owned capture facade for
+  Harbor bridges. Any bridge/server that owns a harbor `Trial` gets Probe
+  capture in ~3 lines:
+
+  ```python
+  from probe.connectors import harbor_capture
+
+  handle = harbor_capture.attach(trial, correlation={...}, context={...},
+                                 capture_mode="shadow",
+                                 sandbox_state=SandboxStateOptions())
+  try:
+      result = await trial.run()
+  finally:
+      capture = await handle.finalize(trial_dir)
+  ```
+
+  `attach()` installs the correlation hooks (logical `session_id` plus a
+  best-effort provider sandbox id read from stable string identifiers on the
+  per-backend private handles — Daytona/E2B `_sandbox`, Modal
+  `_sandbox.object_id`, Runloop `_devbox.id` — retained so they survive
+  Harbor nulling the environment handle) and, when `sandbox_state=` options
+  are given, the existing `probe.sandbox-state/1` recorder from
+  `harbor_runner`. `finalize()` stages the trial tree through
+  `stage_trial_export` and returns a `HarborCaptureResult` carrying the
+  staged paths, archive hash, external key, sandbox ids, and the
+  sandbox-state summary (also folded into the export's
+  `context.sandbox_state`).
+
+  Capture modes: `off` (no-op handle, harbor never imported), `shadow`
+  (best-effort — staging failures come back as `status="failed"`, never
+  raised), `required` (same staging, but the caller gates on
+  `capture.complete` / `capture.raise_if_incomplete()` to fail its
+  response). Harbor stays an optional lazy dependency behind
+  `verify_harbor_contract()`.
+
+- `SandboxStateRecorder` grew `summary()` (the JSON-safe verdict the facade
+  folds into capture context, `"not_attempted"` until a hook fires),
+  `attempted()`, and `record_install_failure()` for callers that install the
+  hooks fail-open.
+
+### Fixed
+
+- The durable Harbor exporter now maps Miles `sample_id` and `group_id`
+  correlation onto Probe `sample` and `group` point labels. Multiple trials at
+  the same training step therefore retain distinct reward points and join
+  directly to their `harbor_trial` manifests without creating per-sample metric
+  series.
+
+## 0.22.0 (unreleased)
 
 ### Breaking
 

@@ -8,7 +8,7 @@
 //
 // Subcommands:
 //
-//	begin --workdir DIR                          -> DIR/begin-manifest.jsonl.gz
+//	begin --workdir DIR [--bytes]                -> DIR/begin-manifest.jsonl.gz [+ DIR/begin-bytes.tar.gz]
 //	end   --workdir DIR --begin-manifest FILE    -> DIR/end-manifest.jsonl.gz + DIR/end-delta.tar.gz
 //
 // Both print a single trailer line to stdout, prefixed "PSBX1 ", carrying
@@ -44,6 +44,10 @@ const (
 	trailerPrefix        = "PSBX1 "
 	defaultMaxFiles      = 2_000_000
 	defaultMaxDeltaBytes = int64(2) << 30 // 2 GiB, further capped by free space
+	// The begin archive covers the whole scanned scope (root defaults to /),
+	// so its ceiling sits near image size rather than agent-diff size. Still
+	// capped at 50% of free space like the delta.
+	defaultMaxBeginBytes = int64(32) << 30
 	// Cap on how many dropped/errored paths we name individually; counts are
 	// always exact.
 	maxRecordedPaths = 100
@@ -565,6 +569,8 @@ func run() error {
 	hashMode := flags.Bool("hash", false, "sha256 every regular file (slow, closes mtime-preserving edits)")
 	maxFiles := flags.Int64("max-files", defaultMaxFiles, "inventory guard")
 	maxDelta := flags.Int64("max-delta-bytes", defaultMaxDeltaBytes, "delta tar guard (further capped at 50% free space)")
+	beginBytes := flags.Bool("bytes", false, "begin phase: also archive every inventoried file/symlink into begin-bytes.tar.gz")
+	maxBeginBytes := flags.Int64("max-begin-bytes", defaultMaxBeginBytes, "begin archive guard (further capped at 50% free space)")
 	maxSeconds := flags.Float64("max-seconds", 0, "self-imposed wall-clock deadline; 0 disables. Set below the caller's exec timeout so the process exits itself.")
 	if err := flags.Parse(os.Args[2:]); err != nil {
 		return err
@@ -574,6 +580,9 @@ func run() error {
 	}
 	if phase == "end" && *beginManifest == "" {
 		return fmt.Errorf("end phase requires --begin-manifest")
+	}
+	if phase != "begin" && *beginBytes {
+		return fmt.Errorf("--bytes is a begin-phase flag")
 	}
 	if err := os.MkdirAll(*workdir, 0o700); err != nil {
 		return err
@@ -632,9 +641,27 @@ func run() error {
 		out.Stats["delta_budget_bytes"] = budget
 	}
 
+	// The begin archive reuses the delta writer machinery: same streaming
+	// gzip->tar, same byte budget semantics, same drop accounting. It tees off
+	// the single manifest walk, so bytes and metadata always describe the same
+	// instant and scope.
+	var bw *deltaWriter
+	if phase == "begin" && *beginBytes {
+		budget := freeSpaceBudget(*workdir, *maxBeginBytes)
+		if bw, err = newDeltaWriter(filepath.Join(*workdir, "begin-bytes.tar.gz"), budget); err != nil {
+			return err
+		}
+		out.Stats["begin_bytes_budget_bytes"] = budget
+	}
+
 	walkErr := cfg.walk(func(e manifestEntry, info fs.FileInfo) error {
 		if err := mw.write(e); err != nil {
 			return err
+		}
+		if bw != nil && (e.Type == "f" || e.Type == "l") {
+			if err := bw.add(e, info); err != nil {
+				cfg.recordErr("begin-bytes "+e.Path, err)
+			}
 		}
 		if idx == nil {
 			return nil
@@ -680,6 +707,16 @@ func run() error {
 		out.Stats["begin_entries"] = int64(len(idx.entries))
 	} else {
 		out.Truncated = cfg.truncated
+	}
+	if bw != nil {
+		beginSum, err := bw.close()
+		if err != nil {
+			return err
+		}
+		out.Files["begin-bytes.tar.gz"] = beginSum
+		out.Truncated = out.Truncated || bw.truncated
+		out.Dropped = bw.dropped
+		out.DroppedCount = bw.droppedN
 	}
 	out.Stats["entries"] = cfg.entries
 	out.Stats["files_scanned"] = cfg.filesScanned

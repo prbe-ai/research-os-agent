@@ -52,8 +52,13 @@ have no Probe run ID. After the run intent resolves, `probe trial drain ROOT
 each pending descriptor before export.
 
 Correlation such as Miles run/rollout/sample/group/session IDs and Osmosis data
-mix IDs is opaque data under `harbor_trial.meta.source.context`. Only the target
-Probe run ID, training step, and external span key have structural meaning.
+mix IDs remains available as opaque data under
+`harbor_trial.meta.source.context`. The exporter also maps `sample_id` to the
+Probe label `sample` and `group_id` to `group` on the reward point and
+`harbor_trial` artifact. Labels are point identity rather than metric
+dimensions: same-step samples stay distinct without minting one reward series
+per sample. The target Probe run ID, training step, and external span key retain
+their existing structural roles.
 
 ## Completeness boundary
 
