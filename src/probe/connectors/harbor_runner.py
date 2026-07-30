@@ -262,7 +262,7 @@ class SandboxStateRecorder:
             # begin-bytes archive when --bytes ran) — same generic loop as _end,
             # so the archive inherits the manifests' tamper-evidence.
             verified = True
-            for name in trailer.get("files", {}):
+            for name in self._expected_files(trailer, BEGIN_MANIFEST, BEGIN_BYTES):
                 host_path = self._host_dir / name
                 await env.download_file(f"{workdir}/{name}", host_path)
                 verified = self._verify(trailer, name, host_path) and verified
@@ -298,7 +298,7 @@ class SandboxStateRecorder:
                 )
             trailer = parse_trailer(result.stdout or "")
             verified = True
-            for name in trailer.get("files", {}):
+            for name in self._expected_files(trailer, END_MANIFEST, END_DELTA):
                 host_path = self._host_dir / name
                 await env.download_file(f"{workdir}/{name}", host_path)
                 verified = self._verify(trailer, name, host_path) and verified
@@ -371,6 +371,22 @@ class SandboxStateRecorder:
         )
         parts += ["--max-seconds", str(max(timeout - 10.0, 5.0))]
         return " ".join(parts)
+
+    def _expected_files(self, trailer: dict[str, Any], *allowed: str) -> list[str]:
+        """Filter trailer-named outputs to the phase's known bundle files.
+
+        The trailer rides container stdout — a hostile task image controls the
+        shell that prints it, so a forged entry could otherwise steer
+        ``download_file`` through ``self._host_dir / name`` to an arbitrary
+        host path. Unknown names are recorded and skipped, never fetched.
+        """
+        names: list[str] = []
+        for name in trailer.get("files", {}):
+            if name in allowed:
+                names.append(name)
+            else:
+                self.errors.append(f"unexpected trailer file skipped: {name!r}")
+        return names
 
     def _verify(self, trailer: dict[str, Any], name: str, host_path: Path) -> bool:
         expected = (trailer.get("files", {}).get(name) or {}).get("sha256")

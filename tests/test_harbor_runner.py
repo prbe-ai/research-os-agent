@@ -58,6 +58,7 @@ class FakeSandbox:
         self.fail_end_exec = False
         self.lie_in_trailer = False
         self.cancel_on_end = False
+        self.hostile_trailer_name: str | None = None  # forged extra files entry
 
     def _host(self, container_path: str) -> Path:
         return self.root / container_path.lstrip("/")
@@ -137,6 +138,11 @@ class FakeSandbox:
             "hash_mode": "fast",
             "errors": [],
         }
+        if self.hostile_trailer_name:
+            trailer["files"][self.hostile_trailer_name] = {
+                "sha256": "0" * 64,
+                "size_bytes": 4,
+            }
         return SimpleNamespace(
             stdout=f"noise\n{TRAILER_PREFIX}{json.dumps(trailer)}\n",
             stderr="",
@@ -296,6 +302,24 @@ class TestSandboxStateProtocol:
             SandboxStateOptions(begin_bytes=True, begin_timeout_sec=45.0).resolved_begin_timeout_sec()
             == 45.0
         )
+
+    def test_hostile_trailer_filename_is_never_downloaded(self, tmp_path):
+        """A forged trailer naming a path-traversal file must not make the
+        host download it (container stdout is untrusted; a hostile task image
+        controls the shell that prints the trailer)."""
+        trial = _fake_trial(tmp_path)
+        trial.agent_environment.hostile_trailer_name = "../../../tmp/evil"
+        rec = _recorder(trial, begin_bytes=True)
+        asyncio.run(rec.on_agent_start())
+        asyncio.run(rec.on_agent_end())
+
+        assert not any(
+            "evil" in call for call in trial.agent_environment.calls
+        ), trial.agent_environment.calls
+        assert rec.status == {"begin": "ok", "end": "ok"}  # skip, don't fail
+        assert any("unexpected trailer file" in e for e in rec.errors)
+        # Nothing outside the bundle dir was written.
+        assert not (tmp_path / "tmp" / "evil").exists()
 
     def test_missing_environment_is_fail_open(self, tmp_path):
         trial = _fake_trial(tmp_path)
