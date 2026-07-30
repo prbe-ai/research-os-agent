@@ -87,7 +87,7 @@ test("the spec is a floor, never an exact pin", () => {
 test("MIN_CLI actually exists on PyPI", () => {
   // The floor has to name a real release or every fallback fails to resolve.
   const floor = source.match(/const MIN_CLI = "([^"]+)"/)[1];
-  assert.equal(floor, "0.10.0", "0.10.0 introduced `probe wizard`");
+  assert.equal(floor, "0.24.0", "0.24.0 introduced the `tag` verbs and tags filters");
 });
 
 test("every fallback refreshes, or users freeze on their first version", () => {

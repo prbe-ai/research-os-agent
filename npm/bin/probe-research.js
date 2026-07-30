@@ -35,10 +35,12 @@ const DIST = "probe-research";
  * `probe-research==<our version>` resolves to a PyPI version that does not
  * exist. That is exactly how 0.10.1 shipped broken.
  *
- * Bump this only when the launcher starts depending on a NEW CLI feature.
- * 0.10.0 is the release that introduced `probe wizard`.
+ * Bump this only when the launcher starts depending on a NEW CLI feature —
+ * or when the plugin's skill prose starts referencing new CLI verbs, so a
+ * fresh install can never pair old-CLI with new-prose (0066 tags review).
+ * 0.24.0 is the release that introduced the `tag` verbs and tags filters.
  */
-const MIN_CLI = "0.10.0";
+const MIN_CLI = "0.24.0";
 const UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh";
 
 /** Compare dotted numeric versions. Returns true when `a` >= `b`. */
