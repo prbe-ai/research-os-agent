@@ -12,7 +12,7 @@ it is, why it matters, and roughly what it takes.
 **What:** A capture plugin for Cursor and for Codex, equivalent to
 `plugins/probe-research-tap` for Claude Code.
 
-**Why:** `sdk/defaults.py` `_agent_context()` already detects all three agents, and both
+**Why:** `sdk/agent_session.py` `detect_agent()` already detects all three agents, and both
 Cursor (`CURSOR_TRACE_ID`) and Codex (`CODEX_THREAD_ID`) expose a session identifier. But
 nothing ships their transcripts for Research OS tenants, so those identifiers resolve to
 nothing. Session↔run linking therefore deliberately records Claude Code only, gated behind
