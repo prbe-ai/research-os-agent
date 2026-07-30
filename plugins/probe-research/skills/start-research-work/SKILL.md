@@ -1,6 +1,6 @@
 ---
 name: start-research-work
-description: Start tracked research — create the project and experiment if new, then open a run in them. Use before any training, evaluation, sweep, docking, scoring, or simulation. Not for edits, installs, or unit tests.
+description: Start tracked research — create project and experiment if new, then open a run. Use for any research work that produces a result someone might reproduce — training, evaluation, sweeps, ablations, data curation, docking, and anything like them. Also use whenever a project, experiment, or run is created. Trigger for one-off and exploratory work, and when the user did not ask for tracking. Not for code edits, installs, or unit tests, which produce no result.
 ---
 
 # Start research work
