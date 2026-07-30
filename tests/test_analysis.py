@@ -145,7 +145,7 @@ def test_a_filtered_comparison_follows_the_cursor(client, app):
 
 def test_runs_sharing_a_label_do_not_collapse_into_one_column(client, app):
     """short_id is optional AND nullable on the wire, so the fallback is `name` —
-    and default_run_name() is second-resolution, so a sweep produces collisions.
+    and generated run names are second-resolution, so a sweep produces collisions.
     Merging two runs into one curve is a silently wrong answer."""
     a = open_run(client, experiment="e1", name="same")
     b = open_run(client, experiment="e1", name="same")

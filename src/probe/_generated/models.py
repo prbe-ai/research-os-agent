@@ -399,7 +399,7 @@ class ExperimentCreate(BaseModel):
     description: str | None = Field(None, title='Description')
     hypothesis: str = Field(..., min_length=1, title='Hypothesis')
     name: str = Field(..., title='Name')
-    project_id: UUID | None = Field(None, title='Project Id')
+    project_id: UUID = Field(..., title='Project Id')
     slug: str = Field(..., title='Slug')
     tags: list[str] | None = Field(None, title='Tags')
 
@@ -1637,10 +1637,9 @@ class IngestRunRequest(BaseModel):
     )
     batch_id: str | None = Field(None, title='Batch Id')
     execution_record: ExecutionRecordCreate | None = None
-    experiment_hypothesis: str | None = Field(None, title='Experiment Hypothesis')
     experiment_slug: str | None = Field(None, title='Experiment Slug')
     metrics: list[MetricPointIn] | None = Field(None, max_length=50000, title='Metrics')
-    project_slug: str | None = Field(None, title='Project Slug')
+    project_slug: str = Field(..., title='Project Slug')
     run: IngestRun
     spans: list[SpanCreate] | None = Field(None, max_length=10000, title='Spans')
 

@@ -24,7 +24,10 @@ def wired(app, tmp_path, monkeypatch):
     # tests below need one to exist. Seeding it through the CLI rather than the
     # fake's dict keeps the precondition honest — and exercises `experiment
     # create`, which is the command that replaced the implicit path.
-    cli.main(["experiment", "create", "e", "--hypothesis", "h"])
+    cli.main(["project", "create", "p"])
+    cli.main(
+        ["experiment", "create", "e", "--hypothesis", "h", "--project", "p"]
+    )
     return app
 
 

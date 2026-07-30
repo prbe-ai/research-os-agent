@@ -33,7 +33,7 @@ them a place to run.
 **What:** A capture plugin for Cursor and for Codex, equivalent to
 `plugins/probe-research-tap` for Claude Code.
 
-**Why:** `sdk/defaults.py` `_agent_context()` already detects all three agents, and both
+**Why:** `sdk/agent_session.py` `detect_agent()` already detects all three agents, and both
 Cursor (`CURSOR_TRACE_ID`) and Codex (`CODEX_THREAD_ID`) expose a session identifier. But
 nothing ships their transcripts for Research OS tenants, so those identifiers resolve to
 nothing. Session↔run linking therefore deliberately records Claude Code only, gated behind
@@ -134,6 +134,8 @@ that stopped batching would only be caught by one count assertion.
 **Takes:** 422 on out-of-range values, the way the fake already does for
 `ScopedUploadRequest` extras.
 
+## Completed
+
 ### `defaults.auto_hypothesis` is dead
 
 **What:** `auto_hypothesis` / `AUTO_HYPOTHESIS_PREFIX` / `_agent_context` are referenced
@@ -142,3 +144,5 @@ is not coming back — it was first-write-wins, so it became permanent unless a 
 noticed.
 
 **Takes:** Delete them and their test, one release after 0.15.0.
+
+**Completed:** v0.25.0 (2026-07-30)

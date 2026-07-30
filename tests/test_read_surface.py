@@ -244,7 +244,8 @@ def wired(app, tmp_path, monkeypatch):
         return make_client(app, tmp_spool=tmp_path / "spool")
 
     monkeypatch.setattr(cli, "Client", factory)
-    cli.main(["experiment", "create", "e", "--hypothesis", "h"])
+    cli.main(["project", "create", "p"])
+    cli.main(["experiment", "create", "e", "--hypothesis", "h", "--project", "p"])
     return app
 
 

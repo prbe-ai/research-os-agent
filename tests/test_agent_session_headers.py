@@ -15,7 +15,6 @@ from probe.sdk.agent_session import (
     resolve_agent_session,
 )
 from probe.sdk.config import Settings
-from probe.sdk.defaults import _agent_context
 from probe.sdk.surface import Surface
 from probe.sdk.transport import Transport
 
@@ -126,9 +125,7 @@ def test_no_nudge_when_upgrading_would_not_help(env: dict[str, str]) -> None:
     assert outdated_client(env) is None
 
 
-def test_agent_context_and_attribution_share_one_detection_table() -> None:
-    """They intentionally DIFFER on captured-ness but must agree on detection:
-    an agent is worth naming in a hypothesis even when uncaptured."""
+def test_detection_recognizes_supported_agents() -> None:
     for env, label in (
         (LIVE, "claude_code"),
         ({"CURSOR_TRACE_ID": "x" * 10}, "cursor"),
@@ -136,13 +133,6 @@ def test_agent_context_and_attribution_share_one_detection_table() -> None:
     ):
         spec = detect_agent(env)
         assert spec is not None and spec.label == label
-
-
-def test_agent_context_still_names_uncaptured_agents(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CLAUDECODE", raising=False)
-    monkeypatch.delenv("CLAUDE_CODE_ENTRYPOINT", raising=False)
-    monkeypatch.setenv("CURSOR_TRACE_ID", "abc12345")
-    assert _agent_context() == "Cursor session"
 
 
 def _transport_headers(monkeypatch: pytest.MonkeyPatch) -> httpx.Headers:

@@ -1,56 +1,35 @@
-"""First-run onboarding: lazy device auth, contextual defaults, explicit creation."""
+"""First-run onboarding: lazy device auth and explicit creation."""
 
 from __future__ import annotations
 
-import subprocess
+import json
+import re
 
 import pytest
 
 from probe import cli, errors
-from probe.sdk import defaults
 from tests.conftest import make_client
 
 
-# -- defaults derivation ------------------------------------------------------
-def _init_repo(path):
-    subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+# -- SDK: explicit run placement + experiment patching ------------------------
+def _create_experiment(client, slug, name, *, hypothesis):
+    project = client.resolve_project("test-project")
+    if project is None:
+        project = client.create_project("test-project")
+    return client.create_experiment(
+        slug,
+        name,
+        hypothesis=hypothesis,
+        project_id=project["id"],
+    )
 
 
-def test_default_experiment_slug_uses_git_repo_name(tmp_path):
-    repo = tmp_path / "My Fold_Sweep"
-    repo.mkdir()
-    _init_repo(repo)
-    assert defaults.default_experiment_slug(cwd=str(repo)) == "my-fold-sweep"
-
-
-def test_default_experiment_slug_falls_back_to_script(tmp_path, monkeypatch):
-    monkeypatch.setattr(defaults.sys, "argv", ["/x/train_dockq.py"])
-    assert defaults.default_experiment_slug(cwd=str(tmp_path)) == "train-dockq"
-
-
-def test_default_run_name_is_timestamped():
-    assert defaults.default_run_name().startswith("run-20")
-
-
-def test_auto_hypothesis_is_marked_and_contextual(tmp_path, monkeypatch):
-    repo = tmp_path / "foldrepo"
-    repo.mkdir()
-    _init_repo(repo)
-    monkeypatch.setattr(defaults.sys, "argv", ["/x/train.py"])
-    text = defaults.auto_hypothesis("foldrepo", cwd=str(repo))
-    assert text.startswith(defaults.AUTO_HYPOTHESIS_PREFIX)
-    assert "foldrepo" in text
-    assert "probe experiment set" in text
-
-
-# -- SDK: run() defaults + experiment patching --------------------------------
-def test_run_with_no_experiment_refuses_rather_than_inventing_one(app, client, monkeypatch):
+def test_run_with_no_experiment_refuses_rather_than_inventing_one(app, client):
     """The context fallback is gone, and its absence has to be LOUD.
 
     It used to derive the slug from the git repo or script name and create it, so
     running from the wrong directory silently filed work under a new experiment
     named after that directory. Nothing failed; the record was just wrong."""
-    monkeypatch.setattr(defaults, "default_experiment_slug", lambda cwd=None: "ctx-slug")
     with pytest.raises(errors.ValidationError, match="needs an experiment slug"):
         client.run()
     assert app.experiments == {}
@@ -59,10 +38,11 @@ def test_run_with_no_experiment_refuses_rather_than_inventing_one(app, client, m
 def test_run_names_near_misses_so_a_typo_is_obvious(app, client):
     """A mistyped slug is by definition close to a real one; this is the whole
     reason resolution beats get-or-create."""
-    client.create_experiment("dockq-sweep", "DockQ", hypothesis="temp 0.7 wins")
+    _create_experiment(client, "dockq-sweep", "DockQ", hypothesis="temp 0.7 wins")
     with pytest.raises(errors.NotFoundError, match="dockq-sweep") as caught:
         client.run(experiment="dockq-sweeep", name="r1")
     assert "Did you mean" in str(caught.value)
+    assert '--hypothesis "..." --project PROJECT_SLUG' in str(caught.value)
 
 
 def test_an_unknown_project_raises_rather_than_being_created_or_ignored(app, client):
@@ -75,7 +55,7 @@ def test_an_unknown_project_raises_rather_than_being_created_or_ignored(app, cli
     asserts the branch itself.
     """
     client.create_project("folding")
-    client.create_experiment("dockq", "DockQ", hypothesis="h")
+    _create_experiment(client, "dockq", "DockQ", hypothesis="h")
     before = len(client.list_projects().items)
 
     with pytest.raises(errors.NotFoundError, match="project"):
@@ -117,21 +97,38 @@ def test_creating_an_experiment_with_a_positional_hypothesis_is_refused(client):
 
 
 def test_an_explicit_hypothesis_survives(app, client):
-    client.create_experiment("e1", "E1", hypothesis="temp 0.7 wins")
+    _create_experiment(client, "e1", "E1", hypothesis="temp 0.7 wins")
     client.run(experiment="e1", name="r1")
     (experiment,) = app.experiments.values()
     assert experiment["hypothesis"] == "temp 0.7 wins"
+
+
+def test_unnamed_run_uses_the_inline_timestamp_fallback(app, client):
+    _create_experiment(client, "e1", "E1", hypothesis="h")
+    run = client.run(experiment="e1")
+    assert re.fullmatch(r"run-\d{8}-\d{6}", run.name)
 
 
 def test_creating_an_experiment_without_a_hypothesis_is_refused(client):
     """No more `[auto]` placeholder. It was first-write-wins, so it became
     permanent unless a human noticed and ran `probe experiment set`."""
     with pytest.raises(errors.ValidationError, match="hypothesis"):
-        client.create_experiment("e1", "E1", hypothesis=None)
+        client.create_experiment("e1", "E1", hypothesis=None, project_id="p")
+
+
+@pytest.mark.parametrize("project_id", [None, ""])
+def test_creating_an_experiment_requires_a_project_id(client, project_id):
+    with pytest.raises(errors.ValidationError, match="project_id"):
+        client.create_experiment(
+            "e1",
+            "E1",
+            hypothesis="h",
+            project_id=project_id,
+        )
 
 
 def test_update_experiment_replaces_the_hypothesis(app, client):
-    exp = client.create_experiment("e1", "E1", hypothesis="first guess")
+    exp = _create_experiment(client, "e1", "E1", hypothesis="first guess")
     updated = client.update_experiment(exp["id"], hypothesis="dockq > 0.8 at temp 0.7")
     assert updated["hypothesis"] == "dockq > 0.8 at temp 0.7"
 
@@ -228,9 +225,8 @@ def wired(app, tmp_path, monkeypatch):
     return app
 
 
-def test_cli_run_start_requires_an_experiment(wired, capsys, monkeypatch):
+def test_cli_run_start_requires_an_experiment(wired, capsys):
     """`--experiment` is required now, so the context fallback cannot fire."""
-    monkeypatch.setattr(defaults, "default_experiment_slug", lambda cwd=None: "ctx-slug")
     rc = cli.main(["run", "start"])
     assert rc != 0
     assert wired.experiments == {}
@@ -238,7 +234,22 @@ def test_cli_run_start_requires_an_experiment(wired, capsys, monkeypatch):
 
 def test_cli_experiment_create_then_run_start(wired, capsys):
     """The two-command shape that replaced the implicit chain."""
-    assert cli.main(["experiment", "create", "e", "--hypothesis", "temp 0.7 wins"]) == 0
+    assert cli.main(["project", "create", "p"]) == 0
+    capsys.readouterr()
+    assert (
+        cli.main(
+            [
+                "experiment",
+                "create",
+                "e",
+                "--hypothesis",
+                "temp 0.7 wins",
+                "--project",
+                "p",
+            ]
+        )
+        == 0
+    )
     capsys.readouterr()
     assert cli.main(["run", "start", "--experiment", "e", "--name", "r1"]) == 0
     assert capsys.readouterr().out.strip() in wired.runs
@@ -246,8 +257,64 @@ def test_cli_experiment_create_then_run_start(wired, capsys):
     assert experiment["hypothesis"] == "temp 0.7 wins"
 
 
+def test_cli_experiment_create_requires_project_or_active_project(wired, capsys):
+    rc = cli.main(["experiment", "create", "missing-project", "--hypothesis", "h"])
+    assert rc != 0
+    captured = capsys.readouterr()
+    assert "pass --project" in (captured.out + captured.err)
+
+
+def test_cli_experiment_create_uses_the_active_project(wired, capsys):
+    assert cli.main(["project", "create", "p"]) == 0
+    capsys.readouterr()
+    assert cli.main(["project", "use", "p"]) == 0
+    capsys.readouterr()
+    assert cli.main(["experiment", "create", "active-exp", "--hypothesis", "h"]) == 0
+    created = capsys.readouterr().out
+    assert '"project_id"' in created
+
+
+def test_cli_experiment_create_rejects_unknown_and_archived_projects(wired, capsys):
+    missing = cli.main(
+        [
+            "experiment",
+            "create",
+            "missing-exp",
+            "--hypothesis",
+            "h",
+            "--project",
+            "missing-project",
+        ]
+    )
+    assert missing != 0
+    captured = capsys.readouterr()
+    assert "no project" in (captured.out + captured.err).lower()
+
+    assert cli.main(["project", "create", "archived-project"]) == 0
+    created = capsys.readouterr().out
+    project_id = json.loads(created)["id"]
+    assert cli.main(["project", "archive", project_id]) == 0
+    capsys.readouterr()
+    archived = cli.main(
+        [
+            "experiment",
+            "create",
+            "archived-exp",
+            "--hypothesis",
+            "h",
+            "--project",
+            "archived-project",
+        ]
+    )
+    assert archived != 0
+    captured = capsys.readouterr()
+    assert "archived" in (captured.out + captured.err).lower()
+
+
 def test_cli_experiment_set_hypothesis(wired, capsys):
-    cli.main(["experiment", "create", "e", "--hypothesis", "h"])
+    cli.main(["project", "create", "p"])
+    capsys.readouterr()
+    cli.main(["experiment", "create", "e", "--hypothesis", "h", "--project", "p"])
     capsys.readouterr()
     (exp_id,) = wired.experiments
     rc = cli.main(["experiment", "set", exp_id, "--hypothesis", "real hypothesis"])
@@ -285,11 +352,24 @@ def test_a_hypothesis_creates_the_experiment_from_the_sdk(app, client):
     """The one opt-in to creation. A hypothesis is the thing you can only write
     when you know what you are testing, so the cost of a new experiment is one
     sentence and an accident cannot pay it."""
-    run = client.run(experiment="dockq-sweep", hypothesis="temp 0.7 wins", name="r1")
+    run = client.run(
+        project="test-project",
+        experiment="dockq-sweep",
+        hypothesis="temp 0.7 wins",
+        name="r1",
+    )
     (experiment,) = app.experiments.values()
     assert experiment["slug"] == "dockq-sweep"
     assert experiment["hypothesis"] == "temp 0.7 wins"
     assert run.id in app.runs
+
+
+def test_a_hypothesis_without_a_project_creates_nothing(app, client):
+    with pytest.raises(errors.ValidationError, match="explicit project slug"):
+        client.run(experiment="dockq-sweep", hypothesis="temp 0.7 wins", name="r1")
+    assert app.projects == {}
+    assert app.experiments == {}
+    assert app.runs == {}
 
 
 def test_without_a_hypothesis_the_sdk_still_refuses_to_create(app, client):
@@ -302,8 +382,18 @@ def test_without_a_hypothesis_the_sdk_still_refuses_to_create(app, client):
 def test_a_second_run_reuses_the_experiment_and_keeps_its_hypothesis(app, client):
     """First-write-wins: reopening never rewrites the hypothesis, so passing a
     different one later is not a silent edit."""
-    client.run(experiment="e1", hypothesis="first guess", name="r1")
-    client.run(experiment="e1", hypothesis="second thoughts", name="r2")
+    client.run(
+        project="test-project",
+        experiment="e1",
+        hypothesis="first guess",
+        name="r1",
+    )
+    client.run(
+        project="test-project",
+        experiment="e1",
+        hypothesis="second thoughts",
+        name="r2",
+    )
     (experiment,) = app.experiments.values()
     assert experiment["hypothesis"] == "first guess"
     assert len(app.runs) == 2
@@ -314,18 +404,30 @@ def test_a_near_miss_is_refused_even_with_a_hypothesis(app, client):
     invisible from a detached CLI process and inside a training loop. `[auto]`
     already proved that shape fails — it shipped with a fix affordance and nobody
     ever used it."""
-    client.create_experiment("dockq-sweep", "DockQ", hypothesis="temp 0.7 wins")
+    _create_experiment(client, "dockq-sweep", "DockQ", hypothesis="temp 0.7 wins")
     with pytest.raises(errors.ValidationError, match="near-miss") as caught:
-        client.run(experiment="dockq-sweeep", hypothesis="deliberate?", name="r1")
+        client.run(
+            project="test-project",
+            experiment="dockq-sweeep",
+            hypothesis="deliberate?",
+            name="r1",
+        )
     assert "dockq-sweep" in str(caught.value)
+    assert "project_id=PROJECT_ID" in str(caught.value)
+    assert "--project PROJECT_SLUG" in str(caught.value)
     assert len(app.experiments) == 1
 
 
 def test_short_version_names_are_not_near_misses(app, client):
     """The 0.6 cutoff has to leave deliberate short names usable — v1 vs v2 scores
     0.5 — so what this catches is long near-identical slugs."""
-    client.create_experiment("v1", "V1", hypothesis="h")
-    client.run(experiment="v2", hypothesis="the next one", name="r1")
+    _create_experiment(client, "v1", "V1", hypothesis="h")
+    client.run(
+        project="test-project",
+        experiment="v2",
+        hypothesis="the next one",
+        name="r1",
+    )
     assert sorted(e["slug"] for e in app.experiments.values()) == ["v1", "v2"]
 
 
@@ -361,17 +463,23 @@ def test_a_hypothesis_without_an_experiment_is_refused(app, client):
 def test_an_archived_slug_is_still_archived_on_the_create_path(app, client):
     """c6bb237's third outcome must survive create-on-demand: creating would 409
     on the slug, so "not found" would send you into a dead end."""
-    exp = client.create_experiment("dockq", "DockQ", hypothesis="h")
+    exp = _create_experiment(client, "dockq", "DockQ", hypothesis="h")
     client.archive_experiment(exp["id"])
     with pytest.raises(errors.NotFoundError, match="ARCHIVED"):
-        client.run(experiment="dockq", hypothesis="h", name="r1")
+        client.run(
+            project="test-project",
+            experiment="dockq",
+            hypothesis="h",
+            name="r1",
+        )
 
 
 def test_losing_a_create_race_returns_the_winner(app, client):
     """Get-or-create promises the row exists afterwards, not that WE made it.
     Different from the swallow #87 removed: that hid a typo behind a
     successful-looking create; this resolves a race on the same correct slug."""
-    winner = app.seed_experiment("dockq")
+    project = client.create_project("test-project")
+    winner = app.seed_experiment("dockq", project_id=project["id"])
     app.experiment_conflict_id = winner["id"]
     real = client.resolve_experiment
     calls = {"n": 0}
@@ -383,7 +491,9 @@ def test_losing_a_create_race_returns_the_winner(app, client):
         return None if calls["n"] <= 2 else real(slug, **kw)
 
     client.resolve_experiment = racy
-    assert client.ensure_experiment("dockq", "DockQ", hypothesis="h")["id"] == winner["id"]
+    assert client.ensure_experiment(
+        "dockq", "DockQ", hypothesis="h", project_id=project["id"]
+    )["id"] == winner["id"]
 
 
 # -- the CLI cannot create, on any path ---------------------------------------
@@ -419,7 +529,7 @@ def test_a_near_miss_is_refused_even_when_it_lives_in_another_project(app, clien
 def test_a_refused_experiment_leaves_no_orphan_project(app, client):
     """ensure_project runs before ensure_experiment, so the refusal has to happen
     first — otherwise the guard against stray identities creates one itself."""
-    client.create_experiment("dockq-sweep", "DockQ", hypothesis="h")
+    _create_experiment(client, "dockq-sweep", "DockQ", hypothesis="h")
     before = len(client.list_projects().items)
     with pytest.raises(errors.ValidationError, match="near-miss"):
         client.run(project="brand-new", experiment="dockq-sweeep", hypothesis="h", name="r1")
@@ -460,7 +570,13 @@ def test_experiment_name_without_a_hypothesis_is_refused(app, client):
 
 
 def test_experiment_name_titles_the_experiment_it_creates(app, client):
-    client.run(experiment="e1", experiment_name="E One", hypothesis="h", name="r1")
+    client.run(
+        project="test-project",
+        experiment="e1",
+        experiment_name="E One",
+        hypothesis="h",
+        name="r1",
+    )
     (experiment,) = app.experiments.values()
     assert experiment["slug"] == "e1" and experiment["name"] == "E One"
 
@@ -469,11 +585,16 @@ def test_the_near_miss_guard_sees_past_the_first_page(app, client):
     """`limit=200` is the schema maximum and page order is unspecified, so a
     single-page guard silently stops firing — and it is the OLDER slugs that drop
     out of view, which are exactly what a typo is a near-miss of."""
-    client.create_experiment("dockq-sweep", "DockQ", hypothesis="h")
+    _create_experiment(client, "dockq-sweep", "DockQ", hypothesis="h")
     for i in range(220):
-        client.create_experiment(f"filler-{i:03d}", f"F{i}", hypothesis="h")
+        _create_experiment(client, f"filler-{i:03d}", f"F{i}", hypothesis="h")
     with pytest.raises(errors.ValidationError, match="near-miss"):
-        client.run(experiment="dockq-sweeep", hypothesis="h", name="r1")
+        client.run(
+            project="test-project",
+            experiment="dockq-sweeep",
+            hypothesis="h",
+            name="r1",
+        )
 
 
 def test_a_slug_blind_backend_resolves_to_nothing_rather_than_the_wrong_row(app, client, monkeypatch):
@@ -481,7 +602,7 @@ def test_a_slug_blind_backend_resolves_to_nothing_rather_than_the_wrong_row(app,
     without `?slug=` answers an unfiltered first page. Taking rows[0] there would
     attach the caller to a real, arbitrary, WRONG experiment — worse than the
     get-or-create it replaced, because it appends your metrics to someone else's."""
-    client.create_experiment("someone-elses", "X", hypothesis="h")
+    _create_experiment(client, "someone-elses", "X", hypothesis="h")
     real_get = client.transport.get
 
     def unfiltered(path, *, params=None):
