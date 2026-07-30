@@ -145,4 +145,4 @@ noticed.
 
 **Takes:** Delete them and their test, one release after 0.15.0.
 
-**Completed:** v0.24.0 (2026-07-30)
+**Completed:** v0.25.0 (2026-07-30)
