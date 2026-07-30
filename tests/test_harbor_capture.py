@@ -282,6 +282,27 @@ class TestFinalize:
         assert manifest["trial"]["id"] == "trial-uuid-1"
         assert handle.result is result
 
+    def test_finalize_surfaces_begin_bytes_captured(self, tmp_path, harbor_stub):
+        # A bridge learns whether the elected trial actually archived begin bytes
+        # from the finalize result — no re-reading the authored bundle off disk.
+        trial, handle = self._run(
+            tmp_path, capture_mode="shadow", sandbox_state=SandboxStateOptions()
+        )
+        handle.sandbox_state._begin_bytes_captured = True  # a verified begin archive
+        result = asyncio.run(
+            handle.finalize(trial.paths.trial_dir, capture_dir=tmp_path / "caps")
+        )
+        assert result.begin_bytes_captured is True
+
+    def test_finalize_begin_bytes_captured_false_by_default(self, tmp_path, harbor_stub):
+        trial, handle = self._run(
+            tmp_path, capture_mode="shadow", sandbox_state=SandboxStateOptions()
+        )
+        result = asyncio.run(
+            handle.finalize(trial.paths.trial_dir, capture_dir=tmp_path / "caps")
+        )
+        assert result.begin_bytes_captured is False
+
     def test_default_capture_dir_is_trials_sibling(self, tmp_path, harbor_stub):
         trial, handle = self._run(tmp_path, capture_mode="shadow")
         result = asyncio.run(handle.finalize(trial.paths.trial_dir))

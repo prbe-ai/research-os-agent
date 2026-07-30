@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.26.0 (unreleased)
+
+### Added
+
+- `HarborCaptureResult.begin_bytes_captured` (and `SandboxStateRecorder.begin_bytes_captured()`
+  + a `begin_bytes_captured` field in the recorder summary): whether the trial
+  archived and verified begin-state bytes. Lets a bridge's per-task election read
+  capture status straight off the `finalize` result instead of re-parsing the
+  authored `meta.json` from disk.
+
 ## 0.25.0 (unreleased)
 
 ### Changed

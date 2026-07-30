@@ -208,6 +208,10 @@ class SandboxStateRecorder:
         }
         self.errors: list[str] = []
         self.bundle_dir: Path | None = None
+        # True once a begin-bytes archive is downloaded AND integrity-verified,
+        # so a bridge (and its per-task election) can read capture status off the
+        # finalize result instead of re-parsing the authored bundle from disk.
+        self._begin_bytes_captured = False
 
     # -- hook callbacks (harbor awaits these inline) -------------------------
     async def on_agent_start(self, event: Any = None) -> None:
@@ -265,7 +269,10 @@ class SandboxStateRecorder:
             for name in self._expected_files(trailer, BEGIN_MANIFEST, BEGIN_BYTES):
                 host_path = self._host_dir / name
                 await env.download_file(f"{workdir}/{name}", host_path)
-                verified = self._verify(trailer, name, host_path) and verified
+                ok = self._verify(trailer, name, host_path)
+                if name == BEGIN_BYTES:
+                    self._begin_bytes_captured = ok
+                verified = ok and verified
             self.integrity["begin_verified"] = verified
             manifest_host = self._host_dir / BEGIN_MANIFEST
             if not manifest_host.is_file():
@@ -461,8 +468,17 @@ class SandboxStateRecorder:
             "status": dict(self.status) if self.attempted() else "not_attempted",
             "arch": self._arch,
             "integrity": dict(self.integrity),
+            "begin_bytes_captured": self._begin_bytes_captured,
             "errors": list(self.errors),
         }
+
+    def begin_bytes_captured(self) -> bool:
+        """Whether this trial archived (and verified) begin-state bytes.
+
+        The precise signal for a bridge's per-task election: the facade folds it
+        onto ``HarborCaptureResult.begin_bytes_captured`` so the bridge never has
+        to re-read the authored ``meta.json``."""
+        return self._begin_bytes_captured
 
 
 def instrument_trial(
