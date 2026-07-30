@@ -1400,13 +1400,19 @@ def make_client(
 
 @pytest.fixture(autouse=True)
 def _no_real_outbox(monkeypatch, tmp_path_factory):
-    """Point the outbox journal away from the developer's real
-    ~/.local/state/probe/outbox. The every-command banner reads it, the
-    drainer re-kick would SPAWN against it, and Journal._ensure imports any
-    real legacy spool it finds -- none of which a test may touch."""
+    """Point every durable-state path away from the developer's real
+    ~/.local/state. The every-command banner reads the outbox, the drainer
+    re-kick would SPAWN against it, and Journal._ensure imports -- AND THEN
+    DELETES -- any legacy spool it finds via PROBE_SPOOL_DIR/XDG_STATE_HOME
+    (testing review: isolating only PROBE_OUTBOX_DIR left the real spool
+    reachable). None of it may be touched by a test."""
     monkeypatch.setenv(
         "PROBE_OUTBOX_DIR", str(tmp_path_factory.mktemp("outbox-guard"))
     )
+    monkeypatch.setenv(
+        "XDG_STATE_HOME", str(tmp_path_factory.mktemp("state-guard"))
+    )
+    monkeypatch.delenv("PROBE_SPOOL_DIR", raising=False)
 
 
 @pytest.fixture(autouse=True)

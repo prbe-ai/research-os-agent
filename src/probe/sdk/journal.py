@@ -109,6 +109,11 @@ def classify(exc: Exception) -> str:
         return "auth"
     if isinstance(exc, errors.ConflictError):
         return "idempotent" if exc.existing_id else "permanent"
+    if isinstance(exc, errors.ValidationError):
+        # Includes locally-raised journal errors (missing staged bytes, unknown
+        # op kind) that carry no HTTP status: retrying can never satisfy them,
+        # and 'transient' would park the drainer on them forever (perf review).
+        return "permanent"
     if isinstance(exc, (errors.TransportError, errors.ServerError)):
         return "transient"
     if isinstance(exc, errors.RosError):
@@ -174,12 +179,15 @@ class Journal:
                 pass
         if not getattr(self, "_spool_checked", False):
             # One-time fold of a surviving pre-journal spool (T1-C). Two stat
-            # calls when there is nothing to import.
+            # calls when there is nothing to import. ONLY the default journal
+            # auto-imports: a custom/temporary journal directory must never
+            # steal (and then delete) the machine's global spool (codex).
             self._spool_checked = True
-            try:
-                self.import_spool()
-            except Exception:  # noqa: BLE001 -- never let legacy debris block a write
-                pass
+            if self.dir == default_dir():
+                try:
+                    self.import_spool()
+                except Exception:  # noqa: BLE001 -- legacy debris must not block a write
+                    pass
 
     # -- append -------------------------------------------------------------
     def _op_filename(self, op_id: str) -> str:
@@ -197,9 +205,15 @@ class Journal:
             "last_error": None,
         }
 
-    def _append(self, op: dict) -> str:
+    def _append(self, op: dict, *, before_write=None) -> str:
         self._ensure()
         with file_lock(self.append_lock):
+            if before_write is not None:
+                # Runs INSIDE the lock, before the op file exists -- used by
+                # append_upload to publish its staged blob atomically with the
+                # op that references it, so gc_blobs (which also takes this
+                # lock) can never see the blob as unreferenced garbage.
+                before_write()
             path = self.ops_dir / self._op_filename(op["op_id"])
             write_text_atomic(path, json.dumps(op, indent=2) + "\n", mode=0o600)
             self._write_status_locked()
@@ -225,30 +239,52 @@ class Journal:
         name: str,
         src_path: str,
         stage: bool = True,
+        inline_hash: bool = False,
         content_type: str | None = None,
         kind: str | None = None,
         meta: dict | None = None,
         span_id: str | None = None,
         step_index: int | None = None,
         run_ref: str | None = None,
-        blob: str | None = None,
-        size_bytes: int | None = None,
-        artifact_id: str | None = None,
-    ) -> str:
-        """Queue a byte upload. When ``stage`` is set the file is snapshotted
-        into the blob store first (under its hash when known, else an
-        ``incoming-<op_id>`` name the drainer hashes later -- 11A)."""
+    ) -> dict:
+        """Queue a byte upload; returns ``{op_id, blob, size_bytes}``.
+
+        When ``stage`` is set the file is snapshotted into the blob store, and
+        with ``inline_hash`` the digest is taken FROM THE SNAPSHOT -- never
+        from the live source, whose bytes can change between a hash pass and a
+        copy pass (codex: a same-size rewrite in that window would poison the
+        content address). Without ``inline_hash`` the drainer hashes later
+        (11A). Snapshot lands under a dot-prefixed staging name (gc ignores
+        dotfiles); the publish rename + op-file write happen together under
+        the append lock, so gc can never see an unreferenced blob to delete.
+        """
         self._ensure()
         op = self._base_op("upload", run_ref)
         staged = False
+        publish = None
+        digest: str | None = None
+        size_bytes: int | None = None
         if stage:
-            if blob is not None:
-                target = self.blobs_dir / blob
-                if not target.exists():
-                    snapshot_file(src_path, target)
-            else:
-                snapshot_file(src_path, self.blobs_dir / f"incoming-{op['op_id']}")
+            staging = self.blobs_dir / f".staging-{op['op_id']}"
+            snapshot_file(src_path, staging)
+            if inline_hash:
+                digest, size_bytes = fingerprint(str(staging))
+            final = (
+                self.blobs_dir / digest
+                if digest is not None
+                else self.blobs_dir / f"incoming-{op['op_id']}"
+            )
+
+            def publish() -> None:
+                if digest is not None and final.exists():
+                    staging.unlink(missing_ok=True)  # dedup: bytes already staged
+                else:
+                    os.replace(staging, final)
+                fsync_directory(self.blobs_dir)
+
             staged = True
+        elif inline_hash:
+            digest, size_bytes = fingerprint(src_path)
         op["upload"] = {
             "anchor": anchor,
             "anchor_id": anchor_id,
@@ -258,13 +294,13 @@ class Journal:
             "meta": meta,
             "span_id": span_id,
             "step_index": step_index,
-            "blob": blob,
+            "blob": digest,
             "src_path": os.path.abspath(src_path),
             "staged": staged,
             "size_bytes": size_bytes,
-            "artifact_id": artifact_id,
         }
-        return self._append(op)
+        self._append(op, before_write=publish)
+        return {"op_id": op["op_id"], "blob": digest, "size_bytes": size_bytes}
 
     # -- reads --------------------------------------------------------------
     @staticmethod
@@ -303,6 +339,37 @@ class Journal:
             with file_lock(self.append_lock):
                 self._write_status_locked()
 
+    def quarantine_corrupt(self) -> int:
+        """Move unparseable op files to failed/ so they stay VISIBLE.
+
+        Silently skipping them (codex) let status count files the drain never
+        saw: the worker exited 'empty' while the banner re-kicked it forever.
+        Quarantined files keep their names -- they count as failed in
+        status.json, while the (parse-skipping) readers ignore them.
+        """
+        moved = 0
+        with file_lock(self.append_lock):
+            if self.ops_dir.exists():
+                for path in sorted(self.ops_dir.iterdir()):
+                    if not path.name.endswith(".json"):
+                        continue
+                    try:
+                        json.loads(path.read_text())
+                    except (OSError, json.JSONDecodeError, ValueError):
+                        os.replace(path, self.failed_dir / path.name)
+                        moved += 1
+            if moved:
+                fsync_directory(self.failed_dir)
+                fsync_directory(self.ops_dir)
+                self._write_status_locked()
+        return moved
+
+    def clear_auth_block(self) -> None:
+        """Forget a recorded auth block (after re-login / explicit retry) so
+        the wake-on-enqueue drainer starts spawning again (codex: nothing
+        cleared it, so delivery stayed stopped forever after one 401)."""
+        self.write_status(auth_blocked_since=None)
+
     def retry_failed(self, op_id: str | None = None) -> int:
         """Requeue dead letters (one op, or all). Files keep their names, so a
         retried op re-enters at its original FIFO position."""
@@ -320,10 +387,27 @@ class Journal:
         return moved
 
     # -- status -------------------------------------------------------------
+    @staticmethod
+    def _count_dir(directory: Path) -> tuple[int, str | None]:
+        """(count, first filename) without parsing op bodies -- this runs on
+        EVERY append, so it must stay O(directory listing), not O(total bytes
+        queued) (perf review: a training loop enqueuing offline was O(N^2))."""
+        if not directory.exists():
+            return 0, None
+        names = sorted(n for n in os.listdir(directory) if n.endswith(".json"))
+        return len(names), names[0] if names else None
+
     def _write_status_locked(self, **extra: Any) -> None:
-        pending = self._read_dir(self.ops_dir)
-        failed = self._read_dir(self.failed_dir)
-        oldest = pending[0][1].get("enqueued_at") if pending else None
+        pending_count, first_pending = self._count_dir(self.ops_dir)
+        failed_count, _ = self._count_dir(self.failed_dir)
+        oldest = None
+        if first_pending:
+            try:
+                oldest = json.loads(
+                    (self.ops_dir / first_pending).read_text()
+                ).get("enqueued_at")
+            except (OSError, json.JSONDecodeError, ValueError):
+                pass
         previous: dict = {}
         try:
             previous = json.loads(self.status_file.read_text())
@@ -332,8 +416,8 @@ class Journal:
         status = {
             "schema": SCHEMA,
             "updated_at": now_iso(),
-            "pending": len(pending),
-            "failed": len(failed),
+            "pending": pending_count,
+            "failed": failed_count,
             "oldest_pending": oldest,
             "paused": self.paused,
             "auth_blocked_since": previous.get("auth_blocked_since"),
@@ -365,20 +449,35 @@ class Journal:
             return self.blobs_dir / upload["blob"]
         return self.blobs_dir / f"incoming-{op['op_id']}"
 
-    def gc_blobs(self) -> int:
+    def gc_blobs(self, *, staging_grace_seconds: float = 86_400.0) -> int:
         """Drop blobs no live or dead op references. Liveness is computed, not
-        counted -- crash-safe by construction."""
+        counted -- crash-safe by construction. The reference scan happens
+        INSIDE the append lock (codex: a stale reference set computed before
+        the lock could delete a blob published while gc waited). Crash-orphaned
+        ``.staging-*`` files older than the grace window are swept too, so an
+        interrupted enqueue cannot leak a multi-GB snapshot forever."""
         if not self.blobs_dir.exists():
             return 0
-        referenced: set[str] = set()
-        for _, op in self.pending() + self.failed():
-            upload = op.get("upload") or {}
-            if upload.get("staged"):
-                referenced.add(upload.get("blob") or f"incoming-{op['op_id']}")
         removed = 0
         with file_lock(self.append_lock):
+            referenced: set[str] = set()
+            for _, op in self.pending() + self.failed():
+                upload = op.get("upload") or {}
+                if upload.get("staged"):
+                    referenced.add(upload.get("blob") or f"incoming-{op['op_id']}")
+            cutoff = time.time() - staging_grace_seconds
             for path in self.blobs_dir.iterdir():
-                if path.name not in referenced and not path.name.startswith("."):
+                if path.name.startswith(".staging-"):
+                    try:
+                        if path.stat().st_mtime < cutoff:
+                            path.unlink(missing_ok=True)
+                            removed += 1
+                    except OSError:
+                        pass
+                    continue
+                if path.name.startswith("."):
+                    continue
+                if path.name not in referenced:
                     path.unlink(missing_ok=True)
                     removed += 1
         return removed
@@ -412,18 +511,55 @@ class Journal:
         return imported
 
 
-class AuthBlocked(Exception):
-    """Raised inside a drain when credentials are rejected -- the queue stays."""
+_URL_QUERY = re.compile(r"\?\S+")
+
+
+def _redact(text: str) -> str:
+    """Strip query strings from URLs embedded in error text. A presigned PUT
+    URL's query IS a signed, bearer-equivalent write capability; transport
+    errors embed the full URL, and last_error is persisted to op files,
+    status.json, doctor output, and the drainer log (security review)."""
+    return _URL_QUERY.sub("?<redacted>", text)
 
 
 def _settings_for(context: dict | None):
-    from .config import resolve
+    from .config import DEFAULT_BASE_URL, Settings, load_context, resolve
 
     name = (context or {}).get("name")
-    base_url = (context or {}).get("base_url")
+    pinned = (context or {}).get("base_url")
     settings = resolve(context=name)
-    if base_url:
-        settings.base_url = base_url
+    stored = load_context(name)
+    if pinned and pinned.rstrip("/") != settings.base_url.rstrip("/"):
+        # Ambient resolution (env vars outrank the context file) produced a
+        # credential for a DIFFERENT endpoint than this op was enqueued for.
+        # Never mix: a token issued for endpoint A must not be sent to pinned
+        # host B (security review). Use only the named context's stored record
+        # for the pinned endpoint; auth-block when none matches.
+        stored_base = (stored.get("base_url") or DEFAULT_BASE_URL).rstrip("/")
+        if stored_base == pinned.rstrip("/") and (
+            stored.get("token") or stored.get("ingest_token")
+        ):
+            return Settings(
+                base_url=pinned.rstrip("/"),
+                token=stored.get("token"),
+                ingest_token=stored.get("ingest_token"),
+                hmac_secret=stored.get("hmac_secret"),
+            )
+        raise errors.AuthError(
+            f"no stored credential for pinned endpoint {pinned} "
+            f"(context {name or '<default>'}); run `probe login`"
+        )
+    if pinned:
+        settings.base_url = pinned.rstrip("/")
+    # Same endpoint, but the pinned context STORES its own credential: the
+    # stored token outranks any ambient PROBE_TOKEN for a drain. Tenants can
+    # share one API URL, and a detached worker inheriting another account's
+    # env must not replay this context's ops under the wrong principal
+    # (codex). Env credentials still serve contexts that store none.
+    if stored.get("token"):
+        settings.token = stored.get("token")
+    if stored.get("ingest_token"):
+        settings.ingest_token = stored.get("ingest_token")
     return settings
 
 
@@ -444,6 +580,10 @@ def drain(
     """
     report = DrainReport()
     journal._ensure()
+    try:
+        journal.quarantine_corrupt()
+    except Exception:  # noqa: BLE001 -- quarantine is best-effort hygiene
+        pass
     if journal.paused:
         report.remaining = len(journal.pending())
         return report
@@ -485,32 +625,41 @@ def drain(
         report.errors.append("another drain holds the lock")
         return report
 
+    touched_upload = False
     try:
         for path, op in journal.pending():
             if run_ref is not None and op.get("run_ref") != run_ref:
                 continue
+            touched_upload = touched_upload or op.get("kind") == "upload"
             try:
-                _execute(journal, client_for(op.get("context")), op)
+                _execute(journal, client_for(op.get("context")), path, op)
             except Exception as exc:  # noqa: BLE001 -- classified below
                 verdict = classify(exc)
-                if verdict == "idempotent":
+                if verdict == "idempotent" and int(op.get("attempts", 0)) > 0:
+                    # A 409-with-existing_id on a RETRY plausibly names our own
+                    # earlier half-delivered attempt. On a FIRST attempt it is
+                    # a genuine natural-key conflict -- treating it as success
+                    # would silently discard the queued write (codex), so it
+                    # falls through to the permanent path below.
                     path.unlink(missing_ok=True)
+                    fsync_directory(journal.ops_dir)
                     report.delivered += 1
                     continue
                 op["attempts"] = int(op.get("attempts", 0)) + 1
-                op["last_error"] = f"{type(exc).__name__}: {exc}"
+                op["last_error"] = _redact(f"{type(exc).__name__}: {exc}")
                 if verdict == "auth":
                     write_text_atomic(path, json.dumps(op, indent=2) + "\n", mode=0o600)
                     report.auth_blocked = True
                     report.errors.append(op["last_error"])
                     break
-                if verdict == "permanent":
-                    write_text_atomic(
-                        journal.failed_dir / path.name,
-                        json.dumps(op, indent=2) + "\n",
-                        mode=0o600,
-                    )
-                    path.unlink(missing_ok=True)
+                if verdict in ("permanent", "idempotent"):
+                    # Update in place, then MOVE atomically: writing a failed/
+                    # copy before unlinking the original leaves the op in both
+                    # queues across a crash (codex).
+                    write_text_atomic(path, json.dumps(op, indent=2) + "\n", mode=0o600)
+                    os.replace(path, journal.failed_dir / path.name)
+                    fsync_directory(journal.failed_dir)
+                    fsync_directory(journal.ops_dir)
                     report.dead_lettered += 1
                     report.errors.append(op["last_error"])
                     continue
@@ -521,6 +670,11 @@ def drain(
                 break
             else:
                 path.unlink(missing_ok=True)
+                # fsync so a post-delivery crash cannot resurrect the op file
+                # and replay a write the server already committed (codex:
+                # replay is at-least-once; keep the window as small as disk
+                # semantics allow).
+                fsync_directory(journal.ops_dir)
                 report.delivered += 1
     finally:
         for client in constructed:
@@ -528,10 +682,11 @@ def drain(
                 client.close()
             except Exception:  # noqa: BLE001
                 pass
-        try:
-            journal.gc_blobs()
-        except Exception:  # noqa: BLE001
-            pass
+        if touched_upload:  # a pass over pure-JSON ops has no blobs to collect
+            try:
+                journal.gc_blobs()
+            except Exception:  # noqa: BLE001
+                pass
         remaining = journal.pending()
         report.remaining = len(remaining)
         journal.write_status(
@@ -543,19 +698,31 @@ def drain(
     return report
 
 
-def _execute(journal: Journal, client, op: dict) -> None:
-    """Deliver one op. Raises the transport/client error on failure."""
+def _execute(journal: Journal, client, op_path: Path, op: dict) -> None:
+    """Deliver one op. Raises the transport/client error on failure. Field
+    guards raise ValidationError (permanent -> dead letter): a KeyError here
+    would classify transient and wedge the FIFO on a malformed op forever."""
     if op.get("kind") == "http":
+        if not op.get("method") or not op.get("path"):
+            raise errors.ValidationError(
+                f"op {op.get('op_id')} is missing method/path", status=422
+            )
         client.transport.request(op["method"], op["path"], json_body=op.get("body"))
         return
     if op.get("kind") != "upload":
-        raise errors.ValidationError(f"unknown journal op kind {op.get('kind')!r}")
+        raise errors.ValidationError(
+            f"unknown journal op kind {op.get('kind')!r}", status=422
+        )
 
-    upload = op["upload"]
+    upload = op.get("upload") or {}
+    if not upload.get("anchor") or not upload.get("name") or not upload.get("src_path"):
+        raise errors.ValidationError(
+            f"upload op {op.get('op_id')} is missing anchor/name/src_path", status=422
+        )
     source = journal.blob_path(op) or Path(upload["src_path"])
     if not source.exists():
         raise errors.ValidationError(
-            f"staged bytes for op {op['op_id']} are gone ({source})"
+            f"staged bytes for op {op['op_id']} are gone ({source})", status=422
         )
     digest = upload.get("blob")
     size = upload.get("size_bytes")
@@ -571,6 +738,11 @@ def _execute(journal: Journal, client, op: dict) -> None:
                 fsync_directory(journal.blobs_dir)
             source = hashed
         upload["blob"], upload["size_bytes"] = digest, size
+        # Persist the rename BEFORE attempting delivery: a crash after the
+        # incoming-><digest> move would otherwise leave an op file pointing at
+        # a staging name that no longer exists, dead-lettering a good upload
+        # on the next drain.
+        write_text_atomic(op_path, json.dumps(op, indent=2) + "\n", mode=0o600)
 
     client.upload_fingerprinted(
         upload["anchor"],

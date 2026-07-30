@@ -36,10 +36,10 @@ def _lease_path(journal) -> str:
 
 
 def _lease_is_free(journal) -> bool:
-    """Non-blocking probe of the drain lease. True when no worker holds it."""
+    """Non-blocking probe of the worker lease. True when no worker holds it.
+    The journal directory is known to exist (the caller read its status.json)."""
     import fcntl
 
-    journal._ensure()
     try:
         handle = open(_lease_path(journal), "a+")
     except OSError:
@@ -57,30 +57,41 @@ def _lease_is_free(journal) -> bool:
 def maybe_spawn(directory: str | None = None) -> bool:
     """Fork a detached worker when there is work and nobody owns the lease.
 
-    Cheap by design -- one status/lease probe -- because every enqueue and
-    every CLI invocation calls it. Returns True when a worker was spawned.
+    O(1) by requirement, not aspiration: this runs after every enqueue and on
+    every CLI invocation (including `probe log` in training loops), so it
+    reads ONLY status.json plus one lock probe -- never the op files
+    themselves (perf review: the old pending() call parsed the whole queue).
+    Returns True when a worker was spawned.
     """
     from ..sdk.journal import Journal
 
-    journal = Journal(directory)
-    if journal.paused or not journal.pending():
-        return False
     status = Journal.read_status(directory)
-    if status and status.get("auth_blocked_since"):
-        return False  # pointless until someone re-authenticates (T2-A)
-    if not _lease_is_free(journal):
+    if (
+        not status
+        or not status.get("pending")
+        or status.get("paused")
+        or status.get("auth_blocked_since")  # pointless until re-auth (T2-A)
+    ):
+        return False
+    journal = Journal(directory)
+    if journal.paused or not _lease_is_free(journal):
         return False
     log_path = journal.dir / _LOG_NAME
-    with open(log_path, "ab") as log:
+    # 0o600 explicitly: the log carries drain errors and tracebacks, and the
+    # journal's everything-0o600 invariant must not depend on the umask.
+    log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
         subprocess.Popen(  # noqa: S603 -- our own interpreter, our own module
             [sys.executable, "-m", "probe.cli.outbox_worker", str(journal.dir)],
             stdin=subprocess.DEVNULL,
-            stdout=log,
-            stderr=log,
+            stdout=log_fd,
+            stderr=log_fd,
             start_new_session=True,  # survives the parent CLI's exit
             close_fds=True,
             env=os.environ.copy(),  # PROBE_* env credentials inherit (T4 decision)
         )
+    finally:
+        os.close(log_fd)
     return True
 
 

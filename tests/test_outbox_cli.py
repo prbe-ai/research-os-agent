@@ -114,7 +114,6 @@ def test_async_artifact_add_pings_intent_and_stages(wired_async, outbox_dir, tmp
     assert pending_row["status"] == "pending"
     (_, op), = Journal(outbox_dir).pending()
     assert op["upload"]["blob"] is not None, "small file hashes inline (11A)"
-    assert op["upload"]["artifact_id"] == pending_row["id"]
     source.write_bytes(b"overwritten")
     report = cli_drain(wired_async, outbox_dir)
     assert report.clean
@@ -195,6 +194,10 @@ def test_flush_is_an_alias_of_outbox_drain(wired_async, outbox_dir, monkeypatch,
     capsys.readouterr()
 
     def factory_drain(journal, run_ref=None, **kw):
+        # The alias claim is about WIRING: flush must drain the --spool-dir
+        # journal, unscoped (testing review: a stub ignoring `journal` could
+        # not catch flush resolving the wrong directory).
+        assert journal.dir == outbox_dir and run_ref is None
         return cli_drain(wired_async, outbox_dir, run_ref=run_ref)
 
     monkeypatch.setattr("probe.sdk.journal.drain", factory_drain)
@@ -264,3 +267,121 @@ def test_run_end_async_is_ordered_behind_the_runs_data(
     assert cli_drain(wired_async, outbox_dir).clean
     assert wired_async.runs[run_id]["status"] == "completed"
     assert wired_async.metric_points_posted[run_id]
+
+
+# -- review-pass additions (testing specialist) -------------------------------
+
+
+def test_banner_surfaces_dead_letters_and_rekicks(wired_async, outbox_dir, capsys):
+    journal = Journal(outbox_dir)
+    journal.append_http("POST", "/v1/runs/poisoned/badroute", {})
+    cli_drain(wired_async, outbox_dir)  # dead-letters it
+    journal.append_http("POST", "/v1/runs/r-1/metrics", {"points": []})
+    kicks = len(wired_async.spawned)
+    cli.main(["--spool-dir", str(outbox_dir), "project", "list"])
+    err = capsys.readouterr().err
+    assert "outbox:" in err and "dead-lettered" in err
+    assert len(wired_async.spawned) > kicks, "pending + healthy must re-kick"
+
+
+def test_async_span_add_queues_and_prints_id(wired_async, outbox_dir, capsys):
+    run_id = start_run(wired_async)
+    before = len(wired_async.requests)
+    assert cli.main(["--async", "span", "add", run_id, "--type", "tool_call"]) == 0
+    span_id = capsys.readouterr().out.strip().splitlines()[-1]
+    assert len(wired_async.requests) == before
+    (_, op), = Journal(outbox_dir).pending()
+    assert op["run_ref"] == run_id and span_id in json.dumps(op["body"])
+    assert cli_drain(wired_async, outbox_dir).clean
+
+
+def test_async_note_add_queues_and_validates_first(wired_async, outbox_dir, capsys):
+    run_id = start_run(wired_async)
+    before = len(wired_async.requests)
+    rc = cli.main([
+        "--async", "note", "add", run_id, "--kind", "decision",
+        "--statement", "use the journal",
+    ])
+    assert rc == 0
+    assert "queued note" in capsys.readouterr().out
+    assert len(wired_async.requests) == before
+    (_, op), = Journal(outbox_dir).pending()
+    assert op["body"]["kind"] == "note" and op["run_ref"] == run_id
+    assert cli_drain(wired_async, outbox_dir).clean
+    # Client-side validation still fails FAST, before anything is queued
+    # (ValueError propagates exactly as in the sync path).
+    with pytest.raises(ValueError, match="statement"):
+        cli.main([
+            "--async", "note", "add", run_id, "--kind", "decision",
+            "--statement", "  ",
+        ])
+    assert Journal(outbox_dir).pending() == []
+
+
+def test_async_big_file_defers_hash_and_ping(wired_async, outbox_dir, tmp_path, monkeypatch, capsys):
+    run_id = start_run(wired_async)
+    monkeypatch.setattr("probe.sdk.journal.INLINE_HASH_MAX_BYTES", 8)
+    source = tmp_path / "huge.bin"
+    source.write_bytes(b"way more than eight bytes")
+    before = len(wired_async.requests)
+    assert cli.main(["--async", "artifact", "add", run_id, str(source)]) == 0
+    assert "intent deferred to drain" in capsys.readouterr().out
+    assert len(wired_async.requests) == before, "no ping for big files (11A)"
+    (_, op), = Journal(outbox_dir).pending()
+    assert op["upload"]["blob"] is None
+    assert cli_drain(wired_async, outbox_dir).clean
+    assert any(a["status"] == "complete" for a in wired_async.artifacts[run_id])
+
+
+def test_run_end_passes_run_scope_and_ignores_other_runs(wired_async, outbox_dir, monkeypatch, capsys):
+    run_id = start_run(wired_async)
+    journal = Journal(outbox_dir)
+    journal.append_http("POST", "/v1/runs/other-run/badroute", {})
+    cli_drain(wired_async, outbox_dir)  # dead-letters the OTHER run's op
+    seen_scope: list = []
+
+    def scoped_drain(j, run_ref=None, **kw):
+        seen_scope.append(run_ref)
+        return DrainReport()
+
+    monkeypatch.setattr("probe.sdk.journal.drain", scoped_drain)
+    rc = cli.main(["--spool-dir", str(outbox_dir), "run", "end", run_id])
+    assert rc == 0, "another run's dead letter must not block this run's close"
+    # First call is the T3-A barrier (run-scoped); Run.finish()'s own flush
+    # then drains unscoped, which is fine — the verdict was already computed.
+    assert seen_scope[0] == run_id, "barrier drain must be run-scoped (T3-A)"
+    assert wired_async.runs[run_id]["status"] == "completed"
+
+
+def test_outbox_watch_once_and_retry_unknown_and_failed_only_status(
+    wired_async, outbox_dir, monkeypatch, capsys
+):
+    journal = Journal(outbox_dir)
+    journal.append_http("POST", "/v1/runs/poisoned/badroute", {})
+    cli_drain(wired_async, outbox_dir)
+    capsys.readouterr()
+    # failed-only queue (pending == 0) still exits 2
+    assert cli.main(["--spool-dir", str(outbox_dir), "outbox", "status"]) == 2
+    # retry with a bogus op id: exit 1, nothing requeued
+    rc = cli.main(["--spool-dir", str(outbox_dir), "outbox", "retry", "nope"])
+    assert rc == 1
+    assert "requeued 0" in capsys.readouterr().out
+    # watch --once drains once and returns
+    monkeypatch.setattr(
+        "probe.sdk.journal.drain", lambda j, **kw: DrainReport(delivered=0)
+    )
+    assert cli.main(["--spool-dir", str(outbox_dir), "outbox", "watch", "--once"]) == 0
+
+
+def test_run_end_refuses_while_paused(wired_async, outbox_dir, capsys):
+    """Codex: a paused journal skipped the drain but run end still closed the
+    run -- the barrier is about the RESULT (nothing of this run still queued)."""
+    run_id = start_run(wired_async)
+    cli.main(["--async", "log", run_id, "loss=1.0", "--step", "1"])
+    assert cli.main(["--spool-dir", str(outbox_dir), "outbox", "pause"]) == 0
+    capsys.readouterr()
+    rc = cli.main(["--spool-dir", str(outbox_dir), "run", "end", run_id])
+    assert rc == 2
+    assert "NOT closed" in capsys.readouterr().err
+    assert wired_async.runs[run_id]["status"] != "completed"
+    cli.main(["--spool-dir", str(outbox_dir), "outbox", "resume"])

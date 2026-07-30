@@ -20,7 +20,6 @@ import pytest
 
 from probe.sdk import errors
 from probe.sdk.durable import snapshot_file
-from probe.sdk.journal import AuthBlocked  # noqa: F401 -- part of the public surface
 from probe.sdk.journal import Journal, classify, drain, run_ref_for_path
 from probe.sdk.spool import Spool
 
@@ -141,14 +140,14 @@ def test_gc_blobs_keeps_referenced_bytes(tmp_path):
     journal = journal_at(tmp_path)
     src = tmp_path / "f.bin"
     src.write_bytes(b"bytes")
-    journal.append_upload(
+    queued = journal.append_upload(
         anchor="run", anchor_id="r-1", name="f.bin", src_path=str(src),
-        run_ref="r-1", blob="a" * 64,
+        run_ref="r-1", inline_hash=True,
     )
     orphan = journal.blobs_dir / ("b" * 64)
     orphan.write_bytes(b"orphan")
     assert journal.gc_blobs() == 1
-    assert (journal.blobs_dir / ("a" * 64)).exists()
+    assert (journal.blobs_dir / queued["blob"]).exists()
     assert not orphan.exists()
 
 
@@ -246,9 +245,15 @@ def test_auth_block_halts_and_keeps_everything(tmp_path):
     assert status["auth_blocked_since"]
 
 
-def test_conflict_with_existing_id_counts_as_delivered(tmp_path):
+def test_conflict_on_retry_counts_as_idempotent_delivery(tmp_path):
+    """409-with-existing_id is claimed as our own earlier delivery ONLY when
+    the op has a prior attempt (first-attempt policy lives in
+    test_first_attempt_conflict_dead_letters_not_swallowed)."""
     journal = journal_at(tmp_path)
     journal.append_http("POST", "/v1/runs/r-1/artifacts", {"name": "n"})
+    path, op = journal.pending()[0]
+    op["attempts"] = 1  # a previous attempt may have half-delivered
+    path.write_text(__import__("json").dumps(op))
 
     class ReplayedTransport:
         def request(self, *a, **k):
@@ -272,7 +277,7 @@ def test_upload_op_stages_hashes_and_confirms(app, tmp_path):
     # blob=None exercises the 11A big-file path: hashing happens at drain.
     journal.append_upload(
         anchor="run", anchor_id=run_id, name="model.bin", src_path=str(src),
-        run_ref=run_id, blob=None,
+        run_ref=run_id, inline_hash=False,
     )
     src.write_bytes(b"mutated after enqueue")  # must not affect the upload
     report = drain_with(app, journal)
@@ -369,3 +374,310 @@ def test_worker_loop_exits_hard_on_auth_block(tmp_path, monkeypatch):
         lambda j, **k: DrainReport(remaining=2, auth_blocked=True, errors=["401"]),
     )
     assert outbox_worker.run(str(tmp_path / "outbox")) == 3
+
+
+def test_gc_ignores_staging_dotfiles(tmp_path):
+    """Review fix: append_upload stages to a dot-prefixed name and publishes
+    it under the append lock, so gc can never reap a mid-enqueue blob."""
+    journal = journal_at(tmp_path)
+    journal._ensure()
+    staging = journal.blobs_dir / ".staging-abc123"
+    staging.write_bytes(b"mid-enqueue bytes")
+    assert journal.gc_blobs() == 0
+    assert staging.exists()
+
+
+def test_drain_persists_deferred_hash_before_delivery(app, tmp_path):
+    """Review fix: the 11A hash+rename must be written back to the op file
+    BEFORE the upload attempt -- a crash after the rename must not strand the
+    op pointing at a staging name that no longer exists."""
+    run_id = seeded_run(app, tmp_path)
+    journal = journal_at(tmp_path)
+    src = tmp_path / "big.bin"
+    src.write_bytes(b"weights " * 2048)
+    journal.append_upload(
+        anchor="run", anchor_id=run_id, name="big.bin", src_path=str(src),
+        run_ref=run_id, inline_hash=False,
+    )
+
+    class HashesThenDies:
+        class transport:  # noqa: N801 -- structural stub
+            @staticmethod
+            def request(*a, **k):
+                raise errors.TransportError("net down")
+
+        @staticmethod
+        def upload_fingerprinted(*a, **k):
+            raise errors.TransportError("net down mid-upload")
+
+        @staticmethod
+        def close():
+            pass
+
+    report = drain(journal, client_factory=lambda ctx: HashesThenDies())
+    assert report.stopped_transient and report.remaining == 1
+    (_, op), = journal.pending()
+    digest = op["upload"]["blob"]
+    assert digest is not None, "hash+rename must be persisted to the op file"
+    assert (journal.blobs_dir / digest).exists()
+    assert not any(p.name.startswith("incoming-") for p in journal.blobs_dir.iterdir())
+    # And the recovered op delivers cleanly on the next drain.
+    assert drain_with(app, journal).clean
+
+
+# -- review-pass additions (testing + performance + security specialists) -----
+
+
+def test_drain_without_factory_auth_blocks_on_unmatched_pin(tmp_path):
+    """Production credential path (no client_factory): an op pinned to an
+    endpoint no stored context matches must auth-block -- never borrow an
+    ambient token issued for a different host (security review)."""
+    journal = Journal(
+        tmp_path / "outbox",
+        context={"name": "ghost", "base_url": "http://elsewhere"},
+    )
+    journal.append_http("POST", "/v1/runs/r-1/metrics", {"points": []})
+    report = drain(journal)
+    assert report.auth_blocked and report.remaining == 1
+    assert journal.failed() == []
+
+
+def test_missing_staged_bytes_dead_letter_not_livelock(app, tmp_path):
+    """ValidationError without an HTTP status must classify permanent: a
+    forever-transient local error would park the drainer at the backoff cap
+    for eternity (performance review)."""
+    run_id = seeded_run(app, tmp_path)
+    journal = journal_at(tmp_path)
+    src = tmp_path / "gone.bin"
+    src.write_bytes(b"bytes")
+    queued = journal.append_upload(
+        anchor="run", anchor_id=run_id, name="gone.bin", src_path=str(src),
+        run_ref=run_id, inline_hash=True,
+    )
+    (journal.blobs_dir / queued["blob"]).unlink()
+    src.unlink()
+    report = drain_with(app, journal)
+    assert report.dead_lettered == 1 and not report.stopped_transient
+    (_, op), = journal.failed()
+    assert "gone" in op["last_error"]
+
+
+def test_unknown_op_kind_dead_letters(app, tmp_path):
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/x", {})
+    path, op = journal.pending()[0]
+    op["kind"] = "from-the-future"
+    path.write_text(__import__("json").dumps(op))
+    report = drain_with(app, journal)
+    assert report.dead_lettered == 1 and report.remaining == 0
+
+
+def test_last_error_redacts_presigned_urls(tmp_path):
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/x", {})
+
+    class LeakyTransport:
+        def request(self, *a, **k):
+            raise errors.ValidationError(
+                "PUT https://r2.example/put/abc?X-Amz-Signature=SECRET123: rejected",
+                status=422,
+            )
+
+    class LeakyClient:
+        transport = LeakyTransport()
+
+        def close(self):
+            pass
+
+    drain(journal, client_factory=lambda ctx: LeakyClient())
+    (_, op), = journal.failed()
+    assert "SECRET123" not in op["last_error"]
+    assert "<redacted>" in op["last_error"]
+    status = Journal.read_status(journal.dir)
+    assert "SECRET123" not in (status.get("last_error") or "")
+
+
+def test_drain_lock_contention_reports_without_touching_queue(tmp_path):
+    import fcntl
+
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/x", {})
+    journal._ensure()
+    holder = open(journal.drain_lock, "a+")
+    fcntl.flock(holder.fileno(), fcntl.LOCK_EX)
+    try:
+        report = drain(journal, wait_for_lock=False)
+        assert report.remaining == 1 and report.delivered == 0
+        assert any("another drain holds the lock" in e for e in report.errors)
+    finally:
+        fcntl.flock(holder.fileno(), fcntl.LOCK_UN)
+        holder.close()
+
+
+def test_maybe_spawn_spawns_detached_worker(tmp_path, monkeypatch):
+    from probe.cli import outbox_worker
+
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/x", {})
+    calls: list = []
+    monkeypatch.setattr(
+        outbox_worker.subprocess, "Popen", lambda argv, **kw: calls.append((argv, kw))
+    )
+    assert outbox_worker.maybe_spawn(str(journal.dir)) is True
+    argv, kw = calls[0]
+    assert argv[1:3] == ["-m", "probe.cli.outbox_worker"]
+    assert kw["start_new_session"] is True
+    import stat as stat_module
+
+    mode = stat_module.S_IMODE((journal.dir / "drainer.log").stat().st_mode)
+    assert mode == 0o600
+
+
+def test_worker_run_exits_4_when_paused(tmp_path):
+    from probe.cli import outbox_worker
+
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/x", {})
+    journal.pause()
+    assert outbox_worker.run(str(journal.dir)) == 4
+
+
+def test_harbor_clone_branch_retries_then_raises_on_mutation(tmp_path, monkeypatch):
+    """The clone-first branch's mutation guard is testable on ANY filesystem by
+    faking try_clone (testing review: the logic had never executed anywhere)."""
+    import shutil as shutil_module
+
+    from probe.connectors import harbor
+
+    def fake_clone(src, dst):
+        shutil_module.copyfile(src, dst)
+        return True
+
+    monkeypatch.setattr(harbor, "try_clone", fake_clone)
+    source = tmp_path / "src.bin"
+    source.write_bytes(b"stable contents")
+    digest, size = harbor._copy_and_hash(source, tmp_path / "out.bin")
+    assert size == len(b"stable contents")
+
+    real_stat = harbor.Path.stat
+    calls = {"n": 0}
+
+    def mutating_stat(self, **kw):
+        result = real_stat(self, **kw)
+        if self == source:
+            calls["n"] += 1
+            if calls["n"] % 2 == 0:  # every after-stat sees a "new" file
+                source.touch()
+                return real_stat(self, **kw)
+        return result
+
+    # A private MonkeyPatch: calling the FIXTURE's undo() would also revert
+    # the autouse env isolation and trip the conftest teardown guard.
+    stat_patch = pytest.MonkeyPatch()
+    stat_patch.setattr(harbor.Path, "stat", mutating_stat, raising=False)
+    try:
+        with pytest.raises(RuntimeError, match="source changed while staging"):
+            harbor._copy_and_hash(source, tmp_path / "out2.bin")
+    finally:
+        stat_patch.undo()
+
+
+# -- codex adversarial-pass regressions ---------------------------------------
+
+
+def test_first_attempt_conflict_dead_letters_not_swallowed(tmp_path):
+    """A 409-with-existing_id on a FIRST attempt is a genuine natural-key
+    conflict -- treating it as idempotent success would silently discard the
+    queued write (codex). Only a RETRY may claim its own earlier delivery."""
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/runs/r-1/artifacts", {"name": "n"})
+
+    class Conflicted:
+        class transport:  # noqa: N801
+            @staticmethod
+            def request(*a, **k):
+                raise errors.ConflictError("dup", detail={"existing_id": "a-1"})
+
+        @staticmethod
+        def close():
+            pass
+
+    report = drain(journal, client_factory=lambda ctx: Conflicted())
+    assert report.dead_lettered == 1 and report.delivered == 0
+    # The same conflict on an op that has already been attempted counts as
+    # our own half-delivered retry.
+    journal.retry_failed()
+    report = drain(journal, client_factory=lambda ctx: Conflicted())
+    assert report.delivered == 1 and report.dead_lettered == 0
+
+
+def test_corrupt_op_files_are_quarantined_visibly(app, tmp_path):
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/runs/r-1/metrics", {"points": []})
+    journal._ensure()
+    bad = journal.ops_dir / "00000000000000000000-corrupt.json"
+    bad.write_text("{not json")
+    journal.write_status()
+    report = drain_with(app, journal)
+    assert report.dead_lettered == 0  # quarantine is not a dead-letter event
+    assert not bad.exists(), "corrupt op must leave ops/"
+    assert (journal.failed_dir / bad.name).exists(), "…and stay visible in failed/"
+    status = Journal.read_status(journal.dir)
+    assert status["pending"] == 0, "status must agree with what drain can see"
+    assert status["failed"] >= 1
+
+
+def test_custom_journal_dir_never_steals_the_global_spool(tmp_path, monkeypatch):
+    """Only the DEFAULT journal auto-imports the legacy spool: a Client with a
+    custom spool_dir must not migrate (and delete) the machine's global
+    pending writes into its private directory (codex)."""
+    state = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(state))
+    monkeypatch.delenv("PROBE_OUTBOX_DIR", raising=False)
+    monkeypatch.delenv("PROBE_SPOOL_DIR", raising=False)
+    legacy = Spool()  # resolves under the isolated XDG_STATE_HOME
+    legacy.append("POST", "/v1/x", {"n": 1})
+    custom = Journal(tmp_path / "custom")
+    custom.append_http("POST", "/v1/y", {})
+    assert legacy.file.exists(), "custom journal must not consume the global spool"
+    assert len(custom.pending()) == 1
+    default = Journal()  # the default dir DOES fold the legacy spool in
+    default.append_http("POST", "/v1/z", {})
+    assert not legacy.file.exists()
+    assert [op["path"] for _, op in default.pending()] == ["/v1/x", "/v1/z"]
+
+
+def test_clear_auth_block_reopens_spawning(tmp_path):
+    from probe.cli import outbox_worker
+
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/x", {})
+    journal.write_status(auth_blocked_since="2026-07-30T00:00:00Z")
+    assert outbox_worker.maybe_spawn(str(journal.dir)) is False
+    journal.clear_auth_block()
+    calls: list = []
+    mp = pytest.MonkeyPatch()
+    mp.setattr(outbox_worker.subprocess, "Popen", lambda *a, **k: calls.append(a))
+    try:
+        assert outbox_worker.maybe_spawn(str(journal.dir)) is True
+    finally:
+        mp.undo()
+
+
+def test_inline_hash_is_taken_from_the_snapshot(tmp_path):
+    """TOCTOU guard: the recorded digest must describe the STAGED bytes, so a
+    source rewrite between enqueue steps can never poison the content
+    address (codex)."""
+    import hashlib
+
+    journal = journal_at(tmp_path)
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"original contents")
+    queued = journal.append_upload(
+        anchor="run", anchor_id="r-1", name="f.bin", src_path=str(src),
+        run_ref="r-1", inline_hash=True,
+    )
+    src.write_bytes(b"rewritten after enqueue")
+    staged = (journal.blobs_dir / queued["blob"]).read_bytes()
+    assert staged == b"original contents"
+    assert queued["blob"] == hashlib.sha256(b"original contents").hexdigest()

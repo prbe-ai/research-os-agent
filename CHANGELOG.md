@@ -31,6 +31,12 @@ supported) and hash in the drainer. Failure policy: permanent rejections
 dead-letter and the queue keeps flowing; transient failures wait and retry;
 401/403 halts delivery with items untouched.
 
+Delivery is **at-least-once**: a crash between the server committing a write
+and the journal deleting the op replays it (ops carry an `op_id`; the drain
+fsyncs deletions to keep the window minimal, and 409-with-existing_id on a
+retry is treated as our own earlier delivery). Scope run refs consistently —
+the run-end barrier matches the literal ref you enqueued with (id vs slug).
+
 **`probe outbox status|drain|watch|retry|pause|resume`** — one surface over
 the whole queue; `probe flush` is now an alias of `outbox drain`. Every
 command prints a one-line stderr banner when the outbox holds dead letters or

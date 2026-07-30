@@ -45,7 +45,7 @@ from ..sdk.config import (
     use_context,
 )
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
-from ..sdk.hashing import fingerprint, reference_fields
+from ..sdk.hashing import reference_fields
 from ..sdk.surface import Surface
 
 
@@ -381,6 +381,15 @@ def login(
         use_context(context)
     path = save_context(updates, name=context)
     print(f"config: {path} (context: {context or current_context_name()})")
+    if settings.token:
+        # Fresh credentials un-block the outbox: forget any recorded 401/403
+        # and wake the drainer so queued writes deliver without further steps.
+        try:
+            journal = _journal()
+            journal.clear_auth_block()
+            _kick_drainer()
+        except Exception:  # noqa: BLE001 -- login must not fail on outbox hygiene
+            pass
 
 
 @app.command()
@@ -1562,7 +1571,11 @@ def run_end(
     journal = _journal()
     report = drain(journal, run_ref=run)
     dead = [op for _, op in journal.failed() if op.get("run_ref") == run]
-    if report.auth_blocked or report.stopped_transient or dead:
+    # Anything of this run's still queued after the drain (paused journal, a
+    # skipped pass, any future skip condition) also blocks the close -- the
+    # barrier promise is about the RESULT, not about which flag tripped.
+    still_queued = [op for _, op in journal.pending() if op.get("run_ref") == run]
+    if report.auth_blocked or report.stopped_transient or dead or still_queued:
         detail = "; ".join(
             report.errors[-3:] or [op.get("last_error") or "?" for op in dead[:3]]
         )
@@ -1953,8 +1966,8 @@ def _ping_presign(
             return None
         transport = Transport(
             settings,
-            timeout=2.0,
-            max_retries=1,
+            timeout=_PING_TIMEOUT_SECONDS,
+            max_retries=_PING_MAX_RETRIES,
             surface=Surface.CLI.value,
             client_headers=client_version_headers("cli", __version__),
         )
@@ -1980,6 +1993,12 @@ _REFERENCE_ROUTES = {
     Anchor.EXPERIMENT: "/v1/experiments/{id}/artifacts",
     Anchor.PROJECT: "/v1/projects/{id}/artifacts",
 }
+
+#: The 1A intent-ping cap. Load-bearing product behavior (CHANGELOG: "a
+#: ~2s-capped presign ping") -- named so the documented cap and the code
+#: cannot silently drift.
+_PING_TIMEOUT_SECONDS = 2.0
+_PING_MAX_RETRIES = 0
 
 
 def _artifact_add_async(
@@ -2035,39 +2054,45 @@ def _artifact_add_async(
 
     if not path:
         raise typer.BadParameter("needs a file path (--reference, or --uri)")
+    if not os.path.isfile(path):
+        # A FIFO, device, or procfs stream would block fingerprint/snapshot
+        # forever -- async promises bounded enqueue time (codex).
+        raise typer.BadParameter(f"{path} is not a regular file")
     from ..sdk.journal import INLINE_HASH_MAX_BYTES
 
     run_only = anchor is Anchor.RUN
     with _async_client() as c:
-        digest: str | None = None
-        size = os.path.getsize(path)
-        artifact_hint: str | None = None
-        if size <= INLINE_HASH_MAX_BYTES:
-            digest, size = fingerprint(path)
-            artifact_hint = _ping_presign(
-                anchor, anchor_id, name,
-                digest=digest, size=size, content_type=content_type,
-                kind=kind if run_only else None, meta=meta if run_only else None,
-                span_id=span, step_index=step,
-            )
-        op_id = c.journal.append_upload(
+        # Snapshot first, hash the snapshot (inside append_upload): hashing
+        # the live file and copying it later would let a same-size rewrite
+        # in between poison the content address (codex TOCTOU).
+        queued = c.journal.append_upload(
             anchor=anchor.value,
             anchor_id=anchor_id,
             name=name,
             src_path=path,
+            inline_hash=os.path.getsize(path) <= INLINE_HASH_MAX_BYTES,
             content_type=content_type,
             kind=kind if run_only else None,
             meta=meta if run_only else None,
             span_id=span,
             step_index=step,
             run_ref=run_ref,
-            blob=digest,
-            size_bytes=size,
-            artifact_id=artifact_hint,
+        )
+    pinged = False
+    if queued["blob"] is not None:
+        pinged = (
+            _ping_presign(
+                anchor, anchor_id, name,
+                digest=queued["blob"], size=queued["size_bytes"],
+                content_type=content_type,
+                kind=kind if run_only else None, meta=meta if run_only else None,
+                span_id=span, step_index=step,
+            )
+            is not None
         )
     _kick_drainer()
-    registered = "intent registered" if artifact_hint else "intent deferred to drain"
-    print(f"queued upload {name!r} op={op_id} ({registered})")
+    registered = "intent registered" if pinged else "intent deferred to drain"
+    print(f"queued upload {name!r} op={queued['op_id']} ({registered})")
 
 
 @artifact_app.command("add")
@@ -2732,6 +2757,9 @@ def _drain_foreground(run_ref: str | None = None) -> None:
         )
     elif report.stopped_transient and report.errors:
         typer.echo(f"stopped on transient failure: {report.errors[-1]}", err=True)
+    elif report.errors:
+        # Dead-letter-only failures: every cause still reaches stderr.
+        typer.echo(f"dead-lettered: {report.errors[-1]}", err=True)
     for message in report.errors[:-1] if report.errors else []:
         typer.echo(f"  {message}", err=True)
     if not report.clean:
@@ -2800,12 +2828,18 @@ def outbox_watch(
     from ._watch import watch
 
     journal = _journal()
-    watch(
-        lambda: drain(journal).__dict__,
-        interval=interval,
-        once=once,
-        report=_print_json,
-    )
+
+    def one_pass() -> dict:
+        report = drain(journal)
+        # Adapt to the shared watch contract: {"counts": {...}, "failed": [...]}.
+        return {
+            "counts": {"completed": report.delivered, "failed": report.dead_lettered},
+            "failed": report.errors if not report.clean else [],
+            "remaining": report.remaining,
+            "auth_blocked": report.auth_blocked,
+        }
+
+    watch(one_pass, interval=interval, once=once, report=_print_json)
 
 
 @outbox_app.command("retry")
@@ -2813,7 +2847,11 @@ def outbox_retry(
     op_id: Optional[str] = typer.Argument(None, help="a dead-lettered op id (omit for all)"),
 ) -> None:
     """Requeue dead-lettered op(s) and kick the drainer."""
-    moved = _journal().retry_failed(op_id)
+    journal = _journal()
+    moved = journal.retry_failed(op_id)
+    # An explicit retry is a statement that the blocker (often credentials)
+    # was dealt with -- forget the auth block so the drainer spawns again.
+    journal.clear_auth_block()
     _kick_drainer()
     print(f"requeued {moved} op(s)")
     if op_id is not None and moved == 0:
@@ -2833,6 +2871,7 @@ def outbox_resume() -> None:
     """Resume background delivery and kick the drainer."""
     journal = _journal()
     journal.resume()
+    journal.clear_auth_block()
     _kick_drainer()
     print("outbox resumed")
 
