@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.24.0 (unreleased)
+
+### Added
+
+- **Begin-state bytes** (`probe.sandbox-state/1`): the snapshot tool's `begin`
+  subcommand gains `--bytes`, teeing the manifest walk into a streamed
+  `begin-bytes.tar.gz` — the byte-level "before" state of the sandbox that the
+  bundle previously only described as metadata. Modified files get true
+  before/after diffs; deleted files' contents become recoverable. Guarded by
+  `--max-begin-bytes` (default 32 GiB, further capped at 50% of free space)
+  with the same drop accounting and PSBX1 trailer integrity as the end delta.
+- `SandboxStateOptions` grows `root` (plumbs the binary's existing scan-root
+  flag), `begin_bytes`, `begin_bytes_ref`, and `max_begin_bytes`. The sharing
+  model is per-task: the caller's ledger elects one trial per task
+  (`task_checksum`) to capture; every trial of the task stamps
+  `meta.json.begin_bytes = {captured, ref, budget_bytes, truncated,
+  dropped_count}` so renderers can resolve the shared archive and verify
+  per-file validity against the begin manifest's sha256s (design:
+  `docs/2026-07-29-begin-state-bytes.md`).
+- `begin_timeout_sec` now defaults to `None`, resolving to 120 s (600 s when
+  `begin_bytes` is on); explicit values are honored unchanged.
+
+### Changed
+
+- The begin phase now downloads and sha256-verifies every file the trailer
+  names (previously just the manifest), so the begin archive inherits the
+  manifests' tamper-evidence.
+
 ## 0.23.0 (unreleased)
 
 ### Added

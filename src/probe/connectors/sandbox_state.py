@@ -32,6 +32,10 @@ TOOL_VERSION = "0.1.0"
 BEGIN_MANIFEST = "begin-manifest.jsonl.gz"
 END_MANIFEST = "end-manifest.jsonl.gz"
 END_DELTA = "end-delta.tar.gz"
+# Full archive of the scanned scope at AGENT_START (begin --bytes). Captured
+# once per task by the first trial and shared via ``begin_bytes.ref``; it is
+# an archive of the whole scope, not a delta, hence the name.
+BEGIN_BYTES = "begin-bytes.tar.gz"
 
 _MACHINE_TO_ARCH = {
     "x86_64": "amd64",
@@ -131,6 +135,7 @@ def build_meta(
     arch: str | None,
     integrity: Mapping[str, bool],
     errors: list[str],
+    begin_bytes_ref: str | None = None,
 ) -> dict[str, Any]:
     """Assemble host-authored ``meta.json`` content from the phase trailers."""
     end_stats = dict((end_trailer or {}).get("stats") or {})
@@ -161,7 +166,7 @@ def build_meta(
     collected_errors = list(errors)
     for trailer in (begin_trailer, end_trailer):
         collected_errors.extend((trailer or {}).get("errors") or [])
-    return {
+    meta = {
         "schema": SCHEMA,
         "tool": {"name": TOOL_NAME, "version": TOOL_VERSION, "arch": arch},
         "begin_at": begin_at,
@@ -173,6 +178,22 @@ def build_meta(
         "integrity": dict(integrity),
         "errors": collected_errors,
     }
+    # Begin-bytes sharing block (docs/2026-07-29-begin-state-bytes.md): present
+    # whenever this trial captured the archive OR the caller supplied a sharing
+    # ref (so non-capturing trials still point renderers at the capturing one).
+    # Absent entirely when the feature is unused — today's meta is unchanged.
+    captured = BEGIN_BYTES in ((begin_trailer or {}).get("files") or {})
+    if captured or begin_bytes_ref is not None:
+        meta["begin_bytes"] = {
+            "captured": captured,
+            "ref": begin_bytes_ref,
+            "budget_bytes": begin_stats.get("begin_bytes_budget_bytes"),
+            "truncated": bool((begin_trailer or {}).get("truncated")) if captured else False,
+            "dropped_count": int((begin_trailer or {}).get("dropped_count") or 0)
+            if captured
+            else 0,
+        }
+    return meta
 
 
 def write_bundle(
