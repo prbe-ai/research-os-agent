@@ -1,6 +1,6 @@
 ---
 name: track-research-work
-description: Record an open run — per-step metrics, spans, artifacts, notes, asset versions, and its final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion, or publication.
+description: Record an open run — per-step metrics, spans, artifacts, notes, asset versions, and its final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion, or publication. Trigger whenever a run is open, without waiting to be asked.
 ---
 
 # Track research work
