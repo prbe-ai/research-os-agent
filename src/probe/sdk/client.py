@@ -18,6 +18,7 @@ import threading
 import warnings
 import weakref
 from collections.abc import Iterable, Mapping
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -36,7 +37,7 @@ from ..models import (
     UploadGcRequest,
     UploadRequest,
 )
-from . import defaults, errors
+from . import errors
 from .config import Settings, resolve
 from .hashing import fingerprint
 from .spool import Spool
@@ -495,8 +496,7 @@ class Client:
         )
 
     def archive_project(self, project_id: str) -> dict:
-        """Hide a project without destroying it. The tenant's ``default`` project
-        cannot be archived (409) — it is the fallback every run needs."""
+        """Hide a project without destroying it."""
         return self.transport.post(f"/v1/projects/{project_id}/archive", None)
 
     def restore_project(self, project_id: str) -> dict:
@@ -704,7 +704,7 @@ class Client:
         name: str | None = None,
         *,
         hypothesis: str | None = None,
-        project_id: str | None = None,
+        project_id: str,
         description: str | None = None,
         tags: list[str] | None = None,
     ) -> dict:
@@ -720,9 +720,17 @@ class Client:
             raise errors.ValidationError(
                 f"an experiment needs a hypothesis: what do you expect {slug} to show?"
             )
-        body: dict[str, Any] = {"slug": slug, "name": name or slug, "hypothesis": hypothesis}
-        if project_id:
-            body["project_id"] = project_id
+        if not project_id:
+            raise errors.ValidationError(
+                "an experiment needs an explicit project_id; create or resolve "
+                "the project first"
+            )
+        body: dict[str, Any] = {
+            "slug": slug,
+            "name": name or slug,
+            "hypothesis": hypothesis,
+            "project_id": project_id,
+        }
         if description is not None:
             body["description"] = description
         if tags is not None:
@@ -747,7 +755,7 @@ class Client:
         name: str | None = None,
         *,
         hypothesis: str,
-        project_id: str | None = None,
+        project_id: str,
         **kw,
     ) -> dict:
         """Get-or-create an experiment by slug. SDK-only; see :meth:`run`.
@@ -1047,6 +1055,11 @@ class Client:
                 "hypothesis= creates an experiment, so it needs an experiment "
                 "slug. A project-direct run has no experiment to hold one."
             )
+        if hypothesis is not None and not project:
+            raise errors.ValidationError(
+                "creating an experiment needs an explicit project slug. Pass "
+                "project= after creating the project first."
+            )
         if hypothesis is not None and not hypothesis.strip():
             # `hypothesis=args.hypothesis or ""` is an ordinary way to get here.
             # Creation gates on `is not None` while create_experiment gates on
@@ -1058,7 +1071,7 @@ class Client:
                 "hypothesis, or drop the argument to open an existing experiment."
             )
         self.ensure_authenticated()
-        name = name or defaults.default_run_name()
+        name = name or f"run-{datetime.now(timezone.utc):%Y%m%d-%H%M%S}"
         # Refuse an uncreatable experiment slug BEFORE any parent is committed.
         # ensure_project runs first below, so without this a refused experiment
         # leaves a brand-new orphan project behind — the exact stray identity the
@@ -1201,14 +1214,22 @@ class Client:
         near = [n for n in self._near(slug, existing) if n != slug]
         if not near:
             return
-        hint = ' --hypothesis "..."' if kind == "experiment" else ""
+        cli_hint = (
+            ' --hypothesis "..." --project PROJECT_SLUG'
+            if kind == "experiment"
+            else ""
+        )
+        sdk_hint = (
+            ", hypothesis=..., project_id=PROJECT_ID"
+            if kind == "experiment"
+            else ""
+        )
         raise errors.ValidationError(
             f"refusing to create {kind} {slug!r}: it is a near-miss of "
             f"{', '.join(repr(n) for n in near)}. If you meant the existing one, "
             f"use that slug. If this really is new, create it explicitly — "
-            f"`client.create_{kind}({slug!r}"
-            f"{', hypothesis=...' if kind == 'experiment' else ''})` or "
-            f"`probe {kind} create {shlex.quote(slug)}{hint}`."
+            f"`client.create_{kind}({slug!r}{sdk_hint})` or "
+            f"`probe {kind} create {shlex.quote(slug)}{cli_hint}`."
         )
 
     @staticmethod
@@ -1224,7 +1245,11 @@ class Client:
         # --hypothesis, so omitting it would print a command that fails on the one
         # field this whole change exists to force. The slug is quoted because it
         # arrives from the caller and this string is presented as copy-pasteable.
-        extra = ' --hypothesis "..."' if kind == "experiment" else ""
+        extra = (
+            ' --hypothesis "..." --project PROJECT_SLUG'
+            if kind == "experiment"
+            else ""
+        )
         return errors.NotFoundError(
             f"no {kind} with slug {slug!r}.{hint} "
             f"Create it with `probe {kind} create {shlex.quote(slug)}{extra}` "
@@ -1950,9 +1975,8 @@ class Client:
         self,
         *,
         experiment_slug: str,
+        project_slug: str,
         run: dict,
-        project_slug: str | None = None,
-        experiment_hypothesis: str | None = None,
         batch_id: str | None = None,
         execution_record: dict | None = None,
         spans: list[dict] | None = None,
@@ -1974,7 +1998,6 @@ class Client:
             experiment_slug=experiment_slug,
             run=run,
             project_slug=project_slug,
-            experiment_hypothesis=experiment_hypothesis,
             batch_id=batch_id,
             execution_record=execution_record,
             spans=spans or [],

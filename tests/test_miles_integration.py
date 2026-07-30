@@ -132,6 +132,44 @@ def _args(tmp_path, **overrides):
     return Namespace(**values)
 
 
+def test_default_run_name_keeps_timestamp_and_external_identity(monkeypatch):
+    class FixedDatetime:
+        @classmethod
+        def now(cls, _tz):
+            from datetime import UTC, datetime
+
+            return datetime(2026, 7, 30, 12, 34, 56, tzinfo=UTC)
+
+    monkeypatch.setattr(probe_utils, "datetime", FixedDatetime)
+    assert (
+        probe_utils._default_run_name(Namespace(), "miles:job:abcdef123456")
+        == "miles-20260730-123456-abcdef12"
+    )
+
+
+def test_miles_experiment_identity_requires_a_resolved_project():
+    from probe.sdk import errors
+
+    class MissingProjectClient(FakeClient):
+        def create_project(self, slug, name=None, **kw):
+            raise errors.ConflictError("race")
+
+        def resolve_project(self, slug):
+            return None
+
+    with pytest.raises(errors.ValidationError, match="explicit project"):
+        probe_utils._ensure_identities(
+            MissingProjectClient(),
+            {"project": "missing", "experiment": "exp", "hypothesis": "h"},
+        )
+
+    with pytest.raises(errors.ValidationError, match="explicit project"):
+        probe_utils._ensure_identities(
+            FakeClient(),
+            {"experiment": "exp", "hypothesis": "h"},
+        )
+
+
 def test_durable_queue_claim_retry_recovery_and_ack(tmp_path):
     queue = probe_utils.DurableMetricQueue(tmp_path / "queue")
     queue.enqueue_metrics(
@@ -229,6 +267,9 @@ def test_tracker_uses_existing_manager_contract_and_publishes_run_identity(
     assert args.probe_run_id == "probe-run-123"
     assert args.research_os_run_id == "probe-run-123"
     assert args.probe_capture_status == "queue_drained"
+    assert client.created_experiments == [
+        ("swe-agent", "capture the run", "proj-customer-project")
+    ]
     # The step counter is the x-axis, not a series (folded from #93's
     # reconciliation): train/step must never mint a catalog row.
     assert run.logs[0][0] == {"train/loss": 1.25}

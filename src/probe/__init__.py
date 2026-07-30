@@ -2,7 +2,11 @@
 
 Quick start:
     import probe
-    probe.init(experiment="dockq-sweep", hypothesis="temp 0.7 wins")
+    probe.init(
+        project="folding",
+        experiment="dockq-sweep",
+        hypothesis="temp 0.7 wins",
+    )
     probe.log({"loss": 0.42, "dockq": 0.71}, step=42)   # from anywhere, any thread
     probe.finish()
 
@@ -13,7 +17,11 @@ thread shadows rather than hijacks — see `probe.sdk.fluent`.
 
 The explicit API has no ambient state and is the implementation underneath:
     client = probe.Client()   # resolves token from env / `probe login`
-    run = client.run(experiment="dockq-sweep")   # no token -> browser approval (TTY)
+    run = client.run(
+        project="folding",
+        experiment="dockq-sweep",
+        hypothesis="temp 0.7 wins",
+    )   # no token -> browser approval (TTY)
     run.log({"loss": 0.42}, step=42)
     run.finish()
 """

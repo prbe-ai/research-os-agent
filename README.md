@@ -88,7 +88,11 @@ code that has no handle to pass around:
 ```python
 import probe
 
-probe.init(experiment="dockq-sweep", hypothesis="temp 0.7 wins")
+probe.init(
+    project="folding",
+    experiment="dockq-sweep",
+    hypothesis="temp 0.7 wins",
+)
 probe.log({"loss": 0.42, "dockq": 0.71}, step=42)    # from anywhere, any thread
 probe.finish()
 ```
@@ -204,7 +208,8 @@ into a miles fork is optional polish (registry docstring's own recipe).
 
 ```python
 client.ingest(
-    experiment_slug="dockq", experiment_hypothesis="...",
+    project_slug="protein-folding",
+    experiment_slug="dockq",
     run={"name": "r1", "source": "temporal", "external_id": "wf-1", "status": "running"},
     metrics=[{"kind": "model", "key": "loss", "value": 0.5, "step_index": 1}],
     batch_id="deadbeef",          # idempotent redelivery
@@ -239,8 +244,9 @@ transport does not need the split, so this is a shaping layer on `Client`.
 ## CLI (`probe`)
 
 ```bash
-RUN=$(probe experiment create dockq --hypothesis "temp 0.7 wins"
-probe run start --experiment dockq --name run-1 \
+probe project create folding
+probe experiment create dockq --hypothesis "temp 0.7 wins" --project folding
+RUN=$(probe run start --experiment dockq --name run-1 \
         --project folding --source runpod --external-id rp-9931)
 probe snapshot $RUN
 probe link $RUN --set wandb_run_id=abc --set gpu_job=rp-9931

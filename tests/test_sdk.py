@@ -10,6 +10,7 @@ import warnings
 import pytest
 
 from probe import errors
+from probe._generated.models import ExperimentCreate, IngestRunRequest
 from tests.conftest import open_run
 
 
@@ -22,7 +23,10 @@ def test_run_resolves_its_experiment_and_creates_only_the_run(client, app):
     named for. Snapshot the request trail AFTER the explicit create and assert
     run() adds a run and nothing else.
     """
-    client.create_experiment("dockq-sweep", "DockQ", hypothesis="h")
+    project = client.create_project("dockq-project")
+    client.create_experiment(
+        "dockq-sweep", "DockQ", hypothesis="h", project_id=project["id"]
+    )
     before = len(app.requests)
 
     run = client.run(experiment="dockq-sweep", name="run-1")
@@ -41,7 +45,7 @@ def test_creating_a_taken_slug_raises_instead_of_returning_the_existing_one(clie
     able to conjure a chain — so the conflict has to surface."""
     app.experiment_conflict_id = "existing-123"
     with pytest.raises(errors.ConflictError):
-        client.create_experiment("dockq", "DockQ", hypothesis="h")
+        client.create_experiment("dockq", "DockQ", hypothesis="h", project_id="p")
 
 
 def test_log_metrics(client, app):
@@ -450,8 +454,8 @@ def test_strict_write_raises(app, tmp_path):
 
 def test_ingest_push(client, app):
     out = client.ingest(
+        project_slug="dockq-project",
         experiment_slug="dockq",
-        experiment_hypothesis="h",
         run={"name": "r1", "source": "temporal", "external_id": "wf-1", "status": "running"},
         metrics=[{"kind": "model", "key": "loss", "value": 0.5, "step_index": 1}],
         strict=True,
@@ -459,8 +463,30 @@ def test_ingest_push(client, app):
     assert out["name"] == "r1"
     # HMAC signature attached on the ingest path
     ingest_req = [r for r in app.requests if r.url.path == "/ingest/v1/runs"][0]
+    assert json.loads(ingest_req.content)["project_slug"] == "dockq-project"
     assert ingest_req.headers.get("X-Signature", "").startswith("sha256=")
     assert ingest_req.headers["Authorization"] == "Bearer ros_ing_cafef00d"
+
+
+def test_ingest_requires_project_and_removed_hypothesis_keyword(client):
+    run = {"name": "r1", "source": "temporal", "external_id": "wf-1"}
+    with pytest.raises(TypeError, match="project_slug"):
+        client.ingest(experiment_slug="dockq", run=run)
+    with pytest.raises(TypeError, match="experiment_hypothesis"):
+        client.ingest(
+            project_slug="dockq-project",
+            experiment_slug="dockq",
+            experiment_hypothesis="removed",
+            run=run,
+        )
+
+
+def test_generated_contract_requires_projects_and_removes_ingest_hypothesis():
+    experiment = ExperimentCreate.model_json_schema()
+    ingest = IngestRunRequest.model_json_schema()
+    assert "project_id" in experiment["required"]
+    assert "project_slug" in ingest["required"]
+    assert "experiment_hypothesis" not in ingest["properties"]
 
 
 def test_ingest_validates_client_side(client, app):
@@ -471,6 +497,7 @@ def test_ingest_validates_client_side(client, app):
     before = len(app.requests)
     with _pytest.raises(Exception):
         client.ingest(
+            project_slug="project",
             experiment_slug="e",
             run={"name": "r1", "source": "temporal"},  # no external_id
             strict=True,
@@ -487,7 +514,7 @@ def test_error_mapping_409(app, tmp_path):
     c = make_client(app, tmp_spool=tmp_path / "spool")
     app.experiment_conflict_id = "e-9"
     with pytest.raises(errors.ConflictError) as caught:
-        c.create_experiment("dup", "Dup", hypothesis="h")
+        c.create_experiment("dup", "Dup", hypothesis="h", project_id="p")
     assert caught.value.existing_id == "e-9"
 
 
@@ -540,7 +567,10 @@ def test_add_edge(client, app):
 
 def test_experiment_version_create_and_list(client, app):
     client.fail_open = False
-    exp = client.create_experiment("dockq", "DockQ", hypothesis="h")
+    project = client.create_project("dockq-project")
+    exp = client.create_experiment(
+        "dockq", "DockQ", hypothesis="h", project_id=project["id"]
+    )
     v = client.experiment_version(exp["id"], label="launch-1")
     assert v["version"] == 1
     assert client.list_experiment_versions(exp["id"])[0]["label"] == "launch-1"
@@ -548,8 +578,8 @@ def test_experiment_version_create_and_list(client, app):
 
 def test_ingest_execution_record_and_foreign_keys_passthrough(client, app):
     out = client.ingest(
+        project_slug="dockq-project",
         experiment_slug="dockq",
-        experiment_hypothesis="h",
         run={"name": "r1", "source": "temporal", "external_id": "wf-1",
              "status": "running", "foreign_keys": {"wandb_run_id": "abc"}},
         execution_record={"code": {"git": {"commit": "x"}}, "deps": {"py": "3.12"}},

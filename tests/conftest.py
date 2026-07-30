@@ -101,8 +101,6 @@ _ME = "00000000-0000-0000-0000-000000000001"
 _WS_MINE = "11111111-1111-1111-1111-111111111111"
 _WS_OTHER = "22222222-2222-2222-2222-222222222222"
 _T0 = "2026-01-01T00:00:00Z"
-#: The tenant's undeletable fallback project — archiving it is a 409, as on the server.
-_DEFAULT_SLUG = "default"
 
 
 class FakeApp:
@@ -408,8 +406,6 @@ class FakeApp:
             if pid not in self.projects:
                 return httpx.Response(404, json={"detail": "not found"})
             row = self.projects[pid]
-            if row["slug"] == _DEFAULT_SLUG:
-                return httpx.Response(409, json={"detail": "the default project cannot be archived"})
             row["archived_at"] = _T0
             return httpx.Response(200, json=row)
 
@@ -487,6 +483,10 @@ class FakeApp:
             return httpx.Response(200, json=self.workspaces[wid])
 
         if path == "/v1/experiments" and method == "POST":
+            if not (body or {}).get("project_id"):
+                return httpx.Response(
+                    422, json={"detail": [{"loc": ["body", "project_id"], "type": "missing"}]}
+                )
             # Mirror the projects handler and the real UNIQUE (customer_id, slug):
             # without this the fake happily mints duplicate identities, so
             # `create_experiment` never conflicts and a regression that put the
@@ -1413,8 +1413,19 @@ def open_run(client: Client, *, experiment: str, name: str | None = None, **run_
     the behaviour."""
     from probe import errors as _errors
 
+    project_slug = f"project-{experiment}"
     try:
-        client.create_experiment(experiment, experiment, hypothesis="h")
+        project = client.create_project(project_slug)
+    except _errors.ConflictError:
+        project = client.resolve_project(project_slug)
+        assert project is not None
+    try:
+        client.create_experiment(
+            experiment,
+            experiment,
+            hypothesis="h",
+            project_id=project["id"],
+        )
     except _errors.ConflictError:
         pass
     return client.run(experiment=experiment, name=name, **run_kw)

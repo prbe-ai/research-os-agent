@@ -11,7 +11,8 @@ here is a typo'd slug minting a second identity: two experiments where you thoug
 had one, and every later comparison silently reading them as different things. On the
 CLI the slug is hand-typed on every invocation, which is exactly where that comes from.
 
-(The SDK does have a create-on-demand path — `client.run(experiment=..., hypothesis=...)`
+(The SDK does have a create-on-demand path —
+`client.run(project=..., experiment=..., hypothesis=...)`
 — because there the slug is written once in a file and code-reviewed. It refuses a
 near-miss of an existing slug rather than warning.)
 
