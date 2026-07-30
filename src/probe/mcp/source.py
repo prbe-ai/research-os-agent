@@ -34,6 +34,13 @@ class ResearchOSSource:
         # False = unsupported (expires after _SUPPORT_RECHECK_SECONDS).
         # Concurrent callers may double-probe; the probe is idempotent and
         # cheap, so no lock is taken here.
+        # Lock-free by choice, now under REAL thread concurrency (server._tool
+        # offloads tool bodies): writes are GIL-atomic and last-writer-wins.
+        # During a mixed-version backend rollout, threads probing different
+        # pods can disagree and the losing verdict sticks for up to
+        # _SUPPORT_RECHECK_SECONDS — accepted: a lock cannot reconcile pods
+        # that genuinely differ, and the verdict self-heals at the recheck.
+        # (2026-07-30 review; revisit only if it bites — see TODOS.md.)
         self._search_supported: bool | None = None
         self._search_semantic_ok: bool = False
         self._search_checked_at: float = float("-inf")

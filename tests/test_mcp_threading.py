@@ -42,6 +42,18 @@ _HEADERS = {
 _SCHEMA_BASELINE = Path(__file__).parent / "fixtures" / "mcp_tool_schemas.json"
 
 
+@pytest.fixture(autouse=True)
+def _clean_server_state():
+    """Module-global teardown: a failing assert must not leak fake clients,
+    leases, or parked sources into unrelated tests (limiters self-clean —
+    the WeakKeyDictionary entry dies with each test's event loop)."""
+    yield
+    server_mod._clients.clear()
+    server_mod._sources.clear()
+    server_mod._in_flight.clear()
+    server_mod._parked.clear()
+
+
 def _tool_call(name: str, arguments: dict, req_id: int = 1) -> dict:
     return {
         "jsonrpc": "2.0",
@@ -76,12 +88,6 @@ class BlockingService:
         return {"ok": True}
 
 
-def _fresh_loop_state() -> None:
-    # anyio limiters bind to the loop they first await on; each test runs its
-    # own asyncio.run loop, and a dead loop's id() can be reused by a new one.
-    server_mod._limiters_by_loop.clear()
-
-
 # -- offload: the regression test ---------------------------------------------
 def test_healthz_answers_while_a_tool_call_blocks() -> None:
     """THE 2026-07-30 regression: with inline dispatch this deadlocks (the loop
@@ -90,7 +96,6 @@ def test_healthz_answers_while_a_tool_call_blocks() -> None:
     svc = BlockingService()
 
     async def run() -> tuple[int, float, httpx.Response]:
-        _fresh_loop_state()
         mcp = create_server(svc, transport_security=_OPEN)
         mcp.settings.streamable_http_path = "/mcp"
         inner = mcp.streamable_http_app()
@@ -128,7 +133,6 @@ def test_saturated_pool_sheds_with_a_retryable_overloaded_error(
     monkeypatch.setattr(server_mod, "_QUEUE_WARN_S", 0.05)
 
     async def run() -> tuple[httpx.Response, float, httpx.Response, httpx.Response]:
-        _fresh_loop_state()
         mcp = create_server(svc, transport_security=_OPEN)
         mcp.settings.streamable_http_path = "/mcp"
         inner = mcp.streamable_http_app()
@@ -176,7 +180,7 @@ def test_concurrent_callers_with_different_tokens_never_cross(
     barrier = threading.Barrier(2)
 
     class FakeClient:
-        def __init__(self, *, settings, fail_open, surface=None):
+        def __init__(self, *, settings, fail_open, surface=None, transport=None):
             self.token = settings.token
 
         def close(self) -> None:
@@ -204,7 +208,6 @@ def test_concurrent_callers_with_different_tokens_never_cross(
     server_mod._sources.clear()
 
     async def run() -> tuple[httpx.Response, httpx.Response]:
-        _fresh_loop_state()
         mcp = create_server(transport_security=_OPEN)
         mcp.settings.streamable_http_path = "/mcp"
         inner = mcp.streamable_http_app()
@@ -229,11 +232,7 @@ def test_concurrent_callers_with_different_tokens_never_cross(
                     ),
                 )
 
-    try:
-        res_alpha, res_beta = asyncio.run(run())
-    finally:
-        server_mod._clients.clear()
-        server_mod._sources.clear()
+    res_alpha, res_beta = asyncio.run(run())
 
     assert "probe_pat_alpha" in res_alpha.text and "probe_pat_beta" not in res_alpha.text
     assert "probe_pat_beta" in res_beta.text and "probe_pat_alpha" not in res_beta.text
@@ -244,7 +243,15 @@ def test_tool_schemas_match_the_pre_offload_baseline() -> None:
     """The _tool wrapper relies on functools.wraps for FastMCP's schema
     generation; this pins every tool's schema byte-for-byte against the
     baseline captured from the pre-offload code (decbed3). A mismatch means
-    agents see wrong/empty tool parameters while every probe stays green."""
+    agents see wrong/empty tool parameters while every probe stays green.
+
+    Intentional schema changes re-capture the baseline (do NOT hand-edit):
+      .venv/bin/python -c "import anyio, json; from probe.mcp.server import \
+        create_server; t = anyio.run(create_server().list_tools); \
+        open('tests/fixtures/mcp_tool_schemas.json','w').write(json.dumps( \
+        sorted((x.model_dump(mode='json', exclude_none=True) for x in t), \
+        key=lambda d: d['name']), indent=2, sort_keys=True) + chr(10))"
+    """
     mcp = create_server()
     tools = anyio.run(mcp.list_tools)
     current = sorted(
@@ -266,7 +273,6 @@ def test_an_error_raised_on_the_worker_thread_keeps_its_shape() -> None:
             raise RuntimeError("boom-sentinel")
 
     async def run() -> httpx.Response:
-        _fresh_loop_state()
         mcp = create_server(ExplodingService(), transport_security=_OPEN)
         mcp.settings.streamable_http_path = "/mcp"
         inner = mcp.streamable_http_app()
@@ -291,7 +297,7 @@ def _install_fake_factory(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, in
     serial = itertools.count(1)
 
     class FakeClient:
-        def __init__(self, *, settings, fail_open, surface=None):
+        def __init__(self, *, settings, fail_open, surface=None, transport=None):
             self.token = settings.token
             self.serial = next(serial)
 
@@ -352,8 +358,6 @@ def test_eviction_parks_a_busy_source_and_closes_it_on_release(
 
     assert closed == [("tok-a", 1)]  # last release closed it
     assert server_mod._parked == {} and server_mod._in_flight == {}
-    server_mod._clients.clear()
-    server_mod._sources.clear()
 
 
 def test_two_generations_of_one_token_park_and_close_independently(
@@ -365,18 +369,169 @@ def test_two_generations_of_one_token_park_and_close_independently(
     closed = _install_fake_factory(monkeypatch)
     monkeypatch.setattr(server_mod, "_MAX_CACHED_TOKENS", 1)
 
-    lease_gen1 = _lease("tok-a")  # serial 1
-    _resolve("tok-b")  # serial 2; cap 1 -> gen1 evicted while busy -> parked
-    assert closed == []
-    lease_gen2 = _lease("tok-a")  # serial 3; evicts idle tok-b (closed now)
-    assert closed == [("tok-b", 2)]
-    _resolve("tok-c")  # serial 4; evicts gen2 while busy -> parked
-    assert len(server_mod._parked) == 2  # both generations parked, distinct slots
+    open_leases: list = []
+    try:
+        lease_gen1 = _lease("tok-a")  # serial 1
+        open_leases.append(lease_gen1)
+        _resolve("tok-b")  # serial 2; cap 1 -> gen1 evicted while busy -> parked
+        assert closed == []
+        lease_gen2 = _lease("tok-a")  # serial 3; evicts idle tok-b (closed now)
+        open_leases.append(lease_gen2)
+        assert closed == [("tok-b", 2)]
+        _resolve("tok-c")  # serial 4; evicts gen2 while busy -> parked
+        assert len(server_mod._parked) == 2  # both generations parked, distinct slots
 
-    lease_gen1.__exit__(None, None, None)
-    assert closed == [("tok-b", 2), ("tok-a", 1)]  # gen1 closed, gen2 still alive
-    lease_gen2.__exit__(None, None, None)
+        lease_gen1.__exit__(None, None, None)
+        open_leases.remove(lease_gen1)
+        assert closed == [("tok-b", 2), ("tok-a", 1)]  # gen1 closed, gen2 still alive
+        lease_gen2.__exit__(None, None, None)
+        open_leases.remove(lease_gen2)
+    finally:
+        for ctx in open_leases:
+            ctx.__exit__(None, None, None)
     assert closed == [("tok-b", 2), ("tok-a", 1), ("tok-a", 3)]
     assert server_mod._parked == {} and server_mod._in_flight == {}
-    server_mod._clients.clear()
-    server_mod._sources.clear()
+
+# -- saturation breadcrumb -----------------------------------------------------
+def test_saturation_warning_logged_when_a_call_waits(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A call that WAITS past _QUEUE_WARN_S (but under the shed timeout) must
+    leave the breadcrumb log — the only server-side signal of a saturated
+    pool short of an actual shed."""
+    svc = BlockingService()
+    monkeypatch.setattr(server_mod, "_TOOL_CAPACITY", 1)
+    monkeypatch.setattr(server_mod, "_QUEUE_WARN_S", 0.05)
+
+    async def run() -> httpx.Response:
+        mcp = create_server(svc, transport_security=_OPEN)
+        mcp.settings.streamable_http_path = "/mcp"
+        inner = mcp.streamable_http_app()
+        async with inner.router.lifespan_context(inner):
+            transport = httpx.ASGITransport(app=inner)
+            async with httpx.AsyncClient(transport=transport, base_url="http://mcp.test") as c:
+                slow = asyncio.create_task(
+                    c.post("/mcp", json=_tool_call("browse_research", {}, 1), headers=_HEADERS)
+                )
+                await asyncio.to_thread(svc.entered.wait, 10)
+                waiter = asyncio.create_task(
+                    c.post("/mcp", json=_tool_call("browse_research", {}, 2), headers=_HEADERS)
+                )
+                await asyncio.sleep(0.2)  # waiter is now past _QUEUE_WARN_S in the queue
+                svc.release.set()
+                await slow
+                return await waiter
+
+    with caplog.at_level("WARNING", logger="probe.mcp.server"):
+        second = asyncio.run(run())
+    assert _result(second).get("isError") is not True
+    assert any(
+        "waited" in r.getMessage() and "browse_research" in r.getMessage()
+        for r in caplog.records
+    ), [r.getMessage() for r in caplog.records]
+
+
+def test_shed_is_logged_server_side(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The shed itself must log: it is the strongest overload event and every
+    probe stays green while it happens — a silent shed is invisible to
+    operators for as long as the overload lasts."""
+    svc = BlockingService()
+    monkeypatch.setattr(server_mod, "_TOOL_CAPACITY", 1)
+    monkeypatch.setattr(server_mod, "_QUEUE_TIMEOUT_S", 0.3)
+
+    async def run() -> httpx.Response:
+        mcp = create_server(svc, transport_security=_OPEN)
+        mcp.settings.streamable_http_path = "/mcp"
+        inner = mcp.streamable_http_app()
+        async with inner.router.lifespan_context(inner):
+            transport = httpx.ASGITransport(app=inner)
+            async with httpx.AsyncClient(transport=transport, base_url="http://mcp.test") as c:
+                slow = asyncio.create_task(
+                    c.post("/mcp", json=_tool_call("browse_research", {}, 1), headers=_HEADERS)
+                )
+                await asyncio.to_thread(svc.entered.wait, 10)
+                shed = await c.post(
+                    "/mcp", json=_tool_call("browse_research", {}, 2), headers=_HEADERS
+                )
+                svc.release.set()
+                await slow
+                return shed
+
+    with caplog.at_level("WARNING", logger="probe.mcp.server"):
+        shed = asyncio.run(run())
+    assert _result(shed)["isError"] is True
+    assert any("SHED" in r.getMessage() for r in caplog.records), [
+        r.getMessage() for r in caplog.records
+    ]
+
+
+# -- admission slot hygiene ----------------------------------------------------
+def test_admission_slot_is_released_after_a_tool_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool body that raises must return its admission permit: at capacity 1
+    a leaked slot would make the SECOND call shed instead of erroring."""
+    monkeypatch.setattr(server_mod, "_TOOL_CAPACITY", 1)
+    monkeypatch.setattr(server_mod, "_QUEUE_TIMEOUT_S", 1.0)
+
+    class ExplodingService:
+        def browse_research(self, **_kw: object) -> dict:
+            raise RuntimeError("boom-sentinel")
+
+    async def run() -> tuple[httpx.Response, httpx.Response]:
+        mcp = create_server(ExplodingService(), transport_security=_OPEN)
+        mcp.settings.streamable_http_path = "/mcp"
+        inner = mcp.streamable_http_app()
+        async with inner.router.lifespan_context(inner):
+            transport = httpx.ASGITransport(app=inner)
+            async with httpx.AsyncClient(transport=transport, base_url="http://mcp.test") as c:
+                first = await c.post(
+                    "/mcp", json=_tool_call("browse_research", {}, 1), headers=_HEADERS
+                )
+                second = await c.post(
+                    "/mcp", json=_tool_call("browse_research", {}, 2), headers=_HEADERS
+                )
+                return first, second
+
+    first, second = asyncio.run(run())
+    assert "boom-sentinel" in _result(first)["content"][0]["text"]
+    # A leaked slot turns this into "server overloaded" instead of the error.
+    assert "boom-sentinel" in _result(second)["content"][0]["text"]
+
+
+# -- structural enforcement ----------------------------------------------------
+def test_every_registered_tool_is_offloaded() -> None:
+    """A future @mcp.tool() added WITHOUT @_tool dispatches inline on the
+    event loop again — silently reintroducing the 2026-07-30 incident while
+    every other test keeps passing. FastMCP awaits async fns; sync fns run
+    inline — so 'every registered tool is async' IS the offload guarantee."""
+    mcp = create_server()
+    tools = mcp._tool_manager.list_tools()
+    assert tools, "no tools registered?"
+    not_offloaded = [t.name for t in tools if not t.is_async]
+    assert not_offloaded == [], (
+        f"tools dispatching inline on the event loop (missing @_tool): {not_offloaded}"
+    )
+
+
+def test_grace_budget_covers_the_worst_case_call() -> None:
+    """deploy/mcp/k8s.yaml's terminationGracePeriodSeconds is derived from SDK
+    constants that live in this repo; if the transport budget grows past the
+    manifest's grace ceiling, drains truncate exactly the calls the preStop
+    exists to protect. This pins the arithmetic so drift fails CI."""
+    import re
+
+    from probe.sdk import transport
+
+    manifest = (Path(__file__).parent.parent / "deploy" / "mcp" / "k8s.yaml").read_text()
+    grace = int(re.search(r"terminationGracePeriodSeconds:\s*(\d+)", manifest).group(1))
+    pre_stop = int(re.search(r"preStop:\n\s*sleep:\n\s*seconds:\s*(\d+)", manifest).group(1))
+
+    worst_call = (transport._MAX_RETRIES + 1) * transport._DEFAULT_TIMEOUT
+    needed = pre_stop + worst_call + server_mod._QUEUE_TIMEOUT_S
+    assert grace >= needed, (
+        f"grace {grace}s < preStop {pre_stop}s + worst call {worst_call:.0f}s "
+        f"+ queue wait {server_mod._QUEUE_TIMEOUT_S:.0f}s = {needed:.0f}s"
+    )

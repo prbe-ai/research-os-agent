@@ -183,6 +183,51 @@ serialization could throttle and stretch latencies invisibly. The
 
 ---
 
+## P2 — MCP flood hardening (from the 2026-07-30 pre-landing review)
+
+### Bound the paths the admission limiter does not cover
+
+**What:** Three related guards for the hosted MCP under request floods:
+1. **Pre-auth verification fan-out** (pre-existing, predates the offload):
+   every unique bogus bearer opens an AsyncClient + `/v1/me` round trip
+   before admission applies; the rejection cache is useless under token
+   rotation. Add a small concurrency bound/rate limit around
+   `_upstream_rejects`.
+2. **Per-tenant fairness:** one valid token can occupy all worker slots;
+   shed logs now carry a token fingerprint (sha256/8) so a noisy tenant is
+   attributable — add a per-token cap when attribution shows it matters.
+3. **Queue depth:** admission bounds queue TIME (20s) not DEPTH; consider
+   uvicorn `limit_concurrency` so an edge 503 caps waiter memory.
+
+**Why:** The 2026-07-30 hardening bounds worker occupancy per pod; these are
+the remaining flood paths, all currently gated only by upstream capacity.
+Codex flagged #1 as its top finding; it is pre-existing and auth-layer, so it
+rode as a TODO rather than blocking the rollout fix.
+
+**Effort:** S each; #1 first (unauthenticated surface)
+**Priority:** P2
+**Depends on:** nothing.
+
+---
+
+## P3 — capability-cache verdict divergence during mixed-version rollouts
+
+### Search support can read False for up to one recheck window
+
+**What:** `source.py` tri-state capability verdicts are last-writer-wins under
+the now-truly-concurrent tool threads; during a mixed-version backend rollout
+the losing pod's verdict can stick (degraded keyword-only search) for up to
+`_SUPPORT_RECHECK_SECONDS`. Documented at the flags; self-heals.
+
+**Why deferred:** a lock cannot reconcile pods that genuinely differ; the fix
+that matters (if it ever bites) is verdict versioning or probe single-flight
+keyed by backend build. Revisit only on a real report of post-deploy search
+degradation lasting minutes.
+
+**Effort:** M **Priority:** P3 **Depends on:** evidence it bites.
+
+---
+
 ## Completed
 
 ### `defaults.auto_hypothesis` is dead

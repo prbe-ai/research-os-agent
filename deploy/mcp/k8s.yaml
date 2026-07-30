@@ -35,13 +35,26 @@ spec:
     metadata:
       labels: { app: research-os-mcp }
     spec:
-      # Grace must cover preStop (10s) + a worst-case in-flight call: the SDK
-      # retries up to _MAX_RETRIES=3 after the first attempt, each bounded by
-      # the 30s client timeout, plus backoff (src/probe/sdk/transport.py) —
-      # ~130s worst case. This is a CEILING, not a wait: the pod exits the
+      # Grace must cover preStop (10s) + up to _QUEUE_TIMEOUT_S (20s) waiting
+      # for a worker + the in-flight call itself. The MCP surface caps
+      # transport retries at 1 (server.py _MCP_MAX_RETRIES), so a single
+      # backend read pins a worker ~62s worst case; 180 leaves room for a
+      # multi-request tool to finish its current reads. Conservatively sized
+      # against the SDK-default budget too (tests/test_mcp_threading.py pins
+      # the arithmetic). This is a CEILING, not a wait: the pod exits the
       # moment uvicorn finishes draining. The default 30s force-killed exactly
       # the long requests the preStop drain exists to protect.
-      terminationGracePeriodSeconds: 150
+      terminationGracePeriodSeconds: 180
+      # Two replicas on one node = one node failure zeroes serving capacity,
+      # and nothing else here constrains placement. ScheduleAnyway (not
+      # DoNotSchedule): a small pool must still schedule both replicas when
+      # only one node has room — spread is a strong preference, not a wedge.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: { app: research-os-mcp }
       imagePullSecrets:
         - name: probe-ghcr-pull   # same GHCR pull secret research-os uses
       containers:
@@ -53,6 +66,13 @@ spec:
             # Same-cluster: point at the internal API service to avoid LB hairpin.
             # Swap to https://api.research.prbe.ai if calling the public endpoint.
             - { name: PROBE_BASE_URL, value: "http://research-os.research.svc.cluster.local:8080" }
+            # Concurrent threaded tool calls per process (server.py _limiters).
+            # 16, not the code default 40: the 1Gi memory ceiling below was
+            # sized under effectively-serialized dispatch, and N concurrent
+            # fat responses (export pages, verbose views) each hold a payload
+            # + serialization copy. Tune here — no code release needed — after
+            # the post-ship CPU/memory measurement (TODOS.md).
+            - { name: PROBE_MCP_TOOL_CAPACITY, value: "16" }
           lifecycle:
             # ingress-nginx removes a terminating pod from its upstreams
             # asynchronously; keep accepting for 10s so routing drains instead
@@ -67,8 +87,13 @@ spec:
           # truly dead — and it stays SHALLOW on purpose: probing backend
           # reachability here would cascade a backend outage into killing
           # every MCP pod.
-          # - Readiness reacts to busy: tight timeout pulls a stalled pod from
-          #   the load balancer without killing it; it returns when free.
+          # - Neither probe reflects worker-pool saturation — that is BY
+          #   DESIGN: a saturated pod sheds per-request (retryable
+          #   "overloaded" tool error + warning log with token fingerprint)
+          #   instead of failing readiness, because with 2 replicas pulling a
+          #   saturated pod from the LB concentrates all load on its peer.
+          #   The readiness timeout below only catches a truly stalled
+          #   process, not a busy one.
           # - Liveness is last resort: a tool call may legitimately hold a
           #   worker ~30s (backend timeout budget), so tolerate ~1 min of
           #   unresponsiveness before the kubelet kills the pod. The defaults
@@ -120,6 +145,20 @@ spec:
           resources:
             requests: { cpu: 50m, memory: 128Mi }
             limits: { cpu: 500m, memory: 1Gi }
+---
+# Rollouts respect maxUnavailable, but VOLUNTARY evictions (node drains,
+# pool upgrades) do not — without a PDB a routine DOKS maintenance can evict
+# both replicas at once and reopen the exact 502 window this manifest exists
+# to close. minAvailable 1 makes drains wait for the replacement pod.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: research-os-mcp
+  namespace: research
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: research-os-mcp }
 ---
 apiVersion: v1
 kind: Service
