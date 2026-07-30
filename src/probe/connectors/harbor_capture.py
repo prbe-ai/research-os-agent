@@ -197,6 +197,10 @@ class HarborCaptureResult:
     sandbox_id: str | None = None
     provider_sandbox_id: str | None = None
     sandbox_state: dict[str, Any] | None = None
+    # True iff this trial archived (and verified) begin-state bytes — the signal
+    # a bridge's per-task election reads to decide whether the shared archive for
+    # this task was produced (no need to re-read the authored bundle from disk).
+    begin_bytes_captured: bool = False
     error: str | None = None
 
     @property
@@ -287,6 +291,11 @@ class CaptureHandle:
         summary = (
             self.sandbox_state.summary() if self.sandbox_state is not None else None
         )
+        begin_bytes_captured = (
+            self.sandbox_state.begin_bytes_captured()
+            if self.sandbox_state is not None
+            else False
+        )
 
         trial_id = str(
             self.correlation.get("trial_id")
@@ -374,6 +383,7 @@ class CaptureHandle:
                 sandbox_id=sandbox_id,
                 provider_sandbox_id=provider_sandbox_id,
                 sandbox_state=summary,
+                begin_bytes_captured=begin_bytes_captured,
             )
         except asyncio.CancelledError:
             raise
@@ -385,6 +395,7 @@ class CaptureHandle:
                 sandbox_id=sandbox_id,
                 provider_sandbox_id=provider_sandbox_id,
                 sandbox_state=summary,
+                begin_bytes_captured=begin_bytes_captured,
             )
         self.result = result
         return result

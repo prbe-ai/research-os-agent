@@ -258,6 +258,10 @@ class TestSandboxStateProtocol:
         assert meta["begin_bytes"]["captured"] is True
         assert meta["begin_bytes"]["ref"] == "task-abc123"
         assert meta["begin_bytes"]["budget_bytes"] == 1024
+        # First-class accessor + summary flag so a bridge learns capture status
+        # from the finalize result — no re-reading the authored bundle off disk.
+        assert rec.begin_bytes_captured() is True
+        assert rec.summary()["begin_bytes_captured"] is True
 
     def test_begin_bytes_ref_without_capture_stamps_meta(self, tmp_path):
         trial = _fake_trial(tmp_path)
@@ -270,6 +274,8 @@ class TestSandboxStateProtocol:
         meta = json.loads((bundle / "meta.json").read_text())
         assert meta["begin_bytes"]["captured"] is False
         assert meta["begin_bytes"]["ref"] == "task-abc123"
+        assert rec.begin_bytes_captured() is False
+        assert rec.summary()["begin_bytes_captured"] is False
 
     def test_meta_has_no_begin_bytes_block_by_default(self, tmp_path):
         trial = _fake_trial(tmp_path)
