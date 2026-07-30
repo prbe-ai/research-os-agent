@@ -189,6 +189,10 @@ def create_server(
             than you did.
         status: filter runs by lifecycle status (e.g. "running").
         tags: filter runs by tags (repeatable; a run must carry ALL — 0066).
+            CAVEAT: a pre-0066 backend silently ignores this filter and the
+            tree carries no per-run tags to verify against — when the answer
+            is load-bearing, cross-check with the guarded list read
+            (list_runs / GET /v1/runs?tags=).
         limit: per level, not per response.
 
         Every node carries a `ref` you can hand straight to `get_entity`.

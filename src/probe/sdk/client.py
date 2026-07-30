@@ -442,7 +442,10 @@ class Client:
             body["tags"] = tags
         if metadata is not None:
             body["metadata"] = metadata
-        return self.transport.post("/v1/projects", body)
+        row = self.transport.post("/v1/projects", body)
+        if tags is not None:
+            self._verify_tags_written(tags, row, "POST /v1/projects")
+        return row
 
     def resolve_project(self, slug: str, *, include_archived: bool = False) -> dict | None:
         """Look a project up by slug. ``None`` when it does not exist.
@@ -497,16 +500,33 @@ class Client:
         """A pre-0066 backend IGNORES the ``tags=`` filter and returns the
         unfiltered list — a confident wrong answer presented as filtered (the
         same failure shape as the 0054 ``project_id`` guard in list_runs).
-        Every returned row must carry ALL requested tags in canonical form;
-        refuse rather than mislabel. (An empty page proves nothing and passes.)"""
+        Every returned row must carry ALL requested tags; both sides compare in
+        canonical form so a legacy un-normalized row can never false-positive.
+        Refuse rather than mislabel. (An empty page proves nothing and passes.)"""
         want = set(canonical_tags(requested))
         for item in items:
-            if want - set(item.get("tags") or []):
+            if want - set(canonical_tags(item.get("tags") or [])):
                 raise errors.NotFoundError(
                     f"this research-os backend predates {route}?tags= (0066): it "
                     "ignored the filter and returned unfiltered rows. Upgrade "
                     "the backend to filter by tags."
                 )
+
+    @staticmethod
+    def _verify_tags_written(sent: list[str], row: dict | None, route: str) -> None:
+        """A pre-0066 backend silently DROPS ``tags`` from write bodies (unknown
+        Pydantic fields are ignored) and answers 200 with the row unchanged — a
+        confident no-op. The response must echo the canonical sent list; refuse
+        rather than pretend (the write-side twin of ``_verify_tags_filter``).
+        ``row=None`` (a spooled fail-open write) is unverifiable and passes."""
+        if row is None:
+            return
+        if "tags" not in row or canonical_tags(row.get("tags") or []) != canonical_tags(sent):
+            raise errors.NotFoundError(
+                f"this research-os backend predates tags on {route} (0066): it "
+                "ignored the tags write and returned the row unchanged. Upgrade "
+                "the backend."
+            )
 
     def list_projects(
         self,
@@ -519,8 +539,11 @@ class Client:
         query = dict(params)
         if workspace_id is not None:
             query["workspace_id"] = workspace_id
+        # Send the canonical form (the server normalizes anyway): the guard
+        # below then compares like against like.
+        tags = canonical_tags(tags) if tags else None
         if tags:
-            query["tags"] = list(tags)
+            query["tags"] = tags
         page = self.transport.get_page("/v1/projects", params=query or None)
         if tags and page.items:
             self._verify_tags_filter(tags, page.items, "GET /v1/projects")
@@ -556,7 +579,10 @@ class Client:
         }
         if not body:
             raise ValueError("update_project needs at least one field to set")
-        return self.transport.patch(f"/v1/projects/{project_id}", body)
+        row = self.transport.patch(f"/v1/projects/{project_id}", body)
+        if tags is not None:
+            self._verify_tags_written(tags, row, "PATCH /v1/projects/{id}")
+        return row
 
     def move_project(self, project_id: str, workspace_id: str) -> dict:
         """Re-file a project into another workspace.
@@ -959,7 +985,10 @@ class Client:
         }
         if not body:
             raise ValueError("update_experiment needs at least one field to set")
-        return self.transport.patch(f"/v1/experiments/{experiment_id}", body)
+        row = self.transport.patch(f"/v1/experiments/{experiment_id}", body)
+        if tags is not None:
+            self._verify_tags_written(tags, row, "PATCH /v1/experiments/{id}")
+        return row
 
     def list_experiments(
         self,
@@ -972,8 +1001,9 @@ class Client:
         query = dict(params)
         if project_id is not None:
             query["project_id"] = project_id
+        tags = canonical_tags(tags) if tags else None
         if tags:
-            query["tags"] = list(tags)
+            query["tags"] = tags
         page = self.transport.get_page("/v1/experiments", params=query or None)
         if tags and page.items:
             self._verify_tags_filter(tags, page.items, "GET /v1/experiments")
@@ -1938,8 +1968,9 @@ class Client:
             query["project_id"] = project_id
         if direct:
             query["direct"] = "true"
+        tags = canonical_tags(tags) if tags else None
         if tags:
-            query["tags"] = list(tags)
+            query["tags"] = tags
         page = self.transport.get_page("/v1/runs", params=query or None)
         if tags and page.items:
             # Same refuse-rather-than-mislabel contract as the 0054 guard below.
@@ -2116,7 +2147,7 @@ class Client:
             "scope": scope,
             "depth": depth,
             "status": status,
-            "tags": tags,
+            "tags": canonical_tags(tags) if tags else None,
             "limit": limit,
             "cursor": cursor,
         }

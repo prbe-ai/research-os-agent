@@ -245,6 +245,9 @@ def _outbox_notice() -> None:
         pass
 
 
+from ..sdk.tags import canonical_tags  # noqa: E402
+
+
 def _run_handle(client: Client, run_id: str):
     from ..sdk.run import Run
 
@@ -262,8 +265,6 @@ def _apply_tag_ops(
     outright; otherwise positional adds append (canonical, deduped) and
     ``--remove`` drops. The same tag in add AND remove is a caller bug — error,
     never a silent tie-break."""
-    from ..sdk.tags import canonical_tags
-
     if replace is not None:
         if add or remove:
             raise typer.BadParameter("--set replaces outright; don't combine it with adds/--remove")
@@ -276,6 +277,22 @@ def _apply_tag_ops(
     out = [t for t in canonical_tags(current) if t not in remove_c]
     out.extend(t for t in add_c if t not in out)
     return out
+
+
+def _tag_verb_flow(entity_id, current, add, remove, replace, write) -> dict:
+    """Shared flow for the three ``tag`` verbs: bare invocation lists, anything
+    else is read-modify-write. The changed-check compares against the RAW
+    stored list (not its canonical form) so re-tagging a pre-0066 row with its
+    own canonical name still writes once and heals the stored form; the write
+    callbacks verify the server actually persisted tags (0066 guard)."""
+    current = list(current or [])
+    if not add and not remove and replace is None:
+        return {"id": entity_id, "tags": current}
+    wanted = _apply_tag_ops(current, add or [], remove or [], replace)
+    if wanted == current:
+        return {"id": entity_id, "tags": current}
+    result = write(wanted) or {}
+    return {"id": result.get("id", entity_id), "tags": result.get("tags", wanted)}
 
 
 def _version_cb(value: bool) -> None:
@@ -1388,24 +1405,22 @@ def project_patch(
 def project_tag(
     project: str = typer.Argument(..., help="project id or slug"),
     add: list[str] = typer.Argument(None, help="tags to add"),
-    remove: list[str] = typer.Option(None, "--remove", help="tag to remove (repeatable)"),
-    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable)"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
 ) -> None:
     """Tag a project: positional args add, --remove drops, --set replaces; bare lists."""
-    from ..sdk.tags import canonical_tags
-
     with _client() as c:
         pid = _project_id(c, project)
-        current = list(c.get_project(pid).get("tags") or [])
-        if not add and not remove and replace is None:
-            _print_json({"id": pid, "tags": current})
-            return
-        wanted = _apply_tag_ops(current, add or [], remove or [], replace)
-        if wanted != canonical_tags(current):
-            result = c.update_project(pid, tags=wanted)
-        else:
-            result = {"id": pid, "tags": current}
-        _print_json({"id": result.get("id", pid), "tags": result.get("tags", current)})
+        _print_json(
+            _tag_verb_flow(
+                pid,
+                c.get_project(pid).get("tags"),
+                add,
+                remove,
+                replace,
+                lambda wanted: c.update_project(pid, tags=wanted),
+            )
+        )
 
 
 @project_app.command("move")
@@ -1625,8 +1640,8 @@ def run_list(
 def run_tag(
     run: str = typer.Argument(..., help="run id"),
     add: list[str] = typer.Argument(None, help="tags to add"),
-    remove: list[str] = typer.Option(None, "--remove", help="tag to remove (repeatable)"),
-    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable)"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
 ) -> None:
     """Tag a run: positional args add, --remove drops, --set replaces; bare lists.
 
@@ -1634,18 +1649,20 @@ def run_tag(
     lowercase-kebab and 422s past the caps). Retro-tag runs the SDK is DONE
     with: a still-live run's next push replaces out-of-band edits (last writer
     wins — CONTRACT.md "tags")."""
-    from ..sdk.tags import canonical_tags
-
     with _client() as c:
         handle = _run_handle(c, run)
-        current = handle.tags
-        if not add and not remove and replace is None:
-            _print_json({"id": handle.id, "tags": current})
-            return
-        wanted = _apply_tag_ops(current, add or [], remove or [], replace)
-        if wanted != canonical_tags(current):
-            handle.set_tags(wanted)
-        _print_json({"id": handle.id, "tags": handle.tags})
+        # strict=True: an interactive tag edit must fail loudly, never spool a
+        # stale whole-list replace for delayed replay (review 2026-07-30).
+        _print_json(
+            _tag_verb_flow(
+                handle.id,
+                handle.tags,
+                add,
+                remove,
+                replace,
+                lambda wanted: handle.set_tags(wanted, strict=True),
+            )
+        )
 
 
 @run_app.command("end")
@@ -3180,23 +3197,21 @@ def experiment_list(
 def experiment_tag(
     experiment_id: str = typer.Argument(...),
     add: list[str] = typer.Argument(None, help="tags to add"),
-    remove: list[str] = typer.Option(None, "--remove", help="tag to remove (repeatable)"),
-    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable)"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
 ) -> None:
     """Tag an experiment: positional args add, --remove drops, --set replaces; bare lists."""
-    from ..sdk.tags import canonical_tags
-
     with _client() as c:
-        current = list(c.get_experiment(experiment_id).get("tags") or [])
-        if not add and not remove and replace is None:
-            _print_json({"id": experiment_id, "tags": current})
-            return
-        wanted = _apply_tag_ops(current, add or [], remove or [], replace)
-        if wanted != canonical_tags(current):
-            result = c.update_experiment(experiment_id, tags=wanted)
-        else:
-            result = {"id": experiment_id, "tags": current}
-        _print_json({"id": result.get("id", experiment_id), "tags": result.get("tags", current)})
+        _print_json(
+            _tag_verb_flow(
+                experiment_id,
+                c.get_experiment(experiment_id).get("tags"),
+                add,
+                remove,
+                replace,
+                lambda wanted: c.update_experiment(experiment_id, tags=wanted),
+            )
+        )
 
 
 @experiment_app.command("archive")
