@@ -708,6 +708,7 @@ class ResearchReadService:
         scope: str | None = None,
         depth: int = 1,
         status: str | None = None,
+        tags: list[str] | None = None,
         limit: int = 50,
         cursor: str | None = None,
     ) -> dict:
@@ -719,7 +720,12 @@ class ResearchReadService:
         """
         try:
             payload = self.source.browse(
-                scope=scope, depth=depth, status=status, limit=limit, cursor=cursor
+                scope=scope,
+                depth=depth,
+                status=status,
+                tags=tags,
+                limit=limit,
+                cursor=cursor,
             )
         except errors.CapabilityUnavailable:
             # NOT an empty tree: "nothing exists" and "this server cannot tell

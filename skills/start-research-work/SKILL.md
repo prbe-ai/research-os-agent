@@ -106,5 +106,12 @@ near-miss of an existing slug rather than warning.)
    and cannot be published. Record W&B, scheduler, pod, image and storage ids with
    `run.link(...)` / `probe link` as they appear; they land on `foreign_keys`.
 
+6. **Tag it.** Repeatable `--tag` on `run start` / `experiment create` /
+   `project create` (SDK `tags=[...]`). Use 1-3 lowercase-kebab tags; prefer
+   `baseline`, `ablation`, `sweep`, `debug`, `smoke-test`, `prod-candidate` —
+   free-form allowed. If a run's meaning changes later:
+   `probe run tag RUN_ID flaky --remove prod-candidate`. Filter with
+   `--tag` on `run list` / `experiment list` / `project list`.
+
 Recording what the run does, and closing it, is `track-research-work`. Command syntax
 for artifacts, assets, publishing and project admin is in that skill's `reference.md`.

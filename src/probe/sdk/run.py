@@ -817,6 +817,28 @@ class Run:
                 strict=False,
             )
 
+    # -- tags ----------------------------------------------------------------
+    @property
+    def tags(self) -> list[str]:
+        return list(self._data.get("tags") or [])
+
+    def set_tags(self, tags: list[str], *, strict: bool | None = None):
+        """REPLACE the run's whole tag list ([] clears). The server normalizes
+        to lowercase-kebab and 422s past the caps (CONTRACT.md "tags").
+        Granular add/remove is the CLI ``probe run tag`` verb's
+        read-modify-write job, not a server op.
+
+        A pre-0066 backend would silently drop the field and 200 the old row;
+        the response is verified so that no-op cannot masquerade as success.
+        A spooled fail-open write returns None (unverifiable until flush)."""
+        data = self._client.write(
+            "PATCH", f"/v1/runs/{self.id}", {"tags": list(tags)}, strict=strict
+        )
+        if data:
+            self._client._verify_tags_written(list(tags), data, "PATCH /v1/runs/{id}")
+            self._data = data
+        return data
+
     # -- foreign keys (shadow-SoT handles) ----------------------------------
     def link(self, *, strict: bool | None = None, **foreign_keys: Any):
         """Attach foreign keys (wandb_run_id, mlflow_run_id, s3_prefix, ...) to the
