@@ -27,6 +27,16 @@
 - The begin phase now downloads and sha256-verifies every file the trailer
   names (previously just the manifest), so the begin archive inherits the
   manifests' tamper-evidence.
+- Experiment creation and passive ingest now require an explicit project.
+  The CLI can use `--project`, an active project selection, or an exact project
+  identifier; SDK and ingest callers must send the project coordinate.
+
+### Removed
+
+- The agent no longer creates or relies on a synthetic `Default` project, and
+  default-named projects can be archived like any other project.
+- The unused automatic-hypothesis helpers and placeholder experiment behavior
+  have been deleted.
 
 ## 0.23.0 (unreleased)
 

@@ -113,6 +113,8 @@ that stopped batching would only be caught by one count assertion.
 **Takes:** 422 on out-of-range values, the way the fake already does for
 `ScopedUploadRequest` extras.
 
+## Completed
+
 ### `defaults.auto_hypothesis` is dead
 
 **What:** `auto_hypothesis` / `AUTO_HYPOTHESIS_PREFIX` / `_agent_context` are referenced
@@ -121,3 +123,5 @@ is not coming back — it was first-write-wins, so it became permanent unless a 
 noticed.
 
 **Takes:** Delete them and their test, one release after 0.15.0.
+
+**Completed:** v0.24.0 (2026-07-30)
