@@ -252,13 +252,32 @@ def test_tool_schemas_match_the_pre_offload_baseline() -> None:
         sorted((x.model_dump(mode='json', exclude_none=True) for x in t), \
         key=lambda d: d['name']), indent=2, sort_keys=True) + chr(10))"
     """
+    import inspect
+
+    def normalized(tools: list[dict]) -> list[dict]:
+        # Python 3.13 dedents docstrings at COMPILE time; 3.11/3.12 (the
+        # deployed image is 3.12) keep raw indentation, so descriptions —
+        # which FastMCP takes verbatim from __doc__ — differ across
+        # interpreters by leading whitespace only. cleandoc both sides:
+        # the pin stays byte-exact on every wrapper-sensitive field
+        # (parameters, types, required) and whitespace-blind on prose.
+        out = []
+        for t in tools:
+            t = dict(t)
+            if "description" in t:
+                t["description"] = inspect.cleandoc(t["description"])
+            out.append(t)
+        return out
+
     mcp = create_server()
     tools = anyio.run(mcp.list_tools)
-    current = sorted(
-        (t.model_dump(mode="json", exclude_none=True) for t in tools),
-        key=lambda t: t["name"],
+    current = normalized(
+        sorted(
+            (t.model_dump(mode="json", exclude_none=True) for t in tools),
+            key=lambda t: t["name"],
+        )
     )
-    expected = json.loads(_SCHEMA_BASELINE.read_text())
+    expected = normalized(json.loads(_SCHEMA_BASELINE.read_text()))
     assert current == expected
 
 
