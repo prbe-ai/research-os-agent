@@ -84,6 +84,9 @@ stops when you finish it, so there is nothing to do. A CLI-opened run is detache
 does not beat at all — do not bolt a beat onto one you cannot keep beating for the
 whole run: a run that beats once and then goes quiet is reaped as `crashed`.
 
+Outcome changed the run's meaning (flaky, superseded, promoted)? Retro-tag it:
+`probe run tag RUN_ID <tag> [--remove <tag>]` (also `experiment tag` / `project tag`).
+
 Do not invoke `probe hook ...`; those are reserved for deterministic coding-agent hooks.
 
 ## Choosing a view

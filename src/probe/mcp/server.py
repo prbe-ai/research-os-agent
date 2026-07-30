@@ -165,6 +165,7 @@ def create_server(
         scope: str | None = None,
         depth: int = 1,
         status: str | None = None,
+        tags: list[str] | None = None,
         limit: int = 50,
         cursor: str | None = None,
     ) -> dict:
@@ -187,13 +188,19 @@ def create_server(
             not clamped -- a silent clamp would let you believe you saw more
             than you did.
         status: filter runs by lifecycle status (e.g. "running").
+        tags: filter runs by tags (repeatable; a run must carry ALL — 0066).
         limit: per level, not per response.
 
         Every node carries a `ref` you can hand straight to `get_entity`.
         """
         with tool_scope("browse_research"):
             return svc().browse_research(
-                scope=scope, depth=depth, status=status, limit=limit, cursor=cursor
+                scope=scope,
+                depth=depth,
+                status=status,
+                tags=tags,
+                limit=limit,
+                cursor=cursor,
             )
 
     @mcp.tool()

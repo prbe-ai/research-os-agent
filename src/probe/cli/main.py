@@ -251,6 +251,33 @@ def _run_handle(client: Client, run_id: str):
     return Run(client, client.get_run(run_id))
 
 
+def _apply_tag_ops(
+    current: list[str],
+    add: list[str],
+    remove: list[str],
+    replace: list[str] | None,
+) -> list[str]:
+    """Compute a ``tag`` verb's replacement list (read-modify-write over the
+    server's whole-list-replace PATCH, CONTRACT.md "tags"). ``--set`` wins
+    outright; otherwise positional adds append (canonical, deduped) and
+    ``--remove`` drops. The same tag in add AND remove is a caller bug — error,
+    never a silent tie-break."""
+    from ..sdk.tags import canonical_tags
+
+    if replace is not None:
+        if add or remove:
+            raise typer.BadParameter("--set replaces outright; don't combine it with adds/--remove")
+        return canonical_tags(replace)
+    add_c = canonical_tags(add)
+    remove_c = set(canonical_tags(remove))
+    both = [t for t in add_c if t in remove_c]
+    if both:
+        raise typer.BadParameter(f"tag(s) both added and removed: {', '.join(both)}")
+    out = [t for t in canonical_tags(current) if t not in remove_c]
+    out.extend(t for t in add_c if t not in out)
+    return out
+
+
 def _version_cb(value: bool) -> None:
     if value:
         typer.echo(f"probe {__version__}")
@@ -1261,6 +1288,7 @@ def project_create(
     slug: str = typer.Argument(..., help="url-safe identifier, unique per tenant"),
     name: str = typer.Option(None, "--name", help="display name (defaults to the slug)"),
     description: str = typer.Option(None, "--description"),
+    tag: list[str] = typer.Option(None, "--tag", help="tag at creation (repeatable)"),
     workspace: str = typer.Option(
         None, "--workspace", help="workspace id; defaults to the active one"
     ),
@@ -1277,6 +1305,7 @@ def project_create(
                 name,
                 workspace_id=_resolve_workspace(workspace),
                 description=description,
+                tags=tag or None,
             )
         )
 
@@ -1290,6 +1319,7 @@ def project_list(
         False, "--all", help="every workspace you can see (ignores --workspace and context)"
     ),
     include_archived: bool = typer.Option(False, "--include-archived"),
+    tag: list[str] = typer.Option(None, "--tag", help="filter: project must carry ALL (repeatable)"),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
     cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
 ) -> None:
@@ -1303,7 +1333,7 @@ def project_list(
     # --all means "send no filter" rather than some magic value.
     workspace_id = None if all_workspaces else _resolve_workspace(workspace)
     with _client() as c:
-        page = c.list_projects(workspace_id=workspace_id, **params)
+        page = c.list_projects(workspace_id=workspace_id, tags=tag or None, **params)
     _print_json({"items": page.items, "next_cursor": page.next_cursor})
 
 
@@ -1352,6 +1382,30 @@ def project_patch(
         _print_json(
             c.update_project(_project_id(c, project_id), name=name, description=description)
         )
+
+
+@project_app.command("tag")
+def project_tag(
+    project: str = typer.Argument(..., help="project id or slug"),
+    add: list[str] = typer.Argument(None, help="tags to add"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove (repeatable)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable)"),
+) -> None:
+    """Tag a project: positional args add, --remove drops, --set replaces; bare lists."""
+    from ..sdk.tags import canonical_tags
+
+    with _client() as c:
+        pid = _project_id(c, project)
+        current = list(c.get_project(pid).get("tags") or [])
+        if not add and not remove and replace is None:
+            _print_json({"id": pid, "tags": current})
+            return
+        wanted = _apply_tag_ops(current, add or [], remove or [], replace)
+        if wanted != canonical_tags(current):
+            result = c.update_project(pid, tags=wanted)
+        else:
+            result = {"id": pid, "tags": current}
+        _print_json({"id": result.get("id", pid), "tags": result.get("tags", current)})
 
 
 @project_app.command("move")
@@ -1541,6 +1595,57 @@ def run_child(
                 "with `probe run start --experiment`."
             )
     print(child.id)
+
+
+@run_app.command("list")
+def run_list(
+    experiment: str = typer.Option(None, "--experiment", help="experiment id"),
+    project: str = typer.Option(None, "--project", help="project id or slug"),
+    direct: bool = typer.Option(False, "--direct", help="only project-direct runs"),
+    tag: list[str] = typer.Option(None, "--tag", help="filter: run must carry ALL (repeatable)"),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+    cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
+) -> None:
+    """List runs, filterable by experiment, project, and tags (AND semantics)."""
+    params: dict[str, Any] = {"limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    with _client() as c:
+        page = c.list_runs(
+            experiment_id=experiment,
+            project_id=_project_id(c, project) if project else None,
+            direct=direct,
+            tags=tag or None,
+            **params,
+        )
+    _print_json({"items": page.items, "next_cursor": page.next_cursor})
+
+
+@run_app.command("tag")
+def run_tag(
+    run: str = typer.Argument(..., help="run id"),
+    add: list[str] = typer.Argument(None, help="tags to add"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove (repeatable)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable)"),
+) -> None:
+    """Tag a run: positional args add, --remove drops, --set replaces; bare lists.
+
+    Read-modify-write over PATCH's whole-list replace (the server normalizes to
+    lowercase-kebab and 422s past the caps). Retro-tag runs the SDK is DONE
+    with: a still-live run's next push replaces out-of-band edits (last writer
+    wins — CONTRACT.md "tags")."""
+    from ..sdk.tags import canonical_tags
+
+    with _client() as c:
+        handle = _run_handle(c, run)
+        current = handle.tags
+        if not add and not remove and replace is None:
+            _print_json({"id": handle.id, "tags": current})
+            return
+        wanted = _apply_tag_ops(current, add or [], remove or [], replace)
+        if wanted != canonical_tags(current):
+            handle.set_tags(wanted)
+        _print_json({"id": handle.id, "tags": handle.tags})
 
 
 @run_app.command("end")
@@ -3000,6 +3105,7 @@ def experiment_create(
         None, "--project", help="project slug; defaults to the active one (`probe project use`)"
     ),
     description: str = typer.Option(None, "--description"),
+    tag: list[str] = typer.Option(None, "--tag", help="tag at creation (repeatable)"),
 ) -> None:
     """Create an experiment.
 
@@ -3025,6 +3131,7 @@ def experiment_create(
             c.create_experiment(slug, name, hypothesis=hypothesis,
                 project_id=project_id,
                 description=description,
+                tags=tag or None,
             )
         )
 
@@ -3044,6 +3151,52 @@ def experiment_set(
             experiment_id, hypothesis=hypothesis, name=name, description=description
         )
     _print_json(result)
+
+
+@experiment_app.command("list")
+def experiment_list(
+    project: str = typer.Option(None, "--project", help="project id or slug"),
+    tag: list[str] = typer.Option(None, "--tag", help="filter: experiment must carry ALL (repeatable)"),
+    include_archived: bool = typer.Option(False, "--include-archived"),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+    cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
+) -> None:
+    """List experiments, filterable by project and tags (AND semantics)."""
+    params: dict[str, Any] = {"limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    if include_archived:
+        params["include"] = _INCLUDE_ARCHIVED
+    with _client() as c:
+        page = c.list_experiments(
+            project_id=_project_id(c, project) if project else None,
+            tags=tag or None,
+            **params,
+        )
+    _print_json({"items": page.items, "next_cursor": page.next_cursor})
+
+
+@experiment_app.command("tag")
+def experiment_tag(
+    experiment_id: str = typer.Argument(...),
+    add: list[str] = typer.Argument(None, help="tags to add"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove (repeatable)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable)"),
+) -> None:
+    """Tag an experiment: positional args add, --remove drops, --set replaces; bare lists."""
+    from ..sdk.tags import canonical_tags
+
+    with _client() as c:
+        current = list(c.get_experiment(experiment_id).get("tags") or [])
+        if not add and not remove and replace is None:
+            _print_json({"id": experiment_id, "tags": current})
+            return
+        wanted = _apply_tag_ops(current, add or [], remove or [], replace)
+        if wanted != canonical_tags(current):
+            result = c.update_experiment(experiment_id, tags=wanted)
+        else:
+            result = {"id": experiment_id, "tags": current}
+        _print_json({"id": result.get("id", experiment_id), "tags": result.get("tags", current)})
 
 
 @experiment_app.command("archive")

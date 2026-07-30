@@ -95,6 +95,7 @@ class ResearchOSSource:
         scope: str | None = None,
         depth: int | None = None,
         status: str | None = None,
+        tags: list[str] | None = None,
         limit: int | None = None,
         cursor: str | None = None,
     ) -> dict:
@@ -108,7 +109,12 @@ class ResearchOSSource:
             raise self._browse_unavailable()
         try:
             response = self.client.browse(
-                scope=scope, depth=depth, status=status, limit=limit, cursor=cursor
+                scope=scope,
+                depth=depth,
+                status=status,
+                tags=tags,
+                limit=limit,
+                cursor=cursor,
             )
         except errors.NotFoundError:
             # A scoped 404 means the SCOPE was not found on a backend that has
