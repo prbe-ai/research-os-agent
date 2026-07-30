@@ -2,6 +2,23 @@
 
 ## 0.24.0 (unreleased)
 
+### Breaking
+
+**Root `--token`, `--ingest-token`, and `--hmac-secret` flags are removed.**
+A secret in argv leaks into shell history and `ps`, and the new background
+outbox drainer could never resolve a credential that lived only in one
+process's flags. Migrate to the environment variables the SDK already honors
+(`PROBE_TOKEN`, `PROBE_INGEST_TOKEN`, `PROBE_HMAC_SECRET`) or a named context
+via `probe login`. `probe login --token` (which STORES the credential) is
+unchanged; `--base-url` and `--spool-dir` remain.
+
+**The JSONL spool is replaced by the outbox journal.** Fail-open writes now
+land in `~/.local/state/probe/outbox` (override: `PROBE_OUTBOX_DIR` or
+`--spool-dir`) as one versioned operation journal (`probe.outbox/1`) with
+per-op identity, run tags, context pins, and a content-addressed blob store.
+A surviving legacy spool is imported automatically, in order, on first use.
+`Client(spool=...)` is gone; pass `journal=` or `spool_dir=`.
+
 ### Added
 
 - **Begin-state bytes** (`probe.sandbox-state/1`): the snapshot tool's `begin`
@@ -21,6 +38,29 @@
   `docs/2026-07-29-begin-state-bytes.md`).
 - `begin_timeout_sec` now defaults to `None`, resolving to 120 s (600 s when
   `begin_bytes` is on); explicit values are honored unchanged.
+
+**`--async` / `PROBE_ASYNC=1`: non-blocking writes.** `probe log`, `span add`,
+`note add`, `artifact add`, and `run end` queue to the local outbox and return
+immediately; a wake-on-enqueue detached drainer delivers with retries and
+capped backoff until the queue is empty, then exits. Small files fingerprint
+and register upload intent inline (a ~2s-capped presign ping creates the
+server's pending row); large files snapshot instantly (filesystem clone where
+supported) and hash in the drainer. Failure policy: permanent rejections
+dead-letter and the queue keeps flowing; transient failures wait and retry;
+401/403 halts delivery with items untouched.
+
+Delivery is **at-least-once**: a crash between the server committing a write
+and the journal deleting the op replays it (ops carry an `op_id`; the drain
+fsyncs deletions to keep the window minimal, and 409-with-existing_id on a
+retry is treated as our own earlier delivery). Scope run refs consistently —
+the run-end barrier matches the literal ref you enqueued with (id vs slug).
+
+**`probe outbox status|drain|watch|retry|pause|resume`** — one surface over
+the whole queue; `probe flush` is now an alias of `outbox drain`. Every
+command prints a one-line stderr banner when the outbox holds dead letters or
+is auth-blocked, and `probe doctor` gained an Outbox section. `probe run end`
+is a run-scoped barrier: it delivers that run's queued items first and exits
+non-zero (without closing the run) while any cannot be delivered.
 
 ### Changed
 

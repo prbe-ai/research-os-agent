@@ -92,6 +92,11 @@ class Capabilities:
     auto_update_enabled: bool = False
     last_update_attempt: str | None = None
 
+    #: Journal.read_status() of the async outbox, None when it has never been
+    #: used. Same rationale as LAST UPDATE ATTEMPT: a detached drainer cannot
+    #: report failure anywhere else.
+    outbox_status: dict | None = None
+
     warnings: list[str] = field(default_factory=list)
 
     @property

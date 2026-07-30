@@ -950,8 +950,24 @@ class Run:
         return data
 
     def finish(self, status: str = "completed", *, summary: dict | None = None):
-        """Close the run. Flushes any spooled writes first."""
+        """Close the run. Flushes any journaled writes first, and refuses to
+        mark the run terminal while any of its own outbox ops remain
+        undelivered or dead-lettered -- the CLI's run-end barrier exists in
+        the SDK too (red team: finish() used to discard the drain outcome and
+        close 'completed' over silently missing data)."""
         self._client.flush()
+        journal = self._client.journal
+        blocked = [
+            op
+            for _, op in journal.pending() + journal.failed()
+            if op.get("run_ref") == self.id
+        ]
+        if blocked:
+            raise errors.RosError(
+                f"run {self.id} not closed: {len(blocked)} outbox op(s) are "
+                "undelivered or dead-lettered — see `probe outbox status`, "
+                "fix or `probe outbox retry`, then finish again"
+            )
         return self.set_status(status, ended_at=_now(), summary=summary)
 
     def execute(

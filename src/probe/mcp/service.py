@@ -1138,11 +1138,27 @@ class ResearchReadService:
         )
 
     def _view_run_artifacts(self, entity: dict, request: _Req) -> _ViewData:
-        return _ViewData(
-            payload={"filters": request.filters or None},
-            rows=self.source.run_artifacts(str(entity["id"]), **request.filters),
-            rows_key="artifacts",
-        )
+        rows = self.source.run_artifacts(str(entity["id"]), **request.filters)
+        payload: dict = {"filters": request.filters or None}
+        # Async-outbox visibility (eng review 2026-07-29, 1A): a row with
+        # status "pending" is a REGISTERED INTENT whose bytes have not arrived
+        # (a client outbox may still deliver it); "failed" means the grace
+        # window expired undelivered. Surfacing the counts here keeps the
+        # metadata-match-is-not-the-blob rule unmissable for agents.
+        pending = sum(1 for r in rows if isinstance(r, dict) and r.get("status") == "pending")
+        failed = sum(1 for r in rows if isinstance(r, dict) and r.get("status") == "failed")
+        if pending or failed:
+            payload["undelivered"] = {
+                "pending": pending,
+                "failed": failed,
+                "note": (
+                    "pending = upload intent registered, bytes not yet arrived "
+                    "(an async client outbox may still deliver); failed = the "
+                    "grace window expired undelivered. Only status='complete' "
+                    "rows have retrievable bytes."
+                ),
+            }
+        return _ViewData(payload=payload, rows=rows, rows_key="artifacts")
 
     def _view_experiment_artifacts(self, entity: dict, request: _Req) -> _ViewData:
         return _ViewData(

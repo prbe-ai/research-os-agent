@@ -429,13 +429,13 @@ def test_fail_open_spools_on_error_then_flush(app, tmp_path):
     c = make_client(app, tmp_spool=tmp_path / "spool")
     run = open_run(c, experiment="e", name="r")
     app.fail_next_metrics = True
-    # fail-open: the failing metrics call is spooled, does not raise
+    # fail-open: the failing metrics call is journaled, does not raise
     run.log({"loss": 1.0}, step=1)
-    assert c.spool.pending(), "expected the failed write to be spooled"
+    assert c.journal.pending(), "expected the failed write to be journaled"
     # replay succeeds now
     sent = c.flush()
     assert sent == 1
-    assert not c.spool.pending()
+    assert not c.journal.pending()
 
 
 def test_strict_write_raises(app, tmp_path):
