@@ -75,11 +75,27 @@ from .hashing import fingerprint
 
 SCHEMA = "probe.outbox/1"
 
+def _inline_hash_max() -> int:
+    raw = os.environ.get("PROBE_ASYNC_INLINE_HASH_MAX")
+    if raw:
+        try:
+            return int(raw)
+        except ValueError:
+            # A malformed override must not crash every import of this module
+            # (client construction, enqueue, the drainer) -- fall back loudly.
+            import warnings
+
+            warnings.warn(
+                f"ignoring malformed PROBE_ASYNC_INLINE_HASH_MAX={raw!r}; "
+                "expected an integer byte count",
+                stacklevel=2,
+            )
+    return 256 * 1024 * 1024
+
+
 #: 11A -- files at or under this size hash (and presign-ping) inline at
 #: enqueue; larger ones snapshot instantly and hash in the drainer.
-INLINE_HASH_MAX_BYTES = int(
-    os.environ.get("PROBE_ASYNC_INLINE_HASH_MAX", 256 * 1024 * 1024)
-)
+INLINE_HASH_MAX_BYTES = _inline_hash_max()
 
 _RUN_PATH = re.compile(r"^/v1/runs/([^/]+)(?:/|$)")
 
@@ -191,7 +207,19 @@ class Journal:
 
     # -- append -------------------------------------------------------------
     def _op_filename(self, op_id: str) -> str:
-        return f"{time.time_ns():020d}-{op_id}.json"
+        """FIFO name: monotonic per-journal sequence first, wall clock second.
+
+        Runs under the append lock. The sequence file makes ordering immune to
+        backwards clock steps (red team: NTP correction between enqueues could
+        otherwise sort a run-end PATCH before the metrics it must follow)."""
+        seq_file = self.dir / ".seq"
+        try:
+            seq = int(seq_file.read_text().strip() or 0)
+        except (OSError, ValueError):
+            seq = 0
+        seq += 1
+        write_text_atomic(seq_file, f"{seq}\n", mode=0o600)
+        return f"{seq:012d}-{time.time_ns():020d}-{op_id}.json"
 
     def _base_op(self, kind: str, run_ref: str | None) -> dict:
         return {
@@ -364,6 +392,34 @@ class Journal:
                 self._write_status_locked()
         return moved
 
+    def discard_failed(self, op_id: str | None = None) -> int:
+        """Move dead letters (one, or all) to ``discarded/`` -- an audit-safe
+        tombstone rather than deletion. Covers quarantined-corrupt files too
+        (matched by name when they cannot be parsed), which retry can never
+        requeue (red team: without a discard verb they nagged forever)."""
+        target = self.failed_dir.parent / "discarded"
+        moved = 0
+        with file_lock(self.append_lock):
+            if self.failed_dir.exists():
+                target.mkdir(parents=True, exist_ok=True, mode=0o700)
+                for path in sorted(self.failed_dir.iterdir()):
+                    if op_id is not None:
+                        try:
+                            if json.loads(path.read_text()).get("op_id") != op_id:
+                                continue
+                        except (OSError, json.JSONDecodeError, ValueError):
+                            if op_id not in path.name:
+                                continue
+                    os.replace(path, target / path.name)
+                    moved += 1
+            if moved:
+                fsync_directory(target)
+                fsync_directory(self.failed_dir)
+                self._write_status_locked()
+        if moved:
+            self.gc_blobs()
+        return moved
+
     def clear_auth_block(self) -> None:
         """Forget a recorded auth block (after re-login / explicit retry) so
         the wake-on-enqueue drainer starts spawning again (codex: nothing
@@ -464,7 +520,12 @@ class Journal:
             for _, op in self.pending() + self.failed():
                 upload = op.get("upload") or {}
                 if upload.get("staged"):
-                    referenced.add(upload.get("blob") or f"incoming-{op['op_id']}")
+                    # BOTH possible names stay referenced: mid-drain, an op
+                    # whose digest was just persisted may still hold its bytes
+                    # under the incoming staging name (red team).
+                    referenced.add(f"incoming-{op['op_id']}")
+                    if upload.get("blob"):
+                        referenced.add(upload["blob"])
             cutoff = time.time() - staging_grace_seconds
             for path in self.blobs_dir.iterdir():
                 if path.name.startswith(".staging-"):
@@ -496,6 +557,17 @@ class Journal:
         spool = spool or Spool()
         if not (spool.file.exists() or spool.inflight_file.exists()):
             return 0
+        if self.context is None:
+            # Stamp the records with the context that is current AT IMPORT
+            # TIME (red team: a null pin resolves at drain time, so a context
+            # switch in between would deliver the old spool's writes to a
+            # different tenant than the one that captured them).
+            from .config import current_context_name, resolve
+
+            self.context = {
+                "name": current_context_name() or None,
+                "base_url": resolve().base_url,
+            }
         imported = 0
         with file_lock(spool.lock_file):
             # NOT spool.pending(): that takes the same lock we already hold,
@@ -720,6 +792,17 @@ def _execute(journal: Journal, client, op_path: Path, op: dict) -> None:
             f"upload op {op.get('op_id')} is missing anchor/name/src_path", status=422
         )
     source = journal.blob_path(op) or Path(upload["src_path"])
+    if not source.exists() and upload.get("staged"):
+        # Recover an interrupted incoming-><digest> rename from a previous
+        # drain (red team): the op may name a digest whose file only exists
+        # under the incoming staging name (or vice versa).
+        incoming = journal.blobs_dir / f"incoming-{op['op_id']}"
+        if incoming.exists():
+            if upload.get("blob"):
+                os.replace(incoming, source)
+                fsync_directory(journal.blobs_dir)
+            else:
+                source = incoming
     if not source.exists():
         raise errors.ValidationError(
             f"staged bytes for op {op['op_id']} are gone ({source})", status=422
@@ -729,6 +812,11 @@ def _execute(journal: Journal, client, op_path: Path, op: dict) -> None:
     if digest is None:
         # 11A: the big-file path hashed nothing at enqueue.
         digest, size = fingerprint(str(source))
+        upload["blob"], upload["size_bytes"] = digest, size
+        # Persist the digest BEFORE the rename (red team: the reverse order
+        # left a crash window where the op pointed at a staging name that no
+        # longer existed, and gc then reaped the renamed blob as unreferenced).
+        write_text_atomic(op_path, json.dumps(op, indent=2) + "\n", mode=0o600)
         if upload.get("staged"):
             hashed = journal.blobs_dir / digest
             if hashed.exists():
@@ -737,12 +825,6 @@ def _execute(journal: Journal, client, op_path: Path, op: dict) -> None:
                 os.replace(source, hashed)
                 fsync_directory(journal.blobs_dir)
             source = hashed
-        upload["blob"], upload["size_bytes"] = digest, size
-        # Persist the rename BEFORE attempting delivery: a crash after the
-        # incoming-><digest> move would otherwise leave an op file pointing at
-        # a staging name that no longer exists, dead-lettering a good upload
-        # on the next drain.
-        write_text_atomic(op_path, json.dumps(op, indent=2) + "\n", mode=0o600)
 
     client.upload_fingerprinted(
         upload["anchor"],

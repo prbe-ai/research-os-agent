@@ -125,6 +125,13 @@ def run(directory: str | None = None) -> int:
             )
             return 3
         if report.remaining == 0:
+            # Exit-race guard (red team): an enqueue during this final stretch
+            # saw our lease held and skipped its spawn. Re-read status while
+            # still holding the lease; anything new means another pass, not an
+            # exit that strands the tail op until some future CLI command.
+            fresh = Journal.read_status(str(journal.dir)) or {}
+            if fresh.get("pending"):
+                continue
             return 0
         if report.stopped_transient:
             print(

@@ -38,6 +38,7 @@ def wired_async(app, outbox_dir, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("PROBE_CONFIG_PATH", str(tmp_path / "config" / "probe.json"))
     monkeypatch.setenv("PROBE_TOKEN", "probe_pat_test")
+    monkeypatch.setenv("PROBE_BASE_URL", "http://test")
     spawned: list[str | None] = []
     monkeypatch.setattr(
         "probe.cli.outbox_worker.maybe_spawn",

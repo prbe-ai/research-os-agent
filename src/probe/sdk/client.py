@@ -247,7 +247,16 @@ class Client:
 
         def factory(context: dict | None):
             base = (context or {}).get("base_url")
-            if not base or base == self.settings.base_url:
+            name = (context or {}).get("name")
+            mine = (self.journal.context or {}).get("name")
+            # BOTH the endpoint and the context name must match before an op
+            # replays over this client's credential: tenants can share one API
+            # URL, and an op pinned to another context must resolve its own
+            # stored token (red team: base_url alone re-opened wrong-principal
+            # replay through the flush path).
+            if (not base or base == self.settings.base_url) and (
+                name is None or name == mine
+            ):
                 return self
             return None  # journal.drain builds one from the pinned context
 

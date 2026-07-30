@@ -1586,8 +1586,15 @@ def run_end(
             err=True,
         )
         raise typer.Exit(2)
+    from ..sdk.durable import now_iso as _now_iso
+
     with _client() as c:
-        _run_handle(c, run).finish(status.value)
+        # set_status, not finish(): the run-scoped barrier above already
+        # delivered THIS run's ops; finish() would foreground-drain the whole
+        # machine-wide journal — other runs' queued gigabytes — inside this
+        # command (red team: 'unrelated runs never block it' held for
+        # correctness but not for time).
+        _run_handle(c, run).set_status(status.value, ended_at=_now_iso())
     print(f"{run} -> {status.value}")
 
 
@@ -1951,6 +1958,7 @@ def _ping_presign(
     meta: dict | None,
     span_id: str | None,
     step_index: int | None,
+    context: dict | None = None,
 ) -> str | None:
     """The 1A intent ping: a capped, best-effort presign at enqueue so the
     server's pending row (and its reaper) know this upload is coming. Never
@@ -1958,10 +1966,19 @@ def _ping_presign(
     local-only enqueue, and the drainer re-presigns on every attempt anyway.
     """
     try:
-        from ..sdk.config import resolve
         from ..sdk.transport import Transport
 
-        settings = resolve(base_url=_conn.base_url)
+        if context is not None:
+            # Same principal as the drain will use (red team: an ambient env
+            # token could register the intent row under a different tenant
+            # than the one the op's pinned context delivers to).
+            from ..sdk.journal import _settings_for
+
+            settings = _settings_for(context)
+        else:
+            from ..sdk.config import resolve
+
+            settings = resolve(base_url=_conn.base_url)
         if not settings.token:
             return None
         transport = Transport(
@@ -2087,6 +2104,7 @@ def _artifact_add_async(
                 content_type=content_type,
                 kind=kind if run_only else None, meta=meta if run_only else None,
                 span_id=span, step_index=step,
+                context=c.journal.context,
             )
             is not None
         )
@@ -2854,6 +2872,20 @@ def outbox_retry(
     journal.clear_auth_block()
     _kick_drainer()
     print(f"requeued {moved} op(s)")
+    if op_id is not None and moved == 0:
+        raise typer.Exit(1)
+
+
+@outbox_app.command("discard")
+def outbox_discard(
+    op_id: Optional[str] = typer.Argument(
+        None, help="a dead-lettered op id (omit to discard ALL dead letters)"
+    ),
+) -> None:
+    """Tombstone dead letters into discarded/ (covers quarantined-corrupt
+    files retry can never requeue). Their staged bytes are freed."""
+    moved = _journal().discard_failed(op_id)
+    print(f"discarded {moved} op(s)")
     if op_id is not None and moved == 0:
         raise typer.Exit(1)
 
