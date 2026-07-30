@@ -35,6 +35,7 @@ from probe.connectors.harbor_runner import (
     SandboxStateRecorder,
 )
 from probe.connectors.sandbox_state import (
+    BEGIN_BYTES,
     BEGIN_MANIFEST,
     BUNDLE_DIRNAME,
     END_DELTA,
@@ -102,9 +103,16 @@ class FakeSandbox:
         lines = [b'{"p": "/workspace/z.py", "t": "f", "s": 2}',
                  b'{"p": "/workspace/a.py", "t": "f", "s": 1}']
         files: dict[str, Path] = {}
+        stats: dict[str, int] = {"entries": 2}
         if phase == "begin":
             files[BEGIN_MANIFEST] = workdir / BEGIN_MANIFEST
             files[BEGIN_MANIFEST].write_bytes(gzip.compress(b"\n".join(lines) + b"\n"))
+            if "--bytes" in command:
+                # Mirrors the real binary: --bytes tees the walk into an archive
+                # and records the budget in the trailer stats.
+                files[BEGIN_BYTES] = workdir / BEGIN_BYTES
+                files[BEGIN_BYTES].write_bytes(gzip.compress(b"begin-archive-bytes"))
+                stats["begin_bytes_budget_bytes"] = 1024
         else:
             assert (workdir / "begin.jsonl.gz").is_file(), "begin manifest not re-uploaded"
             files[END_MANIFEST] = workdir / END_MANIFEST
@@ -125,7 +133,7 @@ class FakeSandbox:
                 }
                 for name, path in files.items()
             },
-            "stats": {"entries": 2},
+            "stats": stats,
             "hash_mode": "fast",
             "errors": [],
         }
@@ -228,6 +236,66 @@ class TestSandboxStateProtocol:
         asyncio.run(rec.on_agent_start())
         with pytest.raises(asyncio.CancelledError):
             asyncio.run(rec.on_agent_end())
+
+    def test_begin_bytes_captured_rides_bundle_and_meta(self, tmp_path):
+        trial = _fake_trial(tmp_path)
+        rec = _recorder(trial, begin_bytes=True, begin_bytes_ref="task-abc123")
+        asyncio.run(rec.on_agent_start())
+        assert rec.status["begin"] == "ok"
+        assert rec.integrity["begin_verified"] is True
+        assert trial.agent_environment.leftover_workdirs() == []  # still probe-free
+        asyncio.run(rec.on_agent_end())
+
+        bundle = trial.paths.trial_dir / "artifacts" / BUNDLE_DIRNAME
+        assert (bundle / BEGIN_BYTES).is_file()
+        meta = json.loads((bundle / "meta.json").read_text())
+        assert meta["begin_bytes"]["captured"] is True
+        assert meta["begin_bytes"]["ref"] == "task-abc123"
+        assert meta["begin_bytes"]["budget_bytes"] == 1024
+
+    def test_begin_bytes_ref_without_capture_stamps_meta(self, tmp_path):
+        trial = _fake_trial(tmp_path)
+        rec = _recorder(trial, begin_bytes_ref="task-abc123")
+        asyncio.run(rec.on_agent_start())
+        asyncio.run(rec.on_agent_end())
+
+        bundle = trial.paths.trial_dir / "artifacts" / BUNDLE_DIRNAME
+        assert not (bundle / BEGIN_BYTES).exists()
+        meta = json.loads((bundle / "meta.json").read_text())
+        assert meta["begin_bytes"]["captured"] is False
+        assert meta["begin_bytes"]["ref"] == "task-abc123"
+
+    def test_meta_has_no_begin_bytes_block_by_default(self, tmp_path):
+        trial = _fake_trial(tmp_path)
+        rec = _recorder(trial)
+        asyncio.run(rec.on_agent_start())
+        asyncio.run(rec.on_agent_end())
+        meta = json.loads((rec.bundle_dir / "meta.json").read_text())
+        assert "begin_bytes" not in meta
+
+    def test_snapshot_command_plumbs_root_and_bytes(self, tmp_path):
+        trial = _fake_trial(tmp_path)
+        rec = _recorder(trial, root="/repo", begin_bytes=True, max_begin_bytes=123456)
+        begin_cmd = rec._snapshot_command("/tmp/.psbx-x", phase="begin")
+        assert "--root /repo" in begin_cmd
+        assert "--bytes" in begin_cmd
+        assert "--max-begin-bytes 123456" in begin_cmd
+        end_cmd = rec._snapshot_command("/tmp/.psbx-x", phase="end")
+        assert "--root /repo" in end_cmd
+        assert "--bytes" not in end_cmd
+
+        plain_root = tmp_path / "plain"
+        plain_root.mkdir()
+        plain = _recorder(_fake_trial(plain_root))
+        assert "--root" not in plain._snapshot_command("/tmp/.psbx-y", phase="begin")
+
+    def test_begin_timeout_resolves_by_bytes_mode(self):
+        assert SandboxStateOptions().resolved_begin_timeout_sec() == 120.0
+        assert SandboxStateOptions(begin_bytes=True).resolved_begin_timeout_sec() == 600.0
+        assert (
+            SandboxStateOptions(begin_bytes=True, begin_timeout_sec=45.0).resolved_begin_timeout_sec()
+            == 45.0
+        )
 
     def test_missing_environment_is_fail_open(self, tmp_path):
         trial = _fake_trial(tmp_path)

@@ -56,6 +56,7 @@ from typing import Any
 
 from ..sdk.durable import now_iso as _utc_now
 from .sandbox_state import (
+    BEGIN_BYTES,
     BEGIN_MANIFEST,
     BUNDLE_DIRNAME,
     END_DELTA,
@@ -144,14 +145,31 @@ def verify_harbor_contract() -> list[str]:
 
 @dataclass(frozen=True)
 class SandboxStateOptions:
-    """Knobs for the ``probe.sandbox-state/1`` capture; defaults per the design doc."""
+    """Knobs for the ``probe.sandbox-state/1`` capture; defaults per the design doc.
 
-    begin_timeout_sec: float = 120.0
+    ``begin_timeout_sec=None`` resolves to 120 s, or 600 s when ``begin_bytes``
+    is on (archiving + downloading GiBs cannot fit 120 s); explicit values are
+    always honored.  ``begin_bytes``/``begin_bytes_ref`` implement the per-task
+    shared begin archive (docs/2026-07-29-begin-state-bytes.md): the caller owns
+    the first-trial-per-task ledger and passes the opaque sharing key (Harbor's
+    ``task_checksum``) on every trial of the task, captured or not.
+    """
+
+    begin_timeout_sec: float | None = None
     end_timeout_sec: float = 300.0
     hash_files: bool = False  # sha256 every file (closes mtime-preserving edits)
+    root: str = "/"  # scan root for manifests AND the begin archive
     exclude: tuple[str, ...] = ()  # extra path prefixes beyond /proc /sys /dev /logs
     max_files: int | None = None
     max_delta_bytes: int | None = None
+    begin_bytes: bool = False  # archive begin bytes of the scanned scope
+    begin_bytes_ref: str | None = None  # opaque sharing key stamped into meta.json
+    max_begin_bytes: int | None = None
+
+    def resolved_begin_timeout_sec(self) -> float:
+        if self.begin_timeout_sec is not None:
+            return self.begin_timeout_sec
+        return 600.0 if self.begin_bytes else 120.0
 
 
 @dataclass
@@ -194,7 +212,9 @@ class SandboxStateRecorder:
     # -- hook callbacks (harbor awaits these inline) -------------------------
     async def on_agent_start(self, event: Any = None) -> None:
         try:
-            await asyncio.wait_for(self._begin(), timeout=self._options.begin_timeout_sec)
+            await asyncio.wait_for(
+                self._begin(), timeout=self._options.resolved_begin_timeout_sec()
+            )
             self.status["begin"] = "ok"
         except asyncio.CancelledError:
             raise
@@ -231,20 +251,27 @@ class SandboxStateRecorder:
             result = await env.exec(
                 self._snapshot_command(workdir, phase="begin"),
                 user="root",
-                timeout_sec=int(self._options.begin_timeout_sec),
+                timeout_sec=int(self._options.resolved_begin_timeout_sec()),
             )
             if result.return_code != 0:
                 raise RuntimeError(
                     f"begin exec rc={result.return_code}: {(result.stderr or '')[-500:]}"
                 )
             trailer = parse_trailer(result.stdout or "")
-            host_path = self._host_dir / BEGIN_MANIFEST
-            await env.download_file(f"{workdir}/{BEGIN_MANIFEST}", host_path)
-            self.integrity["begin_verified"] = self._verify(
-                trailer, BEGIN_MANIFEST, host_path
-            )
+            # Download every begin output the trailer names (manifest, and the
+            # begin-bytes archive when --bytes ran) — same generic loop as _end,
+            # so the archive inherits the manifests' tamper-evidence.
+            verified = True
+            for name in trailer.get("files", {}):
+                host_path = self._host_dir / name
+                await env.download_file(f"{workdir}/{name}", host_path)
+                verified = self._verify(trailer, name, host_path) and verified
+            self.integrity["begin_verified"] = verified
+            manifest_host = self._host_dir / BEGIN_MANIFEST
+            if not manifest_host.is_file():
+                raise RuntimeError("begin trailer names no begin manifest")
             self._begin_trailer = trailer
-            self._begin_manifest_host = host_path
+            self._begin_manifest_host = manifest_host
             self._begin_at = _utc_now()
         finally:
             await self._cleanup(env, workdir)
@@ -321,6 +348,12 @@ class SandboxStateRecorder:
         parts = [f"{quoted}/snap", phase, "--workdir", quoted]
         if phase == "end":
             parts += ["--begin-manifest", f"{quoted}/{_BEGIN_UPLOAD_NAME}"]
+        if phase == "begin" and opts.begin_bytes:
+            parts.append("--bytes")
+            if opts.max_begin_bytes is not None:
+                parts += ["--max-begin-bytes", str(opts.max_begin_bytes)]
+        if opts.root != "/":
+            parts += ["--root", shlex.quote(opts.root)]
         if opts.hash_files:
             parts.append("--hash")
         if opts.exclude:
@@ -331,7 +364,11 @@ class SandboxStateRecorder:
             parts += ["--max-delta-bytes", str(opts.max_delta_bytes)]
         # Self-imposed deadline just under the exec timeout so the binary
         # exits itself instead of being killed mid-write.
-        timeout = opts.begin_timeout_sec if phase == "begin" else opts.end_timeout_sec
+        timeout = (
+            opts.resolved_begin_timeout_sec()
+            if phase == "begin"
+            else opts.end_timeout_sec
+        )
         parts += ["--max-seconds", str(max(timeout - 10.0, 5.0))]
         return " ".join(parts)
 
@@ -355,7 +392,7 @@ class SandboxStateRecorder:
         if self._begin_manifest_host is None:
             return  # begin never succeeded: recorded on the recorder, no bundle
         files: dict[str, Path] = {BEGIN_MANIFEST: self._begin_manifest_host}
-        for name in (END_MANIFEST, END_DELTA):
+        for name in (END_MANIFEST, END_DELTA, BEGIN_BYTES):
             candidate = self._host_dir / name
             if candidate.is_file():
                 files[name] = candidate
@@ -368,6 +405,7 @@ class SandboxStateRecorder:
             arch=self._arch,
             integrity=self.integrity,
             errors=self.errors,
+            begin_bytes_ref=self._options.begin_bytes_ref,
         )
         bundle_dir = self._trial_dir() / "artifacts" / BUNDLE_DIRNAME
         write_bundle(bundle_dir, files, meta)

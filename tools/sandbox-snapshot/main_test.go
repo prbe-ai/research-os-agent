@@ -364,6 +364,108 @@ func TestSymlinkBudgetEnforced(t *testing.T) {
 	}
 }
 
+func TestBeginBytesArchivesScope(t *testing.T) {
+	root, work := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(root, "workspace", "main.py"), "print('hi')\n")
+	writeFile(t, filepath.Join(root, "etc", "config"), "key=value")
+	if err := os.Symlink("workspace/main.py", filepath.Join(root, "link")); err != nil {
+		t.Fatal(err)
+	}
+
+	tr := runPhase(t, "begin", "--workdir", work, "--root", root, "--bytes")
+
+	archivePath := filepath.Join(work, "begin-bytes.tar.gz")
+	members := deltaMembers(t, archivePath)
+	rel := func(p string) string { return strings.TrimPrefix(filepath.Join(root, p), "/") }
+	if members[rel("workspace/main.py")] != "print('hi')\n" {
+		t.Fatalf("file bytes missing from begin archive: %v", members)
+	}
+	if members[rel("etc/config")] != "key=value" {
+		t.Fatalf("second file missing from begin archive: %v", members)
+	}
+	if _, ok := members[rel("link")]; !ok {
+		t.Fatalf("symlink missing from begin archive: %v", members)
+	}
+	for name := range members {
+		if strings.HasPrefix("/"+name, work) {
+			t.Fatalf("workdir leaked into begin archive: %s", name)
+		}
+	}
+	got, ok := tr.Files["begin-bytes.tar.gz"]
+	if !ok || got.Sha256 != fileSha256(t, archivePath) {
+		t.Fatalf("begin archive trailer entry wrong: %+v ok=%v", got, ok)
+	}
+	if _, ok := tr.Stats["begin_bytes_budget_bytes"]; !ok {
+		t.Fatalf("begin bytes budget not recorded: %+v", tr.Stats)
+	}
+	if tr.Truncated || len(tr.Errors) != 0 {
+		t.Fatalf("unexpected truncation/errors: %+v", tr)
+	}
+}
+
+func TestBeginBytesBudgetDropsAndRecords(t *testing.T) {
+	root, work := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(root, "big.bin"), strings.Repeat("x", 4096))
+	writeFile(t, filepath.Join(root, "tiny.txt"), "t")
+
+	tr := runPhase(t, "begin", "--workdir", work, "--root", root,
+		"--bytes", "--max-begin-bytes", "100")
+
+	if !tr.Truncated || tr.DroppedCount != 1 {
+		t.Fatalf("expected one dropped file: %+v", tr)
+	}
+	if len(tr.Dropped) != 1 || !strings.HasSuffix(tr.Dropped[0], "big.bin") {
+		t.Fatalf("dropped path not named: %+v", tr.Dropped)
+	}
+	// The manifest is metadata and must be unaffected by the byte budget.
+	entries := readManifest(t, filepath.Join(work, "begin-manifest.jsonl.gz"))
+	if _, ok := entries[filepath.Join(root, "big.bin")]; !ok {
+		t.Fatalf("budget-dropped file must still be inventoried: %v", entries)
+	}
+	members := deltaMembers(t, filepath.Join(work, "begin-bytes.tar.gz"))
+	if members[strings.TrimPrefix(filepath.Join(root, "tiny.txt"), "/")] != "t" {
+		t.Fatalf("small file should survive the budget: %v", members)
+	}
+}
+
+func TestBeginWithoutBytesUnchanged(t *testing.T) {
+	root, work := t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(root, "x.txt"), "content")
+
+	tr := runPhase(t, "begin", "--workdir", work, "--root", root)
+
+	if _, err := os.Stat(filepath.Join(work, "begin-bytes.tar.gz")); !os.IsNotExist(err) {
+		t.Fatalf("begin archive must not exist without --bytes: %v", err)
+	}
+	if _, ok := tr.Files["begin-bytes.tar.gz"]; ok {
+		t.Fatalf("trailer must not mention begin archive without --bytes: %+v", tr.Files)
+	}
+	if _, ok := tr.Stats["begin_bytes_budget_bytes"]; ok {
+		t.Fatalf("trailer must not carry byte budget without --bytes: %+v", tr.Stats)
+	}
+}
+
+func TestBytesRejectedOnEndPhase(t *testing.T) {
+	root, work1, work2 := t.TempDir(), t.TempDir(), t.TempDir()
+	writeFile(t, filepath.Join(root, "seed"), "s")
+	runPhase(t, "begin", "--workdir", work1, "--root", root)
+
+	oldArgs, oldStdout := os.Args, os.Stdout
+	defer func() { os.Args, os.Stdout = oldArgs, oldStdout }()
+	_, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	os.Args = []string{"probe-sandbox-snapshot", "end", "--workdir", work2, "--root", root,
+		"--begin-manifest", filepath.Join(work1, "begin-manifest.jsonl.gz"), "--bytes"}
+	runErr := run()
+	w.Close()
+	if runErr == nil || !strings.Contains(runErr.Error(), "begin") {
+		t.Fatalf("end --bytes must be rejected loudly, got: %v", runErr)
+	}
+}
+
 func TestTypeChangeIsModified(t *testing.T) {
 	root, work1, work2 := t.TempDir(), t.TempDir(), t.TempDir()
 	target := filepath.Join(root, "thing")
