@@ -2091,16 +2091,9 @@
             "type": "string"
           },
           "project_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Project Id"
+            "format": "uuid",
+            "title": "Project Id",
+            "type": "string"
           },
           "slug": {
             "title": "Slug",
@@ -2117,7 +2110,8 @@
         "required": [
           "slug",
           "name",
-          "hypothesis"
+          "hypothesis",
+          "project_id"
         ],
         "title": "ExperimentCreate",
         "type": "object"
@@ -3075,18 +3069,6 @@
             ],
             "default": null
           },
-          "experiment_hypothesis": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Experiment Hypothesis"
-          },
           "experiment_slug": {
             "anyOf": [
               {
@@ -3108,16 +3090,8 @@
             "type": "array"
           },
           "project_slug": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "default": null,
-            "title": "Project Slug"
+            "title": "Project Slug",
+            "type": "string"
           },
           "run": {
             "$ref": "#/components/schemas/IngestRun"
@@ -3132,6 +3106,7 @@
           }
         },
         "required": [
+          "project_slug",
           "run"
         ],
         "title": "IngestRunRequest",

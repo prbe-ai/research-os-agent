@@ -52,6 +52,23 @@ def test_init_log_finish(app, wired):
     assert app.metrics_inserted == 1
 
 
+def test_init_can_explicitly_create_project_experiment_and_run(app, wired):
+    run = probe.init(
+        project="folding",
+        experiment="new-experiment",
+        hypothesis="temp 0.7 wins",
+        name="r1",
+    )
+    probe.finish()
+
+    (project,) = app.projects.values()
+    (experiment,) = [
+        row for row in app.experiments.values() if row["slug"] == "new-experiment"
+    ]
+    assert experiment["project_id"] == project["id"]
+    assert app.runs[run.id]["experiment_id"] == experiment["id"]
+
+
 def test_active_run_is_none_until_init(app, wired):
     assert probe.active_run() is None
     run = probe.init(experiment="e1", name="r1")

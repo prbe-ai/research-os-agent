@@ -32,7 +32,10 @@ def test_events_read_surface_is_read_only(client, app):
 
 def test_experiment_version_replaces_run_promote(client, app):
     client.fail_open = False
-    exp = client.create_experiment("dockq", "DockQ", hypothesis="h")
+    project = client.create_project("dockq-project")
+    exp = client.create_experiment(
+        "dockq", "DockQ", hypothesis="h", project_id=project["id"]
+    )
     version = client.experiment_version(exp["id"], label="launch")
     assert version["version"] == 1
     # run-level promote is gone (promotion_tier rejected upstream)

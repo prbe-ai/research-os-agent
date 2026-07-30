@@ -87,7 +87,7 @@ class Comparison:
 
         Prefers the server's petname ``short_id``. That is the thing a person
         recognises — but it is optional and nullable on the wire, so the fallback
-        is ``name``, which is emphatically not unique: ``default_run_name()`` is
+        is ``name``, which is emphatically not unique: generated run names are
         second-resolution, so a sweep launching runs in the same second produces
         identical names. Two runs sharing a column would silently merge into one
         curve built from both, so a collision gets a short-id suffix."""

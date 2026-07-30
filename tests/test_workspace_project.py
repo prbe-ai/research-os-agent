@@ -16,7 +16,7 @@ from probe import cli
 from probe.sdk.client import Anchor
 from probe.sdk.config import load_context, save_context
 
-from tests.conftest import _DEFAULT_SLUG, _ME, _WS_MINE, _WS_OTHER
+from tests.conftest import _ME, _WS_MINE, _WS_OTHER
 
 
 def _out(capsys) -> dict | list:
@@ -112,13 +112,12 @@ def test_archived_projects_are_hidden_then_restored(client):
     assert [p["slug"] for p in client.list_projects().items] == ["temp"]
 
 
-def test_the_default_project_cannot_be_archived(client):
-    from probe.sdk import errors
+def test_default_named_project_has_no_archive_exception(client):
+    proj = client.create_project("default", workspace_id=_WS_MINE)
 
-    proj = client.create_project(_DEFAULT_SLUG, workspace_id=_WS_MINE)
+    archived = client.archive_project(proj["id"])
 
-    with pytest.raises(errors.RosError):
-        client.archive_project(proj["id"])
+    assert archived["archived_at"] is not None
 
 
 def test_project_workspace_id_may_be_null_on_a_legacy_row(client):

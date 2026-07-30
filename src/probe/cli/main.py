@@ -1438,7 +1438,7 @@ def project_move(
 
 @project_app.command("archive")
 def project_archive(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
-    """Hide a project without destroying it. The `default` project cannot be archived."""
+    """Hide a project without destroying it."""
     with _client() as c:
         _print_json(c.archive_project(_project_id(c, project_id)))
 
@@ -3133,15 +3133,17 @@ def experiment_create(
     what you are testing, and nothing later goes back to fill it in.
     """
     resolved_project = resolve(project=project).project
+    if not resolved_project:
+        raise errors.ValidationError(
+            "pass --project, or set an active project with `probe project use`"
+        )
     with _client() as c:
-        project_id = None
-        if resolved_project:
-            # Same resolver as `run start`, so "no such project" is one error with
-            # one exit code, and the message names the SLUG that was looked up
-            # rather than the raw ambient value (which is an id).
-            project_id = c.resolve_or_raise(
-                "project", _project_slug(c, resolved_project)
-            )["id"]
+        # Same resolver as `run start`, so "no such project" is one error with
+        # one exit code, and the message names the SLUG that was looked up rather
+        # than the raw ambient value (which is an id).
+        project_id = c.resolve_or_raise(
+            "project", _project_slug(c, resolved_project)
+        )["id"]
         _print_json(
             c.create_experiment(slug, name, hypothesis=hypothesis,
                 project_id=project_id,

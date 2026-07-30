@@ -237,15 +237,15 @@ def _ensure_identities(client, spec: dict) -> None:
             project_id = found["id"] if found else None
     experiment = spec.get("experiment")
     if experiment:
+        if project_id is None:
+            raise _errors.ValidationError(
+                "Miles experiment capture requires an explicit project"
+            )
         try:
             client.create_experiment(
                 experiment,
                 experiment,
                 hypothesis=spec.get("hypothesis") or "Miles telemetry capture.",
-                # Without this the experiment lands under the tenant default and
-                # `run(project=..., experiment=...)` then rejects the pair it was
-                # just handed -- a self-contradicting error on identities the
-                # sidecar created itself.
                 project_id=project_id,
             )
         except _errors.ConflictError:
