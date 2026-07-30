@@ -44,6 +44,7 @@ from ..sdk.config import (
     save_context,
     use_context,
 )
+from ..sdk.tags import canonical_tags
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
 from ..sdk.hashing import reference_fields
 from ..sdk.surface import Surface
@@ -53,10 +54,8 @@ from ..sdk.surface import Surface
 @dataclass
 class Conn:
     base_url: str | None = None
-    token: str | None = None
-    ingest_token: str | None = None
-    hmac_secret: str | None = None
     spool_dir: str | None = None
+    async_mode: bool = False
 
 
 _conn = Conn()
@@ -166,17 +165,132 @@ def _client() -> Client:
     # `Client` is a module global so the CLI package can monkeypatch it in tests.
     return _new_client(
         base_url=_conn.base_url,
-        token=_conn.token,
-        ingest_token=_conn.ingest_token,
-        hmac_secret=_conn.hmac_secret,
         spool_dir=_conn.spool_dir,
     )
+
+
+def _journal():
+    from ..sdk.journal import Journal
+
+    return Journal(_conn.spool_dir)
+
+
+def _async_client() -> Client:
+    """A journaling client for the async write paths (9A). Errors early when no
+    deliverable credentials exist -- queueing an op nothing can ever deliver
+    fails hours later in the drainer, which is the worst place to learn it."""
+    from ..sdk.config import resolve
+
+    settings = resolve(base_url=_conn.base_url)
+    if not settings.token and not settings.ingest_token:
+        raise typer.BadParameter(
+            "--async needs deliverable credentials: run `probe login` "
+            "(or set PROBE_TOKEN) so the background drainer can authenticate"
+        )
+    return _new_client(
+        base_url=_conn.base_url,
+        spool_dir=_conn.spool_dir,
+        async_writes=True,
+    )
+
+
+def _async_run(client: Client, run_ref: str):
+    """A Run handle that does NOT read the run first: async enqueue must not
+    block on (or fail without) the network; the server validates the ref at
+    replay (eng review D20-1)."""
+    from ..sdk.run import Run
+
+    return Run(client, {"id": run_ref})
+
+
+def _kick_drainer() -> None:
+    from . import outbox_worker
+
+    try:
+        outbox_worker.maybe_spawn(_conn.spool_dir)
+    except Exception:  # noqa: BLE001 -- delivery is best-effort; run end is the barrier
+        pass
+
+
+def _outbox_notice() -> None:
+    """The every-command outbox banner (2B) + drainer re-kick (3A).
+
+    One stat/read of status.json, no locks, never raises: this runs before
+    every command, including `probe log` inside training loops.
+    """
+    try:
+        from ..sdk.journal import Journal
+
+        status = Journal.read_status(_conn.spool_dir)
+        if not status:
+            return
+        failed = status.get("failed") or 0
+        pending = status.get("pending") or 0
+        blocked = status.get("auth_blocked_since")
+        parts: list[str] = []
+        if blocked:
+            parts.append(f"auth-blocked since {blocked} — run `probe login`")
+        if failed:
+            parts.append(f"{failed} dead-lettered")
+        if parts or (pending and status.get("paused")):
+            if pending:
+                parts.append(f"{pending} pending")
+            if status.get("paused"):
+                parts.append("paused")
+            typer.echo(
+                f"outbox: {'; '.join(parts)} — see `probe outbox status`", err=True
+            )
+        if pending and not status.get("paused") and not blocked:
+            _kick_drainer()
+    except Exception:  # noqa: BLE001 -- a broken banner must never break a command
+        pass
 
 
 def _run_handle(client: Client, run_id: str):
     from ..sdk.run import Run
 
     return Run(client, client.get_run(run_id))
+
+
+def _apply_tag_ops(
+    current: list[str],
+    add: list[str],
+    remove: list[str],
+    replace: list[str] | None,
+) -> list[str]:
+    """Compute a ``tag`` verb's replacement list (read-modify-write over the
+    server's whole-list-replace PATCH, CONTRACT.md "tags"). ``--set`` wins
+    outright; otherwise positional adds append (canonical, deduped) and
+    ``--remove`` drops. The same tag in add AND remove is a caller bug — error,
+    never a silent tie-break."""
+    if replace is not None:
+        if add or remove:
+            raise typer.BadParameter("--set replaces outright; don't combine it with adds/--remove")
+        return canonical_tags(replace)
+    add_c = canonical_tags(add)
+    remove_c = set(canonical_tags(remove))
+    both = [t for t in add_c if t in remove_c]
+    if both:
+        raise typer.BadParameter(f"tag(s) both added and removed: {', '.join(both)}")
+    out = [t for t in canonical_tags(current) if t not in remove_c]
+    out.extend(t for t in add_c if t not in out)
+    return out
+
+
+def _tag_verb_flow(entity_id, current, add, remove, replace, write) -> dict:
+    """Shared flow for the three ``tag`` verbs: bare invocation lists, anything
+    else is read-modify-write. The changed-check compares against the RAW
+    stored list (not its canonical form) so re-tagging a pre-0066 row with its
+    own canonical name still writes once and heals the stored form; the write
+    callbacks verify the server actually persisted tags (0066 guard)."""
+    current = list(current or [])
+    if not add and not remove and replace is None:
+        return {"id": entity_id, "tags": current}
+    wanted = _apply_tag_ops(current, add or [], remove or [], replace)
+    if wanted == current:
+        return {"id": entity_id, "tags": current}
+    result = write(wanted) or {}
+    return {"id": result.get("id", entity_id), "tags": result.get("tags", wanted)}
 
 
 def _version_cb(value: bool) -> None:
@@ -217,21 +331,33 @@ app = typer.Typer(
 @app.callback()
 def _root(
     base_url: str = typer.Option(None, "--base-url"),
-    token: str = typer.Option(None, "--token"),
-    ingest_token: str = typer.Option(None, "--ingest-token"),
-    hmac_secret: str = typer.Option(None, "--hmac-secret"),
     spool_dir: str = typer.Option(
-        None, "--spool-dir", help="durable fail-open queue directory (or PROBE_SPOOL_DIR)"
+        None, "--spool-dir", help="outbox journal directory (or PROBE_OUTBOX_DIR)"
+    ),
+    async_mode: bool = typer.Option(
+        False,
+        "--async",
+        help="queue data writes to the local outbox and return immediately "
+        "(or PROBE_ASYNC=1). Read by `log`, `span add`, `note add`, "
+        "`artifact add`, `run end`; other commands ignore it.",
     ),
     version: bool = typer.Option(
         False, "--version", callback=_version_cb, is_eager=True, help="show version"
     ),
 ) -> None:
+    # Credentials come from named contexts (`probe login`) or the PROBE_TOKEN /
+    # PROBE_INGEST_TOKEN / PROBE_BASE_URL env vars. The old --token/--ingest-token/
+    # --hmac-secret overrides were removed (v0.23.0): a secret in argv leaks into
+    # shell history and `ps`, and a detached outbox drain could never resolve it.
     _conn.base_url = base_url
-    _conn.token = token
-    _conn.ingest_token = ingest_token
-    _conn.hmac_secret = hmac_secret
     _conn.spool_dir = spool_dir
+    _conn.async_mode = async_mode or os.environ.get("PROBE_ASYNC", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    _outbox_notice()
 
 
 # -- auth -------------------------------------------------------------------
@@ -259,7 +385,7 @@ def login(
     ``--context staging`` logs in under a named context instead of the active one,
     so several endpoints or tenants can coexist on one machine.
     """
-    resolved_token = token or _conn.token
+    resolved_token = token
     base = base_url or _conn.base_url
 
     if device and not resolved_token:
@@ -275,8 +401,8 @@ def login(
     settings = resolve(
         base_url=base,
         token=resolved_token,
-        ingest_token=ingest_token or _conn.ingest_token,
-        hmac_secret=hmac_secret or _conn.hmac_secret,
+        ingest_token=ingest_token,
+        hmac_secret=hmac_secret,
         context=context,
     )
     # None means "leave whatever is already there" in save_context, so an --endpoint-only
@@ -297,6 +423,15 @@ def login(
         use_context(context)
     path = save_context(updates, name=context)
     print(f"config: {path} (context: {context or current_context_name()})")
+    if settings.token:
+        # Fresh credentials un-block the outbox: forget any recorded 401/403
+        # and wake the drainer so queued writes deliver without further steps.
+        try:
+            journal = _journal()
+            journal.clear_auth_block()
+            _kick_drainer()
+        except Exception:  # noqa: BLE001 -- login must not fail on outbox hygiene
+            pass
 
 
 @app.command()
@@ -1168,6 +1303,7 @@ def project_create(
     slug: str = typer.Argument(..., help="url-safe identifier, unique per tenant"),
     name: str = typer.Option(None, "--name", help="display name (defaults to the slug)"),
     description: str = typer.Option(None, "--description"),
+    tag: list[str] = typer.Option(None, "--tag", help="tag at creation (repeatable)"),
     workspace: str = typer.Option(
         None, "--workspace", help="workspace id; defaults to the active one"
     ),
@@ -1184,6 +1320,7 @@ def project_create(
                 name,
                 workspace_id=_resolve_workspace(workspace),
                 description=description,
+                tags=tag or None,
             )
         )
 
@@ -1197,6 +1334,7 @@ def project_list(
         False, "--all", help="every workspace you can see (ignores --workspace and context)"
     ),
     include_archived: bool = typer.Option(False, "--include-archived"),
+    tag: list[str] = typer.Option(None, "--tag", help="filter: project must carry ALL (repeatable)"),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
     cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
 ) -> None:
@@ -1210,7 +1348,7 @@ def project_list(
     # --all means "send no filter" rather than some magic value.
     workspace_id = None if all_workspaces else _resolve_workspace(workspace)
     with _client() as c:
-        page = c.list_projects(workspace_id=workspace_id, **params)
+        page = c.list_projects(workspace_id=workspace_id, tags=tag or None, **params)
     _print_json({"items": page.items, "next_cursor": page.next_cursor})
 
 
@@ -1258,6 +1396,28 @@ def project_patch(
     with _client() as c:
         _print_json(
             c.update_project(_project_id(c, project_id), name=name, description=description)
+        )
+
+
+@project_app.command("tag")
+def project_tag(
+    project: str = typer.Argument(..., help="project id or slug"),
+    add: list[str] = typer.Argument(None, help="tags to add"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
+) -> None:
+    """Tag a project: positional args add, --remove drops, --set replaces; bare lists."""
+    with _client() as c:
+        pid = _project_id(c, project)
+        _print_json(
+            _tag_verb_flow(
+                pid,
+                c.get_project(pid).get("tags"),
+                add,
+                remove,
+                replace,
+                lambda wanted: c.update_project(pid, tags=wanted),
+            )
         )
 
 
@@ -1450,14 +1610,111 @@ def run_child(
     print(child.id)
 
 
+@run_app.command("list")
+def run_list(
+    experiment: str = typer.Option(None, "--experiment", help="experiment id"),
+    project: str = typer.Option(None, "--project", help="project id or slug"),
+    direct: bool = typer.Option(False, "--direct", help="only project-direct runs"),
+    tag: list[str] = typer.Option(None, "--tag", help="filter: run must carry ALL (repeatable)"),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+    cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
+) -> None:
+    """List runs, filterable by experiment, project, and tags (AND semantics)."""
+    params: dict[str, Any] = {"limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    with _client() as c:
+        page = c.list_runs(
+            experiment_id=experiment,
+            project_id=_project_id(c, project) if project else None,
+            direct=direct,
+            tags=tag or None,
+            **params,
+        )
+    _print_json({"items": page.items, "next_cursor": page.next_cursor})
+
+
+@run_app.command("tag")
+def run_tag(
+    run: str = typer.Argument(..., help="run id"),
+    add: list[str] = typer.Argument(None, help="tags to add"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
+) -> None:
+    """Tag a run: positional args add, --remove drops, --set replaces; bare lists.
+
+    Read-modify-write over PATCH's whole-list replace (the server normalizes to
+    lowercase-kebab and 422s past the caps). Retro-tag runs the SDK is DONE
+    with: a still-live run's next push replaces out-of-band edits (last writer
+    wins — CONTRACT.md "tags")."""
+    with _client() as c:
+        handle = _run_handle(c, run)
+        # strict=True: an interactive tag edit must fail loudly, never spool a
+        # stale whole-list replace for delayed replay (review 2026-07-30).
+        _print_json(
+            _tag_verb_flow(
+                handle.id,
+                handle.tags,
+                add,
+                remove,
+                replace,
+                lambda wanted: handle.set_tags(wanted, strict=True),
+            )
+        )
+
+
 @run_app.command("end")
 def run_end(
     run: str = typer.Argument(...),
     status: EndStatus = typer.Option(EndStatus.completed, "--status"),
 ) -> None:
-    """Close a run."""
+    """Close a run.
+
+    Synchronous mode is a RUN-SCOPED barrier (T3-A): this run's queued outbox
+    ops are delivered first, and the run is not closed while any of them cannot
+    be -- unrelated runs' stuck items never block it. Async mode enqueues the
+    close as a journal op ORDERED BEHIND everything the run already queued, so
+    the run only closes after its data lands; nothing blocks.
+    """
+    if _conn.async_mode:
+        from ..sdk.durable import now_iso
+
+        with _async_client() as c:
+            # set_status, not finish(): finish() flushes synchronously, which is
+            # exactly what async mode must not do. Ordering is the barrier here.
+            _async_run(c, run).set_status(status.value, ended_at=now_iso())
+        _kick_drainer()
+        print(f"queued end for {run} -> {status.value} (async)")
+        return
+    from ..sdk.journal import drain
+
+    journal = _journal()
+    report = drain(journal, run_ref=run)
+    dead = [op for _, op in journal.failed() if op.get("run_ref") == run]
+    # Anything of this run's still queued after the drain (paused journal, a
+    # skipped pass, any future skip condition) also blocks the close -- the
+    # barrier promise is about the RESULT, not about which flag tripped.
+    still_queued = [op for _, op in journal.pending() if op.get("run_ref") == run]
+    if report.auth_blocked or report.stopped_transient or dead or still_queued:
+        detail = "; ".join(
+            report.errors[-3:] or [op.get("last_error") or "?" for op in dead[:3]]
+        )
+        typer.echo(
+            f"run {run} NOT closed: its outbox items could not all be delivered "
+            f"({detail}). Fix (see `probe outbox status`), retry dead letters "
+            "with `probe outbox retry`, then re-run `probe run end`.",
+            err=True,
+        )
+        raise typer.Exit(2)
+    from ..sdk.durable import now_iso as _now_iso
+
     with _client() as c:
-        _run_handle(c, run).finish(status.value)
+        # set_status, not finish(): the run-scoped barrier above already
+        # delivered THIS run's ops; finish() would foreground-drain the whole
+        # machine-wide journal — other runs' queued gigabytes — inside this
+        # command (red team: 'unrelated runs never block it' held for
+        # correctness but not for time).
+        _run_handle(c, run).set_status(status.value, ended_at=_now_iso())
     print(f"{run} -> {status.value}")
 
 
@@ -1567,6 +1824,15 @@ def log(
     """Append metric points. --dim adds series dimensions (fold #9)."""
     metrics = _kv_pairs(metric, cast_float=True)
     dims = _kv_pairs(dim) if dim else None
+    if _conn.async_mode:
+        with _async_client() as c:
+            _async_run(c, run).log(
+                metrics, step=step, kind=kind, dimensions=dims,
+                agg=agg.value if agg else None,
+            )
+        _kick_drainer()
+        print(f"queued {len(metrics)} metric(s) for {run} (async)")
+        return
     with _client() as c:
         _run_handle(c, run).log(
             metrics, step=step, kind=kind, dimensions=dims, agg=agg.value if agg else None
@@ -1700,6 +1966,22 @@ def span_add(
     attr: list[str] = typer.Option(None, "--attr", metavar="k=v"),
 ) -> None:
     """Upsert a span."""
+    if _conn.async_mode:
+        with _async_client() as c:
+            handle = _async_run(c, run).span(
+                span_type,
+                name=name,
+                step_index=step,
+                provider=provider,
+                external_key=external_key,
+                parent_span_id=parent,
+                status=status,
+                attributes=_kv_pairs(attr) if attr else None,
+            )
+        _kick_drainer()
+        # The span id is minted client-side, so async still hands it back.
+        print(handle)
+        return
     with _client() as c:
         span_id = _run_handle(c, run).span(
             span_type,
@@ -1784,6 +2066,173 @@ def _pick_anchor(
     return given[0]
 
 
+def _ping_presign(
+    anchor: Anchor,
+    anchor_id: str | None,
+    name: str,
+    *,
+    digest: str,
+    size: int,
+    content_type: str | None,
+    kind: str | None,
+    meta: dict | None,
+    span_id: str | None,
+    step_index: int | None,
+    context: dict | None = None,
+) -> str | None:
+    """The 1A intent ping: a capped, best-effort presign at enqueue so the
+    server's pending row (and its reaper) know this upload is coming. Never
+    raises and never waits past the cap -- a dead network degrades to
+    local-only enqueue, and the drainer re-presigns on every attempt anyway.
+    """
+    try:
+        from ..sdk.transport import Transport
+
+        if context is not None:
+            # Same principal as the drain will use (red team: an ambient env
+            # token could register the intent row under a different tenant
+            # than the one the op's pinned context delivers to).
+            from ..sdk.journal import _settings_for
+
+            settings = _settings_for(context)
+        else:
+            from ..sdk.config import resolve
+
+            settings = resolve(base_url=_conn.base_url)
+        if not settings.token:
+            return None
+        transport = Transport(
+            settings,
+            timeout=_PING_TIMEOUT_SECONDS,
+            max_retries=_PING_MAX_RETRIES,
+            surface=Surface.CLI.value,
+            client_headers=client_version_headers("cli", __version__),
+        )
+        with Client(settings=settings, transport=transport) as ping:
+            presign = ping.presign_upload(
+                anchor,
+                anchor_id,
+                name,
+                digest=digest,
+                size=size,
+                content_type=content_type,
+                kind=kind,
+                meta=meta,
+                span_id=span_id,
+                step_index=step_index,
+            )
+        return presign.get("artifact_id")
+    except Exception:  # noqa: BLE001 -- intent registration is best-effort by design
+        return None
+
+
+_REFERENCE_ROUTES = {
+    Anchor.EXPERIMENT: "/v1/experiments/{id}/artifacts",
+    Anchor.PROJECT: "/v1/projects/{id}/artifacts",
+}
+
+#: The 1A intent-ping cap. Load-bearing product behavior (CHANGELOG: "a
+#: ~2s-capped presign ping") -- named so the documented cap and the code
+#: cannot silently drift.
+_PING_TIMEOUT_SECONDS = 2.0
+_PING_MAX_RETRIES = 0
+
+
+def _artifact_add_async(
+    anchor: Anchor,
+    anchor_id: str | None,
+    name: str,
+    *,
+    path: str | None,
+    uri: str | None,
+    reference: bool,
+    hash_content: bool,
+    allow_missing: bool,
+    kind: str,
+    step: int | None,
+    span: str | None,
+    content_type: str | None,
+    meta: dict | None,
+) -> None:
+    """Queue an artifact operation and return immediately (--async).
+
+    Reference/uri forms are pure JSON writes and journal as http ops -- zero
+    staging, the fastest path. Byte uploads snapshot into the blob store;
+    files at or under the 11A threshold fingerprint inline and fire the capped
+    presign ping so the server registers intent, bigger files defer hashing to
+    the drainer so return time stays flat.
+    """
+    run_ref = anchor_id if anchor is Anchor.RUN else None
+    if reference or uri is not None:
+        with _async_client() as c:
+            if anchor is Anchor.RUN:
+                _async_run(c, anchor_id).log_artifact(
+                    name, path=path, uri=uri, reference=reference,
+                    hash_content=hash_content, allow_missing=allow_missing,
+                    kind=kind, step_index=step, span_id=span,
+                    content_type=content_type, meta=meta,
+                )
+            else:
+                if reference:
+                    fields = reference_fields(
+                        path, hash_content=hash_content, allow_missing=allow_missing
+                    )
+                    body = {"name": name, "is_reference": True, **fields}
+                else:
+                    body = {"name": name, "uri": uri, "is_reference": True}
+                if content_type:
+                    body["content_type"] = content_type
+                c.journal.append_http(
+                    "POST", _REFERENCE_ROUTES[anchor].format(id=anchor_id), body
+                )
+        _kick_drainer()
+        print(f"queued reference {name!r} (async)")
+        return
+
+    if not path:
+        raise typer.BadParameter("needs a file path (--reference, or --uri)")
+    if not os.path.isfile(path):
+        # A FIFO, device, or procfs stream would block fingerprint/snapshot
+        # forever -- async promises bounded enqueue time (codex).
+        raise typer.BadParameter(f"{path} is not a regular file")
+    from ..sdk.journal import INLINE_HASH_MAX_BYTES
+
+    run_only = anchor is Anchor.RUN
+    with _async_client() as c:
+        # Snapshot first, hash the snapshot (inside append_upload): hashing
+        # the live file and copying it later would let a same-size rewrite
+        # in between poison the content address (codex TOCTOU).
+        queued = c.journal.append_upload(
+            anchor=anchor.value,
+            anchor_id=anchor_id,
+            name=name,
+            src_path=path,
+            inline_hash=os.path.getsize(path) <= INLINE_HASH_MAX_BYTES,
+            content_type=content_type,
+            kind=kind if run_only else None,
+            meta=meta if run_only else None,
+            span_id=span,
+            step_index=step,
+            run_ref=run_ref,
+        )
+    pinged = False
+    if queued["blob"] is not None:
+        pinged = (
+            _ping_presign(
+                anchor, anchor_id, name,
+                digest=queued["blob"], size=queued["size_bytes"],
+                content_type=content_type,
+                kind=kind if run_only else None, meta=meta if run_only else None,
+                span_id=span, step_index=step,
+                context=c.journal.context,
+            )
+            is not None
+        )
+    _kick_drainer()
+    registered = "intent registered" if pinged else "intent deferred to drain"
+    print(f"queued upload {name!r} op={queued['op_id']} ({registered})")
+
+
 @artifact_app.command("add")
 def artifact_add(
     run: str = typer.Argument(None, help="run id — omit when using an anchor flag"),
@@ -1860,6 +2309,30 @@ def artifact_add(
         raise typer.BadParameter("--reference needs a local file path")
     if (hash_content or allow_missing) and not reference:
         raise typer.BadParameter("--hash and --allow-missing only apply to --reference")
+    if anchor is not Anchor.RUN:
+        if step is not None or kind != "file" or span is not None or meta:
+            raise typer.BadParameter(
+                f"--kind/--step/--span/--meta are run-only; "
+                f"the {anchor.value} upload contract rejects them"
+            )
+        if (uri is not None or reference) and anchor in _FILE_ANCHORS:
+            # Caught here rather than in the SDK so it reads as a usage error instead
+            # of an unhandled ValueError traceback: a file IS its bytes, so there is
+            # no reference-without-bytes form and the backend declares no such route.
+            raise typer.BadParameter(
+                f"a {anchor.value} file cannot be a reference (it IS its bytes). "
+                "Pass a local path to upload the bytes instead."
+            )
+
+    if _conn.async_mode:
+        _artifact_add_async(
+            anchor, anchor_id, resolved,
+            path=path, uri=uri, reference=reference, hash_content=hash_content,
+            allow_missing=allow_missing, kind=kind, step=step, span=span,
+            content_type=content_type, meta=_kv_pairs(meta) if meta else None,
+        )
+        return
+
     if anchor is Anchor.RUN:
         with _client() as c:
             _run_handle(c, anchor_id).log_artifact(
@@ -1870,20 +2343,6 @@ def artifact_add(
             )
         print(f"artifact {resolved!r} recorded on {anchor_id}")
         return
-
-    if step is not None or kind != "file" or span is not None or meta:
-        raise typer.BadParameter(
-            f"--kind/--step/--span/--meta are run-only; "
-            f"the {anchor.value} upload contract rejects them"
-        )
-    if (uri is not None or reference) and anchor in _FILE_ANCHORS:
-        # Caught here rather than in the SDK so it reads as a usage error instead of
-        # an unhandled ValueError traceback: a file IS its bytes, so there is no
-        # reference-without-bytes form and the backend declares no such route.
-        raise typer.BadParameter(
-            f"a {anchor.value} file cannot be a reference (it IS its bytes). "
-            "Pass a local path to upload the bytes instead."
-        )
     with _client() as c:
         if reference:
             fields = reference_fields(
@@ -2413,12 +2872,166 @@ def snapshot(
     print(f"snapshot {snap['git']['commit'][:12]} -> {snap['git']['ref']}")
 
 
+# -- outbox (the async write journal) ---------------------------------------
+outbox_app = typer.Typer(no_args_is_help=True, help="the durable async write outbox")
+app.add_typer(outbox_app, name="outbox")
+
+
+def _drain_foreground(run_ref: str | None = None) -> None:
+    """Shared body of `probe outbox drain` and its `probe flush` alias."""
+    from ..sdk.journal import drain
+
+    report = drain(_journal(), run_ref=run_ref)
+    scope = f" for run {run_ref}" if run_ref else ""
+    print(
+        f"delivered {report.delivered}{scope}; "
+        f"{report.dead_lettered} dead-lettered; {report.remaining} remaining"
+    )
+    if report.auth_blocked:
+        typer.echo(
+            f"auth-blocked: {report.errors[-1] if report.errors else '401/403'} "
+            "— run `probe login`; queued items were kept",
+            err=True,
+        )
+    elif report.stopped_transient and report.errors:
+        typer.echo(f"stopped on transient failure: {report.errors[-1]}", err=True)
+    elif report.errors:
+        # Dead-letter-only failures: every cause still reaches stderr.
+        typer.echo(f"dead-lettered: {report.errors[-1]}", err=True)
+    for message in report.errors[:-1] if report.errors else []:
+        typer.echo(f"  {message}", err=True)
+    if not report.clean:
+        raise typer.Exit(2)
+
+
+@outbox_app.command("status")
+def outbox_status(
+    verbose: bool = typer.Option(False, "--verbose", help="list every queued/failed op"),
+) -> None:
+    """Outbox summary. Exit 0 when everything is delivered, 2 otherwise."""
+    journal = _journal()
+    pending = journal.pending()
+    failed = journal.failed()
+    from ..sdk.journal import Journal
+
+    status = Journal.read_status(journal.dir) or {}
+    summary = {
+        "dir": str(journal.dir),
+        "pending": len(pending),
+        "failed": len(failed),
+        "paused": journal.paused,
+        "auth_blocked_since": status.get("auth_blocked_since"),
+        "oldest_pending": pending[0][1].get("enqueued_at") if pending else None,
+        "last_error": status.get("last_error"),
+    }
+    if verbose:
+        def row(op: dict, state: str) -> dict:
+            return {
+                "op_id": op.get("op_id"),
+                "state": state,
+                "kind": op.get("kind"),
+                "run_ref": op.get("run_ref"),
+                "detail": (
+                    f"{op.get('method')} {op.get('path')}"
+                    if op.get("kind") == "http"
+                    else (op.get("upload") or {}).get("name")
+                ),
+                "attempts": op.get("attempts"),
+                "last_error": op.get("last_error"),
+            }
+
+        summary["ops"] = [row(op, "pending") for _, op in pending] + [
+            row(op, "failed") for _, op in failed
+        ]
+    _print_json(summary)
+    if pending or failed:
+        raise typer.Exit(2)
+
+
+@outbox_app.command("drain")
+def outbox_drain(
+    run: Optional[str] = typer.Option(None, "--run", help="drain only this run's ops"),
+) -> None:
+    """Deliver everything queued, in order, and wait for it (the sync barrier)."""
+    _drain_foreground(run)
+
+
+@outbox_app.command("watch")
+def outbox_watch(
+    interval: float = typer.Option(5.0, "--interval", min=0.1),
+    once: bool = typer.Option(False, "--once", help="drain once and exit"),
+) -> None:
+    """Continuously drain the outbox in the foreground."""
+    from ..sdk.journal import drain
+    from ._watch import watch
+
+    journal = _journal()
+
+    def one_pass() -> dict:
+        report = drain(journal)
+        # Adapt to the shared watch contract: {"counts": {...}, "failed": [...]}.
+        return {
+            "counts": {"completed": report.delivered, "failed": report.dead_lettered},
+            "failed": report.errors if not report.clean else [],
+            "remaining": report.remaining,
+            "auth_blocked": report.auth_blocked,
+        }
+
+    watch(one_pass, interval=interval, once=once, report=_print_json)
+
+
+@outbox_app.command("retry")
+def outbox_retry(
+    op_id: Optional[str] = typer.Argument(None, help="a dead-lettered op id (omit for all)"),
+) -> None:
+    """Requeue dead-lettered op(s) and kick the drainer."""
+    journal = _journal()
+    moved = journal.retry_failed(op_id)
+    # An explicit retry is a statement that the blocker (often credentials)
+    # was dealt with -- forget the auth block so the drainer spawns again.
+    journal.clear_auth_block()
+    _kick_drainer()
+    print(f"requeued {moved} op(s)")
+    if op_id is not None and moved == 0:
+        raise typer.Exit(1)
+
+
+@outbox_app.command("discard")
+def outbox_discard(
+    op_id: Optional[str] = typer.Argument(
+        None, help="a dead-lettered op id (omit to discard ALL dead letters)"
+    ),
+) -> None:
+    """Tombstone dead letters into discarded/ (covers quarantined-corrupt
+    files retry can never requeue). Their staged bytes are freed."""
+    moved = _journal().discard_failed(op_id)
+    print(f"discarded {moved} op(s)")
+    if op_id is not None and moved == 0:
+        raise typer.Exit(1)
+
+
+@outbox_app.command("pause")
+def outbox_pause() -> None:
+    """Suspend background delivery (the outbox's own switch, not the capture
+    killswitch). Enqueues still work; nothing drains until `resume`."""
+    _journal().pause()
+    print("outbox paused")
+
+
+@outbox_app.command("resume")
+def outbox_resume() -> None:
+    """Resume background delivery and kick the drainer."""
+    journal = _journal()
+    journal.resume()
+    journal.clear_auth_block()
+    _kick_drainer()
+    print("outbox resumed")
+
+
 @app.command()
 def flush() -> None:
-    """Replay spooled writes."""
-    with _client() as c:
-        sent = c.flush()
-    print(f"flushed {sent} spooled write(s)")
+    """Deliver everything queued and wait (alias of `probe outbox drain`)."""
+    _drain_foreground()
 
 
 @app.command()
@@ -2457,6 +3070,21 @@ def note_add(
     meta: list[str] = typer.Option(None, "--meta", metavar="k=v"),
 ) -> None:
     """Append a research note (normal experiment upload; agents/researchers/SDK)."""
+    if _conn.async_mode:
+        with _async_client() as c:
+            c.notes.add(
+                run,
+                kind.value,
+                statement,
+                evidence_refs=evidence,
+                authority=authority,
+                confidence=confidence,
+                supersedes=supersedes,
+                metadata=_kv_pairs(meta) if meta else None,
+            )
+        _kick_drainer()
+        print(f"queued note for {run} (async)")
+        return
     with _client() as c:
         result = c.notes.add(
             run,
@@ -2492,6 +3120,7 @@ def experiment_create(
         None, "--project", help="project slug; defaults to the active one (`probe project use`)"
     ),
     description: str = typer.Option(None, "--description"),
+    tag: list[str] = typer.Option(None, "--tag", help="tag at creation (repeatable)"),
 ) -> None:
     """Create an experiment.
 
@@ -2519,6 +3148,7 @@ def experiment_create(
             c.create_experiment(slug, name, hypothesis=hypothesis,
                 project_id=project_id,
                 description=description,
+                tags=tag or None,
             )
         )
 
@@ -2538,6 +3168,50 @@ def experiment_set(
             experiment_id, hypothesis=hypothesis, name=name, description=description
         )
     _print_json(result)
+
+
+@experiment_app.command("list")
+def experiment_list(
+    project: str = typer.Option(None, "--project", help="project id or slug"),
+    tag: list[str] = typer.Option(None, "--tag", help="filter: experiment must carry ALL (repeatable)"),
+    include_archived: bool = typer.Option(False, "--include-archived"),
+    limit: int = typer.Option(50, "--limit", min=1, max=200),
+    cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
+) -> None:
+    """List experiments, filterable by project and tags (AND semantics)."""
+    params: dict[str, Any] = {"limit": limit}
+    if cursor:
+        params["cursor"] = cursor
+    if include_archived:
+        params["include"] = _INCLUDE_ARCHIVED
+    with _client() as c:
+        page = c.list_experiments(
+            project_id=_project_id(c, project) if project else None,
+            tags=tag or None,
+            **params,
+        )
+    _print_json({"items": page.items, "next_cursor": page.next_cursor})
+
+
+@experiment_app.command("tag")
+def experiment_tag(
+    experiment_id: str = typer.Argument(...),
+    add: list[str] = typer.Argument(None, help="tags to add"),
+    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
+    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
+) -> None:
+    """Tag an experiment: positional args add, --remove drops, --set replaces; bare lists."""
+    with _client() as c:
+        _print_json(
+            _tag_verb_flow(
+                experiment_id,
+                c.get_experiment(experiment_id).get("tags"),
+                add,
+                remove,
+                replace,
+                lambda wanted: c.update_experiment(experiment_id, tags=wanted),
+            )
+        )
 
 
 @experiment_app.command("archive")

@@ -38,9 +38,30 @@ gets made. Record with the surface the run was opened with.
    decisions, observations, failures, results, deviations and next steps as notes
    either way — that is the same record from both surfaces.
 
+   **Never block on delivery: async mode.** Any CLI write above takes `--async`
+   (or `PROBE_ASYNC=1` for a whole session): the write is queued in a durable
+   local outbox and the command returns immediately; a background drainer
+   uploads with retries. Prefer it whenever you do not need the server's
+   response — a stuck network then costs you nothing. Prefer `--reference` over
+   uploading bytes when the file lives on storage the team can already resolve
+   (shared volume, workstation path): it is a single queued record, no staging
+   at all. Three rules keep async honest:
+   - Queued is not delivered. `probe outbox status` (exit 0 = all delivered)
+     before treating a missing recent write as absent anywhere, including MCP
+     reads.
+   - `probe run end` (WITHOUT --async) is the barrier: it delivers that run's
+     queued items first and refuses to close the run while any cannot be. With
+     `--async` it instead queues the close BEHIND the run's data — ordering is
+     the barrier, and nothing blocks.
+   - Failures surface on later commands (a stderr `outbox:` banner) and in
+     `probe outbox status` / `probe doctor`; `probe outbox retry` requeues
+     dead-lettered items after you fix the cause.
+
 2. **Read back what you recorded before relying on it.** `get_entity` with
    `view="trajectory"` for the spans, `view="metrics"` for the series. What you wrote
-   and what landed are different claims, and only the second is evidence.
+   and what landed are different claims, and only the second is evidence. In
+   async mode, `probe outbox status` must be clean before a read-back can prove
+   anything.
 
 3. **Version reusable outputs; do not copy them.** An asset is an artifact with a
    version chain — upload it (`run.log_artifact` / `probe artifact add`), then pin
@@ -62,6 +83,9 @@ Liveness follows the surface. An SDK handle beats for the life of its process an
 stops when you finish it, so there is nothing to do. A CLI-opened run is detached and
 does not beat at all — do not bolt a beat onto one you cannot keep beating for the
 whole run: a run that beats once and then goes quiet is reaped as `crashed`.
+
+Outcome changed the run's meaning (flaky, superseded, promoted)? Retro-tag it:
+`probe run tag RUN_ID <tag> [--remove <tag>]` (also `experiment tag` / `project tag`).
 
 Do not invoke `probe hook ...`; those are reserved for deterministic coding-agent hooks.
 

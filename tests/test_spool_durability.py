@@ -99,15 +99,17 @@ def test_flush_recovers_batch_moved_inflight_before_process_crash(tmp_path):
     assert spool.pending() == []
 
 
-def test_client_rejects_two_spool_owners(client, tmp_path):
+def test_client_rejects_two_journal_owners(client, tmp_path):
+    from probe.sdk.journal import Journal
+
     try:
         Client(
             settings=client.settings,
             transport=client.transport,
-            spool=Spool(tmp_path / "one"),
+            journal=Journal(tmp_path / "one"),
             spool_dir=tmp_path / "two",
         )
     except ValueError as exc:
-        assert "spool or spool_dir" in str(exc)
+        assert "journal or spool_dir" in str(exc)
     else:
-        raise AssertionError("expected ambiguous spool configuration to fail")
+        raise AssertionError("expected ambiguous journal configuration to fail")

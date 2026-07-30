@@ -535,3 +535,36 @@ def test_card_advertises_exactly_the_views_that_kind_supports(client, app):
         # Everything advertised actually answers.
         for view in advertised:
             service.get_entity(ref, view=view, token_budget=100_000)
+
+
+def test_artifacts_view_surfaces_undelivered_async_uploads(client, app):
+    """A row with status='pending' is a registered upload intent whose bytes
+    have not arrived (async outbox, eng review 2026-07-29); 'failed' means the
+    grace window expired. The view must make both unmissable -- an agent that
+    sees a metadata row and assumes the blob exists is the exact failure the
+    metadata-match-is-not-the-blob rule exists to stop."""
+    rid, _, _, _ = _populated(client, app)
+    app.artifacts[rid].extend(
+        [
+            {"id": str(uuid.uuid4()), "run_id": rid, "name": "ckpt.bin",
+             "kind": "file", "status": "pending", "is_reference": False,
+             "uri": None, "customer_id": "lab-42",
+             "created_at": "2026-07-16T00:01:00Z"},
+            {"id": str(uuid.uuid4()), "run_id": rid, "name": "old.bin",
+             "kind": "file", "status": "failed", "is_reference": False,
+             "uri": None, "customer_id": "lab-42",
+             "created_at": "2026-07-10T00:00:00Z"},
+        ]
+    )
+    service = _service(client)
+    data = service.get_entity(f"run:{rid}", view="artifacts")["data"]
+    assert data["undelivered"]["pending"] == 1
+    assert data["undelivered"]["failed"] == 1
+    assert "bytes not yet arrived" in data["undelivered"]["note"]
+
+    # A fully-delivered listing carries no undelivered key at all.
+    app.artifacts[rid] = [
+        r for r in app.artifacts[rid] if r["status"] not in ("pending", "failed")
+    ]
+    clean = service.get_entity(f"run:{rid}", view="artifacts")["data"]
+    assert "undelivered" not in clean

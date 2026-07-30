@@ -89,6 +89,23 @@ def render(caps: Capabilities) -> str:
         _row("Last attempt", caps.last_update_attempt or "never run on this device")
     )
 
+    lines.append("")
+    lines.append("Outbox")
+    if caps.outbox_status is None:
+        lines.append(_row("Queue", "never used"))
+    else:
+        status = caps.outbox_status
+        lines.append(_row("Pending", str(status.get("pending") or 0)))
+        lines.append(_row("Dead-lettered", str(status.get("failed") or 0)))
+        if status.get("auth_blocked_since"):
+            lines.append(
+                _row("Auth-blocked since", str(status["auth_blocked_since"]))
+            )
+        if status.get("paused"):
+            lines.append(_row("Paused", "yes (`probe outbox resume`)"))
+        if status.get("last_error"):
+            lines.append(_row("Last error", str(status["last_error"])))
+
     if caps.warnings:
         lines.append("")
         lines.append("Warnings")
@@ -165,5 +182,15 @@ def collect() -> Capabilities:
             if settings_autoupdate.last_attempt
             else None
         ),
+        outbox_status=_outbox_status(),
         warnings=warnings,
     )
+
+
+def _outbox_status() -> dict | None:
+    try:
+        from probe.sdk.journal import Journal
+
+        return Journal.read_status()
+    except Exception:  # noqa: BLE001 - a diagnostic must never crash
+        return None
