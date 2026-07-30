@@ -479,7 +479,7 @@ def test_token_factory_evicts_oldest_pair_beyond_cap(monkeypatch):
     monkeypatch.setattr(
         server_mod,
         "Client",
-        lambda *, settings, fail_open, surface=None: FakeClient(settings.token),
+        lambda *, settings, fail_open, surface=None, transport=None: FakeClient(settings.token),
     )
 
     def resolve(token):

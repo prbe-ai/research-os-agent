@@ -12,18 +12,27 @@ Runs two ways from one module:
 
 from __future__ import annotations
 
+import asyncio
 import contextvars
+import functools
 import hashlib
 import json
+import logging
 import os
 import threading
 import time
 import warnings
+import weakref
 from collections import OrderedDict
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from typing import Any
 
+import anyio
+import anyio.to_thread
 import httpx
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
 from ..client_headers import (
@@ -34,6 +43,7 @@ from ..client_headers import (
 from ..sdk.client import Client
 from ..sdk.config import Settings, load_context, resolve
 from ..sdk.surface import Surface, tool_scope
+from ..sdk.transport import Transport
 from .service import ResearchReadService
 from .source import ResearchOSSource
 
@@ -51,12 +61,57 @@ _client_headers_var: contextvars.ContextVar[dict[str, str] | None] = contextvars
 # capability-probe cache — a fresh source per call would re-probe (a full
 # search fan-out) on every tool call, including unrelated reads. Both maps are
 # LRU-bounded together (hosted multi-tenant mode must not pin one client+source
-# per distinct token forever); the least-recently-used pair is evicted and its
-# httpx client closed. An evicted token simply re-creates on its next request.
+# per distinct token forever). Eviction: an IDLE evictee's httpx client is
+# closed immediately; a BUSY one (in-flight lease below) is parked and closed
+# by its last lease release. An evicted token re-creates on its next request.
 _MAX_CACHED_TOKENS = 256
 _clients: OrderedDict[str | None, Client] = OrderedDict()
 _sources: OrderedDict[str | None, ResearchOSSource] = OrderedDict()
 _factory_lock = threading.Lock()
+
+# In-flight leases: with tool bodies on worker threads (_tool), LRU eviction
+# can race a call that is mid-request on the evicted client. A lease pins the
+# source for the duration of one tool call; eviction closes idle sources
+# immediately but PARKS busy ones, and the last lease release closes them.
+# Keyed by the SOURCE INSTANCE (id of a strongly-held object), never the
+# token: one token can cycle through several client generations, and two
+# generations must never share a slot. Guarded by _factory_lock; close()
+# always happens outside the lock.
+_in_flight: dict[int, int] = {}
+_parked: dict[int, ResearchOSSource] = {}
+
+# Tool execution runs on worker threads (see _tool) so the event loop — which
+# serves /healthz and every kubelet probe — is never blocked by a backend
+# round-trip (2026-07-30: one slow CallToolRequest starved /healthz and the
+# pod was liveness-killed). Admission is bounded and sheds load explicitly:
+#   _TOOL_CAPACITY   concurrent threaded tool calls per process (matches
+#                    anyio's default thread-pool bound of 40);
+#   _QUEUE_TIMEOUT_S a call that cannot get a worker within this raises a
+#                    retryable "overloaded" error instead of queueing toward
+#                    the ingress's 300s timeout;
+#   _QUEUE_WARN_S    waits past this log a saturation breadcrumb, because a
+#                    saturated pod otherwise looks healthy to every probe.
+# Two limiters on purpose: admission is OURS, so the acquire can be timed and
+# shed; the run_sync limiter merely permits the thread and is never contended
+# because admission gates entry. anyio primitives bind to the running event
+# loop, so both are created lazily per loop (one loop in production; tests
+# create one per anyio.run). Weak-keyed by the LOOP OBJECT so a dead loop's
+# entry disappears with it — an id()-keyed map handed a recycled id would give
+# a new loop limiters bound to dead-loop primitives.
+# Default concurrent threaded tool calls per process; PROBE_MCP_TOOL_CAPACITY
+# overrides at boot (read in _limiters) so the manifest can co-tune capacity
+# with the pod's CPU/memory budget without a code release.
+_TOOL_CAPACITY = 40
+_QUEUE_TIMEOUT_S = 20.0
+_QUEUE_WARN_S = 5.0
+# Retries on the MCP surface only (SDK default stays 3): agents retry their
+# own tool calls, so the server retrying too just multiplies worker-pin time.
+_MCP_MAX_RETRIES = 1
+_limiters_by_loop: weakref.WeakKeyDictionary[
+    asyncio.AbstractEventLoop, tuple[anyio.CapacityLimiter, anyio.CapacityLimiter]
+] = weakref.WeakKeyDictionary()
+
+_logger = logging.getLogger(__name__)
 
 
 def _env(name: str, default: str | None = None) -> str | None:
@@ -72,13 +127,14 @@ def _env(name: str, default: str | None = None) -> str | None:
     return default
 
 
-def _service_from_token() -> ResearchReadService:
-    """Build a read service bound to the current request's token (HTTP) or the
-    ``PROBE_MCP_TOKEN`` (stdio), falling back to the ``mcp_token`` that
-    ``probe mcp token set`` stores. Client and source are memoized per token
-    (the service itself is a stateless wrapper); the lock only guards the maps —
-    a racing double-probe inside the source is idempotent and accepted."""
+def _acquire_service(*, lease: bool) -> tuple[ResearchReadService, ResearchOSSource, list[ResearchOSSource]]:
+    """Resolve (and memoize) the per-token client+source, optionally taking an
+    in-flight lease on the source, and run LRU eviction — all under ONE lock
+    acquisition, so a source can never be evicted between resolution and its
+    lease. Returns the sources to close; the CALLER closes them outside the
+    lock (close() does network-adjacent teardown and must not hold it)."""
     token = _token_var.get() or _env("MCP_TOKEN") or load_context().get("mcp_token")
+    to_close: list[ResearchOSSource] = []
     with _factory_lock:
         source = _sources.get(token)
         if source is None:
@@ -90,8 +146,21 @@ def _service_from_token() -> ResearchReadService:
                 # MCP client. The read-only boundary is the whole reason mcp_token
                 # is a separate credential, so a missing one must stay missing and
                 # surface as an auth error, never silently upgrade to write scope.
+                #
+                # Custom Transport with max_retries=1: the SDK default (3) lets
+                # one tool call pin a worker thread ~130s exactly when the
+                # backend is slow — and MCP callers are agents that retry
+                # anyway, so server-side persistence buys latency, not
+                # reliability. Worst-case pin drops to ~62s, which the
+                # manifest's grace budget covers with room.
+                mcp_settings = Settings(base_url=resolve().base_url, token=token)
                 client = Client(
-                    settings=Settings(base_url=resolve().base_url, token=token),
+                    settings=mcp_settings,
+                    transport=Transport(
+                        mcp_settings,
+                        max_retries=_MCP_MAX_RETRIES,
+                        surface=Surface.MCP.value,
+                    ),
                     fail_open=False,
                     surface=Surface.MCP.value,
                 )
@@ -99,14 +168,171 @@ def _service_from_token() -> ResearchReadService:
             source = ResearchOSSource(client)
             _sources[token] = source
         # LRU: refresh both maps' recency together, then evict the stalest
-        # pair(s) beyond the cap, closing the evicted httpx client.
+        # pair(s) beyond the cap. Idle evictees are closed (by the caller);
+        # busy ones are parked and closed by their last lease release.
         _clients.move_to_end(token)
         _sources.move_to_end(token)
+        if lease:
+            _in_flight[id(source)] = _in_flight.get(id(source), 0) + 1
         while len(_sources) > _MAX_CACHED_TOKENS:
             stale_token, stale_source = _sources.popitem(last=False)
             _clients.pop(stale_token, None)
-            stale_source.close()  # closes the underlying httpx client
-    return ResearchReadService(source)
+            if _in_flight.get(id(stale_source), 0) > 0:
+                _parked[id(stale_source)] = stale_source
+            else:
+                to_close.append(stale_source)
+    return ResearchReadService(source), source, to_close
+
+
+def _close_quietly(source: ResearchOSSource) -> None:
+    """Teardown must never poison the caller's request or abort sibling
+    closes: a failing httpx close is logged and swallowed. Anything stronger
+    turns one tenant's teardown hiccup into another tenant's tool error —
+    or, worse, a permanently leaked lease."""
+    try:
+        source.close()
+    except Exception:
+        _logger.warning("closing an evicted client failed (leaked socket at worst)", exc_info=True)
+
+
+def _release_lease(source: ResearchOSSource) -> None:
+    """Drop one in-flight lease; the last release of a PARKED (evicted while
+    busy) source closes it — outside the lock."""
+    close_me: ResearchOSSource | None = None
+    with _factory_lock:
+        key = id(source)
+        remaining = _in_flight.get(key, 1) - 1
+        if remaining > 0:
+            _in_flight[key] = remaining
+        else:
+            _in_flight.pop(key, None)
+            close_me = _parked.pop(key, None)
+    if close_me is not None:
+        _close_quietly(close_me)
+
+
+def _service_from_token() -> ResearchReadService:
+    """TEST SEAM — production traffic goes through ``_leased_service``.
+
+    Build a read service bound to the current request's token (HTTP) or the
+    ``PROBE_MCP_TOKEN`` (stdio), falling back to the ``mcp_token`` that
+    ``probe mcp token set`` stores. Client and source are memoized per token
+    (the service itself is a stateless wrapper); the lock only guards the maps —
+    a racing double-probe inside the source is idempotent and accepted.
+
+    WARNING: the returned service holds NO lease — another thread's eviction
+    can close its client mid-call. That is exactly the race `_leased_service`
+    exists to prevent, so any new production caller must use that instead."""
+    service, _source, to_close = _acquire_service(lease=False)
+    for stale in to_close:
+        _close_quietly(stale)  # closes the underlying httpx client
+    return service
+
+
+@contextmanager
+def _leased_service() -> Iterator[ResearchReadService]:
+    """`_service_from_token` plus an in-flight lease held for the duration of
+    one tool call — the guard that makes LRU eviction safe under threads.
+
+    The try/finally starts BEFORE the evictee closes: the lease was already
+    taken inside `_acquire_service`, so a raising close must not skip
+    `_release_lease` (that would park the leased source forever)."""
+    service, source, to_close = _acquire_service(lease=True)
+    try:
+        for stale in to_close:
+            _close_quietly(stale)
+        yield service
+    finally:
+        _release_lease(source)
+
+
+def _limiters() -> tuple[anyio.CapacityLimiter, anyio.CapacityLimiter]:
+    """(admission, thread) limiters for the running event loop, created on
+    first use. Only ever called from the loop (inside async wrappers), so the
+    lazy init cannot race. Weak-keyed per loop because anyio primitives bind
+    to the loop they first await on — production has one loop for the process
+    lifetime; each test's asyncio.run gets fresh limiters (and fresh capacity,
+    so monkeypatching _TOOL_CAPACITY works per-test)."""
+    loop = asyncio.get_running_loop()
+    pair = _limiters_by_loop.get(loop)
+    if pair is None:
+        capacity = int(_env("MCP_TOOL_CAPACITY") or _TOOL_CAPACITY)
+        pair = (anyio.CapacityLimiter(capacity), anyio.CapacityLimiter(capacity))
+        _limiters_by_loop[loop] = pair
+    return pair
+
+
+def _token_fingerprint() -> str:
+    """A loggable, non-reversible handle for the current caller's token, so
+    saturation and shed events are attributable to a tenant without ever
+    logging the credential. None (stdio / env-token mode) logs as "local"."""
+    token = _token_var.get()
+    if not token:
+        return "local"
+    return hashlib.sha256(token.encode()).hexdigest()[:8]
+
+
+def _tool(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """Run a sync tool body on a worker thread so the event loop — and the
+    /healthz endpoint the kubelet probes — stays responsive.
+
+    FastMCP dispatches sync tools INLINE on the event loop (mcp
+    func_metadata.call_fn_with_arg_validation is a bare ``fn(...)``), and every
+    tool here does a blocking backend round-trip bounded only by the SDK's
+    30s-per-attempt retry budget. One slow call therefore froze the whole
+    process — the 2026-07-30 liveness-kill incident.
+
+    ``functools.wraps`` preserves the signature and annotations FastMCP reads
+    to build the tool schema; tests pin the schemas byte-for-byte so that
+    contract is verified, not assumed. Contextvars (the caller's token,
+    tool_scope) propagate into the worker thread — anyio runs the function in
+    the calling task's context copy.
+
+    Admission: waiting past _QUEUE_WARN_S logs a saturation breadcrumb;
+    waiting past _QUEUE_TIMEOUT_S sheds the call with a retryable
+    "overloaded" error instead of queueing toward the ingress timeout."""
+
+    @functools.wraps(fn)
+    async def _threaded(*args: Any, **kwargs: Any) -> Any:
+        admission, thread_permit = _limiters()
+        start = time.monotonic()
+        try:
+            with anyio.fail_after(_QUEUE_TIMEOUT_S):
+                await admission.acquire()
+        except TimeoutError:
+            # The shed is the strongest overload signal this process has —
+            # every probe stays green while it happens — so it MUST log.
+            _logger.warning(
+                "tool %s SHED after %.0fs queue wait (pool saturated; token %s)",
+                fn.__name__,
+                _QUEUE_TIMEOUT_S,
+                _token_fingerprint(),
+            )
+            raise ToolError(
+                f"server overloaded: waited {_QUEUE_TIMEOUT_S:.0f}s for a free "
+                "worker thread; retry shortly"
+            ) from None
+        try:
+            waited = time.monotonic() - start
+            if waited >= _QUEUE_WARN_S:
+                _logger.warning(
+                    "tool %s waited %.1fs for a worker thread (pool saturated; token %s)",
+                    fn.__name__,
+                    waited,
+                    _token_fingerprint(),
+                )
+
+            def _invoke() -> Any:
+                # tool_scope rides inside the worker thread's context copy, so
+                # the six tool bodies no longer repeat their own name.
+                with tool_scope(fn.__name__):
+                    return fn(*args, **kwargs)
+
+            return await anyio.to_thread.run_sync(_invoke, limiter=thread_permit)
+        finally:
+            admission.release()
+
+    return _threaded
 
 
 # Written as a BEHAVIOURAL PRESCRIPTION, not a feature description. Describing
@@ -144,9 +370,16 @@ def create_server(
     transport_security: TransportSecuritySettings | None = None,
 ) -> FastMCP:
     # An explicit service (tests, or a fixed single-tenant deployment) is used for
-    # every call; otherwise each call resolves a service from the caller's token.
-    def svc() -> ResearchReadService:
-        return service if service is not None else _service_from_token()
+    # every call; otherwise each call resolves a service from the caller's token,
+    # holding an in-flight lease so LRU eviction can never close the client
+    # mid-call (tool bodies run on worker threads — see _tool).
+    @contextmanager
+    def svc() -> Iterator[ResearchReadService]:
+        if service is not None:
+            yield service
+        else:
+            with _leased_service() as leased:
+                yield leased
 
     mcp = FastMCP(
         "probe-research-read",
@@ -161,6 +394,7 @@ def create_server(
     )
 
     @mcp.tool()
+    @_tool
     def browse_research(
         scope: str | None = None,
         depth: int = 1,
@@ -197,8 +431,8 @@ def create_server(
 
         Every node carries a `ref` you can hand straight to `get_entity`.
         """
-        with tool_scope("browse_research"):
-            return svc().browse_research(
+        with svc() as s:
+            return s.browse_research(
                 scope=scope,
                 depth=depth,
                 status=status,
@@ -208,6 +442,7 @@ def create_server(
             )
 
     @mcp.tool()
+    @_tool
     def search_knowledge(
         query: str,
         corpora: list[str] | None = None,
@@ -246,8 +481,8 @@ def create_server(
         Every result carries `why_matched` {mode, channel, score, terms} and a
         `ref` you can hand to `get_entity`.
         """
-        with tool_scope("search_knowledge"):
-            return svc().search_knowledge(
+        with svc() as s:
+            return s.search_knowledge(
                 query,
                 corpora=corpora,
                 project_id=project_id,
@@ -259,6 +494,7 @@ def create_server(
             )
 
     @mcp.tool()
+    @_tool
     def get_entity(
         ref: str,
         view: str = "card",
@@ -296,10 +532,11 @@ def create_server(
         inapplicable filter is rejected, and a truncated view returns
         `state="partial"` with a `next_cursor` you pass back with the SAME view.
         """
-        with tool_scope("get_entity"):
-            return svc().get_entity(ref, view, token_budget, cursor, filters, verbose=verbose)
+        with svc() as s:
+            return s.get_entity(ref, view, token_budget, cursor, filters, verbose=verbose)
 
     @mcp.tool()
+    @_tool
     def get_metrics_grouped(
         run_id: str,
         key: str,
@@ -333,8 +570,8 @@ def create_server(
         A partial response was cut at the row bound: pass `next_cursor` back as
         `step_from` to continue.
         """
-        with tool_scope("get_metrics_grouped"):
-            return svc().metrics_grouped(
+        with svc() as s:
+            return s.metrics_grouped(
                 run_id,
                 key,
                 kind=kind,
@@ -348,6 +585,7 @@ def create_server(
             )
 
     @mcp.tool()
+    @_tool
     def get_run_coordinates(run_id: str) -> dict:
         """List a run's coordinate catalog: every coordinate (rank/split/seed
         combination) any fact landed on, with which fact tables have it.
@@ -357,10 +595,11 @@ def create_server(
         unnecessary, and it costs no fact-table scan. Each row carries the
         coordinate map plus has_metrics/has_spans/has_artifacts flags.
         """
-        with tool_scope("get_run_coordinates"):
-            return svc().run_coordinates(run_id)
+        with svc() as s:
+            return s.run_coordinates(run_id)
 
     @mcp.tool()
+    @_tool
     def export_metric_points(
         run_id: str,
         key: str | None = None,
@@ -380,8 +619,8 @@ def create_server(
         A partial response has more points: pass `next_cursor` back as
         `after_id`. `limit` caps the page and is clamped server-side.
         """
-        with tool_scope("export_metric_points"):
-            return svc().metrics_export(
+        with svc() as s:
+            return s.metrics_export(
                 run_id,
                 key=key,
                 kind=kind,

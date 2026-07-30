@@ -57,7 +57,7 @@ def test_a_missing_mcp_token_never_falls_back_to_the_write_token(monkeypatch):
     captured = {}
 
     class FakeClient:
-        def __init__(self, *, settings, fail_open, surface=None):
+        def __init__(self, *, settings, fail_open, surface=None, transport=None):
             captured["token"] = settings.token
 
         def close(self):

@@ -134,6 +134,100 @@ that stopped batching would only be caught by one count assertion.
 **Takes:** 422 on out-of-range values, the way the fake already does for
 `ScopedUploadRequest` extras.
 
+## P2 — backend cold-start latency (research-os, cross-repo)
+
+### First post-deploy search takes ~55s
+
+**What:** Profile why the first `search_knowledge` after a research-os backend
+deploy took ~55s (2026-07-30 incident, 05:54:59–05:55:54 UTC — the call that
+wedged an MCP pod into a liveness kill). Likely retrieval-service cold caches
+or lazy model/embedding load on the first request.
+
+**Why:** The MCP now survives slow backend calls (thread offload + probe
+tuning, PR from the 2026-07-30 rollout-hardening plan), but users still wait
+nearly a minute for the first post-deploy search. The slowness itself lives in
+research-os, not this repo — this entry is the cross-repo pointer so the
+context survives.
+
+**Context:** Incident evidence in the plan file
+(`~/.gstack/projects/prbe-ai-research-os-agent/2026-07-30-mcp-rollout-hardening-plan.md`)
+and the killed pod's log (healthz silent from the moment the CallToolRequest
+started). Start at the retrieval service's first-request path.
+
+**Effort:** M (profiling + a warm-up or eager-load fix in research-os)
+**Priority:** P2
+**Depends on:** nothing — independent of the MCP hardening PR.
+
+---
+
+## P3 — MCP CPU limit evaluation (trigger-conditioned)
+
+### Measure CFS throttling under threaded concurrency, then size the limit
+
+**What:** After the thread-offload MCP ships and has ~a week of real traffic,
+read throttling counters (`kubectl exec … cat /sys/fs/cgroup/cpu.stat` —
+`nr_throttled`/`throttled_usec`; no metrics-server on this cluster) on the
+`research-os-mcp` pods, check the `research` namespace ResourceQuota CPU
+headroom, and decide whether the 500m limit should be raised or dropped.
+
+**Why:** Up to 40 worker threads now share half a core; large tool-result
+serialization could throttle and stretch latencies invisibly. The
+2026-07-30 eng review deliberately deferred this rather than guess
+(plan NOT-in-scope) — this entry carries the trigger so the revisit happens.
+
+**Trigger:** any MCP latency complaint, or nonzero `throttled_usec` growth.
+
+**Effort:** S (measurement) + a one-line manifest change if warranted
+**Priority:** P3
+**Depends on:** the rollout-hardening PR shipping first.
+
+---
+
+## P2 — MCP flood hardening (from the 2026-07-30 pre-landing review)
+
+### Bound the paths the admission limiter does not cover
+
+**What:** Three related guards for the hosted MCP under request floods:
+1. **Pre-auth verification fan-out** (pre-existing, predates the offload):
+   every unique bogus bearer opens an AsyncClient + `/v1/me` round trip
+   before admission applies; the rejection cache is useless under token
+   rotation. Add a small concurrency bound/rate limit around
+   `_upstream_rejects`.
+2. **Per-tenant fairness:** one valid token can occupy all worker slots;
+   shed logs now carry a token fingerprint (sha256/8) so a noisy tenant is
+   attributable — add a per-token cap when attribution shows it matters.
+3. **Queue depth:** admission bounds queue TIME (20s) not DEPTH; consider
+   uvicorn `limit_concurrency` so an edge 503 caps waiter memory.
+
+**Why:** The 2026-07-30 hardening bounds worker occupancy per pod; these are
+the remaining flood paths, all currently gated only by upstream capacity.
+Codex flagged #1 as its top finding; it is pre-existing and auth-layer, so it
+rode as a TODO rather than blocking the rollout fix.
+
+**Effort:** S each; #1 first (unauthenticated surface)
+**Priority:** P2
+**Depends on:** nothing.
+
+---
+
+## P3 — capability-cache verdict divergence during mixed-version rollouts
+
+### Search support can read False for up to one recheck window
+
+**What:** `source.py` tri-state capability verdicts are last-writer-wins under
+the now-truly-concurrent tool threads; during a mixed-version backend rollout
+the losing pod's verdict can stick (degraded keyword-only search) for up to
+`_SUPPORT_RECHECK_SECONDS`. Documented at the flags; self-heals.
+
+**Why deferred:** a lock cannot reconcile pods that genuinely differ; the fix
+that matters (if it ever bites) is verdict versioning or probe single-flight
+keyed by backend build. Revisit only on a real report of post-deploy search
+degradation lasting minutes.
+
+**Effort:** M **Priority:** P3 **Depends on:** evidence it bites.
+
+---
+
 ## Completed
 
 ### `defaults.auto_hypothesis` is dead
