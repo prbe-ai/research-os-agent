@@ -16,12 +16,32 @@ metadata:
   labels: { app: research-os-mcp }
 spec:
   replicas: 2
+  # ROLLOUT SHAPE (2026-07-30 incident: old capacity was gone 16s after the
+  # first new pod's first readiness pass; the new pods then wedged on their
+  # first tool calls and one was liveness-killed, leaving a 502 window).
+  # minReadySeconds makes a new pod hold readiness for a minute before the
+  # rollout counts it available and removes old capacity. The strategy values
+  # equal the computed defaults at 2 replicas — explicit so the intent
+  # (never drop below 2 serving pods) survives a replica-count change.
+  minReadySeconds: 60
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels: { app: research-os-mcp }
   template:
     metadata:
       labels: { app: research-os-mcp }
     spec:
+      # Grace must cover preStop (10s) + a worst-case in-flight call: the SDK
+      # retries up to _MAX_RETRIES=3 after the first attempt, each bounded by
+      # the 30s client timeout, plus backoff (src/probe/sdk/transport.py) —
+      # ~130s worst case. This is a CEILING, not a wait: the pod exits the
+      # moment uvicorn finishes draining. The default 30s force-killed exactly
+      # the long requests the preStop drain exists to protect.
+      terminationGracePeriodSeconds: 150
       imagePullSecrets:
         - name: probe-ghcr-pull   # same GHCR pull secret research-os uses
       containers:
@@ -33,12 +53,36 @@ spec:
             # Same-cluster: point at the internal API service to avoid LB hairpin.
             # Swap to https://api.research.prbe.ai if calling the public endpoint.
             - { name: PROBE_BASE_URL, value: "http://research-os.research.svc.cluster.local:8080" }
+          lifecycle:
+            # ingress-nginx removes a terminating pod from its upstreams
+            # asynchronously; keep accepting for 10s so routing drains instead
+            # of hitting a closed socket (502). Native sleep action — cluster
+            # is v1.35, no shell/sleep binary needed in the image.
+            preStop:
+              sleep:
+                seconds: 10
+          # PROBE POSTURE (2026-07-30 liveness-kill incident). /healthz is
+          # served by the event loop while tool work runs on worker threads
+          # (server.py _tool), so healthz answers fast unless the process is
+          # truly dead — and it stays SHALLOW on purpose: probing backend
+          # reachability here would cascade a backend outage into killing
+          # every MCP pod.
+          # - Readiness reacts to busy: tight timeout pulls a stalled pod from
+          #   the load balancer without killing it; it returns when free.
+          # - Liveness is last resort: a tool call may legitimately hold a
+          #   worker ~30s (backend timeout budget), so tolerate ~1 min of
+          #   unresponsiveness before the kubelet kills the pod. The defaults
+          #   (1s timeout × 3 failures) killed a healthy-but-warming replica.
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 3
+            timeoutSeconds: 3
           livenessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 5
+            timeoutSeconds: 5
+            periodSeconds: 15
+            failureThreshold: 4
           # WHY 1Gi, AND WHY NOT MORE.
           #
           # Both replicas were OOMKilled (exit 137) in the `research` namespace
