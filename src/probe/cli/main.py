@@ -44,6 +44,7 @@ from ..sdk.config import (
     save_context,
     use_context,
 )
+from ..sdk.tags import canonical_tags
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
 from ..sdk.hashing import reference_fields
 from ..sdk.surface import Surface
@@ -243,9 +244,6 @@ def _outbox_notice() -> None:
             _kick_drainer()
     except Exception:  # noqa: BLE001 -- a broken banner must never break a command
         pass
-
-
-from ..sdk.tags import canonical_tags  # noqa: E402
 
 
 def _run_handle(client: Client, run_id: str):
