@@ -19,9 +19,12 @@ it belongs and leaves this primitive with exactly one meaningful knob: the file
 
 from __future__ import annotations
 
+import ctypes
 import fcntl
 import json
 import os
+import shutil
+import sys
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -112,10 +115,66 @@ def read_json(path: str | Path, *, error: type[Exception] = ValueError) -> dict[
     return value
 
 
+def try_clone(src: str, dst: str) -> bool:
+    """Filesystem-level clone of ``src`` at ``dst``. True when the platform and
+    filesystem support one (APFS clonefile, Linux FICLONE reflink); False means
+    the caller must fall back to a byte copy. ``dst`` must not exist."""
+    if sys.platform == "darwin":
+        try:
+            libc = ctypes.CDLL(None, use_errno=True)
+            if libc.clonefile(os.fsencode(src), os.fsencode(dst), 0) == 0:
+                return True
+        except (OSError, AttributeError):
+            pass
+        return False
+    if sys.platform.startswith("linux"):
+        _FICLONE = 0x40049409
+        try:
+            with open(src, "rb") as source, open(dst, "wb") as target:
+                fcntl.ioctl(target.fileno(), _FICLONE, source.fileno())
+            return True
+        except OSError:
+            Path(dst).unlink(missing_ok=True)
+            return False
+    return False
+
+
+def snapshot_file(src: str | Path, dst: str | Path, *, mode: int = 0o600) -> None:
+    """Immutable point-in-time snapshot of ``src`` at ``dst``.
+
+    The mechanism is an internal detail: a copy-on-write filesystem clone where
+    the filesystem offers one (instant, no extra space until the original
+    changes), else a streamed byte copy. Either way ``dst`` appears atomically
+    (temp sibling + ``os.replace``) and never shares mutable state with ``src``
+    through the original path -- overwriting or deleting the original later
+    cannot alter the snapshot. Named for what it is FOR, not how it works.
+    """
+    src = Path(src)
+    dst = Path(dst)
+    temporary = dst.with_name(f".{dst.name}.{uuid.uuid4().hex}.tmp")
+    try:
+        if not try_clone(str(src), str(temporary)):
+            shutil.copyfile(src, temporary)
+        os.chmod(temporary, mode)
+        # A clone is a metadata operation and a copy already streamed the bytes;
+        # fsync the result so the rename below lands on a durable file.
+        descriptor = os.open(temporary, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, dst)
+        fsync_directory(dst.parent)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 __all__ = [
     "now_iso",
     "fsync_directory",
     "write_text_atomic",
     "file_lock",
     "read_json",
+    "snapshot_file",
+    "try_clone",
 ]

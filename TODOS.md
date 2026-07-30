@@ -5,6 +5,27 @@ it is, why it matters, and roughly what it takes.
 
 ---
 
+## P3 — CI coverage for the filesystem-clone branch
+
+### macOS CI lane for `try_clone` / `snapshot_file` tests
+
+**What:** A scoped GitHub Actions `macos-latest` job running just
+`tests/test_outbox.py` (and the harbor stager tests), so the APFS `clonefile`
+branch of `sdk/durable.py:try_clone` gets CI coverage.
+
+**Why:** Accepted risk from the 2026-07-29 async-outbox eng review (decision
+10B): ubuntu runners use ext4, which has no reflink, so CI only ever executes
+the byte-copy fallback. The clone branch is the one every developer Mac (and
+any xfs/btrfs PVC) actually hits; today it is covered only by local test runs.
+The tests already `skipif` on unsupported filesystems — the lane just gives
+them a place to run.
+
+**Effort:** S (~2 min of macOS runner time per push if scoped to two files)
+**Priority:** P3
+**Depends on:** nothing — can land any time after the async outbox merges.
+
+---
+
 ## P2 — coding-agent coverage
 
 ### Transcript capture for Cursor and Codex

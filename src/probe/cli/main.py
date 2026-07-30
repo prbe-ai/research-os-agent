@@ -45,7 +45,7 @@ from ..sdk.config import (
     use_context,
 )
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
-from ..sdk.hashing import reference_fields
+from ..sdk.hashing import fingerprint, reference_fields
 from ..sdk.surface import Surface
 
 
@@ -53,10 +53,8 @@ from ..sdk.surface import Surface
 @dataclass
 class Conn:
     base_url: str | None = None
-    token: str | None = None
-    ingest_token: str | None = None
-    hmac_secret: str | None = None
     spool_dir: str | None = None
+    async_mode: bool = False
 
 
 _conn = Conn()
@@ -166,11 +164,85 @@ def _client() -> Client:
     # `Client` is a module global so the CLI package can monkeypatch it in tests.
     return _new_client(
         base_url=_conn.base_url,
-        token=_conn.token,
-        ingest_token=_conn.ingest_token,
-        hmac_secret=_conn.hmac_secret,
         spool_dir=_conn.spool_dir,
     )
+
+
+def _journal():
+    from ..sdk.journal import Journal
+
+    return Journal(_conn.spool_dir)
+
+
+def _async_client() -> Client:
+    """A journaling client for the async write paths (9A). Errors early when no
+    deliverable credentials exist -- queueing an op nothing can ever deliver
+    fails hours later in the drainer, which is the worst place to learn it."""
+    from ..sdk.config import resolve
+
+    settings = resolve(base_url=_conn.base_url)
+    if not settings.token and not settings.ingest_token:
+        raise typer.BadParameter(
+            "--async needs deliverable credentials: run `probe login` "
+            "(or set PROBE_TOKEN) so the background drainer can authenticate"
+        )
+    return _new_client(
+        base_url=_conn.base_url,
+        spool_dir=_conn.spool_dir,
+        async_writes=True,
+    )
+
+
+def _async_run(client: Client, run_ref: str):
+    """A Run handle that does NOT read the run first: async enqueue must not
+    block on (or fail without) the network; the server validates the ref at
+    replay (eng review D20-1)."""
+    from ..sdk.run import Run
+
+    return Run(client, {"id": run_ref})
+
+
+def _kick_drainer() -> None:
+    from . import outbox_worker
+
+    try:
+        outbox_worker.maybe_spawn(_conn.spool_dir)
+    except Exception:  # noqa: BLE001 -- delivery is best-effort; run end is the barrier
+        pass
+
+
+def _outbox_notice() -> None:
+    """The every-command outbox banner (2B) + drainer re-kick (3A).
+
+    One stat/read of status.json, no locks, never raises: this runs before
+    every command, including `probe log` inside training loops.
+    """
+    try:
+        from ..sdk.journal import Journal
+
+        status = Journal.read_status(_conn.spool_dir)
+        if not status:
+            return
+        failed = status.get("failed") or 0
+        pending = status.get("pending") or 0
+        blocked = status.get("auth_blocked_since")
+        parts: list[str] = []
+        if blocked:
+            parts.append(f"auth-blocked since {blocked} — run `probe login`")
+        if failed:
+            parts.append(f"{failed} dead-lettered")
+        if parts or (pending and status.get("paused")):
+            if pending:
+                parts.append(f"{pending} pending")
+            if status.get("paused"):
+                parts.append("paused")
+            typer.echo(
+                f"outbox: {'; '.join(parts)} — see `probe outbox status`", err=True
+            )
+        if pending and not status.get("paused") and not blocked:
+            _kick_drainer()
+    except Exception:  # noqa: BLE001 -- a broken banner must never break a command
+        pass
 
 
 def _run_handle(client: Client, run_id: str):
@@ -217,21 +289,33 @@ app = typer.Typer(
 @app.callback()
 def _root(
     base_url: str = typer.Option(None, "--base-url"),
-    token: str = typer.Option(None, "--token"),
-    ingest_token: str = typer.Option(None, "--ingest-token"),
-    hmac_secret: str = typer.Option(None, "--hmac-secret"),
     spool_dir: str = typer.Option(
-        None, "--spool-dir", help="durable fail-open queue directory (or PROBE_SPOOL_DIR)"
+        None, "--spool-dir", help="outbox journal directory (or PROBE_OUTBOX_DIR)"
+    ),
+    async_mode: bool = typer.Option(
+        False,
+        "--async",
+        help="queue data writes to the local outbox and return immediately "
+        "(or PROBE_ASYNC=1). Read by `log`, `span add`, `note add`, "
+        "`artifact add`, `run end`; other commands ignore it.",
     ),
     version: bool = typer.Option(
         False, "--version", callback=_version_cb, is_eager=True, help="show version"
     ),
 ) -> None:
+    # Credentials come from named contexts (`probe login`) or the PROBE_TOKEN /
+    # PROBE_INGEST_TOKEN / PROBE_BASE_URL env vars. The old --token/--ingest-token/
+    # --hmac-secret overrides were removed (v0.23.0): a secret in argv leaks into
+    # shell history and `ps`, and a detached outbox drain could never resolve it.
     _conn.base_url = base_url
-    _conn.token = token
-    _conn.ingest_token = ingest_token
-    _conn.hmac_secret = hmac_secret
     _conn.spool_dir = spool_dir
+    _conn.async_mode = async_mode or os.environ.get("PROBE_ASYNC", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    _outbox_notice()
 
 
 # -- auth -------------------------------------------------------------------
@@ -259,7 +343,7 @@ def login(
     ``--context staging`` logs in under a named context instead of the active one,
     so several endpoints or tenants can coexist on one machine.
     """
-    resolved_token = token or _conn.token
+    resolved_token = token
     base = base_url or _conn.base_url
 
     if device and not resolved_token:
@@ -275,8 +359,8 @@ def login(
     settings = resolve(
         base_url=base,
         token=resolved_token,
-        ingest_token=ingest_token or _conn.ingest_token,
-        hmac_secret=hmac_secret or _conn.hmac_secret,
+        ingest_token=ingest_token,
+        hmac_secret=hmac_secret,
         context=context,
     )
     # None means "leave whatever is already there" in save_context, so an --endpoint-only
@@ -1455,7 +1539,40 @@ def run_end(
     run: str = typer.Argument(...),
     status: EndStatus = typer.Option(EndStatus.completed, "--status"),
 ) -> None:
-    """Close a run."""
+    """Close a run.
+
+    Synchronous mode is a RUN-SCOPED barrier (T3-A): this run's queued outbox
+    ops are delivered first, and the run is not closed while any of them cannot
+    be -- unrelated runs' stuck items never block it. Async mode enqueues the
+    close as a journal op ORDERED BEHIND everything the run already queued, so
+    the run only closes after its data lands; nothing blocks.
+    """
+    if _conn.async_mode:
+        from ..sdk.durable import now_iso
+
+        with _async_client() as c:
+            # set_status, not finish(): finish() flushes synchronously, which is
+            # exactly what async mode must not do. Ordering is the barrier here.
+            _async_run(c, run).set_status(status.value, ended_at=now_iso())
+        _kick_drainer()
+        print(f"queued end for {run} -> {status.value} (async)")
+        return
+    from ..sdk.journal import drain
+
+    journal = _journal()
+    report = drain(journal, run_ref=run)
+    dead = [op for _, op in journal.failed() if op.get("run_ref") == run]
+    if report.auth_blocked or report.stopped_transient or dead:
+        detail = "; ".join(
+            report.errors[-3:] or [op.get("last_error") or "?" for op in dead[:3]]
+        )
+        typer.echo(
+            f"run {run} NOT closed: its outbox items could not all be delivered "
+            f"({detail}). Fix (see `probe outbox status`), retry dead letters "
+            "with `probe outbox retry`, then re-run `probe run end`.",
+            err=True,
+        )
+        raise typer.Exit(2)
     with _client() as c:
         _run_handle(c, run).finish(status.value)
     print(f"{run} -> {status.value}")
@@ -1567,6 +1684,15 @@ def log(
     """Append metric points. --dim adds series dimensions (fold #9)."""
     metrics = _kv_pairs(metric, cast_float=True)
     dims = _kv_pairs(dim) if dim else None
+    if _conn.async_mode:
+        with _async_client() as c:
+            _async_run(c, run).log(
+                metrics, step=step, kind=kind, dimensions=dims,
+                agg=agg.value if agg else None,
+            )
+        _kick_drainer()
+        print(f"queued {len(metrics)} metric(s) for {run} (async)")
+        return
     with _client() as c:
         _run_handle(c, run).log(
             metrics, step=step, kind=kind, dimensions=dims, agg=agg.value if agg else None
@@ -1700,6 +1826,22 @@ def span_add(
     attr: list[str] = typer.Option(None, "--attr", metavar="k=v"),
 ) -> None:
     """Upsert a span."""
+    if _conn.async_mode:
+        with _async_client() as c:
+            handle = _async_run(c, run).span(
+                span_type,
+                name=name,
+                step_index=step,
+                provider=provider,
+                external_key=external_key,
+                parent_span_id=parent,
+                status=status,
+                attributes=_kv_pairs(attr) if attr else None,
+            )
+        _kick_drainer()
+        # The span id is minted client-side, so async still hands it back.
+        print(handle)
+        return
     with _client() as c:
         span_id = _run_handle(c, run).span(
             span_type,
@@ -1784,6 +1926,150 @@ def _pick_anchor(
     return given[0]
 
 
+def _ping_presign(
+    anchor: Anchor,
+    anchor_id: str | None,
+    name: str,
+    *,
+    digest: str,
+    size: int,
+    content_type: str | None,
+    kind: str | None,
+    meta: dict | None,
+    span_id: str | None,
+    step_index: int | None,
+) -> str | None:
+    """The 1A intent ping: a capped, best-effort presign at enqueue so the
+    server's pending row (and its reaper) know this upload is coming. Never
+    raises and never waits past the cap -- a dead network degrades to
+    local-only enqueue, and the drainer re-presigns on every attempt anyway.
+    """
+    try:
+        from ..sdk.config import resolve
+        from ..sdk.transport import Transport
+
+        settings = resolve(base_url=_conn.base_url)
+        if not settings.token:
+            return None
+        transport = Transport(
+            settings,
+            timeout=2.0,
+            max_retries=1,
+            surface=Surface.CLI.value,
+            client_headers=client_version_headers("cli", __version__),
+        )
+        with Client(settings=settings, transport=transport) as ping:
+            presign = ping.presign_upload(
+                anchor,
+                anchor_id,
+                name,
+                digest=digest,
+                size=size,
+                content_type=content_type,
+                kind=kind,
+                meta=meta,
+                span_id=span_id,
+                step_index=step_index,
+            )
+        return presign.get("artifact_id")
+    except Exception:  # noqa: BLE001 -- intent registration is best-effort by design
+        return None
+
+
+_REFERENCE_ROUTES = {
+    Anchor.EXPERIMENT: "/v1/experiments/{id}/artifacts",
+    Anchor.PROJECT: "/v1/projects/{id}/artifacts",
+}
+
+
+def _artifact_add_async(
+    anchor: Anchor,
+    anchor_id: str | None,
+    name: str,
+    *,
+    path: str | None,
+    uri: str | None,
+    reference: bool,
+    hash_content: bool,
+    allow_missing: bool,
+    kind: str,
+    step: int | None,
+    span: str | None,
+    content_type: str | None,
+    meta: dict | None,
+) -> None:
+    """Queue an artifact operation and return immediately (--async).
+
+    Reference/uri forms are pure JSON writes and journal as http ops -- zero
+    staging, the fastest path. Byte uploads snapshot into the blob store;
+    files at or under the 11A threshold fingerprint inline and fire the capped
+    presign ping so the server registers intent, bigger files defer hashing to
+    the drainer so return time stays flat.
+    """
+    run_ref = anchor_id if anchor is Anchor.RUN else None
+    if reference or uri is not None:
+        with _async_client() as c:
+            if anchor is Anchor.RUN:
+                _async_run(c, anchor_id).log_artifact(
+                    name, path=path, uri=uri, reference=reference,
+                    hash_content=hash_content, allow_missing=allow_missing,
+                    kind=kind, step_index=step, span_id=span,
+                    content_type=content_type, meta=meta,
+                )
+            else:
+                if reference:
+                    fields = reference_fields(
+                        path, hash_content=hash_content, allow_missing=allow_missing
+                    )
+                    body = {"name": name, "is_reference": True, **fields}
+                else:
+                    body = {"name": name, "uri": uri, "is_reference": True}
+                if content_type:
+                    body["content_type"] = content_type
+                c.journal.append_http(
+                    "POST", _REFERENCE_ROUTES[anchor].format(id=anchor_id), body
+                )
+        _kick_drainer()
+        print(f"queued reference {name!r} (async)")
+        return
+
+    if not path:
+        raise typer.BadParameter("needs a file path (--reference, or --uri)")
+    from ..sdk.journal import INLINE_HASH_MAX_BYTES
+
+    run_only = anchor is Anchor.RUN
+    with _async_client() as c:
+        digest: str | None = None
+        size = os.path.getsize(path)
+        artifact_hint: str | None = None
+        if size <= INLINE_HASH_MAX_BYTES:
+            digest, size = fingerprint(path)
+            artifact_hint = _ping_presign(
+                anchor, anchor_id, name,
+                digest=digest, size=size, content_type=content_type,
+                kind=kind if run_only else None, meta=meta if run_only else None,
+                span_id=span, step_index=step,
+            )
+        op_id = c.journal.append_upload(
+            anchor=anchor.value,
+            anchor_id=anchor_id,
+            name=name,
+            src_path=path,
+            content_type=content_type,
+            kind=kind if run_only else None,
+            meta=meta if run_only else None,
+            span_id=span,
+            step_index=step,
+            run_ref=run_ref,
+            blob=digest,
+            size_bytes=size,
+            artifact_id=artifact_hint,
+        )
+    _kick_drainer()
+    registered = "intent registered" if artifact_hint else "intent deferred to drain"
+    print(f"queued upload {name!r} op={op_id} ({registered})")
+
+
 @artifact_app.command("add")
 def artifact_add(
     run: str = typer.Argument(None, help="run id — omit when using an anchor flag"),
@@ -1860,6 +2146,30 @@ def artifact_add(
         raise typer.BadParameter("--reference needs a local file path")
     if (hash_content or allow_missing) and not reference:
         raise typer.BadParameter("--hash and --allow-missing only apply to --reference")
+    if anchor is not Anchor.RUN:
+        if step is not None or kind != "file" or span is not None or meta:
+            raise typer.BadParameter(
+                f"--kind/--step/--span/--meta are run-only; "
+                f"the {anchor.value} upload contract rejects them"
+            )
+        if (uri is not None or reference) and anchor in _FILE_ANCHORS:
+            # Caught here rather than in the SDK so it reads as a usage error instead
+            # of an unhandled ValueError traceback: a file IS its bytes, so there is
+            # no reference-without-bytes form and the backend declares no such route.
+            raise typer.BadParameter(
+                f"a {anchor.value} file cannot be a reference (it IS its bytes). "
+                "Pass a local path to upload the bytes instead."
+            )
+
+    if _conn.async_mode:
+        _artifact_add_async(
+            anchor, anchor_id, resolved,
+            path=path, uri=uri, reference=reference, hash_content=hash_content,
+            allow_missing=allow_missing, kind=kind, step=step, span=span,
+            content_type=content_type, meta=_kv_pairs(meta) if meta else None,
+        )
+        return
+
     if anchor is Anchor.RUN:
         with _client() as c:
             _run_handle(c, anchor_id).log_artifact(
@@ -1870,20 +2180,6 @@ def artifact_add(
             )
         print(f"artifact {resolved!r} recorded on {anchor_id}")
         return
-
-    if step is not None or kind != "file" or span is not None or meta:
-        raise typer.BadParameter(
-            f"--kind/--step/--span/--meta are run-only; "
-            f"the {anchor.value} upload contract rejects them"
-        )
-    if (uri is not None or reference) and anchor in _FILE_ANCHORS:
-        # Caught here rather than in the SDK so it reads as a usage error instead of
-        # an unhandled ValueError traceback: a file IS its bytes, so there is no
-        # reference-without-bytes form and the backend declares no such route.
-        raise typer.BadParameter(
-            f"a {anchor.value} file cannot be a reference (it IS its bytes). "
-            "Pass a local path to upload the bytes instead."
-        )
     with _client() as c:
         if reference:
             fields = reference_fields(
@@ -2413,12 +2709,138 @@ def snapshot(
     print(f"snapshot {snap['git']['commit'][:12]} -> {snap['git']['ref']}")
 
 
+# -- outbox (the async write journal) ---------------------------------------
+outbox_app = typer.Typer(no_args_is_help=True, help="the durable async write outbox")
+app.add_typer(outbox_app, name="outbox")
+
+
+def _drain_foreground(run_ref: str | None = None) -> None:
+    """Shared body of `probe outbox drain` and its `probe flush` alias."""
+    from ..sdk.journal import drain
+
+    report = drain(_journal(), run_ref=run_ref)
+    scope = f" for run {run_ref}" if run_ref else ""
+    print(
+        f"delivered {report.delivered}{scope}; "
+        f"{report.dead_lettered} dead-lettered; {report.remaining} remaining"
+    )
+    if report.auth_blocked:
+        typer.echo(
+            f"auth-blocked: {report.errors[-1] if report.errors else '401/403'} "
+            "— run `probe login`; queued items were kept",
+            err=True,
+        )
+    elif report.stopped_transient and report.errors:
+        typer.echo(f"stopped on transient failure: {report.errors[-1]}", err=True)
+    for message in report.errors[:-1] if report.errors else []:
+        typer.echo(f"  {message}", err=True)
+    if not report.clean:
+        raise typer.Exit(2)
+
+
+@outbox_app.command("status")
+def outbox_status(
+    verbose: bool = typer.Option(False, "--verbose", help="list every queued/failed op"),
+) -> None:
+    """Outbox summary. Exit 0 when everything is delivered, 2 otherwise."""
+    journal = _journal()
+    pending = journal.pending()
+    failed = journal.failed()
+    from ..sdk.journal import Journal
+
+    status = Journal.read_status(journal.dir) or {}
+    summary = {
+        "dir": str(journal.dir),
+        "pending": len(pending),
+        "failed": len(failed),
+        "paused": journal.paused,
+        "auth_blocked_since": status.get("auth_blocked_since"),
+        "oldest_pending": pending[0][1].get("enqueued_at") if pending else None,
+        "last_error": status.get("last_error"),
+    }
+    if verbose:
+        def row(op: dict, state: str) -> dict:
+            return {
+                "op_id": op.get("op_id"),
+                "state": state,
+                "kind": op.get("kind"),
+                "run_ref": op.get("run_ref"),
+                "detail": (
+                    f"{op.get('method')} {op.get('path')}"
+                    if op.get("kind") == "http"
+                    else (op.get("upload") or {}).get("name")
+                ),
+                "attempts": op.get("attempts"),
+                "last_error": op.get("last_error"),
+            }
+
+        summary["ops"] = [row(op, "pending") for _, op in pending] + [
+            row(op, "failed") for _, op in failed
+        ]
+    _print_json(summary)
+    if pending or failed:
+        raise typer.Exit(2)
+
+
+@outbox_app.command("drain")
+def outbox_drain(
+    run: Optional[str] = typer.Option(None, "--run", help="drain only this run's ops"),
+) -> None:
+    """Deliver everything queued, in order, and wait for it (the sync barrier)."""
+    _drain_foreground(run)
+
+
+@outbox_app.command("watch")
+def outbox_watch(
+    interval: float = typer.Option(5.0, "--interval", min=0.1),
+    once: bool = typer.Option(False, "--once", help="drain once and exit"),
+) -> None:
+    """Continuously drain the outbox in the foreground."""
+    from ..sdk.journal import drain
+    from ._watch import watch
+
+    journal = _journal()
+    watch(
+        lambda: drain(journal).__dict__,
+        interval=interval,
+        once=once,
+        report=_print_json,
+    )
+
+
+@outbox_app.command("retry")
+def outbox_retry(
+    op_id: Optional[str] = typer.Argument(None, help="a dead-lettered op id (omit for all)"),
+) -> None:
+    """Requeue dead-lettered op(s) and kick the drainer."""
+    moved = _journal().retry_failed(op_id)
+    _kick_drainer()
+    print(f"requeued {moved} op(s)")
+    if op_id is not None and moved == 0:
+        raise typer.Exit(1)
+
+
+@outbox_app.command("pause")
+def outbox_pause() -> None:
+    """Suspend background delivery (the outbox's own switch, not the capture
+    killswitch). Enqueues still work; nothing drains until `resume`."""
+    _journal().pause()
+    print("outbox paused")
+
+
+@outbox_app.command("resume")
+def outbox_resume() -> None:
+    """Resume background delivery and kick the drainer."""
+    journal = _journal()
+    journal.resume()
+    _kick_drainer()
+    print("outbox resumed")
+
+
 @app.command()
 def flush() -> None:
-    """Replay spooled writes."""
-    with _client() as c:
-        sent = c.flush()
-    print(f"flushed {sent} spooled write(s)")
+    """Deliver everything queued and wait (alias of `probe outbox drain`)."""
+    _drain_foreground()
 
 
 @app.command()
@@ -2457,6 +2879,21 @@ def note_add(
     meta: list[str] = typer.Option(None, "--meta", metavar="k=v"),
 ) -> None:
     """Append a research note (normal experiment upload; agents/researchers/SDK)."""
+    if _conn.async_mode:
+        with _async_client() as c:
+            c.notes.add(
+                run,
+                kind.value,
+                statement,
+                evidence_refs=evidence,
+                authority=authority,
+                confidence=confidence,
+                supersedes=supersedes,
+                metadata=_kv_pairs(meta) if meta else None,
+            )
+        _kick_drainer()
+        print(f"queued note for {run} (async)")
+        return
     with _client() as c:
         result = c.notes.add(
             run,

@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -1368,7 +1369,9 @@ class FakeApp:
         return row
 
 
-def make_client(app: FakeApp, *, fail_open: bool = True, tmp_spool=None) -> Client:
+def make_client(
+    app: FakeApp, *, fail_open: bool = True, tmp_spool=None, async_writes: bool = False
+) -> Client:
     settings = Settings(
         base_url="http://test",
         token="ros_pat_deadbeef",
@@ -1377,10 +1380,33 @@ def make_client(app: FakeApp, *, fail_open: bool = True, tmp_spool=None) -> Clie
     )
     httpx_client = httpx.Client(base_url="http://test", transport=httpx.MockTransport(app.handler))
     transport = Transport(settings, client=httpx_client)
-    from probe.spool import Spool
+    from probe.sdk.journal import Journal
 
-    spool = Spool(tmp_spool) if tmp_spool else None
-    return Client(settings=settings, transport=transport, fail_open=fail_open, spool=spool)
+    # ALWAYS an isolated journal: the default would be the developer's real
+    # ~/.local/state/probe/outbox, and Journal._ensure imports any real legacy
+    # spool it finds -- a test must never touch either.
+    journal = Journal(
+        tmp_spool if tmp_spool else tempfile.mkdtemp(prefix="probe-test-journal-"),
+        context={"name": None, "base_url": settings.base_url},
+    )
+    return Client(
+        settings=settings,
+        transport=transport,
+        fail_open=fail_open,
+        journal=journal,
+        async_writes=async_writes,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _no_real_outbox(monkeypatch, tmp_path_factory):
+    """Point the outbox journal away from the developer's real
+    ~/.local/state/probe/outbox. The every-command banner reads it, the
+    drainer re-kick would SPAWN against it, and Journal._ensure imports any
+    real legacy spool it finds -- none of which a test may touch."""
+    monkeypatch.setenv(
+        "PROBE_OUTBOX_DIR", str(tmp_path_factory.mktemp("outbox-guard"))
+    )
 
 
 @pytest.fixture(autouse=True)

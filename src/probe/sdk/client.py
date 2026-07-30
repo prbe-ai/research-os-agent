@@ -36,10 +36,11 @@ from ..models import (
     UploadGcRequest,
     UploadRequest,
 )
+from . import config as config_module
 from . import defaults, errors
 from .config import Settings, resolve
 from .hashing import fingerprint
-from .spool import Spool
+from .journal import Journal
 from .surface import Surface
 from .transport import Page, Transport
 
@@ -151,8 +152,9 @@ class Client:
         settings: Settings | None = None,
         transport: Transport | None = None,
         fail_open: bool = True,
-        spool: Spool | None = None,
+        journal: "Journal | None" = None,
         spool_dir: str | Path | None = None,
+        async_writes: bool = False,
         surface: str = Surface.SDK.value,
         client_headers: Mapping[str, str] | None = None,
     ):
@@ -175,9 +177,20 @@ class Client:
             client_headers=client_headers,
         )
         self.fail_open = fail_open
-        if spool is not None and spool_dir is not None:
-            raise ValueError("pass spool or spool_dir, not both")
-        self.spool = spool or Spool(Path(spool_dir).expanduser() if spool_dir else None)
+        # One queue (eng review 2026-07-29, T1-C): the journal holds both
+        # async-mode writes and the sync fail-open safety net that used to be
+        # the spool. `spool_dir` keeps its name as the directory override.
+        self.async_writes = async_writes
+        if journal is not None and spool_dir is not None:
+            raise ValueError("pass journal or spool_dir, not both")
+        self.journal = journal or Journal(
+            Path(spool_dir).expanduser() if spool_dir else None
+        )
+        if self.journal.context is None:
+            self.journal.context = {
+                "name": config_module.current_context_name() or None,
+                "base_url": self.settings.base_url,
+            }
         self._events = None
         self._notes = None
         # Stop signals for every live run-heartbeat thread this client minted.
@@ -204,8 +217,13 @@ class Client:
 
     # -- fail-open write ----------------------------------------------------
     def write(self, method: str, path: str, body: dict | None = None, *, strict: bool | None = None):
-        """A data write that spools on failure unless ``strict`` (or ``fail_open``
-        is off). Returns the parsed response, or None if it was spooled."""
+        """A data write. In ``async_writes`` mode it is journaled without ever
+        touching the network (the outbox drainer delivers it); otherwise it is
+        attempted and journaled on failure unless ``strict`` (or ``fail_open``
+        is off). Returns the parsed response, or None if it was journaled."""
+        if self.async_writes:
+            self.journal.append_http(method, path, body)
+            return None
         strict = (not self.fail_open) if strict is None else strict
         try:
             resp = self.transport.request(method, path, json_body=body)
@@ -213,11 +231,27 @@ class Client:
         except errors.RosError:
             if strict:
                 raise
-            self.spool.append(method, path, body)
+            self.journal.append_http(method, path, body)
             return None
 
     def flush(self) -> int:
-        return self.spool.flush(self.transport)
+        """Foreground-drain the journal; returns the delivered count.
+
+        Ops pinned to THIS client's endpoint (or unpinned) replay over this
+        client -- that keeps fake-transport tests and custom transports
+        working. Ops pinned elsewhere resolve their own client from the named
+        context, tokens fresh (5A): a context switch between enqueue and flush
+        must never deliver to the wrong tenant.
+        """
+        from .journal import drain
+
+        def factory(context: dict | None):
+            base = (context or {}).get("base_url")
+            if not base or base == self.settings.base_url:
+                return self
+            return None  # journal.drain builds one from the pinned context
+
+        return drain(self.journal, client_factory=factory).delivered
 
     # -- identity / auth ----------------------------------------------------
     def ensure_authenticated(self, *, interactive: bool | None = None) -> bool:
@@ -595,6 +629,40 @@ class Client:
             raise ValueError(f"a {anchor.value} anchor needs an id")
 
         digest, size = fingerprint(path)
+        return self.upload_fingerprinted(
+            anchor,
+            anchor_id,
+            name,
+            path,
+            digest=digest,
+            size=size,
+            content_type=content_type,
+            kind=kind,
+            meta=meta,
+            span_id=span_id,
+            step_index=step_index,
+        )
+
+    def presign_upload(
+        self,
+        anchor: Anchor | str,
+        anchor_id: str | None,
+        name: str,
+        *,
+        digest: str,
+        size: int,
+        content_type: str | None = None,
+        kind: str | None = None,
+        meta: dict | None = None,
+        span_id: str | None = None,
+        step_index: int | None = None,
+    ) -> dict:
+        """Register upload intent: the server creates (or revives) the
+        ``pending`` artifact row and returns a presigned PUT. Called by
+        :meth:`upload_fingerprinted` on every attempt -- a remembered URL or
+        row is never trusted (the reaper may have expired both) -- and by the
+        async enqueue's capped best-effort ping (1A)."""
+        anchor = Anchor(anchor)
         if anchor in _SCOPED_ANCHORS:
             req = ScopedUploadRequest(
                 name=name, content_hash=digest, size_bytes=size, content_type=content_type
@@ -610,8 +678,44 @@ class Client:
                 kind=kind,
                 meta=meta or None,
             )
-        presign = self._presign_anchored(
+        return self._presign_anchored(
             anchor, anchor_id, req.model_dump(mode="json", exclude_none=True)
+        )
+
+    def upload_fingerprinted(
+        self,
+        anchor: Anchor | str,
+        anchor_id: str | None,
+        name: str,
+        path: str,
+        *,
+        digest: str,
+        size: int,
+        content_type: str | None = None,
+        kind: str | None = None,
+        meta: dict | None = None,
+        span_id: str | None = None,
+        step_index: int | None = None,
+    ) -> dict:
+        """The presign -> PUT -> confirm core, for callers that already hold the
+        fingerprint -- :meth:`upload_file` after hashing, and the outbox journal
+        drain replaying a staged blob (whose hash was taken at enqueue or by the
+        drainer, 11A). Phase-aware failure handling lives HERE, where the phase
+        is known: a 404 on confirm after a ``have`` dedup is success (see below),
+        and every attempt re-presigns rather than trusting a remembered URL.
+        """
+        anchor = Anchor(anchor)
+        presign = self.presign_upload(
+            anchor,
+            anchor_id,
+            name,
+            digest=digest,
+            size=size,
+            content_type=content_type,
+            kind=kind,
+            meta=meta,
+            span_id=span_id,
+            step_index=step_index,
         )
         # `have` means the server already holds these bytes (content-addressed dedup),
         # so there is nothing to PUT. For a file anchor the swap to live also already

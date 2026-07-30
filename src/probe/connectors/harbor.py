@@ -52,8 +52,10 @@ from ..sdk.capture import (
 from ..sdk.durable import (
     fsync_directory as _fsync_directory,
     now_iso as _utc_now,
+    try_clone,
     write_text_atomic,
 )
+from ..sdk.hashing import fingerprint
 
 if TYPE_CHECKING:
     from ..sdk.run import Run
@@ -261,12 +263,46 @@ def _json_object(value: dict[str, Any] | None, *, field_name: str) -> dict[str, 
 
 
 def _copy_and_hash(source: Path, destination: Path) -> tuple[str, int]:
-    """Copy one stable source snapshot, returning its SHA-256 and byte count."""
+    """Copy one stable source snapshot, returning its SHA-256 and byte count.
+
+    Clone-first (shared ``try_clone`` primitive): on a reflink-capable
+    filesystem the snapshot is an atomic point-in-time clone and only the hash
+    pass reads the bytes -- cheaper than the copy loop, and immune to the
+    source mutating mid-copy. Elsewhere the original single-pass
+    copy-while-hashing loop runs unchanged (one read + one write; a separate
+    hash pass would read the file twice on exactly the PVC filesystems trials
+    stage to). Behavior and the returned ledger fields are identical.
+    """
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     for attempt in range(2):
         before = source.stat()
         temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+        if try_clone(str(source), str(temporary)):
+            try:
+                digest_hex, size = fingerprint(str(temporary))
+                after = source.stat()
+                identity_before = (before.st_ino, before.st_size, before.st_mtime_ns)
+                identity_after = (after.st_ino, after.st_size, after.st_mtime_ns)
+                # A clone is point-in-time, so mid-copy mutation cannot corrupt
+                # it; the identity check still catches a source swapped between
+                # the stat and the clone (same contract as the loop below).
+                if identity_before != identity_after or size != after.st_size:
+                    if attempt == 0:
+                        continue
+                    raise RuntimeError(f"source changed while staging: {source}")
+                os.replace(temporary, destination)
+                try:
+                    shutil.copystat(source, destination, follow_symlinks=False)
+                except OSError:
+                    pass
+                _fsync_directory(destination.parent)
+                return digest_hex, size
+            finally:
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
         digest = hashlib.sha256()
         size = 0
         try:
