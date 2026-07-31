@@ -27,9 +27,10 @@ from .contract import (
 from .source import ResearchOSSource
 
 # Tool corpora vocabulary -> backend /v1/search `corpus` values. Experiments are
-# always searched (the tool's core corpus). Transcripts now have a backend corpus
-# (POST /v1/search accepts and defaults to it), so the tool maps them through
-# instead of degrading them to an unsupported kb_corpora miss.
+# one corpus among five, not an always-on floor: they are searched when the caller
+# names no corpora at all (no filter) or names them explicitly. Transcripts have a
+# backend corpus (POST /v1/search accepts and defaults to it), so the tool maps them
+# through instead of degrading them to an unsupported kb_corpora miss.
 _CORPORA_TO_BACKEND: dict[str, set[BackendCorpus]] = {
     ToolCorpus.ASSETS: {BackendCorpus.FILES},
     ToolCorpus.PROCEDURES: {BackendCorpus.FILES},
@@ -38,7 +39,8 @@ _CORPORA_TO_BACKEND: dict[str, set[BackendCorpus]] = {
     ToolCorpus.EXPERIMENTS: {BackendCorpus.EXPERIMENTS},
 }
 
-# The knowledge-side tool corpora (everything except the always-on experiments).
+# The knowledge-side tool corpora (every tool corpus except experiments). Drives the
+# kb_corpora missing-marker; carries no "always searched" implication for experiments.
 _KB_TOOL_CORPORA = {
     ToolCorpus.ASSETS,
     ToolCorpus.PROCEDURES,
@@ -70,10 +72,17 @@ def _map_corpora(corpora: list[str] | None) -> tuple[list[str] | None, list[str]
     """Translate the tool's corpora vocabulary into backend corpus values.
 
     Returns ``(backend_corpus_or_None, unsupported_corpora)``. No corpora means
-    no filter (the backend searches every corpus)."""
+    no filter (the backend searches every corpus).
+
+    Naming corpora NARROWS to exactly those. Experiments used to be unioned in
+    unconditionally, which made a narrowed search unusable in practice: the
+    per-channel budget is roughly half of `top_k`, experiment projections
+    outrank the knowledge corpora on most queries, and so `corpora=["transcripts"]`
+    came back holding nothing but experiments. Ask for experiments alongside by
+    naming them (`["experiments", "transcripts"]`)."""
     if not corpora:
         return None, []
-    backend: set[str] = {BackendCorpus.EXPERIMENTS}
+    backend: set[str] = set()
     unsupported: list[str] = []
     for corpus in corpora:
         mapped = _CORPORA_TO_BACKEND.get(corpus)
@@ -81,6 +90,11 @@ def _map_corpora(corpora: list[str] | None) -> tuple[list[str] | None, list[str]
             unsupported.append(corpus)
         else:
             backend.update(mapped)
+    if not backend:
+        # Every named corpus was unrecognized. Falling through with an empty
+        # filter would search EVERYTHING and read as success; keep the old
+        # experiments-only floor and let `unsupported_corpora` carry the miss.
+        backend = {BackendCorpus.EXPERIMENTS}
     return sorted(backend), sorted(set(unsupported))
 
 
@@ -204,16 +218,43 @@ def _collapse_experiments(results: list[dict]) -> list[dict]:
     RUN hits pass through (deduped by id) instead of being dropped: experiment
     is OPTIONAL grouping now (research-os 0054), so a project-direct run has no
     experiment-level hit to represent it — and the result rows carry no
-    experiment linkage to tell a direct run from an attached one."""
+    experiment linkage to tell a direct run from an attached one.
+
+    Everything else — document/file/project/asset hits — passes through too.
+    Collapse DEDUPES; it does not filter. Dropping the non-experiment rows made
+    every knowledge corpus unreachable through the default call: `corpora` maps
+    transcripts/documents/assets straight into the backend query, the backend
+    returns them, and then this discarded all of them before the caller ever saw
+    one. A search that silently answers a different question than it was asked is
+    worse than one that errors."""
+
+    def _key(row: dict) -> Any:
+        if row.get("entity_type") not in (EntityType.EXPERIMENT, EntityType.RUN):
+            return None  # never deduped, never dropped
+        return (row.get("entity_type"), row.get("id"))
+
     best: dict[Any, dict] = {}
     for row in results:
-        if row.get("entity_type") not in (EntityType.EXPERIMENT, EntityType.RUN):
+        key = _key(row)
+        if key is None:
             continue
-        key = (row.get("entity_type"), row.get("id"))
         kept = best.get(key)
         if kept is None or _score(row) > _score(kept):
-            best[key] = row  # replacement keeps first-seen order
-    return list(best.values())
+            best[key] = row
+    # Emit in the merged ranking order the caller was given: a collapsed
+    # experiment takes the position of its FIRST occurrence, carrying the
+    # best-scoring representative. Appending the pass-through rows at the end
+    # instead would bury every document hit below every experiment hit.
+    emitted: set[Any] = set()
+    collapsed: list[dict] = []
+    for row in results:
+        key = _key(row)
+        if key is None:
+            collapsed.append(row)
+        elif key not in emitted:
+            emitted.add(key)
+            collapsed.append(best[key])
+    return collapsed
 
 
 def _pack_cursor(payload: dict) -> str:
@@ -914,7 +955,16 @@ class ResearchReadService:
         (project-scoped via filters.project_id). This path cannot paginate, so
         any incoming cursor is ignored and next_cursor is always None — echoing
         a packed /v1/search cursor here would make cursor-following consumers
-        loop forever on version skew."""
+        loop forever on version skew.
+
+        It also cannot honor `corpora` narrowing: there is nothing here but
+        experiment cards, so a caller who narrowed AWAY from experiments still
+        gets experiment rows. That is the one place the tool's "narrowing" wording
+        does not hold, which is exactly why any knowledge corpus on this path
+        raises the kb_corpora marker — the envelope says `partial` rather than
+        letting the rows pass as a complete answer to a question they do not
+        answer. Backends this old predate the hosted service; the marker is the
+        contract here, not silence."""
         experiments = self.source.experiments(project_id=project_id, limit=100)
         terms = set(query.lower().split())
         results = []
