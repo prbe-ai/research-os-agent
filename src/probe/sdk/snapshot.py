@@ -19,6 +19,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from functools import lru_cache
 from typing import Any
 
 from .errors import RosError
@@ -32,6 +33,9 @@ class SnapshotError(RosError):
 # it can block the start of a training run indefinitely -- on an unreachable host,
 # or worse, waiting forever on a credential prompt nobody is there to answer.
 _LS_REMOTE_TIMEOUT = 10.0
+# A verify fetch pulls one commit at depth 1. Bounded for the same reason as
+# ls-remote: an audit must not wedge on one unreachable remote.
+_VERIFY_TIMEOUT = 20.0
 
 
 def _NONINTERACTIVE_ENV() -> dict:
@@ -221,6 +225,40 @@ def pushed_base(cwd: str) -> tuple[str | None, str | None]:
         if best is None or _is_ancestor(best, candidate):
             best = candidate
     return best, (_remote_url(cwd, remote) if best else None)
+
+
+@lru_cache(maxsize=256)
+def commit_on_remote(remote: str, commit: str, timeout: float = _VERIFY_TIMEOUT) -> bool:
+    """Can this commit actually be fetched from this remote, right now?
+
+    The question a recorded reference is making a claim about, and the one nothing
+    asked for 19 runs. `ls-remote` cannot answer it: it lists ref tips, while a
+    capture base is usually an ancestor of one. So ask the server for the object
+    itself -- a depth-1 fetch of the bare SHA into a throwaway repo, which is
+    exactly what a reproduction would do.
+
+    False means "could not prove it", not "definitely gone": an unreachable host,
+    a timeout, or a private repo we lack credentials for all land here. That is
+    the safe direction -- the alternative is calling a run reproducible on a guess.
+
+    MEMOIZED on (remote, commit), which is what makes a bulk audit affordable.
+    Runs from one machine share a base commit, so auditing 200 runs is a handful
+    of fetches, not 200. This is never called during a run -- only by an explicit
+    `check(verify=True)` -- so it cannot slow training or artifact upload.
+    """
+    if not remote or not commit:
+        return False
+    with tempfile.TemporaryDirectory(prefix="probe-verify-") as tmp:
+        _git(tmp, "init", "-q", ".", check=False, timeout=timeout)
+        try:
+            proc = subprocess.run(
+                ["git", "fetch", "--depth", "1", "--quiet", remote, commit],
+                cwd=tmp, capture_output=True, text=True,
+                env=_NONINTERACTIVE_ENV(), timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+        return proc.returncode == 0
 
 
 def _file_sha256(path: str) -> tuple[str, int]:

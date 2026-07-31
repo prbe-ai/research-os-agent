@@ -1719,12 +1719,20 @@ def run_end(
 
 
 @run_app.command("check")
-def run_check(run: str = typer.Argument(...)) -> None:
-    """Assess capture completeness (exit 2 if incomplete)."""
+def run_check(
+    run: str = typer.Argument(...),
+    verify: bool = typer.Option(False, "--verify"),
+) -> None:
+    """Assess capture completeness (exit 2 if incomplete).
+
+    Default is `unverified`: nothing is obviously absent, which is NOT the same
+    as "this run can be rebuilt". `--verify` resolves the recorded code commit
+    against its remote and is the only way to earn `complete`.
+    """
     with _client() as c:
-        result = c.check_run(run)
+        result = c.check_run(run, verify=verify)
     _print_json(result)
-    if result.get("state") != "complete":
+    if result.get("state") == "incomplete":
         raise typer.Exit(2)
 
 

@@ -1853,11 +1853,26 @@ class Client:
         model = UploadGcRequest(older_than=older_than)
         return self.transport.post("/v1/artifacts/uploads/gc", model.model_dump(mode="json"))
 
-    def check_run(self, run_id: str) -> dict:
+    def check_run(self, run_id: str, *, verify: bool = False) -> dict:
         """Assess capture completeness from the bounded run bundle.
 
-        This is a local read/assessment over API v3, not an assertion that the
-        target immutable manifest exists.
+        Three verdicts, and the distinction is the point:
+
+        * ``incomplete`` -- something is absent or provably unrecoverable.
+        * ``unverified`` -- nothing is obviously absent. The default. It does NOT
+          mean the run can be rebuilt.
+        * ``complete`` -- earned only under ``verify=True``, by resolving the
+          recorded code reference against its remote.
+
+        This used to answer ``complete`` for the first case's near-miss: a run
+        whose code_snapshot artifact existed and pointed at a commit that lived
+        nowhere. Seventeen runs read as captured for a week on the strength of a
+        row being present. Counting rows is not the same as proving retrieval, so
+        the cheap path no longer claims a word it has not earned.
+
+        ``verify`` costs one depth-1 fetch per DISTINCT (remote, commit) -- it is
+        memoized, so auditing a project's runs is a few network calls rather than
+        one per run. Never called during a run: it cannot slow training or upload.
         """
         bundle = self.run_bundle(run_id)
         run = bundle.get("run", bundle)
@@ -1883,11 +1898,52 @@ class Client:
         ]
         if failed_uploads:
             missing.append("portable_artifact_bytes")
+
+        # Free: the manifest summary already rode in on the artifact's meta, so
+        # this costs a dict lookup. A file classified as needing upload whose
+        # bytes nobody stored is unrecoverable exactly like a dead reference --
+        # and this is the failure mode per-file capture INTRODUCED, so leaving it
+        # unchecked would repeat the original mistake in a new place.
+        snapshot_meta: dict = next(
+            (
+                (item.get("meta") or {})
+                for item in artifacts
+                if item.get("kind") == "code_snapshot"
+            ),
+            {},
+        )
+        pending = snapshot_meta.get("n_pending_upload")
+        if isinstance(pending, int) and pending > 0:
+            missing.append("pending_code_bytes")
+
+        verified = None
+        if verify and not missing:
+            from . import snapshot as _snapshot
+
+            base_commit = snapshot_meta.get("base_commit")
+            remote = snapshot_meta.get("remote")
+            if base_commit and remote:
+                verified = _snapshot.commit_on_remote(str(remote), str(base_commit))
+                if not verified:
+                    missing.append("unresolvable_code_reference")
+            else:
+                # Pre-0.26.3 runs recorded no manifest, so there is nothing to
+                # resolve against. Absence of evidence; say so rather than
+                # inventing a pass or a failure.
+                verified = False
+
+        if missing:
+            state = "incomplete"
+        elif verify and verified:
+            state = "complete"
+        else:
+            state = "unverified"
         return {
             "run_id": run_id,
-            "state": "complete" if not missing else "incomplete",
+            "state": state,
             "missing": missing,
             "local_only_artifacts": failed_uploads,
+            "verified_code_reference": verified,
         }
 
     # -- lineage edges (fold #2) -------------------------------------------
