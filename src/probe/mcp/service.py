@@ -616,6 +616,29 @@ def _annotate(node: dict, kind: str) -> dict:
     }
 
 
+def _summarize_manifest(record: dict | None) -> dict | None:
+    """Drop the per-file manifest rows, keep the counts that decide the answer.
+
+    `reproduce` is an atomic view: it is never truncated, so anything unbounded
+    inside it makes the whole call fail. The code manifest holds one row per
+    captured file — 224 rows was 94% of the payload on a small repo and blew the
+    token budget outright. The summary (`tree_sha256`, `base_commit`, `remote`,
+    and the two counts) is what tells you whether the run is reproducible; the
+    rows only matter once you are actually fetching bytes, and they stay
+    available in full at `/v1/execution-records/{env_ref}`.
+    """
+    manifest = ((record or {}).get("code") or {}).get("manifest")
+    if not isinstance(manifest, dict) or "entries" not in manifest:
+        return record
+    entries = manifest.get("entries") or []
+    trimmed = {k: v for k, v in manifest.items() if k != "entries"}
+    trimmed["entries_omitted"] = len(entries)
+    return {
+        **record,
+        "code": {**record["code"], "manifest": trimmed},
+    }
+
+
 class ResearchReadService:
     """Compact, provenance-bearing read model exposed through MCP."""
 
@@ -1263,7 +1286,7 @@ class ResearchReadService:
                 "hypothesis": hypothesis,
                 "config": entity.get("config"),
                 "env_ref": env_ref,
-                "execution_record": record,
+                "execution_record": _summarize_manifest(record),
             },
             missing=missing,
         )

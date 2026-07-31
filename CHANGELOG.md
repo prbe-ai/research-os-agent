@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.26.4 (unreleased)
+
+### Fixed
+
+- `get_entity(view="reproduce")` no longer fails on token budget. The view is
+  atomic (never truncated), so the per-file code manifest inside it made the whole
+  call error on any real repo — 224 files was 79,809 characters, 94% of it manifest
+  rows. It now carries the manifest SUMMARY plus `entries_omitted`; the rows stay
+  available at `/v1/execution-records/{env_ref}`. Same run: 3,713 characters.
+
+### Added
+
+- `probe snapshot-show <run>` prints a run's captured code manifest, one file per
+  line, with `--pending-only` for the files whose bytes are not yet stored.
+  `probe snapshot` now also reports the referenced / pending-upload counts.
+- `capture_manifest` and `pushed_base` are exported from `probe.snapshot`.
+
 ## 0.26.3
 
 ### Fixed
