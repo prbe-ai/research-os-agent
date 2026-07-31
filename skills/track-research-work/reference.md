@@ -64,7 +64,8 @@ no run-level "official" flag; never encode one as a filename or run metadata.
 
 1. `get_entity(view="reproduce")` on each candidate run. Verify the hypothesis, the
    config, and that `env_ref` resolves — `missing: ["execution_record"]` means the run
-   captured no snapshot and cannot be reproduced. Add `view="trajectory"` when the
+   captured no snapshot and cannot be reproduced. Check `code.manifest.n_pending_upload`
+   too: above zero, those files were never stored and the run cannot be rebuilt either. Add `view="trajectory"` when the
    claim depends on what the run did rather than on its final numbers.
 2. `get_entity(view="versions")` on the experiment first: if a version already covers
    this set, do not mint a second.

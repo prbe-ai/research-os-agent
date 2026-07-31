@@ -2864,12 +2864,49 @@ def snapshot(
     no_env: bool = typer.Option(False, "--no-env"),
     no_gpu: bool = typer.Option(False, "--no-gpu"),
 ) -> None:
-    """Non-disruptive code + env capture."""
+    """Non-disruptive code + env capture.
+
+    Each file is recorded as retrievable from a pushed remote, or as still needing
+    its bytes uploaded. A non-zero `pending upload` count means this snapshot alone
+    does NOT make the run reproducible.
+    """
     with _client() as c:
         snap = _run_handle(c, run).snapshot(
             cwd=cwd, include_env=not no_env, include_gpu=not no_gpu
         )
+    m = snap["manifest"]
     print(f"snapshot {snap['git']['commit'][:12]} -> {snap['git']['ref']}")
+    print(
+        f"code: {m['n_git_referenced']} referenced from {m['base_commit'][:12] if m['base_commit'] else 'no pushed base'}"
+        f", {m['n_pending_upload']} pending upload"
+    )
+
+
+@app.command("snapshot-show")
+def snapshot_show(
+    run: str = typer.Argument(...),
+    pending_only: bool = typer.Option(False, "--pending-only"),
+) -> None:
+    """Print a run's captured code manifest, one file per line.
+
+    `git` files are retrievable with `git cat-file blob <blob>` from the recorded
+    remote; `blob` files need their bytes fetched from the artifact store.
+    """
+    with _client() as c:
+        record = c.transport.get(f"/v1/execution-records/{_run_handle(c, run).data['env_ref']}")
+    manifest = ((record or {}).get("code") or {}).get("manifest") or {}
+    entries = manifest.get("entries") or []
+    print(f"base_commit {manifest.get('base_commit')}  remote {manifest.get('remote')}")
+    print(f"tree_sha256 {manifest.get('tree_sha256')}")
+    for e in entries:
+        if pending_only and e.get("source") != "blob":
+            continue
+        ref = e.get("blob", "-") if e.get("source") == "git" else "needs-upload"
+        print(f"  {e.get('source'):<5} {ref:<40} {e.get('sha256', '')[:12]} {e.get('path')}")
+    print(
+        f"{manifest.get('n_git_referenced', 0)} referenced, "
+        f"{manifest.get('n_pending_upload', 0)} pending upload"
+    )
 
 
 # -- outbox (the async write journal) ---------------------------------------

@@ -540,7 +540,10 @@ def create_server(
 
         `trajectory` = the run's actual spans, `reproduce` = hypothesis + resolved
         env_ref, `handoff` = what a new session needs; the other views are what
-        their names say. `filters` and `token_budget` are view-specific -- an
+        their names say. `reproduce` carries the code manifest's SUMMARY, not its
+        per-file rows: `n_pending_upload > 0` means those bytes were never stored
+        and the run cannot be rebuilt. The rows live at
+        `/v1/execution-records/{env_ref}`. `filters` and `token_budget` are view-specific -- an
         inapplicable filter is rejected, and a truncated view returns
         `state="partial"` with a `next_cursor` you pass back with the SAME view.
         """
