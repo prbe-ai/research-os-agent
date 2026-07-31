@@ -200,9 +200,19 @@ trips the server's default budget mid-training. Config: `PROBE_BASE_URL` /
 `PROBE_TOKEN`, optional `args.probe_experiment` / `args.probe_run_name`
 (fall back to the wandb names). Fail-open end to end: a broken tracker never
 costs a training step; non-finite values are dropped per-point. Per-rank and
-per-sample detail ride the capture-at-source arc (`run.unit` +
-`capture_trial`), not this backend. Upstreaming a native `--use-probe` flag
-into a miles fork is optional polish (registry docstring's own recipe).
+per-sample detail is enabled without replacing aggregate logging by passing:
+
+```text
+--custom-rollout-log-function-path probe.connectors.miles.per_sample_rollout_log
+```
+
+The hook logs labeled reward/response-length points through the same durable
+queue. When the sample carries Harbor's returned capture `external_key`, Probe
+anchors those points to the exact deterministic rollout span, so the dashboard
+resolves sample → trial → trajectory/sandbox without a Miles-core change.
+Per-rank detail otherwise rides the capture-at-source arc (`run.unit` +
+`capture_trial`). Upstreaming a native `--use-probe` flag into a miles fork is
+optional polish (registry docstring's own recipe).
 
 ## SDK (install-once / passive push)
 

@@ -21,6 +21,7 @@ import pytest
 
 from probe.connectors.miles import FLAG, ProbeBackend, planned_labeled_points, register
 from probe.integrations import miles as integrations_miles
+from probe.sdk.capture import stable_span_id
 from tests.test_miles_integration import FakeClient, FakeRun, _args
 
 
@@ -201,7 +202,14 @@ class TestQueueCoordinates:
         assert kwargs.get("dimensions") is None and kwargs.get("labels") is None
 
 
-def _sample(index=0, group=None, reward=1.0, response_length=10, effective=None):
+def _sample(
+    index=0,
+    group=None,
+    reward=1.0,
+    response_length=10,
+    effective=None,
+    metadata=None,
+):
     """A miles Sample stand-in: the hook reads index / group_index / reward /
     effective_response_length / response_length via getattr, nothing else."""
     sample = SimpleNamespace(
@@ -209,6 +217,7 @@ def _sample(index=0, group=None, reward=1.0, response_length=10, effective=None)
         group_index=group,
         reward=reward,
         response_length=response_length,
+        metadata=metadata or {},
     )
     if effective is not None:
         sample.effective_response_length = effective
@@ -294,6 +303,64 @@ class TestPerSampleRolloutHook:
         assert kwargs["step"] == 7 and kwargs["kind"] == "model"
         (_, kwargs_1) = per_sample[1]
         assert kwargs_1["labels"] == {"sample": 1, "group": 0}
+
+    def test_hook_anchors_sample_to_harbor_rollout_span(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            integrations_miles, "_load_sdk", lambda: (FakeClient, FakeRun)
+        )
+        args = _args(tmp_path)
+        tracker = integrations_miles.ProbeTracker()
+        tracker.init(args, primary=True)
+        run_id = tracker._run_id
+        external_key = "probe:v1:harbor:rollout:trial-123:stepless:0"
+        try:
+            sample = _sample(
+                index=4,
+                group=2,
+                metadata={
+                    "run_id": run_id,
+                    "trial_id": "trial-123",
+                    "external_key": external_key,
+                },
+            )
+            integrations_miles.per_sample_rollout_log(7, args, [sample], {}, 3.5)
+        finally:
+            tracker.finish()
+
+        expected_span_id = stable_span_id(run_id, external_key)
+        (client,) = FakeClient.instances
+        ((_, kwargs),) = [
+            entry for entry in client.created_run.logs if entry[1].get("labels")
+        ]
+        assert kwargs["step"] == 7
+        assert kwargs["labels"] == {"sample": 4, "group": 2}
+        assert kwargs["span_id"] == expected_span_id
+
+    def test_hook_uses_returned_run_id_when_actor_args_lack_it(self, tmp_path):
+        args = _args(tmp_path, use_probe=True, probe_run_id=None)
+        external_key = "probe:v1:harbor:rollout:trial-456:stepless:0"
+        sample = _sample(
+            metadata={
+                "run_id": "probe-run-from-harbor",
+                "external_key": external_key,
+            }
+        )
+        integrations_miles.per_sample_rollout_log(3, args, [sample], {}, 1.0)
+
+        (record,) = _queue_records(args)
+        assert record["run_id"] == "probe-run-from-harbor"
+        assert record["span_id"] == stable_span_id(
+            "probe-run-from-harbor", external_key
+        )
+
+    def test_hook_without_harbor_metadata_keeps_unanchored_behavior(self, tmp_path):
+        args = _args(tmp_path, use_probe=True)
+        integrations_miles.per_sample_rollout_log(
+            3, args, [_sample(metadata={"trial_id": "trial-only"})], {}, 1.0
+        )
+
+        (record,) = _queue_records(args)
+        assert "span_id" not in record
 
     def test_hook_computes_the_train_step_like_miles(self, tmp_path):
         args = _args(

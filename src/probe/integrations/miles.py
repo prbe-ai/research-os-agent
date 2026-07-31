@@ -30,6 +30,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # Stdlib-only leaf: importing it does NOT pull httpx (see the lazy package init),
 # so a distributed actor keeps writing metric batches without the network stack.
+from ..sdk.capture import stable_span_id
 from ..sdk.durable import (
     file_lock as _file_lock,
 )
@@ -49,7 +50,9 @@ logger = logging.getLogger(__name__)
 # v2 adds optional per-record `dimensions` (bounded coordinate axes) and
 # `labels` (per-sample ids) so ANY producer process — a rank actor, a rollout
 # worker, a bridge — can emit coordinate-stamped points through the durable
-# queue. v1 records (no coordinate fields) stay drainable: they land on the
+# queue. It also accepts an optional `span_id` exemplar pointer, added
+# backwards-compatibly so existing v2 records remain byte-for-byte drainable.
+# v1 records (no coordinate or span fields) stay drainable: they land on the
 # run's empty coordinate, exactly as they always did.
 QUEUE_SCHEMA_VERSION = "miles.probe.metrics/v2"
 _DRAINABLE_QUEUE_SCHEMAS = frozenset({"miles.probe.metrics/v1", QUEUE_SCHEMA_VERSION})
@@ -380,6 +383,7 @@ class DurableMetricQueue:
         kind: str,
         dimensions: dict[str, Any] | None = None,
         labels: dict[str, Any] | None = None,
+        span_id: str | None = None,
         producer_id: str | None = None,
         producer_sequence: int | None = None,
     ) -> Path:
@@ -399,6 +403,8 @@ class DurableMetricQueue:
             payload["dimensions"] = dict(dimensions)
         if labels:
             payload["labels"] = dict(labels)
+        if span_id:
+            payload["span_id"] = str(span_id)
         return self._enqueue(payload)
 
     def enqueue_finish(
@@ -662,6 +668,7 @@ class _MetricExporter:
                             wall_clock=record.get("created_at"),
                             dimensions=record.get("dimensions"),
                             labels=record.get("labels"),
+                            span_id=record.get("span_id"),
                             strict=True,
                         )
                     elif record.get("type") == "finish":
@@ -893,6 +900,7 @@ class ProbeTracker:
         step_key = kwargs.get("step_key")
         dimensions = kwargs.get("dimensions")
         labels = kwargs.get("labels")
+        span_id = kwargs.get("span_id")
         scalar_metrics = {
             key: number
             for key, value in metrics.items()
@@ -913,6 +921,7 @@ class ProbeTracker:
                 kind=kind,
                 dimensions=dimensions if isinstance(dimensions, dict) else None,
                 labels=labels if isinstance(labels, dict) else None,
+                span_id=span_id if isinstance(span_id, str) else None,
                 producer_id=self._producer_id,
                 producer_sequence=self._producer_sequence,
             )
@@ -1124,6 +1133,26 @@ def _sample_response_length(sample) -> float | None:
     return length
 
 
+def _sample_harbor_anchor(sample, run_id: str | None) -> tuple[str | None, str | None]:
+    """The target run and deterministic span already owned by Harbor capture.
+
+    The custom agent's response is merged into ``sample.metadata`` before
+    Miles calls the rollout logging hook.  The bridge returns the exact
+    ``external_key`` later consumed by ``capture_trial``; deriving the span
+    from that key makes the metric and asynchronously exported trial converge
+    on one identity without requiring Miles to understand Probe spans.
+    """
+    metadata = getattr(sample, "metadata", None)
+    if not isinstance(metadata, dict):
+        return run_id, None
+    resolved_run_id = run_id or metadata.get("run_id")
+    resolved_run_id = str(resolved_run_id) if resolved_run_id else None
+    external_key = metadata.get("external_key")
+    if not resolved_run_id or not isinstance(external_key, str) or not external_key:
+        return resolved_run_id, None
+    return resolved_run_id, stable_span_id(resolved_run_id, external_key)
+
+
 def per_sample_rollout_log(
     rollout_id, args, samples, rollout_extra_metrics, rollout_time
 ) -> bool:
@@ -1134,7 +1163,9 @@ def per_sample_rollout_log(
     through the durable queue as label-identified points
     (``labels={"sample": index, "group": group_index}`` — POINT identity,
     never a series axis; no dimensions), at the same step miles' aggregate
-    rail logs at.
+    rail logs at.  When Harbor's response metadata carries its exact capture
+    ``external_key``, both points also carry the deterministic rollout
+    ``span_id`` so the dashboard resolves sample -> trial -> sandbox directly.
 
     Runs inside miles' RolloutManager process. ALWAYS returns False so miles'
     default aggregate logging still runs, and NEVER raises into miles: any
@@ -1171,14 +1202,18 @@ def per_sample_rollout_log(
                 # The prompt group: unbounded cardinality, so a LABEL —
                 # never a dimension.
                 labels["group"] = group
+            sample_run_id, span_id = _sample_harbor_anchor(
+                sample, str(run_id) if run_id else None
+            )
             state.sequence += 1
             state.queue.enqueue_metrics(
                 metrics,
-                run_id=str(run_id) if run_id else None,
+                run_id=sample_run_id,
                 external_id=external_id,
                 step=step,
                 kind="model",
                 labels=labels,
+                span_id=span_id,
                 producer_id=state.producer_id,
                 producer_sequence=state.sequence,
             )

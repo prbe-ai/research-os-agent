@@ -17,7 +17,10 @@ The per-sample rollout rail is re-exported here too, so pointing miles at
 ``--custom-rollout-log-function-path
 probe.connectors.miles.per_sample_rollout_log`` streams one labeled point
 pair per rollout sample WITHOUT replacing miles' aggregate logging (the hook
-always returns False; see :func:`probe.integrations.miles.per_sample_rollout_log`).
+always returns False). When the sample contains Harbor's returned capture
+``external_key``, the points carry the same deterministic rollout ``span_id``
+as ``capture_trial``, making the sample → trial → trajectory/sandbox join
+exact; see :func:`probe.integrations.miles.per_sample_rollout_log`.
 
 Reconciliation note (2026-07-27): an earlier duplicate backend class that
 lived here was retired in favor of the shipped integration. Its two genuine
