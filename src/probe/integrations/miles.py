@@ -23,7 +23,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -1238,6 +1238,55 @@ def _sample_metrics(args: Any, sample: Any) -> dict[str, float]:
     return metrics
 
 
+def make_per_sample_rollout_log(
+    metric_paths: Mapping[str, str],
+) -> Callable[[Any, Any, Any, Any, Any], bool]:
+    """Build a Miles hook with an inline metric-name to Sample-path mapping.
+
+    This is the stock-Miles surface when its argument parser has no place to
+    carry ``args.probe_sample_metrics``. Put the returned callable at a module
+    path Miles can load::
+
+        from probe.connectors.miles import make_per_sample_rollout_log
+
+        per_sample_rollout_log = make_per_sample_rollout_log({
+            "agent/turns": "metadata.agent_metrics.turns",
+        })
+
+    The hook temporarily folds the mapping into the args object it already
+    receives, delegates to the shipped durable hook, then restores that object.
+    A mapping supplied directly on args wins on a same-named metric.
+    """
+    configured = dict(metric_paths)
+    for name, path in configured.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("sample metric names must be non-empty strings")
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"sample metric path for {name!r} must be a non-empty string")
+
+    absent = object()
+
+    def configured_hook(
+        rollout_id, args, samples, rollout_extra_metrics, rollout_time
+    ) -> bool:
+        previous = getattr(args, "probe_sample_metrics", absent)
+        inherited = dict(previous) if isinstance(previous, Mapping) else {}
+        args.probe_sample_metrics = {**configured, **inherited}
+        try:
+            return per_sample_rollout_log(
+                rollout_id, args, samples, rollout_extra_metrics, rollout_time
+            )
+        finally:
+            if previous is absent:
+                delattr(args, "probe_sample_metrics")
+            else:
+                args.probe_sample_metrics = previous
+
+    configured_hook.__name__ = "per_sample_rollout_log"
+    configured_hook.__qualname__ = "per_sample_rollout_log"
+    return configured_hook
+
+
 def _sample_harbor_anchor(sample, run_id: str | None) -> tuple[str | None, str | None]:
     """The target run and deterministic span already owned by Harbor capture.
 
@@ -1466,6 +1515,7 @@ __all__ = [
     "ProbeTracker",
     "drain_metric_queue",
     "drain_miles_metric_queue",
+    "make_per_sample_rollout_log",
     "per_sample_rollout_log",
 ]
 

@@ -236,6 +236,25 @@ args.probe_sample_metrics = {
 }
 ```
 
+Stock Miles launchers that do not expose arbitrary rollout args can put the
+same inline mapping in a tiny importable hook module instead:
+
+```python
+# my_project/probe_metrics.py
+from probe.connectors.miles import make_per_sample_rollout_log
+
+per_sample_rollout_log = make_per_sample_rollout_log({
+    "agent/observed_tokens": "metadata.agent_metrics.observed_tokens",
+    "agent/turns": "metadata.agent_metrics.turns",
+    "agent/tool_calls": "metadata.agent_metrics.tool_calls",
+})
+```
+
+Then set `--custom-rollout-log-function-path` to
+`my_project.probe_metrics.per_sample_rollout_log`. This stays entirely outside
+Miles source while preserving the shipped hook's durable queue, sample labels,
+and Harbor span linkage.
+
 Missing, non-numeric, boolean, and non-finite values are omitted; an explicit
 numeric zero is retained. Configured paths override a same-named
 `metadata["probe_metrics"]` entry. The run reserves 1,024 sample metric points per

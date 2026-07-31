@@ -39,6 +39,7 @@ from typing import Any
 
 from ..integrations.miles import (
     ProbeBackend,
+    make_per_sample_rollout_log,
     per_sample_rollout_log,
     planned_labeled_points,
 )
@@ -46,6 +47,7 @@ from ..integrations.miles import (
 __all__ = [
     "FLAG",
     "ProbeBackend",
+    "make_per_sample_rollout_log",
     "per_sample_rollout_log",
     "planned_labeled_points",
     "register",

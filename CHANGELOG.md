@@ -7,6 +7,8 @@
 - Miles' existing `probe.connectors.miles.per_sample_rollout_log` hook now
   captures arbitrary numeric entries from `sample.metadata["probe_metrics"]`
   and inline `args.probe_sample_metrics` metric-name to dotted-path mappings.
+  Stock launchers that cannot carry custom args can define the same mapping with
+  `make_per_sample_rollout_log(...)` in an importable hook module.
   These values use the same durable metric queue and database representation as
   aggregate `tracking.log()` points, with `metric_scope=sample`, sample/group
   labels, and the existing Harbor rollout-span anchor distinguishing them.

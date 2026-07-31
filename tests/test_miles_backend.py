@@ -19,7 +19,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from probe.connectors.miles import FLAG, ProbeBackend, planned_labeled_points, register
+from probe.connectors.miles import (
+    FLAG,
+    ProbeBackend,
+    make_per_sample_rollout_log,
+    planned_labeled_points,
+    register,
+)
 from probe.integrations import miles as integrations_miles
 from probe.sdk.capture import stable_span_id
 from tests.test_miles_integration import FakeClient, FakeRun, _args
@@ -501,6 +507,35 @@ class TestPerSampleRolloutHook:
             "sample/raw_length": 17.0,
         }
         assert "agent/missing" not in record["metrics"]
+
+    def test_inline_factory_configures_stock_miles_hook_without_leaking_args(self, tmp_path):
+        hook = make_per_sample_rollout_log(
+            {
+                "agent/turns": "metadata.agent_metrics.turns",
+                "agent/observed_tokens": "metadata.agent_metrics.observed_tokens",
+            }
+        )
+        args = _args(tmp_path, use_probe=True)
+        sample = _sample(
+            metadata={"agent_metrics": {"turns": 14, "observed_tokens": 0}}
+        )
+
+        assert hook(4, args, [sample], {}, 1.0) is False
+
+        (record,) = _queue_records(args)
+        assert record["metrics"] == {
+            "rollout/reward": 1.0,
+            "rollout/response_length": 10.0,
+            "agent/turns": 14.0,
+            "agent/observed_tokens": 0.0,
+        }
+        assert not hasattr(args, "probe_sample_metrics")
+
+    def test_inline_factory_validates_mapping_at_definition_time(self):
+        with pytest.raises(ValueError, match="non-empty strings"):
+            make_per_sample_rollout_log({"": "metadata.value"})
+        with pytest.raises(ValueError, match="sample metric path"):
+            make_per_sample_rollout_log({"metric": ""})
 
     def test_invalid_inline_metric_entries_do_not_block_defaults(self, tmp_path):
         args = _args(
