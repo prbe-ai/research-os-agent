@@ -1,4 +1,7 @@
-"""Reconcile-before-retry: a lost response must not duplicate an artifact.
+"""reconcile_artifact: find the row a lost response hid, so a retry reuses it.
+
+OPT-IN today -- log_artifact does not call this, so these cover the helper's
+contract, not an end-to-end retry.
 
 The 502 that motivated ``with_retries`` came from the proxy in FRONT of the API,
 so it fires after the write has already landed. Retrying blindly records the same
@@ -64,31 +67,22 @@ def test_scopes_to_this_run_only():
     assert client.calls[0][1] == "own"
 
 
-class _Run:
-    """Minimal stand-in exercising the retry loop around a flaky create."""
-
-    def __init__(self, run):
-        self.run = run
-        self.created = []
-
-    def create(self, name, content_hash, *, fail_after_write: bool):
-        existing = self.run.reconcile_artifact(name, content_hash)
-        if existing:
-            return existing
-        row = {"id": f"art-{len(self.created) + 1}", "name": name, "content_hash": content_hash}
-        self.created.append(row)
-        self.run._client._rows.append(row)
-        if fail_after_write:
-            raise RuntimeError("502 Bad Gateway")
-        return row
-
-
-def test_retry_after_lost_response_creates_exactly_one():
+def test_null_listing_is_treated_as_no_match():
     run, _ = _bind([])
-    helper = _Run(run)
-    try:
-        helper.create("adapter", "abc123", fail_after_write=True)
-    except RuntimeError:
-        pass
-    helper.create("adapter", "abc123", fail_after_write=False)
-    assert len(helper.created) == 1, "retry must reuse, not duplicate"
+    run._client.list_run_artifacts = lambda *a, **k: None
+    assert run.reconcile_artifact("adapter", "abc123") is None
+
+
+def test_same_hash_under_a_different_name_is_not_a_match():
+    """Artifacts are content-addressed, so one blob legitimately appears under
+    several names. Matching on hash alone would return the wrong row."""
+    run, _ = _bind([
+        {"id": "art-1", "name": "adapter-final", "content_hash": "abc123"},
+        {"id": "art-2", "name": "adapter", "content_hash": "abc123"},
+    ])
+    assert run.reconcile_artifact("adapter", "abc123")["id"] == "art-2"
+
+
+def test_hash_match_under_only_a_foreign_name_is_no_match():
+    run, _ = _bind([{"id": "art-1", "name": "other", "content_hash": "abc123"}])
+    assert run.reconcile_artifact("adapter", "abc123") is None

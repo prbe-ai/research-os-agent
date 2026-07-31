@@ -4,6 +4,34 @@
 
 ### Fixed
 
+- Code capture no longer stakes reproducibility on a commit that may exist only
+  on the machine that ran the job. `snapshot.capture_manifest()` classifies each
+  file per-FILE as retrievable from a *pushed* remote (`source="git"`) or needing
+  its bytes uploaded (`source="blob"`), proving reachability with `git ls-remote`
+  rather than assuming it. `Run.snapshot()` publishes the manifest and its
+  `tree_sha256` on the execution record and the code-snapshot artifact meta.
+  Classification only: `n_pending_upload` counts outstanding work, and callers
+  still move the bytes.
+- `snapshot.capture_env()` records the resolved package LIST instead of only a
+  digest and a count, reads it via `importlib.metadata` (a `uv venv` ships no
+  `pip`, so the previous `pip freeze` subprocess captured nothing at all), and
+  raises instead of silently returning `{"python": ...}`. Strictness follows the
+  client's `fail_open` setting unless `snapshot(strict=...)` overrides it.
+  **Breaking for digest consumers:** `packages_sha256` still exists but is now
+  computed over sorted `name==version` lines, so its value differs for an
+  unchanged environment. Do not compare across this boundary.
+- Remote URLs are credential-scrubbed before being recorded. A CI remote such as
+  `https://x-access-token:<TOKEN>@github.com/...` previously copied a live token
+  into run metadata and artifact meta.
+- `ls-remote` runs with a 10s timeout and `GIT_TERMINAL_PROMPT=0`, so an
+  unreachable or credential-prompting remote can no longer hang the start of a run.
+
+### Added
+
+- `Run.reconcile_artifact(name, content_hash)` finds an artifact a lost response
+  hid, so a retry reuses it instead of creating a duplicate. Opt-in:
+  `log_artifact` does not call it yet.
+
 - Expanded Harbor trajectories now stamp every turn, tool call, nested span,
   and truncation marker with a zero-based `attributes.trajectory_index`.
   Consumers can restore parser execution order without relying on optional

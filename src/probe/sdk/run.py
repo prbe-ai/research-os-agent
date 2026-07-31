@@ -722,12 +722,14 @@ class Run:
     def reconcile_artifact(self, name: str, content_hash: str) -> dict | None:
         """This run's already-recorded artifact with ``name`` AND ``content_hash``.
 
-        Call before retrying a failed artifact create. The server can succeed and
-        the response can still be lost -- the 502 that motivated ``with_retries``
-        came from the proxy in front of the API, which means it fires AFTER the
-        write. A blind retry then records the same bytes twice, and later
-        selection (``next(a for a in arts if a["kind"] == "checkpoint")``) starts
-        silently choosing between duplicates.
+        OPT-IN helper: the SDK's own ``log_artifact`` does NOT call this yet, so a
+        caller that retries artifact creation must invoke it explicitly.
+
+        A proxy in front of the API can return 502 AFTER the write has landed, so
+        the response is lost while the artifact exists. A blind retry then records
+        the same bytes twice, and later selection
+        (``next(a for a in arts if a["kind"] == "checkpoint")``) silently chooses
+        between duplicates.
 
         Matching on the content hash makes this exact rather than a guess:
         artifacts are content-addressed, so identical hash under the same name on
@@ -899,7 +901,9 @@ class Run:
         manifest = _snapshot.capture_manifest(cwd)
         record = ExecutionRecordCreate(
             code={"git": git, "manifest": manifest},
-            deps=_snapshot.capture_env() if include_env else {},
+            deps=_snapshot.capture_env(
+                strict=strict if strict is not None else not self._client.fail_open
+            ) if include_env else {},
             hardware={"gpu": _snapshot.capture_gpu()} if include_gpu else {},
         )
         exec_rec = self._client.transport.post(
@@ -937,8 +941,8 @@ class Run:
                 "tree_sha256": manifest["tree_sha256"],
                 "base_commit": manifest["base_commit"],
                 "remote": manifest["remote"],
-                "n_referenced": manifest["n_referenced"],
-                "n_uploaded": manifest["n_uploaded"],
+                "n_git_referenced": manifest["n_git_referenced"],
+                "n_pending_upload": manifest["n_pending_upload"],
             },
             strict=strict,
         )

@@ -6,14 +6,16 @@ touching HEAD, the real index, the branch, or the working tree. It does this wit
 a throwaway ``GIT_INDEX_FILE``, so there is nothing to restore afterward: nothing
 moved. This is the concrete form of the ``/experiment`` launch snapshot.
 
-Environment and GPU capture are best-effort ambient context (deps, in-container
-``nvidia-smi``) for the reproducibility manifest.
+GPU capture is best-effort ambient context. Dependency capture is STRICT by
+default: it records the resolved package list and raises rather than storing an
+empty set that reads downstream as a successful capture.
 """
 
 from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -26,14 +28,43 @@ class SnapshotError(RosError):
     """Git plumbing failed or the cwd is not a git repository."""
 
 
-def _git(cwd: str, *args: str, env: dict | None = None, check: bool = True) -> str:
-    proc = subprocess.run(
-        ["git", *args],
-        cwd=cwd,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
+# `ls-remote` is the only git call here that touches the network. Left unbounded
+# it can block the start of a training run indefinitely -- on an unreachable host,
+# or worse, waiting forever on a credential prompt nobody is there to answer.
+_LS_REMOTE_TIMEOUT = 10.0
+
+
+def _NONINTERACTIVE_ENV() -> dict:
+    """Git env that fails fast instead of prompting for credentials."""
+    return {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_SSH_COMMAND": os.environ.get(
+            "GIT_SSH_COMMAND", "ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new"
+        ),
+    }
+
+
+def _git(
+    cwd: str,
+    *args: str,
+    env: dict | None = None,
+    check: bool = True,
+    timeout: float | None = None,
+) -> str:
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        if check:
+            raise SnapshotError(f"git {' '.join(args)}: timed out after {timeout}s") from None
+        return ""
     if check and proc.returncode != 0:
         raise SnapshotError(f"git {' '.join(args)}: {proc.stderr.strip()}")
     return proc.stdout.strip()
@@ -97,22 +128,48 @@ def capture_git_snapshot(run_id: str, cwd: str | None = None) -> dict[str, Any]:
     }
 
 
+_SHA_RE = re.compile(r"[0-9a-f]{40,64}")
+_CREDENTIAL_URI = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
+# ssh scp-syntax: user@host:path -- strip the userinfo, keep host:path.
+_SCP_USERINFO = re.compile(r"^[^/@\s]+@(?=[^/\s]+:)")
+
+
+def _scrub_remote(url: str | None) -> str | None:
+    """Drop credentials from a remote URL before it is recorded anywhere.
+
+    Git remotes routinely carry tokens: GitHub Actions' ``persist-credentials``
+    writes ``https://x-access-token:<TOKEN>@github.com/...`` and CI clones use
+    ``https://oauth2:$TOKEN@...``. This value lands in run metadata and artifact
+    meta, which are readable by anyone with access to the run, so an unscrubbed
+    URL copies a live credential into durable storage.
+    """
+    if not url:
+        return None
+    scrubbed = _CREDENTIAL_URI.sub(r"\g<scheme><redacted>@", url)
+    return _SCP_USERINFO.sub("<redacted>@", scrubbed)
+
+
 def _remote_url(cwd: str, remote: str) -> str | None:
-    return _git(cwd, "remote", "get-url", remote, check=False) or None
+    return _scrub_remote(_git(cwd, "remote", "get-url", remote, check=False) or None)
 
 
 def pushed_base(cwd: str) -> tuple[str | None, str | None]:
-    """Newest commit that is an ancestor of HEAD *and* present on a remote.
+    """A commit that is an ancestor of HEAD *and* present on a remote.
 
-    Returns ``(commit, remote_url)``, or ``(None, None)`` when nothing about the
-    local history can be proven to exist anywhere else.
+    Returns ``(commit, scrubbed_remote_url)``, or ``(None, None)`` when nothing
+    about the local history can be proven to exist anywhere else. HEAD itself is
+    preferred; otherwise the first merge-base found against a remote head is
+    used, which is a sound but not necessarily newest common ancestor.
 
     This is the check whose absence made every prior snapshot a dangling
     pointer. ``git remote -v`` printing a URL proves nothing -- commits can be
-    local-only forever. The remote's refs are read with ``ls-remote`` (the
-    authoritative answer, not a possibly-stale remote-tracking ref), and a remote
-    head we do not have locally is treated as NOT pushed, so the failure mode is
-    "upload the bytes", never "assume they are retrievable".
+    local-only forever. Remote refs are read with ``ls-remote`` (authoritative,
+    unlike a possibly-stale remote-tracking ref), and a remote head we do not
+    have locally is treated as NOT pushed, so the failure mode is "upload the
+    bytes", never "assume they are retrievable".
+
+    The network call is bounded and non-interactive: an unreachable or
+    credential-prompting remote must not hang the start of a training run.
     """
     remotes = [r for r in _git(cwd, "remote", check=False).splitlines() if r.strip()]
     if not remotes:
@@ -123,17 +180,23 @@ def pushed_base(cwd: str) -> tuple[str | None, str | None]:
     if not head:
         return None, None
 
-    listing = _git(cwd, "ls-remote", "--heads", remote, check=False)
+    listing = _git(
+        cwd, "ls-remote", "--heads", remote,
+        check=False, timeout=_LS_REMOTE_TIMEOUT, env=_NONINTERACTIVE_ENV(),
+    )
     if not listing:
         return None, None
 
-    best: str | None = None
+    shas = []
     for line in listing.splitlines():
         sha = line.split("\t", 1)[0].strip()
-        if not sha:
-            continue
-        # An object we never fetched cannot be reasoned about; skip it rather
-        # than assuming reachability.
+        # Advertised object ids are hex; anything else (notably a leading '-')
+        # would be parsed as a git option rather than a rev.
+        if sha and _SHA_RE.fullmatch(sha):
+            shas.append(sha)
+
+    best: str | None = None
+    for sha in shas:
         if subprocess.run(
             ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
             cwd=cwd, capture_output=True, text=True,
@@ -144,9 +207,8 @@ def pushed_base(cwd: str) -> tuple[str | None, str | None]:
             cwd=cwd, capture_output=True, text=True,
         ).returncode == 0:
             return head, _remote_url(cwd, remote)
-        mb = _git(cwd, "merge-base", head, sha, check=False)
-        if mb and best is None:
-            best = mb
+        if best is None:
+            best = _git(cwd, "merge-base", head, sha, check=False) or None
     return best, (_remote_url(cwd, remote) if best else None)
 
 
@@ -161,38 +223,42 @@ def _file_sha256(path: str) -> tuple[str, int]:
 
 
 def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
-    """Classify every captured file as retrievable-from-git or needs-upload.
+    """Classify each captured file as retrievable-from-git or needing upload.
+
+    CLASSIFICATION ONLY. Nothing here moves bytes: a ``source="blob"`` entry
+    carries ``path``/``mode``/``sha256``/``size`` and says "git cannot supply
+    this, someone must upload it". ``n_pending_upload`` is a work count, not a
+    record of work done.
 
     Per FILE, not per tree: a working tree is normally mostly-committed with a
-    few edited or untracked files, and an all-or-nothing tree check would upload
-    all of them because one changed.
+    few edited or untracked files, and an all-or-nothing tree check would mark
+    all of them for upload because one changed.
 
     A file is referenced only when its content is byte-identical to what a
-    PUSHED commit holds at that path. Everything else -- edited, untracked,
-    unpushed, no remote, not a repo -- carries its bytes.
+    PUSHED commit holds at that path. Edited, untracked, unpushed, or no-remote
+    all fall through to ``source="blob"``.
 
-    ``tree_sha256`` hashes ``(path, mode, sha256)`` and deliberately does NOT
-    include the source. The same content must produce the same identity whether
-    it arrived as a git reference or an uploaded blob, or an otherwise-identical
-    run with one dirty file would compare as different code.
+    ``tree_sha256`` hashes ``(path, mode, sha256)`` and deliberately excludes the
+    source. The same content must produce the same identity whether it came from
+    a git reference or an uploaded blob, or an otherwise-identical run with one
+    dirty file would compare as different code. Symlinks participate as their
+    target so a retarget is visible.
+
+    Raises :class:`SnapshotError` if ``cwd`` is not a git repository -- matching
+    ``capture_git_snapshot``. Walking an arbitrary directory would have no
+    ``.gitignore`` to honour, and the first thing it would sweep up is the
+    ``.env`` the git path is careful to exclude.
     """
     cwd = cwd or os.getcwd()
-    entries: list[dict[str, Any]] = []
-
     if not is_git_repo(cwd):
-        base, remote = None, None
-        paths = sorted(
-            os.path.relpath(os.path.join(root, f), cwd)
-            for root, _dirs, files in os.walk(cwd)
-            for f in files
-        )
-    else:
-        base, remote = pushed_base(cwd)
-        paths = sorted(
-            p for p in _git(
-                cwd, "ls-files", "--cached", "--others", "--exclude-standard"
-            ).splitlines() if p.strip()
-        )
+        raise SnapshotError(f"{cwd} is not a git repository")
+
+    base, remote = pushed_base(cwd)
+    paths = sorted(
+        p for p in _git(
+            cwd, "ls-files", "--cached", "--others", "--exclude-standard"
+        ).splitlines() if p.strip()
+    )
 
     base_blobs: dict[str, str] = {}
     if base:
@@ -202,24 +268,41 @@ def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
             if len(bits) >= 3 and path:
                 base_blobs[path] = bits[2]
 
+    # One `git diff` instead of one `git hash-object` per file. Anything tracked
+    # in base and absent from this set is byte-identical to base by definition,
+    # so the per-file subprocess (measured at ~11ms each) disappears entirely.
+    changed: set[str] = set()
+    if base:
+        changed = {
+            p for p in _git(cwd, "diff", "--name-only", base, "--", check=False).splitlines()
+            if p.strip()
+        }
+
+    entries: list[dict[str, Any]] = []
     for path in paths:
         full = os.path.join(cwd, path)
+        if os.path.islink(full):
+            target = os.readlink(full)
+            entries.append({
+                "path": path,
+                "mode": "120000",
+                "sha256": hashlib.sha256(target.encode()).hexdigest(),
+                "size": len(target.encode()),
+                "source": "blob",
+                "symlink_target": target,
+            })
+            continue
         # `ls-files --cached` still lists tracked files deleted from the worktree.
-        if not os.path.isfile(full) or os.path.islink(full):
+        if not os.path.isfile(full):
             continue
         sha, size = _file_sha256(full)
         mode = "100755" if os.access(full, os.X_OK) else "100644"
         entry: dict[str, Any] = {"path": path, "mode": mode, "sha256": sha, "size": size}
-        if base and path in base_blobs:
-            working_blob = _git(cwd, "hash-object", "--", full, check=False)
-            if working_blob and working_blob == base_blobs[path]:
-                entry["source"] = "git"
-                entry["blob"] = working_blob
-                entry["commit"] = base
-                entry["remote"] = remote
-                entries.append(entry)
-                continue
-        entry["source"] = "blob"
+        if base and path in base_blobs and path not in changed:
+            entry["source"] = "git"
+            entry["blob"] = base_blobs[path]
+        else:
+            entry["source"] = "blob"
         entries.append(entry)
 
     digest = hashlib.sha256()
@@ -230,9 +313,10 @@ def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
         "entries": entries,
         "tree_sha256": digest.hexdigest(),
         "base_commit": base,
+        # Recorded once, not per entry: the URL is identical for every git entry.
         "remote": remote,
-        "n_referenced": sum(1 for e in entries if e["source"] == "git"),
-        "n_uploaded": sum(1 for e in entries if e["source"] == "blob"),
+        "n_git_referenced": sum(1 for e in entries if e["source"] == "git"),
+        "n_pending_upload": sum(1 for e in entries if e["source"] == "blob"),
     }
 
 
@@ -247,7 +331,7 @@ def _installed_distributions() -> list[str]:
 
     seen: dict[str, str] = {}
     for dist in metadata.distributions():
-        name = dist.metadata["Name"] if dist.metadata else None
+        name = getattr(dist, "name", None)
         if not name:
             continue
         seen[name] = dist.version or "0"
@@ -281,7 +365,10 @@ def capture_env(strict: bool = True) -> dict[str, Any]:
     joined = "\n".join(packages)
     info["packages"] = packages
     info["package_count"] = len(packages)
-    # Retained so existing consumers keyed on the digest keep working.
+    # NOTE: the digest domain changed in this version -- it now covers sorted
+    # `name==version` lines from importlib.metadata, not raw `pip freeze` stdout.
+    # The key survives, but its value differs for an unchanged environment, so
+    # do not compare values across this upgrade boundary.
     info["packages_sha256"] = hashlib.sha256(joined.encode()).hexdigest()
     return info
 
