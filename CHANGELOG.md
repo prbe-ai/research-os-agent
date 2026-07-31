@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.27.0 (unreleased)
+
+### Added
+
+- Miles' existing `probe.connectors.miles.per_sample_rollout_log` hook now
+  captures arbitrary numeric entries from `sample.metadata["probe_metrics"]`
+  and inline `args.probe_sample_metrics` metric-name to dotted-path mappings.
+  These values use the same durable metric queue and database representation as
+  aggregate `tracking.log()` points, with `metric_scope=sample`, sample/group
+  labels, and the existing Harbor rollout-span anchor distinguishing them.
+  Missing and non-numeric values are omitted instead of becoming false zeros;
+  explicit numeric zero remains a measurement. Runs reserve 64 configurable
+  sample points per sample by default, adjustable through
+  `args.probe_sample_metric_budget`.
+
 ## 0.26.4 (unreleased)
 
 ### Fixed

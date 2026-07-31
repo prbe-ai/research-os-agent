@@ -15,9 +15,11 @@ setting the flag from your launcher IS the entire integration::
 
 The per-sample rollout rail is re-exported here too, so pointing miles at
 ``--custom-rollout-log-function-path
-probe.connectors.miles.per_sample_rollout_log`` streams one labeled point
-pair per rollout sample WITHOUT replacing miles' aggregate logging (the hook
-always returns False). When the sample contains Harbor's returned capture
+probe.connectors.miles.per_sample_rollout_log`` streams labeled points for
+reward, response length, numeric ``sample.metadata["probe_metrics"]`` entries,
+and inline ``args.probe_sample_metrics`` dotted-path mappings WITHOUT replacing
+miles' aggregate logging (the hook always returns False). When the sample
+contains Harbor's returned capture
 ``external_key``, the points carry the same deterministic rollout ``span_id``
 as ``capture_trial``, making the sample → trial → trajectory/sandbox join
 exact; see :func:`probe.integrations.miles.per_sample_rollout_log`.

@@ -206,10 +206,42 @@ per-sample detail is enabled without replacing aggregate logging by passing:
 --custom-rollout-log-function-path probe.connectors.miles.per_sample_rollout_log
 ```
 
-The hook logs labeled reward/response-length points through the same durable
-queue. When the sample carries Harbor's returned capture `external_key`, Probe
-anchors those points to the exact deterministic rollout span, so the dashboard
-resolves sample → trial → trajectory/sandbox without a Miles-core change.
+The hook logs labeled sample points through the same durable queue as Miles'
+aggregate `tracking.log()` calls. Every point carries `metric_scope=sample`,
+the Miles sample id, an optional group id, and—when the sample carries Harbor's
+returned capture `external_key`—the exact deterministic rollout span. The
+dashboard can therefore separate aggregate and sample points while resolving
+sample → trial → trajectory/sandbox without a Miles-core change.
+
+Reward and effective response length are captured by default. Applications can
+publish arbitrary numeric sample measurements without connector changes by
+putting an inline dictionary on the sample:
+
+```python
+sample.metadata["probe_metrics"] = {
+    "agent/input_tokens": input_tokens,
+    "agent/output_tokens": output_tokens,
+    "quality/custom_score": score,
+}
+```
+
+If values already live elsewhere on the Miles sample, declare metric-name to
+dotted-path mappings on the same args object Miles sends to RolloutManager:
+
+```python
+args.probe_sample_metrics = {
+    "agent/observed_tokens": "metadata.agent_metrics.observed_tokens",
+    "agent/turns": "metadata.agent_metrics.turns",
+    "agent/tool_calls": "metadata.agent_metrics.tool_calls",
+}
+```
+
+Missing, non-numeric, boolean, and non-finite values are omitted; an explicit
+numeric zero is retained. Configured paths override a same-named
+`metadata["probe_metrics"]` entry. The run reserves 64 sample metric points per
+sample by default; set `args.probe_sample_metric_budget` higher when a sample
+schema intentionally exceeds that.
+
 Per-rank detail otherwise rides the capture-at-source arc (`run.unit` +
 `capture_trial`). Upstreaming a native `--use-probe` flag into a miles fork is
 optional polish (registry docstring's own recipe).
