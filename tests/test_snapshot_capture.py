@@ -263,3 +263,33 @@ def test_zero_distributions_is_refused_under_strict(monkeypatch):
     monkeypatch.setattr("probe.sdk.snapshot._installed_distributions", list)
     with pytest.raises(SnapshotError):
         capture_env()
+
+
+def test_stale_remote_branch_does_not_drag_the_base_backwards(repo):
+    """A stale branch sorting earlier in ls-remote must not win the base.
+
+    Taking the first merge-base found made an unrelated old branch decide the
+    base, which marked hundreds of unchanged files for upload. Measured on the
+    real repo before the fix: 57 pending uploads for a 5-file change.
+    """
+    old = _git(repo, "rev-parse", "HEAD")
+    # 'aaa-stale' sorts before 'main' in ls-remote refname order.
+    _git(repo, "push", "-q", "origin", f"{old}:refs/heads/aaa-stale")
+
+    (repo / "b.py").write_text("b = 20\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "second")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+    newer = _git(repo, "rev-parse", "HEAD")
+
+    # An unpushed commit on top, so pushed_base must fall back to a merge-base.
+    (repo / "a.py").write_text("a = 99\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "local only")
+
+    base, _ = pushed_base(str(repo))
+    assert base == newer, "must pick the newest pushed ancestor, not the stale branch"
+
+    m = capture_manifest(str(repo))
+    assert _by_path(m)["b.py"]["source"] == "git", "b.py is pushed; must not re-upload"
+    assert m["n_pending_upload"] == 1

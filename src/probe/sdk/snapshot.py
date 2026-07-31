@@ -158,8 +158,8 @@ def pushed_base(cwd: str) -> tuple[str | None, str | None]:
 
     Returns ``(commit, scrubbed_remote_url)``, or ``(None, None)`` when nothing
     about the local history can be proven to exist anywhere else. HEAD itself is
-    preferred; otherwise the first merge-base found against a remote head is
-    used, which is a sound but not necessarily newest common ancestor.
+    preferred; otherwise the NEWEST merge-base across all remote heads is used,
+    so an unrelated stale branch cannot drag the base backwards.
 
     This is the check whose absence made every prior snapshot a dangling
     pointer. ``git remote -v`` printing a URL proves nothing -- commits can be
@@ -195,6 +195,12 @@ def pushed_base(cwd: str) -> tuple[str | None, str | None]:
         if sha and _SHA_RE.fullmatch(sha):
             shas.append(sha)
 
+    def _is_ancestor(a: str, b: str) -> bool:
+        return subprocess.run(
+            ["git", "merge-base", "--is-ancestor", a, b],
+            cwd=cwd, capture_output=True, text=True,
+        ).returncode == 0
+
     best: str | None = None
     for sha in shas:
         if subprocess.run(
@@ -202,13 +208,18 @@ def pushed_base(cwd: str) -> tuple[str | None, str | None]:
             cwd=cwd, capture_output=True, text=True,
         ).returncode != 0:
             continue
-        if subprocess.run(
-            ["git", "merge-base", "--is-ancestor", head, sha],
-            cwd=cwd, capture_output=True, text=True,
-        ).returncode == 0:
+        if _is_ancestor(head, sha):
             return head, _remote_url(cwd, remote)
-        if best is None:
-            best = _git(cwd, "merge-base", head, sha, check=False) or None
+        candidate = _git(cwd, "merge-base", head, sha, check=False) or None
+        if not candidate:
+            continue
+        # Keep the NEWEST candidate. Taking the first one found means an
+        # unrelated stale branch can win on ls-remote's refname ordering, which
+        # pushes the base far back in history and marks hundreds of unchanged
+        # files for upload. Measured on this repo: first-found gave 57 pending
+        # uploads for a 5-file change; newest gives 5.
+        if best is None or _is_ancestor(best, candidate):
+            best = candidate
     return best, (_remote_url(cwd, remote) if best else None)
 
 
