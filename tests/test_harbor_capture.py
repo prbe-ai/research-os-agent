@@ -262,6 +262,8 @@ class TestFinalize:
         assert result.size_bytes > 0
         assert Path(result.manifest_path).is_file()
         assert Path(result.export_descriptor_path).is_file()
+        descriptor = json.loads(Path(result.export_descriptor_path).read_text())
+        assert descriptor["arguments"]["expand"] is True
         assert Path(result.archive_path).is_file()
         assert result.archive_content_hash
 

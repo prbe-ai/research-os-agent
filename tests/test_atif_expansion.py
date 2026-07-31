@@ -167,6 +167,12 @@ def test_capture_expands_atif_into_the_span_tree(client, app, tmp_path):
     # coords is ALWAYS a dict on the wire ({} = no coordinate stated) — a null
     # is the live-prod 422 (server 0059: non-nullable dict)
     assert all(s["coords"] == {} for s in turns + calls)
+    # Parser order is explicit on every expanded node. Consumers must not infer
+    # trajectory order from optional timestamps or producer-specific step ids.
+    expanded = [s for s in spans if s["span_type"] in {"turn", "tool_call"}]
+    assert sorted(s["attributes"]["trajectory_index"] for s in expanded) == list(
+        range(len(expanded))
+    )
     # manifest records the expansion outcome
     manifest = client.list_run_artifacts(run.id, kind=MANIFEST_KIND)[0]
     assert manifest["meta"]["trajectory"]["expanded"] is True
@@ -230,6 +236,9 @@ def test_truncation_is_an_explicit_marker_never_silent(client, app, tmp_path):
     assert marker["attributes"]["truncated"] is True
     # 10 turns + 7 calls = 17 planned; 4 kept eagerly
     assert marker["attributes"]["remaining"] == 13
+    # The marker sorts after the full trajectory even when a later idempotent
+    # re-expansion fills the omitted window.
+    assert marker["attributes"]["trajectory_index"] == 17
     manifest = client.list_run_artifacts(run.id, kind=MANIFEST_KIND)[0]
     assert manifest["meta"]["trajectory"]["truncated"] is True
 
@@ -244,6 +253,58 @@ def test_re_expansion_is_idempotent(client, app, tmp_path):
     expand_trajectory(run, doc, root_span_id=root, trial="t__1", max_spans=0, strict=True)
     ids_twice = sorted({s["id"] for s in app.spans[run.id] if s["span_type"] != "rollout"})
     assert first["expanded"] and ids_twice == ids_once  # same UUIDs -> upserts, no duplicates
+
+
+def test_expansion_stamps_parser_order_when_timestamps_are_missing(client, app):
+    """System/user setup turns without timestamps retain ATIF execution order."""
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    doc = {
+        "schema_version": "ATIF-v1.7",
+        "agent": {"name": "a", "model_name": "model-a"},
+        "steps": [
+            {"step_id": 1, "source": "system", "message": "instructions"},
+            {"step_id": 2, "source": "user", "message": "task"},
+            {
+                "step_id": 3,
+                "source": "agent",
+                "message": "working",
+                "timestamp": "2026-07-31T02:48:38Z",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "call-1",
+                        "function_name": "bash",
+                        "arguments": {"command": "true"},
+                    }
+                ],
+            },
+        ],
+    }
+    root = run.span("rollout", name="t")
+    expand_trajectory(
+        run,
+        doc,
+        root_span_id=root,
+        trial="t__1",
+        max_spans=0,
+        strict=True,
+    )
+
+    expanded = [
+        span
+        for span in app.spans[run.id]
+        if span["span_type"] in {"turn", "tool_call"}
+    ]
+    by_index = sorted(expanded, key=lambda span: span["attributes"]["trajectory_index"])
+    assert [span["external_key"].split(":", 1)[1] for span in by_index] == [
+        "turn/1",
+        "turn/2",
+        "turn/3",
+        "turn/3/call/0",
+    ]
+    assert "model_name" not in by_index[0]["attributes"]
+    assert "model_name" not in by_index[1]["attributes"]
+    assert by_index[2]["attributes"]["model_name"] == "model-a"
 
 
 # -- coords on expanded spans (live-prod 422 regression) -------------------------

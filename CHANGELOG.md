@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.26.3 (unreleased)
+
+### Fixed
+
+- Expanded Harbor trajectories now stamp every turn, tool call, nested span,
+  and truncation marker with a zero-based `attributes.trajectory_index`.
+  Consumers can restore parser execution order without relying on optional
+  timestamps; system and user setup turns also stop inheriting model metadata
+  that ATIF did not record on those steps.
+- SDK-owned Harbor captures now request recognized trajectory expansion from
+  the durable watcher by default, removing the manual `probe trial expand`
+  step for future captures while retaining the raw trajectory artifact.
+
 ## 0.26.2 (unreleased)
 
 ### Fixed
