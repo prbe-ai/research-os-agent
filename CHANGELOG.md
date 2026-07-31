@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.26.2 (unreleased)
+
+### Fixed
+
+- Miles per-sample reward and response-length points now carry the same
+  deterministic rollout `span_id` as their correlated Harbor capture whenever
+  the agent response includes the capture `external_key`. This makes the
+  dashboard's sample → trial → trajectory/sandbox join exact without requiring
+  Miles-core changes. The optional anchor survives durable queue replay, while
+  older and non-Harbor records continue draining unanchored.
+
 ## 0.26.1 (unreleased)
 
 ### Changed
