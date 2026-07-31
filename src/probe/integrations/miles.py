@@ -23,6 +23,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -265,10 +266,21 @@ def _default_run_name(args, external_id: str) -> str:
 
 
 _LABELED_POINT_BUDGET_CEILING = 100_000_000  # mirrors the server-side ceiling
-# Each captured rollout sample can publish two labeled points through
-# ``per_sample_rollout_log`` (reward + response length) and one more when the
-# correlated Harbor trial publishes its verifier reward.
-_LABELED_POINTS_PER_SAMPLE = 3
+# The hook now accepts caller-defined sample metrics, whose count cannot be known
+# from Miles' rollout shape. Reserve room for 1,024 metrics per sample plus the one
+# verifier point a correlated Harbor capture may publish. Callers with a larger
+# schema can raise the reservation through ``args.probe_sample_metric_budget``.
+_DEFAULT_SAMPLE_METRIC_BUDGET = 1_024
+_HARBOR_LABELED_POINTS_PER_SAMPLE = 1
+
+
+def _sample_metric_budget(args) -> int:
+    configured = getattr(args, "probe_sample_metric_budget", None)
+    try:
+        budget = int(configured) if configured is not None else _DEFAULT_SAMPLE_METRIC_BUDGET
+    except (TypeError, ValueError):
+        budget = _DEFAULT_SAMPLE_METRIC_BUDGET
+    return max(2, budget)
 
 
 def planned_labeled_points(args) -> int | None:
@@ -284,7 +296,7 @@ def planned_labeled_points(args) -> int | None:
             int(getattr(args, "num_rollout", None))
             * int(getattr(args, "rollout_batch_size", None))
             * int(per_prompt)
-            * _LABELED_POINTS_PER_SAMPLE
+            * (_sample_metric_budget(args) + _HARBOR_LABELED_POINTS_PER_SAMPLE)
         )
     except (TypeError, ValueError):
         return None
@@ -1133,6 +1145,148 @@ def _sample_response_length(sample) -> float | None:
     return length
 
 
+_MISSING = object()
+
+
+def _sample_metric_scalar(value: Any) -> float | None:
+    """A numeric sample measurement, preserving zero but rejecting booleans."""
+    if hasattr(value, "item") and callable(value.item):
+        try:
+            value = value.item()
+        except (TypeError, ValueError, RuntimeError):
+            return None
+    if isinstance(value, bool):
+        return None
+    return _scalar(value)
+
+
+def _sample_path_value(sample: Any, path: str) -> Any:
+    """Read a dotted path across object attributes and mapping keys."""
+    value: Any = sample
+    for part in path.split("."):
+        if not part:
+            return _MISSING
+        if isinstance(value, Mapping):
+            value = value.get(part, _MISSING)
+        else:
+            value = getattr(value, part, _MISSING)
+        if value is _MISSING:
+            return _MISSING
+    return value
+
+
+def _metadata_probe_metrics(sample: Any) -> dict[str, float]:
+    """The zero-configuration ``sample.metadata['probe_metrics']`` contract."""
+    metadata = getattr(sample, "metadata", None)
+    if not isinstance(metadata, Mapping):
+        return {}
+    raw_metrics = metadata.get("probe_metrics")
+    if not isinstance(raw_metrics, Mapping):
+        return {}
+    metrics: dict[str, float] = {}
+    for name, value in raw_metrics.items():
+        if not isinstance(name, str) or not name:
+            continue
+        if (number := _sample_metric_scalar(value)) is not None:
+            metrics[name] = number
+    return metrics
+
+
+def _configured_sample_metrics(args: Any, sample: Any) -> dict[str, float]:
+    """Resolve ``metric name -> Sample dotted path`` from the Miles args object.
+
+    Keeping this as a plain inline mapping makes it serialize naturally with the
+    same args Miles already passes to its RolloutManager processes::
+
+        args.probe_sample_metrics = {
+            "agent/turns": "metadata.agent_metrics.turns",
+            "agent/observed_tokens": "metadata.agent_metrics.observed_tokens",
+        }
+    """
+    configured = getattr(args, "probe_sample_metrics", None)
+    if not isinstance(configured, Mapping):
+        return {}
+    metrics: dict[str, float] = {}
+    for name, path in configured.items():
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(path, str)
+            or not path
+        ):
+            continue
+        value = _sample_path_value(sample, path)
+        if value is not _MISSING and (number := _sample_metric_scalar(value)) is not None:
+            metrics[name] = number
+    return metrics
+
+
+def _sample_metrics(args: Any, sample: Any) -> dict[str, float]:
+    """Built-ins plus caller-owned metadata and inline path mappings.
+
+    Later, more explicit sources win on key collisions: a configured mapping
+    overrides ``metadata.probe_metrics``, which overrides the two built-ins.
+    Missing/non-numeric values never manufacture zero-valued points.
+    """
+    metrics: dict[str, float] = {}
+    if (reward := _sample_reward(sample)) is not None:
+        metrics["rollout/reward"] = reward
+    if (length := _sample_response_length(sample)) is not None:
+        metrics["rollout/response_length"] = length
+    metrics.update(_metadata_probe_metrics(sample))
+    metrics.update(_configured_sample_metrics(args, sample))
+    return metrics
+
+
+def make_per_sample_rollout_log(
+    metric_paths: Mapping[str, str],
+) -> Callable[[Any, Any, Any, Any, Any], bool]:
+    """Build a Miles hook with an inline metric-name to Sample-path mapping.
+
+    This is the stock-Miles surface when its argument parser has no place to
+    carry ``args.probe_sample_metrics``. Put the returned callable at a module
+    path Miles can load::
+
+        from probe.connectors.miles import make_per_sample_rollout_log
+
+        per_sample_rollout_log = make_per_sample_rollout_log({
+            "agent/turns": "metadata.agent_metrics.turns",
+        })
+
+    The hook temporarily folds the mapping into the args object it already
+    receives, delegates to the shipped durable hook, then restores that object.
+    A mapping supplied directly on args wins on a same-named metric.
+    """
+    configured = dict(metric_paths)
+    for name, path in configured.items():
+        if not isinstance(name, str) or not name:
+            raise ValueError("sample metric names must be non-empty strings")
+        if not isinstance(path, str) or not path:
+            raise ValueError(f"sample metric path for {name!r} must be a non-empty string")
+
+    absent = object()
+
+    def configured_hook(
+        rollout_id, args, samples, rollout_extra_metrics, rollout_time
+    ) -> bool:
+        previous = getattr(args, "probe_sample_metrics", absent)
+        inherited = dict(previous) if isinstance(previous, Mapping) else {}
+        args.probe_sample_metrics = {**configured, **inherited}
+        try:
+            return per_sample_rollout_log(
+                rollout_id, args, samples, rollout_extra_metrics, rollout_time
+            )
+        finally:
+            if previous is absent:
+                delattr(args, "probe_sample_metrics")
+            else:
+                args.probe_sample_metrics = previous
+
+    configured_hook.__name__ = "per_sample_rollout_log"
+    configured_hook.__qualname__ = "per_sample_rollout_log"
+    return configured_hook
+
+
 def _sample_harbor_anchor(sample, run_id: str | None) -> tuple[str | None, str | None]:
     """The target run and deterministic span already owned by Harbor capture.
 
@@ -1159,12 +1313,14 @@ def per_sample_rollout_log(
     """Per-sample rollout rail for ``--custom-rollout-log-function-path``.
 
     Pass ``probe.connectors.miles.per_sample_rollout_log`` to miles and every
-    rollout sample streams ``rollout/reward`` and ``rollout/response_length``
-    through the durable queue as label-identified points
-    (``labels={"sample": index, "group": group_index}`` — POINT identity,
-    never a series axis; no dimensions), at the same step miles' aggregate
-    rail logs at.  When Harbor's response metadata carries its exact capture
-    ``external_key``, both points also carry the deterministic rollout
+    rollout sample streams ``rollout/reward``, ``rollout/response_length``,
+    numeric ``sample.metadata["probe_metrics"]`` entries, and inline
+    ``args.probe_sample_metrics`` path mappings through the durable queue as
+    label-identified points (``metric_scope=sample`` plus ``sample`` and
+    optional ``group`` — POINT identity, never a series axis; no dimensions),
+    at the same step miles' aggregate rail logs at. When Harbor's response
+    metadata carries its exact capture
+    ``external_key``, all points also carry the deterministic rollout
     ``span_id`` so the dashboard resolves sample -> trial -> sandbox directly.
 
     Runs inside miles' RolloutManager process. ALWAYS returns False so miles'
@@ -1185,11 +1341,7 @@ def per_sample_rollout_log(
         )
         step = _rollout_step(args, rollout_id)
         for sample in samples:
-            metrics: dict[str, float] = {}
-            if (reward := _sample_reward(sample)) is not None:
-                metrics["rollout/reward"] = reward
-            if (length := _sample_response_length(sample)) is not None:
-                metrics["rollout/response_length"] = length
+            metrics = _sample_metrics(args, sample)
             index = getattr(sample, "index", None)
             # `sample.index` is miles' unique per-sample id (assigned by the
             # data source for every generated sample). Without it the point
@@ -1197,7 +1349,7 @@ def per_sample_rollout_log(
             # collide with real indices — so an id-less sample is skipped.
             if not metrics or index is None:
                 continue
-            labels: dict[str, Any] = {"sample": index}
+            labels: dict[str, Any] = {"metric_scope": "sample", "sample": index}
             if (group := getattr(sample, "group_index", None)) is not None:
                 # The prompt group: unbounded cardinality, so a LABEL —
                 # never a dimension.
@@ -1363,6 +1515,7 @@ __all__ = [
     "ProbeTracker",
     "drain_metric_queue",
     "drain_miles_metric_queue",
+    "make_per_sample_rollout_log",
     "per_sample_rollout_log",
 ]
 

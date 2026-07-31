@@ -19,7 +19,13 @@ from types import SimpleNamespace
 
 import pytest
 
-from probe.connectors.miles import FLAG, ProbeBackend, planned_labeled_points, register
+from probe.connectors.miles import (
+    FLAG,
+    ProbeBackend,
+    make_per_sample_rollout_log,
+    planned_labeled_points,
+    register,
+)
 from probe.integrations import miles as integrations_miles
 from probe.sdk.capture import stable_span_id
 from tests.test_miles_integration import FakeClient, FakeRun, _args
@@ -67,9 +73,19 @@ class TestBudgetPlan:
         args = SimpleNamespace(
             num_rollout=4000, rollout_batch_size=512, n_samples_per_prompt=1
         )
-        assert planned_labeled_points(args) == 4000 * 512 * 3
+        assert planned_labeled_points(args) == 100_000_000  # server-side ceiling
+        args.num_rollout = 10
         args.n_samples_per_prompt = 8
-        assert planned_labeled_points(args) == 4000 * 512 * 8 * 3
+        assert planned_labeled_points(args) == 10 * 512 * 8 * 1_025
+
+    def test_sample_metric_budget_is_configurable(self):
+        args = SimpleNamespace(
+            num_rollout=10,
+            rollout_batch_size=4,
+            n_samples_per_prompt=2,
+            probe_sample_metric_budget=100,
+        )
+        assert planned_labeled_points(args) == 10 * 4 * 2 * 101
 
     def test_clamped_to_ceiling_and_absent_when_unknown(self):
         big = SimpleNamespace(
@@ -102,9 +118,9 @@ class TestFoldedDeltas:
         try:
             (client,) = FakeClient.instances
             (run_kwargs,) = client.run_calls
-            # Two Miles points (reward + response length) and one correlated
-            # Harbor verifier reward can be published for every sample.
-            assert run_kwargs["labeled_point_budget"] == 100 * 16 * 2 * 3
+            # Reserve 1,024 configurable Miles points and one correlated Harbor
+            # verifier point for every sample.
+            assert run_kwargs["labeled_point_budget"] == 100 * 16 * 2 * 1_025
         finally:
             tracker.finish()
 
@@ -267,7 +283,11 @@ class TestPerSampleRolloutHook:
             "rollout/reward": 1.0,
             "rollout/response_length": 8.0,  # effective (loss-masked) wins
         }
-        assert records[0]["labels"] == {"sample": 0, "group": 0}
+        assert records[0]["labels"] == {
+            "metric_scope": "sample",
+            "sample": 0,
+            "group": 0,
+        }
         assert records[1]["metrics"] == {
             "rollout/reward": 0.0,
             "rollout/response_length": 20.0,
@@ -285,7 +305,14 @@ class TestPerSampleRolloutHook:
         tracker.init(args, primary=True)  # resolves the queue, publishes identity
         try:
             samples = [
-                _sample(index=0, group=0, reward=1.0, response_length=10, effective=8),
+                _sample(
+                    index=0,
+                    group=0,
+                    reward=1.0,
+                    response_length=10,
+                    effective=8,
+                    metadata={"probe_metrics": {"agent/tool_calls": 12}},
+                ),
                 _sample(index=1, group=0, reward=0.0, response_length=20),
             ]
             assert (
@@ -298,11 +325,23 @@ class TestPerSampleRolloutHook:
         per_sample = [e for e in client.created_run.logs if e[1].get("labels")]
         assert len(per_sample) == 2  # the live exporter drained the hook's records
         metrics, kwargs = per_sample[0]
-        assert metrics == {"rollout/reward": 1.0, "rollout/response_length": 8.0}
-        assert kwargs["labels"] == {"sample": 0, "group": 0}
+        assert metrics == {
+            "rollout/reward": 1.0,
+            "rollout/response_length": 8.0,
+            "agent/tool_calls": 12.0,
+        }
+        assert kwargs["labels"] == {
+            "metric_scope": "sample",
+            "sample": 0,
+            "group": 0,
+        }
         assert kwargs["step"] == 7 and kwargs["kind"] == "model"
         (_, kwargs_1) = per_sample[1]
-        assert kwargs_1["labels"] == {"sample": 1, "group": 0}
+        assert kwargs_1["labels"] == {
+            "metric_scope": "sample",
+            "sample": 1,
+            "group": 0,
+        }
 
     def test_hook_anchors_sample_to_harbor_rollout_span(self, monkeypatch, tmp_path):
         monkeypatch.setattr(
@@ -333,7 +372,11 @@ class TestPerSampleRolloutHook:
             entry for entry in client.created_run.logs if entry[1].get("labels")
         ]
         assert kwargs["step"] == 7
-        assert kwargs["labels"] == {"sample": 4, "group": 2}
+        assert kwargs["labels"] == {
+            "metric_scope": "sample",
+            "sample": 4,
+            "group": 2,
+        }
         assert kwargs["span_id"] == expected_span_id
 
     def test_hook_uses_returned_run_id_when_actor_args_lack_it(self, tmp_path):
@@ -398,6 +441,121 @@ class TestPerSampleRolloutHook:
         assert by_sample[1]["metrics"]["rollout/reward"] == 0.5
         assert "rollout/reward" not in by_sample[2]["metrics"]
         assert "group" not in by_sample[0]["labels"]  # group_index None stays off
+
+    def test_hook_logs_numeric_probe_metrics_from_sample_metadata(self, tmp_path):
+        args = _args(tmp_path, use_probe=True)
+        sample = _sample(
+            index=9,
+            group=4,
+            reward=None,
+            response_length=None,
+            metadata={
+                "probe_metrics": {
+                    "agent/observed_tokens": 0,
+                    "agent/tool_calls": 12,
+                    "quality/score": 0.75,
+                    "missing": None,
+                    "not_a_metric": "Submitted",
+                    "boolean": True,
+                    "non_finite": float("nan"),
+                }
+            },
+        )
+
+        integrations_miles.per_sample_rollout_log(2, args, [sample], {}, 1.0)
+
+        (record,) = _queue_records(args)
+        assert record["metrics"] == {
+            "agent/observed_tokens": 0.0,
+            "agent/tool_calls": 12.0,
+            "quality/score": 0.75,
+        }
+        assert record["labels"] == {
+            "metric_scope": "sample",
+            "sample": 9,
+            "group": 4,
+        }
+
+    def test_hook_resolves_inline_metric_paths_from_args(self, tmp_path):
+        args = _args(
+            tmp_path,
+            use_probe=True,
+            probe_sample_metrics={
+                "agent/observed_tokens": "metadata.agent_metrics.observed_tokens",
+                "agent/tool_calls": "metadata.agent_metrics.tool_calls",
+                "agent/missing": "metadata.agent_metrics.missing",
+                "sample/raw_length": "response_length",
+            },
+        )
+        sample = _sample(
+            index=5,
+            reward=None,
+            response_length=17,
+            metadata={
+                "probe_metrics": {"agent/tool_calls": 1},
+                "agent_metrics": {"observed_tokens": 0, "tool_calls": 14},
+            },
+        )
+
+        integrations_miles.per_sample_rollout_log(3, args, [sample], {}, 1.0)
+
+        (record,) = _queue_records(args)
+        assert record["metrics"] == {
+            "rollout/response_length": 17.0,
+            "agent/observed_tokens": 0.0,
+            "agent/tool_calls": 14.0,  # explicit mapping wins over probe_metrics
+            "sample/raw_length": 17.0,
+        }
+        assert "agent/missing" not in record["metrics"]
+
+    def test_inline_factory_configures_stock_miles_hook_without_leaking_args(self, tmp_path):
+        hook = make_per_sample_rollout_log(
+            {
+                "agent/turns": "metadata.agent_metrics.turns",
+                "agent/observed_tokens": "metadata.agent_metrics.observed_tokens",
+            }
+        )
+        args = _args(tmp_path, use_probe=True)
+        sample = _sample(
+            metadata={"agent_metrics": {"turns": 14, "observed_tokens": 0}}
+        )
+
+        assert hook(4, args, [sample], {}, 1.0) is False
+
+        (record,) = _queue_records(args)
+        assert record["metrics"] == {
+            "rollout/reward": 1.0,
+            "rollout/response_length": 10.0,
+            "agent/turns": 14.0,
+            "agent/observed_tokens": 0.0,
+        }
+        assert not hasattr(args, "probe_sample_metrics")
+
+    def test_inline_factory_validates_mapping_at_definition_time(self):
+        with pytest.raises(ValueError, match="non-empty strings"):
+            make_per_sample_rollout_log({"": "metadata.value"})
+        with pytest.raises(ValueError, match="sample metric path"):
+            make_per_sample_rollout_log({"metric": ""})
+
+    def test_invalid_inline_metric_entries_do_not_block_defaults(self, tmp_path):
+        args = _args(
+            tmp_path,
+            use_probe=True,
+            probe_sample_metrics={
+                "": "metadata.value",
+                "bad-path": None,
+                "boolean": "metadata.boolean",
+            },
+        )
+        sample = _sample(metadata={"boolean": False})
+
+        integrations_miles.per_sample_rollout_log(1, args, [sample], {}, 1.0)
+
+        (record,) = _queue_records(args)
+        assert record["metrics"] == {
+            "rollout/reward": 1.0,
+            "rollout/response_length": 10.0,
+        }
 
     def test_hook_never_raises_even_when_the_queue_cannot_open(self, tmp_path):
         blocker = tmp_path / "blocked"
