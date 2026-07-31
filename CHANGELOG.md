@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.26.1 (unreleased)
+
+### Fixed
+
+- Miles now reserves three labeled metric points per planned rollout sample:
+  the per-sample reward and response length plus the correlated Harbor verifier
+  reward. This prevents the durable exporter from exhausting a run's
+  create-time labeled-point budget during normal per-sample capture.
+
 ## 0.26.0 (unreleased)
 
 ### Added

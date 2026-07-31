@@ -66,9 +66,9 @@ class TestBudgetPlan:
         args = SimpleNamespace(
             num_rollout=4000, rollout_batch_size=512, n_samples_per_prompt=1
         )
-        assert planned_labeled_points(args) == 4000 * 512
+        assert planned_labeled_points(args) == 4000 * 512 * 3
         args.n_samples_per_prompt = 8
-        assert planned_labeled_points(args) == 4000 * 512 * 8
+        assert planned_labeled_points(args) == 4000 * 512 * 8 * 3
 
     def test_clamped_to_ceiling_and_absent_when_unknown(self):
         big = SimpleNamespace(
@@ -101,7 +101,9 @@ class TestFoldedDeltas:
         try:
             (client,) = FakeClient.instances
             (run_kwargs,) = client.run_calls
-            assert run_kwargs["labeled_point_budget"] == 100 * 16 * 2
+            # Two Miles points (reward + response length) and one correlated
+            # Harbor verifier reward can be published for every sample.
+            assert run_kwargs["labeled_point_budget"] == 100 * 16 * 2 * 3
         finally:
             tracker.finish()
 

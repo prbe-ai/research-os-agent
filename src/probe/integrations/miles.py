@@ -262,6 +262,10 @@ def _default_run_name(args, external_id: str) -> str:
 
 
 _LABELED_POINT_BUDGET_CEILING = 100_000_000  # mirrors the server-side ceiling
+# Each captured rollout sample can publish two labeled points through
+# ``per_sample_rollout_log`` (reward + response length) and one more when the
+# correlated Harbor trial publishes its verifier reward.
+_LABELED_POINTS_PER_SAMPLE = 3
 
 
 def planned_labeled_points(args) -> int | None:
@@ -277,6 +281,7 @@ def planned_labeled_points(args) -> int | None:
             int(getattr(args, "num_rollout", None))
             * int(getattr(args, "rollout_batch_size", None))
             * int(per_prompt)
+            * _LABELED_POINTS_PER_SAMPLE
         )
     except (TypeError, ValueError):
         return None
