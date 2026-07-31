@@ -267,10 +267,10 @@ def _default_run_name(args, external_id: str) -> str:
 
 _LABELED_POINT_BUDGET_CEILING = 100_000_000  # mirrors the server-side ceiling
 # The hook now accepts caller-defined sample metrics, whose count cannot be known
-# from Miles' rollout shape. Reserve room for 64 metrics per sample plus the one
+# from Miles' rollout shape. Reserve room for 1,024 metrics per sample plus the one
 # verifier point a correlated Harbor capture may publish. Callers with a larger
 # schema can raise the reservation through ``args.probe_sample_metric_budget``.
-_DEFAULT_SAMPLE_METRIC_BUDGET = 64
+_DEFAULT_SAMPLE_METRIC_BUDGET = 1_024
 _HARBOR_LABELED_POINTS_PER_SAMPLE = 1
 
 

@@ -67,10 +67,10 @@ class TestBudgetPlan:
         args = SimpleNamespace(
             num_rollout=4000, rollout_batch_size=512, n_samples_per_prompt=1
         )
-        assert planned_labeled_points(args) == 100_000_000  # configurable rail reserves 64/sample
+        assert planned_labeled_points(args) == 100_000_000  # server-side ceiling
         args.num_rollout = 10
         args.n_samples_per_prompt = 8
-        assert planned_labeled_points(args) == 10 * 512 * 8 * 65
+        assert planned_labeled_points(args) == 10 * 512 * 8 * 1_025
 
     def test_sample_metric_budget_is_configurable(self):
         args = SimpleNamespace(
@@ -112,9 +112,9 @@ class TestFoldedDeltas:
         try:
             (client,) = FakeClient.instances
             (run_kwargs,) = client.run_calls
-            # Reserve 64 configurable Miles points and one correlated Harbor
+            # Reserve 1,024 configurable Miles points and one correlated Harbor
             # verifier point for every sample.
-            assert run_kwargs["labeled_point_budget"] == 100 * 16 * 2 * 65
+            assert run_kwargs["labeled_point_budget"] == 100 * 16 * 2 * 1_025
         finally:
             tracker.finish()
 

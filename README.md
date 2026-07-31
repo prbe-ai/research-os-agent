@@ -238,7 +238,7 @@ args.probe_sample_metrics = {
 
 Missing, non-numeric, boolean, and non-finite values are omitted; an explicit
 numeric zero is retained. Configured paths override a same-named
-`metadata["probe_metrics"]` entry. The run reserves 64 sample metric points per
+`metadata["probe_metrics"]` entry. The run reserves 1,024 sample metric points per
 sample by default; set `args.probe_sample_metric_budget` higher when a sample
 schema intentionally exceeds that.
 

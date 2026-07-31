@@ -11,7 +11,7 @@
   aggregate `tracking.log()` points, with `metric_scope=sample`, sample/group
   labels, and the existing Harbor rollout-span anchor distinguishing them.
   Missing and non-numeric values are omitted instead of becoming false zeros;
-  explicit numeric zero remains a measurement. Runs reserve 64 configurable
+  explicit numeric zero remains a measurement. Runs reserve 1,024 configurable
   sample points per sample by default, adjustable through
   `args.probe_sample_metric_budget`.
 
