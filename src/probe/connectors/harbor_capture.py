@@ -336,7 +336,11 @@ class CaptureHandle:
                 context=context,
                 expected_paths=expected_paths,
                 external_key=external_key,
-                expand=False,
+                # Expansion happens in the network-side watcher after durable
+                # staging. Request it by default so recognized trajectories
+                # become dashboard turn/tool spans without a manual repair;
+                # the raw trajectory artifact remains authoritative.
+                expand=True,
                 create_archive=create_archive,
             )
             manifest = json.loads(staged.capture_manifest_path.read_text())

@@ -195,7 +195,11 @@ def _parse_atif_inner(doc: dict, *, prefix: str, parent_path: str | None) -> lis
                     {
                         "source": source,
                         "timestamp": step.get("timestamp"),
-                        "model_name": step.get("model_name") or agent.get("model_name"),
+                        # System/user setup turns are not model generations.
+                        # Only inherit the trajectory-level model for agent
+                        # turns; otherwise preserve absence honestly.
+                        "model_name": step.get("model_name")
+                        or (agent.get("model_name") if source == "agent" else None),
                         "message": message,
                         "image_parts": image_parts or None,
                         "reasoning": _excerpt(step.get("reasoning_content")),
@@ -318,22 +322,32 @@ def expand_trajectory(
     if parser is None or not isinstance(doc, dict):
         return {"format": fmt, "expanded": False, "spans": 0, "truncated": False}
 
-    plans = parser(doc)
+    # A trajectory parser's plan order is the producer's authoritative
+    # execution order. Persist it explicitly because timestamps are optional
+    # (ATIF system/user setup turns commonly omit them) and the spans API is
+    # otherwise free to return equal/missing-timestamp siblings in a different
+    # order. Use one global, zero-based index across the flattened plan: sorting
+    # siblings by it restores parser order at every level of the tree.
+    all_plans = parser(doc)
+    indexed_plans = list(enumerate(all_plans))
     limit = DEFAULT_MAX_SPANS if max_spans is None else max_spans
     remaining = 0
-    if limit and len(plans) > limit:
-        remaining = len(plans) - limit
-        plans = plans[:limit]
-        plans.append(
-            PlannedSpan(
-                path="truncation-marker",
-                span_type="marker",
-                name=f"{remaining} more spans not yet expanded",
-                attributes={
-                    "truncated": True,
-                    "remaining": remaining,
-                    "hint": "probe trial expand <run> <manifest-id> --max-spans 0",
-                },
+    if limit and len(all_plans) > limit:
+        remaining = len(all_plans) - limit
+        indexed_plans = indexed_plans[:limit]
+        indexed_plans.append(
+            (
+                len(all_plans),
+                PlannedSpan(
+                    path="truncation-marker",
+                    span_type="marker",
+                    name=f"{remaining} more spans not yet expanded",
+                    attributes={
+                        "truncated": True,
+                        "remaining": remaining,
+                        "hint": "probe trial expand <run> <manifest-id> --max-spans 0",
+                    },
+                ),
             )
         )
 
@@ -343,7 +357,7 @@ def expand_trajectory(
     # ONCE, so every span in the batch carries the same coordinate.
     resolved_coords = unit_context.merged_coords(coords)
     spans = []
-    for plan in plans:
+    for trajectory_index, plan in indexed_plans:
         parent = (
             span_id_for(run.id, trial, plan.parent_path) if plan.parent_path else root_span_id
         )
@@ -358,7 +372,13 @@ def expand_trajectory(
                 status=plan.status,
                 started_at=plan.started_at,
                 ended_at=plan.ended_at,
-                attributes=plan.attributes,
+                attributes={
+                    **plan.attributes,
+                    # Connector-owned presentation metadata. This intentionally
+                    # overrides a parser-supplied key so every format shares one
+                    # trustworthy ordering contract.
+                    "trajectory_index": trajectory_index,
+                },
                 summary={},
                 coords=resolved_coords,
             )
