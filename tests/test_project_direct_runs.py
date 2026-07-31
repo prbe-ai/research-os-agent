@@ -78,7 +78,11 @@ def test_list_runs_direct_filter_narrows_to_experiment_less_runs(client, app):
 
 def test_collapse_keeps_one_experiment_and_one_run_per_id():
     """collapse="experiment" dedupes experiments AND passes run hits through
-    (deduped) — a project-direct run has no experiment hit to represent it."""
+    (deduped) — a project-direct run has no experiment hit to represent it.
+
+    Document hits pass through too: collapse dedupes, it never filters. Dropping
+    them made every knowledge corpus (transcripts, github docs, workspace files)
+    unreachable through the default call."""
     rows = [
         {"entity_type": "experiment", "id": "e1", "why_matched": {"score": 1.0}},
         {"entity_type": "experiment", "id": "e1", "why_matched": {"score": 0.5}},
@@ -88,6 +92,27 @@ def test_collapse_keeps_one_experiment_and_one_run_per_id():
     ]
     collapsed = _collapse_experiments(rows)
     assert sorted((row["entity_type"], row["id"]) for row in collapsed) == [
+        ("document", "d1"),
         ("experiment", "e1"),
         ("run", "r1"),
     ]
+
+
+def test_collapse_keeps_merged_ranking_order_and_does_not_dedupe_documents():
+    """A collapsed experiment holds the position of its FIRST occurrence, and
+    same-id document hits are distinct chunks — deduping them by id would
+    collapse a whole transcript to one chunk."""
+    rows = [
+        {"entity_type": "document", "id": "d1", "why_matched": {"score": 0.95}},
+        {"entity_type": "experiment", "id": "e1", "why_matched": {"score": 0.4}},
+        {"entity_type": "document", "id": "d1", "why_matched": {"score": 0.3}},
+        {"entity_type": "experiment", "id": "e1", "why_matched": {"score": 0.9}},
+    ]
+    collapsed = _collapse_experiments(rows)
+    assert [(row["entity_type"], row["id"]) for row in collapsed] == [
+        ("document", "d1"),
+        ("experiment", "e1"),
+        ("document", "d1"),
+    ]
+    # the surviving experiment row is the best-scoring representative
+    assert collapsed[1]["why_matched"]["score"] == 0.9

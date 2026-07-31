@@ -2,6 +2,25 @@
 
 ## 0.26.1 (unreleased)
 
+### Changed
+
+- `search_knowledge` no longer discards knowledge hits. `collapse="experiment"` (the
+  DEFAULT) used to drop every result row that was not an experiment or run, so every
+  document, transcript, file and artifact hit the backend returned was filtered out
+  before the caller saw it — the ingested Claude Code session corpus was unreachable
+  through the tool entirely. Collapse now dedupes experiments and runs and passes
+  everything else through in the merged ranking order. Callers on the default will
+  start seeing rows with `entity_type` `document` / `file` / `project` / `artifact`;
+  those rows are terminal (no `resource` to hand to `get_entity`).
+- `search_knowledge` `corpora` now narrows the semantic channel to exactly the corpora
+  named, instead of always unioning `experiments` in. The union made narrowing useless
+  in practice: the per-channel budget is ~`top_k/2` and experiment projections outrank
+  the knowledge corpora, so `corpora=["transcripts"]` came back holding only
+  experiments. To restore the old behavior, name it: `["experiments", "transcripts"]`.
+  A narrowing where every named corpus is unrecognized still falls back to
+  experiments-only and reports `kb_corpora` in `completeness.missing`. The exact
+  channel is structured-entity search and remains un-filtered by corpus.
+
 ### Fixed
 
 - Miles now reserves three labeled metric points per planned rollout sample:

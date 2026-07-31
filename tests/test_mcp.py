@@ -82,12 +82,12 @@ def test_search_maps_corpora_and_merges_channels(client, app):
         "adam sweep", corpora=["documents"], workspace_id="ws-1", collapse=None
     )
 
-    # corpora vocabulary maps onto backend corpus values (documents -> github+files,
-    # experiments always searched); the workspace lens rides along and the limit
-    # budget is split per channel (limit=8 -> 4+4, no post-merge truncation).
+    # corpora vocabulary maps onto backend corpus values (documents -> github+files)
+    # and narrows to exactly what was named; the workspace lens rides along and the
+    # limit budget is split per channel (limit=8 -> 4+4, no post-merge truncation).
     body = app.search_requests[-1]
     assert body["query"] == "adam sweep"
-    assert body["corpus"] == ["experiments", "files", "github"]
+    assert body["corpus"] == ["files", "github"]
     assert body["workspace_id"] == "ws-1"
     assert body["top_k"] == 4 and body["exact_limit"] == 4
 
@@ -128,9 +128,51 @@ def test_search_transcripts_corpus_maps_to_backend(client, app):
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
     out = service.search_knowledge("q", corpora=["transcripts", "assets"])
-    assert app.search_requests[-1]["corpus"] == ["experiments", "files", "transcripts"]
+    assert app.search_requests[-1]["corpus"] == ["files", "transcripts"]
     assert out["completeness"] == {"state": "complete", "missing": []}
     assert out["data"]["unsupported_corpora"] == []
+
+
+def test_search_narrowing_does_not_drag_experiments_along(client, app):
+    """Naming corpora narrows to EXACTLY those.
+
+    Unioning experiments in unconditionally made a narrowed search unusable: the
+    per-channel budget is ~top_k/2 and experiment projections outrank the
+    knowledge corpora, so `corpora=["transcripts"]` came back holding nothing but
+    experiments — the ingested Claude Code sessions were unreachable through the
+    tool even though the backend indexed and returned them."""
+    app.search_response = _search_response()
+    service = ResearchReadService(ResearchOSSource(client))
+
+    service.search_knowledge("q", corpora=["transcripts"])
+    assert app.search_requests[-1]["corpus"] == ["transcripts"]
+
+    # ...and a caller who wants both still says so.
+    service.search_knowledge("q", corpora=["experiments", "transcripts"])
+    assert app.search_requests[-1]["corpus"] == ["experiments", "transcripts"]
+
+    # An entirely unrecognized narrowing keeps the experiments-only floor rather
+    # than falling through to an unfiltered tenant-wide search. The floor is only
+    # honest if the envelope also says the narrowing was NOT honored — without the
+    # kb_corpora marker this answers a different question wearing a "complete" label.
+    out = service.search_knowledge("q", corpora=["nonsense"])
+    assert app.search_requests[-1]["corpus"] == ["experiments"]
+    assert out["data"]["unsupported_corpora"] == ["nonsense"]
+    assert out["completeness"] == {"state": "partial", "missing": ["kb_corpora"]}
+
+
+def test_one_unrecognized_corpus_does_not_widen_the_narrowing(client, app):
+    """A typo alongside a real corpus must not resurrect the experiments union.
+
+    The floor is `if not backend`, NOT `if unsupported` — the difference is
+    invisible until a caller pairs a good corpus with a bad one, and getting it
+    wrong silently restores the crowd-out bug for exactly that call."""
+    app.search_response = _search_response()
+    service = ResearchReadService(ResearchOSSource(client))
+    out = service.search_knowledge("q", corpora=["documents", "bogus"])
+    assert app.search_requests[-1]["corpus"] == ["files", "github"]
+    assert out["data"]["unsupported_corpora"] == ["bogus"]
+    assert out["completeness"]["missing"] == ["kb_corpora"]
 
 
 def test_search_falls_back_to_keyword_on_pre_search_backend(client, app):
@@ -280,16 +322,18 @@ def test_search_collapse_experiment_dedupes_across_channels(client, app):
     )
     service = ResearchReadService(ResearchOSSource(client))
 
-    # default collapse="experiment": one deduped experiment-level result, keeping
-    # the best-scoring representative's channel provenance (semantic, 0.9 > 0.7)
+    # default collapse="experiment": the TWO experiment hits become one, keeping
+    # the best-scoring representative's channel provenance (semantic, 0.9 > 0.7).
+    # The project and file hits are not experiments and are not deduped away —
+    # collapse dedupes, it never filters.
     out = service.search_knowledge("adam")
     results = out["data"]["results"]
-    assert [r["id"] for r in results] == ["e-1"]
+    assert [r["id"] for r in results] == ["e-1", "p-1", "f-1"]
     assert results[0]["entity_type"] == "experiment"
     assert results[0]["why_matched"]["channel"] == "semantic"
     assert results[0]["why_matched"]["score"] == 0.9
 
-    # collapse=None keeps the heterogeneous merged view
+    # collapse=None keeps both experiment rows instead of merging them
     out = service.search_knowledge("adam", collapse=None)
     assert {r["entity_type"] for r in out["data"]["results"]} == {
         "experiment", "project", "file",

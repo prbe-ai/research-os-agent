@@ -45,8 +45,9 @@ script version, parameters, schema/statistics, and the output content hash.
 
 ## Tracing a path, URI, or content hash
 
-`search_knowledge` with the path, URI, artifact id, or content hash as the query and
-`collapse=null` — its exact channel matches artifacts directly. Then follow
+`search_knowledge` with the path, URI, artifact id, or content hash as the query — its
+exact channel matches artifacts directly, and the default collapse keeps those hits
+(it dedupes experiments, it does not filter). Then follow
 `get_entity(view="lineage")` on the run that owns the hit.
 
 There is no trace-file tool. It was removed rather than fixed: no backend trace index
