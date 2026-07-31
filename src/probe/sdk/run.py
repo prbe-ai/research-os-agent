@@ -719,6 +719,27 @@ class Run:
         server-side."""
         return self._client.list_run_artifacts(self.id, scope=scope, **filters)
 
+    def reconcile_artifact(self, name: str, content_hash: str) -> dict | None:
+        """This run's already-recorded artifact with ``name`` AND ``content_hash``.
+
+        Call before retrying a failed artifact create. The server can succeed and
+        the response can still be lost -- the 502 that motivated ``with_retries``
+        came from the proxy in front of the API, which means it fires AFTER the
+        write. A blind retry then records the same bytes twice, and later
+        selection (``next(a for a in arts if a["kind"] == "checkpoint")``) starts
+        silently choosing between duplicates.
+
+        Matching on the content hash makes this exact rather than a guess:
+        artifacts are content-addressed, so identical hash under the same name on
+        the same run IS the same artifact.
+        """
+        if not content_hash:
+            return None
+        for row in self._client.list_run_artifacts(self.id, name=name, scope="own") or []:
+            if row.get("content_hash") == content_hash:
+                return row
+        return None
+
     def resolve_artifact(self, name: str, *, scope: str = "all") -> dict | None:
         """The nearest artifact named ``name`` visible to this run, or ``None``. The
         backend returns nearest-wins order (run before experiment before project), so a
@@ -866,10 +887,18 @@ class Run:
         artifact. Non-disruptive.
 
         The execution record pins ``run.env_ref`` to its content hash via RunPatch
-        (fold #7 + the RunPatch env_ref parity), the same column the ingest path sets."""
+        (fold #7 + the RunPatch env_ref parity), the same column the ingest path sets.
+
+        The git shadow ref is provenance, NOT the code record. It lives in the
+        object database of whatever machine ran the job, so on an ephemeral box it
+        stops resolving the moment that box is destroyed. ``capture_manifest``
+        decides per file whether the content is already retrievable from a pushed
+        remote; anything that is not gets its bytes uploaded by the caller against
+        ``manifest['entries']``."""
         git = _snapshot.capture_git_snapshot(self.id, cwd)
+        manifest = _snapshot.capture_manifest(cwd)
         record = ExecutionRecordCreate(
-            code={"git": git},
+            code={"git": git, "manifest": manifest},
             deps=_snapshot.capture_env() if include_env else {},
             hardware={"gpu": _snapshot.capture_gpu()} if include_gpu else {},
         )
@@ -893,16 +922,32 @@ class Run:
                     if strict is True or (strict is None and not self._client.fail_open):
                         raise errors.CapabilityUnavailable("run.env_ref", message)
                     warnings.warn(message, stacklevel=2)
-        # Record the shadow commit as a reference artifact for lineage.
+        # Record the shadow commit as a reference artifact for lineage. The
+        # manifest travels with it so a reader can tell, without fetching
+        # anything, which files this reference can actually still supply.
         self.log_artifact(
             "code-snapshot",
             uri=f"git:{git['ref']}#{git['commit']}",
             kind="code_snapshot",
             is_reference=True,
-            meta={"branch": git.get("branch"), "dirty": git.get("dirty"), "env_ref": content_hash},
+            meta={
+                "branch": git.get("branch"),
+                "dirty": git.get("dirty"),
+                "env_ref": content_hash,
+                "tree_sha256": manifest["tree_sha256"],
+                "base_commit": manifest["base_commit"],
+                "remote": manifest["remote"],
+                "n_referenced": manifest["n_referenced"],
+                "n_uploaded": manifest["n_uploaded"],
+            },
             strict=strict,
         )
-        return {"git": git, "execution_record": exec_rec, "content_hash": content_hash}
+        return {
+            "git": git,
+            "manifest": manifest,
+            "execution_record": exec_rec,
+            "content_hash": content_hash,
+        }
 
     # -- liveness -----------------------------------------------------------
     def start_heartbeat(self, interval_seconds: float | None = None) -> None:
