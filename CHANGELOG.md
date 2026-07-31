@@ -2,7 +2,34 @@
 
 ## 0.27.0 (unreleased)
 
+### Breaking
+
+- `check_run` / `probe run check` no longer answer `complete` on the cheap path.
+  It counted rows — is there an `env_ref`, is there a `code_snapshot` artifact —
+  and never asked whether either led anywhere, so seventeen runs whose code was
+  already unrecoverable read as captured for a week. Three verdicts now:
+  `incomplete` (something absent or provably unrecoverable), `unverified` (the
+  default: nothing obviously absent, which is NOT "can be rebuilt"), and
+  `complete`, earned only under `verify=True` / `--verify` by resolving the
+  recorded commit against its remote. Callers testing `state == "complete"` must
+  either pass `verify` or accept `unverified`. CLI exit 2 now means `incomplete`
+  specifically, so an unverified run no longer fails a script.
+
 ### Added
+
+- `check_run(verify=True)` and `probe run check --verify` resolve the captured
+  code reference by depth-1 fetching the recorded commit from the recorded
+  remote — the same thing a reproduction does. `snapshot.commit_on_remote()` is
+  memoized on `(remote, commit)` and bounded by a 20s timeout, so auditing a
+  project costs one fetch per distinct base commit rather than one per run
+  (measured: 201 runs sharing a base = 1 network call, 2.6s; the other 200
+  resolve from cache in 0.01ms total). Never called during a run, so it cannot
+  affect training or upload throughput.
+- `check_run` reports `pending_code_bytes` when the manifest records files whose
+  bytes were never stored. Free: the summary already arrives on the artifact's
+  meta, so it costs a dict lookup and no network. This is the failure mode
+  per-file capture introduced in 0.26.3, and leaving it unchecked would have
+  repeated the original mistake in a new place.
 
 - Miles' existing `probe.connectors.miles.per_sample_rollout_log` hook now
   captures arbitrary numeric entries from `sample.metadata["probe_metrics"]`

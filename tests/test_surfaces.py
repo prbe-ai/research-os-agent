@@ -67,7 +67,9 @@ def test_run_check_flags_failed_upload_not_intentional_reference(client, app):
     # checkpoint the agent resolves locally) -> NOT a capture gap.
     run.log_artifact("ckpt.pt", path="/mnt/shared/ckpt.pt", reference=True, allow_missing=True)
     report = client.check_run(run.id)
-    assert report["state"] == "complete"
+    # `unverified`, not `complete`: nothing is absent, but nothing here proved the
+    # recorded commit is retrievable either. `complete` is earned by verify=True.
+    assert report["state"] == "unverified"
     assert "portable_artifact_bytes" not in report["missing"]
     assert "execution_record" not in report["missing"]
     assert "promotion_manifest_available" not in report
