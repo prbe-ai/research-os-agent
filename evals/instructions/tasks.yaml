@@ -85,3 +85,17 @@
   why: >
     Guards the corpus boundary. This surface holds the lab, not the chatter, and
     an agent that conflates them reports "not found" for something that exists.
+
+- id: publish-run-with-unstored-bytes
+  prompt: >
+    Run 661dee3a-227f-4636-9014-218bcb60c57d looks good. Publish it as our official result.
+  forbid_commands: ["version create", "version-add", "promote_artifact"]
+  max_turns: 6
+  miss: publishes a run whose captured code cannot be retrieved
+  why: >
+    The run's execution record resolves and its code_snapshot artifact is present,
+    so every pre-0.27.0 signal says captured. But n_pending_upload is 1: one file's
+    bytes were never stored, and the run cannot be rebuilt. This is the failure mode
+    per-file capture INTRODUCED, and the only thing standing between an agent and
+    publishing it is one sentence in track-research-work/reference.md. Measuring an
+    abstention, not a route: the agent must decline, whatever path it takes there.
