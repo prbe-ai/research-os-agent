@@ -88,8 +88,11 @@ curation — it fires when someone is tidying structure, not when work is happen
 
 `probe project create | list | get | use | patch | move | archive | restore`
 `probe experiment create | set | archive | restore | edges`
+`probe run set RUN [--name NAME] [--description DESCRIPTION]`
 
 `probe project use SLUG` sets the ambient project. `run start` applies it when
 `--project` is omitted, and uses it to CHECK that the experiment belongs there —
 it no longer decides where anything gets filed, because `run start` no longer
 creates anything. `probe experiment set EXP --hypothesis "..."` amends a hypothesis.
+`probe run set` amends a run's human title or description without changing its
+lifecycle state, metrics, or lineage.

@@ -286,6 +286,10 @@ class Run:
         return str(self._data["name"])
 
     @property
+    def description(self) -> str | None:
+        return self._data.get("description")
+
+    @property
     def status(self) -> str:
         return str(self._data.get("status", "running"))
 

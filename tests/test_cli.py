@@ -33,11 +33,67 @@ def wired(app, tmp_path, monkeypatch):
 
 def test_run_start_prints_id(wired, capsys):
     rc = cli.main(
-        ["run", "start", "--experiment", "e", "--name", "r1"]
+        [
+            "run",
+            "start",
+            "--experiment",
+            "e",
+            "--name",
+            "r1",
+            "--description",
+            "Initial run context",
+        ]
     )
     assert rc == 0
     out = capsys.readouterr().out.strip()
     assert out in wired.runs
+    assert wired.runs[out]["description"] == "Initial run context"
+
+
+def test_run_set_updates_title_and_description(wired, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+
+    rc = cli.main(
+        [
+            "run",
+            "set",
+            run_id,
+            "--name",
+            "Named baseline",
+            "--description",
+            "Operator-authored context",
+        ]
+    )
+
+    assert rc == 0
+    assert wired.runs[run_id]["name"] == "Named baseline"
+    assert wired.runs[run_id]["description"] == "Operator-authored context"
+
+    assert cli.main(["run", "set", run_id, "--name", "Retitled baseline"]) == 0
+    assert wired.runs[run_id]["name"] == "Retitled baseline"
+    assert wired.runs[run_id]["description"] == "Operator-authored context"
+
+
+def test_run_set_updates_description_without_changing_title(wired, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "keep-me"])
+    run_id = capsys.readouterr().out.strip()
+
+    rc = cli.main(
+        ["run", "set", run_id, "--description", "Description-only edit"]
+    )
+
+    assert rc == 0
+    assert wired.runs[run_id]["name"] == "keep-me"
+    assert wired.runs[run_id]["description"] == "Description-only edit"
+
+
+def test_run_set_requires_a_field(wired, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+
+    assert cli.main(["run", "set", run_id]) == 2
+    assert "pass at least one of --name/--description" in capsys.readouterr().err
 
 
 def test_log_command(wired, capsys):
@@ -65,11 +121,24 @@ def test_link_command(wired, capsys):
 def test_child_command(wired, capsys):
     cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
     parent = capsys.readouterr().out.strip()
-    rc = cli.main(["run", "child", parent, "--name", "step-1", "--relation", "resume"])
+    rc = cli.main(
+        [
+            "run",
+            "child",
+            parent,
+            "--name",
+            "step-1",
+            "--description",
+            "Resumed from the baseline",
+            "--relation",
+            "resume",
+        ]
+    )
     assert rc == 0
     child = capsys.readouterr().out.strip()
     assert wired.runs[child]["parent_run_id"] == parent
     assert wired.runs[child]["parent_relation"] == "resume"
+    assert wired.runs[child]["description"] == "Resumed from the baseline"
 
 
 def test_artifact_add_forwards_span_content_type_and_meta(wired, capsys, tmp_path):

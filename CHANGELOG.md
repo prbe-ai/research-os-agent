@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.28.0
+
+### Added
+
+- Run titles and descriptions can now be edited with
+  `probe run set RUN --name ... --description ...`, matching the existing
+  project and experiment editing commands.
+- `probe run start` and `probe run child` accept `--description`, and the
+  Python SDK exposes run descriptions on creation, reads, and
+  `Client.update_run()`.
+
 ## 0.27.1
 
 ### Fixed

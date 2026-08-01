@@ -1349,6 +1349,7 @@ class FakeApp:
             "experiment_id": experiment_id,
             "project_id": project_id or str(uuid.uuid4()),
             "name": body.get("name", "run"),
+            "description": body.get("description"),
             "status": "running",
             "source": body.get("source", "api"),
             "metadata": body.get("metadata", {}),

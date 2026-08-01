@@ -118,6 +118,7 @@ client = probe.Client()  # resolves creds from env / `probe login`
 # FIRST run in a new experiment says what you expect to see:
 run = client.run(experiment="dockq-sweep", hypothesis="temp 0.7 wins",
                  name="run-1", project="folding",
+                 description="DockQ baseline at temperature 0.7",
                  source="runpod", external_id="rp-9931")
 
 # …and every run after that is bare — the experiment already exists, and its
@@ -133,6 +134,10 @@ run = client.run(project="folding")
 # a training loop. Creation is SDK-only — `probe run start` never creates, because on
 # the CLI the slug is hand-typed every time, which is where typos come from.
 
+client.update_run(run.id, name="DockQ baseline",
+                  description="Stable reference run")
+child = run.child("retry-1", relation="retry",
+                  description="Retry after fixing the data loader")
 run.snapshot()                                   # non-disruptive git + deps + GPU capture
 run.link(wandb_run_id="abc123", s3_prefix="s3://x/y")
 
@@ -308,7 +313,11 @@ transport does not need the split, so this is a shaping layer on `Client`.
 probe project create folding
 probe experiment create dockq --hypothesis "temp 0.7 wins" --project folding
 RUN=$(probe run start --experiment dockq --name run-1 \
-        --project folding --source runpod --external-id rp-9931)
+        --project folding --source runpod --external-id rp-9931 \
+        --description "DockQ baseline at temperature 0.7")
+probe project patch folding --name "Protein folding" --description "DockQ studies"
+probe experiment set EXPERIMENT_ID --name "DockQ sweep" --description "Temperature sweep"
+probe run set $RUN --name "DockQ baseline" --description "Stable reference run"
 probe snapshot $RUN
 probe link $RUN --set wandb_run_id=abc --set gpu_job=rp-9931
 probe log $RUN loss=0.42 dockq=0.71 --step 42
