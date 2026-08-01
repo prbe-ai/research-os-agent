@@ -35,12 +35,21 @@ const DIST = "probe-research";
  * `probe-research==<our version>` resolves to a PyPI version that does not
  * exist. That is exactly how 0.10.1 shipped broken.
  *
- * Bump this only when the launcher starts depending on a NEW CLI feature —
- * or when the plugin's skill prose starts referencing new CLI verbs, so a
- * fresh install can never pair old-CLI with new-prose (0066 tags review).
- * 0.24.0 is the release that introduced the `tag` verbs and tags filters.
+ * Three reasons to bump it, and only three:
+ *   1. the launcher starts depending on a NEW CLI feature;
+ *   2. the plugin's skill prose starts referencing new CLI verbs, so a fresh
+ *      install can never pair old-CLI with new-prose (0066 tags review);
+ *   3. a shipped CLI version is KNOWN BROKEN and this is the repair path.
+ *
+ * (3) is why the floor is 0.27.1. 0.26.0 through 0.27.0 crash on every fresh
+ * `probe wizard` — a KeyError the moment the plan names auto-update (#120) —
+ * and they all cleared the previous 0.24.0 floor, so this launcher happily
+ * handed users straight to a CLI that could not complete a setup. `npx
+ * probe-research` IS the advertised from-zero entry point; it has to be able
+ * to repair the thing it installed. A healthy 0.26.x install pays one refetch,
+ * which is the right trade against a broken one staying broken forever.
  */
-const MIN_CLI = "0.24.0";
+const MIN_CLI = "0.27.1";
 const UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh";
 
 /** Compare dotted numeric versions. Returns true when `a` >= `b`. */
