@@ -138,6 +138,25 @@ def test_update_experiment_requires_a_field(client):
         client.update_experiment("whatever")
 
 
+def test_update_run_replaces_human_details(app, client):
+    _create_experiment(client, "e1", "E1", hypothesis="h")
+    run = client.run(experiment="e1", name="before", description="old context")
+
+    updated = client.update_run(
+        run.id,
+        name="after",
+        description="new context",
+    )
+
+    assert updated["name"] == "after"
+    assert updated["description"] == "new context"
+
+
+def test_update_run_requires_a_field(client):
+    with pytest.raises(ValueError):
+        client.update_run("whatever")
+
+
 # -- SDK: lazy device auth ----------------------------------------------------
 def _tokenless_client(app, tmp_path):
     client = make_client(app, tmp_spool=tmp_path / "spool")
@@ -311,15 +330,50 @@ def test_cli_experiment_create_rejects_unknown_and_archived_projects(wired, caps
     assert "archived" in (captured.out + captured.err).lower()
 
 
-def test_cli_experiment_set_hypothesis(wired, capsys):
+def test_cli_project_patch_updates_title_and_description(wired, capsys):
+    cli.main(["project", "create", "p"])
+    project_id = json.loads(capsys.readouterr().out)["id"]
+
+    rc = cli.main(
+        [
+            "project",
+            "patch",
+            project_id,
+            "--name",
+            "Protein folding",
+            "--description",
+            "DockQ studies",
+        ]
+    )
+
+    assert rc == 0
+    assert wired.projects[project_id]["name"] == "Protein folding"
+    assert wired.projects[project_id]["description"] == "DockQ studies"
+
+
+def test_cli_experiment_set_updates_human_details(wired, capsys):
     cli.main(["project", "create", "p"])
     capsys.readouterr()
     cli.main(["experiment", "create", "e", "--hypothesis", "h", "--project", "p"])
     capsys.readouterr()
     (exp_id,) = wired.experiments
-    rc = cli.main(["experiment", "set", exp_id, "--hypothesis", "real hypothesis"])
+    rc = cli.main(
+        [
+            "experiment",
+            "set",
+            exp_id,
+            "--hypothesis",
+            "real hypothesis",
+            "--name",
+            "DockQ sweep",
+            "--description",
+            "Temperature sweep",
+        ]
+    )
     assert rc == 0
     assert wired.experiments[exp_id]["hypothesis"] == "real hypothesis"
+    assert wired.experiments[exp_id]["name"] == "DockQ sweep"
+    assert wired.experiments[exp_id]["description"] == "Temperature sweep"
 
 
 def test_cli_bare_login_runs_device_flow(wired, tmp_path, monkeypatch, capsys):

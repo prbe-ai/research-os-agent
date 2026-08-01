@@ -33,11 +33,42 @@ def wired(app, tmp_path, monkeypatch):
 
 def test_run_start_prints_id(wired, capsys):
     rc = cli.main(
-        ["run", "start", "--experiment", "e", "--name", "r1"]
+        [
+            "run",
+            "start",
+            "--experiment",
+            "e",
+            "--name",
+            "r1",
+            "--description",
+            "Initial run context",
+        ]
     )
     assert rc == 0
     out = capsys.readouterr().out.strip()
     assert out in wired.runs
+    assert wired.runs[out]["description"] == "Initial run context"
+
+
+def test_run_set_updates_title_and_description(wired, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+
+    rc = cli.main(
+        [
+            "run",
+            "set",
+            run_id,
+            "--name",
+            "Named baseline",
+            "--description",
+            "Operator-authored context",
+        ]
+    )
+
+    assert rc == 0
+    assert wired.runs[run_id]["name"] == "Named baseline"
+    assert wired.runs[run_id]["description"] == "Operator-authored context"
 
 
 def test_log_command(wired, capsys):

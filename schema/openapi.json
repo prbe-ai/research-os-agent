@@ -4512,6 +4512,17 @@
             "title": "Config",
             "type": "object"
           },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "env_ref": {
             "anyOf": [
               {
@@ -4663,6 +4674,17 @@
               }
             ],
             "title": "Deleted At"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
           },
           "ended_at": {
             "anyOf": [
@@ -5266,6 +5288,17 @@
       },
       "RunPatch": {
         "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
           "ended_at": {
             "anyOf": [
               {

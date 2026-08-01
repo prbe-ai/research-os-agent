@@ -1525,6 +1525,7 @@ def run_start(
         help="slug of an EXISTING experiment; omit for a PROJECT-DIRECT run (W&B shape)",
     ),
     name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
+    description: str = typer.Option(None, "--description", help="human context for this run"),
     project: str = typer.Option(
         None, "--project", help="project slug/id; defaults to the active one (`probe project use`)"
     ),
@@ -1556,6 +1557,7 @@ def run_start(
         run = c.run(
             experiment=experiment,
             name=name,
+            description=description,
             # run() resolves by SLUG, so an id has to be translated first or the
             # lookup misses and reports a real project as absent.
             project=_project_slug(c, resolved_project),
@@ -1576,6 +1578,7 @@ def run_start(
 def run_child(
     run: str = typer.Argument(...),
     name: str = typer.Option(..., "--name"),
+    description: str = typer.Option(None, "--description"),
     relation: Relation = typer.Option(Relation.fork, "--relation"),
     source: str = typer.Option("api", "--source"),
     external_id: str = typer.Option(None, "--external-id"),
@@ -1590,6 +1593,7 @@ def run_child(
         common = dict(
             parent_run_id=run,
             parent_relation=relation.value,
+            description=description,
             source=source,
             external_id=external_id,
             heartbeat=False,  # detached, same as `run start`
@@ -1608,6 +1612,19 @@ def run_child(
                 "with `probe run start --experiment`."
             )
     print(child.id)
+
+
+@run_app.command("set")
+def run_set(
+    run: str = typer.Argument(..., help="run id"),
+    name: str = typer.Option(None, "--name"),
+    description: str = typer.Option(None, "--description"),
+) -> None:
+    """Update a run's human title or description."""
+    if name is None and description is None:
+        raise typer.BadParameter("pass at least one of --name/--description")
+    with _client() as c:
+        _print_json(c.update_run(run, name=name, description=description))
 
 
 @run_app.command("list")

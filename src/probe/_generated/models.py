@@ -924,6 +924,7 @@ class LabeledPointBudget(RootModel[int]):
 
 class RunCreate(BaseModel):
     config: dict[str, Any] | None = Field(None, title='Config')
+    description: str | None = Field(None, title='Description')
     env_ref: str | None = Field(None, title='Env Ref')
     external_id: str | None = Field(None, title='External Id')
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
@@ -1677,6 +1678,7 @@ class RunDetailOut(BaseModel):
     created_by: str | None = Field(None, title='Created By')
     customer_id: str = Field(..., title='Customer Id')
     deleted_at: AwareDatetime | None = Field(None, title='Deleted At')
+    description: str | None = Field(None, title='Description')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     env_ref: str | None = Field(None, title='Env Ref')
     experiment_id: UUID | None = Field(..., title='Experiment Id')
@@ -1732,6 +1734,7 @@ class RunOut(BaseModel):
 
 
 class RunPatch(BaseModel):
+    description: str | None = Field(None, title='Description')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     env_ref: str | None = Field(None, title='Env Ref')
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')

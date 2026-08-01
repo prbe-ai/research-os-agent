@@ -1072,6 +1072,7 @@ class Client:
     def _run_create_body(
         name: str,
         *,
+        description: str | None,
         source: str,
         external_id: str | None,
         parent_run_id: str | None,
@@ -1083,6 +1084,8 @@ class Client:
         labeled_point_budget: int | None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"name": name, "source": source}
+        if description is not None:
+            body["description"] = description
         if external_id is not None:
             body["external_id"] = external_id
         if parent_run_id is not None:
@@ -1119,6 +1122,7 @@ class Client:
         experiment_id: str,
         name: str,
         *,
+        description: str | None = None,
         source: str = "api",
         external_id: str | None = None,
         parent_run_id: str | None = None,
@@ -1132,6 +1136,7 @@ class Client:
     ) -> Run:
         body = self._run_create_body(
             name,
+            description=description,
             source=source,
             external_id=external_id,
             parent_run_id=parent_run_id,
@@ -1151,6 +1156,7 @@ class Client:
         project_id: str,
         name: str,
         *,
+        description: str | None = None,
         source: str = "api",
         external_id: str | None = None,
         parent_run_id: str | None = None,
@@ -1169,6 +1175,7 @@ class Client:
         """
         body = self._run_create_body(
             name,
+            description=description,
             source=source,
             external_id=external_id,
             parent_run_id=parent_run_id,
@@ -1480,6 +1487,23 @@ class Client:
     def get_run(self, run_id: str, *, include_deleted: bool = False) -> dict:
         params = {"include": "deleted"} if include_deleted else None
         return self.transport.get(f"/v1/runs/{run_id}", params=params)
+
+    def update_run(
+        self,
+        run_id: str,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> dict:
+        """PATCH /v1/runs/{id} — amend a run's human title or description."""
+        body = {
+            key: value
+            for key, value in {"name": name, "description": description}.items()
+            if value is not None
+        }
+        if not body:
+            raise ValueError("update_run needs at least one of name/description")
+        return self.transport.patch(f"/v1/runs/{run_id}", body)
 
     def run_bundle(self, run_id: str) -> dict:
         return self.transport.get(f"/v1/runs/{run_id}/bundle")
