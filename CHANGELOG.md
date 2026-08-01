@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.27.1
+
+### Fixed
+
+- `probe wizard` no longer dies with `KeyError: Capability.AUTO_UPDATE` right
+  after you answer the auto-update question. `plan()` read every capability's
+  label out of `MENU_COPY`, which holds only the two checkbox rows — auto-update
+  is asked as its own step and its copy lives in `AUTO_UPDATE_COPY`. It was the
+  worst possible split: auto-update defaults ON and starts OFF, so the plan
+  always changed it, so *every fresh install crashed* — after the consent menu
+  and before anything was installed. `probe wizard --yes` on a fresh machine
+  (CI, scripted setup) crashed the same way, since `plan()` runs on the flag
+  path too. Labels now come from `PLAN_LABELS`, which is total over
+  `Capability` and asserted to stay that way. Broken since the auto-update step
+  was split out of the picker (#73), shipped in 0.26.0 through 0.27.0.
+
 ## 0.27.0 (unreleased)
 
 ### Breaking
