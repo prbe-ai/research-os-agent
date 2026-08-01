@@ -17,11 +17,18 @@ from tests.conftest import open_run
 
 def test_run_with_only_a_project_opens_a_direct_run(client, app):
     project = client.create_project("folding", "Folding")
-    run = client.run(project="folding", name="direct-1", heartbeat=False)
+    run = client.run(
+        project="folding",
+        name="direct-1",
+        description="Exploratory work without an experiment",
+        heartbeat=False,
+    )
 
     row = app.runs[run.id]
     assert row["experiment_id"] is None
     assert row["project_id"] == project["id"]
+    assert row["description"] == "Exploratory work without an experiment"
+    assert run.description == "Exploratory work without an experiment"
 
 
 def test_run_with_a_project_and_a_group_is_rejected_client_side(client, app):
