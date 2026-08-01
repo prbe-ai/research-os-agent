@@ -221,6 +221,59 @@ def test_a_stale_lock_does_not_wedge_auto_update_forever(isolate):
     assert autoupdate.acquire_lock() is True
 
 
+# --- the plan is printed before anything is touched ------------------------
+
+
+def test_the_plan_survives_the_answer_every_fresh_machine_gives():
+    """The exact crash: a fresh install answers "yes" to auto-update, the plan
+    has to name a capability that is not a checkbox row, and the wizard died
+    with a KeyError before it had installed anything. Fresh is the WORST case,
+    not an edge one -- auto-update defaults on and starts off, so it changes
+    state on every machine that has never been set up."""
+    selection = setup.resolve_selection(
+        _caps(), tracking=None, capture=None, auto_update=None, configured=False
+    )
+    steps = setup.plan(_caps(), selection)
+
+    assert any("automatic updates" in step for step in steps)
+    assert all(step.startswith(("enable ", "disable ")) for step in steps)
+
+
+def test_every_capability_can_be_named_in_a_plan():
+    """PLAN_LABELS must stay TOTAL over Capability. A partial map is what broke
+    the wizard, and the failure landed at a user's terminal rather than in CI
+    because nothing here asserted the mapping covered the enum."""
+    assert set(setup.PLAN_LABELS) == set(Capability)
+
+
+def test_the_plan_lists_only_what_actually_changes():
+    """It is an audit trail, so a run that changes one thing must not claim to
+    change three."""
+    caps = _caps(
+        tracking_plugin_installed=True,
+        logged_in_as="richard@prbe.ai",
+        auto_update_enabled=True,
+    )
+    steps = setup.plan(
+        caps, setup.Selection(tracking=True, capture=True, auto_update=True)
+    )
+
+    assert len(steps) == 1
+    assert steps[0].startswith("enable ")
+    assert "capture" in steps[0].lower()
+
+
+def test_no_change_means_no_plan():
+    caps = _caps(
+        tracking_plugin_installed=True,
+        logged_in_as="richard@prbe.ai",
+        capture_token_sources=(TokenSource.PAIRED_FILE,),
+        auto_update_enabled=True,
+    )
+    selection = setup.Selection(tracking=True, capture=True, auto_update=True)
+    assert setup.plan(caps, selection) == []
+
+
 # --- doctor ----------------------------------------------------------------
 
 

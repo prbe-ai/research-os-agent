@@ -129,6 +129,21 @@ AUTO_UPDATE_COPY = (
     "Upgrades the CLI and plugins in the background at Claude Code session start.",
 )
 
+#: How `plan()` names each capability in "This run will: - enable X".
+#:
+#: MUST stay total over `Capability`. It is a SEPARATE map from MENU_COPY
+#: because the plan covers every capability while MENU_COPY only holds the
+#: checkbox rows -- reading the label out of MENU_COPY crashed the wizard on
+#: every fresh install, since auto-update is asked outside that list and always
+#: changes state on a machine that has never been set up. The phrasings differ
+#: too: a menu row is a question ("Keep it up to date automatically?"), a plan
+#: step is a noun ("enable automatic updates").
+PLAN_LABELS: dict[Capability, str] = {
+    Capability.TRACKING: MENU_COPY[Capability.TRACKING][0],
+    Capability.CAPTURE: MENU_COPY[Capability.CAPTURE][0],
+    Capability.AUTO_UPDATE: "automatic updates",
+}
+
 
 def interactive() -> bool:
     """Whether a real human can answer a prompt. Both ends must be a TTY: a
@@ -286,7 +301,7 @@ def plan(caps: Capabilities, selection: Selection) -> list[str]:
         have = current[capability]
         if want == have:
             continue
-        label = MENU_COPY[capability][0]
+        label = PLAN_LABELS[capability]
         steps.append(f"{'enable' if want else 'disable'} {label}")
     return steps
 
