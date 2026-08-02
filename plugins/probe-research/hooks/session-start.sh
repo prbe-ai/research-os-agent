@@ -3,9 +3,10 @@
 # of date. SYNCHRONOUS and FAIL-OPEN by contract — the version check must finish
 # before this returns its JSON (a SessionStart systemMessage can't come from a
 # detached process), and ANY failure degrades to `{"continue": true}` so a
-# broken check never blocks a session. Network is throttled to once/24h by a
-# cache file (version_check.py), so most session starts do zero network yet the
-# nudge still renders every session from the cached manifest.
+# broken check never blocks a session. Network is throttled by a cache file to
+# once per version_policy.TTL (15m; it was 24h once and that bought a whole day
+# of blindness across a burst of releases), so most session starts do zero
+# network yet the nudge still renders every session from the cached manifest.
 set -u
 
 # Claude Code sends {session_id, transcript_path, cwd, source} on stdin. We do

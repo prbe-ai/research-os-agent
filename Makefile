@@ -1,4 +1,4 @@
-.PHONY: install test test-tap parity dump-openapi gen-models regen sync-plugin-skills
+.PHONY: install test test-tap parity dump-openapi gen-models regen sync-plugin-skills sync-plugin-policy sync-plugin
 
 install:
 	pip install -e ".[dev]"
@@ -45,3 +45,19 @@ sync-plugin-skills:
 	  rm -rf plugins/probe-research/skills/$$s; mkdir -p plugins/probe-research/skills/$$s; \
 	  cp -R skills/$$s/. plugins/probe-research/skills/$$s/; done
 	@echo "synced skills -> plugins/probe-research/skills"
+
+# Keep the plugin's copy of the shared version policy in sync with the canonical
+# src/probe/version_policy.py. Same contract as the skills above: edit the
+# canonical file, never the plugin copy, and tests/test_policy_sync.py fails when
+# they drift.
+#
+# The copy exists because the hook cannot import it. session-start.sh runs
+# version_check.py under the SYSTEM python3, which has no probe package on its
+# path, so a shared import is impossible and a shipped duplicate is the only
+# option. `import version_policy` resolves to this sibling because sys.path[0] is
+# the script's own directory.
+sync-plugin-policy:
+	@cp src/probe/version_policy.py plugins/probe-research/hooks/version_policy.py
+	@echo "synced version_policy -> plugins/probe-research/hooks"
+
+sync-plugin: sync-plugin-skills sync-plugin-policy

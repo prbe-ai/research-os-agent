@@ -92,6 +92,17 @@ class Capabilities:
     auto_update_enabled: bool = False
     last_update_attempt: str | None = None
 
+    #: The last time an available upgrade was deliberately NOT applied, and why.
+    #: A SIBLING of last_update_attempt, never a substitute: without it, a box
+    #: that has correctly deferred every upgrade for a fortnight of training is
+    #: indistinguishable from one whose auto-updater is dead, because both show
+    #: nothing but an old timestamp.
+    last_update_skip: str | None = None
+
+    #: Run refs currently holding this box against an upgrade. Diagnostic only —
+    #: run_lock.any_live() is what the gate actually consults.
+    live_runs: list[str] = field(default_factory=list)
+
     #: Journal.read_status() of the async outbox, None when it has never been
     #: used. Same rationale as LAST UPDATE ATTEMPT: a detached drainer cannot
     #: report failure anywhere else.

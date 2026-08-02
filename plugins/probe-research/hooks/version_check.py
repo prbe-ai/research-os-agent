@@ -32,38 +32,29 @@ from __future__ import annotations
 
 import json
 import os
-import pathlib
 import subprocess
 import sys
-import time
-import urllib.request
+
+# pathlib, time and urllib left with the helpers that moved to version_policy.
+# The shared policy: TTL/BACKOFF, the cache and state paths, the cache reader and
+# writer, and the fetch. `make sync-plugin-policy` copies it here from
+# src/probe/version_policy.py and tests/test_policy_sync.py fails if the copies
+# drift. This is a sibling import -- sys.path[0] is this script's directory when
+# session-start.sh runs `python3 <plugin_root>/hooks/version_check.py` -- because
+# the system python3 has no probe package to import from.
+#
+# Three of the values below used to be defined here as well as in the CLI. The
+# autoupdate STATE path was the dangerous one: this file recomputed what
+# autoupdate.py owned, and a divergence would have stopped auto-update while
+# `probe doctor` kept reporting it healthy.
+import version_policy
+
+TTL = version_policy.TTL
+BACKOFF = version_policy.BACKOFF
+TIMEOUT = version_policy.TIMEOUT
+DEFAULT_BASE = version_policy.DEFAULT_BASE
 
 
-def _int_env(name: str, default: int) -> int:
-    """Env int that never raises at import (a bad value falls back to default)."""
-    try:
-        return int(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
-
-
-def _float_env(name: str, default: float) -> float:
-    try:
-        return float(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return default
-
-
-# 15 minutes, not a day. A day was chosen to keep poll volume down, and the cost
-# it actually bought was invisibility: four releases went out one afternoon and a
-# machine that had cached the manifest that morning would have compared against a
-# `latest` OLDER than what it already had -- concluded it was ahead, said nothing,
-# and not looked again for another 21 hours. A 3s GET at session start is not
-# worth a day of blindness.
-TTL = _int_env("PROBE_VERSION_TTL", 900)            # reuse a good manifest this long
-BACKOFF = _int_env("PROBE_VERSION_BACKOFF", 3600)   # min seconds between attempts after a failure
-TIMEOUT = _float_env("PROBE_VERSION_TIMEOUT", 3.0)
-DEFAULT_BASE = "https://api.research.prbe.ai"
 # The CLI release that introduced `probe update`. The nudge points at that one
 # command only for CLIs >= this; older ones get the raw commands (which get them
 # to a version that has it). CI keeps this == the released version (see release.yml).
@@ -109,79 +100,12 @@ def _remote_gt_local(local: str, remote: str) -> bool:
         return rp > lp
 
 
-def _valid_base(b: object) -> str | None:
-    """Accept only an http(s) origin; reject file://, ftp://, etc."""
-    if isinstance(b, str) and (b.startswith("https://") or b.startswith("http://")):
-        return b.rstrip("/")
-    return None
-
-
-def _base_url() -> str:
-    b = _valid_base(os.environ.get("PROBE_BASE_URL"))
-    if b:
-        return b
-    cfg = os.environ.get("PROBE_CONFIG_PATH") or os.path.join(
-        os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
-        "probe", "config.json",
-    )
-    try:
-        with open(cfg) as f:
-            data = json.load(f)
-        ctxs = data.get("contexts")
-        if isinstance(ctxs, dict):  # v2 named contexts
-            active = ctxs.get(data.get("current_context") or "default") or {}
-            b = _valid_base(active.get("base_url"))
-        else:  # flat v1
-            b = _valid_base(data.get("base_url"))
-        if b:
-            return b
-    except Exception:
-        pass
-    return DEFAULT_BASE
-
-
-def _cache_path() -> str:
-    return os.environ.get("PROBE_VERSION_CACHE") or os.path.join(
-        os.environ.get("XDG_CACHE_HOME") or os.path.expanduser("~/.cache"),
-        "probe", "version-check.json",
-    )
-
-
-def _read_cache(path: str):
-    """Returns (manifest, fetched_at, ok). manifest is the last-good dict or None."""
-    try:
-        with open(path) as f:
-            data = json.load(f)
-        manifest = data.get("manifest")
-        if not isinstance(manifest, dict):
-            manifest = None
-        return manifest, float(data.get("fetched_at", 0)), bool(data.get("ok", False))
-    except Exception:
-        return None, 0.0, False
-
-
-def _write_cache(path: str, manifest, ok: bool) -> None:
-    try:
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            json.dump(
-                {"fetched_at": int(time.time()), "ok": ok, "manifest": manifest}, f
-            )
-        os.replace(tmp, path)
-    except Exception:
-        pass
-
-
-def _fetch(url: str) -> dict:
-    """GET the manifest; raise unless it is a JSON object (so a bad 200 is treated
-    as a failure and never cached as good)."""
-    req = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as r:  # noqa: S310 (http(s) only, see _valid_base)
-        data = json.loads(r.read().decode("utf-8"))
-    if not isinstance(data, dict):
-        raise ValueError("manifest is not a JSON object")
-    return data
+# _valid_base / _base_url / _cache_path / _read_cache / _write_cache / _fetch all
+# moved to version_policy, which the CLI shares. They are re-exported here under
+# their old private names so the rest of this file (and its tests) read the same.
+_valid_base = version_policy.valid_base
+_base_url = version_policy.base_url
+_fetch = version_policy.fetch
 
 
 def _local_cli(probe_bin: str):
@@ -220,14 +144,14 @@ def _local_plugin(plugin_json: str):
 
 
 def _autoupdate_settings() -> dict:
-    """Read the opt-in state written by `probe setup`. Fail-soft to OFF."""
-    base = os.environ.get("XDG_STATE_HOME")
-    root = pathlib.Path(base) if base else pathlib.Path.home() / ".local" / "state"
-    try:
-        data = json.loads((root / "probe" / "autoupdate.json").read_text())
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    """Read the opt-in state written by `probe setup`. Fail-soft to OFF.
+
+    This used to recompute the state path that autoupdate.py owns. It now shares
+    one definition -- the divergence that duplication invited would have stopped
+    auto-update here while `probe doctor`, reading the other path, went on
+    reporting it enabled with a months-old success.
+    """
+    return version_policy.read_state()
 
 
 def _spawn_autoupdate(probe_bin: str) -> None:
@@ -253,17 +177,30 @@ def _spawn_autoupdate(probe_bin: str) -> None:
 
 
 def main() -> None:
-    cache = _cache_path()
-    manifest, fetched_at, ok = _read_cache(cache)
-    age = time.time() - fetched_at
+    manifest, fetched_at, ok = version_policy.read_cache()
     # Reuse a good manifest for TTL; after a failure, wait BACKOFF before retrying.
-    if age >= (TTL if ok else BACKOFF):
-        try:
-            manifest = _fetch(_base_url() + "/v1/client-version")
-            _write_cache(cache, manifest, True)
-        except Exception:
-            # Keep the last-good manifest (if any); record the attempt for backoff.
-            _write_cache(cache, manifest, False)
+    #
+    # This hook is SYNCHRONOUS by contract and so it fetches INLINE, unlike the
+    # CLI, which hands the refresh to a detached process. Its systemMessage only
+    # reaches the session if it is in this process's stdout, so there is nothing
+    # to hand off to.
+    #
+    # The fetch goes through the module-level `_fetch` (which IS
+    # version_policy.fetch) rather than version_policy.refresh, so this file keeps
+    # one substitutable seam for its own tests. What matters for correctness is
+    # shared either way: the cache format, the TTL, and what `ok` means.
+    if not version_policy.cache_is_fresh(fetched_at, ok):
+        # Single-flight. If a CLI invocation is already refreshing, reuse what we
+        # have instead of making the identical request a second time.
+        if version_policy.claim_refresh():
+            try:
+                manifest = _fetch(_base_url() + version_policy.MANIFEST_PATH)
+                version_policy.write_cache(manifest, True)
+            except Exception:
+                # Keep the last-good manifest; record the attempt for backoff.
+                version_policy.write_cache(manifest, False)
+            finally:
+                version_policy.release_refresh()
 
     if not isinstance(manifest, dict):
         _emit({"continue": True})

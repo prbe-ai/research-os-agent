@@ -1110,6 +1110,15 @@ class Client:
         # created here but executed and finished from somewhere else (CLI
         # `run start`, the miles exporter) — because beating briefly and then
         # going silent gets a legitimately-running run reaped.
+        #
+        # `heartbeat` also decides which tier of the auto-update run lock applies,
+        # and it is exactly the right question: a run that lives and dies with
+        # this process can hold an flock the kernel releases on death, while a
+        # detached one has no process to hold anything and needs a renewable
+        # lease. This is the single construction boundary, so every path that
+        # opens a run — client.run(), probe.init(), a directly built handle —
+        # is covered by it.
+        run._hold_run_lock(process_bound=heartbeat)
         if heartbeat:
             run.start_heartbeat()
         return run
