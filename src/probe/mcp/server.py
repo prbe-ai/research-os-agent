@@ -515,7 +515,9 @@ def create_server(
             # intent, and honouring either would be the same silent drop.
             raise errors.ValidationError(
                 "`corpora` was renamed to `search_in` and is no longer accepted; "
-                "pass search_in=[...] instead. The accepted values are unchanged: "
+                "pass search_in=[...] instead. The VALUES changed too, so do not "
+                "translate mechanically: `assets` and `procedures` are both now "
+                "`files` (they always ran the same query). Accepted values: "
                 "experiments | files | documents | transcripts",
                 status=422,
             )

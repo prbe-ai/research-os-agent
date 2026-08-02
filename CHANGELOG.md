@@ -8,10 +8,11 @@
   `corpora` raises; it is not honoured and not aliased.
 
   The old name read as the plural of the backend's `corpus` field
-  (`POST /v1/search`), and it is not: two of the five values map identity
-  (`transcripts`, `experiments`) and three do not (`documents` fans out to
-  github + files, `assets` and `procedures` both collapse to files). Whichever
-  identity value you tried first confirmed the misreading.
+  (`POST /v1/search`), and it is not. Before this release, two of the five
+  values mapped identity (`transcripts`, `experiments`) and three did not
+  (`documents` fanned out to github + files; `assets` and `procedures` both
+  collapsed to files). Whichever identity value you tried first confirmed the
+  misreading. See the next entry for the value list as it stands now.
 
   `corpora` stays bound in the tool signature, marked `deprecated`, **purely to
   reject**. Deleting it would have been silent: FastMCP builds its argument

@@ -97,6 +97,24 @@ def test_the_old_name_is_rejected_at_the_boundary_not_silently_dropped() -> None
     assert svc.calls == []
 
 
+def test_the_rejection_names_the_value_change_not_just_the_parameter_change() -> None:
+    """The message must not invite a mechanical translation.
+
+    `corpora=["assets"]` -> `search_in=["assets"]` is the obvious rewrite, and it
+    is WRONG: `assets` was removed in the same release. That call is accepted,
+    lands in `unsupported_values`, falls to the experiments-only floor, and
+    returns plausible rows from the wrong corpus. An agent that reads `results`
+    without checking `completeness` never notices. The error text is the only
+    place that migration is explained, so it has to say the values moved too.
+    """
+    result = _call(_RecordingService(), {"query": "q", "corpora": ["assets"]})
+    text = _error_text(result)
+    assert "assets" in text and "procedures" in text, text
+    assert "files" in text, text
+    # And it must not claim the vocabulary survived the rename intact.
+    assert "unchanged" not in text.lower(), text
+
+
 def test_the_old_name_is_rejected_even_when_the_new_one_is_also_given() -> None:
     """A half-migrated caller naming BOTH vocabularies has not expressed one
     intent. Honouring either silently would reintroduce the very drop the guard
