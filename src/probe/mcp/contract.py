@@ -54,6 +54,23 @@ class EntityType(StrEnum):
     DOCUMENT = "document"  # a semantic hit whose ref is null
 
 
+class CollapseMode(StrEnum):
+    """``search_knowledge(collapse=...)`` — the result-dedupe vocabulary.
+
+    One member today, and deliberately its OWN type rather than a reuse of
+    ``EntityType.EXPERIMENT``: those strings coincide, but "dedupe by experiment"
+    and "this row IS an experiment" are different ideas, and typing the parameter
+    as EntityType would advertise `project`/`run`/`artifact` as collapse modes
+    that do not exist.
+
+    `null` (skip the dedupe) is expressed by the parameter being optional, not by
+    a member here -- an enum member spelled "none" would be a second way to say
+    the same thing.
+    """
+
+    EXPERIMENT = "experiment"
+
+
 class View(StrEnum):
     """``research_get(view=...)`` — the progressive-disclosure seam.
 

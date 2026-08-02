@@ -17,6 +17,7 @@ from .contract import (
     Capability,
     Channel,
     ChannelError,
+    CollapseMode,
     EntityType,
     EnvelopeState,
     MatchMode,
@@ -858,7 +859,10 @@ class ResearchReadService:
         is the internal API, so a Python caller passing `corpora=` gets a
         TypeError, which is already loud.
         """
-        if collapse is not None and collapse != EntityType.EXPERIMENT:
+        # The tool surface types this as CollapseMode so the vocabulary ships in
+        # the schema; this check is what protects DIRECT Python callers, for whom
+        # nothing validates. Both spellings compare equal -- StrEnum is a str.
+        if collapse is not None and collapse != CollapseMode.EXPERIMENT:
             raise errors.ValidationError(
                 f'unknown collapse value {collapse!r}: pass "experiment" or null',
                 status=422,

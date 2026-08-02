@@ -46,6 +46,7 @@ from ..sdk.client import Client
 from ..sdk.config import Settings, load_context, resolve
 from ..sdk.surface import Surface, tool_scope
 from ..sdk.transport import Transport
+from .contract import CollapseMode, ToolCorpus
 from .service import ResearchReadService
 from .source import ResearchOSSource
 
@@ -447,11 +448,17 @@ def create_server(
     @_tool
     def search_knowledge(
         query: str,
-        search_in: list[str] | None = None,
+        # Typed as the enums, not `str`, so the accepted vocabulary reaches the
+        # caller as SCHEMA (an `enum` in $defs) instead of only as prose in this
+        # docstring. A typo is then caught before the request leaves the client,
+        # and pydantic's rejection names every valid value for free. The service
+        # keeps taking plain strings and keeps its own graceful handling: it is
+        # callable directly from Python, where nothing validates for it.
+        search_in: list[ToolCorpus] | None = None,
         project_id: str | None = None,
         workspace_id: str | None = None,
         top_k: int = 8,
-        collapse: str | None = "experiment",
+        collapse: CollapseMode | None = CollapseMode.EXPERIMENT,
         verbose: bool = False,
         cursor: str | None = None,
         corpora: Annotated[

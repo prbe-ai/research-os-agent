@@ -88,3 +88,32 @@ def test_every_value_is_documented_at_all() -> None:
     documented = _documented_pairs(_tool_description())
     missing = set(_SEARCH_IN_TO_BACKEND) - set(documented)
     assert not missing, f"undocumented search_in values: {sorted(missing)}"
+
+
+# -- the enum, the mapping and the docstring are ONE vocabulary ----------------
+def test_every_enum_member_has_a_backend_mapping() -> None:
+    """Typing `search_in` as ToolCorpus makes the enum the ADVERTISED contract,
+    so a member with no mapping is worse than before: the schema now promises a
+    value that `_map_search_in` cannot resolve, and the caller lands in the
+    unsupported floor holding a value the tool told them was valid.
+    """
+    from probe.mcp.contract import ToolCorpus
+
+    unmapped = set(ToolCorpus) - set(_SEARCH_IN_TO_BACKEND)
+    assert not unmapped, f"advertised but unmapped search_in values: {sorted(unmapped)}"
+    stray = set(_SEARCH_IN_TO_BACKEND) - set(ToolCorpus)
+    assert not stray, f"mapped but not advertised: {sorted(stray)}"
+
+
+def test_the_schema_enum_matches_the_enum_it_is_generated_from() -> None:
+    """Pins the generated artifact, not just the source. FastMCP builds the
+    schema through functools.wraps on the _tool decorator; if that seam ever
+    stops carrying annotations the enum silently degrades to a bare string array
+    and every typo goes back to round-tripping."""
+    from probe.mcp.contract import CollapseMode, ToolCorpus
+
+    tools = anyio.run(create_server(object()).list_tools)
+    schema = next(t for t in tools if t.name == "search_knowledge").inputSchema
+    defs = schema.get("$defs", {})
+    assert defs.get("ToolCorpus", {}).get("enum") == [v.value for v in ToolCorpus]
+    assert defs.get("CollapseMode", {}).get("enum") == [v.value for v in CollapseMode]

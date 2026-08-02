@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Changed
+
+- `search_knowledge`'s `search_in` and `collapse` are now typed as enums, so
+  their vocabularies ship in the tool's JSON Schema (`$defs.ToolCorpus`,
+  `$defs.CollapseMode`) instead of existing only as prose in the description.
+
+  Callers get client-side validation and a rejection that names every accepted
+  value: `Input should be 'files', 'documents', 'transcripts' or 'experiments'`.
+  Previously a typo round-tripped to the server and came back as
+  `unsupported_values`, which named the bad value but never the valid set.
+
+  **Behaviour change:** one bad entry now rejects the whole list.
+  `search_in=["documents", "bogus"]` used to search `documents` and flag
+  `bogus`; it now fails. The rows that call used to return were for the value
+  the caller already got right, and the error hands a caller the correct
+  vocabulary for an immediate retry.
+
+  `ResearchReadService` still takes plain strings and keeps its graceful
+  unsupported-value handling — it is callable directly from Python, where
+  nothing validates on its behalf.
+
+## Unreleased
+
 ### Breaking
 
 - `search_knowledge`'s `corpora` parameter is now **`search_in`**. Passing
