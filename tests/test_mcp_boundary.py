@@ -158,3 +158,56 @@ def test_the_dead_parameter_is_advertised_as_deprecated() -> None:
     assert schema["properties"]["corpora"]["deprecated"] is True
     assert "search_in" in schema["properties"]["corpora"]["description"]
     assert "search_in" in schema["properties"]
+
+
+# -- strict parameter enums ----------------------------------------------------
+def test_an_unknown_search_in_value_is_rejected_with_the_valid_set_named() -> None:
+    """`search_in` is typed as ToolCorpus, so the vocabulary ships as a schema
+    enum and pydantic rejects anything else BEFORE the tool body runs.
+
+    The payoff is the message: it names the offending index, the bad value, and
+    every accepted value. `unsupported_values` could only ever report the first
+    two, and only after a network round trip.
+    """
+    svc = _RecordingService()
+    result = _call(svc, {"query": "q", "search_in": ["bogus"]})
+    text = _error_text(result)
+    for valid in ("files", "documents", "transcripts", "experiments"):
+        assert valid in text, text
+    assert "bogus" in text, text
+    assert svc.calls == []
+
+
+def test_one_bad_value_rejects_the_whole_search_in_list() -> None:
+    """The deliberate trade for strictness.
+
+    Before the enum, ["documents", "bogus"] searched documents and flagged bogus
+    in `unsupported_values`. Now the call fails outright. That is the accepted
+    cost: the rows it used to return were for the value the caller already got
+    right, and the rejection hands an LLM caller the correct vocabulary so the
+    retry succeeds on the next turn.
+    """
+    svc = _RecordingService()
+    result = _call(svc, {"query": "q", "search_in": ["documents", "bogus"]})
+    assert _error_text(result)
+    assert svc.calls == []
+
+
+def test_an_unknown_collapse_value_is_rejected_at_the_schema() -> None:
+    """Same treatment for `collapse`, which had the identical hole: a fixed
+    vocabulary enforced only by a hand-written check in service.py, invisible to
+    every caller reading the schema."""
+    svc = _RecordingService()
+    result = _call(svc, {"query": "q", "collapse": "run"})
+    assert "experiment" in _error_text(result)
+    assert svc.calls == []
+
+
+def test_the_documented_defaults_still_bind() -> None:
+    """Guards the guard: a typo in either annotation could make every ordinary
+    call fail, and the rejection tests above would still pass."""
+    svc = _RecordingService()
+    assert _call(svc, {"query": "q"}).get("isError") is not True
+    assert _call(svc, {"query": "q", "search_in": ["files"], "collapse": None}).get("isError") is not True
+    assert svc.calls[-1]["search_in"] == ["files"]
+    assert svc.calls[-1]["collapse"] is None
