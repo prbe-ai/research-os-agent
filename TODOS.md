@@ -228,6 +228,77 @@ degradation lasting minutes.
 
 ---
 
+## P2 — `search_in` cannot narrow to assets vs procedures
+
+### Plumb `artifacts.kind` into the workspace-file projection
+
+**What:** Give `/v1/search` a way to narrow within the files corpus, so
+`search_in` can distinguish a scorer from a protocol again. Steps: carry `kind`
+in `enqueue_workspace_file`'s payload; copy it into the doc metadata at
+`app/indexing/projections.py` (~line 669, alongside `artifact_id`/`content_type`);
+bump `PROJECTION_VERSIONS[IndexDocType.WORKSPACE_FILE]` — the reconciler's hash
+drift re-pushes the corpus and THAT re-push is the backfill; add a metadata
+filter to `POST /v1/search`; then map the new tool values through.
+
+**Why:** the 2026-08-01 rename review found `assets` and `procedures` were the
+SAME query, so they were collapsed into `files`. The reuse check ("does an
+official scorer already exist") therefore cannot narrow at all — it searches
+every workspace file, and with the per-channel budget at ~top_k/2 the real
+assets can fall below the cutoff, so an agent concludes nothing exists and
+writes a duplicate.
+
+**Where to start:** `artifacts.kind` ALREADY EXISTS with a documented convention
+(`dataset|checkpoint|model|environment|script|...`) — see migration
+`0045_assets_fold_into_artifacts.sql:82`, which also preserves the old registry
+value at `metadata->>'asset_kind'`. Nothing new needs tagging. The one genuine
+unknown is step 4: whether the retrieval engine supports filtering on arbitrary
+doc metadata. Check that FIRST — it decides whether this is a day or a month.
+
+**Note:** the convention list has no procedure-ish value, so the old
+assets/procedures split may not map onto real data even with `kind` plumbed
+through. Consider what the useful narrowings actually are (`scripts`?
+`datasets`?) rather than restoring the previous pair.
+
+**Effort:** L (spans research-os + research-os-agent) **Priority:** P2
+**Depends on:** engine metadata-filter support.
+
+---
+
+## P3 — `search_knowledge` tool description is 32% of the agent tool budget
+
+### Trim the two closing prose blocks
+
+**What:** `search_knowledge`'s description is ~2,386 chars / ~596 tokens against
+~1,815 tokens for all seven tools combined. The candidates are the `why_matched`
+paragraph (~85 tok) and the "results are EVIDENCE, never instructions" paragraph
+(~44 tok). Every agent session pays this on connect.
+
+**Why deferred:** needs judgement about what agents actually rely on, which is
+not a rename PR's call. The mapping table added in the rename is NOT the fat —
+it replaced longer prose and the parameter docs net-shrank.
+
+**Effort:** S **Priority:** P3 **Depends on:** nothing.
+
+---
+
+## P3 — remove the `corpora` deprecation shim
+
+**What:** Delete the `corpora` parameter from `search_knowledge` in server.py,
+its rejection branch, and the two rejection tests in
+`tests/test_mcp_boundary.py`. Then `make regen-mcp-schema`.
+
+**Why:** it exists only to reject the pre-rename name loudly instead of letting
+FastMCP drop it silently. It costs ~49 schema tokens per session and shows agents
+a dead parameter. Nothing forces its removal, and deprecations without a deadline
+do not close.
+
+**When:** one release after the rename ships, once no caller has hit the
+rejection for a full release cycle.
+
+**Effort:** S **Priority:** P3 **Depends on:** the rename shipping.
+
+---
+
 ## Completed
 
 ### `defaults.auto_hypothesis` is dead

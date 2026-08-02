@@ -20,10 +20,20 @@ class BackendCorpus(StrEnum):
 
 
 class ToolCorpus(StrEnum):
-    """research_search's `corpora` vocabulary (the agent-facing side)."""
+    """``search_knowledge``'s `search_in` vocabulary (the agent-facing side).
 
-    ASSETS = "assets"
-    PROCEDURES = "procedures"
+    NOT the backend's `corpus` values. Three of these coincide with a
+    BackendCorpus member and one (`documents`) does not -- see
+    ``_SEARCH_IN_TO_BACKEND`` in service.py. The parameter was called `corpora`
+    until it was renamed for exactly that reason: the plural read as `corpus` +
+    s, and the identity mappings confirmed the misreading on whichever value a
+    caller tried first."""
+
+    # One value, not the former assets/procedures pair: both mapped to the same
+    # backend corpus, so narrowing to one never excluded the other. The index has
+    # a single bucket for these (IndexDocType.WORKSPACE_FILE), so the split was a
+    # distinction the data model cannot make.
+    FILES = "files"
     DOCUMENTS = "documents"
     TRANSCRIPTS = "transcripts"
     EXPERIMENTS = "experiments"
@@ -137,7 +147,7 @@ class MissingMarker(StrEnum):
     # research_search
     EXACT_SEARCH = "exact_search"
     SEMANTIC_SEARCH = "semantic_search"
-    KB_CORPORA = "kb_corpora"
+    KB_VALUES = "kb_values"
     # The BACKEND trimmed the response onto its byte budget (dropped chunks or
     # whole results). Distinct from truncated_by_token_budget, which is this
     # tool's own row budget: one is the server shrinking the payload, the other

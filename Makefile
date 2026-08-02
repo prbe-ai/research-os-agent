@@ -1,4 +1,4 @@
-.PHONY: install test test-tap parity dump-openapi gen-models regen sync-plugin-skills sync-plugin-policy sync-plugin
+.PHONY: install test test-tap parity dump-openapi gen-models regen regen-mcp-schema sync-plugin-skills sync-plugin-policy sync-plugin
 
 install:
 	pip install -e ".[dev]"
@@ -34,6 +34,28 @@ gen-models:
 # it existed, a new backend route regenerated a model and nothing failed, so nobody
 # noticed the client had no way to call it.
 regen: dump-openapi gen-models parity
+
+# Re-capture the MCP tool-schema baseline that tests/test_mcp_threading.py pins.
+# Run this whenever a tool's SIGNATURE or DOCSTRING changes; never hand-edit the
+# fixture.
+#
+# PYTHONPATH is the whole point. `uv venv` fails in this repo's worktrees
+# (requires-python allows 3.11, but the harbor extra needs >=3.12), so worktree
+# work runs against the primary checkout's interpreter -- and a bare
+# `import probe.mcp.server` then resolves to the INSTALLED package, not your
+# edits. You would snapshot the OLD schema, the pin would compare old to old,
+# and the suite would go green while the shipped tool schema was never checked.
+# Forcing the source tree onto the front of sys.path is what makes that
+# impossible. Override PY= to point at a different interpreter.
+PY ?= python
+regen-mcp-schema:
+	@PYTHONPATH=$(CURDIR)/src $(PY) -c "import anyio, json, probe.mcp.server as m; \
+	  assert m.__file__.startswith('$(CURDIR)/src'), 'refusing to snapshot %s -- not this tree' % m.__file__; \
+	  t = anyio.run(m.create_server().list_tools); \
+	  open('tests/fixtures/mcp_tool_schemas.json','w').write(json.dumps( \
+	  sorted((x.model_dump(mode='json', exclude_none=True) for x in t), \
+	  key=lambda d: d['name']), indent=2, sort_keys=True) + chr(10))"
+	@echo "re-captured tests/fixtures/mcp_tool_schemas.json from $(CURDIR)/src"
 
 # Keep the plugin's skill copies in sync with the canonical top-level skills/.
 # Edit skills/, never the plugin copy. tests/test_skills_sync.py fails if they drift,

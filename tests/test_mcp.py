@@ -54,7 +54,7 @@ def test_context_and_search_use_current_api_fallback(client, app):
 
 
 # -- research_search over POST /v1/search (workspaces+kb fold-in) ------------
-def test_search_maps_corpora_and_merges_channels(client, app):
+def test_search_maps_search_in_and_merges_channels(client, app):
     app.search_response = _search_response(
         exact=[
             {
@@ -79,10 +79,10 @@ def test_search_maps_corpora_and_merges_channels(client, app):
     )
     service = ResearchReadService(ResearchOSSource(client))
     out = service.search_knowledge(
-        "adam sweep", corpora=["documents"], workspace_id="ws-1", collapse=None
+        "adam sweep", search_in=["documents"], workspace_id="ws-1", collapse=None
     )
 
-    # corpora vocabulary maps onto backend corpus values (documents -> github+files)
+    # search_in vocabulary maps onto backend corpus values (documents -> github+files)
     # and narrows to exactly what was named; the workspace lens rides along and the
     # limit budget is split per channel (limit=8 -> 4+4, no post-merge truncation).
     body = app.search_requests[-1]
@@ -121,58 +121,58 @@ def test_search_maps_corpora_and_merges_channels(client, app):
     assert "semantic_cursor" not in app.search_requests[-1]
 
 
-def test_search_transcripts_corpus_maps_to_backend(client, app):
+def test_search_transcripts_value_maps_to_backend(client, app):
     # transcripts is now a first-class backend corpus (POST /v1/search accepts and
     # defaults to it), so the tool maps it through instead of degrading it to an
-    # unsupported kb_corpora miss.
+    # unsupported kb_values miss.
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.search_knowledge("q", corpora=["transcripts", "assets"])
+    out = service.search_knowledge("q", search_in=["transcripts", "files"])
     assert app.search_requests[-1]["corpus"] == ["files", "transcripts"]
     assert out["completeness"] == {"state": "complete", "missing": []}
-    assert out["data"]["unsupported_corpora"] == []
+    assert out["data"]["unsupported_values"] == []
 
 
 def test_search_narrowing_does_not_drag_experiments_along(client, app):
-    """Naming corpora narrows to EXACTLY those.
+    """Naming search_in values narrows to EXACTLY those.
 
     Unioning experiments in unconditionally made a narrowed search unusable: the
     per-channel budget is ~top_k/2 and experiment projections outrank the
-    knowledge corpora, so `corpora=["transcripts"]` came back holding nothing but
+    knowledge corpora, so `search_in=["transcripts"]` came back holding nothing but
     experiments — the ingested Claude Code sessions were unreachable through the
     tool even though the backend indexed and returned them."""
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
 
-    service.search_knowledge("q", corpora=["transcripts"])
+    service.search_knowledge("q", search_in=["transcripts"])
     assert app.search_requests[-1]["corpus"] == ["transcripts"]
 
     # ...and a caller who wants both still says so.
-    service.search_knowledge("q", corpora=["experiments", "transcripts"])
+    service.search_knowledge("q", search_in=["experiments", "transcripts"])
     assert app.search_requests[-1]["corpus"] == ["experiments", "transcripts"]
 
     # An entirely unrecognized narrowing keeps the experiments-only floor rather
     # than falling through to an unfiltered tenant-wide search. The floor is only
     # honest if the envelope also says the narrowing was NOT honored — without the
-    # kb_corpora marker this answers a different question wearing a "complete" label.
-    out = service.search_knowledge("q", corpora=["nonsense"])
+    # kb_values marker this answers a different question wearing a "complete" label.
+    out = service.search_knowledge("q", search_in=["nonsense"])
     assert app.search_requests[-1]["corpus"] == ["experiments"]
-    assert out["data"]["unsupported_corpora"] == ["nonsense"]
-    assert out["completeness"] == {"state": "partial", "missing": ["kb_corpora"]}
+    assert out["data"]["unsupported_values"] == ["nonsense"]
+    assert out["completeness"] == {"state": "partial", "missing": ["kb_values"]}
 
 
-def test_one_unrecognized_corpus_does_not_widen_the_narrowing(client, app):
-    """A typo alongside a real corpus must not resurrect the experiments union.
+def test_one_unrecognized_value_does_not_widen_the_narrowing(client, app):
+    """A typo alongside a real value must not resurrect the experiments union.
 
     The floor is `if not backend`, NOT `if unsupported` — the difference is
-    invisible until a caller pairs a good corpus with a bad one, and getting it
+    invisible until a caller pairs a good value with a bad one, and getting it
     wrong silently restores the crowd-out bug for exactly that call."""
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.search_knowledge("q", corpora=["documents", "bogus"])
+    out = service.search_knowledge("q", search_in=["documents", "bogus"])
     assert app.search_requests[-1]["corpus"] == ["files", "github"]
-    assert out["data"]["unsupported_corpora"] == ["bogus"]
-    assert out["completeness"]["missing"] == ["kb_corpora"]
+    assert out["data"]["unsupported_values"] == ["bogus"]
+    assert out["completeness"]["missing"] == ["kb_values"]
 
 
 def test_search_falls_back_to_keyword_on_pre_search_backend(client, app):
@@ -186,11 +186,11 @@ def test_search_falls_back_to_keyword_on_pre_search_backend(client, app):
         name="eval-1",
     )
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.search_knowledge("DockQ paths", corpora=["documents"])
+    out = service.search_knowledge("DockQ paths", search_in=["documents"])
     assert app.search_requests, "should try POST /v1/search first"
     assert out["data"]["results"][0]["why_matched"]["mode"] == "keyword_fallback"
     assert out["completeness"]["state"] == "partial"
-    assert set(out["completeness"]["missing"]) == {"kb_corpora", "semantic_search"}
+    assert set(out["completeness"]["missing"]) == {"kb_values", "semantic_search"}
     assert out["capabilities"]["unified_search"] is False
     assert out["capabilities"]["semantic_search"] is False
     assert out["next_cursor"] is None  # the fallback cannot paginate
