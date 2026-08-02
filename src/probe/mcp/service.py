@@ -26,12 +26,22 @@ from .contract import (
 )
 from .source import ResearchOSSource
 
-# Tool corpora vocabulary -> backend /v1/search `corpus` values. Experiments are
-# one corpus among five, not an always-on floor: they are searched when the caller
-# names no corpora at all (no filter) or names them explicitly. Transcripts have a
-# backend corpus (POST /v1/search accepts and defaults to it), so the tool maps them
-# through instead of degrading them to an unsupported kb_corpora miss.
-_CORPORA_TO_BACKEND: dict[str, set[BackendCorpus]] = {
+# `search_in` vocabulary -> backend /v1/search `corpus` values. NOT a passthrough:
+# two entries are identity and three are not, which is the whole reason the tool
+# parameter is no longer called `corpora`. Experiments are one value among five,
+# not an always-on floor: they are searched when the caller names nothing at all
+# (no filter) or names them explicitly.
+#
+#   search_in      backend corpus        shape
+#   transcripts -> transcripts           identity
+#   experiments -> experiments           identity
+#   documents   -> github + files        fans out
+#   assets      -> files                 collapses
+#   procedures  -> files                 collapses
+#
+# The tool docstring in server.py carries this same table for callers, and
+# tests/test_mcp_schema_docs.py fails if the two disagree.
+_SEARCH_IN_TO_BACKEND: dict[str, set[BackendCorpus]] = {
     ToolCorpus.ASSETS: {BackendCorpus.FILES},
     ToolCorpus.PROCEDURES: {BackendCorpus.FILES},
     ToolCorpus.DOCUMENTS: {BackendCorpus.GITHUB, BackendCorpus.FILES},
@@ -39,9 +49,9 @@ _CORPORA_TO_BACKEND: dict[str, set[BackendCorpus]] = {
     ToolCorpus.EXPERIMENTS: {BackendCorpus.EXPERIMENTS},
 }
 
-# The knowledge-side tool corpora (every tool corpus except experiments). Drives the
-# kb_corpora missing-marker; carries no "always searched" implication for experiments.
-_KB_TOOL_CORPORA = {
+# The knowledge-side values (every one except experiments). Drives the kb_values
+# missing-marker; carries no "always searched" implication for experiments.
+_KB_TOOL_VALUES = {
     ToolCorpus.ASSETS,
     ToolCorpus.PROCEDURES,
     ToolCorpus.DOCUMENTS,
@@ -68,32 +78,32 @@ def _text(record: dict) -> str:
     return " ".join(str(value) for value in fields if value).lower()
 
 
-def _map_corpora(corpora: list[str] | None) -> tuple[list[str] | None, list[str]]:
-    """Translate the tool's corpora vocabulary into backend corpus values.
+def _map_search_in(search_in: list[str] | None) -> tuple[list[str] | None, list[str]]:
+    """Translate the tool's `search_in` vocabulary into backend corpus values.
 
-    Returns ``(backend_corpus_or_None, unsupported_corpora)``. No corpora means
+    Returns ``(backend_corpus_or_None, unsupported_values)``. Naming nothing means
     no filter (the backend searches every corpus).
 
-    Naming corpora NARROWS to exactly those. Experiments used to be unioned in
+    Naming values NARROWS to exactly those. Experiments used to be unioned in
     unconditionally, which made a narrowed search unusable in practice: the
     per-channel budget is roughly half of `top_k`, experiment projections
-    outrank the knowledge corpora on most queries, and so `corpora=["transcripts"]`
+    outrank the knowledge corpora on most queries, and so `["transcripts"]`
     came back holding nothing but experiments. Ask for experiments alongside by
     naming them (`["experiments", "transcripts"]`)."""
-    if not corpora:
+    if not search_in:
         return None, []
     backend: set[str] = set()
     unsupported: list[str] = []
-    for corpus in corpora:
-        mapped = _CORPORA_TO_BACKEND.get(corpus)
+    for value in search_in:
+        mapped = _SEARCH_IN_TO_BACKEND.get(value)
         if mapped is None:
-            unsupported.append(corpus)
+            unsupported.append(value)
         else:
             backend.update(mapped)
     if not backend:
-        # Every named corpus was unrecognized. Falling through with an empty
+        # Every named value was unrecognized. Falling through with an empty
         # filter would search EVERYTHING and read as success; keep the old
-        # experiments-only floor and let `unsupported_corpora` carry the miss.
+        # experiments-only floor and let `unsupported_values` carry the miss.
         backend = {BackendCorpus.EXPERIMENTS}
     return sorted(backend), sorted(set(unsupported))
 
@@ -222,7 +232,7 @@ def _collapse_experiments(results: list[dict]) -> list[dict]:
 
     Everything else — document/file/project/asset hits — passes through too.
     Collapse DEDUPES; it does not filter. Dropping the non-experiment rows made
-    every knowledge corpus unreachable through the default call: `corpora` maps
+    every knowledge corpus unreachable through the default call: `search_in` maps
     transcripts/documents/assets straight into the backend query, the backend
     returns them, and then this discarded all of them before the caller ever saw
     one. A search that silently answers a different question than it was asked is
@@ -822,7 +832,7 @@ class ResearchReadService:
     def search_knowledge(
         self,
         query: str,
-        corpora: list[str] | None = None,
+        search_in: list[str] | None = None,
         project_id: str | None = None,
         workspace_id: str | None = None,
         top_k: int = 8,
@@ -841,13 +851,18 @@ class ResearchReadService:
         accepted exactly one documented key while looking like it accepted many,
         and a per-key cost (project scope used to disable semantic retrieval)
         cannot be documented on a `dict[str, Any]`.
+
+        `search_in` was called `corpora` until the rename. That old name is a
+        TOOL-SURFACE concern and its rejection lives in server.py, not here: this
+        is the internal API, so a Python caller passing `corpora=` gets a
+        TypeError, which is already loud.
         """
         if collapse is not None and collapse != EntityType.EXPERIMENT:
             raise errors.ValidationError(
                 f'unknown collapse value {collapse!r}: pass "experiment" or null',
                 status=422,
             )
-        corpus, unsupported = _map_corpora(corpora)
+        corpus, unsupported = _map_search_in(search_in)
         exact_cursor, semantic_cursor = _split_cursor(cursor)
         # Split the budget per channel with NO post-merge truncation: every row
         # the backend hands us is emitted, so the per-channel cursors we return
@@ -877,7 +892,7 @@ class ResearchReadService:
                     status=422,
                 ) from None
             return self._keyword_search(
-                query, corpora, project_id, collapse, top_k, verbose=verbose
+                query, search_in, project_id, collapse, top_k, verbose=verbose
             )
 
         exact = _section(response, Channel.EXACT)
@@ -926,7 +941,7 @@ class ResearchReadService:
         if semantic["error"]:
             missing.append(MissingMarker.SEMANTIC_SEARCH)
         if unsupported:
-            missing.append(MissingMarker.KB_CORPORA)
+            missing.append(MissingMarker.KB_VALUES)
         if isinstance(response, dict) and response.get("truncated"):
             # The backend trimmed the response onto its size budget, so an
             # absent document is NOT evidence of absence. Surfacing this is the
@@ -953,7 +968,7 @@ class ResearchReadService:
                 # None on backends that do not report it.
                 "total_candidates": semantic.get("total_candidates"),
                 "active_runs_count": exact.get("active_runs_count"),
-                "unsupported_corpora": unsupported,
+                "unsupported_values": unsupported,
             },
             state=(
                 EnvelopeState.COMPLETE
@@ -968,7 +983,7 @@ class ResearchReadService:
     def _keyword_search(
         self,
         query: str,
-        corpora: list[str] | None,
+        search_in: list[str] | None,
         project_id: str | None,
         collapse: str | None,
         top_k: int,
@@ -980,11 +995,11 @@ class ResearchReadService:
         a packed /v1/search cursor here would make cursor-following consumers
         loop forever on version skew.
 
-        It also cannot honor `corpora` narrowing: there is nothing here but
+        It also cannot honor `search_in` narrowing: there is nothing here but
         experiment cards, so a caller who narrowed AWAY from experiments still
         gets experiment rows. That is the one place the tool's "narrowing" wording
         does not hold, which is exactly why any knowledge corpus on this path
-        raises the kb_corpora marker — the envelope says `partial` rather than
+        raises the kb_values marker — the envelope says `partial` rather than
         letting the rows pass as a complete answer to a question they do not
         answer. Backends this old predate the hosted service; the marker is the
         contract here, not silence."""
@@ -1014,8 +1029,8 @@ class ResearchReadService:
         missing = []
         if not self.source.capabilities()[Capability.SEMANTIC_SEARCH]:
             missing.append(MissingMarker.SEMANTIC_SEARCH)
-        if corpora and any(c in _KB_TOOL_CORPORA for c in corpora):
-            missing.append(MissingMarker.KB_CORPORA)
+        if search_in and any(v in _KB_TOOL_VALUES for v in search_in):
+            missing.append(MissingMarker.KB_VALUES)
         return self._envelope(
             {"query": query, "collapse": collapse, "results": results[:top_k]},
             state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
