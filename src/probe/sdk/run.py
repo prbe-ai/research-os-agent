@@ -251,11 +251,56 @@ class Run:
         self._hb_stop: threading.Event | None = None
         self._hb_thread: threading.Thread | None = None
         self._hb_finalizer: weakref.finalize | None = None
+        # Auto-update run lock. Held for the life of a process-bound run so an
+        # upgrade cannot replace the installed tree mid-experiment; see
+        # probe.cli.run_lock. None for detached runs, which use a lease instead.
+        self._run_lock = None
+        self._run_lock_leased = False
         # Auto-step counters, per metric kind. Guarded because logging from
         # several threads is ordinary (a sampler beside a training loop), and two
         # threads reading the same counter would put two points on one step.
         self._steps: dict[str, int] = {}
         self._steps_lock = threading.Lock()
+
+    def _hold_run_lock(self, *, process_bound: bool) -> None:
+        """Claim this box against an auto-update while the run is open.
+
+        Two tiers, and which one applies is decided by whether a process of ours
+        outlives this call. A process-bound run takes an flock the kernel
+        releases on death -- including SIGKILL and OOM-kill -- so a crashed run
+        can never wedge auto-update. A detached run has nothing alive to hold
+        anything, so it gets a lease that its own subsequent writes renew.
+
+        Never raises and never blocks. Failing to take the lock leaves the run
+        unprotected, which is bad; failing to START the run because the lock
+        could not be taken would be worse.
+        """
+        try:
+            from probe.cli import run_lock
+        except Exception:  # noqa: BLE001 -- SDK must not hard-depend on the CLI package
+            return
+        try:
+            if process_bound:
+                self._run_lock = run_lock.acquire(self.id)
+            else:
+                run_lock.touch_lease(self.id)
+                self._run_lock_leased = True
+        except Exception:  # noqa: BLE001 -- see docstring
+            pass
+
+    def _release_run_lock(self) -> None:
+        """Drop the claim. Idempotent, never raises."""
+        try:
+            if self._run_lock is not None:
+                self._run_lock.release()
+                self._run_lock = None
+            if self._run_lock_leased:
+                from probe.cli import run_lock
+
+                run_lock.clear_lease(self.id)
+                self._run_lock_leased = False
+        except Exception:  # noqa: BLE001
+            pass
 
     def _next_step(self, kind: str) -> int:
         with self._steps_lock:
@@ -1038,12 +1083,25 @@ class Run:
             if op.get("run_ref") == self.id
         ]
         if blocked:
+            # Deliberately BEFORE the raise is not where the lock is released:
+            # a run that refuses to close is still open, and still has to keep
+            # the box claimed against an upgrade.
             raise errors.RosError(
                 f"run {self.id} not closed: {len(blocked)} outbox op(s) are "
                 "undelivered or dead-lettered — see `probe outbox status`, "
                 "fix or `probe outbox retry`, then finish again"
             )
-        return self.set_status(status, ended_at=_now(), summary=summary)
+        result = self.set_status(status, ended_at=_now(), summary=summary)
+        # ONLY on success, and deliberately not in a `finally`.
+        #
+        # If set_status raised, the run is not closed: the caller may catch the
+        # error and keep training, and releasing here would hand auto-update a
+        # green light over a live process. Holding costs nothing -- an flock is
+        # bound to this process and the kernel frees it at exit regardless, so
+        # the failure mode of keeping it is "protected slightly too long", while
+        # the failure mode of dropping it is an upgrade landing mid-run.
+        self._release_run_lock()
+        return result
 
     def execute(
         self,

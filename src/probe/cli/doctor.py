@@ -88,6 +88,17 @@ def render(caps: Capabilities) -> str:
     lines.append(
         _row("Last attempt", caps.last_update_attempt or "never run on this device")
     )
+    # A SEPARATE line, never folded into the one above. Once the run lock exists,
+    # a box that has been training all week is deliberately not updating -- and
+    # with only a last-attempt timestamp that is byte-identical to an auto-updater
+    # that died. This is the line that tells them apart.
+    if caps.last_update_skip:
+        lines.append(_row("Deferred", caps.last_update_skip))
+    if caps.live_runs:
+        shown = ", ".join(caps.live_runs[:3])
+        if len(caps.live_runs) > 3:
+            shown += f", +{len(caps.live_runs) - 3} more"
+        lines.append(_row("Runs in flight", shown))
 
     lines.append("")
     lines.append("Outbox")
@@ -182,9 +193,24 @@ def collect() -> Capabilities:
             if settings_autoupdate.last_attempt
             else None
         ),
+        last_update_skip=(
+            settings_autoupdate.last_skip.describe()
+            if settings_autoupdate.last_skip
+            else None
+        ),
+        live_runs=_live_runs(),
         outbox_status=_outbox_status(),
         warnings=warnings,
     )
+
+
+def _live_runs() -> list[str]:
+    try:
+        from probe.cli import run_lock
+
+        return run_lock.live_runs()
+    except Exception:  # noqa: BLE001 - a diagnostic must never crash
+        return []
 
 
 def _outbox_status() -> dict | None:

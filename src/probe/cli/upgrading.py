@@ -13,6 +13,7 @@ machine whose plugin has not been refreshed yet.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 
@@ -27,15 +28,62 @@ class UpdateOutcome:
     restart_needed: bool
 
 
-def perform_update(*, base_url: str, include_plugin: bool = True) -> UpdateOutcome:
+def perform_update(
+    *, base_url: str, include_plugin: bool = True, force: bool = False
+) -> UpdateOutcome:
     """Upgrade the CLI and (optionally) the plugins, and record the attempt.
 
     There is no confirmation hook. Both callers -- the wizard's Update action
     and the plugin's SessionStart hook -- have already been told to update by
     the time they get here, and the one that has a terminal must not stop to
     ask a second time.
+
+    ``force`` skips the run-lock check. Reserved for a human who has explicitly
+    asked to upgrade now and can see what is running; nothing automatic sets it.
     """
     lines: list[str] = []
+
+    # WAIT FOR THE PROCESS THAT SPAWNED US, if it named itself.
+    #
+    # Only the detached auto-update path sets this; the wizard's interactive
+    # Update action has no parent to outlive and skips the wait. Replacing the
+    # installed tree while the triggering command is still lazily importing from
+    # it is how you get a ModuleNotFoundError out of a command that has worked
+    # for a year (see autoupdate.wait_for_pid_exit).
+    parent = os.environ.get(autoupdate.WAIT_FOR_PID_ENV)
+    if parent:
+        try:
+            autoupdate.wait_for_pid_exit(int(parent))
+        except (TypeError, ValueError):
+            pass
+
+    # THE RUN-LOCK CHECK IS UNCONDITIONAL, and deliberately outside the block
+    # above. It used to sit inside it, which meant it only ran for spawns that
+    # named a parent -- and the plugin's SessionStart hook does not: it runs
+    # `probe wizard --action update --yes`, which lands here with no parent pid
+    # and would have upgraded straight through a live training run. The hook is
+    # the OLDEST caller of this function, so scoping the check to the new one
+    # protected everything except the path that already existed.
+    #
+    # For the spawned path this is also a RE-check: the gate that allowed the
+    # spawn ran before the wait, and a run started during it must not be
+    # upgraded into by a decision made minutes earlier.
+    if not force:
+        try:
+            from probe.cli import run_lock
+
+            if run_lock.any_live():
+                autoupdate.record_skip(autoupdate.SKIP_RUN_IN_FLIGHT)
+                return UpdateOutcome(
+                    lines=[
+                        "a run is in flight on this machine; upgrade deferred "
+                        "(`probe doctor` shows what is holding it)"
+                    ],
+                    ok=True,
+                    restart_needed=False,
+                )
+        except Exception:  # noqa: BLE001 -- an unreadable lock must not strand the upgrade
+            pass
 
     # A failed manifest fetch must never block the upgrade -- being unable to
     # ask "what is latest" is not a reason to refuse to move.

@@ -10,6 +10,7 @@ This test fails CI on that drift — the load-bearing half of the version-gate.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from pathlib import Path
 
 import probe
@@ -24,7 +25,20 @@ def _load_hook():
     spec = importlib.util.spec_from_file_location("_version_check_under_test", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    # The hook's own directory has to be importable, because that is the only
+    # thing that makes `import version_policy` resolve at runtime: session-start.sh
+    # runs `python3 <plugin_root>/hooks/version_check.py`, which puts that
+    # directory at sys.path[0]. Loading the file by path alone does not, so
+    # without this the test is checking a configuration that never ships.
+    hooks_dir = str(path.parent)
+    added = hooks_dir not in sys.path
+    if added:
+        sys.path.insert(0, hooks_dir)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if added:
+            sys.path.remove(hooks_dir)
     return module
 
 

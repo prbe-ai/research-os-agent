@@ -18,6 +18,7 @@ import hashlib
 import json
 import os
 import shlex
+import subprocess
 import sys
 from dataclasses import dataclass
 from enum import Enum
@@ -212,6 +213,207 @@ def _kick_drainer() -> None:
         pass
 
 
+# Commands that must never trigger an upgrade, whatever the terminal looks like.
+#
+# These are the run-scoped writes a training loop makes. The TTY test alone does
+# not cover them: `python train.py` started from a terminal passes its TTY down to
+# every child, so `probe log` inside an interactive training run IS a TTY -- the
+# check says "a human is present" in precisely the case where the hazard is worst.
+#
+# `exec` is here for the opposite reason: it does not run INSIDE a training loop,
+# it OWNS one. It holds a run-lock flock for the wrapped process's whole life
+# (see the exec command), so it is both barred from triggering and protected from
+# being triggered on.
+#
+# Group name, not full path: Typer dispatches `probe run start` through the `run`
+# group, and every subcommand under these groups is run-scoped.
+_UPDATE_HOT_PATH_COMMANDS = frozenset(
+    {"log", "span", "note", "artifact", "run", "exec", "outbox"}
+)
+
+
+#: Root options that consume the NEXT argv token as their value. Skipping the
+#: flag but not its value is how `probe --base-url URL log` resolves to "URL" --
+#: which is not in the denylist, so `log` would sail through the gate it exists
+#: to stop. Flags (--async, --version) take no value and must NOT be listed.
+_ROOT_OPTIONS_WITH_VALUES = frozenset({"--base-url", "--spool-dir"})
+
+
+def _invoked_command() -> str | None:
+    """The top-level command name from argv, or None.
+
+    Read from argv rather than a Typer context because the root callback runs
+    before dispatch -- there is no command context yet.
+
+    Conservative by construction: an unrecognized `--opt value` form returns the
+    value, which is not a known command, so the denylist does not match and the
+    gate falls through to the RUN LOCK. Getting this wrong costs a redundant
+    lock scan, never an upgrade into a live run.
+    """
+    import sys as _sys
+
+    skip_next = False
+    for token in _sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if token.startswith("--") and "=" in token:
+            continue  # --base-url=URL carries its own value
+        if token in _ROOT_OPTIONS_WITH_VALUES:
+            skip_next = True
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
+
+def _version_notice() -> None:
+    """The every-command version check: nudge from cache, refresh in background.
+
+    Same contract as _outbox_notice below -- cheap reads, no network, never
+    raises -- because it runs before every command including `probe log` inside
+    training loops.
+
+    THE GATE ORDER IS LOAD-BEARING, cheapest and most-likely-to-exit first:
+
+        enabled?          one small read; defaults False, so an install that
+                          never opted in touches exactly one file and stops
+        cache fresh?      one ~150-byte read; this is where ~99.9% of calls
+                          exit, which is what makes the trigger free in a loop
+        (spawn refresher) detached; this process NEVER fetches inline. A 3s
+                          timeout on the hot path would put a periodic stall
+                          inside training loops, attributed to anything but us
+        update available? pure comparison, no I/O
+        TTY?              cheap, and wrong on its own -- see the denylist above
+        denylisted?       frozenset membership
+        run in flight?    LAST, because it is the only O(N) check: it scans a
+                          directory and probes locks. Never reached unless an
+                          upgrade would otherwise be applied right now
+
+    A skip at any of the last three is RECORDED, so `probe doctor` can tell a box
+    that is correctly deferring from an auto-updater that has silently died.
+    """
+    try:
+        from probe import version_policy
+
+        if not version_policy.autoupdate_enabled():
+            return
+
+        manifest, fetched_at, ok = version_policy.read_cache()
+        if not version_policy.cache_is_fresh(fetched_at, ok):
+            _spawn_version_refresh()
+
+        if not isinstance(manifest, dict):
+            return  # cold cache: nothing to compare against until the refresh lands
+
+        from . import updater
+
+        latest = updater.cli_update_available(manifest, __version__)
+        if not latest:
+            return
+
+        from . import autoupdate
+
+        typer.echo(
+            f"probe {__version__} -> {latest} available (`probe wizard --action update`)",
+            err=True,
+        )
+
+        if not sys.stdout.isatty():
+            autoupdate.record_skip(autoupdate.SKIP_NOT_A_TTY, available=latest)
+            return
+        if _invoked_command() in _UPDATE_HOT_PATH_COMMANDS:
+            autoupdate.record_skip(autoupdate.SKIP_HOT_PATH_COMMAND, available=latest)
+            return
+
+        from . import run_lock
+
+        if run_lock.any_live():
+            autoupdate.record_skip(autoupdate.SKIP_RUN_IN_FLIGHT, available=latest)
+            return
+
+        _spawn_autoupdate()
+    except Exception:  # noqa: BLE001 -- a version check must never break a command
+        pass
+
+
+def _spawn_detached(argv: list[str], env: dict[str, str]) -> None:
+    """Launch `argv` fully detached, leaving NO child of ours behind.
+
+    `start_new_session=True` detaches the session but does NOT reparent: the
+    process stays our child, so if we never wait for it, its exit status sits in
+    the table as a zombie until we exit. That is invisible for `probe ls` and
+    real for `probe exec`, which can own a training process for hours.
+
+    So the target daemonizes -- it forks and its first stage exits immediately
+    (see version_refresh.main) -- and we reap that first stage right here. The
+    real work is carried by the grandchild, which init adopts.
+    """
+    child = subprocess.Popen(  # noqa: S603 -- our own interpreter, our own module
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+        env=env,
+    )
+    try:
+        # The first stage forks and exits at once, so this returns immediately.
+        # The timeout is a backstop, not a wait: if the fork ever fails and the
+        # process runs its work inline, we abandon it rather than block a command.
+        child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
+def _spawn_version_refresh() -> None:
+    """Refresh the manifest in a DETACHED child; never fetch inline.
+
+    The invoking process must not make a network call. `PROBE_VERSION_TIMEOUT` is
+    3s, so an inline fetch means one `probe log` in every TTL blocking for up to
+    three seconds inside somebody's training loop -- a periodic step-time spike
+    that correlates with nothing in their code. This repo has been here before:
+    every run-anchored CLI write used to make a network call before the write,
+    and it had to be removed.
+
+    The cost is that this invocation compares against the OLD manifest and the
+    nudge lands on the NEXT one. That is how update-notifier behaves, for the
+    same reason.
+    """
+    from probe import version_policy
+
+    if not version_policy.claim_refresh():
+        return  # somebody is already fetching; a burst of 8 runs makes 1 request
+    env = dict(os.environ)
+    env[version_policy.REFRESH_OWNER_ENV] = str(os.getpid())
+    try:
+        _spawn_detached([sys.executable, "-m", "probe.cli.version_refresh"], env)
+    except Exception:  # noqa: BLE001
+        version_policy.release_refresh()
+
+
+def _spawn_autoupdate() -> None:
+    """Apply the upgrade in a DETACHED child that waits for US to exit first.
+
+    The wait is the whole point. This runs in the root callback, BEFORE Typer
+    dispatches, and the CLI imports lazily throughout -- so without it the child
+    would be replacing the installed tree while this very command is still
+    importing from it.
+    """
+    from . import autoupdate
+
+    env = dict(os.environ)
+    env[autoupdate.WAIT_FOR_PID_ENV] = str(os.getpid())
+    try:
+        _spawn_detached(
+            [sys.executable, "-m", "probe.cli.version_refresh", "--apply"], env
+        )
+    except Exception:  # noqa: BLE001 -- fail-open: never block the command
+        pass
+
+
 def _outbox_notice() -> None:
     """The every-command outbox banner (2B) + drainer re-kick (3A).
 
@@ -249,6 +451,21 @@ def _outbox_notice() -> None:
 def _run_handle(client: Client, run_id: str):
     from ..sdk.run import Run
 
+    # Every run-scoped CLI write funnels through here, which makes it the one
+    # place a detached run's auto-update lease can be renewed without anyone
+    # having to remember to. A bare `probe run start` ... `probe run end`
+    # bracket has no process of ours alive in between, so its claim on the box
+    # is a lease -- and this is the traffic that keeps it alive.
+    #
+    # No-ops for a run holding an flock (SDK, `probe exec`) and skips the write
+    # until the lease is half spent, so `probe log` in a training loop does not
+    # pay for it. See run_lock.renew_lease_if_stale.
+    try:
+        from . import run_lock
+
+        run_lock.renew_lease_if_stale(run_id)
+    except Exception:  # noqa: BLE001 -- a lock refresh must never break a write
+        pass
     return Run(client, client.get_run(run_id))
 
 
@@ -358,6 +575,12 @@ def _root(
         "on",
     }
     _outbox_notice()
+    # The CLI's own auto-update trigger. Before this existed, auto-update fired
+    # from exactly one place -- the Claude Code plugin's SessionStart hook -- so a
+    # user who never started a session never updated, and a headless box never
+    # updated at all. Both of these are read-only-and-spawn on the fast path; see
+    # _version_notice for why its gate order is what it is.
+    _version_notice()
 
 
 # -- auth -------------------------------------------------------------------
@@ -1732,6 +1955,16 @@ def run_end(
         # command (red team: 'unrelated runs never block it' held for
         # correctness but not for time).
         _run_handle(c, run).set_status(status.value, ended_at=_now_iso())
+    # The run is terminal, so release its claim on the box immediately rather
+    # than waiting out the lease. Done AFTER set_status and outside the client
+    # block: a lease that outlives its run only delays an upgrade, while one
+    # dropped before the run actually closed would let an upgrade land on it.
+    try:
+        from . import run_lock
+
+        run_lock.clear_lease(run)
+    except Exception:  # noqa: BLE001 -- an expiring lease is the backstop
+        pass
     print(f"{run} -> {status.value}")
 
 
@@ -1829,8 +2062,20 @@ def exec(
         argv = argv[1:]
     if not argv:
         raise typer.BadParameter("probe exec requires a command after --")
-    with _client() as c:
-        result = _run_handle(c, run).execute(argv, cwd=cwd)
+    # `exec` is the one CLI command that owns a long-running child for the whole
+    # life of a run, which makes it the flock tier rather than the lease tier:
+    # this process is alive throughout, so the kernel can release the claim if it
+    # dies. Without this, an upgrade triggered from any other shell would land in
+    # the middle of the very process this command exists to wrap.
+    from . import run_lock
+
+    claim = run_lock.acquire(run)
+    try:
+        with _client() as c:
+            result = _run_handle(c, run).execute(argv, cwd=cwd)
+    finally:
+        if claim is not None:
+            claim.release()
     raise typer.Exit(result.returncode)
 
 
