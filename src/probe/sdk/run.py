@@ -1087,15 +1087,17 @@ class Run:
                 "undelivered or dead-lettered — see `probe outbox status`, "
                 "fix or `probe outbox retry`, then finish again"
             )
-        try:
-            return self.set_status(status, ended_at=_now(), summary=summary)
-        finally:
-            # The run is terminal either way here: if set_status raised, the
-            # server may still have recorded it, and holding the lock forever on
-            # a run nobody will finish again is the failure mode this must not
-            # have. The kernel would free an flock at exit regardless; this just
-            # does not wait for that.
-            self._release_run_lock()
+        result = self.set_status(status, ended_at=_now(), summary=summary)
+        # ONLY on success, and deliberately not in a `finally`.
+        #
+        # If set_status raised, the run is not closed: the caller may catch the
+        # error and keep training, and releasing here would hand auto-update a
+        # green light over a live process. Holding costs nothing -- an flock is
+        # bound to this process and the kernel frees it at exit regardless, so
+        # the failure mode of keeping it is "protected slightly too long", while
+        # the failure mode of dropping it is an upgrade landing mid-run.
+        self._release_run_lock()
+        return result
 
     def execute(
         self,

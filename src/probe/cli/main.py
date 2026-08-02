@@ -232,16 +232,36 @@ _UPDATE_HOT_PATH_COMMANDS = frozenset(
 )
 
 
+#: Root options that consume the NEXT argv token as their value. Skipping the
+#: flag but not its value is how `probe --base-url URL log` resolves to "URL" --
+#: which is not in the denylist, so `log` would sail through the gate it exists
+#: to stop. Flags (--async, --version) take no value and must NOT be listed.
+_ROOT_OPTIONS_WITH_VALUES = frozenset({"--base-url", "--spool-dir"})
+
+
 def _invoked_command() -> str | None:
     """The top-level command name from argv, or None.
 
     Read from argv rather than a Typer context because the root callback runs
-    before dispatch -- there is no command context yet. Options are skipped so
-    `probe --base-url X log ...` still resolves to `log`.
+    before dispatch -- there is no command context yet.
+
+    Conservative by construction: an unrecognized `--opt value` form returns the
+    value, which is not a known command, so the denylist does not match and the
+    gate falls through to the RUN LOCK. Getting this wrong costs a redundant
+    lock scan, never an upgrade into a live run.
     """
     import sys as _sys
 
+    skip_next = False
     for token in _sys.argv[1:]:
+        if skip_next:
+            skip_next = False
+            continue
+        if token.startswith("--") and "=" in token:
+            continue  # --base-url=URL carries its own value
+        if token in _ROOT_OPTIONS_WITH_VALUES:
+            skip_next = True
+            continue
         if token.startswith("-"):
             continue
         return token
@@ -318,6 +338,36 @@ def _version_notice() -> None:
         pass
 
 
+def _spawn_detached(argv: list[str], env: dict[str, str]) -> None:
+    """Launch `argv` fully detached, leaving NO child of ours behind.
+
+    `start_new_session=True` detaches the session but does NOT reparent: the
+    process stays our child, so if we never wait for it, its exit status sits in
+    the table as a zombie until we exit. That is invisible for `probe ls` and
+    real for `probe exec`, which can own a training process for hours.
+
+    So the target daemonizes -- it forks and its first stage exits immediately
+    (see version_refresh.main) -- and we reap that first stage right here. The
+    real work is carried by the grandchild, which init adopts.
+    """
+    child = subprocess.Popen(  # noqa: S603 -- our own interpreter, our own module
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+        close_fds=True,
+        env=env,
+    )
+    try:
+        # The first stage forks and exits at once, so this returns immediately.
+        # The timeout is a backstop, not a wait: if the fork ever fails and the
+        # process runs its work inline, we abandon it rather than block a command.
+        child.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        pass
+
+
 def _spawn_version_refresh() -> None:
     """Refresh the manifest in a DETACHED child; never fetch inline.
 
@@ -336,15 +386,10 @@ def _spawn_version_refresh() -> None:
 
     if not version_policy.claim_refresh():
         return  # somebody is already fetching; a burst of 8 runs makes 1 request
+    env = dict(os.environ)
+    env[version_policy.REFRESH_OWNER_ENV] = str(os.getpid())
     try:
-        subprocess.Popen(  # noqa: S603 -- our own interpreter, our own module
-            [sys.executable, "-m", "probe.cli.version_refresh"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,  # survives this command's exit
-            close_fds=True,
-        )
+        _spawn_detached([sys.executable, "-m", "probe.cli.version_refresh"], env)
     except Exception:  # noqa: BLE001
         version_policy.release_refresh()
 
@@ -362,14 +407,8 @@ def _spawn_autoupdate() -> None:
     env = dict(os.environ)
     env[autoupdate.WAIT_FOR_PID_ENV] = str(os.getpid())
     try:
-        subprocess.Popen(  # noqa: S603 -- resolved interpreter, no shell
-            [sys.executable, "-m", "probe.cli.version_refresh", "--apply"],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-            close_fds=True,
-            env=env,
+        _spawn_detached(
+            [sys.executable, "-m", "probe.cli.version_refresh", "--apply"], env
         )
     except Exception:  # noqa: BLE001 -- fail-open: never block the command
         pass

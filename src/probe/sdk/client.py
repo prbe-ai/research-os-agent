@@ -42,10 +42,31 @@ from . import errors
 from .config import Settings, resolve
 from .tags import canonical_tags
 from .hashing import fingerprint
-from .journal import Journal
+from .journal import Journal, run_ref_for_path
+
 from .surface import Surface
 from .transport import Page, Transport
 
+
+
+def _touch_run_lease(path: str) -> None:
+    """Renew the auto-update lease for whichever run this write targets.
+
+    Reuses ``run_ref_for_path`` -- the journal's own extractor -- rather than a
+    second parser, so the run a write is attributed to for lease purposes is by
+    construction the same one it is attributed to for barrier purposes.
+
+    Never raises: instrumentation must not be able to break the write it rides on.
+    """
+    try:
+        run_ref = run_ref_for_path(path)
+        if not run_ref:
+            return
+        from probe.cli import run_lock
+
+        run_lock.renew_lease_if_stale(run_ref)
+    except Exception:  # noqa: BLE001 -- see docstring
+        pass
 
 class Anchor(str, Enum):
     """What an artifact hangs off.
@@ -223,6 +244,14 @@ class Client:
         touching the network (the outbox drainer delivers it); otherwise it is
         attempted and journaled on failure unless ``strict`` (or ``fail_open``
         is off). Returns the parsed response, or None if it was journaled."""
+        # Renew a DETACHED run's auto-update lease off its own traffic. This is
+        # the single funnel every SDK write passes through, which is what makes
+        # the renewal complete rather than sprinkled: a detached run
+        # (heartbeat=False) has no process of ours to hold an flock, so without
+        # this its 30-minute lease expires under a longer job and an upgrade
+        # lands mid-run. No-ops for process-bound runs, which hold an flock and
+        # have no lease file, and skips the write until the lease is half spent.
+        _touch_run_lease(path)
         if self.async_writes:
             self.journal.append_http(method, path, body)
             return None

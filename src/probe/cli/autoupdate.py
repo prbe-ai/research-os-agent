@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import os
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from probe import version_policy
@@ -224,31 +225,68 @@ def _write(payload: dict) -> None:
     version_policy.atomic_write_json(state_path(), payload)
 
 
+@contextmanager
+def _state_write_lock():
+    """Serialize read-modify-write over the state file.
+
+    Atomic replacement makes each WRITE whole; it does nothing for the read that
+    preceded it. `save()`, `record_attempt()` and `record_skip()` each read the
+    file, change one key and write it all back, so without this an updater can
+    read `enabled=true`, race a `save(enabled=false)`, and write its attempt back
+    with the stale `true` -- silently undoing the user's opt-out.
+
+    Advisory and best-effort: if the lock cannot be taken the write still
+    happens, because losing a diagnostic is better than dropping one.
+    """
+    handle = None
+    try:
+        import fcntl
+
+        path = state_dir() / "state.lock"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = open(path, "a+")  # noqa: SIM115 -- released in the finally
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    except Exception:  # noqa: BLE001 -- no fcntl, or an unwritable dir
+        if handle is not None:
+            handle.close()
+            handle = None
+    try:
+        yield
+    finally:
+        if handle is not None:
+            try:
+                handle.close()  # releases the flock
+            except OSError:
+                pass
+
+
 def save(*, enabled: bool) -> Settings:
-    raw = _read()
-    raw["enabled"] = bool(enabled)
-    _write(raw)
+    with _state_write_lock():
+        raw = _read()
+        raw["enabled"] = bool(enabled)
+        _write(raw)
     return load()
 
 
 def record_attempt(attempt: Attempt) -> None:
     """Persist the outcome of one run. This is the ONLY way a detached upgrade
     can tell anyone what happened."""
-    raw = _read()
-    raw["last_attempt"] = {
-        "at": attempt.at,
-        "ok": attempt.ok,
-        "detail": attempt.detail,
-        "from_version": attempt.from_version,
-        "to_version": attempt.to_version,
-        "plugin_ok": attempt.plugin_ok,
-        "plugin_detail": attempt.plugin_detail,
-        "plugin_version": attempt.plugin_version,
-    }
-    # A real attempt CLEARS the skip record. Leaving a week-old "skipped, run in
-    # flight" beside a fresh success would read as though we were still blocked.
-    raw.pop("last_skip", None)
-    _write(raw)
+    with _state_write_lock():
+        raw = _read()
+        raw["last_attempt"] = {
+            "at": attempt.at,
+            "ok": attempt.ok,
+            "detail": attempt.detail,
+            "from_version": attempt.from_version,
+            "to_version": attempt.to_version,
+            "plugin_ok": attempt.plugin_ok,
+            "plugin_detail": attempt.plugin_detail,
+            "plugin_version": attempt.plugin_version,
+        }
+        # A real attempt CLEARS the skip record. Leaving a week-old "skipped, run
+        # in flight" beside a fresh success would read as though we were blocked.
+        raw.pop("last_skip", None)
+        _write(raw)
 
 
 def record_skip(reason: str, *, available: str | None = None, now: int | None = None) -> None:
@@ -264,21 +302,22 @@ def record_skip(reason: str, *, available: str | None = None, now: int | None = 
     """
     try:
         stamp = int(time.time()) if now is None else now
-        raw = _read()
-        previous = raw.get("last_skip")
-        count = 1
-        if isinstance(previous, dict) and previous.get("reason") == reason:
-            try:
-                count = int(previous.get("count", 1)) + 1
-            except (TypeError, ValueError):
-                count = 1
-        raw["last_skip"] = {
-            "at": stamp,
-            "reason": reason,
-            "count": count,
-            "available": available,
-        }
-        _write(raw)
+        with _state_write_lock():
+            raw = _read()
+            previous = raw.get("last_skip")
+            count = 1
+            if isinstance(previous, dict) and previous.get("reason") == reason:
+                try:
+                    count = int(previous.get("count", 1)) + 1
+                except (TypeError, ValueError):
+                    count = 1
+            raw["last_skip"] = {
+                "at": stamp,
+                "reason": reason,
+                "count": count,
+                "available": available,
+            }
+            _write(raw)
     except Exception:  # noqa: BLE001 -- see docstring
         pass
 

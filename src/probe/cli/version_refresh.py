@@ -17,7 +17,32 @@ the audit record in `autoupdate` is how a detached run reports what happened.
 
 from __future__ import annotations
 
+import os
 import sys
+
+
+def _daemonize() -> bool:
+    """Fork so the caller's direct child exits at once. True in the worker.
+
+    Without this the spawning CLI has to either wait for the whole refresh
+    (defeating the point) or leave a zombie until it exits -- which for
+    `probe exec` means the length of a training run. Forking here lets the CLI
+    reap the first stage immediately while init adopts the grandchild.
+
+    Returns False in the stage that should exit. Where fork is unavailable
+    (Windows), returns True and the work runs in this process: correct, just not
+    reaped as early.
+    """
+    try:
+        if os.fork() > 0:
+            os._exit(0)  # first stage: vanish so the parent's wait() returns
+    except (AttributeError, OSError):
+        return True  # no fork here; carry on inline
+    try:
+        os.setsid()
+    except (AttributeError, OSError):
+        pass
+    return True
 
 
 def _refresh() -> None:
@@ -25,15 +50,19 @@ def _refresh() -> None:
 
     The claim was taken by the SPAWNER, before this process existed -- otherwise
     eight concurrent invocations would each spawn a refresher and only then
-    discover they were racing. Releasing it here, in a finally, is what keeps
-    that handoff honest.
+    discover they were racing. It carries the spawner's pid, so releasing it
+    means releasing THAT claim, not whatever claim happens to be there now.
     """
     from probe import version_policy
 
+    owner = os.environ.get(version_policy.REFRESH_OWNER_ENV)
     try:
         version_policy.refresh()
     finally:
-        version_policy.release_refresh()
+        try:
+            version_policy.release_refresh(int(owner) if owner else None)
+        except (TypeError, ValueError):
+            version_policy.release_refresh()
 
 
 def _apply() -> None:
@@ -60,6 +89,11 @@ def _apply() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
+    # Detach FIRST, before any real work, so the spawning CLI's wait() returns
+    # in microseconds no matter how long the work takes. `--no-daemon` keeps the
+    # work in this process for tests, which need it synchronous to assert on.
+    if "--no-daemon" not in args:
+        _daemonize()
     try:
         if "--apply" in args:
             _apply()

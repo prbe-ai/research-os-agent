@@ -101,6 +101,10 @@ REFRESH_CLAIM_SECONDS = 30
 DEFAULT_BASE = "https://api.research.prbe.ai"
 MANIFEST_PATH = "/v1/client-version"
 
+#: The spawner's pid, handed to the detached refresher so it can release the
+#: single-flight claim that authorized it (see `release_refresh`).
+REFRESH_OWNER_ENV = "PROBE_VERSION_REFRESH_OWNER"
+
 STATE_DIRNAME = "probe"
 STATE_FILENAME = "autoupdate.json"
 LOCK_FILENAME = "autoupdate.lock"
@@ -332,8 +336,11 @@ def claim_refresh() -> bool:
     REFRESH_CLAIM_SECONDS is treated as abandoned so a killed refresher cannot
     suppress refreshes until the process table wraps.
 
-    Callers do NOT need to release: the claim ages out on its own, and it is
-    sized well under TTL so the next cycle is never blocked by a leaked one.
+    The claim records the OWNER's pid, and `release_refresh` only removes a claim
+    it still owns. Without that, two processes racing to reap one stale claim
+    could both proceed -- the loser unlinking the winner's fresh claim -- and
+    then either one's release would delete the other's, so a success and a
+    failure could interleave and leave a good cache marked failed.
     """
     path = refresh_lock_path()
     try:
@@ -357,11 +364,27 @@ def claim_refresh() -> bool:
     return True
 
 
-def release_refresh() -> None:
-    """Best-effort early release, so a fast refresh does not hold the claim for
-    the full REFRESH_CLAIM_SECONDS."""
+def release_refresh(owner: int | None = None) -> None:
+    """Release a claim owned by `owner` (default: this process). Never anyone else's.
+
+    Unconditional deletion here is what would let a process that lost a stale-
+    claim race delete the winner's live claim, admitting the second concurrent
+    fetch the claim exists to prevent.
+
+    `owner` exists because the claim is taken by the CLI and released by the
+    detached refresher it spawns -- two different pids for one claim. The spawner
+    passes its pid down (REFRESH_OWNER_ENV) so the child can release exactly the
+    claim that authorized it, and nothing else.
+    """
+    path = refresh_lock_path()
+    expected = str(os.getpid() if owner is None else owner)
     try:
-        refresh_lock_path().unlink(missing_ok=True)
+        if path.read_text().strip() != expected:
+            return  # not ours: a takeover happened, leave it alone
+    except (OSError, ValueError):
+        return
+    try:
+        path.unlink(missing_ok=True)
     except OSError:
         pass
 

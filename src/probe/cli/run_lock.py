@@ -80,6 +80,11 @@ LEASE_SECONDS = 1800
 #: user who knows their box is idle and wants the stuck lease gone now.
 OVERRIDE_ENV = "PROBE_ASSUME_NO_RUNS"
 
+#: Above this many entries, stop scanning and report live. Far more than any
+#: real concurrent-run count (a big sweep is tens), so crossing it means cleanup
+#: has failed -- and the every-command path must not pay for that.
+MAX_SCAN_ENTRIES = 512
+
 
 def runs_dir() -> Path:
     return version_policy.state_dir() / RUNS_DIRNAME
@@ -327,6 +332,13 @@ def any_live() -> bool:
         now = time.time()
         entries = sorted(directory.iterdir())
     except OSError:
+        return True
+    if len(entries) > MAX_SCAN_ENTRIES:
+        # This runs on the CLI's every-command path. A directory that has grown
+        # past any plausible number of concurrent runs means something is wrong
+        # with cleanup, and walking all of it would make an ordinary command
+        # slow in proportion to the mess. Refuse rather than scan: unknown reads
+        # as live, same as every other uncertainty here.
         return True
     for entry in entries:
         try:

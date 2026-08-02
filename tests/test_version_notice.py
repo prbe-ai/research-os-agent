@@ -375,3 +375,97 @@ def test_releasing_a_claim_lets_the_next_caller_through(isolate):
     assert version_policy.claim_refresh() is True
     version_policy.release_refresh()
     assert version_policy.claim_refresh() is True
+
+
+# ---------------------------------------------------------------------------
+# Regressions from the adversarial review of this change.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "argv, expected",
+    [
+        (["probe", "log"], "log"),
+        (["probe", "--base-url", "http://x", "log"], "log"),
+        (["probe", "--base-url=http://x", "log"], "log"),
+        (["probe", "--spool-dir", "/tmp/s", "exec"], "exec"),
+        (["probe", "--async", "log"], "log"),
+        (["probe", "ls"], "ls"),
+        (["probe"], None),
+    ],
+)
+def test_option_values_are_not_mistaken_for_the_command(argv, expected, monkeypatch):
+    """`probe --base-url URL log` used to resolve to the URL, so `log` missed the
+    denylist entirely — the gate opened for the exact command it exists to stop."""
+    monkeypatch.setattr(cli_main.sys, "argv", argv)
+    assert cli_main._invoked_command() == expected
+
+
+def test_the_hook_path_also_respects_the_run_lock(isolate, monkeypatch):
+    """The plugin's SessionStart hook runs `probe wizard --action update --yes`,
+    which reaches perform_update with NO parent pid. The run-lock check used to
+    live inside the wait-for-parent branch, so that path — the OLDEST caller —
+    upgraded straight through a live training run."""
+    from probe.cli import run_lock
+    from probe.cli.upgrading import perform_update
+
+    monkeypatch.delenv(autoupdate.WAIT_FOR_PID_ENV, raising=False)
+    lock = run_lock.acquire("training-run")
+    assert lock is not None
+    try:
+        outcome = perform_update(base_url="http://127.0.0.1:9")
+        assert outcome.restart_needed is False
+        assert any("deferred" in line for line in outcome.lines)
+        assert autoupdate.load().last_skip.reason == autoupdate.SKIP_RUN_IN_FLIGHT
+    finally:
+        lock.release()
+
+
+def test_release_refresh_never_removes_another_processes_claim(isolate):
+    """Two processes racing to reap one stale claim could both proceed, and
+    either one's release would then delete the other's live claim."""
+    assert version_policy.claim_refresh() is True
+    version_policy.refresh_lock_path().write_text("999999")  # somebody else owns it
+    version_policy.release_refresh()
+    assert version_policy.refresh_lock_path().exists(), "released a claim we did not own"
+
+
+def test_release_refresh_honours_an_explicit_owner(isolate):
+    """The claim is taken by the CLI and released by the refresher it spawns —
+    two pids, one claim."""
+    assert version_policy.claim_refresh() is True
+    owner = int(version_policy.refresh_lock_path().read_text())
+    version_policy.release_refresh(owner)
+    assert not version_policy.refresh_lock_path().exists()
+
+
+def test_a_huge_runs_directory_is_refused_rather_than_scanned(isolate):
+    """This runs before every command; walking an unbounded directory would make
+    an ordinary command slow in proportion to a cleanup failure."""
+    from probe.cli import run_lock
+
+    directory = run_lock.runs_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    for index in range(run_lock.MAX_SCAN_ENTRIES + 1):
+        (directory / f"junk-{index}{run_lock.LEASE_SUFFIX}").write_text("{}")
+    assert run_lock.any_live() is True
+
+
+def test_an_sdk_write_renews_a_detached_runs_lease(isolate):
+    """A detached run has no process to hold an flock, so its lease has to be
+    renewed by its own traffic or it expires under a job longer than 30 minutes."""
+    from probe.cli import run_lock
+    from probe.sdk.client import _touch_run_lease
+
+    run_lock.touch_lease("detached-run", seconds=10)  # nearly expired
+    lease = run_lock.runs_dir() / f"detached-run{run_lock.LEASE_SUFFIX}"
+    before = json.loads(lease.read_text())["expires_at"]
+    _touch_run_lease("/v1/runs/detached-run/metrics")
+    assert json.loads(lease.read_text())["expires_at"] > before
+
+
+def test_a_write_to_a_non_run_path_touches_nothing(isolate):
+    from probe.sdk.client import _touch_run_lease
+
+    _touch_run_lease("/v1/projects")  # must not raise, must not create anything
+    assert not (isolate / "state" / "probe" / "runs").exists()
