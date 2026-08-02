@@ -27,23 +27,25 @@ from .contract import (
 from .source import ResearchOSSource
 
 # `search_in` vocabulary -> backend /v1/search `corpus` values. NOT a passthrough:
-# two entries are identity and three are not, which is the whole reason the tool
-# parameter is no longer called `corpora`. Experiments are one value among five,
-# not an always-on floor: they are searched when the caller names nothing at all
-# (no filter) or names them explicitly.
+# three entries are identity and one is not, which is the whole reason the tool
+# parameter is no longer called `corpora` -- the identity majority is exactly what
+# made "this is just `corpus` pluralised" such an easy wrong conclusion.
+# Experiments are one value among four, not an always-on floor: they are searched
+# when the caller names nothing at all (no filter) or names them explicitly.
 #
 #   search_in      backend corpus        shape
 #   transcripts -> transcripts           identity
 #   experiments -> experiments           identity
-#   documents   -> github + files        fans out
-#   assets      -> files                 collapses
-#   procedures  -> files                 collapses
+#   files -> files                       identity
+#   documents -> github + files          fans out
+#
+# `documents` deliberately overlaps `files`: it is the broader ask (workspace
+# files PLUS indexed github docs), and `files` is the narrower one.
 #
 # The tool docstring in server.py carries this same table for callers, and
 # tests/test_mcp_schema_docs.py fails if the two disagree.
 _SEARCH_IN_TO_BACKEND: dict[str, set[BackendCorpus]] = {
-    ToolCorpus.ASSETS: {BackendCorpus.FILES},
-    ToolCorpus.PROCEDURES: {BackendCorpus.FILES},
+    ToolCorpus.FILES: {BackendCorpus.FILES},
     ToolCorpus.DOCUMENTS: {BackendCorpus.GITHUB, BackendCorpus.FILES},
     ToolCorpus.TRANSCRIPTS: {BackendCorpus.TRANSCRIPTS},
     ToolCorpus.EXPERIMENTS: {BackendCorpus.EXPERIMENTS},
@@ -52,8 +54,7 @@ _SEARCH_IN_TO_BACKEND: dict[str, set[BackendCorpus]] = {
 # The knowledge-side values (every one except experiments). Drives the kb_values
 # missing-marker; carries no "always searched" implication for experiments.
 _KB_TOOL_VALUES = {
-    ToolCorpus.ASSETS,
-    ToolCorpus.PROCEDURES,
+    ToolCorpus.FILES,
     ToolCorpus.DOCUMENTS,
     ToolCorpus.TRANSCRIPTS,
 }
@@ -233,7 +234,7 @@ def _collapse_experiments(results: list[dict]) -> list[dict]:
     Everything else — document/file/project/asset hits — passes through too.
     Collapse DEDUPES; it does not filter. Dropping the non-experiment rows made
     every knowledge corpus unreachable through the default call: `search_in` maps
-    transcripts/documents/assets straight into the backend query, the backend
+    transcripts/documents/files straight into the backend query, the backend
     returns them, and then this discarded all of them before the caller ever saw
     one. A search that silently answers a different question than it was asked is
     worse than one that errors."""

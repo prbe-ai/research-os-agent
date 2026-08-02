@@ -28,8 +28,11 @@ class ToolCorpus(StrEnum):
     the plural read as `corpus` + s, and the two identity mappings confirmed the
     misreading on whichever value a caller tried first."""
 
-    ASSETS = "assets"
-    PROCEDURES = "procedures"
+    # One value, not the former assets/procedures pair: both mapped to the same
+    # backend corpus, so narrowing to one never excluded the other. The index has
+    # a single bucket for these (IndexDocType.WORKSPACE_FILE), so the split was a
+    # distinction the data model cannot make.
+    FILES = "files"
     DOCUMENTS = "documents"
     TRANSCRIPTS = "transcripts"
     EXPERIMENTS = "experiments"

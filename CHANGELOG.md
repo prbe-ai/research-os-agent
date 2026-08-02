@@ -1,5 +1,40 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- `search_knowledge`'s `corpora` parameter is now **`search_in`**. Passing
+  `corpora` raises; it is not honoured and not aliased.
+
+  The old name read as the plural of the backend's `corpus` field
+  (`POST /v1/search`), and it is not: two of the five values map identity
+  (`transcripts`, `experiments`) and three do not (`documents` fans out to
+  github + files, `assets` and `procedures` both collapse to files). Whichever
+  identity value you tried first confirmed the misreading.
+
+  `corpora` stays bound in the tool signature, marked `deprecated`, **purely to
+  reject**. Deleting it would have been silent: FastMCP builds its argument
+  model without `extra="forbid"`, so pydantic discards unknown keys — a stale
+  caller would have received an unfiltered search wearing a success envelope,
+  which is the failure this tool already refuses elsewhere.
+
+  Response fields rename with it: `unsupported_corpora` -> `unsupported_values`,
+  and the `kb_corpora` completeness marker -> `kb_values`.
+
+- The `assets` and `procedures` values collapse into **`files`**. Both mapped to
+  the same backend corpus, so the tool was advertising a distinction the index
+  cannot make (`IndexDocType` has one bucket, `workspace.file`). Narrowing to
+  `assets` never excluded a procedure, and vice versa.
+
+### Added
+
+- `make regen-mcp-schema` re-captures the MCP tool-schema baseline. It pins
+  `PYTHONPATH` and refuses to run against a source tree other than the one you
+  are in, because a bare `import probe.mcp.server` from a worktree resolves to
+  the *installed* package and would snapshot the wrong schema while the pin
+  test stayed green.
+
 ## 0.28.0
 
 ### Added

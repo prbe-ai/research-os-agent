@@ -127,7 +127,7 @@ def test_search_transcripts_value_maps_to_backend(client, app):
     # unsupported kb_values miss.
     app.search_response = _search_response()
     service = ResearchReadService(ResearchOSSource(client))
-    out = service.search_knowledge("q", search_in=["transcripts", "assets"])
+    out = service.search_knowledge("q", search_in=["transcripts", "files"])
     assert app.search_requests[-1]["corpus"] == ["files", "transcripts"]
     assert out["completeness"] == {"state": "complete", "missing": []}
     assert out["data"]["unsupported_values"] == []

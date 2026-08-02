@@ -471,17 +471,19 @@ def create_server(
             Good: "grpo gpt-oss-20b bird-sql reward_fn kl_coef 0.04 eval_ndcg"
             Bad:  "why did the SQL agent stop improving?"
 
-        search_in: omit for everything. NOT the backend's corpus values -- two
-            coincide, three do not:
+        search_in: omit for everything. NOT the backend's corpus values --
+            `documents` is broader than it looks:
               transcripts -> transcripts
               experiments -> experiments
+              files -> files
               documents -> github + files
-              assets -> files
-              procedures -> files
-            Naming any narrows the SEMANTIC channel to exactly those; name
-            "experiments" too to keep it alongside. The exact channel is
-            structured-entity search and is NOT corpus-filtered, so a narrowed
-            query still returns rows whose name/slug/id matched literally.
+            `files` is workspace files (scripts, datasets, configs, protocols --
+            the index does not separate those). `documents` is those PLUS
+            indexed GitHub docs. Naming any narrows the SEMANTIC channel to
+            exactly those; name "experiments" too to keep it alongside. The
+            exact channel is structured-entity search and is NOT corpus-
+            filtered, so a narrowed query still returns rows whose
+            name/slug/id matched literally.
         project_id / workspace_id: scope both channels. Applied server-side, so
             semantic retrieval keeps working (it used to be switched off).
         top_k: your recall dial. If results look thin, RAISE IT before deciding
@@ -514,7 +516,7 @@ def create_server(
             raise errors.ValidationError(
                 "`corpora` was renamed to `search_in` and is no longer accepted; "
                 "pass search_in=[...] instead. The accepted values are unchanged: "
-                "experiments | assets | procedures | documents | transcripts",
+                "experiments | files | documents | transcripts",
                 status=422,
             )
         with svc() as s:
