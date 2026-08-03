@@ -4,6 +4,23 @@
 
 ### Fixed
 
+- **Run lineage is no longer a half-answer.** `get_entity(ref="run:<id>",
+  view="lineage")` walked `parent_run_id` only — fork/retry parentage — and
+  never read the edge table, so a run that consumed a dataset version and
+  produced three artifacts answered `ancestors: [] / descendants: []`. An agent
+  reads that as "this run has no lineage", which is a confident wrong answer
+  rather than a missing one. The view now returns both relations under separate
+  keys: `run_ancestry` (the parent chain, unchanged) and `edges` (artifact and
+  asset-version provenance). Kept separate deliberately — they are different
+  relations over different endpoint kinds, and flattening them recreates the
+  ambiguity that made the empty response unreadable.
+- **A run hit from the exact channel is addressable.** `search_knowledge` now
+  maps `entity_type: "run"` to `research://runs/<id>/handoff` and carries
+  `short_id` in the card. Pasting a petname you were handed resolves to the run
+  (research-os 0093 added the backend's runs branch); without the card field a
+  correct hit could look unrelated to the query, since a run's `name` may be
+  server-derived or since edited.
+
 - **The reuse check works again.** The MCP instructions, `get_entity`'s
   description and `start-research-work`'s step 4 all mandated
   `get_entity(ref="asset:<name>", view="versions")` — the guard against duplicate

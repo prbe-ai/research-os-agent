@@ -980,3 +980,31 @@ def test_backend_truncation_is_surfaced_not_swallowed(client, app):
     # ...and an untruncated response stays complete, so the marker means something.
     app.search_response = _search_response()
     assert service.search_knowledge("q")["completeness"]["state"] == "complete"
+
+
+def test_exact_run_hit_carries_short_id_and_a_resource(client, app):
+    """A run hit from the exact channel is addressable and echoes its petname.
+
+    The backend gained a runs branch so a pasted `tunneling-sambar-254` resolves
+    structurally instead of being left to the semantic gatherer, which does not
+    do literal identifier lookup. The short_id has to survive into the card: a
+    run's `name` may be server-derived or since edited, so without it a correct
+    hit looks unrelated to the query the caller typed."""
+    app.search_response = _search_response(
+        exact=[
+            {
+                "entity_type": "run", "id": "r-9", "name": "trace-sft-s0",
+                "slug": None, "short_id": "tunneling-sambar-254",
+                "workspace_id": "ws-1", "project_id": "p-1",
+                "experiment_id": "e-1", "run_id": "r-9", "score": 1.0,
+            },
+        ],
+    )
+    service = ResearchReadService(ResearchOSSource(client))
+    out = service.search_knowledge("tunneling-sambar-254", collapse=None)
+
+    hit = out["data"]["results"][0]
+    assert hit["entity_type"] == "run" and hit["id"] == "r-9"
+    assert hit["card"]["short_id"] == "tunneling-sambar-254"
+    assert hit["resource"] == "research://runs/r-9/handoff"
+    assert hit["why_matched"]["score"] == 1.0

@@ -88,7 +88,11 @@ class View(StrEnum):
     ARTIFACTS = "artifacts"  # the artifact list
     REPRODUCE = "reproduce"  # hypothesis + env_ref resolved + config
     HANDOFF = "handoff"  # everything a new session needs to continue
-    LINEAGE = "lineage"  # run lineage, or experiment-level edges
+    # On a run: BOTH relations — `run_ancestry` (the parent_run_id fork/retry
+    # chain) and `edges` (artifact / asset-version provenance). On an experiment:
+    # its edges. The run view used to be the ancestry walk alone, which reported
+    # empty lineage for runs that had plainly produced artifacts.
+    LINEAGE = "lineage"
     EVENTS = "events"  # the append-only lifecycle log
     GROUPS = "groups"  # sweeps/ensembles under an experiment
     VERSIONS = "versions"  # immutable published manifests

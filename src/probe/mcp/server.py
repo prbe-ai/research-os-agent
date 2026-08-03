@@ -478,6 +478,13 @@ def create_server(
             Good: "grpo gpt-oss-20b bird-sql reward_fn kl_coef 0.04 eval_ndcg"
             Bad:  "why did the SQL agent stop improving?"
 
+        A run's petname short_id (`tunneling-sambar-254`) resolves here: paste it
+        alone and the exact channel returns that run at score 1.0. It did not
+        used to -- runs were absent from that channel's query entirely, so a
+        short_id someone handed you fell through to semantic retrieval, which
+        does not do literal identifier lookup and answered with whatever seemed
+        related.
+
         search_in: omit for everything. NOT the backend's corpus values --
             `documents` is broader than it looks:
               transcripts -> transcripts
@@ -577,7 +584,13 @@ def create_server(
 
         `trajectory` = the run's actual spans, `reproduce` = hypothesis + resolved
         env_ref, `handoff` = what a new session needs; the other views are what
-        their names say. `reproduce` carries the code manifest's SUMMARY, not its
+        their names say. A run's `lineage` carries TWO relations under separate
+        keys: `run_ancestry` (fork/retry parentage) and `edges` (artifact and
+        asset-version provenance). An empty `edges` now means no recorded
+        provenance, not "this view never looked" -- it used to return the
+        ancestry walk alone, so a run that produced artifacts still read as
+        having no lineage. `consumes` edges stay absent until a run has a way to
+        declare which asset version it read. `reproduce` carries the code manifest's SUMMARY, not its
         per-file rows: `n_pending_upload > 0` means those bytes were never stored
         and the run cannot be rebuilt. The rows live at
         `/v1/execution-records/{env_ref}`. `filters` and `token_budget` are view-specific -- an

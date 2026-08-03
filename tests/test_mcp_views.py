@@ -583,3 +583,38 @@ def test_artifacts_view_surfaces_undelivered_async_uploads(client, app):
     ]
     clean = service.get_entity(f"run:{rid}", view="artifacts")["data"]
     assert "undelivered" not in clean
+
+
+# -- lineage: two relations, both surfaced ------------------------------------
+
+
+def test_run_lineage_view_carries_edges_not_just_run_parentage(client, app):
+    """The reported defect: `lineage` on a run that consumed a dataset version
+    and produced three artifacts answered `ancestors: [] / descendants: []`.
+
+    It walked `parent_run_id` — fork/retry parentage — and never read the edge
+    table at all, so artifact provenance had no field it could arrive in. An
+    agent reads an empty lineage as "this run has no lineage", which is a
+    confident wrong answer rather than a missing one."""
+    rid, _, _, _ = _populated(client, app)  # seeds one run -> artifact `produces`
+
+    data = _service(client).get_entity(f"run:{rid}", view="lineage")["data"]
+    produced = [e for e in data["edges"] if e["relation"] == "produces"]
+    assert produced, "the run's artifact provenance must reach the lineage view"
+    assert all(e["source_id"] == rid for e in produced)
+    # The parent-chain walk is still here, under its own key — it answers a
+    # different question and merging the two would recreate the ambiguity.
+    assert "run_ancestry" in data
+    assert set(data["run_ancestry"]) >= {"ancestors", "descendants"}
+
+
+def test_run_lineage_keeps_the_two_relations_separate(client, app):
+    """Artifact edges must not be reported as run parentage, or vice versa.
+
+    Different relations over different endpoint kinds: this run has an artifact
+    edge and no parent run, and the two keys have to say so independently."""
+    rid, _, _, _ = _populated(client, app)
+    data = _service(client).get_entity(f"run:{rid}", view="lineage")["data"]
+    assert data["edges"], "edges are present"
+    assert data["run_ancestry"]["ancestors"] == []
+    assert data["run_ancestry"]["descendants"] == []

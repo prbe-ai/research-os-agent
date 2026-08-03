@@ -151,12 +151,27 @@ def _section(response: Any, key: str) -> dict[str, Any]:
 
 
 def _exact_result(row: dict) -> dict:
-    """An exact-channel hit (project | experiment | artifact) in the tool's result shape."""
+    """An exact-channel hit (project | experiment | run | artifact) in the tool's
+    result shape.
+
+    `short_id` rides in the card because it is the reason a run hit exists: the
+    backend gained a runs branch precisely so a pasted petname resolves, and a
+    caller who searched `tunneling-sambar-254` needs to see it echoed on the row
+    -- the run's `name` may be server-derived or since edited, which makes a
+    correct hit look unrelated to the query."""
     entity_type = row.get("entity_type")
     entity_id = row.get("id")
     card = {
         key: row.get(key)
-        for key in ("name", "slug", "workspace_id", "project_id", "experiment_id", "run_id")
+        for key in (
+            "name",
+            "slug",
+            "short_id",
+            "workspace_id",
+            "project_id",
+            "experiment_id",
+            "run_id",
+        )
         if row.get(key) is not None
     }
     resource = None
@@ -164,6 +179,10 @@ def _exact_result(row: dict) -> dict:
         resource = f"research://experiments/{entity_id}/card"
     elif entity_type == EntityType.PROJECT:
         resource = f"research://projects/{entity_id}/card"
+    elif entity_type == EntityType.RUN:
+        # Same target the semantic channel gives a run hit, so an agent gets one
+        # addressable resource per run regardless of which channel surfaced it.
+        resource = f"research://runs/{entity_id}/handoff"
     # artifacts have no addressable research:// resource (no single-GET route)
     return {
         "entity_type": entity_type,
@@ -1369,7 +1388,26 @@ class ResearchReadService:
         )
 
     def _view_run_lineage(self, entity: dict, request: _Req) -> _ViewData:
-        return _ViewData(payload={"lineage": self.source.lineage(str(entity["id"]))})
+        """Both lineage relations, under distinct keys.
+
+        `run_ancestry` is the `parent_run_id` walk -- fork/retry parentage,
+        run-to-run. `edges` is the artifact / asset-version provenance graph.
+        They answer different questions and this view used to return only the
+        first, which made `ancestors: [] / descendants: []` the answer for a run
+        that consumed a dataset version and produced three artifacts. An agent
+        reads that as "this run has no lineage", a confident wrong answer.
+
+        Deliberately NOT merged into one list: they are different relation types
+        over different endpoint kinds, and flattening them recreates exactly the
+        ambiguity that made the empty response unreadable.
+        """
+        run_id = str(entity["id"])
+        return _ViewData(
+            payload={
+                "run_ancestry": self.source.lineage(run_id),
+                "edges": self.source.run_edges(run_id),
+            }
+        )
 
     def _view_experiment_lineage(self, entity: dict, request: _Req) -> _ViewData:
         """Lineage was run-only; experiment_edges was in the SDK the whole time."""

@@ -414,6 +414,16 @@ class ResearchOSSource:
     def lineage(self, run_id: str) -> dict:
         return self.client.run_lineage(run_id)
 
+    def run_edges(self, run_id: str) -> list[dict]:
+        """Lineage EDGES touching this run (artifact / asset-version provenance).
+
+        A different relation from `lineage()`, which walks `parent_run_id` and
+        answers "which run was this forked from". Both are needed to answer
+        "where did this run's data come from", and only one of them was ever
+        surfaced -- which is why the lineage view reported empty on runs that
+        demonstrably consumed a dataset and produced artifacts."""
+        return self.client.run_edges(run_id)
+
     # -- reads the SDK already had, which the MCP simply never surfaced --------
 
     def run_spans(self, run_id: str, **filters: Any) -> list[dict]:
