@@ -536,6 +536,17 @@ class ExperimentDetailOut(BaseModel):
     updated_at: AwareDatetime = Field(..., title='Updated At')
 
 
+class ExperimentMetadataValuePut(BaseModel):
+    """
+    Replacement value for one server-allowlisted experiment metadata key.
+
+    The key is carried in the URL so the database can update it atomically
+    without replacing sibling metadata written by another subsystem.
+    """
+
+    value: dict[str, Any] = Field(..., title='Value')
+
+
 class ExperimentOut(BaseModel):
     created_at: AwareDatetime = Field(..., title='Created At')
     created_by: str | None = Field(None, title='Created By')
@@ -691,15 +702,21 @@ class Grant(StrEnum):
 class GroupedPoint(BaseModel):
     """
     One aggregated cell of a grouped read: a step bucket x one combination of the
-    `by` axes' values. `group` maps each requested axis to its value's JSON text
-    (None per axis when a point misses it — sparse coords collapse into one NULL
-    bucket per axis by design), and is None entirely when no axis was requested (a
-    full reduction). `n` is the count of finite raw points folded into this cell,
+    `by` axes' values. `group` maps each requested axis to its value TYPED — the
+    int 0 arrives as `0`, the string "train" as `"train"` — because the coordinate
+    contract distinguishes them and JSON already encodes that distinction. None per
+    axis when a point misses it (sparse coords collapse into one NULL bucket per
+    axis by design), and None entirely when no axis was requested (a full
+    reduction). `n` is the count of finite raw points folded into this cell,
     so a sparse or partially-logged coordinate is observable rather than silently
     averaged over.
+
+    These were JSON TEXT until the labels reached a chart legend rendering
+    `"train"` with the quotes in it. Anything formatting a label must coerce at
+    the render boundary now, not assume `str`.
     """
 
-    group: dict[str, str | None] | None = Field(None, title='Group')
+    group: dict[str, Any] | None = Field(None, title='Group')
     n: int = Field(..., title='N')
     step_index: int = Field(..., title='Step Index')
     value: float = Field(..., title='Value')
@@ -712,8 +729,9 @@ class GroupedSeriesResult(BaseModel):
     (declared per-key reduce fns arrive with the opt-in declaration layer). `by`
     echoes the requested axes in order; `where` echoes the canonical coord filter.
     Bounded to `max_rows` cells; page the remainder by passing `next_step` back as
-    `step_from`. Group labels are each axis value's JSON text, so the int 1 and the
-    string "1" (distinct coordinates) render as `1` and `"1"`.
+    `step_from`. Group labels are each axis value TYPED, so the int 1 and the
+    string "1" (distinct coordinates) stay distinct as JSON `1` and `"1"` without
+    the label itself carrying quote characters.
     """
 
     agg: str = Field(..., title='Agg')
@@ -837,7 +855,8 @@ class LatestScalarsResult(BaseModel):
 class LineageEdgeOut(BaseModel):
     created_at: AwareDatetime = Field(..., title='Created At')
     customer_id: str = Field(..., title='Customer Id')
-    id: UUID = Field(..., title='Id')
+    derived: bool | None = Field(False, title='Derived')
+    id: UUID | None = Field(None, title='Id')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     relation: str = Field(..., title='Relation')
     source_id: UUID = Field(..., title='Source Id')
@@ -1456,6 +1475,7 @@ class SearchEntityType(StrEnum):
     project = 'project'
     experiment = 'experiment'
     artifact = 'artifact'
+    run = 'run'
 
 
 class SearchRequest(BaseModel):
@@ -2119,6 +2139,7 @@ class ExactHit(BaseModel):
     run_id: UUID | None = Field(None, title='Run Id')
     score: float = Field(..., title='Score')
     shared_folder_id: UUID | None = Field(None, title='Shared Folder Id')
+    short_id: str | None = Field(None, title='Short Id')
     slug: str | None = Field(None, title='Slug')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
 
@@ -2804,6 +2825,8 @@ class MetricViewPreviewRequest(BaseModel):
     spec: MetricViewSpec
     step_from: int | None = Field(None, title='Step From')
     step_to: int | None = Field(None, title='Step To')
+    wall_clock_from: float | None = Field(None, title='Wall Clock From')
+    wall_clock_to: float | None = Field(None, title='Wall Clock To')
 
 
 class MetricViewSpec(BaseModel):
