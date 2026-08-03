@@ -3411,10 +3411,12 @@ def snapshot(
         f", {m['n_pending_upload']} pending upload"
     )
     deps = snap.get("deps") or {}
+    prov = snap.get("env_provenance") or {}
     if deps.get("packages") is not None:
+        source = prov.get("venv") or prov.get("python_executable")
         print(
             f"env: {deps['package_count']} packages, python {deps['python']}"
-            f" ({deps.get('resolved_via')}: {deps.get('venv') or deps.get('python_executable')})"
+            f" ({prov.get('resolved_via')}: {source})"
         )
 
 

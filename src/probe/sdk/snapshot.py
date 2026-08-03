@@ -573,10 +573,9 @@ def capture_env(
 
     The returned mapping carries ``venv`` / ``python_executable`` /
     ``resolved_via`` so that a capture which picked the wrong environment is
-    visible in the record rather than indistinguishable from a correct one.
-    Those paths are machine-specific and participate in the execution record's
-    content hash, so two identical environments at different paths no longer
-    share a record -- deliberate, and already true of ``hardware.gpu``.
+    visible rather than indistinguishable from a correct one. Those three are
+    PROVENANCE, not identity: split them off with
+    :func:`split_env_provenance` before the result reaches an execution record.
     """
     resolved_via = "interpreter"
     venv_root: str | None = None
@@ -659,6 +658,32 @@ def capture_env(
     # across that upgrade boundary.
     info["packages_sha256"] = hashlib.sha256("\n".join(packages).encode()).hexdigest()
     return info
+
+
+# How the environment was FOUND, as against what the environment IS. Machine
+# -specific by nature: the same packages live at /Users/x/p/.venv on a laptop
+# and /workspace/p/.venv on a training box.
+ENV_PROVENANCE_KEYS = ("venv", "python_executable", "resolved_via")
+
+
+def split_env_provenance(info: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split :func:`capture_env` output into ``(identity, provenance)``.
+
+    The execution record's ``content_hash`` covers the WHOLE ``deps`` section
+    (research-os ``app/execution/service.py`` ``canonical_hash``, which
+    json-dumps every section sorted). Any machine-specific value inside it makes
+    two genuinely identical environments at different paths hash differently --
+    and ``env_ref`` equality is precisely what a reader compares to ask "did
+    these two runs use the same environment?". Recording the venv path there
+    would answer "no" to a "yes", which is the same confidently-wrong shape this
+    module exists to eliminate.
+
+    So identity (python + packages) is hashed, and provenance rides on the
+    ``code-snapshot`` artifact meta, which ``Client.check_run`` already reads.
+    """
+    provenance = {k: info[k] for k in ENV_PROVENANCE_KEYS if k in info}
+    identity = {k: v for k, v in info.items() if k not in ENV_PROVENANCE_KEYS}
+    return identity, provenance
 
 
 def capture_gpu() -> list[dict[str, Any]]:

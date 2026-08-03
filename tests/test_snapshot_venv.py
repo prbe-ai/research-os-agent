@@ -12,6 +12,7 @@ failure was precisely that the code looked right while reading the wrong prefix.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -208,6 +209,34 @@ def test_provenance_is_always_recorded(project):
             "packages_sha256",
         }
         assert info["package_count"] == len(info["packages"])
+
+
+def test_identity_carries_no_machine_specific_paths(project):
+    """`deps` is hashed into the execution record's content_hash, so a venv path
+    in it would make two identical environments at different paths produce
+    different env_refs -- and env_ref equality is what a reader compares to ask
+    'same environment?'. Provenance belongs on the artifact meta instead."""
+    from probe.sdk.snapshot import split_env_provenance
+
+    identity, provenance = split_env_provenance(capture_env(str(project), detect_venv=True))
+
+    assert set(provenance) == {"venv", "python_executable", "resolved_via"}
+    assert provenance["venv"] == str(project / ".venv")
+    # identity is what the environment IS, and nothing else
+    assert set(identity) == {"python", "packages", "package_count", "packages_sha256"}
+    blob = json.dumps(identity)
+    assert str(project) not in blob and sys.prefix not in blob
+
+
+def test_split_is_total_and_lossless(project):
+    """Every key lands in exactly one side -- a new field added to capture_env
+    must be classified deliberately, not silently hashed."""
+    from probe.sdk.snapshot import split_env_provenance
+
+    info = capture_env(str(project))
+    identity, provenance = split_env_provenance(info)
+    assert identity.keys() | provenance.keys() == info.keys()
+    assert not (identity.keys() & provenance.keys())
 
 
 def test_foreign_python_version_comes_from_the_foreign_interpreter(project):

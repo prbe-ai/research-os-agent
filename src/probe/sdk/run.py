@@ -1139,7 +1139,10 @@ class Run:
         ``manifest['entries']``."""
         git = _snapshot.capture_git_snapshot(self.id, cwd)
         manifest = _snapshot.capture_manifest(cwd)
-        deps = (
+        # Identity is hashed into the execution record; provenance is NOT --
+        # a venv path in `deps` would make two identical environments at
+        # different paths produce different env_refs. See split_env_provenance.
+        deps, env_provenance = _snapshot.split_env_provenance(
             _snapshot.capture_env(
                 cwd,
                 venv=venv,
@@ -1191,6 +1194,9 @@ class Run:
                 "remote": manifest["remote"],
                 "n_git_referenced": manifest["n_git_referenced"],
                 "n_pending_upload": manifest["n_pending_upload"],
+                # WHICH environment the deps came from. Deliberately here and
+                # not in the hashed execution record (split_env_provenance).
+                **({"env": env_provenance} if env_provenance else {}),
             },
             strict=strict,
         )
@@ -1198,6 +1204,7 @@ class Run:
             "git": git,
             "manifest": manifest,
             "deps": deps,
+            "env_provenance": env_provenance,
             "execution_record": exec_rec,
             "content_hash": content_hash,
         }
