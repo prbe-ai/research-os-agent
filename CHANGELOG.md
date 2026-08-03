@@ -47,23 +47,22 @@
 
 ### Added
 
-- **A fresh install now ends by offering to import existing work.** Every step
-  above it configures what Probe does from now on, which left a new install
-  pointed at an empty dashboard — and an empty dashboard is indistinguishable
-  from a product that does not work yet. Say yes and the folder picker opens
-  immediately; say no and nothing changes.
+- **`probe backfill`** — a top-level command, so `npx probe-research backfill`
+  works from zero. Arguments are forwarded verbatim by the npm launcher, so the
+  command the dashboard's last onboarding step hands you lands straight on the
+  folder picker. `probe backfill <folder>` skips the picker.
 
-  Asked here rather than left to the action menu because the action menu only
-  appears on a RE-RUN: someone who installs, sees nothing, and closes the
-  terminal never reaches it. Declining costs nothing — `Import existing work`
-  stays in the menu forever.
+  It installs a persistent `probe` first, and for a stronger reason than the
+  wizard has: reached through `npx` we are running from an ephemeral uvx/pipx
+  with no binary on PATH, and the agent does its work by shelling out to
+  `probe artifact add`. Without that step the agent reads the whole folder and
+  lands nothing.
 
-  Skippable, and skipping is the default: every other step sets a preference,
-  this one launches an agent over a folder, so opting in is deliberate rather
-  than whatever happens when you hold enter through an install. It does not
-  appear on a re-run, after a failed browser approval (no credential to spend),
-  on a capture-only install (no `api` grant), or on any flag/`--yes`/non-TTY
-  path — the flags stay the contract and CI is never handed a prompt.
+  The npm launcher's CLI floor moves to **0.36.0** for the same reason it moved
+  to 0.27.1: arguments are forwarded to whatever `probe` is already on PATH, so
+  under the old floor a user on 0.35.0 would answer a command the product just
+  told them to run with `No such command 'backfill'`. Nothing in the copied
+  string differs — only the floor can catch it.
 
 - **`probe wizard` → Import existing work.** Point the wizard at a folder of
   existing research and one headless Claude agent reads it, uploads what it

@@ -87,7 +87,7 @@ test("the spec is a floor, never an exact pin", () => {
 test("MIN_CLI actually exists on PyPI", () => {
   // The floor has to name a real release or every fallback fails to resolve.
   const floor = source.match(/const MIN_CLI = "([^"]+)"/)[1];
-  assert.equal(floor, "0.27.1", "0.27.1 is the first release whose wizard does not crash");
+  assert.equal(floor, "0.36.0", "0.36.0 is the first release carrying `probe backfill`");
 });
 
 test("the floor rejects every CLI whose wizard crashes", () => {
@@ -95,14 +95,45 @@ test("the floor rejects every CLI whose wizard crashes", () => {
   // fresh `probe wizard` (#120). They all cleared the old 0.24.0 floor, so the
   // launcher handed users to a CLI that could not finish a setup — and npx is
   // the from-zero entry point, so it has to be the repair path too.
+  const floor = source.match(/const MIN_CLI = "([^"]+)"/)[1];
   for (const broken of ["0.26.0", "0.26.3", "0.26.4", "0.27.0"]) {
     assert.equal(
-      atLeast(broken, "0.27.1"),
+      atLeast(broken, floor),
       false,
       `${broken} crashes on a fresh wizard and must not be handed off to`,
     );
   }
-  assert.equal(atLeast("0.27.1", "0.27.1"), true, "the fix itself must be accepted");
+  assert.equal(atLeast(floor, floor), true, "the floor itself must be accepted");
+});
+
+test("the floor rejects every CLI without `probe backfill`", () => {
+  // The dashboard's last onboarding step hands out `npx probe-research
+  // backfill`. Arguments are forwarded verbatim to whatever `probe` resolves,
+  // so a pre-0.36.0 install on PATH answers a command the product just told
+  // the user to run with `No such command 'backfill'`. Nothing in the copied
+  // string differs; only the floor can catch this.
+  const floor = source.match(/const MIN_CLI = "([^"]+)"/)[1];
+  for (const noBackfill of ["0.27.1", "0.32.0", "0.34.0", "0.35.0"]) {
+    assert.equal(
+      atLeast(noBackfill, floor),
+      false,
+      `${noBackfill} has no \`backfill\` command and must not be handed off to`,
+    );
+  }
+});
+
+test("arguments are forwarded, so `npx probe-research backfill` reaches the CLI", () => {
+  // The whole dashboard hand-off depends on this: with no args the launcher
+  // runs the wizard, with args it forwards them verbatim. If it ever hardcoded
+  // ["wizard"] the copied command would silently open the menu instead.
+  assert.ok(
+    /const forwarded = args\.length \? args : \["wizard"\]/.test(source),
+    "args must pass through; only the empty case defaults to the wizard",
+  );
+  for (const call of source.match(/"tool",\s*"run",[^\]]+/g) || []) {
+    assert.ok(/\.\.\.forwarded/.test(call), `uv fallback drops the arguments: ${call}`);
+  }
+  assert.ok(/"--spec", spec, "probe", \.\.\.forwarded/.test(source), "pipx fallback drops args");
 });
 
 test("every fallback refreshes, or users freeze on their first version", () => {
