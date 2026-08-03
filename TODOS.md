@@ -5,6 +5,51 @@ it is, why it matters, and roughly what it takes.
 
 ---
 
+## P2 — `pushed_base` is an N+1 over remote branches
+
+### Batch the per-branch git calls in `snapshot.py:pushed_base`
+
+**What:** Replace the per-remote-head loop (`snapshot.py:209-227`) with two git
+invocations: `git cat-file --batch-check` fed all advertised SHAs on stdin, then
+`git rev-list --boundary HEAD --not <those SHAs>`. Lines prefixed `-` are the
+pushed frontier; the first is the newest pushed ancestor. Empty output means HEAD
+itself is pushed; a root commit with no pushed ancestor returns `None`, matching
+today's behaviour.
+
+**Why:** the loop spawns ~3 git processes per remote branch — `cat-file -e`,
+`merge-base --is-ancestor`, `merge-base` — and each spawn pays ~39ms of fixed
+startup (fork/exec, config read, object-database open, `packed-refs` load)
+regardless of how trivial the query is. Measured on this repo, 2026-08-03:
+
+| | spawns | time |
+|---|---|---|
+| current loop, 66 remote heads | ~198 | 2.6s–6.6s |
+| `cat-file --batch-check` + `rev-list --boundary` | 2 | 64ms |
+
+Same answer both ways (verified: `a6a7d1a3…`). 60–100x, and the gap grows
+linearly — this repo accumulates `codex/*` and worktree branches, so at 200
+branches the current loop is ~8s per snapshot. `pushed_base` is on the
+`capture_manifest` path, so every snapshot pays it.
+
+Arguably also more correct: `--boundary` computes the frontier directly instead
+of approximating it as the max over pairwise merge-bases, which is merge-safe.
+
+**Context:** surfaced by the 2026-08-03 eng review of `fix/snapshot-venv-detection`
+(section 4). Deliberately NOT folded into that branch — unrelated to venv
+detection, and nothing pays this cost automatically today. That changes if the
+snapshot plan's Phase 1b lands (`tasks/2026-08-03-snapshot-reproducibility-plan.md`),
+which makes `probe exec` snapshot on every run.
+
+**Watch out:** `--not` with thousands of SHAs hits `ARG_MAX` (~6000 branches on
+macOS); use `rev-list --stdin` if that ever becomes real.
+
+**Effort:** S (~30 min — the prototype and the timing harness already exist in
+the review transcript)
+**Priority:** P2
+**Depends on:** nothing. Should land BEFORE snapshot plan Phase 1b.
+
+---
+
 ## P3 — CI coverage for the filesystem-clone branch
 
 ### macOS CI lane for `try_clone` / `snapshot_file` tests
