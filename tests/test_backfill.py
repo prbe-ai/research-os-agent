@@ -9,6 +9,7 @@ downstream can undo).
 from __future__ import annotations
 
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
@@ -88,17 +89,28 @@ def test_reconcile_says_so_when_it_could_not_read_back():
 # -- the anchor -------------------------------------------------------------
 
 
+#: A real project id. The routes type `{project_id}` as a UUID, so a slug in
+#: that position is a 422 — this fixture exists to keep that honest.
+FAKE_ID = "3f7c1a52-0d64-4e2f-9c31-0b8a5d6e1f90"
+
+
 class _FakeClient:
     def __init__(self, existing=None):
         self.existing = existing
-        self.created: list[tuple] = []
+        self.ensured: list[tuple] = []
 
     def resolve_project(self, slug):
         return self.existing
 
-    def create_project(self, slug, name=None, **kw):
-        self.created.append((slug, name))
-        return {"slug": slug}
+    def get_project(self, project_id):
+        return {"id": project_id, "slug": "by-id"}
+
+    def ensure_project(self, slug, name=None, **kw):
+        self.ensured.append((slug, name))
+        return self.existing or {"id": FAKE_ID, "slug": slug}
+
+    def list_anchored(self, anchor, anchor_id, **kw):
+        return []
 
     def __enter__(self):
         return self
@@ -120,25 +132,51 @@ def test_slug_never_empties_out(tmp_path):
     assert backfill.slug_for(folder) == "backfill"
 
 
+def test_the_anchor_is_a_uuid_never_a_slug(tmp_path):
+    """The bug this test exists for: `/v1/projects/{project_id}` types the path
+    param as a UUID, so anchoring on a slug 422s every upload AND the read-back —
+    and the read-back failing is invisible, which is the whole point of the count."""
+    folder = tmp_path / "odyssey"
+    folder.mkdir()
+    project_id, slug = backfill.resolve_anchor(_FakeClient(), folder)
+    UUID(project_id)  # raises if a slug leaked into the id position
+    assert slug == "odyssey"
+
+
 def test_configured_project_wins_over_the_derived_slug(tmp_path):
     client = _FakeClient()
-    got = backfill.resolve_anchor(client, tmp_path, configured="chosen-by-hand")
-    assert got == "chosen-by-hand"
-    assert client.created == []
+    project_id, _ = backfill.resolve_anchor(client, tmp_path, configured=FAKE_ID)
+    assert project_id == FAKE_ID
+    assert client.ensured == []
+
+
+def test_a_configured_slug_is_resolved_to_its_id(tmp_path):
+    # PROBE_PROJECT takes a slug, so the configured value is not always an id.
+    client = _FakeClient(existing={"id": FAKE_ID, "slug": "already-here"})
+    project_id, slug = backfill.resolve_anchor(client, tmp_path, configured="already-here")
+    assert project_id == FAKE_ID
+    assert slug == "already-here"
+
+
+def test_an_unknown_configured_slug_fails_loudly(tmp_path):
+    with pytest.raises(ValueError, match="no project"):
+        backfill.resolve_anchor(_FakeClient(existing=None), tmp_path, configured="ghost")
 
 
 def test_existing_project_is_reused_not_forked(tmp_path):
-    client = _FakeClient(existing={"slug": "already-here"})
-    assert backfill.resolve_anchor(client, tmp_path) == "already-here"
-    assert client.created == []
+    client = _FakeClient(existing={"id": FAKE_ID, "slug": "already-here"})
+    project_id, slug = backfill.resolve_anchor(client, tmp_path)
+    assert (project_id, slug) == (FAKE_ID, "already-here")
 
 
-def test_missing_project_is_created_once(tmp_path):
+def test_creation_goes_through_the_near_miss_guard(tmp_path):
+    # ensure_project, not create_project: its guard refuses a slug that looks
+    # like a typo of an existing one, which is the identity fork we cannot undo.
     folder = tmp_path / "odyssey"
     folder.mkdir()
     client = _FakeClient(existing=None)
-    assert backfill.resolve_anchor(client, folder) == "odyssey"
-    assert client.created == [("odyssey", "odyssey")]
+    backfill.resolve_anchor(client, folder)
+    assert client.ensured == [("odyssey", "odyssey")]
 
 
 # -- the prompt (the actual deliverable) ------------------------------------

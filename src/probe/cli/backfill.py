@@ -153,24 +153,48 @@ def slug_for(folder: Path) -> str:
     return cleaned or "backfill"
 
 
-def resolve_anchor(client, folder: Path, *, configured: str | None = None) -> str:
-    """The project this folder imports into. Created if it does not exist.
+def resolve_anchor(client, folder: Path, *, configured: str | None = None) -> tuple[str, str]:
+    """The project this folder imports into, as ``(project_id, slug)``.
+
+    Returns the UUID, never the slug, because that is what the agent's commands
+    need: every ``/v1/projects/{project_id}`` route types the path param as a
+    UUID, so a slug arrives as a 422 about UUID parsing rather than a lookup.
+    The slug rides along only to be shown to a human.
 
     An explicitly configured active project always wins -- someone who ran
-    `probe project use` has already answered this question, and silently
-    importing somewhere else would be the wrong kind of helpful.
+    `probe project use` has already answered this question, and importing
+    somewhere else would be the wrong kind of helpful. It may be either form
+    (`PROBE_PROJECT` takes a slug), so it is resolved the same way.
+
+    Creation goes through ``ensure_project``, whose near-miss guard refuses a
+    slug that looks like a typo of one already there. A folder called
+    `odyssey-v2` sitting next to an existing `odyssey_v2` should stop, not
+    quietly open a second identity for the same work.
     """
     if configured:
-        return configured
-    slug = slug_for(folder)
-    existing = client.resolve_project(slug)
-    if existing:
-        return existing.get("slug") or slug
-    client.create_project(slug, name=folder.resolve().name)
-    return slug
+        return _resolve_ref(client, configured)
+    proj = client.ensure_project(slug_for(folder), name=folder.resolve().name)
+    return str(proj["id"]), proj.get("slug") or slug_for(folder)
 
 
-def build_prompt(*, folder: Path, project: str, census: Census) -> str:
+def _resolve_ref(client, ref: str) -> tuple[str, str]:
+    """A configured project id OR slug -> ``(project_id, slug)``."""
+    from uuid import UUID
+
+    try:
+        UUID(ref)
+    except ValueError:
+        found = client.resolve_project(ref)
+        if found is None:
+            raise ValueError(f"no project with id or slug {ref!r}") from None
+        return str(found["id"]), found.get("slug") or ref
+    try:
+        return ref, client.get_project(ref).get("slug") or ref
+    except Exception:  # noqa: BLE001 - the id is what matters; the slug is decoration
+        return ref, ref
+
+
+def build_prompt(*, folder: Path, project: str, census: Census, slug: str | None = None) -> str:
     """The prompt the wizard hands the agent.
 
     This is the actual deliverable of the feature: the user never writes it,
@@ -189,7 +213,10 @@ A deterministic walk counted {census.files:,} files here — roughly what you sh
 expect to account for.
 
 ANCHOR (fixed — do not change, do not create another project):
-    --project {project}
+    --project {project}{f"        (the project named `{slug}`)" if slug else ""}
+
+    That is a project id, and it is what `--project` wants: those routes type the
+    path parameter as a UUID, so passing the name instead comes back as a 422.
 
 Step 1 — upload everything of substance.
 
@@ -420,17 +447,17 @@ def run(
 
     try:
         with client_factory() as client:
-            project = resolve_anchor(client, target, configured=configured_project)
+            project_id, slug = resolve_anchor(client, target, configured=configured_project)
     except Exception as exc:  # noqa: BLE001 - a credential problem is the likely cause
         return [
             f"Could not resolve a project to import into: {exc}",
-            "Run `probe login` (or `probe project use <slug>`) and try again.",
+            "Run `probe login`, or `probe project use <slug>` to pick one, and try again.",
         ]
 
-    prompt = build_prompt(folder=target, project=project, census=census)
+    prompt = build_prompt(folder=target, project=project_id, census=census, slug=slug)
 
     tui.say()
-    tui.say(f"Importing {target} into project `{project}`.")
+    tui.say(f"Importing {target} into project `{slug}`.")
     tui.say(f"{census.describe()} — the agent is reading them now.")
     tui.say()
 
@@ -438,11 +465,11 @@ def run(
 
     try:
         with client_factory() as client:
-            landed, at_least = count_landed(client, project)
+            landed, at_least = count_landed(client, project_id)
     except Exception:  # noqa: BLE001 - never fail the import on the read-back
         landed, at_least = -1, False
 
-    lines = [f"Imported {target}", f"Project: {project}", ""]
+    lines = [f"Imported {target}", f"Project: {slug}", ""]
     lines += reconcile(census, landed, at_least)
     if not ok:
         lines += ["", f"The agent did not finish cleanly: {tail.splitlines()[-1] if tail else ''}"]
