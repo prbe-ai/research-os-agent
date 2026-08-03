@@ -20,6 +20,39 @@ class AcceptInviteOut(BaseModel):
     role: Role = Field(..., title='Role')
 
 
+class AgentSessionOut(BaseModel):
+    """
+    A coding-agent session that touched this entity, or something beneath it.
+
+    Ordered by when we first saw it, so at run level the first entry is the
+    session the run originated in — the same one recorded in
+    `runs.foreign_keys.<agent>_session_id`.
+
+    `captured` is deliberately NOT here. Whether a transcript exists is the
+    engine's answer, not this database's: capture is a per-device permission a
+    user can switch off, so a recorded session with no transcript is an
+    expected state. The page resolves it against the transcripts corpus at
+    render time and shows captured / pending / not-captured there. Asserting it
+    here would mean this endpoint lying whenever the engine disagreed.
+    """
+
+    agent: str = Field(..., title='Agent')
+    direct: bool | None = Field(True, title='Direct')
+    first_seen_at: AwareDatetime = Field(..., title='First Seen At')
+    session_id: str = Field(..., title='Session Id')
+    src_id: UUID | None = Field(None, title='Src Id')
+    src_type: str | None = Field(None, title='Src Type')
+
+
+class AgentSessionsOut(BaseModel):
+    """
+    A bounded page of sessions plus the honest total.
+    """
+
+    session_total: int | None = Field(0, title='Session Total')
+    sessions: list[AgentSessionOut] | None = Field(None, title='Sessions')
+
+
 class AnchorLevel(StrEnum):
     """
     The three vertically-movable artifact anchors (workspace/shared-folder files
@@ -153,6 +186,13 @@ class ArtifactVersionOut(BaseModel):
     version: int = Field(..., title='Version')
 
 
+class Fn(StrEnum):
+    add = 'add'
+    sub = 'sub'
+    mul = 'mul'
+    div = 'div'
+
+
 class BodyConsentOauthConsentPost(BaseModel):
     csrf: str = Field(..., title='Csrf')
     decision: str = Field(..., title='Decision')
@@ -176,6 +216,34 @@ class ChannelError(StrEnum):
     engine_timeout = 'engine_timeout'
     engine_error = 'engine_error'
     sql_budget_exceeded = 'sql_budget_exceeded'
+
+
+class ChartSettingsDelete(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    metric_key: str | None = Field(None, title='Metric Key')
+    project_id: UUID | None = Field(None, title='Project Id')
+    reset_all: bool | None = Field(False, title='Reset All')
+    run_id: UUID | None = Field(None, title='Run Id')
+
+
+class ChartSettingsOut(BaseModel):
+    metric_key: str | None = Field(None, title='Metric Key')
+    project_id: UUID | None = Field(None, title='Project Id')
+    run_id: UUID | None = Field(None, title='Run Id')
+    settings: dict[str, Any] | None = Field(None, title='Settings')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class ChartSettingsPut(BaseModel):
+    model_config = ConfigDict(
+        extra='forbid',
+    )
+    metric_key: str | None = Field(None, title='Metric Key')
+    project_id: UUID | None = Field(None, title='Project Id')
+    run_id: UUID | None = Field(None, title='Run Id')
+    settings: dict[str, Any] | None = Field(None, title='Settings')
 
 
 class AutoUpdate(StrEnum):
@@ -255,6 +323,11 @@ class ClientUpdateStatus(StrEnum):
     required = 'required'
 
 
+class ConstNode(BaseModel):
+    op: Literal['const'] = Field(..., title='Op')
+    value: float = Field(..., title='Value')
+
+
 class CoordinateOut(BaseModel):
     """
     One catalog row of the run's coordinate space (0060): a non-empty coordinate
@@ -269,6 +342,16 @@ class CoordinateOut(BaseModel):
     has_metrics: bool = Field(..., title='Has Metrics')
     has_spans: bool = Field(..., title='Has Spans')
     last_seen_at: AwareDatetime = Field(..., title='Last Seen At')
+
+
+class CreatorKind(StrEnum):
+    """
+    The credential kind that wrote a row. See the module docstring: this is the
+    credential, not a proven actor type.
+    """
+
+    user = 'user'
+    ingest = 'ingest'
 
 
 class CredentialAttachmentGrantOut(BaseModel):
@@ -292,6 +375,14 @@ class CredentialAttachmentOut(BaseModel):
     installation_id: UUID = Field(..., title='Installation Id')
     role: Role1 = Field(..., title='Role')
     token_id: UUID = Field(..., title='Token Id')
+
+
+class CodeRef(RootModel[str]):
+    root: str = Field(..., max_length=512, title='Code Ref')
+
+
+class Note(RootModel[str]):
+    root: str = Field(..., max_length=2000, title='Note')
 
 
 class Decision(StrEnum):
@@ -404,9 +495,35 @@ class ExperimentCreate(BaseModel):
     tags: list[str] | None = Field(None, title='Tags')
 
 
-class ExperimentOut(BaseModel):
-    archived_at: AwareDatetime | None = Field(None, title='Archived At')
+class ExperimentDetailOut(BaseModel):
+    """
+    The single-experiment read. Carries the sessions that touched it.
+
+    A separate model from ExperimentOut so the LIST endpoints cannot grow this field
+    by accident: sessions are one indexed lookup per entity, which is fine once
+    per page and wrong once per row.
+    """
+
     created_at: AwareDatetime = Field(..., title='Created At')
+    created_by: str | None = Field(None, title='Created By')
+    customer_id: str = Field(..., title='Customer Id')
+    description: str | None = Field(None, title='Description')
+    hypothesis: str = Field(..., title='Hypothesis')
+    id: UUID = Field(..., title='Id')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., title='Name')
+    project_id: UUID = Field(..., title='Project Id')
+    session_total: int | None = Field(0, title='Session Total')
+    sessions: list[AgentSessionOut] | None = Field(None, title='Sessions')
+    slug: str = Field(..., title='Slug')
+    summary: dict[str, Any] | None = Field(None, title='Summary')
+    tags: list[str] | None = Field(None, title='Tags')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class ExperimentOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    created_by: str | None = Field(None, title='Created By')
     customer_id: str = Field(..., title='Customer Id')
     description: str | None = Field(None, title='Description')
     hypothesis: str = Field(..., title='Hypothesis')
@@ -445,6 +562,7 @@ class ExperimentPatch(BaseModel):
     hypothesis: Hypothesis | None = Field(None, title='Hypothesis')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: Name | None = Field(None, title='Name')
+    tags: list[str] | None = Field(None, title='Tags')
 
 
 class ExperimentVersionMint(BaseModel):
@@ -737,6 +855,11 @@ class LineageRelation(StrEnum):
     derived_from = 'derived_from'
 
 
+class Origin(StrEnum):
+    logged = 'logged'
+    derived = 'derived'
+
+
 class MetricExportResult(BaseModel):
     """
     Lossless, paginated raw-point export (item 5): every point exactly once, NO
@@ -755,7 +878,16 @@ class MetricInsertResult(BaseModel):
     series_count: int | None = Field(None, title='Series Count')
 
 
+class Agg(StrEnum):
+    mean = 'mean'
+    sum = 'sum'
+    min = 'min'
+    max = 'max'
+    count = 'count'
+
+
 class MetricPointIn(BaseModel):
+    agg: Agg | None = Field(None, title='Agg')
     dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     key: str = Field(..., title='Key')
     kind: str | None = Field('model', title='Kind')
@@ -784,9 +916,13 @@ class MetricSeriesOut(BaseModel):
     One catalog row: what/how-much/what-shape, no point scan (D15).
     """
 
+    agg: str | None = Field(None, title='Agg')
     dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     first_step_index: int | None = Field(None, title='First Step Index')
     first_wall_clock: AwareDatetime | None = Field(None, title='First Wall Clock')
+    has_labeled_points: bool | None = Field(False, title='Has Labeled Points')
+    has_span_anchors: bool | None = Field(False, title='Has Span Anchors')
+    has_trial_links: bool | None = Field(False, title='Has Trial Links')
     key: str = Field(..., title='Key')
     kind: str = Field(..., title='Kind')
     last_step_index: int | None = Field(None, title='Last Step Index')
@@ -794,9 +930,43 @@ class MetricSeriesOut(BaseModel):
     last_wall_clock: AwareDatetime | None = Field(None, title='Last Wall Clock')
     max_value: float | None = Field(None, title='Max Value')
     min_value: float | None = Field(None, title='Min Value')
+    origin: str | None = Field('logged', title='Origin')
     point_count: int = Field(..., title='Point Count')
+    provenance: dict[str, Any] | None = Field(None, title='Provenance')
     run_id: UUID = Field(..., title='Run Id')
     x_axis: str | None = Field('step', title='X Axis')
+
+
+class MetricSeriesSelector(BaseModel):
+    """
+    An exact metric-series identity used as a chart's value-typed x-axis.
+
+    Unlike a y-axis ``SeriesSelector``, dimensions are never ``None`` here: a
+    metric x-axis must name one concrete series or two ranks could be paired
+    into the same line silently.
+    """
+
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    key: str = Field(..., title='Key')
+    kind: str = Field(..., title='Kind')
+
+
+class MetricViewOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    created_by: str | None = Field(None, title='Created By')
+    id: UUID = Field(..., title='Id')
+    name: str = Field(..., title='Name')
+    run_id: UUID = Field(..., title='Run Id')
+    spec: dict[str, Any] = Field(..., title='Spec')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class Name1(RootModel[str]):
+    root: str = Field(..., max_length=200, min_length=1, title='Name')
+
+
+class MaxPoints(RootModel[int]):
+    root: int = Field(2000, ge=2, le=100000, title='Max Points')
 
 
 class Hostname(RootModel[str]):
@@ -878,20 +1048,50 @@ class ProjectCreate(BaseModel):
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     slug: str = Field(..., title='Slug')
+    tags: list[str] | None = Field(None, title='Tags')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
 
 
-class ProjectOut(BaseModel):
-    archived_at: AwareDatetime | None = Field(None, title='Archived At')
+class ProjectDetailOut(BaseModel):
+    """
+    The single-project read. Carries the sessions that touched it.
+
+    A separate model from ProjectOut so the LIST endpoints cannot grow this field
+    by accident: sessions are one indexed lookup per entity, which is fine once
+    per page and wrong once per row.
+    """
+
     created_at: AwareDatetime = Field(..., title='Created At')
+    created_by: str | None = Field(None, title='Created By')
+    customer_id: str = Field(..., title='Customer Id')
+    description: str | None = Field(None, title='Description')
+    id: UUID = Field(..., title='Id')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., title='Name')
+    session_total: int | None = Field(0, title='Session Total')
+    sessions: list[AgentSessionOut] | None = Field(None, title='Sessions')
+    slug: str = Field(..., title='Slug')
+    tags: list[str] | None = Field(None, title='Tags')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+    workspace_id: UUID | None = Field(..., title='Workspace Id')
+
+
+class ProjectOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    created_by: str | None = Field(None, title='Created By')
     customer_id: str = Field(..., title='Customer Id')
     description: str | None = Field(None, title='Description')
     id: UUID = Field(..., title='Id')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     slug: str = Field(..., title='Slug')
+    tags: list[str] | None = Field(None, title='Tags')
     updated_at: AwareDatetime = Field(..., title='Updated At')
     workspace_id: UUID | None = Field(..., title='Workspace Id')
+
+
+class Name2(RootModel[str]):
+    root: str = Field(..., min_length=1, title='Name')
 
 
 class ProjectPatch(BaseModel):
@@ -904,8 +1104,140 @@ class ProjectPatch(BaseModel):
 
     description: str | None = Field(None, title='Description')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: Name | None = Field(None, title='Name')
+    name: Name2 | None = Field(None, title='Name')
+    tags: list[str] | None = Field(None, title='Tags')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
+
+
+class PublicArtifactOut(BaseModel):
+    content_hash: str | None = Field(None, title='Content Hash')
+    content_type: str | None = Field(None, title='Content Type')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    dims_hash: str | None = Field(None, title='Dims Hash')
+    experiment_id: UUID | None = Field(None, title='Experiment Id')
+    id: UUID = Field(..., title='Id')
+    is_reference: bool = Field(..., title='Is Reference')
+    kind: str = Field(..., title='Kind')
+    name: str = Field(..., title='Name')
+    path: str | None = Field('', title='Path')
+    project_id: UUID | None = Field(None, title='Project Id')
+    run_id: UUID | None = Field(None, title='Run Id')
+    size_bytes: int | None = Field(None, title='Size Bytes')
+    source_level: str | None = Field(None, title='Source Level')
+    span_id: UUID | None = Field(None, title='Span Id')
+    status: str = Field(..., title='Status')
+    step_index: int | None = Field(None, title='Step Index')
+
+
+class PublicExperimentOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    description: str | None = Field(None, title='Description')
+    hypothesis: str = Field(..., title='Hypothesis')
+    id: UUID = Field(..., title='Id')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., title='Name')
+    project_id: UUID = Field(..., title='Project Id')
+    slug: str = Field(..., title='Slug')
+    summary: dict[str, Any] | None = Field(None, title='Summary')
+    tags: list[str] | None = Field(None, title='Tags')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class PublicMetricSeriesOut(BaseModel):
+    """
+    Catalog row for the public surface: `origin` stays (the "derived" chip
+    is honest labeling), `provenance` is filtered to producer + computed_at.
+    """
+
+    agg: str | None = Field(None, title='Agg')
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    first_step_index: int | None = Field(None, title='First Step Index')
+    first_wall_clock: AwareDatetime | None = Field(None, title='First Wall Clock')
+    has_labeled_points: bool | None = Field(False, title='Has Labeled Points')
+    has_span_anchors: bool | None = Field(False, title='Has Span Anchors')
+    has_trial_links: bool | None = Field(False, title='Has Trial Links')
+    key: str = Field(..., title='Key')
+    kind: str = Field(..., title='Kind')
+    last_step_index: int | None = Field(None, title='Last Step Index')
+    last_value: float | None = Field(None, title='Last Value')
+    last_wall_clock: AwareDatetime | None = Field(None, title='Last Wall Clock')
+    max_value: float | None = Field(None, title='Max Value')
+    min_value: float | None = Field(None, title='Min Value')
+    origin: str | None = Field('logged', title='Origin')
+    point_count: int = Field(..., title='Point Count')
+    provenance: dict[str, Any] | None = Field(None, title='Provenance')
+    run_id: UUID = Field(..., title='Run Id')
+    x_axis: str | None = Field('step', title='X Axis')
+
+
+class PublicMetricViewOut(BaseModel):
+    """
+    MetricViewOut minus `created_by` — user ids never leave the tenant.
+    """
+
+    created_at: AwareDatetime = Field(..., title='Created At')
+    id: UUID = Field(..., title='Id')
+    name: str = Field(..., title='Name')
+    run_id: UUID = Field(..., title='Run Id')
+    spec: dict[str, Any] = Field(..., title='Spec')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class PublicProjectOut(BaseModel):
+    created_at: AwareDatetime = Field(..., title='Created At')
+    description: str | None = Field(None, title='Description')
+    id: UUID = Field(..., title='Id')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., title='Name')
+    slug: str = Field(..., title='Slug')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class PublicSpanOut(BaseModel):
+    attributes: dict[str, Any] | None = Field(None, title='Attributes')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    dims_hash: str | None = Field(None, title='Dims Hash')
+    ended_at: AwareDatetime | None = Field(None, title='Ended At')
+    generated_description: str | None = Field(None, title='Generated Description')
+    generated_description_meta: dict[str, Any] | None = Field(
+        None, title='Generated Description Meta'
+    )
+    id: UUID = Field(..., title='Id')
+    name: str | None = Field(None, title='Name')
+    parent_span_id: UUID | None = Field(None, title='Parent Span Id')
+    provider: str | None = Field(None, title='Provider')
+    run_id: UUID = Field(..., title='Run Id')
+    span_type: str = Field(..., title='Span Type')
+    started_at: AwareDatetime = Field(..., title='Started At')
+    status: str = Field(..., title='Status')
+    step_index: int | None = Field(None, title='Step Index')
+    summary: dict[str, Any] | None = Field(None, title='Summary')
+
+
+class PublicSpanTypeCount(BaseModel):
+    count: int = Field(..., title='Count')
+    span_type: str = Field(..., title='Span Type')
+
+
+class PublishRequest(BaseModel):
+    """
+    Publish (or re-publish with new settings) a resource at its own URL.
+    """
+
+    allow_downloads: bool | None = Field(False, title='Allow Downloads')
+    expires_at: AwareDatetime | None = Field(None, title='Expires At')
+    include_children: bool | None = Field(True, title='Include Children')
+
+
+class ResourceKind(StrEnum):
+    """
+    Values match the dashboard's SharedResourceKind byte-for-byte.
+    """
+
+    project = 'project'
+    experiment = 'experiment'
+    run = 'run'
 
 
 class RunCounts(BaseModel):
@@ -933,29 +1265,11 @@ class RunCreate(BaseModel):
         None, title='Labeled Point Budget'
     )
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: str = Field(..., title='Name')
+    name: Name2 | None = Field(None, title='Name')
     parent_relation: ParentRelation | None = None
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
     source: str | None = Field('api', title='Source')
     tags: list[str] | None = Field(None, title='Tags')
-
-
-class RunIds(RootModel[list[UUID]]):
-    root: list[UUID] = Field(..., max_length=50, title='Run Ids')
-
-
-class RunGcRequest(BaseModel):
-    """
-    Permanently purge deleted runs (owner/admin). Exactly one selector: an
-    explicit id list, or every run soft-deleted before `older_than`.
-    """
-
-    older_than: AwareDatetime | None = Field(None, title='Older Than')
-    run_ids: RunIds | None = Field(None, title='Run Ids')
-
-
-class RunGcResult(BaseModel):
-    purged: int = Field(..., title='Purged')
 
 
 class RunGroupCreate(BaseModel):
@@ -979,7 +1293,7 @@ class RunGroupPatch(BaseModel):
     Field-replace PATCH (D9). Only provided fields change; None = untouched.
     """
 
-    name: Name | None = Field(None, title='Name')
+    name: Name2 | None = Field(None, title='Name')
     spec: dict[str, Any] | None = Field(None, title='Spec')
 
 
@@ -994,27 +1308,6 @@ class RunNode(BaseModel):
     status: str = Field(..., title='Status')
 
 
-class RunSessionOut(BaseModel):
-    """
-    A coding-agent session that touched this run.
-
-    Ordered by when we first saw it, so the first entry is the session the run
-    originated in — the same one recorded in
-    `runs.foreign_keys.<agent>_session_id`.
-
-    `captured` is deliberately NOT here. Whether a transcript exists is the
-    engine's answer, not this database's: capture is a per-device permission a
-    user can switch off, so a recorded session with no transcript is an
-    expected state. The run page resolves it against the transcripts corpus at
-    render time and shows captured / pending / not-captured there. Asserting it
-    here would mean this endpoint lying whenever the engine disagreed.
-    """
-
-    agent: str = Field(..., title='Agent')
-    first_seen_at: AwareDatetime = Field(..., title='First Seen At')
-    session_id: str = Field(..., title='Session Id')
-
-
 class RunStatus(StrEnum):
     created = 'created'
     running = 'running'
@@ -1022,6 +1315,71 @@ class RunStatus(StrEnum):
     failed = 'failed'
     crashed = 'crashed'
     canceled = 'canceled'
+
+
+class SandboxDiffCounts(BaseModel):
+    """
+    Change tallies over the WHOLE scan (both manifests fully consumed), so a
+    truncated page still reports honest totals.
+    """
+
+    added: int = Field(..., title='Added')
+    begin_files: int = Field(..., title='Begin Files')
+    deleted: int = Field(..., title='Deleted')
+    end_files: int = Field(..., title='End Files')
+    modified: int = Field(..., title='Modified')
+    unchanged: int = Field(..., title='Unchanged')
+
+
+class Status2(StrEnum):
+    added = 'added'
+    modified = 'modified'
+    deleted = 'deleted'
+    unchanged = 'unchanged'
+
+
+class CompareMode(StrEnum):
+    size_mtime = 'size_mtime'
+    hash = 'hash'
+
+
+class Phase(StrEnum):
+    begin = 'begin'
+    end = 'end'
+
+
+class SandboxFileContent(BaseModel):
+    """
+    One added/modified file's END-state content from `end-delta.tar.gz`
+    (phase 2). The delta carries only end bytes — never the begin side — so this
+    is honestly the POST-change content, not a before/after diff (D3). A symlink
+    member returns its `symlink_target` and no `text`; a non-UTF-8 file returns
+    `is_binary=true` with no `text`; a file over the byte cap returns its head
+    with `truncated=true`.
+    """
+
+    begin_bytes_validated: bool | None = Field(None, title='Begin Bytes Validated')
+    is_binary: bool | None = Field(False, title='Is Binary')
+    is_symlink: bool | None = Field(False, title='Is Symlink')
+    language: str | None = Field(None, title='Language')
+    path: str = Field(..., title='Path')
+    phase: Phase | None = Field('end', title='Phase')
+    size: int = Field(..., title='Size')
+    symlink_target: str | None = Field(None, title='Symlink Target')
+    text: str | None = Field(None, title='Text')
+    trial: str = Field(..., title='Trial')
+    truncated: bool | None = Field(False, title='Truncated')
+
+
+class SandboxFileSide(BaseModel):
+    """
+    One file's metadata on one side of the capture window (begin or end).
+    """
+
+    hash: str | None = Field(None, title='Hash')
+    mode: str | None = Field(None, title='Mode')
+    mtime: float | None = Field(None, title='Mtime')
+    size: int | None = Field(None, title='Size')
 
 
 class Scope(StrEnum):
@@ -1108,35 +1466,104 @@ class SemanticRefKind(StrEnum):
     file = 'file'
 
 
+class SeriesNode(BaseModel):
+    """
+    Leaf: one stored series of the anchor run. Must resolve to EXACTLY one
+    catalog series — `dimensions: None` is only valid while (kind, key) has a
+    single dimension variant; an explicit map (incl. {}) pins the variant.
+    """
+
+    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
+    key: str = Field(..., max_length=512, min_length=1, title='Key')
+    kind: str = Field(..., max_length=128, min_length=1, title='Kind')
+    op: Literal['series'] = Field(..., title='Op')
+
+
 class SeriesPoint(BaseModel):
     smoothed: float | None = Field(None, title='Smoothed')
     step_index: int | None = Field(None, title='Step Index')
     value: float = Field(..., title='Value')
     wall_clock: AwareDatetime = Field(..., title='Wall Clock')
+    x_value: float | None = Field(None, title='X Value')
 
 
-class MaxPoints(RootModel[int]):
+class Keys1(RootModel[list[str]]):
+    root: list[str] = Field(..., max_length=200, min_length=1, title='Keys')
+
+
+class MaxPoints1(RootModel[int]):
     root: int = Field(..., ge=2, le=100000, title='Max Points')
 
 
 class Smoothing(StrEnum):
     ema = 'ema'
     sma = 'sma'
+    gaussian = 'gaussian'
+    twema = 'twema'
 
 
 class SeriesResult(BaseModel):
-    dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
-    key: str = Field(..., title='Key')
-    kind: str = Field(..., title='Kind')
-    points: list[SeriesPoint] = Field(..., title='Points')
-    run_id: UUID = Field(..., title='Run Id')
-    x_axis: str = Field(..., title='X Axis')
+    model_config = ConfigDict(
+        extra='allow',
+    )
+
+
+class SelectorId(RootModel[str]):
+    root: str = Field(..., min_length=1, title='Selector Id')
+
+
+class XAxis(StrEnum):
+    step = 'step'
+    wall_clock = 'wall_clock'
 
 
 class SeriesSelector(BaseModel):
     dimensions: dict[str, Any] | None = Field(None, title='Dimensions')
     key: str = Field(..., title='Key')
     kind: str = Field(..., title='Kind')
+    selector_id: SelectorId | None = Field(None, title='Selector Id')
+    smoothing: Smoothing | None = Field(None, title='Smoothing')
+    smoothing_factor: float | None = Field(
+        0.6, ge=0.0, lt=1.0, title='Smoothing Factor'
+    )
+    smoothing_window: int | None = Field(10, ge=1, le=5000, title='Smoothing Window')
+    x_axis: XAxis | MetricSeriesSelector | None = Field(None, title='X Axis')
+    x_max: float | None = Field(None, title='X Max')
+    x_min: float | None = Field(None, title='X Min')
+
+
+class SessionEntityOut(BaseModel):
+    """
+    One entity a session touched.
+    """
+
+    direct: bool | None = Field(True, title='Direct')
+    entity_id: UUID = Field(..., title='Entity Id')
+    entity_type: str = Field(..., title='Entity Type')
+    first_seen_at: AwareDatetime = Field(..., title='First Seen At')
+    inactive: bool | None = Field(False, title='Inactive')
+    name: str | None = Field(None, title='Name')
+    slug: str | None = Field(None, title='Slug')
+
+
+class SessionWorkOut(BaseModel):
+    """
+    Everything one session touched, grouped by entity type.
+    """
+
+    agent: str | None = Field(None, title='Agent')
+    artifacts: list[SessionEntityOut] | None = Field(None, title='Artifacts')
+    experiments: list[SessionEntityOut] | None = Field(None, title='Experiments')
+    first_seen_at: AwareDatetime | None = Field(None, title='First Seen At')
+    projects: list[SessionEntityOut] | None = Field(None, title='Projects')
+    runs: list[SessionEntityOut] | None = Field(None, title='Runs')
+    session_id: str = Field(..., title='Session Id')
+    totals: dict[str, int] | None = Field(None, title='Totals')
+
+
+class Fn1(StrEnum):
+    ema = 'ema'
+    sma = 'sma'
 
 
 class SpanCreate(BaseModel):
@@ -1164,6 +1591,10 @@ class SpanOut(BaseModel):
     dims_hash: str | None = Field(None, title='Dims Hash')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     external_key: str | None = Field(None, title='External Key')
+    generated_description: str | None = Field(None, title='Generated Description')
+    generated_description_meta: dict[str, Any] | None = Field(
+        None, title='Generated Description Meta'
+    )
     id: UUID = Field(..., title='Id')
     name: str | None = Field(None, title='Name')
     parent_span_id: UUID | None = Field(None, title='Parent Span Id')
@@ -1342,6 +1773,15 @@ class TokenOut(BaseModel):
     token_prefix: str = Field(..., title='Token Prefix')
 
 
+class Fn2(StrEnum):
+    log = 'log'
+    log10 = 'log10'
+    exp = 'exp'
+    abs = 'abs'
+    neg = 'neg'
+    sqrt = 'sqrt'
+
+
 class UploadGcRequest(BaseModel):
     older_than: AwareDatetime = Field(..., title='Older Than')
 
@@ -1430,7 +1870,6 @@ class WorkspaceOut(BaseModel):
     One dropdown entry: the dashboard's workspace switcher builds on this.
     """
 
-    archived_at: AwareDatetime | None = Field(None, title='Archived At')
     created_at: AwareDatetime = Field(..., title='Created At')
     customer_id: str = Field(..., title='Customer Id')
     id: UUID = Field(..., title='Id')
@@ -1504,6 +1943,24 @@ class ClientVersionOut(BaseModel):
     advisory: str | None = Field(None, title='Advisory')
     cli: VersionPair | None = Field({}, validate_default=True)
     plugin: VersionPair | None = Field({}, validate_default=True)
+
+
+class Inputs(RootModel[list[SeriesSelector]]):
+    root: list[SeriesSelector] = Field(..., max_length=16, title='Inputs')
+
+
+class DerivedProvenance(BaseModel):
+    """
+    Client-supplied provenance for a DERIVED batch (0087): what computed these
+    points after the fact (an agent backfilling AUROC onto a completed run). The
+    server stamps `computed_at` and `created_by` on top — clients cannot forge
+    either. Folded keep-first into the series catalog, like `agg`.
+    """
+
+    code_ref: CodeRef | None = Field(None, title='Code Ref')
+    inputs: Inputs | None = Field(None, title='Inputs')
+    note: Note | None = Field(None, title='Note')
+    producer: str = Field(..., max_length=128, min_length=1, title='Producer')
 
 
 class Scopes(RootModel[list[Scope]]):
@@ -1622,7 +2079,7 @@ class IngestRun(BaseModel):
     external_id: str = Field(..., title='External Id')
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: str = Field(..., title='Name')
+    name: str | None = Field(None, title='Name')
     parent_external_id: str | None = Field(None, title='Parent External Id')
     parent_relation: ParentRelation | None = None
     source: str | None = Field('api', title='Source')
@@ -1646,7 +2103,24 @@ class IngestRunRequest(BaseModel):
 
 
 class MetricBatch(BaseModel):
+    origin: Origin | None = Field('logged', title='Origin')
     points: list[MetricPointIn] = Field(..., max_length=50000, title='Points')
+    provenance: DerivedProvenance | None = None
+
+
+class MetricViewData(BaseModel):
+    """
+    An evaluated view: one stepped series. Points reuse the /series/query
+    shape (SeriesPoint) so chart clients need no second decoder.
+    """
+
+    dropped_nonfinite: int | None = Field(0, title='Dropped Nonfinite')
+    missing_inputs: list[str] | None = Field(None, title='Missing Inputs')
+    name: str | None = Field(None, title='Name')
+    points: list[SeriesPoint] = Field(..., title='Points')
+    truncated: bool | None = Field(False, title='Truncated')
+    view_id: UUID | None = Field(None, title='View Id')
+    x_axis: str | None = Field('step', title='X Axis')
 
 
 class ProjectNode(BaseModel):
@@ -1662,14 +2136,90 @@ class ProjectNode(BaseModel):
     workspace_id: UUID | None = Field(None, title='Workspace Id')
 
 
+class PublicAccessOut(BaseModel):
+    """
+    A resource's publication state, as the team-facing surface sees it. There
+    is no token: the shareable link is the resource's ordinary dashboard URL.
+    """
+
+    access_count: int = Field(..., title='Access Count')
+    allow_downloads: bool = Field(..., title='Allow Downloads')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    created_by: UUID | None = Field(None, title='Created By')
+    expires_at: AwareDatetime | None = Field(None, title='Expires At')
+    include_children: bool = Field(..., title='Include Children')
+    last_accessed_at: AwareDatetime | None = Field(None, title='Last Accessed At')
+    resource_id: UUID = Field(..., title='Resource Id')
+    resource_kind: ResourceKind
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class PublicPageResource(BaseModel):
+    id: UUID = Field(..., title='Id')
+    name: str | None = Field(None, title='Name')
+    short_id: str | None = Field(None, title='Short Id')
+    slug: str | None = Field(None, title='Slug')
+    status: RunStatus | None = None
+
+
+class PublicRunDetailOut(BaseModel):
+    config: dict[str, Any] | None = Field(None, title='Config')
+    counts: RunCounts | None = None
+    created_at: AwareDatetime = Field(..., title='Created At')
+    description: str | None = Field(None, title='Description')
+    ended_at: AwareDatetime | None = Field(None, title='Ended At')
+    experiment_id: UUID | None = Field(None, title='Experiment Id')
+    group_id: UUID | None = Field(None, title='Group Id')
+    id: UUID = Field(..., title='Id')
+    labeled_point_budget: int | None = Field(None, title='Labeled Point Budget')
+    labeled_point_count: int | None = Field(0, title='Labeled Point Count')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., title='Name')
+    parent_relation: str | None = Field(None, title='Parent Relation')
+    parent_run_id: UUID | None = Field(None, title='Parent Run Id')
+    project_id: UUID | None = Field(None, title='Project Id')
+    short_id: str | None = Field(None, title='Short Id')
+    source: str = Field(..., title='Source')
+    started_at: AwareDatetime | None = Field(None, title='Started At')
+    status: RunStatus
+    summary: dict[str, Any] | None = Field(None, title='Summary')
+    tags: list[str] | None = Field(None, title='Tags')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
+class PublicRunOut(BaseModel):
+    config: dict[str, Any] | None = Field(None, title='Config')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    description: str | None = Field(None, title='Description')
+    ended_at: AwareDatetime | None = Field(None, title='Ended At')
+    experiment_id: UUID | None = Field(None, title='Experiment Id')
+    group_id: UUID | None = Field(None, title='Group Id')
+    id: UUID = Field(..., title='Id')
+    labeled_point_budget: int | None = Field(None, title='Labeled Point Budget')
+    labeled_point_count: int | None = Field(0, title='Labeled Point Count')
+    metadata: dict[str, Any] | None = Field(None, title='Metadata')
+    name: str = Field(..., title='Name')
+    parent_relation: str | None = Field(None, title='Parent Relation')
+    parent_run_id: UUID | None = Field(None, title='Parent Run Id')
+    project_id: UUID | None = Field(None, title='Project Id')
+    short_id: str | None = Field(None, title='Short Id')
+    source: str = Field(..., title='Source')
+    started_at: AwareDatetime | None = Field(None, title='Started At')
+    status: RunStatus
+    summary: dict[str, Any] | None = Field(None, title='Summary')
+    tags: list[str] | None = Field(None, title='Tags')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+
+
 class RunDetailOut(BaseModel):
     """
     The /v1 read view of a run: RunOut plus the fold fields that are DELIBERATELY
     absent from RunOut so the frozen ingest response stays byte-identical (the ingest
     route keeps response_model=RunOut, which filters these out). short_id (fold #21)
     is the human-facing petname the dashboard displays; created_by (fold #1), env_ref
-    (fold #7), and foreign_keys (fold #8) surface here for reads. project_id
-    (0054) is likewise detail-only: the run's owning project, always set.
+    (fold #7), foreign_keys (fold #8), and activity-aware updated_at (0071)
+    surface here for reads. project_id (0054) is likewise detail-only: the
+    run's owning project, always set.
     """
 
     config: dict[str, Any] | None = Field(None, title='Config')
@@ -1677,7 +2227,6 @@ class RunDetailOut(BaseModel):
     created_at: AwareDatetime = Field(..., title='Created At')
     created_by: str | None = Field(None, title='Created By')
     customer_id: str = Field(..., title='Customer Id')
-    deleted_at: AwareDatetime | None = Field(None, title='Deleted At')
     description: str | None = Field(None, title='Description')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     env_ref: str | None = Field(None, title='Env Ref')
@@ -1687,8 +2236,10 @@ class RunDetailOut(BaseModel):
     group_id: UUID | None = Field(None, title='Group Id')
     id: UUID = Field(..., title='Id')
     labeled_point_budget: int | None = Field(None, title='Labeled Point Budget')
+    labeled_point_count: int | None = Field(0, title='Labeled Point Count')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
+    name_customized: bool | None = Field(False, title='Name Customized')
     parent_relation: ParentRelation | None = None
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
     project_id: UUID = Field(..., title='Project Id')
@@ -1698,6 +2249,7 @@ class RunDetailOut(BaseModel):
     status: RunStatus
     summary: dict[str, Any] | None = Field(None, title='Summary')
     tags: list[str] | None = Field(None, title='Tags')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
 
 
 class RunLineage(BaseModel):
@@ -1715,13 +2267,13 @@ class RunOut(BaseModel):
     counts: RunCounts | None = None
     created_at: AwareDatetime = Field(..., title='Created At')
     customer_id: str = Field(..., title='Customer Id')
-    deleted_at: AwareDatetime | None = Field(None, title='Deleted At')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     experiment_id: UUID | None = Field(..., title='Experiment Id')
     external_id: str | None = Field(None, title='External Id')
     group_id: UUID | None = Field(None, title='Group Id')
     id: UUID = Field(..., title='Id')
     labeled_point_budget: int | None = Field(None, title='Labeled Point Budget')
+    labeled_point_count: int | None = Field(0, title='Labeled Point Count')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     parent_relation: ParentRelation | None = None
@@ -1739,9 +2291,44 @@ class RunPatch(BaseModel):
     env_ref: str | None = Field(None, title='Env Ref')
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: Name | None = Field(None, title='Name')
+    name: Name2 | None = Field(None, title='Name')
     status: RunStatus | None = None
     summary: dict[str, Any] | None = Field(None, title='Summary')
+    tags: list[str] | None = Field(None, title='Tags')
+
+
+class SandboxDiffEntry(BaseModel):
+    """
+    One changed (or, when include_unchanged, unchanged) path in the diff.
+    """
+
+    begin: SandboxFileSide | None = None
+    end: SandboxFileSide | None = None
+    has_begin_content: bool | None = Field(False, title='Has Begin Content')
+    has_content: bool | None = Field(False, title='Has Content')
+    path: str = Field(..., title='Path')
+    status: Status2 = Field(..., title='Status')
+    symlink_target: str | None = Field(None, title='Symlink Target')
+    type: str = Field(..., title='Type')
+
+
+class SandboxDiffResult(BaseModel):
+    """
+    A trial's begin/end filesystem diff: changed-set entries + full-scan counts
+    + the meta.json integrity/limits echo. `include_unchanged=false` (default)
+    keeps the common case tiny (D2); the rare full tree pages by `next_cursor`.
+    """
+
+    begin_state_hash: str = Field(..., title='Begin State Hash')
+    compare_mode: CompareMode = Field(..., title='Compare Mode')
+    counts: SandboxDiffCounts
+    entries: list[SandboxDiffEntry] = Field(..., title='Entries')
+    integrity: dict[str, bool] | None = Field(None, title='Integrity')
+    limits: dict[str, Any] | None = Field(None, title='Limits')
+    next_cursor: str | None = Field(None, title='Next Cursor')
+    schema_: str = Field(..., alias='schema', title='Schema')
+    trial: str = Field(..., title='Trial')
+    truncated: bool | None = Field(False, title='Truncated')
 
 
 class SemanticRef(BaseModel):
@@ -1750,7 +2337,7 @@ class SemanticRef(BaseModel):
 
 
 class Series(RootModel[list[SeriesSelector]]):
-    root: list[SeriesSelector] = Field(..., max_length=200, title='Series')
+    root: list[SeriesSelector] = Field(..., max_length=10000, title='Series')
 
 
 class SeriesQueryRequest(BaseModel):
@@ -1758,14 +2345,17 @@ class SeriesQueryRequest(BaseModel):
     Multi-run, multi-series read for the run page AND N-run comparison (D9).
     """
 
-    max_points: MaxPoints | None = Field(None, title='Max Points')
+    keys: Keys1 | None = Field(None, title='Keys')
+    max_points: MaxPoints1 | None = Field(None, title='Max Points')
     run_ids: list[UUID] = Field(..., max_length=50, min_length=1, title='Run Ids')
     series: Series | None = Field(None, title='Series')
-    smoothing: Smoothing | None = Field(None, title='Smoothing')
+    smoothing: Smoothing | None = Field(None, deprecated=True, title='Smoothing')
     smoothing_factor: float | None = Field(
-        0.6, ge=0.0, lt=1.0, title='Smoothing Factor'
+        0.6, deprecated=True, ge=0.0, lt=1.0, title='Smoothing Factor'
     )
-    smoothing_window: int | None = Field(10, ge=1, le=5000, title='Smoothing Window')
+    smoothing_window: int | None = Field(
+        10, deprecated=True, ge=1, le=5000, title='Smoothing Window'
+    )
     step_from: int | None = Field(None, title='Step From')
     step_to: int | None = Field(None, title='Step To')
 
@@ -1789,6 +2379,42 @@ class BrowseResponse(BaseModel):
     truncated: bool | None = Field(False, title='Truncated')
 
 
+class PublicPageInfo(BaseModel):
+    """
+    The unfurl/page-shell read: what kind of thing this URL opens and the
+    resource's display identity — nothing else.
+    """
+
+    allow_downloads: bool = Field(..., title='Allow Downloads')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    include_children: bool = Field(..., title='Include Children')
+    kind: ResourceKind
+    resource: PublicPageResource
+
+
+class PublicRunBundle(BaseModel):
+    """
+    The run-page bundle minus `sessions` (coding-agent session ids) and with
+    lineage refs filtered by the caller to in-grant runs before validation.
+    """
+
+    artifact_total: int = Field(..., title='Artifact Total')
+    artifacts: list[PublicArtifactOut] = Field(..., title='Artifacts')
+    chart_settings: list[ChartSettingsOut] | None = Field(None, title='Chart Settings')
+    child_run_ids: list[UUID] | None = Field(None, title='Child Run Ids')
+    parent_run_id: UUID | None = Field(None, title='Parent Run Id')
+    run: PublicRunDetailOut
+    series: list[PublicMetricSeriesOut] = Field(..., title='Series')
+    span_types: list[PublicSpanTypeCount] = Field(..., title='Span Types')
+    views: list[PublicMetricViewOut] | None = Field(None, title='Views')
+
+
+class PublicRunLineage(BaseModel):
+    ancestors: list[PublicRunOut] = Field(..., title='Ancestors')
+    descendants: list[PublicRunOut] = Field(..., title='Descendants')
+    run_id: UUID = Field(..., title='Run Id')
+
+
 class RunBundle(BaseModel):
     """
     One request: run + coding sessions + catalog + artifact index (bounded) +
@@ -1798,12 +2424,15 @@ class RunBundle(BaseModel):
 
     artifact_total: int = Field(..., title='Artifact Total')
     artifacts: list[ArtifactOut] = Field(..., title='Artifacts')
+    chart_settings: list[ChartSettingsOut] | None = Field(None, title='Chart Settings')
     child_run_ids: list[UUID] | None = Field(None, title='Child Run Ids')
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
     run: RunDetailOut
     series: list[MetricSeriesOut] = Field(..., title='Series')
-    sessions: list[RunSessionOut] | None = Field(None, title='Sessions')
+    session_total: int | None = Field(0, title='Session Total')
+    sessions: list[AgentSessionOut] | None = Field(None, title='Sessions')
     span_types: list[SpanTypeCount] = Field(..., title='Span Types')
+    views: list[MetricViewOut] | None = Field(None, title='Views')
 
 
 class SemanticHit(BaseModel):
@@ -1842,3 +2471,75 @@ class SearchResponse(BaseModel):
     semantic: SemanticSection
     state: SearchState
     truncated: bool | None = Field(False, title='Truncated')
+
+
+class BinaryNode(BaseModel):
+    fn: Fn = Field(..., title='Fn')
+    left: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
+        ..., discriminator='op', title='Left'
+    )
+    op: Literal['binary'] = Field(..., title='Op')
+    right: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
+        ..., discriminator='op', title='Right'
+    )
+
+
+class MetricViewCreate(BaseModel):
+    name: str = Field(..., max_length=200, min_length=1, title='Name')
+    spec: MetricViewSpec
+
+
+class MetricViewPatch(BaseModel):
+    name: Name1 | None = Field(None, title='Name')
+    spec: MetricViewSpec | None = None
+
+
+class MetricViewPreviewRequest(BaseModel):
+    """
+    Un-persisted evaluation — powers the create/edit dialog's live preview.
+    """
+
+    max_points: MaxPoints | None = Field(
+        2000, title='Max Points', validate_default=True
+    )
+    spec: MetricViewSpec
+    step_from: int | None = Field(None, title='Step From')
+    step_to: int | None = Field(None, title='Step To')
+
+
+class MetricViewSpec(BaseModel):
+    expression: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
+        ..., discriminator='op', title='Expression'
+    )
+
+
+class SmoothNode(BaseModel):
+    """
+    Smoothing INSIDE the expression (EMA(loss_a / loss_b) differs from
+    EMA-ing the rendered output). Reuses the store's _ema/_sma at the aligned
+    grid's full resolution. ema uses `factor`, sma uses `window`.
+    """
+
+    factor: float | None = Field(0.6, ge=0.0, lt=1.0, title='Factor')
+    fn: Fn1 = Field(..., title='Fn')
+    op: Literal['smooth'] = Field(..., title='Op')
+    operand: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
+        ..., discriminator='op', title='Operand'
+    )
+    window: int | None = Field(10, ge=1, le=5000, title='Window')
+
+
+class UnaryNode(BaseModel):
+    fn: Fn2 = Field(..., title='Fn')
+    op: Literal['unary'] = Field(..., title='Op')
+    operand: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
+        ..., discriminator='op', title='Operand'
+    )
+
+
+BinaryNode.model_rebuild()
+MetricViewCreate.model_rebuild()
+MetricViewPatch.model_rebuild()
+MetricViewPreviewRequest.model_rebuild()
+MetricViewSpec.model_rebuild()
+SmoothNode.model_rebuild()

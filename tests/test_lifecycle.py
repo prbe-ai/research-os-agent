@@ -172,62 +172,47 @@ def test_list_and_get_group_read_back(client, app):
         client.get_group(str(uuid.uuid4()))
 
 
-# -- lifecycle --------------------------------------------------------------
-def test_experiment_archive_is_idempotent_then_restores(client, app):
-    exp = _create_experiment(client)
-    first = client.archive_experiment(exp["id"])
-    assert first["archived_at"]
-    again = client.archive_experiment(exp["id"])
-    assert again["archived_at"] == first["archived_at"]  # keeps the original time
-    assert client.restore_experiment(exp["id"])["archived_at"] is None
-
-
-def test_run_delete_then_restore(client, app):
+# -- permanent delete -------------------------------------------------------
+def test_delete_run_is_permanent(client, app):
     run = open_run(client, experiment="e", name="r")
-    assert client.delete_run(run.id)["deleted_at"]
+    assert client.delete_run(run.id) is None  # 204, no body
+    assert run.id not in app.runs
     with pytest.raises(errors.NotFoundError):
-        client.delete_run(run.id)  # already deleted
-    assert client.restore_run(run.id)["deleted_at"] is None
+        client.delete_run(run.id)  # already gone
 
 
-def test_gc_runs_requires_exactly_one_selector(client, app):
-    with pytest.raises(ValueError):
-        client.gc_runs()
-    with pytest.raises(ValueError):
-        client.gc_runs(run_ids=["r-1"], older_than="2026-01-01T00:00:00Z")
+def test_delete_experiment_takes_its_runs(client, app):
+    exp = _create_experiment(client)
+    run = client.create_run(exp["id"], "r")
+    assert client.delete_experiment(exp["id"]) is None
+    assert exp["id"] not in app.experiments
+    assert run.id not in app.runs
+    with pytest.raises(errors.NotFoundError):
+        client.delete_experiment(exp["id"])
 
 
-def test_gc_runs_rejects_an_empty_id_list(client, app):
-    """An empty run_ids is not a valid selector — sending `{"run_ids": []}` risks the
-    backend reading it as an unfiltered purge. It must raise, not slip through."""
-    with pytest.raises(ValueError):
-        client.gc_runs(run_ids=[])
-    assert not [r for r in app.requests if r.url.path == "/v1/runs/gc"]
-
-
-def test_gc_runs_purges_by_id(client, app):
-    run = open_run(client, experiment="e", name="r")
-    client.delete_run(run.id)
-    assert client.gc_runs(run_ids=[run.id])["purged"] == 1
+def test_delete_project_takes_the_whole_tree(client, app):
+    project = client.create_project("doomed", "Doomed")
+    exp = client.create_experiment("e-doomed", "E", hypothesis="h", project_id=project["id"])
+    run = client.create_run(exp["id"], "r")
+    assert client.delete_project(project["id"]) is None
+    assert project["id"] not in app.projects
+    assert exp["id"] not in app.experiments
     assert run.id not in app.runs
 
 
-def test_gc_runs_never_purges_a_live_run(client, app):
-    """gc only ever reaps soft-deleted runs; naming a live one purges nothing."""
-    run = open_run(client, experiment="e", name="r")
-    assert client.gc_runs(run_ids=[run.id])["purged"] == 0
-    assert run.id in app.runs
+def test_deleted_slugs_are_free_again(client, app):
+    """Archiving kept a slug reserved, which is what made "missing" and "already
+    exists" both true of one name. Deleting releases it."""
+    project = client.create_project("recycle", "First")
+    client.delete_project(project["id"])
+    assert client.resolve_project("recycle") is None
+    again = client.create_project("recycle", "Second")
+    assert again["id"] != project["id"]
 
 
-def test_gc_runs_honors_the_older_than_cutoff(client, app):
-    run = open_run(client, experiment="e", name="r")
-    client.delete_run(run.id)  # fake stamps deleted_at = 2026-07-15
-    assert client.gc_runs(older_than="2026-01-01T00:00:00Z")["purged"] == 0
-    assert client.gc_runs(older_than="2026-08-01T00:00:00Z")["purged"] == 1
-
-
-def test_run_gc_cli_requires_confirmation(wired, monkeypatch):
-    """Purging is irreversible, so the CLI must not do it on a bare invocation."""
+def test_run_delete_cli_requires_confirmation(wired, monkeypatch):
+    """Deleting is irreversible, so the CLI must not do it on a bare invocation."""
     asked = []
 
     def refuse(text, **kw):
@@ -235,19 +220,32 @@ def test_run_gc_cli_requires_confirmation(wired, monkeypatch):
         raise typer.Abort()
 
     monkeypatch.setattr(typer, "confirm", refuse)
-    assert cli.main(["run", "gc", "--older-than", "2026-01-01T00:00:00Z"]) == 1
+    assert cli.main(["run", "delete", "r-1"]) == 1
     assert "cannot be undone" in asked[0]
-    assert not [r for r in wired.requests if r.url.path == "/v1/runs/gc"]
+    assert not [
+        r for r in wired.requests if r.method == "DELETE" and "/v1/runs/" in r.url.path
+    ]
 
 
-def test_run_gc_cli_proceeds_with_yes(wired):
-    """--yes is the scriptable path: no prompt, and the purge actually fires."""
-    assert cli.main(["run", "gc", "--older-than", "2026-01-01T00:00:00Z", "--yes"]) == 0
-    assert [r for r in wired.requests if r.url.path == "/v1/runs/gc"]
+def test_project_delete_cli_requires_confirmation(wired, monkeypatch):
+    asked = []
+
+    def refuse(text, **kw):
+        asked.append(text)
+        raise typer.Abort()
+
+    monkeypatch.setattr(typer, "confirm", refuse)
+    pid = make_client(wired).create_project("keepme", "Keep")["id"]
+    assert cli.main(["project", "delete", pid]) == 1
+    assert "cannot be undone" in asked[0]
+    assert pid in wired.projects
 
 
-def test_run_gc_cli_rejects_both_selectors(wired):
-    assert cli.main(["run", "gc", "--id", "r-1", "--older-than", "2026-01-01T00:00:00Z", "--yes"]) == 2
+def test_experiment_delete_cli_proceeds_with_yes(wired):
+    """--yes is the scriptable path: no prompt, and the delete actually fires."""
+    eid = next(iter(wired.experiments))
+    assert cli.main(["experiment", "delete", eid, "--yes"]) == 0
+    assert eid not in wired.experiments
 
 
 def test_delete_artifact(client, app):

@@ -102,22 +102,19 @@ def test_project_list_all_omits_the_filter(client):
     assert slugs == ["in-mine", "in-other"]
 
 
-def test_archived_projects_are_hidden_then_restored(client):
+def test_deleted_projects_leave_the_listing_for_good(client):
     proj = client.create_project("temp", workspace_id=_WS_MINE)
-
-    client.archive_project(proj["id"])
-    assert [p["slug"] for p in client.list_projects().items] == []
-
-    client.restore_project(proj["id"])
     assert [p["slug"] for p in client.list_projects().items] == ["temp"]
 
+    client.delete_project(proj["id"])
+    assert [p["slug"] for p in client.list_projects().items] == []
 
-def test_default_named_project_has_no_archive_exception(client):
+
+def test_default_named_project_has_no_delete_exception(client):
     proj = client.create_project("default", workspace_id=_WS_MINE)
 
-    archived = client.archive_project(proj["id"])
-
-    assert archived["archived_at"] is not None
+    assert client.delete_project(proj["id"]) is None
+    assert client.resolve_project("default") is None
 
 
 def test_project_workspace_id_may_be_null_on_a_legacy_row(client):

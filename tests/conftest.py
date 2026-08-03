@@ -91,8 +91,6 @@ _PROJ_ARTIFACTS = re.compile(r"^/v1/projects/([^/]+)/artifacts$")
 _PROJ_ARTIFACT_UPLOADS = re.compile(r"^/v1/projects/([^/]+)/artifacts/uploads$")
 _EXP_ARTIFACTS = re.compile(r"^/v1/experiments/([^/]+)/artifacts$")
 _EXP_ARTIFACT_UPLOADS = re.compile(r"^/v1/experiments/([^/]+)/artifacts/uploads$")
-_PROJ_ARCHIVE = re.compile(r"^/v1/projects/([^/]+)/archive$")
-_PROJ_RESTORE = re.compile(r"^/v1/projects/([^/]+)/restore$")
 _SHARED_FILE_ITEM = re.compile(r"^/v1/shared/files/([^/]+)$")
 _SHARED_FILE_SUB = re.compile(r"^/v1/shared/files/([^/]+)/(confirm|download|unshare)$")
 _WS_FILE_SHARE = re.compile(r"^/v1/workspace-files/([^/]+)/share$")
@@ -203,7 +201,7 @@ class FakeApp:
         row = {
             "id": eid, "customer_id": "lab-42", "slug": slug, "name": slug,
             "hypothesis": "h", "project_id": project_id,
-            "created_at": _T0, "archived_at": None,
+            "created_at": _T0,
         }
         self.experiments[eid] = row
         return row
@@ -221,12 +219,12 @@ class FakeApp:
             _WS_MINE: {
                 "id": _WS_MINE, "customer_id": "lab-42", "name": "Mine",
                 "slug": "mine", "kind": "personal", "owner_user_id": _ME,
-                "project_count": 0, "created_at": _T0, "archived_at": None,
+                "project_count": 0, "created_at": _T0,
             },
             _WS_OTHER: {
                 "id": _WS_OTHER, "customer_id": "lab-42", "name": "Teammate",
                 "slug": "teammate", "kind": "personal", "owner_user_id": "user-other",
-                "project_count": 0, "created_at": _T0, "archived_at": None,
+                "project_count": 0, "created_at": _T0,
             },
         }
         # Artifacts are keyed by an anchor key ("run:<id>", "project:<id>", ...) so the
@@ -299,7 +297,7 @@ class FakeApp:
 
     def _stamp(self) -> str:
         """A fresh, monotonically increasing timestamp per call. Distinct values let a
-        preservation test (archive is idempotent) actually catch a wrong re-stamp."""
+        test that pins ordering actually catch a wrong re-stamp."""
         self._ts += 1
         return f"2026-07-15T00:00:{self._ts:02d}Z"
 
@@ -382,7 +380,6 @@ class FakeApp:
                 "description": body.get("description"),
                 "metadata": body.get("metadata") or {},
                 "created_at": _T0,
-                "archived_at": None,
             }
             self.projects[pid] = row
             return httpx.Response(201, json=row)
@@ -397,26 +394,27 @@ class FakeApp:
             slug = request.url.params.get("slug")
             if slug:
                 rows = [r for r in rows if r.get("slug") == slug]
-            if request.url.params.get("include") != "archived":
-                rows = [r for r in rows if r.get("archived_at") is None]
             return httpx.Response(200, json=rows)
 
-        m = _PROJ_ARCHIVE.match(path)
-        if m and method == "POST":
+        m = _PROJ_ITEM.match(path)
+        if m and method == "DELETE":
             pid = m.group(1)
             if pid not in self.projects:
                 return httpx.Response(404, json={"detail": "not found"})
-            row = self.projects[pid]
-            row["archived_at"] = _T0
-            return httpx.Response(200, json=row)
-
-        m = _PROJ_RESTORE.match(path)
-        if m and method == "POST":
-            pid = m.group(1)
-            if pid not in self.projects:
-                return httpx.Response(404, json={"detail": "not found"})
-            self.projects[pid]["archived_at"] = None
-            return httpx.Response(200, json=self.projects[pid])
+            # Mirrors the engine cascade (0080): the tree goes with the project.
+            doomed = {
+                eid for eid, e in self.experiments.items() if e.get("project_id") == pid
+            }
+            for rid in [
+                rid
+                for rid, r in self.runs.items()
+                if r.get("project_id") == pid or r.get("experiment_id") in doomed
+            ]:
+                self.runs.pop(rid)
+            for eid in doomed:
+                self.experiments.pop(eid)
+            self.projects.pop(pid)
+            return httpx.Response(204)
 
         m = _PROJ_ITEM.match(path)
         if m and method == "GET":
@@ -441,7 +439,7 @@ class FakeApp:
                 if row.get("workspace_id") != dest:
                     row["workspace_id"] = dest
                     for eid, exp in self.experiments.items():
-                        if exp.get("project_id") == pid and not exp.get("archived_at"):
+                        if exp.get("project_id") == pid:
                             self.reindexed.append(eid)
                     for rid, run in self.runs.items():
                         if run.get("project_id") == pid:
@@ -511,7 +509,6 @@ class FakeApp:
                 "project_id": body.get("project_id") or str(uuid.uuid4()),
                 "customer_id": "lab-42",
                 "created_at": self._stamp(),
-                "archived_at": None,
             }
             self.experiments[eid] = row
             return httpx.Response(201, json=row)
@@ -525,11 +522,6 @@ class FakeApp:
             slug = request.url.params.get("slug")
             if slug:
                 rows = [row for row in rows if row.get("slug") == slug]
-            # The engine filters archived rows out of the default listing
-            # (`archived_at IS NULL` unless include=archived); the fake did not,
-            # so the archived-vs-absent distinction was invisible for experiments.
-            if request.url.params.get("include") != "archived":
-                rows = [row for row in rows if row.get("archived_at") is None]
             return httpx.Response(200, json=rows)
 
         if path == "/v1/runs" and method == "GET":
@@ -770,7 +762,7 @@ class FakeApp:
             for rid in body.get("run_ids", []):
                 row = self.runs.get(rid)
                 # Every run is validated in-tenant AND live before any read.
-                if row is None or row.get("deleted_at"):
+                if row is None:
                     return httpx.Response(404, json={"detail": "run not found"})
                 for s in self.series.get(rid, []):
                     if body.get("keys") and s.get("key") not in body["keys"]:
@@ -891,11 +883,9 @@ class FakeApp:
         m = _RUN_ITEM.match(path)
         if m and method == "DELETE":
             rid = m.group(1)
-            row = self.runs.get(rid)
-            if row is None or row.get("deleted_at"):
+            if self.runs.pop(rid, None) is None:
                 return httpx.Response(404, json={"detail": "run not found"})
-            row["deleted_at"] = "2026-07-15T00:00:00Z"
-            return httpx.Response(200, json=row)
+            return httpx.Response(204)
         if m and method == "GET":
             rid = m.group(1)
             row = self.runs.get(rid)
@@ -948,21 +938,18 @@ class FakeApp:
                 row.update({k: v for k, v in body.items() if v is not None})
             return httpx.Response(200, json=row)
 
-        # -- archive / restore / gc --
-        m = re.match(r"^/v1/experiments/([^/]+)/(archive|restore)$", path)
-        if m and method == "POST":
-            eid, verb = m.group(1), m.group(2)
-            row = self.experiments.get(eid)
-            if row is None:
+        # -- permanent delete --
+        m = _EXP_ITEM.match(path)
+        if m and method == "DELETE":
+            eid = m.group(1)
+            if self.experiments.pop(eid, None) is None:
                 return httpx.Response(404, json={"detail": "experiment not found"})
-            if verb == "archive":
-                # Idempotent: keep the FIRST archive time (mirrors the backend). The
-                # stamp is unique per call, so an idempotency test that asserts the time
-                # was preserved would actually fail if this wrongly re-stamped.
-                row["archived_at"] = row.get("archived_at") or self._stamp()
-            else:
-                row["archived_at"] = None
-            return httpx.Response(200, json=row)
+            # Mirrors the engine cascade (0080): the experiment's runs go with it.
+            for rid in [
+                rid for rid, r in self.runs.items() if r.get("experiment_id") == eid
+            ]:
+                self.runs.pop(rid)
+            return httpx.Response(204)
 
         m = re.match(r"^/v1/runs/([^/]+)/heartbeat$", path)
         if m and method == "POST":
@@ -972,36 +959,11 @@ class FakeApp:
                 return httpx.Response(404, json={"detail": "run not found"})
             # Mirrors app/runs/router.py: only a 'running' run is stamped; a late
             # beat racing a completion is a no-op, not an error.
-            if row.get("status") == "running" and not row.get("deleted_at"):
+            if row.get("status") == "running":
                 row["last_heartbeat_at"] = self._stamp()
                 self.run_heartbeats[rid] = self.run_heartbeats.get(rid, 0) + 1
             return httpx.Response(200, json=row)
 
-        m = re.match(r"^/v1/runs/([^/]+)/restore$", path)
-        if m and method == "POST":
-            rid = m.group(1)
-            row = self.runs.get(rid)
-            if row is None:
-                return httpx.Response(404, json={"detail": "run not found"})
-            row["deleted_at"] = None
-            return httpx.Response(200, json=row)
-
-        if path == "/v1/runs/gc" and method == "POST":
-            ids, older_than = body.get("run_ids"), body.get("older_than")
-            if (ids is None) == (older_than is None):  # exactly one selector (backend 422s)
-                return httpx.Response(422, json={"detail": "exactly one of run_ids/older_than"})
-            # Only ever purges SOFT-DELETED runs — a live run is untouched even if its
-            # id is named explicitly. Mirrors app/runs/router.py.
-            if ids is not None:
-                doomed = [r for r in ids if (self.runs.get(r) or {}).get("deleted_at")]
-            else:
-                doomed = [
-                    r for r, row in self.runs.items()
-                    if row.get("deleted_at") and row["deleted_at"] < older_than
-                ]
-            for rid in doomed:
-                self.runs.pop(rid)
-            return httpx.Response(200, json={"purged": len(doomed)})
 
         if path == "/v1/artifacts/uploads/gc" and method == "POST":
             older_than = body["older_than"]
@@ -1361,8 +1323,8 @@ class FakeApp:
             "foreign_keys": body.get("foreign_keys", {}),
             "env_ref": body.get("env_ref"),
             "created_by": "ingest:test",
-            # Required on the real RunDetailOut, so delete_run/restore_run responses
-            # match the contract rather than a leaner fiction.
+            # Required on the real RunDetailOut, so read responses match the
+            # contract rather than a leaner fiction.
             "customer_id": "lab-42",
             "created_at": self._stamp(),
         }
