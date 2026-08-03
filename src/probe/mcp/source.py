@@ -293,6 +293,26 @@ class ResearchOSSource:
         # check exists to prevent. So narrow by the name's DIRECTORY and match the
         # name ourselves. A root-level name has no directory, and the whole shared
         # scope is then the honest search space.
+        # An id is not a name, and must never be answered as an absent one.
+        # `search_knowledge` returns artifact hits carrying an ID (there is no
+        # addressable resource for them), so feeding that straight back here is
+        # the obvious next move -- and answering "nothing official exists under
+        # that name yet" would tell the agent to CREATE a duplicate of the very
+        # artifact the search just returned. Same inversion as the retired
+        # `asset:` ref, one layer in.
+        try:
+            uuid.UUID(name)
+        except ValueError:
+            pass
+        else:
+            raise errors.ValidationError(
+                f"{name!r} is an id, not a name: an artifact ref resolves by NAME "
+                f"(no GET /v1/artifacts/{{id}} route exists). This says nothing "
+                f"about whether that artifact exists -- do NOT read it as licence "
+                f"to create one. Use its `name` from the search result, or read "
+                f"the owning run with run:<id> view=artifacts.",
+                status=422,
+            )
         folder = name.rsplit("/", 1)[0] if "/" in name else ""
         params = {"prefix": folder} if folder else {}
         # NO `limit`, deliberately. A cap would make an artifact past the cap read
@@ -305,13 +325,20 @@ class ResearchOSSource:
         rows = self.client.list_anchored(Anchor.SHARED, **params) or []
         exact = [row for row in rows if row.get("name") == name]
         if not exact:
-            # Scoped honestly: the route serves live COMPLETE rows only, so an
-            # upload still pending is invisible here. Saying "nothing exists"
-            # would overstate what was actually checked.
+            # States what was SEARCHED, not what exists. This lookup covers live
+            # COMPLETE artifacts at the SHARED level only -- a run/experiment/
+            # project-anchored artifact of the same name is real and invisible
+            # here, and so is an upload still pending. "Nothing exists" would
+            # overstate all of that, and downstream this message is read as
+            # licence to create a new identity, so the overstatement is the
+            # expensive direction to be wrong in.
             raise errors.NotFoundError(
-                f"no completed shared artifact named {name!r}; "
-                f"nothing official exists under that name yet "
-                f"(an upload still pending would not appear here)"
+                f"no completed artifact named {name!r} at the SHARED level, which "
+                f"is the only scope this check covers. That is the answer to "
+                f"'does an OFFICIAL one exist' -- it does not rule out a copy "
+                f"anchored to a run, experiment or project, or an upload still "
+                f"pending. Check a container with run:<id> / experiment:<id> "
+                f"view=artifacts; promote a workspace file with `probe shared share`."
             )
         if len(exact) > 1:
             # Loud, and deliberately NOT a not-found: an agent reads not-found as
