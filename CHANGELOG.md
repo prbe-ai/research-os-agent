@@ -47,6 +47,24 @@
 
 ### Added
 
+- **A fresh install now ends by offering to import existing work.** Every step
+  above it configures what Probe does from now on, which left a new install
+  pointed at an empty dashboard — and an empty dashboard is indistinguishable
+  from a product that does not work yet. Say yes and the folder picker opens
+  immediately; say no and nothing changes.
+
+  Asked here rather than left to the action menu because the action menu only
+  appears on a RE-RUN: someone who installs, sees nothing, and closes the
+  terminal never reaches it. Declining costs nothing — `Import existing work`
+  stays in the menu forever.
+
+  Skippable, and skipping is the default: every other step sets a preference,
+  this one launches an agent over a folder, so opting in is deliberate rather
+  than whatever happens when you hold enter through an install. It does not
+  appear on a re-run, after a failed browser approval (no credential to spend),
+  on a capture-only install (no `api` grant), or on any flag/`--yes`/non-TTY
+  path — the flags stay the contract and CI is never handed a prompt.
+
 - **`probe wizard` → Import existing work.** Point the wizard at a folder of
   existing research and one headless Claude agent reads it, uploads what it
   finds, and describes each artifact. The wizard does the two things a program

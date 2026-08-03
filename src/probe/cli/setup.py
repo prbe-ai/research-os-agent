@@ -129,6 +129,22 @@ AUTO_UPDATE_COPY = (
     "Upgrades the CLI and plugins in the background at Claude Code session start.",
 )
 
+#: The LAST step of a fresh install, and the only one about work that already
+#: exists. Everything above it configures what Probe does from now on, which
+#: leaves a new install pointed at an empty dashboard -- and an empty dashboard
+#: is indistinguishable from a product that does not work yet.
+#:
+#: Asked here rather than left to the action menu because the menu only appears
+#: on a RE-RUN: someone who installs, sees nothing, and closes the terminal
+#: never reaches it. Declining is a real answer -- `Import existing work` stays
+#: in the menu forever, so "not now" costs nothing.
+BACKFILL_COPY = (
+    "Import work you have already done?",
+    "Point Probe at a folder and an agent uploads and describes what it finds, "
+    "so your dashboard starts with your history instead of empty. You can also "
+    "do this later from this menu.",
+)
+
 #: How `plan()` names each capability in "This run will: - enable X".
 #:
 #: MUST stay total over `Capability`. It is a SEPARATE map from MENU_COPY
@@ -427,6 +443,71 @@ def ask_auto_update(default: bool):
         questionary.confirm(
             message,
             default=default,
+            style=tui.style(),
+            qmark=tui.qmark(),
+        ),
+        height=tui.content_height(message),
+    )
+
+
+def should_offer_backfill(
+    *,
+    configured: bool,
+    yes: bool,
+    explicit_flags: bool,
+    missing: list[str],
+    selection: Selection,
+    interactive: bool,
+) -> bool:
+    """Whether a finished install ends with the import offer.
+
+    Pure, and separate from the prompt, because each of these five gates is a
+    way the offer goes wrong rather than a preference:
+
+    * `configured` -- on a RE-RUN `Import existing work` is already in the
+      action menu. The offer exists precisely because a fresh install never
+      reaches that menu; showing it in both places is nagging.
+    * `missing` -- a failed browser approval leaves no credential, and backfill
+      resolves a project before it does anything. Offering it there hands the
+      user an error for a step they were told had just succeeded.
+    * `selection.tracking` -- backfill spends the `api` grant. A capture-only
+      install never asked for one.
+    * `yes` / `explicit_flags` / `interactive` -- the flag path is the contract
+      and CI must never be handed a prompt, let alone one that launches an
+      agent over somebody's filesystem.
+    """
+    return (
+        not configured
+        and not yes
+        and not explicit_flags
+        and not missing
+        and selection.tracking
+        and interactive
+    )
+
+
+def ask_backfill():
+    """The onboarding step. Returns None, tui.BACK, or a bool.
+
+    Built exactly like ask_auto_update, and deliberately so: it is the same
+    kind of step (one question, one line of detail, a yes/no) and a fresh
+    install should not change shape at the last screen.
+
+    Defaults to False. Every other step in this wizard configures a setting;
+    this one launches an agent that reads a folder and uploads what it finds,
+    which is a much bigger thing to do to someone who pressed enter to get
+    through the install. Opting in should be deliberate.
+    """
+    import questionary
+
+    from probe.cli import tui
+
+    title, detail = BACKFILL_COPY
+    message = tui.framed("One more thing, and it is optional.", tui.wrap(detail), title)
+    return tui.ask(
+        questionary.confirm(
+            message,
+            default=False,
             style=tui.style(),
             qmark=tui.qmark(),
         ),

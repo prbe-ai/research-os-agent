@@ -808,6 +808,7 @@ def test_every_menu_line_fits_a_narrow_terminal():
         for line in detail:
             assert len(line) + 5 <= 80, line
     assert len(setup.AUTO_UPDATE_COPY[0]) + 5 <= 80
+    assert len(setup.BACKFILL_COPY[0]) + 5 <= 80
 
 
 def test_title_and_description_stay_together():
@@ -1232,6 +1233,85 @@ def test_auto_update_is_asked_after_the_capabilities_not_inside_them():
     assert source.index("run_menu") < source.index("ask_auto_update")
 
 
+def _fresh_install(**over):
+    """The gate's arguments for a clean, successful, interactive install."""
+    return {
+        "configured": False,
+        "yes": False,
+        "explicit_flags": False,
+        "missing": [],
+        "selection": setup.Selection(tracking=True, capture=False, auto_update=True),
+        "interactive": True,
+        **over,
+    }
+
+
+def test_a_fresh_install_ends_with_the_import_offer():
+    assert setup.should_offer_backfill(**_fresh_install()) is True
+
+
+def test_a_rerun_does_not_re_offer_what_the_menu_already_has():
+    # `Import existing work` is a menu action on every re-run. The offer exists
+    # only because a fresh install never reaches that menu.
+    assert setup.should_offer_backfill(**_fresh_install(configured=True)) is False
+
+
+def test_a_failed_approval_is_not_offered_a_backfill():
+    # No credential was minted, and backfill resolves a project before it does
+    # anything — the user would get an error for a step just called successful.
+    assert setup.should_offer_backfill(**_fresh_install(missing=["api"])) is False
+
+
+def test_a_capture_only_install_is_not_offered_a_backfill():
+    # Backfill spends the `api` grant; capture-only never asked for one.
+    capture_only = setup.Selection(tracking=False, capture=True, auto_update=True)
+    assert setup.should_offer_backfill(**_fresh_install(selection=capture_only)) is False
+
+
+@pytest.mark.parametrize("gate", ["yes", "explicit_flags"])
+def test_the_flag_path_is_never_handed_a_prompt(gate):
+    # THE FLAGS ARE THE CONTRACT: a scripted install must not stop to ask, and
+    # must certainly not launch an agent over somebody's filesystem.
+    assert setup.should_offer_backfill(**_fresh_install(**{gate: True})) is False
+
+
+def test_a_non_tty_is_never_handed_a_prompt():
+    assert setup.should_offer_backfill(**_fresh_install(interactive=False)) is False
+
+
+def test_the_import_offer_is_skippable_and_defaults_to_no():
+    """Every other step configures a setting; this one launches an agent that
+    reads a folder. Opting in has to be deliberate, not the enter-key default."""
+    import inspect
+
+    source = inspect.getsource(setup.ask_backfill)
+    assert "default=False" in source
+
+
+def test_the_import_offer_is_the_last_step_of_the_install():
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
+    assert "should_offer_backfill" in source
+    # After the capability steps AND after the approval, whose outcome gates it.
+    assert source.index("ask_auto_update") < source.index("should_offer_backfill")
+    assert source.index("needs_authorization") < source.index("should_offer_backfill")
+
+
+def test_escape_or_ctrl_c_at_the_import_offer_does_not_backfill():
+    """`ask_backfill` returns None (Ctrl-C), tui.BACK (Escape), or a bool, and
+    only True may launch an agent — BACK is truthy, so `if wants:` would run a
+    backfill on the keystroke that means 'go back'."""
+    import inspect
+    import sys
+
+    source = inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
+    assert "wants_backfill is True" in source
+
+
 def test_both_recommended_options_say_so():
     from probe.cli.capabilities import Capability
 
@@ -1378,6 +1458,7 @@ def test_every_prompt_in_the_wizard_is_a_centred_page():
         wizard.run_menu,
         wizard.run_action_menu,
         wizard.ask_auto_update,
+        wizard.ask_backfill,
         wizard.confirm_removal,
     ):
         source = inspect.getsource(prompt)
