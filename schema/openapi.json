@@ -3002,6 +3002,17 @@
             ],
             "title": "Shared Folder Id"
           },
+          "short_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Short Id"
+          },
           "slug": {
             "anyOf": [
               {
@@ -3382,6 +3393,21 @@
           "updated_at"
         ],
         "title": "ExperimentDetailOut",
+        "type": "object"
+      },
+      "ExperimentMetadataValuePut": {
+        "description": "Replacement value for one server-allowlisted experiment metadata key.\n\nThe key is carried in the URL so the database can update it atomically\nwithout replacing sibling metadata written by another subsystem.",
+        "properties": {
+          "value": {
+            "additionalProperties": true,
+            "title": "Value",
+            "type": "object"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "title": "ExperimentMetadataValuePut",
         "type": "object"
       },
       "ExperimentNode": {
@@ -3939,21 +3965,12 @@
         "type": "string"
       },
       "GroupedPoint": {
-        "description": "One aggregated cell of a grouped read: a step bucket x one combination of the\n`by` axes' values. `group` maps each requested axis to its value's JSON text\n(None per axis when a point misses it \u2014 sparse coords collapse into one NULL\nbucket per axis by design), and is None entirely when no axis was requested (a\nfull reduction). `n` is the count of finite raw points folded into this cell,\nso a sparse or partially-logged coordinate is observable rather than silently\naveraged over.",
+        "description": "One aggregated cell of a grouped read: a step bucket x one combination of the\n`by` axes' values. `group` maps each requested axis to its value TYPED \u2014 the\nint 0 arrives as `0`, the string \"train\" as `\"train\"` \u2014 because the coordinate\ncontract distinguishes them and JSON already encodes that distinction. None per\naxis when a point misses it (sparse coords collapse into one NULL bucket per\naxis by design), and None entirely when no axis was requested (a full\nreduction). `n` is the count of finite raw points folded into this cell,\nso a sparse or partially-logged coordinate is observable rather than silently\naveraged over.\n\nThese were JSON TEXT until the labels reached a chart legend rendering\n`\"train\"` with the quotes in it. Anything formatting a label must coerce at\nthe render boundary now, not assume `str`.",
         "properties": {
           "group": {
             "anyOf": [
               {
-                "additionalProperties": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
+                "additionalProperties": true,
                 "type": "object"
               },
               {
@@ -3984,7 +4001,7 @@
         "type": "object"
       },
       "GroupedSeriesResult": {
-        "description": "Server-side reduce/group over a run's stepped points (item 7). The aggregation\nis EXPLICIT \u2014 the caller names the fn; the server never guesses a reduction\n(declared per-key reduce fns arrive with the opt-in declaration layer). `by`\nechoes the requested axes in order; `where` echoes the canonical coord filter.\nBounded to `max_rows` cells; page the remainder by passing `next_step` back as\n`step_from`. Group labels are each axis value's JSON text, so the int 1 and the\nstring \"1\" (distinct coordinates) render as `1` and `\"1\"`.",
+        "description": "Server-side reduce/group over a run's stepped points (item 7). The aggregation\nis EXPLICIT \u2014 the caller names the fn; the server never guesses a reduction\n(declared per-key reduce fns arrive with the opt-in declaration layer). `by`\nechoes the requested axes in order; `where` echoes the canonical coord filter.\nBounded to `max_rows` cells; page the remainder by passing `next_step` back as\n`step_from`. Group labels are each axis value TYPED, so the int 1 and the\nstring \"1\" (distinct coordinates) stay distinct as JSON `1` and `\"1\"` without\nthe label itself carrying quote characters.",
         "properties": {
           "agg": {
             "title": "Agg",
@@ -4773,10 +4790,22 @@
             "title": "Customer Id",
             "type": "string"
           },
+          "derived": {
+            "default": false,
+            "title": "Derived",
+            "type": "boolean"
+          },
           "id": {
-            "format": "uuid",
-            "title": "Id",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Id"
           },
           "meta": {
             "additionalProperties": true,
@@ -4807,7 +4836,6 @@
           }
         },
         "required": [
-          "id",
           "customer_id",
           "source_type",
           "source_id",
@@ -5486,6 +5514,28 @@
               }
             ],
             "title": "Step To"
+          },
+          "wall_clock_from": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Clock From"
+          },
+          "wall_clock_to": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wall Clock To"
           }
         },
         "required": [
@@ -9094,7 +9144,8 @@
         "enum": [
           "project",
           "experiment",
-          "artifact"
+          "artifact",
+          "run"
         ],
         "title": "SearchEntityType",
         "type": "string"
@@ -14765,6 +14816,38 @@
           },
           {
             "in": "query",
+            "name": "wall_clock_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Wall Clock From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wall_clock_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Wall Clock To"
+            }
+          },
+          {
+            "in": "query",
             "name": "max_points",
             "required": false,
             "schema": {
@@ -16591,7 +16674,7 @@
     },
     "/v1/experiments/{experiment_id}/edges": {
       "get": {
-        "description": "Every edge touching a run or artifact that belongs to this experiment.",
+        "description": "Every edge touching a run or artifact that belongs to this experiment.\n\nDerives the same run -> artifact `produces` edges the run-level route does.\nDeriving in one place and not the other is worse than deriving in neither:\nthe experiment graph would read as empty while each of its runs' graphs was\npopulated, and a caller comparing the two would conclude edges were being\nlost somewhere between them.\n\nBounded at MAX_LIST_LIMIT, same as the run route -- an experiment fans out\nover every run it owns, so it is the wider of the two.",
         "operationId": "list_experiment_edges_v1_experiments__experiment_id__edges_get",
         "parameters": [
           {
@@ -16732,6 +16815,70 @@
         "summary": "Create Group",
         "tags": [
           "groups"
+        ]
+      }
+    },
+    "/v1/experiments/{experiment_id}/metadata/{metadata_key}": {
+      "put": {
+        "description": "Atomically replace one dashboard-owned experiment metadata value.\n\nThe path key is an explicit allowlist, not an arbitrary JSONB write door.\nIn particular, this route cannot overwrite ``metadata.summary``. Keeping\nthe merge in one UPDATE also prevents a stale dashboard snapshot from\nerasing a summary or another metadata key committed while the panel was\nopen.",
+        "operationId": "put_experiment_metadata_key_v1_experiments__experiment_id__metadata__metadata_key__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "metadata_key",
+            "required": true,
+            "schema": {
+              "const": "parallel_coordinates_panel_v1",
+              "title": "Metadata Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExperimentMetadataValuePut"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExperimentOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Experiment Metadata Key",
+        "tags": [
+          "experiments"
         ]
       }
     },
@@ -18979,6 +19126,7 @@
     },
     "/v1/runs/{run_id}/edges": {
       "get": {
+        "description": "Stored edges PLUS the run -> artifact `produces` edges derived from\n`artifacts.run_id`.\n\nWhy derive: nothing ever wrote a `produces` edge. `add_edge` is reachable\nonly by hand or via `probe edge add`, and `log_artifact()` does not call it,\nso `lineage_edges` is empty for essentially every run -- which is why the\nlineage view answered \"no lineage\" for runs that had plainly produced\noutput. The fact was never missing, only unexpressed: `artifacts.run_id` has\nrecorded it since the table existed.\n\nDeriving at read time rather than materializing on artifact create means no\nbackfill for existing runs and no second copy to drift. Derived rows are\nflagged `derived: true` and carry no `id` -- see LineageEdgeOut.\n\nNOT covered here: `consumes`. A run declaring which asset version it read\nhas no recording surface at all today, so there is nothing to derive from.\nThat needs an SDK affordance before it can appear in this response, and an\nempty `consumes` set is honest until it exists.\n\nBOUNDED at MAX_LIST_LIMIT. Before deriving, this route returned ~0 rows for\nessentially every run, so being unbounded cost nothing; deriving turns it\ninto one row per artifact, and a run with 50k artifacts is an ordinary\nagentic-RL run, not an abuse case. The sibling `/v1/runs/{id}/artifacts`\ncaps at the same number for the same reason.",
         "operationId": "list_run_edges_v1_runs__run_id__edges_get",
         "parameters": [
           {
@@ -20684,6 +20832,38 @@
                 }
               ],
               "title": "Step To"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wall_clock_from",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Wall Clock From"
+            }
+          },
+          {
+            "in": "query",
+            "name": "wall_clock_to",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Wall Clock To"
             }
           },
           {

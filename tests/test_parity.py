@@ -350,6 +350,12 @@ PENDING: dict[Op, str] = {
     ("POST", "/v1/integrations/ingestion/retry-dlq"): "operator action; no CLI verb designed yet",
     ("DELETE", "/v1/workspaces/{}/files/{}"): "workspace file delete; `probe` has no file-rm verb yet",
     #
+    # Surfaced 2026-08-03 by the `make dump-openapi` in the search/lineage pass:
+    # this shipped on the backend while the checked-in schema sat stale. Newly
+    # VISIBLE debt, not new debt, and unrelated to that pass -- wiring it there
+    # would have been scope creep. Same shape as the two batches below.
+    ("PUT", "/v1/experiments/{}/metadata/{}"): "experiment metadata set; `probe` has no metadata verb yet",
+    #
     # Surfaced 2026-08-02 by the `make regen` in the archive-removal pass: the
     # public share-links surface (research-os#226) and two sandbox-state reads
     # shipped on the backend while the checked-in schema sat stale. Newly
