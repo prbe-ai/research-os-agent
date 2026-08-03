@@ -755,7 +755,12 @@ def wizard(
     action: Optional[str] = typer.Option(  # noqa: UP007
         None,
         "--action",
-        help="skip the menu: configure | diagnose | update | manual | remove",
+        help="skip the menu: configure | diagnose | update | manual | remove | backfill",
+    ),
+    folder: str = typer.Option(
+        None,
+        "--folder",
+        help="backfill only: the folder to import, skipping the picker (needed headless)",
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="skip the menu and prompts"),
 ) -> None:
@@ -841,6 +846,7 @@ def wizard(
             auto_update=auto_update,
             uninstall=uninstall,
             configured=configured,
+            folder=folder,
         )
 
         # Inside the menu loop this is a PAGE of the wizard, so it gets the
@@ -880,6 +886,7 @@ def _run_wizard_action(
     auto_update,
     uninstall: bool,
     configured: bool,
+    folder: str | None = None,
 ) -> list[str]:
     """Perform ONE action and RETURN its output.
 
@@ -941,6 +948,19 @@ def _run_wizard_action(
             settings=settings_before_removal,
         )
         return lines
+
+    if chosen_action is actions_mod.Action.BACKFILL:
+        from pathlib import Path
+
+        from probe.cli import backfill as backfill_impl
+
+        return backfill_impl.run(
+            client_factory=_client,
+            start=Path.cwd(),
+            folder=Path(folder) if folder else None,
+            configured_project=resolve(base_url=base_now).project,
+            interactive=wizard.interactive(),
+        )
 
     # CONFIGURE
     selection = wizard.resolve_selection(
