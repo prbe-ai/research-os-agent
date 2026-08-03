@@ -1067,6 +1067,37 @@ def _run_wizard_action(
         settings=resolve(base_url=base_now),
     ):
         tui.say(message)
+
+    # The last step of a FRESH install: offer to import what already exists.
+    #
+    # Gated on `not configured` because on a re-run `Import existing work` is
+    # already in the action menu -- and the action menu is exactly what a fresh
+    # install never sees, which is why the offer has to live here at all.
+    # Gated on tracking because backfill spends the `api` grant, and on `not
+    # missing` because a failed approval means there is no credential to spend.
+    if wizard.should_offer_backfill(
+        configured=configured,
+        yes=yes,
+        explicit_flags=explicit_flags,
+        missing=missing,
+        selection=selection,
+        interactive=wizard.interactive(),
+    ):
+        tui.clear()
+        wants_backfill = wizard.ask_backfill()
+        # None (Ctrl-C) and BACK (Escape) are both "no thanks" here. There is
+        # no step after this one to go back to, and the install already landed.
+        if wants_backfill is True:
+            from probe.cli import backfill as backfill_impl
+
+            # `start` is left to default to the cwd, which is where someone
+            # running the installer almost always already is.
+            for line in backfill_impl.run(
+                client_factory=_client,
+                configured_project=resolve(base_url=base_now).project,
+                interactive=True,
+            ):
+                tui.say(line)
     return []
 
 
