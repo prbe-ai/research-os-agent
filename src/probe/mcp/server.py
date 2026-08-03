@@ -571,12 +571,18 @@ def create_server(
           group       card
 
         `ref="artifact:<name>"` with `view="versions"` is the reuse check before you
-        create a script, scorer, dataset, config or image. An artifact ref resolves
-        by NAME (there is no by-id read route) against the SHARED, lab-wide level --
-        the level an official one is promoted to. Versions are monotonic integers,
+        create a script, scorer, dataset, config or image. The NAME axis is the reuse
+        check and is scoped to the SHARED, lab-wide level -- the level an official one
+        is promoted to. An artifact ref ALSO takes an ID (`artifact:<uuid>`, the id
+        `search_knowledge` hands back): `view="versions"` works for ANY artifact by
+        id whatever its anchor, and a shared id resolves to a full card. A non-shared
+        id resolves to an id-only identity that says where the rest lives -- it is
+        NOT absence. Versions are monotonic integers,
         not semver -- constrain with `filters={"requirement": ">=2"}`.
-        Its two empty answers are OPPOSITES. A not-found error means no shared
-        artifact carries that name: a new identity is licensed. `state="no_match"`
+        Its two empty answers are OPPOSITES. A not-found error on a NAME means no
+        shared artifact carries it: a new identity is licensed. (A not-found on an
+        ID is stronger -- ids are global, so it rules out every anchor at once.)
+        `state="no_match"`
         means the artifact EXISTS and no version satisfies your `requirement` -- the
         response carries the versions that DO, so this is a real version ceiling,
         not an absent artifact: pin a new version of the SAME artifact rather than

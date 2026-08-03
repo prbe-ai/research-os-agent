@@ -47,7 +47,9 @@ def _version(client, artifact_id: str, n: int) -> dict:
 
 # -- resolution ---------------------------------------------------------------
 def test_artifact_ref_resolves_by_name(service, client, tmp_path):
-    """The whole point: a NAME, not an id. There is no GET /v1/artifacts/{id}."""
+    """A NAME resolves. (An ID resolves too, via the by-id `/versions` route and a
+    shared-list scan -- see the id tests below; there is no GET /v1/artifacts/{id}
+    ENTITY route, which is a narrower fact than "ids are unresolvable".)"""
     shared = _share(client, tmp_path, "exec-accuracy.py")
 
     out = service.get_entity(ref="artifact:exec-accuracy.py")
@@ -292,21 +294,61 @@ def test_an_unsupported_view_on_an_artifact_names_what_is_supported(
         service.get_entity(ref="artifact:t.py", view="trajectory")
 
 
-# -- an id is not a name (found verifying against production) ------------------
-def test_an_id_is_not_answered_as_an_absent_name(service, client, tmp_path):
+# -- an id RESOLVES; it is neither an absent name nor an unresolvable ref -------
+def test_a_shared_id_resolves_to_the_same_artifact_its_name_does(
+    service, client, tmp_path
+):
     """`search_knowledge` returns artifact hits carrying an ID and no addressable
-    resource, so feeding that id straight back is the obvious next move. Answering
-    "nothing official exists under that name" would tell the agent to create a
-    duplicate of the artifact the search just returned -- the retired `asset:` ref
-    inversion, one layer in."""
+    resource, so feeding that id straight back is the obvious next move.
+
+    #133 answered it as an absent NAME (licence to create a duplicate). #135 fixed
+    that with a 422 saying ids are unresolvable -- true of a `GET /v1/artifacts/{id}`
+    ENTITY route, false of the ref: `/versions` takes a raw id, and a shared id is a
+    scan away from a full row. Both must land on one artifact.
+    """
     shared = _share(client, tmp_path, "by-id.py")
 
-    with pytest.raises(errors.ValidationError) as excinfo:
-        service.get_entity(ref=f"artifact:{shared['id']}", view="versions")
+    by_id = service.get_entity(ref=f"artifact:{shared['id']}")
+    by_name = service.get_entity(ref="artifact:by-id.py")
 
-    message = str(excinfo.value)
-    assert "is an id, not a name" in message
-    assert "licence to create" in message
+    assert by_id["data"]["entity"]["id"] == by_name["data"]["entity"]["id"] == shared["id"]
+    # A shared id is a FULL card, not a stub: the row carries the name.
+    assert by_id["data"]["entity"].get("name") == "by-id.py"
+    assert "resolution_note" not in by_id["data"]["entity"]
+
+
+def test_versions_by_id_works_for_a_shared_artifact(service, client, tmp_path):
+    """The view the reuse check reads must be reachable from the id the search
+    handed back, not only from a name the caller may not have."""
+    shared = _share(client, tmp_path, "versioned.py")
+
+    out = service.get_entity(ref=f"artifact:{shared['id']}", view="versions")
+
+    assert out["completeness"]["state"] in ("complete", "no_match")
+
+
+def test_an_unknown_id_is_not_found_and_says_ids_are_global(service, client, tmp_path):
+    """A not-found by ID is authoritative in a way the name path's never is: ids
+    are unscoped, so this rules out every anchor at once. It must not be phrased
+    like the name path's SHARED-only answer."""
+    _share(client, tmp_path, "present.py")
+    missing = "00000000-0000-4000-8000-000000000000"
+
+    with pytest.raises(errors.NotFoundError):
+        service.get_entity(ref=f"artifact:{missing}", view="versions")
+
+
+def test_resolving_an_id_does_not_widen_the_reuse_check(service, client, tmp_path):
+    """The DELIBERATE scope decision. `artifact:<name>` is the reuse check and stays
+    SHARED-only -- "is there an official X" must never be answered off a run-anchored
+    copy. Resolving an id the caller already holds is a different question, so it
+    resolving for a non-shared artifact does not widen the name path one inch."""
+    _share(client, tmp_path, "official.py")
+
+    # A name that exists only outside Shared is STILL not-found on the name axis.
+    with pytest.raises(errors.NotFoundError) as excinfo:
+        service.get_entity(ref="artifact:run-anchored-only.py")
+    assert "SHARED" in str(excinfo.value)
 
 
 def test_the_not_found_message_states_the_scope_it_searched(service, client, tmp_path):

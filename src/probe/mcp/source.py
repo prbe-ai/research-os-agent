@@ -271,6 +271,80 @@ class ResearchOSSource:
             limit=limit,
         ).items
 
+    def artifact_ref(self, value: str) -> dict:
+        """Resolve ``artifact:<value>`` where value is a NAME or an ID.
+
+        The two axes answer DIFFERENT questions, and conflating them is what #135
+        got wrong in the other direction:
+
+        * a NAME asks "does an official X already exist" -- the reuse check. It is
+          scoped to SHARED and stays that way (:meth:`artifact_by_name`).
+        * an ID is an identity the caller ALREADY holds (``search_knowledge``
+          returns artifact hits carrying an id and ``resource: null``). It is not a
+          reuse question at all, so the shared scoping does not apply to it.
+
+        #135 answered an id with a 422 saying ids are unresolvable because no
+        ``GET /v1/artifacts/{id}`` route exists. The premise was wrong: no ENTITY
+        route exists, but ``GET /v1/artifacts/{id}/versions`` takes a raw id and
+        already backs the versions view, so an id is resolvable today.
+        """
+        try:
+            uuid.UUID(value)
+        except ValueError:
+            return self.artifact_by_name(value)
+        return self.artifact_by_id(value)
+
+    def artifact_by_id(self, artifact_id: str) -> dict:
+        """Resolve an artifact ID, without widening the reuse check's scope.
+
+        DELIBERATE SCOPE DECISION -- an id resolves for EVERY artifact, but only a
+        SHARED one resolves to a full card:
+
+        * ``view=versions`` works for any artifact whatever its anchor, because
+          ``GET /v1/artifacts/{id}/versions`` is an unscoped by-id route. A caller
+          holding an id gets the version chain even for a run-anchored artifact.
+        * a full CARD needs the artifact's ROW (name, metadata), and the only list
+          that yields one is ``GET /v1/shared/files``. So a shared id gets the same
+          card a name does; a non-shared id resolves to an id-only identity that
+          says where the rest lives.
+
+        This does NOT widen the reuse check. That check is ``artifact:<name>`` and
+        is still SHARED-only: "is there an official X" must not be answered off a
+        run-anchored copy. Resolving an id the caller already holds answers a
+        different question and licences nothing.
+
+        A not-found here is authoritative in a way the name path's never is: ids
+        are global and unscoped, so "no artifact with this id" rules out every
+        anchor at once, where "no artifact named X" only ever ruled out SHARED.
+        """
+        # Shared FIRST, for the card. Costs one unbounded list (same read the name
+        # path already does) and is the only source of a full row.
+        rows = self.client.list_anchored(Anchor.SHARED) or []
+        for row in rows:
+            if str(row.get("id")) == artifact_id:
+                return row
+        # Not shared. The artifact almost certainly still EXISTS -- run-, experiment-
+        # and project-anchored artifacts never appear in the shared list -- so
+        # answering not-found here would be the #135 inversion wearing new clothes:
+        # get_entity's contract reads an error as "a new identity is licensed".
+        # Prove existence off the unscoped by-id route instead of guessing.
+        self.artifact_versions(artifact_id)  # 404s iff the id is genuinely unknown
+        return {
+            "id": artifact_id,
+            "shared": False,
+            # Carried so the card says why it is thin rather than looking truncated.
+            "resolution_note": (
+                f"artifact {artifact_id} exists but is not shared, so only its id "
+                f"and version chain are readable here (there is no "
+                f"GET /v1/artifacts/{{id}} entity route, and only "
+                f"GET /v1/shared/files yields a full row). view=versions is "
+                f"complete; for name and metadata read the owning container with "
+                f"run:<id> / experiment:<id> view=artifacts, or promote it with "
+                f"`probe shared share`. This is NOT absence and licences no new "
+                f"identity."
+            ),
+        }
+
     def artifact_by_name(self, name: str) -> dict:
         """Resolve an artifact NAME to the artifact, at the shared (lab-wide) level.
 
@@ -293,26 +367,11 @@ class ResearchOSSource:
         # check exists to prevent. So narrow by the name's DIRECTORY and match the
         # name ourselves. A root-level name has no directory, and the whole shared
         # scope is then the honest search space.
-        # An id is not a name, and must never be answered as an absent one.
-        # `search_knowledge` returns artifact hits carrying an ID (there is no
-        # addressable resource for them), so feeding that straight back here is
-        # the obvious next move -- and answering "nothing official exists under
-        # that name yet" would tell the agent to CREATE a duplicate of the very
-        # artifact the search just returned. Same inversion as the retired
-        # `asset:` ref, one layer in.
-        try:
-            uuid.UUID(name)
-        except ValueError:
-            pass
-        else:
-            raise errors.ValidationError(
-                f"{name!r} is an id, not a name: an artifact ref resolves by NAME "
-                f"(no GET /v1/artifacts/{{id}} route exists). This says nothing "
-                f"about whether that artifact exists -- do NOT read it as licence "
-                f"to create one. Use its `name` from the search result, or read "
-                f"the owning run with run:<id> view=artifacts.",
-                status=422,
-            )
+        # An id never reaches here: `artifact_ref` routes UUID-shaped values to
+        # `artifact_by_id`. #135 raised a 422 at this point instead, on the premise
+        # that ids were unresolvable -- they are not, and refusing one sent agents
+        # back to a name they may not have. The invariant that 422 protected still
+        # holds, just earlier: an id is never answered as an absent NAME.
         folder = name.rsplit("/", 1)[0] if "/" in name else ""
         params = {"prefix": folder} if folder else {}
         # NO `limit`, deliberately. A cap would make an artifact past the cap read
@@ -359,7 +418,7 @@ class ResearchOSSource:
 
         ``group`` is here rather than behind a research_list_groups tool: a sweep is
         an experiment-shaped noun, so it belongs on the same ref seam as the rest.
-        ``artifact`` is reached by name (see :meth:`artifact_by_name`).
+        ``artifact`` is reached by name OR id (see :meth:`artifact_ref`).
         """
         kind, _, value = ref.partition(":")
         if not value:
@@ -372,7 +431,7 @@ class ResearchOSSource:
             EntityType.GROUP.value: self.client.get_group,
         }
         if kind == EntityType.ARTIFACT.value:
-            return kind, self.artifact_by_name(value)
+            return kind, self.artifact_ref(value)
         if kind in getters:
             return kind, getters[kind](value)
         if kind:

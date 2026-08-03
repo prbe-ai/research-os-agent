@@ -1432,8 +1432,11 @@ class ResearchReadService:
         The two empty answers are OPPOSITES and this view is the only thing that
         can tell them apart, so it never collapses them:
 
-        - the artifact does not exist -> `artifact_by_name` already raised
-          NotFoundError, and a new identity is genuinely licensed.
+        - the artifact does not exist -> resolution already raised NotFoundError
+          (`artifact_by_name` for a name, the by-id `/versions` probe in
+          `artifact_by_id` for an id), and a new identity is genuinely licensed.
+          Note the two differ in REACH: a name only ever ruled out SHARED, while
+          an id is global and rules out every anchor at once.
         - the artifact EXISTS but no version satisfies `requirement` ->
           state="no_match", carrying the versions that DO exist so the caller sees
           the real ceiling. Pin a new version of the SAME artifact.
