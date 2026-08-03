@@ -675,6 +675,48 @@ def whoami() -> None:
         _print_json(c.me())
 
 
+@app.command()
+def backfill(
+    folder: str = typer.Argument(None, help="folder to import; omit to pick one interactively"),
+) -> None:
+    """Import work you have already done: point an agent at a folder.
+
+    It uploads what it finds, describes each artifact, and reports how much of
+    the folder it accounted for. Large files (checkpoints, datasets) are
+    recorded as references, not copied.
+
+    This is the command the dashboard hands you: `npx probe-research backfill`
+    forwards straight here. The same thing is in `probe wizard` under
+    `Import existing work`.
+    """
+    from pathlib import Path
+
+    from probe.cli import backfill as backfill_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+
+    # BEFORE anything else, and for a stronger reason than the wizard has:
+    # `npx probe-research backfill` reaches us through an EPHEMERAL `uv tool
+    # run` / `pipx run`, and the agent we are about to launch does its work by
+    # shelling out to `probe artifact add`. With no persistent binary on PATH
+    # every one of those calls fails, so the agent reads the whole folder and
+    # lands nothing.
+    from probe.cli.bootstrap import ensure_persistent_install
+
+    boot = ensure_persistent_install()
+    if boot.message:
+        print(boot.message)
+
+    lines = backfill_impl.run(
+        client_factory=_client,
+        folder=Path(folder) if folder else None,
+        configured_project=resolve(base_url=_conn.base_url).project,
+        interactive=wizard.interactive(),
+    )
+    if lines:
+        tui.page(lines) if wizard.interactive() else print("\n".join(lines))
+
+
 # `probe update` is HIDDEN, not deleted. The plugin's SessionStart hook spawns
 # it, and plugins update on the USER's schedule -- deleting it would silently
 # break auto-update on every machine whose plugin has not been refreshed yet.
@@ -1068,36 +1110,6 @@ def _run_wizard_action(
     ):
         tui.say(message)
 
-    # The last step of a FRESH install: offer to import what already exists.
-    #
-    # Gated on `not configured` because on a re-run `Import existing work` is
-    # already in the action menu -- and the action menu is exactly what a fresh
-    # install never sees, which is why the offer has to live here at all.
-    # Gated on tracking because backfill spends the `api` grant, and on `not
-    # missing` because a failed approval means there is no credential to spend.
-    if wizard.should_offer_backfill(
-        configured=configured,
-        yes=yes,
-        explicit_flags=explicit_flags,
-        missing=missing,
-        selection=selection,
-        interactive=wizard.interactive(),
-    ):
-        tui.clear()
-        wants_backfill = wizard.ask_backfill()
-        # None (Ctrl-C) and BACK (Escape) are both "no thanks" here. There is
-        # no step after this one to go back to, and the install already landed.
-        if wants_backfill is True:
-            from probe.cli import backfill as backfill_impl
-
-            # `start` is left to default to the cwd, which is where someone
-            # running the installer almost always already is.
-            for line in backfill_impl.run(
-                client_factory=_client,
-                configured_project=resolve(base_url=base_now).project,
-                interactive=True,
-            ):
-                tui.say(line)
     return []
 
 

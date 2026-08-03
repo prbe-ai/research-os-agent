@@ -326,6 +326,66 @@ def test_the_happy_path_reports_the_denominator(tmp_path, monkeypatch):
     assert any("3 files found on disk · 3 artifacts" in ln for ln in lines)
 
 
+# -- `probe backfill`, the command the dashboard hands out -------------------
+
+
+def test_backfill_is_a_top_level_command():
+    """`npx probe-research backfill` forwards its arguments verbatim, so the
+    dashboard's copied command lands on `probe backfill` — not on the wizard."""
+    from typer.main import get_command
+
+    from probe.cli.main import app
+
+    assert "backfill" in get_command(app).commands
+
+
+def _cli_main():
+    """`probe.cli.main` is the entry-point FUNCTION on the package, not the
+    module — `from probe.cli import main` imports the wrong object."""
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    return sys.modules["probe.cli.main"]
+
+
+def test_the_command_installs_a_persistent_probe_first():
+    """The agent does its work by shelling out to `probe artifact add`. Reached
+    through `npx` we are running from an EPHEMERAL uvx/pipx with no binary on
+    PATH, so without this the agent reads the whole folder and lands nothing."""
+    import inspect
+
+    source = inspect.getsource(_cli_main().backfill)
+    assert "ensure_persistent_install" in source
+    assert source.index("ensure_persistent_install") < source.index("backfill_impl.run")
+
+
+def _stub_bootstrap(monkeypatch):
+    monkeypatch.setattr(
+        "probe.cli.bootstrap.ensure_persistent_install",
+        lambda: type("B", (), {"message": None})(),
+    )
+
+
+def test_the_command_passes_its_folder_through(monkeypatch, tmp_path):
+    cli_main = _cli_main()
+    seen = {}
+    _stub_bootstrap(monkeypatch)
+    monkeypatch.setattr("probe.cli.backfill.run", lambda **kw: seen.update(kw) or ["done"])
+    cli_main.backfill(folder=str(tmp_path))
+    assert seen["folder"] == Path(str(tmp_path))
+    assert seen["client_factory"] is cli_main._client
+
+
+def test_the_command_with_no_folder_leaves_the_picker_to_decide(monkeypatch):
+    cli_main = _cli_main()
+    seen = {}
+    _stub_bootstrap(monkeypatch)
+    monkeypatch.setattr("probe.cli.backfill.run", lambda **kw: seen.update(kw) or [])
+    cli_main.backfill(folder=None)
+    assert seen["folder"] is None
+
+
 def test_a_failed_agent_says_rerunning_is_safe(tmp_path, monkeypatch):
     _tree(tmp_path)
     monkeypatch.setattr(backfill, "launch_agent", lambda *a, **kw: (False, "boom"))

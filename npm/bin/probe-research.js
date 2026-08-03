@@ -41,15 +41,22 @@ const DIST = "probe-research";
  *      install can never pair old-CLI with new-prose (0066 tags review);
  *   3. a shipped CLI version is KNOWN BROKEN and this is the repair path.
  *
- * (3) is why the floor is 0.27.1. 0.26.0 through 0.27.0 crash on every fresh
+ * (3) is why the floor was 0.27.1. 0.26.0 through 0.27.0 crash on every fresh
  * `probe wizard` — a KeyError the moment the plan names auto-update (#120) —
  * and they all cleared the previous 0.24.0 floor, so this launcher happily
  * handed users straight to a CLI that could not complete a setup. `npx
  * probe-research` IS the advertised from-zero entry point; it has to be able
  * to repair the thing it installed. A healthy 0.26.x install pays one refetch,
  * which is the right trade against a broken one staying broken forever.
+ *
+ * (1) is why it is now 0.36.0. The dashboard's last onboarding step hands out
+ * `npx probe-research backfill`, and `probe backfill` does not exist before
+ * 0.36.0. Arguments are forwarded to whatever `probe` this launcher resolves,
+ * so under the old floor a user with 0.35.0 on PATH gets `No such command
+ * 'backfill'` from a command the product just told them to run. A floor is the
+ * only thing that can catch it: the copied command is identical either way.
  */
-const MIN_CLI = "0.27.1";
+const MIN_CLI = "0.36.0";
 const UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh";
 
 /** Compare dotted numeric versions. Returns true when `a` >= `b`. */
