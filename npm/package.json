@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.10.5",
+  "version": "0.10.6",
   "description": "Setup wizard for Probe Research in Claude Code. Runs from zero with npx.",
   "bin": {
     "probe-research": "bin/probe-research.js"
