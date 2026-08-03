@@ -248,6 +248,84 @@ def test_split_is_total_and_lossless(project):
     assert not (identity.keys() & provenance.keys())
 
 
+# --- _enumerate_foreign error paths -----------------------------------------
+
+def test_a_hanging_interpreter_times_out_instead_of_wedging_the_launch(monkeypatch):
+    """Snapshot runs at the start of a training run; an unbounded wait here
+    stalls the experiment rather than failing it."""
+    from probe.sdk import snapshot as S
+
+    def hang(*a, **kw):
+        raise subprocess.TimeoutExpired(cmd="python", timeout=S._ENUMERATE_TIMEOUT)
+
+    monkeypatch.setattr(subprocess, "run", hang)
+    with pytest.raises(SnapshotError, match="did not report its packages"):
+        S._enumerate_foreign(sys.executable)
+
+
+def test_an_unexecutable_interpreter_is_reported_not_swallowed(monkeypatch):
+    from probe.sdk import snapshot as S
+
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **kw: (_ for _ in ()).throw(OSError("Exec format error"))
+    )
+    with pytest.raises(SnapshotError, match="could not run"):
+        S._enumerate_foreign(sys.executable)
+
+
+def test_unparseable_output_is_refused_rather_than_recorded_as_empty(monkeypatch):
+    """A garbled stdout must not degrade into 'zero packages, captured fine'."""
+    from probe.sdk import snapshot as S
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda *a, **kw: subprocess.CompletedProcess(["python"], 0, "not json", ""),
+    )
+    with pytest.raises(SnapshotError, match="unreadable package list"):
+        S._enumerate_foreign(sys.executable)
+
+
+def test_pythonhome_is_stripped_from_the_child(monkeypatch):
+    """PYTHONHOME repoints an interpreter's stdlib at another installation's,
+    which breaks a foreign interpreter outright. Everything else is inherited
+    on purpose -- PYTHONPATH genuinely contributes modules to the run."""
+    from probe.sdk import snapshot as S
+
+    seen: dict = {}
+    real = subprocess.run
+
+    def spy(cmd, **kw):
+        seen.update(kw.get("env") or {})
+        return real(cmd, **kw)
+
+    monkeypatch.setenv("PYTHONHOME", "/nonexistent/should/be/stripped")
+    monkeypatch.setattr(subprocess, "run", spy)
+    S._enumerate_foreign(sys.executable)
+    assert "PYTHONHOME" not in seen
+    assert "PATH" in seen, "the rest of the environment is inherited on purpose"
+
+
+# --- remaining find_venv branches -------------------------------------------
+
+def test_conda_prefix_is_the_last_resort(tmp_path, monkeypatch):
+    conda = _make_venv(tmp_path / "conda-env", "only-conda")
+    monkeypatch.setenv("CONDA_PREFIX", str(conda))
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    _git(bare, "init", "-q")
+    assert find_venv(str(bare)) == (str(conda), "CONDA_PREFIX")
+
+
+def test_outside_a_git_repo_the_search_does_not_climb(tmp_path):
+    """No repo means no ceiling to stop at, so only cwd itself is considered --
+    otherwise a directory with no venv would adopt an unrelated parent's."""
+    _make_venv(tmp_path / ".venv", "only-parent")
+    child = tmp_path / "child"
+    child.mkdir()
+    assert find_venv(str(child)) == (None, None)
+
+
 def test_foreign_python_version_comes_from_the_foreign_interpreter(project):
     info = capture_env(str(project), detect_venv=True)
     expected = subprocess.run(
