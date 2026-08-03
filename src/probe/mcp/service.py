@@ -1405,9 +1405,18 @@ class ResearchReadService:
         """
         versions = self.source.artifact_versions(str(entity["id"]))
         requirement = request.filters.get("requirement")
-        if not requirement:
+        if requirement is None or requirement == "":
             return _ViewData(rows=versions, rows_key="versions")
-        matching = [v for v in versions if _satisfies(v, str(requirement))]
+        requirement = str(requirement)
+        # Validated BEFORE the per-version scan, not inside it. Inside, an artifact
+        # with zero versions never reaches _satisfies, so a malformed ">=2.0" would
+        # skip validation entirely and answer an authoritative no_match -- the
+        # THIRD kind of nothing _satisfies exists to refuse, and indistinguishable
+        # from a real ceiling.
+        # "0" and not "": the probe must PARSE, so that only a malformed operand
+        # raises. An unparseable probe version would reject ">=2" as well.
+        _satisfies({"version": "0"}, requirement)
+        matching = [v for v in versions if _satisfies(v, requirement)]
         if matching:
             return _ViewData(
                 payload={"requirement": requirement},
@@ -1417,8 +1426,20 @@ class ResearchReadService:
         # No match: return every version that EXISTS, not an empty list. An empty
         # list here is indistinguishable from an empty artifact, and that is the
         # confusion that creates duplicates.
+        #
+        # `highest_version` rides the FIXED-size payload rather than the rows,
+        # because rows are what token_budget truncates: a tight budget could
+        # otherwise emit state="no_match" with every version cut, promising a
+        # ceiling the response no longer carries. The ceiling is the whole answer,
+        # so it must survive truncation.
+        numeric = [int(v["version"]) for v in versions if str(v.get("version", "")).isdigit()]
         return _ViewData(
-            payload={"requirement": requirement, "satisfied_by": None},
+            payload={
+                "requirement": requirement,
+                "satisfied_by": None,
+                "highest_version": max(numeric) if numeric else None,
+                "version_count": len(versions),
+            },
             rows=versions,
             rows_key="versions",
             no_match=True,

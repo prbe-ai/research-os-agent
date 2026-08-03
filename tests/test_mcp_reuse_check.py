@@ -57,6 +57,38 @@ def test_artifact_ref_resolves_by_name(service, client, tmp_path):
     assert out["data"]["available_views"] == ["card", "versions"]
 
 
+def test_a_root_level_name_resolves(service, client, tmp_path, app):
+    """The bug review caught. `prefix` is a FOLDER filter over the derived `path`
+    (the DIRNAME of `name`), not a name filter -- a root-level file has path '',
+    so passing its whole name as `prefix` matches NOTHING. That returns not-found,
+    which the tool description defines as "a new identity is licensed": the guard
+    inverts into a duplicate generator, exactly what this seam exists to stop.
+    """
+    _share(client, tmp_path, "flat-scorer.py")
+
+    out = service.get_entity(ref="artifact:flat-scorer.py")
+
+    assert out["data"]["entity"]["name"] == "flat-scorer.py"
+    # And the lookup must not have sent the name as a folder prefix.
+    shared = [r for r in app.requests if "/v1/shared/files" in str(r.url)]
+    assert shared, "no shared-files lookup was issued"
+    assert all("prefix=flat-scorer.py" not in str(r.url) for r in shared)
+
+
+def test_a_nested_name_resolves_and_narrows_by_its_folder(service, client, tmp_path, app):
+    """The other half: a name WITH a directory narrows server-side by that
+    directory, and still matches on the full name."""
+    blob = tmp_path / "nested.py"
+    blob.write_bytes(b"x")
+    client.upload_file(Anchor.SHARED, None, "scorers/exec-acc.py", str(blob))
+
+    out = service.get_entity(ref="artifact:scorers/exec-acc.py")
+
+    assert out["data"]["entity"]["name"] == "scorers/exec-acc.py"
+    shared = [r for r in app.requests if "/v1/shared/files" in str(r.url)]
+    assert any("prefix=scorers" in str(r.url) for r in shared)
+
+
 def test_a_prefix_match_is_not_a_match(service, client, tmp_path):
     """`prefix` narrows server-side; the EXACT match is ours. Resolving "score" to
     "score_v2" would reuse a different artifact, which is the same class of
@@ -159,6 +191,74 @@ def test_a_retired_ref_kind_says_so_instead_of_leaking_a_uuid_parse_error(servic
     assert "unknown ref kind" in message
     assert "artifact:<name>" in message
     assert "uuid" not in message.lower()
+
+
+def test_a_malformed_requirement_is_rejected_even_with_zero_versions(
+    service, client, tmp_path
+):
+    """Adversarial review caught this. Validation used to live only inside the
+    per-version scan, so an artifact with NO versions never reached it: ">=2.0"
+    skipped validation and answered an authoritative no_match, which reads as a
+    real version ceiling rather than a malformed query."""
+    _share(client, tmp_path, "empty.py")  # deliberately no versions
+
+    with pytest.raises(errors.ValidationError, match="monotonic integers"):
+        service.get_entity(
+            ref="artifact:empty.py", view="versions", filters={"requirement": ">=2.0"}
+        )
+
+
+def test_a_valid_requirement_is_not_rejected_by_the_validation_probe(
+    service, client, tmp_path
+):
+    """The probe validates the OPERAND, so a well-formed requirement must pass
+    even when nothing satisfies it."""
+    _share(client, tmp_path, "probe.py")
+
+    out = service.get_entity(
+        ref="artifact:probe.py", view="versions", filters={"requirement": ">=2"}
+    )
+
+    assert out["completeness"]["state"] == EnvelopeState.NO_MATCH
+
+
+def test_no_match_carries_the_ceiling_even_when_rows_are_truncated(
+    service, client, tmp_path
+):
+    """`highest_version` rides the fixed-size payload, not the rows. A tight token
+    budget truncates rows, and a no_match whose versions were all cut would promise
+    a ceiling the response no longer carries."""
+    shared = _share(client, tmp_path, "big.py")
+    for n in range(1, 6):
+        _version(client, shared["id"], n)
+
+    out = service.get_entity(
+        ref="artifact:big.py",
+        view="versions",
+        filters={"requirement": ">=99"},
+        token_budget=1,
+    )
+
+    assert out["completeness"]["state"] == EnvelopeState.NO_MATCH
+    assert out["data"]["highest_version"] == 5
+    assert out["data"]["version_count"] == 5
+
+
+def test_a_real_backend_422_is_not_rewritten_as_not_found():
+    """The bare-id fallback used to catch every ValidationError, so a genuine 422
+    from schema drift was swallowed and reported as "nothing matches this ref".
+    A well-formed UUID must let the backend's own error through."""
+    real_uuid = "123e4567-e89b-12d3-a456-426614174000"
+
+    class _SchemaDrift:
+        def __getattr__(self, _name):
+            def _boom(_value):
+                raise errors.ValidationError("column does not exist", status=422)
+
+            return _boom
+
+    with pytest.raises(errors.ValidationError, match="column does not exist"):
+        ResearchOSSource(_SchemaDrift()).get(real_uuid)
 
 
 def test_a_bare_non_uuid_id_reports_no_match_not_a_parse_failure():

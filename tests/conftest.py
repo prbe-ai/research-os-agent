@@ -1270,12 +1270,27 @@ class FakeApp:
             return httpx.Response(200, json=self.artifacts.get(f"workspace:{m.group(1)}", []))
 
         if path == "/v1/shared/files" and method == "GET":
-            # `prefix` is modelled, not ignored: the reuse check RELIES on it to
-            # narrow server-side, and a fake that hands back every shared file
-            # would certify a client that pulls the whole lab and filters locally.
+            # `prefix` is a FOLDER filter, and this fake models that EXACTLY,
+            # because the kind version certifies broken code. The backend derives
+            # `path` as the DIRNAME of `name` (0029, GENERATED column) and matches
+            # `path = prefix OR path LIKE 'prefix/%'` -- so a root-level file has
+            # path '' and a prefix of its own NAME matches nothing. A fake that
+            # did startswith() on `name` instead would make a client that passes
+            # the whole name look correct, and that client returns "no such
+            # artifact" for every flat-named scorer -- read downstream as licence
+            # to create a duplicate.
             rows = self.artifacts.get("shared:team", [])
             if (want := request.url.params.get("prefix")) is not None:
-                rows = [a for a in rows if str(a.get("name", "")).startswith(want)]
+                want = want.rstrip("/")
+                if want:
+                    def _dirname(row: dict) -> str:
+                        nm = str(row.get("name", ""))
+                        return nm.rsplit("/", 1)[0] if "/" in nm else ""
+
+                    rows = [
+                        a for a in rows
+                        if _dirname(a) == want or _dirname(a).startswith(f"{want}/")
+                    ]
             return httpx.Response(200, json=rows)
 
         m = _SHARED_FILE_SUB.match(path)

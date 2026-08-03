@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any
 
 from ..sdk import errors
@@ -284,15 +285,33 @@ class ResearchOSSource:
         this to a project would answer a narrower question than the one the caller
         asked and would licence a duplicate that already exists one level up.
         """
-        # `prefix` narrows server-side; the exact match is ours, since a prefix
-        # search for "score" must not resolve to "score_v2" -- silently reusing a
-        # DIFFERENT asset is the same class of unreproducibility as duplicating one.
-        rows = self.client.list_anchored(Anchor.SHARED, prefix=name) or []
+        # `prefix` is a FOLDER filter, NOT a name filter: `path` is a GENERATED
+        # column holding the DIRNAME of `name` (research-os 0029), and the clause
+        # is `path = $1 OR path LIKE '$1/%'`. Passing the whole name would match
+        # nothing for a root-level file, whose path is '' -- and "nothing" here
+        # reads as "no such artifact", i.e. licence to create the duplicate this
+        # check exists to prevent. So narrow by the name's DIRECTORY and match the
+        # name ourselves. A root-level name has no directory, and the whole shared
+        # scope is then the honest search space.
+        folder = name.rsplit("/", 1)[0] if "/" in name else ""
+        params = {"prefix": folder} if folder else {}
+        # NO `limit`, deliberately. A cap would make an artifact past the cap read
+        # as absent, and absent is defined downstream as licence to create a new
+        # identity -- reintroducing the precise bug the retired asset registry
+        # had (assets.resolve() read one default-limit page, so asset 51+ resolved
+        # to no_match and callers were told to register a duplicate). An unbounded
+        # read of one curated team folder is the cheaper failure. A server-side
+        # name filter would fix both; /v1/shared/files has no such parameter yet.
+        rows = self.client.list_anchored(Anchor.SHARED, **params) or []
         exact = [row for row in rows if row.get("name") == name]
         if not exact:
+            # Scoped honestly: the route serves live COMPLETE rows only, so an
+            # upload still pending is invisible here. Saying "nothing exists"
+            # would overstate what was actually checked.
             raise errors.NotFoundError(
-                f"no shared artifact named {name!r}; "
-                f"nothing official exists under that name yet"
+                f"no completed shared artifact named {name!r}; "
+                f"nothing official exists under that name yet "
+                f"(an upload still pending would not appear here)"
             )
         if len(exact) > 1:
             # Loud, and deliberately NOT a not-found: an agent reads not-found as
@@ -342,14 +361,23 @@ class ResearchOSSource:
                 f"(assets were folded into artifacts: use artifact:<name>)",
                 status=422,
             )
+        # A bare ref is only ever an id, and every id route validates it as a UUID.
+        # Checking the SHAPE here rather than catching the backend's 422 keeps a
+        # REAL 422 -- schema drift, a backend invariant -- propagating instead of
+        # being rewritten into "nothing matches this ref". Catching every
+        # ValidationError would swallow those, which is the same class of mistake
+        # as the leak this replaced, only quieter.
+        try:
+            uuid.UUID(value)
+        except ValueError:
+            raise errors.NotFoundError(
+                f"no run, experiment, project, or group matches {ref!r}: "
+                f"a bare ref must be a UUID id (names are reached as artifact:<name>)"
+            ) from None
         for candidate in getters:
             try:
                 return candidate, getters[candidate](value)
-            except (errors.NotFoundError, errors.ValidationError):
-                # ValidationError too: a bare id that is not a UUID makes the
-                # backend's path validator raise 422, not 404, and letting that
-                # escape reports a parse failure for whichever kind happened to be
-                # tried first rather than "nothing matches this ref".
+            except errors.NotFoundError:
                 continue
         raise errors.NotFoundError(f"no run, experiment, project, or group matches {ref}")
 
