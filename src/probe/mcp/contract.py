@@ -44,12 +44,14 @@ class EntityType(StrEnum):
 
     PROJECT = "project"
     EXPERIMENT = "experiment"
+    # Reached by NAME as a ref (`artifact:<name>`), because the reuse check asks
+    # "does an official X already exist" and you have the name, not an id -- and
+    # because no `GET /v1/artifacts/{id}` read route exists at all. This absorbed
+    # the retired `asset` member: #143 folded every asset into an artifact keeping
+    # its id, so one noun now covers both.
     ARTIFACT = "artifact"
     RUN = "run"
     GROUP = "group"  # a sweep/ensemble: an experiment-shaped noun, reached by ref
-    # Reached by NAME, not id (`asset:<name>`): the reuse check asks "does an
-    # official X already exist", and you have the name, not an id.
-    ASSET = "asset"
     FILE = "file"
     DOCUMENT = "document"  # a semantic hit whose ref is null
 
@@ -118,6 +120,14 @@ class EnvelopeState(StrEnum):
 
     COMPLETE = "complete"
     PARTIAL = "partial"
+    # The query was answered in full and the answer is "nothing satisfies that
+    # constraint" -- distinct from COMPLETE-with-empty-rows, and load-bearing on
+    # the reuse check: "this artifact exists, no version meets your requirement"
+    # must NOT read the same as "no such artifact". The first says pin a new
+    # version of the SAME identity; the second licenses a new identity. The tool
+    # description has promised this state since the asset registry shipped; it was
+    # never actually emitted until artifact:<name> replaced that route.
+    NO_MATCH = "no_match"
 
 
 class Capability(StrEnum):

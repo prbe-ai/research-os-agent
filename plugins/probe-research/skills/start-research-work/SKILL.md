@@ -96,11 +96,12 @@ near-miss of an existing slug rather than warning.)
 
 4. **Reuse before you create.** Before writing or materially changing a reusable
    script, scoring method, dataset, config, image, checkpoint or container
-   definition, run `get_entity(ref="asset:<name>", view="versions")`. Its tool
-   description spells out what the two empty answers mean — they are opposites, and
-   confusing them is how duplicate asset identities get created, the single most
-   expensive avoidable error here: two scorers with the same intent and different
-   behaviour make every result that used either one unreproducible.
+   definition, run `get_entity(ref="artifact:<name>", view="versions")` — artifacts
+   resolve by name at the shared, lab-wide level, which is where an official one
+   lives. Its tool description spells out what the two empty answers mean — they are
+   opposites, and confusing them is how duplicate identities get created, the single
+   most expensive avoidable error here: two scorers with the same intent and
+   different behaviour make every result that used either one unreproducible.
 
 5. **Snapshot before launch.** `run.snapshot()` / `probe snapshot RUN_ID` captures
    code + env and pins `env_ref`. A run with no execution record cannot be reproduced

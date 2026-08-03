@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The reuse check works again.** The MCP instructions, `get_entity`'s
+  description and `start-research-work`'s step 4 all mandated
+  `get_entity(ref="asset:<name>", view="versions")` — the guard against duplicate
+  identities, called the most expensive avoidable error in the system. The asset
+  registry was retired into artifacts (research-os #143/#144) and the MCP asset
+  views were deleted, so that call had nothing behind it for a release.
+
+  It did not fail cleanly. `asset` was not a key in the ref resolver, so the ref
+  fell into a guess-every-getter loop that caught only `NotFoundError`;
+  `get_experiment()` raises a 422 `uuid_parsing` on a non-UUID name, so a
+  compliant agent got a parse error naming `experiment_id` for a call that never
+  mentioned an experiment. And because the description defines an error as "the
+  name does not exist, a new identity is licensed", the guard **against**
+  duplicate identities licensed one on every call.
+
+  The check is now `get_entity(ref="artifact:<name>", view="versions")`,
+  resolving by name against the shared, lab-wide level. An unknown ref kind is
+  rejected outright instead of guessed at.
+
+- `EnvelopeState.NO_MATCH` is real. The tool description had promised
+  `state="no_match"` since the asset registry shipped and the enum never had the
+  member, so "this artifact exists but no version satisfies your requirement" was
+  indistinguishable from "no such artifact" — the confusion that opens a second
+  identity. `highest_version` and `version_count` ride the fixed-size payload, so
+  the ceiling survives token-budget truncation.
+
+- A bare ref is checked for UUID shape locally, so a genuine backend 422 is no
+  longer rewritten as "nothing matches this ref".
+
 ### Removed
 
 - **Archiving is gone**, following the backend (research-os 0.88.0.0). Archiving

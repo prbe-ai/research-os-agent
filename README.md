@@ -2,9 +2,7 @@
 
 CLI + SDK client for **Probe Research**, Probe's experiment-tracking platform. It is a
 thin client over the v3 ingestion contract (`CONTRACT.md` in the Probe Research backend).
-Implemented experiment calls map onto real endpoints. Target asset-registry
-methods are present as an explicit client contract but fail closed with a
-capability error until the backend routes exist.
+Implemented experiment calls map onto real endpoints.
 
 ## Two client surfaces
 
@@ -38,8 +36,7 @@ therefore have capability parity; they differ only in ergonomics.
 | Experiment upload | `Client.run`, `Run.log/span/log_artifact/snapshot/link/execute`, `Client.events`, `Client.promote` | `run`, `log`, `span`, `artifact`, `snapshot`, `link`, `exec`, `event`, `promote` | Researchers, agents, notebooks, training/platform code |
 | Ambient upload | `probe.init/log/log_hw/log_artifact/span/finish`, `probe.active_run` | n/a (a CLI call has no ambient run) | Training scripts, and library code with no handle to pass |
 | Session adapter | `Client.sessions.attach/checkpoint/detach` | `probe hook session ...` | **Future deterministic hooks/broker only** |
-| Asset read/selection | `Client.assets.resolve`, normally behind MCP | No normal read verb | Agent through read-only MCP |
-| Asset effects | `Client.assets.materialize/fork/propose/promote` | `probe asset ...` | Agent/researcher after selecting an exact asset ref |
+| Artifact reuse check | `Client.list_anchored(Anchor.SHARED, prefix=…)` + `list_artifact_versions`, normally behind MCP | `probe artifact versions` | Agent through read-only MCP |
 | Passive ingestion | `Client.ingest` | No convenience command yet | Install-once platform integration |
 | Read plane | SDK reads used by `probe.mcp`; `Client.compare` for N-run analysis | `get`/`bundle` diagnostics | MCP for agents; CLI for humans/scripts |
 
@@ -431,24 +428,32 @@ that bar: it answers a question the others structurally cannot, because search r
 relevance to a query and therefore needs you to already know what to search for.
 
 `get_entity(ref, view=..., filters=..., token_budget=..., cursor=...)`, where `ref` is
-`run:<id>`, `experiment:<id>`, `asset:<name>`, `project:<id>`, `group:<id>`, or a bare id:
+`run:<id>`, `experiment:<id>`, `artifact:<name>`, `project:<id>`, `group:<id>`, or a bare id:
 
 | Kind | Views |
 |---|---|
 | run | `card` · `trajectory` · `metrics` · `artifacts` · `reproduce` · `handoff` · `lineage` · `events` |
 | experiment | `card` · `artifacts` · `lineage` · `groups` · `versions` |
-| asset | `card` · `versions` |
+| artifact | `card` · `versions` |
 | project, group | `card` |
 
 `card` (the default) returns `available_views` for that entity, so one call tells you what
 else you can ask for — the matrix above is documentation, not something to memorise.
+An unrecognised ref kind is rejected outright rather than guessed at: the resolver used to
+try every getter in turn, so a retired kind surfaced whichever backend parse error came
+first instead of saying the kind was gone.
 
-Assets resolve by NAME, because the reuse check has a name and not an id.
-`get_entity(ref="asset:<name>", view="versions", filters={"requirement": ">=2"})` is where
-`research_resolve` went. A name that does not exist raises not-found; a name that exists
-with no satisfying version returns `state="no_match"` **with the versions that do exist**,
-so you can see the real ceiling. Requirements match monotonic integers and labels, not
-semver — `">=2.0"` is rejected rather than silently matching nothing.
+Artifacts resolve by NAME, because the reuse check has a name and not an id — and because
+no `GET /v1/artifacts/{id}` route exists. The lookup runs against the SHARED, lab-wide
+level, which is where an official artifact is promoted to and the nearest thing to the
+tenant-unique names the retired asset registry enforced.
+`get_entity(ref="artifact:<name>", view="versions", filters={"requirement": ">=2"})` is
+where `research_resolve` went. A name that does not exist raises not-found; a name that
+exists with no satisfying version returns `state="no_match"` **with the versions that do
+exist**, so you can see the real ceiling. Requirements match monotonic integers and labels,
+not semver — `">=2.0"` is rejected rather than silently matching nothing. A name carried by
+more than one shared artifact is a 422 naming both ids: the duplication this check exists
+to prevent has already happened, and picking one silently would compound it.
 
 `trajectory` reads a run's spans (the run bundle carries span_type *counts* only). `metrics`
 returns series summaries, and `filters={"key": "<key>"}` drills to raw points. `reproduce`
@@ -464,7 +469,7 @@ path/URI/hash, use `search_knowledge` (its exact channel matches artifacts) and 
 
 MCP reads through the Probe Research API—never directly from Postgres or R2. Its
 logical sources are control identity/tenant scope, the structured experiment
-store, the asset/manifest registry, the one-index search door (`POST /v1/search`:
+store, the artifact/manifest registry, the one-index search door (`POST /v1/search`:
 exact SQL channel + the KB engine's semantic channel; search capabilities are
 discovered against the live backend with one cached probe), and object-store
 resource pointers returned by the API. W&B, RunPod, Kubernetes,
@@ -479,14 +484,14 @@ never creates. Creation on the CLI is always `probe project create` /
 `probe experiment create`.
 
 - `start-research-work` covers that call: orient against what already exists and
-  what is already running, create the project and experiment explicitly, resolve assets
-  before creating them, and snapshot code + env before launch.
+  what is already running, create the project and experiment explicitly, resolve
+  artifacts before creating them, and snapshot code + env before launch.
 - `track-research-work` covers everything after the run exists: metrics, spans,
   artifacts, notes, version pinning, reading back what actually landed, and closing
-  with the real lifecycle outcome. Its `reference.md` holds the artifact/asset
+  with the real lifecycle outcome. Its `reference.md` holds the artifact
   command syntax, the publication sequence, and project admin.
 
-Asset-reuse hooks are deliberately deferred. `start-research-work` contains the
+Reuse hooks are deliberately deferred. `start-research-work` contains the
 reuse-before-create rule; deterministic enforcement can be added later without
 changing the SDK, CLI, MCP, or skill contracts.
 
@@ -517,9 +522,10 @@ Most earlier gaps are closed by Probe Research v0.4 (PR #13). Now wired:
   reference artifacts (Harbor-ownership Phase 0). Fails open to a reference on error.
 - **Execution records.** `snapshot()` posts a content-addressed `execution-record`
   (fold #7); `client.execution_record(...)`.
-- **Asset registry.** `client.assets.register()` + `add_version()` + `resolve()`
-  (fold #5). The aspirational fork/propose/promote-candidate surface was dropped
-  (promotion tiers rejected upstream).
+- **Artifact versions.** `client.list_artifact_versions()` + `create_artifact_version()`.
+  The separate asset registry that used to sit here was folded into artifacts
+  (research-os #143/#144): an artifact is a named thing in a container with a chain
+  of immutable versions, which is what an asset was.
 - **Experiment versions.** `client.experiment_version()` mints the immutable manifest
   (fold #6). This replaces the removed run-level `promote`.
 - **Lineage edges.** `client.add_edge()` / `run.edges()` (fold #2).
@@ -544,7 +550,7 @@ asset `materialize`, upload `kind`/`meta`, and server-side artifact list filters
 
 Request/response models are generated from the backend's OpenAPI schema, not
 hand-written, so the client cannot silently drift from the contract. The write
-paths (`log`/`span`/`log_artifact`/`ingest`/`assets`/`edges`/`execution-records`)
+paths (`log`/`span`/`log_artifact`/`ingest`/`edges`/`execution-records`)
 build their payloads through the generated models, so a renamed or removed field
 fails client-side instead of as a server 422. `/ingest/v1/runs` is now declared in
 the schema too (Probe Research PR #12), so the passive push is generated and validated

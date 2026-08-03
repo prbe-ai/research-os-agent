@@ -232,7 +232,7 @@ def _collapse_experiments(results: list[dict]) -> list[dict]:
     experiment-level hit to represent it — and the result rows carry no
     experiment linkage to tell a direct run from an attached one.
 
-    Everything else — document/file/project/asset hits — passes through too.
+    Everything else — document/file/project/artifact hits — passes through too.
     Collapse DEDUPES; it does not filter. Dropping the non-experiment rows made
     every knowledge corpus unreachable through the default call: `search_in` maps
     transcripts/documents/files straight into the backend query, the backend
@@ -453,6 +453,11 @@ class _ViewData:
     because forgetting it is a LIE, not an inefficiency: a bounded fetch of 200
     spans from a 500-span run would otherwise be emitted whole and reported
     complete, and the agent would believe it had read the entire trajectory.
+
+    `no_match` says the view answered fully and the answer was "nothing satisfies
+    that constraint". It is NOT `missing`: nothing is absent from the response, so
+    reporting it as partial would read as a degraded backend rather than a real
+    ceiling. See EnvelopeState.NO_MATCH for why the distinction is load-bearing.
     """
 
     payload: dict[str, Any] = field(default_factory=dict)
@@ -460,6 +465,7 @@ class _ViewData:
     rows_key: str = "rows"
     missing: list[str] = field(default_factory=list)
     more_beyond: bool = False
+    no_match: bool = False
 
 
 # (entity kind, view) -> builder method. Explicit and greppable: this table IS the
@@ -481,14 +487,18 @@ _VIEWS: dict[tuple[str, str], str] = {
     (EntityType.EXPERIMENT, View.VERSIONS): "_view_versions",
     (EntityType.PROJECT, View.CARD): "_view_card",
     (EntityType.GROUP, View.CARD): "_view_card",
-    # Assets: the reuse-before-create seam. `versions` is where research_resolve
-    # went -- an asset lookup is a read of one entity, and it never needed a
-    # tool of its own.
-    # NO asset lineage view. There is no backend route for it, so it could only
-    # ever answer `edges: []` -- and an agent reads that as "this asset has no
+    # Artifacts: the reuse-before-create seam, reached by NAME. This is where the
+    # retired `asset:<name>` check went -- #143 folded assets into artifacts, and
+    # for one release the instructions still named a route with no builder behind
+    # it, so every compliant agent got a 422 and read it as "licence to create a
+    # duplicate", inverting the exact guard the instructions exist to enforce.
+    # NO artifact lineage view. There is no backend route for it, so it could only
+    # ever answer `edges: []` -- and an agent reads that as "this artifact has no
     # lineage", a confident wrong answer. Exactly why research_trace_file was
     # removed rather than left returning empty. Add the view when the route
     # exists, not before.
+    (EntityType.ARTIFACT, View.CARD): "_view_card",
+    (EntityType.ARTIFACT, View.VERSIONS): "_view_artifact_versions",
 }
 
 # Filters each (kind, view) accepts, mapped onto the backend's REAL server-side
@@ -502,6 +512,10 @@ _VIEW_FILTERS: dict[tuple[str, str], set[str]] = {
     (EntityType.RUN, View.TRAJECTORY): {"span_type", "parent_span_id", "step_from", "step_to"},
     (EntityType.RUN, View.METRICS): {"key", "kind"},
     (EntityType.RUN, View.ARTIFACTS): {"kind", "step_from", "step_to", "name", "scope"},
+    # `requirement` is applied HERE, not server-side: /v1/artifacts/{id}/versions
+    # takes no filter, so this is an honest client-side narrowing of a fully-read
+    # chain rather than a filter the backend silently ignored.
+    (EntityType.ARTIFACT, View.VERSIONS): {"requirement"},
     # `at` is deliberately absent: the SDK accepted it and never read it, and
     # no backend as-of resolution exists. Advertising a parameter that silently
     # does nothing is worse than not having one.
@@ -564,9 +578,9 @@ def _echoes_project_scope(response: Any, project_id: str) -> bool:
 
 
 def _satisfies(version: dict, requirement: str) -> bool:
-    """Does this asset version satisfy `requirement`?
+    """Does this artifact version satisfy `requirement`?
 
-    Asset versions are MONOTONIC INTEGERS with optional labels, not semver --
+    Artifact versions are MONOTONIC INTEGERS with optional labels, not semver --
     so this supports exactly what the data supports: an exact label/version
     match, or `>=N` / `>N` / `<=N` / `<N` against the integer. Pretending to
     understand semver ranges over integer versions would answer confidently and
@@ -586,11 +600,11 @@ def _satisfies(version: dict, requirement: str) -> bool:
                 # satisfies this". That is a THIRD kind of nothing, and it is
                 # indistinguishable from a real version ceiling: the caller sees
                 # state="no_match" with completeness="complete", believes the
-                # asset is too old, and registers a duplicate -- the exact
+                # artifact is too old, and registers a duplicate -- the exact
                 # outcome this view exists to prevent. ">=2.0" is the obvious
                 # way to write this and it is not a version here.
                 raise errors.ValidationError(
-                    f"asset versions are monotonic integers, not semver: "
+                    f"artifact versions are monotonic integers, not semver: "
                     f"{requirement!r} does not name one (try '>=2', '<3', "
                     f"'==1', or a bare label)",
                     status=422,
@@ -1147,9 +1161,18 @@ class ResearchReadService:
 
         if _tokens(data) > token_budget and MissingMarker.TRUNCATED_BY_TOKEN_BUDGET not in missing:
             missing.append(MissingMarker.TOKEN_BUDGET_EXCEEDED)
+        # NO_MATCH outranks PARTIAL: it is the ANSWER to the question asked, while
+        # `missing` describes the response's own completeness, and the two are
+        # independent. A truncated no-match that reported state="partial" would
+        # hide the ceiling behind what reads as a transient degradation -- and the
+        # truncation is still visible, because `missing` rides along either way.
+        if result.no_match:
+            state = EnvelopeState.NO_MATCH
+        else:
+            state = EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE
         return self._envelope(
             data,
-            state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
+            state=state,
             missing=missing,
             next_cursor=next_cursor,
             verbose=verbose,
@@ -1362,6 +1385,64 @@ class ResearchReadService:
         research_list_groups tool. One group is research_get(ref="group:<id>")."""
         return _ViewData(
             rows=self.source.experiment_groups(str(entity["id"])), rows_key="groups"
+        )
+
+    def _view_artifact_versions(self, entity: dict, request: _Req) -> _ViewData:
+        """The reuse check's answer: this artifact's version chain, optionally
+        narrowed to the versions that satisfy `requirement`.
+
+        The two empty answers are OPPOSITES and this view is the only thing that
+        can tell them apart, so it never collapses them:
+
+        - the artifact does not exist -> `artifact_by_name` already raised
+          NotFoundError, and a new identity is genuinely licensed.
+        - the artifact EXISTS but no version satisfies `requirement` ->
+          state="no_match", carrying the versions that DO exist so the caller sees
+          the real ceiling. Pin a new version of the SAME artifact.
+
+        A caller that reads the second as the first opens a duplicate identity,
+        which is the single most expensive avoidable error in this system.
+        """
+        versions = self.source.artifact_versions(str(entity["id"]))
+        requirement = request.filters.get("requirement")
+        if requirement is None or requirement == "":
+            return _ViewData(rows=versions, rows_key="versions")
+        requirement = str(requirement)
+        # Validated BEFORE the per-version scan, not inside it. Inside, an artifact
+        # with zero versions never reaches _satisfies, so a malformed ">=2.0" would
+        # skip validation entirely and answer an authoritative no_match -- the
+        # THIRD kind of nothing _satisfies exists to refuse, and indistinguishable
+        # from a real ceiling.
+        # "0" and not "": the probe must PARSE, so that only a malformed operand
+        # raises. An unparseable probe version would reject ">=2" as well.
+        _satisfies({"version": "0"}, requirement)
+        matching = [v for v in versions if _satisfies(v, requirement)]
+        if matching:
+            return _ViewData(
+                payload={"requirement": requirement},
+                rows=matching,
+                rows_key="versions",
+            )
+        # No match: return every version that EXISTS, not an empty list. An empty
+        # list here is indistinguishable from an empty artifact, and that is the
+        # confusion that creates duplicates.
+        #
+        # `highest_version` rides the FIXED-size payload rather than the rows,
+        # because rows are what token_budget truncates: a tight budget could
+        # otherwise emit state="no_match" with every version cut, promising a
+        # ceiling the response no longer carries. The ceiling is the whole answer,
+        # so it must survive truncation.
+        numeric = [int(v["version"]) for v in versions if str(v.get("version", "")).isdigit()]
+        return _ViewData(
+            payload={
+                "requirement": requirement,
+                "satisfied_by": None,
+                "highest_version": max(numeric) if numeric else None,
+                "version_count": len(versions),
+            },
+            rows=versions,
+            rows_key="versions",
+            no_match=True,
         )
 
     def _view_versions(self, entity: dict, request: _Req) -> _ViewData:

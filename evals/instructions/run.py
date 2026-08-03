@@ -43,6 +43,35 @@ def _first_tool_call(trace: list[dict]) -> str | None:
     return None
 
 
+def _first_tool_failed(trace: list[dict]) -> bool:
+    """Did the FIRST tool call come back an error?
+
+    Reading the name alone scores intent, not outcome, and the two came apart
+    badly: when the asset registry was retired the instructions kept mandating
+    `get_entity(ref="asset:<name>")`, every such call 422'd, and this eval scored
+    each one a hit because the right tool name appeared first. A mandated call
+    that cannot succeed is not compliance -- it is the instruction being broken --
+    so an errored first call is now a MISS, and the eval can see the whole class
+    of "the docs name a route with nothing behind it".
+    """
+    call_id: str | None = None
+    for event in trace:
+        if event.get("type") == "tool_use":
+            call_id = event.get("id")
+            break
+    else:
+        return False
+    for event in trace:
+        if event.get("type") != "tool_result":
+            continue
+        # Match on id when the trace carries one; otherwise the first result is
+        # the first call's, since the run is capped at one meaningful action.
+        if call_id is not None and event.get("tool_use_id") not in (None, call_id):
+            continue
+        return bool(event.get("is_error"))
+    return False
+
+
 def _forbidden_command(trace: list[dict], patterns: list[str]) -> str | None:
     """First trace command matching a forbidden pattern, if any.
 
@@ -71,7 +100,10 @@ def _correct(task: dict, called: str | None, trace: list[dict] | None = None) ->
     if not expected:
         # NEGATIVE control: the right behaviour is to call NONE of these tools.
         return called is None
-    return called in expected
+    if called not in expected:
+        return False
+    # The call must also have WORKED. See _first_tool_failed.
+    return not _first_tool_failed(trace or [])
 
 
 def run_task(task: dict, arm: str, repeat: int) -> dict:
@@ -96,6 +128,7 @@ def run_task(task: dict, arm: str, repeat: int) -> dict:
         "task_id": task["id"],
         "repeat": repeat,
         "first_tool": called,
+        "first_tool_failed": _first_tool_failed(trace),
         "forbidden_hit": _forbidden_command(trace, task.get("forbid_commands") or []),
         "correct": _correct(task, called, trace),
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -133,7 +166,11 @@ def main() -> int:
                 fh.write(json.dumps(record) + "\n")
                 fh.flush()  # a killed sweep keeps the runs it already paid for
                 mark = "ok " if record["correct"] else "MISS"
-                print(f"  {mark} {task['id']:<28} -> {record['first_tool']}", file=sys.stderr)
+                note = " (errored)" if record["first_tool_failed"] else ""
+                print(
+                    f"  {mark} {task['id']:<28} -> {record['first_tool']}{note}",
+                    file=sys.stderr,
+                )
     print(f"\nwrote {out}", file=sys.stderr)
     return 0
 
