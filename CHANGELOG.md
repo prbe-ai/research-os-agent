@@ -55,9 +55,24 @@
   record's content hash, so identical environments at different paths no longer
   share a record — deliberate, and already true of `hardware.gpu`.
 
-  SDK behaviour is unchanged by default (`run.snapshot()` is in-process and its
-  interpreter *is* the environment). Launchers that start training as a subprocess
-  should pass `run.snapshot(detect_venv=True)` or an explicit `venv=`.
+  SDK behaviour is unchanged by default (`run.snapshot()` records its own
+  interpreter). Launchers that start training as a subprocess should pass
+  `run.snapshot(detect_venv=True)` or an explicit `venv=`.
+
+  Packages are now always enumerated by running the target interpreter, including
+  when that is the current one. The in-process variant was deleted rather than
+  kept: two implementations of one algorithm whose output is hashed into
+  `env_ref` will drift, and the drift reads as two identical environments
+  comparing unequal — indistinguishable from a real dependency change. The spawn
+  costs ~50ms once per run, since a snapshot is a launch-time act. A frozen
+  interpreter (PyInstaller) now raises instead of enumerating the bundled app.
+
+  `deps` carries only what the environment IS (`python`, `packages`,
+  `package_count`, `packages_sha256`). The provenance — `venv`,
+  `python_executable`, `resolved_via` — rides on the `code-snapshot` artifact
+  meta under `env`, because the execution record's `content_hash` covers the
+  whole `deps` section and an absolute path in it would make two identical
+  environments at different paths produce different `env_ref`s.
 
 ### Removed
 

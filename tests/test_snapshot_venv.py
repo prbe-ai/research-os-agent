@@ -126,9 +126,18 @@ def test_detect_venv_records_the_project_env_not_the_callers(project):
     assert os.path.realpath(info["venv"]) != os.path.realpath(sys.prefix)
     # Note what is deliberately NOT asserted: that the two INTERPRETERS differ.
     # Both `bin/python` symlink to the same base CPython, so their realpaths are
-    # equal while the environments are unrelated. That equality is why capture
-    # compares prefixes -- resolving the executable reads the caller's packages.
+    # equal while the environments are unrelated. Any future shortcut that
+    # decides "same interpreter, skip the subprocess" by resolving the
+    # executable would therefore read the CALLER's packages here.
     assert os.path.realpath(info["python_executable"]) == os.path.realpath(sys.executable)
+
+
+def test_a_frozen_interpreter_is_refused_rather_than_guessed(project, monkeypatch):
+    """PyInstaller rewrites sys.executable to the bundled app, which does not
+    understand `-c` -- it would re-run the app. Refuse, name the escape hatch."""
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    with pytest.raises(SnapshotError, match="frozen interpreter"):
+        capture_env(str(project))
 
 
 def test_in_process_default_still_records_this_interpreter(project):

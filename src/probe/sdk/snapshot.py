@@ -374,33 +374,22 @@ def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
     }
 
 
-def _installed_distributions() -> list[str]:
-    """``name==version`` for every distribution installed in THIS interpreter.
-
-    Uses ``importlib.metadata`` rather than shelling out to ``pip freeze``. A
-    ``uv venv`` ships no pip, so ``sys.executable -m pip`` returns non-zero there
-    and an older implementation silently recorded nothing at all.
-
-    First occurrence wins: ``distributions()`` yields in ``sys.path`` order, so
-    the entry that shadows the others at import time is the one recorded.
-    """
-    from importlib import metadata
-
-    seen: dict[str, str] = {}
-    for dist in metadata.distributions():
-        try:
-            name = dist.metadata["Name"]
-        except Exception:  # noqa: BLE001 - an unreadable METADATA is not fatal
-            name = None
-        if not name:
-            continue
-        seen.setdefault(name, dist.version or "0")
-    return sorted(f"{n}=={v}" for n, v in seen.items())
-
-
-# Run inside the TARGET interpreter. Deliberately the same enumeration as
-# ``_installed_distributions``, expressed for the oldest interpreter a project
-# venv might hold (``dist.name`` is 3.10+, ``dist.metadata['Name']`` is not).
+# THE enumeration -- there is deliberately only one, and it always runs inside
+# the TARGET interpreter, even when that is this process.
+#
+# An in-process variant used to exist alongside this for the SDK path. It was
+# deleted rather than kept-and-tested: two implementations of one algorithm
+# whose outputs are HASHED into `env_ref` will drift, and the drift surfaces as
+# two identical environments comparing unequal -- indistinguishable from a real
+# dependency change. Its only unique capability was seeing runtime `sys.path`
+# mutations, and those are derivable: the `sys.path.insert` line lives in the
+# code the snapshot already captures. The spawn costs ~50ms ONCE per run (a
+# snapshot is a launch-time act, not a training-loop one), so there is no hot
+# path to protect here -- that constraint belongs to `probe log`.
+#
+# Written for the oldest interpreter a project venv might hold: `dist.name` is
+# 3.10+, `dist.metadata['Name']` is not. First occurrence wins, matching
+# `sys.path` shadowing order. No pip required -- `uv venv` installs none.
 _ENUMERATE_PROGRAM = r"""
 import json, sys
 from importlib import metadata
@@ -618,26 +607,18 @@ def capture_env(
         "resolved_via": resolved_via,
     }
 
-    # Enumerating in-process when the target IS this environment keeps the SDK's
-    # hot path free of a subprocess, and puts `probe` installed into the project
-    # venv on one code path rather than two.
-    #
-    # Compared on PREFIX, never on the interpreter's realpath: a venv's
-    # `bin/python` is a symlink to the base installation, so two unrelated venvs
-    # sharing a base Python have the SAME realpath. Resolving the executable
-    # would call every such venv "this one" and read the caller's packages --
-    # the very bug this function exists to fix, reintroduced one layer down.
-    same_env = (
-        os.path.realpath(venv_root) == os.path.realpath(sys.prefix)
-        if venv_root is not None
-        else python_exe == sys.executable
-    )
+    # A frozen build (PyInstaller and friends) rewrites sys.executable to the
+    # bundled application, which does not understand `-c` -- it would re-run the
+    # app. Refuse instead of enumerating whatever that produces.
+    if getattr(sys, "frozen", False) and python_exe == sys.executable:
+        raise SnapshotError(
+            "cannot enumerate packages from a frozen interpreter "
+            f"({sys.executable}); pass --venv PATH (SDK: venv=...) naming the "
+            "environment whose packages should be recorded"
+        )
 
     try:
-        if same_env:
-            packages = _installed_distributions()
-        else:
-            info["python"], packages = _enumerate_foreign(python_exe)
+        info["python"], packages = _enumerate_foreign(python_exe)
     except SnapshotError:
         raise
     except Exception as exc:  # noqa: BLE001 - surfaced, never swallowed
