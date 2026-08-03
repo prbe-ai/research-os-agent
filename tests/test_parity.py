@@ -402,14 +402,12 @@ PENDING: dict[Op, str] = {
     ("GET", "/v1/sessions/{}/work"): "agent-session work feed; dashboard surface today",
     ("GET", "/v1/artifacts/{}/sessions"): "artifact session roll-up; dashboard surface today",
     #
-    # Third pass, 2026-08-03: computed metric views (research-os 0087-0089)
-    # landed while this branch was in review. Dashboard surface today.
-    ("GET", "/v1/runs/{}/views"): "computed metric views; dashboard surface today",
-    ("POST", "/v1/runs/{}/views"): "computed metric views; dashboard surface today",
-    ("POST", "/v1/runs/{}/views/preview"): "computed metric views; dashboard surface today",
-    ("GET", "/v1/runs/{}/views/{}/data"): "computed metric views; dashboard surface today",
-    ("PATCH", "/v1/views/{}"): "computed metric views; dashboard surface today",
-    ("DELETE", "/v1/views/{}"): "computed metric views; dashboard surface today",
+    # The six PRIVATE metric-view routes (research-os 0087-0089) were parked here
+    # on 2026-08-03 as "dashboard surface today" and cleared the same day: the
+    # dashboard turned out to be the WRONG authoring surface. An expression comes
+    # from an agent session or a script, so `probe.expr` + `probe views` are the
+    # door, and the dashboard only renders/renames/deletes. They are call sites in
+    # sdk/client.py now.
     ("GET", "/public/v1/runs/{}/views"): "public share read; unauthenticated browser surface, no client story yet",
     ("GET", "/public/v1/runs/{}/views/{}/data"): "public share read; unauthenticated browser surface, no client story yet",
 }
