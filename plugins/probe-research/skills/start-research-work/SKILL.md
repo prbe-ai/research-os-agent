@@ -108,6 +108,14 @@ near-miss of an existing slug rather than warning.)
    and cannot be published. Record W&B, scheduler, pod, image and storage ids with
    `run.link(...)` / `probe link` as they appear; they land on `foreign_keys`.
 
+   The two spellings read the environment differently, because they have to.
+   `run.snapshot()` runs INSIDE the training venv and records that interpreter.
+   `probe snapshot` is a separate process — normally a uv-tool install with its
+   own packages — so it detects the project's venv (`.venv`/`venv`/`env` up to the
+   git root, then `VIRTUAL_ENV`, then `CONDA_PREFIX`). If the venv lives somewhere
+   else, pass `--venv PATH`; the command fails loudly rather than recording the
+   CLI's own packages as the project's.
+
 6. **Tag it.** Repeatable `--tag` on `run start` / `experiment create` /
    `project create` (SDK `tags=[...]`). Use 1-3 lowercase-kebab tags; prefer
    `baseline`, `ablation`, `sweep`, `debug`, `smoke-test`, `prod-candidate` —

@@ -183,8 +183,8 @@ def test_capture_env_records_the_actual_packages():
 def test_capture_env_raises_rather_than_recording_nothing(monkeypatch):
     """Silently returning {'python': ...} is how real runs lost their deps."""
     monkeypatch.setattr(
-        "probe.sdk.snapshot._installed_distributions",
-        lambda: (_ for _ in ()).throw(RuntimeError("no metadata")),
+        "probe.sdk.snapshot._enumerate_foreign",
+        lambda python: (_ for _ in ()).throw(RuntimeError("no metadata")),
     )
     with pytest.raises(SnapshotError):
         capture_env()
@@ -192,8 +192,8 @@ def test_capture_env_raises_rather_than_recording_nothing(monkeypatch):
 
 def test_capture_env_non_strict_degrades_quietly(monkeypatch):
     monkeypatch.setattr(
-        "probe.sdk.snapshot._installed_distributions",
-        lambda: (_ for _ in ()).throw(RuntimeError("no metadata")),
+        "probe.sdk.snapshot._enumerate_foreign",
+        lambda python: (_ for _ in ()).throw(RuntimeError("no metadata")),
     )
     assert capture_env(strict=False)["python"]
 
@@ -260,7 +260,7 @@ def test_unreachable_remote_falls_back_without_hanging(tmp_path):
 
 
 def test_zero_distributions_is_refused_under_strict(monkeypatch):
-    monkeypatch.setattr("probe.sdk.snapshot._installed_distributions", list)
+    monkeypatch.setattr("probe.sdk.snapshot._enumerate_foreign", lambda python: ("3.13.0", []))
     with pytest.raises(SnapshotError):
         capture_env()
 

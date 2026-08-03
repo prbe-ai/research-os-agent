@@ -622,6 +622,47 @@ def test_snapshot_pins_real_env_ref_column(client, app, tmp_path):
     assert "env_ref" not in (app.runs[run.id].get("metadata") or {})
 
 
+def test_snapshot_splits_env_identity_from_provenance(client, app, tmp_path):
+    """The hashed execution record gets what the environment IS; the artifact
+    meta gets how it was found.
+
+    Both other snapshot tests pass include_env=False, so without this the whole
+    environment path through Run.snapshot is unexercised -- `env_provenance`
+    could stop reaching the artifact meta entirely and every test would pass.
+    """
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    for args in (["init", "-q"], ["config", "user.email", "t@e.com"], ["config", "user.name", "t"]):
+        subprocess.run(["git", *args], cwd=repo, check=True)
+    (repo / "a.txt").write_text("x\n")
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True)
+
+    client.fail_open = False
+    run = open_run(client, experiment="e", name="r")
+    snap = run.snapshot(cwd=str(repo), include_env=True, include_gpu=False)
+
+    deps = snap["deps"]
+    assert deps["packages"] and deps["package_count"] == len(deps["packages"])
+    # identity only -- a path here would change content_hash per machine
+    assert not ({"venv", "python_executable", "resolved_via"} & set(deps))
+
+    prov = snap["env_provenance"]
+    assert prov["resolved_via"] == "interpreter"
+    assert prov["python_executable"] == sys.executable
+
+    # ...and provenance actually reaches the artifact row a reader inspects.
+    meta = next(
+        a["meta"]
+        for rows in app.artifacts.values()
+        for a in rows
+        if a.get("kind") == "code_snapshot"
+    )
+    assert meta["env"] == prov
+
+
 def test_snapshot_rejects_backend_that_drops_env_ref(client, app, tmp_path):
     import subprocess
 

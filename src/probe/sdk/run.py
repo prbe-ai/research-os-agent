@@ -1112,11 +1112,21 @@ class Run:
         cwd: str | None = None,
         include_env: bool = True,
         include_gpu: bool = True,
+        venv: str | None = None,
+        detect_venv: bool = False,
         strict: bool | None = None,
     ) -> dict:
         """Capture code (git shadow ref) + deps + GPUs as a content-addressed
         execution record (fold #7), and record the shadow commit as a reference
         artifact. Non-disruptive.
+
+        ``venv`` / ``detect_venv`` choose WHICH environment is recorded. The
+        default records this interpreter's, which is correct here and only here:
+        an in-process caller is running in the environment being snapshotted.
+        A caller that launches the code as a subprocess -- the CLI, or any
+        launcher script outside the training venv -- must pass ``detect_venv=True``
+        (or an explicit ``venv``), otherwise it records its OWN packages with
+        full confidence. See :func:`probe.sdk.snapshot.capture_env`.
 
         The execution record pins ``run.env_ref`` to its content hash via RunPatch
         (fold #7 + the RunPatch env_ref parity), the same column the ingest path sets.
@@ -1129,11 +1139,22 @@ class Run:
         ``manifest['entries']``."""
         git = _snapshot.capture_git_snapshot(self.id, cwd)
         manifest = _snapshot.capture_manifest(cwd)
+        # Identity is hashed into the execution record; provenance is NOT --
+        # a venv path in `deps` would make two identical environments at
+        # different paths produce different env_refs. See split_env_provenance.
+        deps, env_provenance = _snapshot.split_env_provenance(
+            _snapshot.capture_env(
+                cwd,
+                venv=venv,
+                detect_venv=detect_venv,
+                strict=strict if strict is not None else not self._client.fail_open,
+            )
+            if include_env
+            else {}
+        )
         record = ExecutionRecordCreate(
             code={"git": git, "manifest": manifest},
-            deps=_snapshot.capture_env(
-                strict=strict if strict is not None else not self._client.fail_open
-            ) if include_env else {},
+            deps=deps,
             hardware={"gpu": _snapshot.capture_gpu()} if include_gpu else {},
         )
         exec_rec = self._client.transport.post(
@@ -1173,12 +1194,17 @@ class Run:
                 "remote": manifest["remote"],
                 "n_git_referenced": manifest["n_git_referenced"],
                 "n_pending_upload": manifest["n_pending_upload"],
+                # WHICH environment the deps came from. Deliberately here and
+                # not in the hashed execution record (split_env_provenance).
+                **({"env": env_provenance} if env_provenance else {}),
             },
             strict=strict,
         )
         return {
             "git": git,
             "manifest": manifest,
+            "deps": deps,
+            "env_provenance": env_provenance,
             "execution_record": exec_rec,
             "content_hash": content_hash,
         }

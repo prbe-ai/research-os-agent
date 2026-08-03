@@ -7,13 +7,18 @@ a throwaway ``GIT_INDEX_FILE``, so there is nothing to restore afterward: nothin
 moved. This is the concrete form of the ``/experiment`` launch snapshot.
 
 GPU capture is best-effort ambient context. Dependency capture is STRICT by
-default: it records the resolved package list and raises rather than storing an
-empty set that reads downstream as a successful capture.
+default, in both directions that matter: it raises rather than storing an empty
+package set, AND rather than storing the WRONG one. The second guard exists
+because the first is not enough -- an out-of-process caller (the CLI is a
+uv-tool install with its own interpreter) that enumerates itself produces a
+full, plausible, entirely wrong dependency list, which is indistinguishable
+downstream from a correct capture. See ``capture_env``.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import subprocess
@@ -369,57 +374,297 @@ def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
     }
 
 
-def _installed_distributions() -> list[str]:
-    """``name==version`` for every installed distribution, sorted.
+# THE enumeration -- there is deliberately only one, and it always runs inside
+# the TARGET interpreter, even when that is this process.
+#
+# An in-process variant used to exist alongside this for the SDK path. It was
+# deleted rather than kept-and-tested: two implementations of one algorithm
+# whose outputs are HASHED into `env_ref` will drift, and the drift surfaces as
+# two identical environments comparing unequal -- indistinguishable from a real
+# dependency change. Its only unique capability was seeing runtime `sys.path`
+# mutations, and those are derivable: the `sys.path.insert` line lives in the
+# code the snapshot already captures. The spawn costs ~50ms ONCE per run (a
+# snapshot is a launch-time act, not a training-loop one), so there is no hot
+# path to protect here -- that constraint belongs to `probe log`.
+#
+# Written for the oldest interpreter a project venv might hold: `dist.name` is
+# 3.10+, `dist.metadata['Name']` is not. First occurrence wins, matching
+# `sys.path` shadowing order. No pip required -- `uv venv` installs none.
+_ENUMERATE_PROGRAM = r"""
+import json, sys
+from importlib import metadata
 
-    Uses ``importlib.metadata`` rather than shelling out to ``pip freeze``. A
-    ``uv venv`` ships no pip, so ``sys.executable -m pip`` returns non-zero there
-    and the old implementation silently recorded nothing at all.
-    """
-    from importlib import metadata
-
-    seen: dict[str, str] = {}
-    for dist in metadata.distributions():
-        name = getattr(dist, "name", None)
-        if not name:
-            continue
+seen = {}
+for dist in metadata.distributions():
+    try:
+        name = dist.metadata["Name"]
+    except Exception:
+        name = None
+    if not name:
+        continue
+    if name not in seen:
         seen[name] = dist.version or "0"
-    return sorted(f"{n}=={v}" for n, v in seen.items())
+json.dump(
+    {
+        "python": ".".join(str(p) for p in sys.version_info[:3]),
+        "executable": sys.executable,
+        "packages": sorted("%s==%s" % (n, v) for n, v in seen.items()),
+    },
+    sys.stdout,
+)
+"""
+
+_ENUMERATE_TIMEOUT = 60.0
+
+# Layout of a venv, POSIX and Windows.
+_VENV_BIN = ("bin", "Scripts")
+_VENV_PYTHON = ("python", "python3", "python.exe")
+# Ordered: a project that has both `.venv` and `venv` almost always maintains
+# the first (uv, poetry and pdm all create `.venv`) and keeps the other stale.
+_VENV_DIR_NAMES = (".venv", "venv", "env")
 
 
-def capture_env(strict: bool = True) -> dict[str, Any]:
+def venv_python(venv: str) -> str | None:
+    """The interpreter inside ``venv``, or None if it does not look like a venv."""
+    for bindir in _VENV_BIN:
+        for name in _VENV_PYTHON:
+            candidate = os.path.join(venv, bindir, name)
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+    return None
+
+
+def find_venv(cwd: str | None = None) -> tuple[str | None, str | None]:
+    """Locate the virtualenv whose packages belong to the code at ``cwd``.
+
+    Returns ``(venv_root, resolved_via)``, or ``(None, None)``.
+
+    Order, strongest tie to the snapshotted code first:
+
+    1. a venv directory inside the project -- ``.venv`` / ``venv`` / ``env``,
+       walking ``cwd`` upward and stopping AT the git toplevel. The snapshot is
+       of a repository, so the search is bounded by that repository; without the
+       bound a project with no venv would silently adopt one from a parent
+       directory that has nothing to do with it.
+    2. ``VIRTUAL_ENV`` -- an activated env, including the one ``uv run`` exports.
+    3. ``CONDA_PREFIX`` -- conda envs live outside the project by design.
+    """
+    cwd = os.path.abspath(cwd or os.getcwd())
+
+    top = _git(cwd, "rev-parse", "--show-toplevel", check=False)
+    ceiling = os.path.abspath(top) if top else cwd
+
+    directory = cwd
+    while True:
+        for name in _VENV_DIR_NAMES:
+            candidate = os.path.join(directory, name)
+            if venv_python(candidate):
+                return candidate, "project-venv"
+        if os.path.normcase(directory) == os.path.normcase(ceiling):
+            break
+        parent = os.path.dirname(directory)
+        if parent == directory:
+            break
+        directory = parent
+
+    for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+        value = os.environ.get(var)
+        if value and venv_python(value):
+            return os.path.abspath(value), var
+
+    return None, None
+
+
+def _enumerate_foreign(python: str) -> tuple[str, list[str]]:
+    """``(python_version, packages)`` as reported BY ``python`` itself.
+
+    ``PYTHONHOME`` is dropped because it repoints an interpreter's stdlib at
+    another installation's, which breaks a foreign interpreter outright. The
+    rest of the environment is inherited on purpose: ``PYTHONPATH`` and user
+    site-packages genuinely contribute modules to the run being recorded, so
+    isolating them would record an environment nobody actually uses.
+    """
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONHOME"}
+    try:
+        proc = subprocess.run(
+            [python, "-c", _ENUMERATE_PROGRAM],
+            capture_output=True,
+            text=True,
+            timeout=_ENUMERATE_TIMEOUT,
+            env=env,
+        )
+    except subprocess.TimeoutExpired:
+        raise SnapshotError(
+            f"{python} did not report its packages within {_ENUMERATE_TIMEOUT}s"
+        ) from None
+    except OSError as exc:
+        raise SnapshotError(f"could not run {python}: {exc}") from exc
+    if proc.returncode != 0:
+        raise SnapshotError(
+            f"{python} could not enumerate its packages: {proc.stderr.strip()[:400]}"
+        )
+    try:
+        payload = json.loads(proc.stdout)
+        return payload["python"], list(payload["packages"])
+    except (ValueError, KeyError, TypeError) as exc:
+        raise SnapshotError(f"{python} returned an unreadable package list: {exc}") from exc
+
+
+def _is_inside(path: str, root: str) -> bool:
+    try:
+        return not os.path.relpath(os.path.realpath(path), os.path.realpath(root)).startswith("..")
+    except ValueError:  # different drives on Windows
+        return False
+
+
+def capture_env(
+    cwd: str | None = None,
+    *,
+    venv: str | None = None,
+    detect_venv: bool = False,
+    strict: bool = True,
+) -> dict[str, Any]:
     """Resolved dependency list for the reproducibility manifest.
 
-    Stores the PACKAGES THEMSELVES, not just a digest of them. The previous
+    Stores the PACKAGES THEMSELVES, not just a digest of them. An earlier
     implementation kept only ``packages_sha256`` + a count, which can tell you
     that two runs differed and can never tell you what either one used -- the
     same failure shape as recording a commit SHA whose objects are gone.
 
-    ``strict`` (the default) raises when the dependency set cannot be resolved.
-    Silently returning ``{"python": ...}`` is how real runs ended up with no
-    dependency record and nobody noticed.
+    WHICH environment gets recorded is the whole problem this signature exists to
+    solve. Enumerating the calling process is right for the SDK, whose
+    ``run.snapshot()`` runs inside the training venv, and wrong for the CLI,
+    which is a uv-tool install with its own interpreter and its own ~40
+    packages. Recording those is not a degraded capture; it is a confident,
+    plausible, WRONG one, and it is exactly the "different venvs" failure the
+    execution record exists to eliminate.
+
+    Resolution order:
+
+    - ``venv`` -- an explicit path always wins.
+    - ``detect_venv`` -- resolve the project's venv via :func:`find_venv`. This
+      is the out-of-process caller's mode: the CLI is not the thing that runs
+      the code, so its own interpreter is evidence of nothing.
+    - neither -- the current interpreter, enumerated in-process. The default,
+      because an in-process caller IS the environment being recorded.
+
+    A resolved venv is read by running ``importlib.metadata`` under ITS
+    interpreter, so the answer comes from the environment itself rather than
+    from a guess about its layout, and no ``pip`` is required (``uv venv``
+    installs none).
+
+    ``strict`` (the default) covers two distinct failures, both of which used to
+    pass silently:
+
+    - the dependency set cannot be resolved, or resolves to nothing;
+    - ``detect_venv`` found no project venv and the running interpreter is
+      foreign to ``cwd`` -- i.e. we are about to record the wrong environment.
+
+    The returned mapping carries ``venv`` / ``python_executable`` /
+    ``resolved_via`` so that a capture which picked the wrong environment is
+    visible rather than indistinguishable from a correct one. Those three are
+    PROVENANCE, not identity: split them off with
+    :func:`split_env_provenance` before the result reaches an execution record.
     """
-    info: dict[str, Any] = {"python": sys.version.split()[0]}
+    resolved_via = "interpreter"
+    venv_root: str | None = None
+
+    if venv is not None:
+        venv_root, resolved_via = os.path.abspath(venv), "explicit"
+        if venv_python(venv_root) is None:
+            raise SnapshotError(f"{venv} is not a virtualenv (no bin/python inside)")
+    elif detect_venv:
+        venv_root, found_via = find_venv(cwd)
+        if venv_root is not None:
+            resolved_via = found_via or "project-venv"
+
+    python_exe = sys.executable
+    if venv_root is not None:
+        python_exe = venv_python(venv_root) or sys.executable
+    elif detect_venv:
+        # No project venv, so the only candidate left is the interpreter running
+        # this code -- acceptable only when it lives in the tree being recorded
+        # (probe pip-installed into the project's own env). Anything else is the
+        # caller's own toolchain, and recording it is the bug, not a fallback.
+        root = cwd or os.getcwd()
+        top = _git(root, "rev-parse", "--show-toplevel", check=False) or root
+        if _is_inside(sys.prefix, top):
+            resolved_via = "interpreter"
+        elif strict:
+            raise SnapshotError(
+                f"no virtualenv found for {os.path.abspath(root)}, and the running "
+                f"interpreter ({sys.prefix}) is outside it -- refusing to record "
+                "this process's own packages as the project's. Pass --venv PATH "
+                "(SDK: venv=...), or activate the environment the code runs in."
+            )
+        else:
+            resolved_via = "unresolved-fallback"
+
+    info: dict[str, Any] = {
+        "python": sys.version.split()[0],
+        "python_executable": python_exe,
+        "venv": venv_root,
+        "resolved_via": resolved_via,
+    }
+
+    # A frozen build (PyInstaller and friends) rewrites sys.executable to the
+    # bundled application, which does not understand `-c` -- it would re-run the
+    # app. Refuse instead of enumerating whatever that produces.
+    if getattr(sys, "frozen", False) and python_exe == sys.executable:
+        raise SnapshotError(
+            "cannot enumerate packages from a frozen interpreter "
+            f"({sys.executable}); pass --venv PATH (SDK: venv=...) naming the "
+            "environment whose packages should be recorded"
+        )
+
     try:
-        packages = _installed_distributions()
+        info["python"], packages = _enumerate_foreign(python_exe)
+    except SnapshotError:
+        raise
     except Exception as exc:  # noqa: BLE001 - surfaced, never swallowed
         if strict:
             raise SnapshotError(f"could not resolve installed distributions: {exc}") from exc
         return info
+
     if not packages and strict:
         raise SnapshotError(
-            "resolved zero installed distributions; refusing to record an empty "
-            "dependency set as if it were captured"
+            f"resolved zero installed distributions from {python_exe}; refusing to "
+            "record an empty dependency set as if it were captured"
         )
-    joined = "\n".join(packages)
+
     info["packages"] = packages
     info["package_count"] = len(packages)
-    # NOTE: the digest domain changed in this version -- it now covers sorted
-    # `name==version` lines from importlib.metadata, not raw `pip freeze` stdout.
-    # The key survives, but its value differs for an unchanged environment, so
-    # do not compare values across this upgrade boundary.
-    info["packages_sha256"] = hashlib.sha256(joined.encode()).hexdigest()
+    # NOTE: the digest domain covers sorted `name==version` lines from
+    # importlib.metadata, not raw `pip freeze` stdout. Do not compare values
+    # across that upgrade boundary.
+    info["packages_sha256"] = hashlib.sha256("\n".join(packages).encode()).hexdigest()
     return info
+
+
+# How the environment was FOUND, as against what the environment IS. Machine
+# -specific by nature: the same packages live at /Users/x/p/.venv on a laptop
+# and /workspace/p/.venv on a training box.
+ENV_PROVENANCE_KEYS = ("venv", "python_executable", "resolved_via")
+
+
+def split_env_provenance(info: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Split :func:`capture_env` output into ``(identity, provenance)``.
+
+    The execution record's ``content_hash`` covers the WHOLE ``deps`` section
+    (research-os ``app/execution/service.py`` ``canonical_hash``, which
+    json-dumps every section sorted). Any machine-specific value inside it makes
+    two genuinely identical environments at different paths hash differently --
+    and ``env_ref`` equality is precisely what a reader compares to ask "did
+    these two runs use the same environment?". Recording the venv path there
+    would answer "no" to a "yes", which is the same confidently-wrong shape this
+    module exists to eliminate.
+
+    So identity (python + packages) is hashed, and provenance rides on the
+    ``code-snapshot`` artifact meta, which ``Client.check_run`` already reads.
+    """
+    provenance = {k: info[k] for k in ENV_PROVENANCE_KEYS if k in info}
+    identity = {k: v for k, v in info.items() if k not in ENV_PROVENANCE_KEYS}
+    return identity, provenance
 
 
 def capture_gpu() -> list[dict[str, Any]]:

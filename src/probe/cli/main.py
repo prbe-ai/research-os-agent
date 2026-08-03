@@ -3378,6 +3378,9 @@ def link(
 def snapshot(
     run: str = typer.Argument(...),
     cwd: str = typer.Option(None, "--cwd"),
+    venv: str = typer.Option(
+        None, "--venv", help="virtualenv to record; auto-detected from --cwd otherwise"
+    ),
     no_env: bool = typer.Option(False, "--no-env"),
     no_gpu: bool = typer.Option(False, "--no-gpu"),
 ) -> None:
@@ -3386,10 +3389,20 @@ def snapshot(
     Each file is recorded as retrievable from a pushed remote, or as still needing
     its bytes uploaded. A non-zero `pending upload` count means this snapshot alone
     does NOT make the run reproducible.
+
+    The dependency set comes from the PROJECT's virtualenv, not this CLI's. `probe`
+    is normally a uv-tool install with its own interpreter, so recording the
+    packages of the process you are reading this from would describe typer and rich
+    rather than torch and transformers.
     """
     with _client() as c:
         snap = _run_handle(c, run).snapshot(
-            cwd=cwd, include_env=not no_env, include_gpu=not no_gpu
+            cwd=cwd,
+            include_env=not no_env,
+            include_gpu=not no_gpu,
+            venv=venv,
+            # The CLI is never the process that runs the code.
+            detect_venv=True,
         )
     m = snap["manifest"]
     print(f"snapshot {snap['git']['commit'][:12]} -> {snap['git']['ref']}")
@@ -3397,6 +3410,14 @@ def snapshot(
         f"code: {m['n_git_referenced']} referenced from {m['base_commit'][:12] if m['base_commit'] else 'no pushed base'}"
         f", {m['n_pending_upload']} pending upload"
     )
+    deps = snap.get("deps") or {}
+    prov = snap.get("env_provenance") or {}
+    if deps.get("packages") is not None:
+        source = prov.get("venv") or prov.get("python_executable")
+        print(
+            f"env: {deps['package_count']} packages, python {deps['python']}"
+            f" ({prov.get('resolved_via')}: {source})"
+        )
 
 
 @app.command("snapshot-show")
