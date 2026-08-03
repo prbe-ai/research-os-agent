@@ -1,0 +1,220 @@
+"""Which environment does a snapshot actually record?
+
+The bug these pin down: `capture_env` enumerated the CALLING process's packages.
+That is right for the SDK, which runs inside the training venv, and wrong for the
+CLI, which is a uv-tool install with its own interpreter -- so `probe snapshot`
+recorded typer/rich/questionary as the project's dependencies. `strict` refused
+an EMPTY dep set, so the wrong one sailed through as a confident capture.
+
+These build real throwaway venvs rather than mocking the resolution, because the
+failure was precisely that the code looked right while reading the wrong prefix.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+import pytest
+
+from probe.sdk.snapshot import SnapshotError, capture_env, find_venv, venv_python
+
+
+def _git(cwd, *args):
+    proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    assert proc.returncode == 0, f"git {' '.join(args)}: {proc.stderr}"
+    return proc.stdout.strip()
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_venv(monkeypatch):
+    """`uv run` exports VIRTUAL_ENV, which is a legitimate fallback in
+    `find_venv` and would mask every "nothing was found" assertion below."""
+    monkeypatch.delenv("VIRTUAL_ENV", raising=False)
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+
+
+def _make_venv(path, marker: str, version: str = "9.9.9"):
+    """A real venv holding exactly one distribution, named `marker`.
+
+    The marker is what makes these tests falsifiable: it exists in NO other
+    environment, so its presence proves which prefix was actually read. Built
+    with `--without-pip` on purpose -- `uv venv` ships no pip either, and the
+    capture path must not depend on one.
+    """
+    proc = subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(path)],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:  # pragma: no cover - venv is stdlib, but be honest
+        pytest.skip(f"could not create a venv: {proc.stderr}")
+    site = next(iter((path / "lib").glob("python*"))) / "site-packages"
+    site.mkdir(parents=True, exist_ok=True)
+    dist_info = site / f"{marker.replace('-', '_')}-{version}.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text(
+        f"Metadata-Version: 2.1\nName: {marker}\nVersion: {version}\n"
+    )
+    (dist_info / "RECORD").write_text("")
+    return path
+
+
+@pytest.fixture
+def project(tmp_path):
+    """A git repo with a real `.venv` holding one package the caller lacks."""
+    work = tmp_path / "project"
+    work.mkdir()
+    _git(work, "init", "-q")
+    _git(work, "config", "user.email", "t@example.com")
+    _git(work, "config", "user.name", "t")
+    (work / "train.py").write_text("print('hi')\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "init")
+    _make_venv(work / ".venv", "only-in-project")
+    return work
+
+
+def _names(info):
+    return {p.split("==")[0] for p in info["packages"]}
+
+
+# --- detection --------------------------------------------------------------
+
+def test_finds_the_project_venv_from_a_subdirectory(project):
+    nested = project / "src" / "deep"
+    nested.mkdir(parents=True)
+    root, via = find_venv(str(nested))
+    assert root == str(project / ".venv")
+    assert via == "project-venv"
+
+
+def test_search_stops_at_the_git_toplevel(project, tmp_path):
+    """A venv in a PARENT of the repo belongs to something else."""
+    _make_venv(tmp_path / "outer.venv", "only-outside")
+    inner = project / "nested"
+    inner.mkdir()
+    _git(inner, "init", "-q")  # its own repo, no venv of its own
+    root, via = find_venv(str(inner))
+    assert root is None and via is None
+
+
+def test_virtual_env_is_used_when_the_project_has_no_venv(project, monkeypatch, tmp_path):
+    activated = _make_venv(tmp_path / "activated", "only-activated")
+    monkeypatch.setenv("VIRTUAL_ENV", str(activated))
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    _git(bare, "init", "-q")
+    root, via = find_venv(str(bare))
+    assert root == str(activated) and via == "VIRTUAL_ENV"
+
+
+# --- the actual bug ---------------------------------------------------------
+
+def test_detect_venv_records_the_project_env_not_the_callers(project):
+    """The regression test for `probe snapshot`: a foreign interpreter is read."""
+    info = capture_env(str(project), detect_venv=True)
+
+    assert "only-in-project" in _names(info), "did not read the project's venv"
+    assert info["resolved_via"] == "project-venv"
+    assert info["venv"] == str(project / ".venv")
+    assert info["python_executable"] == venv_python(str(project / ".venv"))
+    # ...and it is NOT this process's environment.
+    assert "pytest" not in _names(info)
+    assert os.path.realpath(info["venv"]) != os.path.realpath(sys.prefix)
+    # Note what is deliberately NOT asserted: that the two INTERPRETERS differ.
+    # Both `bin/python` symlink to the same base CPython, so their realpaths are
+    # equal while the environments are unrelated. That equality is why capture
+    # compares prefixes -- resolving the executable reads the caller's packages.
+    assert os.path.realpath(info["python_executable"]) == os.path.realpath(sys.executable)
+
+
+def test_in_process_default_still_records_this_interpreter(project):
+    """The SDK path must not change: run.snapshot() IS the training env."""
+    info = capture_env(str(project))
+    assert info["resolved_via"] == "interpreter"
+    assert info["venv"] is None
+    assert "pytest" in _names(info)
+    assert "only-in-project" not in _names(info)
+
+
+def test_explicit_venv_wins_over_detection(project, tmp_path):
+    other = _make_venv(tmp_path / "other", "only-explicit")
+    info = capture_env(str(project), venv=str(other), detect_venv=True)
+    assert info["resolved_via"] == "explicit"
+    assert info["venv"] == str(other)
+    assert "only-explicit" in _names(info)
+    assert "only-in-project" not in _names(info)
+
+
+def test_explicit_non_venv_path_is_refused(project, tmp_path):
+    with pytest.raises(SnapshotError, match="not a virtualenv"):
+        capture_env(str(project), venv=str(tmp_path))
+
+
+# --- strict now covers "wrong", not just "empty" -----------------------------
+
+def test_strict_refuses_to_record_a_foreign_interpreter(tmp_path):
+    """No project venv + an outside interpreter == the exact silent-wrong case."""
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    _git(bare, "init", "-q")
+    with pytest.raises(SnapshotError, match="refusing to record"):
+        capture_env(str(bare), detect_venv=True)
+
+
+def test_non_strict_degrades_but_says_so(tmp_path):
+    bare = tmp_path / "bare"
+    bare.mkdir()
+    _git(bare, "init", "-q")
+    info = capture_env(str(bare), detect_venv=True, strict=False)
+    assert info["resolved_via"] == "unresolved-fallback"
+
+
+def test_interpreter_inside_the_project_is_an_acceptable_fallback(project, monkeypatch):
+    """`probe` pip-installed into the project's own env: no venv dir to find,
+    but sys.prefix lives in the tree, so it is the project's environment."""
+    monkeypatch.setattr("probe.sdk.snapshot.find_venv", lambda cwd=None: (None, None))
+    monkeypatch.setattr(sys, "prefix", str(project / ".venv"))
+    info = capture_env(str(project), detect_venv=True)
+    assert info["resolved_via"] == "interpreter"
+    assert "pytest" in _names(info)
+
+
+def test_a_broken_interpreter_raises_rather_than_recording_nothing(project):
+    broken = project / ".venv" / "bin" / "python"
+    if not broken.exists():  # pragma: no cover - Windows layout
+        pytest.skip("posix venv layout only")
+    broken.unlink()
+    broken.write_text("#!/bin/sh\nexit 3\n")
+    broken.chmod(0o755)
+    with pytest.raises(SnapshotError, match="could not enumerate"):
+        capture_env(str(project), detect_venv=True)
+
+
+# --- shape ------------------------------------------------------------------
+
+def test_provenance_is_always_recorded(project):
+    for kwargs in ({}, {"detect_venv": True}):
+        info = capture_env(str(project), **kwargs)
+        assert set(info) >= {
+            "python",
+            "python_executable",
+            "venv",
+            "resolved_via",
+            "packages",
+            "package_count",
+            "packages_sha256",
+        }
+        assert info["package_count"] == len(info["packages"])
+
+
+def test_foreign_python_version_comes_from_the_foreign_interpreter(project):
+    info = capture_env(str(project), detect_venv=True)
+    expected = subprocess.run(
+        [info["python_executable"], "-c",
+         "import sys;print('.'.join(str(p) for p in sys.version_info[:3]))"],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    assert info["python"] == expected

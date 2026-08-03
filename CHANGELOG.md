@@ -32,6 +32,32 @@
 
 - A bare ref is checked for UUID shape locally, so a genuine backend 422 is no
   longer rewritten as "nothing matches this ref".
+- **`probe snapshot` recorded the CLI's own environment as the project's.**
+  `capture_env` enumerated `importlib.metadata` in the calling process. That is
+  correct for `run.snapshot()`, which runs inside the training venv, and wrong for
+  the CLI, which is a uv-tool install: snapshots taken from the command line
+  recorded typer/rich/questionary/mcp and the tool's Python version instead of the
+  project's packages. `strict=True` only refused an *empty* dependency set, so the
+  wrong one was written as a confident, plausible execution record — the exact
+  "unreproducible due to different venvs" failure the record exists to prevent.
+
+  `probe snapshot` now resolves the project's virtualenv (`.venv` / `venv` / `env`,
+  searching from `--cwd` up to the git toplevel, then `VIRTUAL_ENV`, then
+  `CONDA_PREFIX`) and enumerates packages by running `importlib.metadata` under
+  **that** interpreter — no `pip` required, which matters because `uv venv` installs
+  none. New `--venv PATH` pins it explicitly. `strict` now also refuses the
+  wrong environment, not just an absent one: with no project venv found and the
+  running interpreter outside the tree, the snapshot fails instead of recording.
+
+  `deps` gained `venv`, `python_executable` and `resolved_via`, so a capture that
+  picked the wrong environment is visible in the record rather than
+  indistinguishable from a correct one. Those paths participate in the execution
+  record's content hash, so identical environments at different paths no longer
+  share a record — deliberate, and already true of `hardware.gpu`.
+
+  SDK behaviour is unchanged by default (`run.snapshot()` is in-process and its
+  interpreter *is* the environment). Launchers that start training as a subprocess
+  should pass `run.snapshot(detect_venv=True)` or an explicit `venv=`.
 
 ### Removed
 

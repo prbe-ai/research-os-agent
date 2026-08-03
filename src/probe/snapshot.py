@@ -6,8 +6,10 @@ from .sdk.snapshot import (
     capture_git_snapshot,
     capture_gpu,
     capture_manifest,
+    find_venv,
     is_git_repo,
     pushed_base,
+    venv_python,
 )
 
 __all__ = [
@@ -16,6 +18,8 @@ __all__ = [
     "capture_git_snapshot",
     "capture_gpu",
     "capture_manifest",
+    "find_venv",
     "is_git_repo",
     "pushed_base",
+    "venv_python",
 ]
