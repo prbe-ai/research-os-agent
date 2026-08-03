@@ -290,3 +290,34 @@ def test_an_unsupported_view_on_an_artifact_names_what_is_supported(
 
     with pytest.raises(errors.ValidationError, match=r"artifact supports \['card', 'versions'\]"):
         service.get_entity(ref="artifact:t.py", view="trajectory")
+
+
+# -- an id is not a name (found verifying against production) ------------------
+def test_an_id_is_not_answered_as_an_absent_name(service, client, tmp_path):
+    """`search_knowledge` returns artifact hits carrying an ID and no addressable
+    resource, so feeding that id straight back is the obvious next move. Answering
+    "nothing official exists under that name" would tell the agent to create a
+    duplicate of the artifact the search just returned -- the retired `asset:` ref
+    inversion, one layer in."""
+    shared = _share(client, tmp_path, "by-id.py")
+
+    with pytest.raises(errors.ValidationError) as excinfo:
+        service.get_entity(ref=f"artifact:{shared['id']}", view="versions")
+
+    message = str(excinfo.value)
+    assert "is an id, not a name" in message
+    assert "licence to create" in message
+
+
+def test_the_not_found_message_states_the_scope_it_searched(service, client, tmp_path):
+    """Not-found is read downstream as licence to create, so it must not overstate
+    what was checked: this lookup covers COMPLETE artifacts at the SHARED level
+    only, and a run-anchored copy of the same name is real and invisible to it."""
+    _share(client, tmp_path, "other.py")
+
+    with pytest.raises(errors.NotFoundError) as excinfo:
+        service.get_entity(ref="artifact:run-anchored.py")
+
+    message = str(excinfo.value)
+    assert "SHARED level" in message
+    assert "does not rule out" in message
