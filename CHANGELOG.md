@@ -16,6 +16,31 @@
 
 ### Added
 
+- **`probe wizard` → Import existing work.** Point the wizard at a folder of
+  existing research and one headless Claude agent reads it, uploads what it
+  finds, and describes each artifact. The wizard does the two things a program
+  does better and hands the middle to the agent: it ENUMERATES the folder
+  (file and byte counts, pruning build noise) so the denominator comes from a
+  walk no model produced, and it RECONCILES what landed against that count
+  afterwards. Silent partial coverage reading as success is the failure this
+  shape exists to prevent.
+
+  The folder picker labels every subdirectory with its file count and size, so
+  nobody points an importer at a 2.9 TB `checkpoints/` without seeing it first.
+  Files over 100MB are recorded as references (`--reference --allow-missing`,
+  unhashed — fingerprinting a 10GB checkpoint over a shared mount costs minutes
+  and buys nothing); everything else uploads.
+
+  The project anchor is fixed before the agent starts and resolved through
+  `ensure_project`, so an agent may decide what a folder MEANS but never what it
+  is CALLED — a second run opening a second project for the same work is the one
+  mistake here that cannot be undone. The agent runs with
+  `Bash(probe:*),Read,Glob,Grep,Task` and nothing else: it sweeps folders nobody
+  audited, so it can call the probe CLI and read, but not write, delete, or
+  reach the network by any other route.
+
+  `--action backfill --folder <path>` skips the picker for headless use.
+
 - `probe project delete` and `probe experiment delete`, plus SDK
   `delete_project()` / `delete_experiment()`. All three delete verbs
   (`project`, `experiment`, `run`) are permanent, take the whole subtree, and
