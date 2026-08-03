@@ -44,8 +44,10 @@ __all__ = [
     "log", "log10", "log1p", "log2",
     "max_", "min_", "mod", "neg",
     "pow_", "reciprocal", "relu", "round_",
-    "series", "sigmoid", "sign", "sin", "sinh", "sma", "spec", "sqrt",
-    "tan", "tanh", "trunc",
+    "cummax", "cummin", "cumprod", "cumsum", "delta",
+    "normalize", "reduce", "rolling_max", "rolling_min", "rolling_std",
+    "scan", "series", "shift", "sigmoid", "sign", "sin", "sinh", "sma", "spec",
+    "sqrt", "tan", "tanh", "trunc", "window", "zscore",
 ]
 
 # Server-side names; mirrored here so a typo is a KeyError in this module rather
@@ -59,6 +61,9 @@ _UNARY = {
     "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh",
 }
 _CMP = {"gt", "gte", "lt", "lte", "eq", "ne"}
+_SCAN = {"cumsum", "cumprod", "cummax", "cummin", "delta"}
+_WINDOW = {"mean", "std", "var", "min", "max", "median"}
+_REDUCE = {"sum", "mean", "median", "std", "var", "min", "max", "first", "last", "count"}
 
 
 def _node(value: "Expr | dict | int | float") -> dict:
@@ -421,6 +426,96 @@ def coalesce(operand: Any, fallback: Any) -> Expr:
     return Expr(
         {"op": "coalesce", "operand": _node(operand), "fallback": _node(fallback)}
     )
+
+
+# -- non-pointwise: running values, windows, whole-curve statistics ---------
+def scan(fn: str, operand: Any) -> Expr:
+    """A running value over the step axis."""
+    if fn not in _SCAN:
+        raise ValueError(f"unknown scan fn {fn!r}; one of {sorted(_SCAN)}")
+    return Expr({"op": "scan", "fn": fn, "operand": _node(operand)})
+
+
+def cumsum(operand: Any) -> Expr:
+    """Running total — tokens consumed, cumulative reward."""
+    return scan("cumsum", operand)
+
+
+def cumprod(operand: Any) -> Expr:
+    return scan("cumprod", operand)
+
+
+def cummax(operand: Any) -> Expr:
+    """Best so far. The most-asked-for derived curve."""
+    return scan("cummax", operand)
+
+
+def cummin(operand: Any) -> Expr:
+    """Worst so far."""
+    return scan("cummin", operand)
+
+
+def delta(operand: Any) -> Expr:
+    """Step-over-step change. The first step has no predecessor and is NaN."""
+    return scan("delta", operand)
+
+
+def window(fn: str, operand: Any, *, size: int = 10) -> Expr:
+    """A trailing-window statistic. Partial windows at the start use what is
+    available; non-finite values are excluded from the windows they touch."""
+    if fn not in _WINDOW:
+        raise ValueError(f"unknown window fn {fn!r}; one of {sorted(_WINDOW)}")
+    return Expr({"op": "window", "fn": fn, "window": size, "operand": _node(operand)})
+
+
+def rolling_std(operand: Any, *, size: int = 10) -> Expr:
+    return window("std", operand, size=size)
+
+
+def rolling_min(operand: Any, *, size: int = 10) -> Expr:
+    return window("min", operand, size=size)
+
+
+def rolling_max(operand: Any, *, size: int = 10) -> Expr:
+    return window("max", operand, size=size)
+
+
+def shift(operand: Any, by: int) -> Expr:
+    """Move a curve along the step axis. Positive `by` looks BACK (x[i-by]).
+    Steps with no counterpart are NaN — never wrapped, never clamped."""
+    return Expr({"op": "shift", "by": int(by), "operand": _node(operand)})
+
+
+def reduce(fn: str, operand: Any) -> Expr:
+    """Collapse the whole curve to one number, broadcast over every step.
+
+    What makes normalization expressible — see :func:`zscore` and
+    :func:`normalize`. Non-finite values are excluded from the statistic.
+
+    SCOPE: the statistic covers the ALIGNED grid — the inner join across every
+    series the expression names — not the operand's whole stored curve. On its
+    own, `zscore(a)` standardizes over all of `a`; put a sparse `b` in the same
+    expression and it standardizes over the steps they share. The same applies
+    to :func:`scan` and :func:`window`."""
+    if fn not in _REDUCE:
+        raise ValueError(f"unknown reduce fn {fn!r}; one of {sorted(_REDUCE)}")
+    return Expr({"op": "reduce", "fn": fn, "operand": _node(operand)})
+
+
+def zscore(operand: Any) -> Expr:
+    """Standardize against the curve's own mean and spread.
+
+    Sugar over `(x - reduce(mean, x)) / reduce(std, x)` — common enough that
+    spelling it out every time invites getting it subtly wrong."""
+    node = _node(operand)
+    return (Expr(node) - reduce("mean", node)) / reduce("std", node)
+
+
+def normalize(operand: Any) -> Expr:
+    """Rescale to [0, 1] against the curve's own min and max."""
+    node = _node(operand)
+    low = reduce("min", node)
+    return (Expr(node) - low) / (reduce("max", node) - low)
 
 
 def spec(expression: "Expr | dict") -> dict:

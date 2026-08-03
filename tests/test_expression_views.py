@@ -386,3 +386,71 @@ def test_cli_derived_log_writes_provenance(wired, tmp_path, capsys):
     assert batch["provenance"]["producer"] == "claude-code"
     assert batch["provenance"]["inputs"][0]["key"] == "eval/mean_reward"
     assert "derived metric" in capsys.readouterr().out
+
+
+# -- non-pointwise operators ------------------------------------------------
+def test_cummax_is_best_so_far():
+    node = expr.spec(expr.cummax(expr.series("acc")))["expression"]
+    assert node["op"] == "scan" and node["fn"] == "cummax"
+
+
+def test_zscore_expands_to_the_reduction_form():
+    """Sugar, not a new node: it has to be exactly the thing you would write by
+    hand, or the two would drift."""
+    a = expr.series("acc")
+    built = expr.spec(expr.zscore(a))["expression"]
+    manual = expr.spec(
+        (a - expr.reduce("mean", a)) / expr.reduce("std", a)
+    )["expression"]
+    assert built == manual
+
+
+def test_normalize_rescales_against_the_curves_own_bounds():
+    a = expr.series("acc")
+    node = expr.spec(expr.normalize(a))["expression"]
+    assert node["fn"] == "div"
+    assert node["right"]["left"] == {"op": "reduce", "fn": "max", "operand": a.node}
+
+
+def test_rolling_helpers_carry_their_window():
+    node = expr.spec(expr.rolling_std(expr.series("acc"), size=5))["expression"]
+    assert node["op"] == "window" and node["fn"] == "std" and node["window"] == 5
+
+
+def test_shift_keeps_its_sign():
+    assert expr.spec(expr.shift(expr.series("a"), -2))["expression"]["by"] == -2
+
+
+@pytest.mark.parametrize("fn", ["cumsum", "cumprod", "cummax", "cummin", "delta"])
+def test_every_scan_validates(fn):
+    assert expr.spec(expr.scan(fn, expr.series("a")))["expression"]["fn"] == fn
+
+
+@pytest.mark.parametrize(
+    "fn", ["sum", "mean", "median", "std", "var", "min", "max", "first", "last", "count"]
+)
+def test_every_reduce_validates(fn):
+    assert expr.spec(expr.reduce(fn, expr.series("a")))["expression"]["fn"] == fn
+
+
+def test_unknown_scan_and_reduce_names_are_refused():
+    with pytest.raises(ValueError, match="unknown scan fn"):
+        expr.scan("integral", expr.series("a"))
+    with pytest.raises(ValueError, match="unknown reduce fn"):
+        expr.reduce("mode", expr.series("a"))
+
+
+# -- deleting a derived series ---------------------------------------------
+def test_delete_series_sends_the_write_identity(client, app):
+    run = open_run(client, experiment="del")
+    run.log_derived({"eval/oops": 1.0}, step=0, producer="claude-code")
+    client.delete_series(run.id, key="eval/oops", kind="model")
+    assert app.deleted_series == [
+        {"run_id": run.id, "kind": "model", "key": "eval/oops", "dimensions": None}
+    ]
+
+
+def test_delete_series_pins_one_dimension_variant(client, app):
+    run = open_run(client, experiment="del-dims")
+    client.delete_series(run.id, key="eval/auroc", kind="eval", dimensions={"rank": 0})
+    assert app.deleted_series[-1]["dimensions"] == {"rank": 0}

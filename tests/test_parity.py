@@ -400,6 +400,9 @@ PENDING: dict[Op, str] = {
     ("PUT", "/v1/chart-settings"): "chart presentation state; dashboard surface today",
     ("DELETE", "/v1/chart-settings"): "chart presentation state; dashboard surface today",
     ("GET", "/v1/sessions/{}/work"): "agent-session work feed; dashboard surface today",
+    # Landed on the backend while this branch was open. Sibling of /work above,
+    # and the same call: the dashboard's coding-session detail page.
+    ("GET", "/v1/sessions/{}/transcript"): "agent-session transcript; dashboard surface today",
     ("GET", "/v1/artifacts/{}/sessions"): "artifact session roll-up; dashboard surface today",
     #
     # The six PRIVATE metric-view routes (research-os 0087-0089) were parked here
