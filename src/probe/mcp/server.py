@@ -354,7 +354,7 @@ REACH FOR THESE TOOLS WHEN:
 - You need to figure out what another researcher is doing.
 - You just arrived in an unfamiliar project and do not know what is in it.
 
-REUSE BEFORE YOU CREATE. Duplicate asset identities are the most expensive avoidable error in this system: two scorers with the same intent and different behaviour make every result that used either one unreproducible. Before writing any reusable artifact, call get_entity(ref="asset:<name>", view="versions").
+REUSE BEFORE YOU CREATE. Duplicate identities are the most expensive avoidable error in this system: two scorers with the same intent and different behaviour make every result that used either one unreproducible. Before writing any reusable artifact, call get_entity(ref="artifact:<name>", view="versions"). Artifacts resolve by NAME at the shared (lab-wide) level, which is where an official one lives.
 
 DO NOT SKIP THESE. A missed lookup is the default failure mode here, and it is invisible: you get a plausible answer built from nothing. If you are about to write a script, launch a run, or say "here is how I would approach this" without having looked, stop and look.
 
@@ -550,7 +550,7 @@ def create_server(
         filters: dict[str, Any] | None = None,
         verbose: bool = False,
     ) -> dict:
-        """Read ONE thing -- a run, experiment, asset, project or group -- through
+        """Read ONE thing -- a run, experiment, artifact, project or group -- through
         a purpose-shaped view.
 
         Use it on a `ref` you got from `browse_research` or `search_knowledge`.
@@ -559,18 +559,20 @@ def create_server(
 
           run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events
           experiment  card | artifacts | lineage | groups | versions
-          asset       card | versions
+          artifact    card | versions
           project     card
           group       card
 
-        `ref="asset:<name>"` with `view="versions"` is the reuse check before you
-        create a script, scorer, dataset, config or image. Versions are monotonic
-        integers, not semver -- constrain with `filters={"requirement": ">=2"}`.
-        Its two empty answers are OPPOSITES. An error means the name does not
-        exist, like any bad ref: a new identity is licensed. `state="no_match"`
-        means the asset EXISTS and no version satisfies your `requirement` -- the
+        `ref="artifact:<name>"` with `view="versions"` is the reuse check before you
+        create a script, scorer, dataset, config or image. An artifact ref resolves
+        by NAME (there is no by-id read route) against the SHARED, lab-wide level --
+        the level an official one is promoted to. Versions are monotonic integers,
+        not semver -- constrain with `filters={"requirement": ">=2"}`.
+        Its two empty answers are OPPOSITES. A not-found error means no shared
+        artifact carries that name: a new identity is licensed. `state="no_match"`
+        means the artifact EXISTS and no version satisfies your `requirement` -- the
         response carries the versions that DO, so this is a real version ceiling,
-        not an absent asset: pin a new version of the SAME asset rather than
+        not an absent artifact: pin a new version of the SAME artifact rather than
         opening a second identity. Never edit a published version in place.
 
         `trajectory` = the run's actual spans, `reproduce` = hypothesis + resolved

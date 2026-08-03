@@ -27,6 +27,11 @@ def _service(client) -> ResearchReadService:
     return ResearchReadService(ResearchOSSource(client))
 
 
+#: The shared artifact `_populated` seeds, referenced by NAME because that is the
+#: only way an artifact ref resolves.
+_SHARED_ARTIFACT = "exec-accuracy.py"
+
+
 def _populated(client, app, *, spans: int = 3):
     """A run with EVERYTHING a view could want: spans, series, metric points,
     artifacts, an execution record, a group, an experiment version, and events.
@@ -93,6 +98,15 @@ def _populated(client, app, *, spans: int = 3):
         source_type="run", source_id=rid, relation="produces",
         target_type="artifact", target_id=artifact_id,
     )
+    # A SHARED artifact with a version chain: the reuse check's entity, and the
+    # only kind reached by name rather than by id.
+    shared_id = str(uuid.uuid4())
+    app.artifacts["shared:team"] = [
+        {"id": shared_id, "name": _SHARED_ARTIFACT, "kind": "dataset",
+         "status": "ready", "is_reference": False, "uri": "s3://b/scorer.py",
+         "customer_id": "lab-42", "created_at": "2026-07-16T00:00:00Z"},
+    ]
+    client.create_artifact_version(shared_id, uri="r2://bucket/v1")
     return rid, experiment_id, group["id"], record["content_hash"]
 
 
@@ -153,7 +167,8 @@ def test_no_view_reports_missing_unconditionally(client, app):
     rid, experiment_id, group_id, _ = _populated(client, app)
     project_id = app.runs[rid].get("project_id") or client.list_projects().items[0]["id"]
     refs = {"run": f"run:{rid}", "experiment": f"experiment:{experiment_id}",
-            "project": f"project:{project_id}", "group": f"group:{group_id}"}
+            "project": f"project:{project_id}", "group": f"group:{group_id}",
+            "artifact": f"artifact:{_SHARED_ARTIFACT}"}
     service = _service(client)
 
     for kind, view in sorted(_VIEWS):

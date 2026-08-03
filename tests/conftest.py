@@ -284,8 +284,7 @@ class FakeApp:
         self.spans: dict[str, list[dict]] = {}
         #: run_id -> {step_index: step record}. Where log() puts non-numeric values.
         self.steps: dict[str, dict[int, dict]] = {}
-        self.assets: dict[str, dict] = {}
-        self.asset_versions: dict[str, list[dict]] = {}
+        self.artifact_versions: dict[str, list[dict]] = {}
         self.edges: list[dict] = []
         self.execution_records: dict[str, dict] = {}
         self.experiment_versions: dict[str, list[dict]] = {}
@@ -1139,63 +1138,23 @@ class FakeApp:
 
             return httpx.Response(200, json=[e for e in self.edges if _touches(e)])
 
-        # -- assets (fold #5) --
-        if path == "/v1/assets" and method == "POST":
-            dup = next((a for a in self.assets.values() if a["name"] == body["name"]), None)
-            if dup:
-                return httpx.Response(409, json={"detail": {"message": "asset name exists", "existing_id": dup["id"]}})
-            aid = str(uuid.uuid4())
-            row = {"id": aid, "customer_id": "lab-42", "name": body["name"], "kind": body.get("kind", "dataset"),
-                   "description": body.get("description"), "tags": body.get("tags", []),
-                   "metadata": body.get("metadata", {}), "created_at": "2026-07-11T00:00:00Z"}
-            self.assets[aid] = row
-            self.asset_versions[aid] = []
-            return httpx.Response(201, json=row)
-        if path == "/v1/assets" and method == "GET":
-            # Mirrors the backend's keyset paging: limit defaults to 50, caps at 200,
-            # and the cursor is an opaque offset. The fake used to return EVERY asset
-            # and ignore `limit`, which hid a real bug — assets.resolve() read one
-            # default-limit page, so asset 51+ resolved to "no_match" and callers were
-            # told to register a duplicate. A fake kinder than the backend is a fake
-            # that certifies broken code.
-            rows = list(self.assets.values())
-            # Server-side name/kind filters (research-os #103). Modelled here
-            # because the client now RELIES on them: without them it would fall
-            # back to walking pages, and a fake that quietly ignores a filter
-            # certifies code that the real backend would break.
-            # name matches EXACTLY (stored verbatim, its uniqueness check is
-            # exact); kind is lowercased on write, so the filter lowercases too.
-            if (want_name := request.url.params.get("name")) is not None:
-                rows = [a for a in rows if a["name"] == want_name]
-            if (want_kind := request.url.params.get("kind")) is not None:
-                rows = [a for a in rows if a["kind"] == want_kind.strip().lower()]
-            limit = min(int(request.url.params.get("limit") or 50), 200)
-            start = int(request.url.params.get("cursor") or request.url.params.get("offset") or 0)
-            window = rows[start : start + limit]
-            nxt = start + limit
-            return httpx.Response(
-                200,
-                json=window,
-                headers={"x-next-cursor": str(nxt)} if nxt < len(rows) else {},
-            )
-        if path.startswith("/v1/assets/") and path.endswith("/versions"):
-            aid = path.split("/")[3]
+        # -- artifact versions (the chain the retired asset registry folded into) --
+        m = re.match(r"^/v1/artifacts/([^/]+)/versions$", path)
+        if m:
+            aid = m.group(1)
             if method == "POST":
-                vers = self.asset_versions.setdefault(aid, [])
-                v = {"id": str(uuid.uuid4()), "customer_id": "lab-42", "asset_id": aid,
+                vers = self.artifact_versions.setdefault(aid, [])
+                v = {"id": str(uuid.uuid4()), "customer_id": "lab-42", "artifact_id": aid,
                      "version": len(vers) + 1, "label": body.get("label"),
                      "content_hash": body.get("content_hash"), "uri": body.get("uri"),
                      "size_bytes": body.get("size_bytes"), "content_type": body.get("content_type"),
                      "source_artifact_id": body.get("from_artifact_id"), "meta": body.get("meta", {}),
+                     "status": "complete", "origin": "upload",
                      "created_at": "2026-07-11T00:00:00Z"}
                 vers.append(v)
                 return httpx.Response(201, json=v)
             if method == "GET":
-                return httpx.Response(200, json=self.asset_versions.get(aid, []))
-        m = re.match(r"^/v1/assets/([^/]+)$", path)
-        if m and method == "GET":
-            aid = m.group(1)
-            return httpx.Response(200, json=self.assets[aid]) if aid in self.assets else httpx.Response(404, json={"detail": "not found"})
+                return httpx.Response(200, json=self.artifact_versions.get(aid, []))
 
         # -- lineage edges (fold #2) --
         if path == "/v1/edges" and method == "POST":
@@ -1311,7 +1270,13 @@ class FakeApp:
             return httpx.Response(200, json=self.artifacts.get(f"workspace:{m.group(1)}", []))
 
         if path == "/v1/shared/files" and method == "GET":
-            return httpx.Response(200, json=self.artifacts.get("shared:team", []))
+            # `prefix` is modelled, not ignored: the reuse check RELIES on it to
+            # narrow server-side, and a fake that hands back every shared file
+            # would certify a client that pulls the whole lab and filters locally.
+            rows = self.artifacts.get("shared:team", [])
+            if (want := request.url.params.get("prefix")) is not None:
+                rows = [a for a in rows if str(a.get("name", "")).startswith(want)]
+            return httpx.Response(200, json=rows)
 
         m = _SHARED_FILE_SUB.match(path)
         if m and method in ("POST", "GET"):

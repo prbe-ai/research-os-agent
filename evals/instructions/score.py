@@ -2,11 +2,17 @@
 """Score instruction-eval runs.
 
 Reads run records (one JSON object per line) and reports, per arm, the fraction
-of runs whose FIRST tool call was the one the task called for.
+of runs whose FIRST tool call was the one the task called for AND came back
+without an error.
 
 Deliberately dumb about prose: it reads the tool-call trace only. Whether the
 agent explained itself well is a different question from whether it looked
 before it acted, and only the second one is what the instructions claim to change.
+
+The result, not just the name, because scoring the name alone made this eval
+blind to its own subject: an instruction naming a route that no longer exists
+produced a perfect score, since the mandated tool still appeared first in every
+trace. See run.py:_first_tool_failed.
 """
 
 from __future__ import annotations

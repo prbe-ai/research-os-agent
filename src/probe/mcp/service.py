@@ -453,6 +453,11 @@ class _ViewData:
     because forgetting it is a LIE, not an inefficiency: a bounded fetch of 200
     spans from a 500-span run would otherwise be emitted whole and reported
     complete, and the agent would believe it had read the entire trajectory.
+
+    `no_match` says the view answered fully and the answer was "nothing satisfies
+    that constraint". It is NOT `missing`: nothing is absent from the response, so
+    reporting it as partial would read as a degraded backend rather than a real
+    ceiling. See EnvelopeState.NO_MATCH for why the distinction is load-bearing.
     """
 
     payload: dict[str, Any] = field(default_factory=dict)
@@ -460,6 +465,7 @@ class _ViewData:
     rows_key: str = "rows"
     missing: list[str] = field(default_factory=list)
     more_beyond: bool = False
+    no_match: bool = False
 
 
 # (entity kind, view) -> builder method. Explicit and greppable: this table IS the
@@ -481,14 +487,18 @@ _VIEWS: dict[tuple[str, str], str] = {
     (EntityType.EXPERIMENT, View.VERSIONS): "_view_versions",
     (EntityType.PROJECT, View.CARD): "_view_card",
     (EntityType.GROUP, View.CARD): "_view_card",
-    # Assets: the reuse-before-create seam. `versions` is where research_resolve
-    # went -- an asset lookup is a read of one entity, and it never needed a
-    # tool of its own.
-    # NO asset lineage view. There is no backend route for it, so it could only
-    # ever answer `edges: []` -- and an agent reads that as "this asset has no
+    # Artifacts: the reuse-before-create seam, reached by NAME. This is where the
+    # retired `asset:<name>` check went -- #143 folded assets into artifacts, and
+    # for one release the instructions still named a route with no builder behind
+    # it, so every compliant agent got a 422 and read it as "licence to create a
+    # duplicate", inverting the exact guard the instructions exist to enforce.
+    # NO artifact lineage view. There is no backend route for it, so it could only
+    # ever answer `edges: []` -- and an agent reads that as "this artifact has no
     # lineage", a confident wrong answer. Exactly why research_trace_file was
     # removed rather than left returning empty. Add the view when the route
     # exists, not before.
+    (EntityType.ARTIFACT, View.CARD): "_view_card",
+    (EntityType.ARTIFACT, View.VERSIONS): "_view_artifact_versions",
 }
 
 # Filters each (kind, view) accepts, mapped onto the backend's REAL server-side
@@ -502,6 +512,10 @@ _VIEW_FILTERS: dict[tuple[str, str], set[str]] = {
     (EntityType.RUN, View.TRAJECTORY): {"span_type", "parent_span_id", "step_from", "step_to"},
     (EntityType.RUN, View.METRICS): {"key", "kind"},
     (EntityType.RUN, View.ARTIFACTS): {"kind", "step_from", "step_to", "name", "scope"},
+    # `requirement` is applied HERE, not server-side: /v1/artifacts/{id}/versions
+    # takes no filter, so this is an honest client-side narrowing of a fully-read
+    # chain rather than a filter the backend silently ignored.
+    (EntityType.ARTIFACT, View.VERSIONS): {"requirement"},
     # `at` is deliberately absent: the SDK accepted it and never read it, and
     # no backend as-of resolution exists. Advertising a parameter that silently
     # does nothing is worse than not having one.
@@ -1147,9 +1161,18 @@ class ResearchReadService:
 
         if _tokens(data) > token_budget and MissingMarker.TRUNCATED_BY_TOKEN_BUDGET not in missing:
             missing.append(MissingMarker.TOKEN_BUDGET_EXCEEDED)
+        # NO_MATCH outranks PARTIAL: it is the ANSWER to the question asked, while
+        # `missing` describes the response's own completeness, and the two are
+        # independent. A truncated no-match that reported state="partial" would
+        # hide the ceiling behind what reads as a transient degradation -- and the
+        # truncation is still visible, because `missing` rides along either way.
+        if result.no_match:
+            state = EnvelopeState.NO_MATCH
+        else:
+            state = EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE
         return self._envelope(
             data,
-            state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
+            state=state,
             missing=missing,
             next_cursor=next_cursor,
             verbose=verbose,
@@ -1362,6 +1385,43 @@ class ResearchReadService:
         research_list_groups tool. One group is research_get(ref="group:<id>")."""
         return _ViewData(
             rows=self.source.experiment_groups(str(entity["id"])), rows_key="groups"
+        )
+
+    def _view_artifact_versions(self, entity: dict, request: _Req) -> _ViewData:
+        """The reuse check's answer: this artifact's version chain, optionally
+        narrowed to the versions that satisfy `requirement`.
+
+        The two empty answers are OPPOSITES and this view is the only thing that
+        can tell them apart, so it never collapses them:
+
+        - the artifact does not exist -> `artifact_by_name` already raised
+          NotFoundError, and a new identity is genuinely licensed.
+        - the artifact EXISTS but no version satisfies `requirement` ->
+          state="no_match", carrying the versions that DO exist so the caller sees
+          the real ceiling. Pin a new version of the SAME artifact.
+
+        A caller that reads the second as the first opens a duplicate identity,
+        which is the single most expensive avoidable error in this system.
+        """
+        versions = self.source.artifact_versions(str(entity["id"]))
+        requirement = request.filters.get("requirement")
+        if not requirement:
+            return _ViewData(rows=versions, rows_key="versions")
+        matching = [v for v in versions if _satisfies(v, str(requirement))]
+        if matching:
+            return _ViewData(
+                payload={"requirement": requirement},
+                rows=matching,
+                rows_key="versions",
+            )
+        # No match: return every version that EXISTS, not an empty list. An empty
+        # list here is indistinguishable from an empty artifact, and that is the
+        # confusion that creates duplicates.
+        return _ViewData(
+            payload={"requirement": requirement, "satisfied_by": None},
+            rows=versions,
+            rows_key="versions",
+            no_match=True,
         )
 
     def _view_versions(self, entity: dict, request: _Req) -> _ViewData:

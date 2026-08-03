@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from ..sdk import errors
-from ..sdk.client import Client
+from ..sdk.client import Anchor, Client
 from .contract import Capability, EntityType
 
 # A cached "backend has no /v1/search" verdict is re-checked after this long, so
@@ -270,11 +270,50 @@ class ResearchOSSource:
             limit=limit,
         ).items
 
+    def artifact_by_name(self, name: str) -> dict:
+        """Resolve an artifact NAME to the artifact, at the shared (lab-wide) level.
+
+        This is the reuse-before-you-create seam, and it is by NAME because the
+        question is "does an official X already exist" -- you have the name, not an
+        id. There is no ``GET /v1/artifacts/{id}`` read route at all, so name is not
+        merely the convenient axis here, it is the only one.
+
+        SHARED, not a container, on purpose: the retired asset registry enforced
+        tenant-unique names, and a shared-level artifact is what that identity
+        became (#143 folded every asset into an artifact keeping its id). Scoping
+        this to a project would answer a narrower question than the one the caller
+        asked and would licence a duplicate that already exists one level up.
+        """
+        # `prefix` narrows server-side; the exact match is ours, since a prefix
+        # search for "score" must not resolve to "score_v2" -- silently reusing a
+        # DIFFERENT asset is the same class of unreproducibility as duplicating one.
+        rows = self.client.list_anchored(Anchor.SHARED, prefix=name) or []
+        exact = [row for row in rows if row.get("name") == name]
+        if not exact:
+            raise errors.NotFoundError(
+                f"no shared artifact named {name!r}; "
+                f"nothing official exists under that name yet"
+            )
+        if len(exact) > 1:
+            # Loud, and deliberately NOT a not-found: an agent reads not-found as
+            # "a new identity is licensed" and would create a THIRD copy of a name
+            # that is already duplicated. Naming the ids is the only answer that
+            # leads to a merge instead.
+            ids = ", ".join(sorted(str(row.get("id")) for row in exact))
+            raise errors.ValidationError(
+                f"{len(exact)} shared artifacts are named {name!r} (ids: {ids}); "
+                f"this name is already duplicated -- reconcile them rather than "
+                f"pinning either blindly",
+                status=422,
+            )
+        return exact[0]
+
     def get(self, ref: str) -> tuple[str, dict]:
         """Resolve ``kind:value`` (or a bare id) to ``(kind, entity)``.
 
         ``group`` is here rather than behind a research_list_groups tool: a sweep is
         an experiment-shaped noun, so it belongs on the same ref seam as the rest.
+        ``artifact`` is reached by name (see :meth:`artifact_by_name`).
         """
         kind, _, value = ref.partition(":")
         if not value:
@@ -286,12 +325,31 @@ class ResearchOSSource:
             EntityType.PROJECT.value: self.client.get_project,
             EntityType.GROUP.value: self.client.get_group,
         }
+        if kind == EntityType.ARTIFACT.value:
+            return kind, self.artifact_by_name(value)
         if kind in getters:
             return kind, getters[kind](value)
+        if kind:
+            # An unknown kind is REJECTED, never guessed at. `asset:<name>` used to
+            # land here and fall into the loop below, where get_experiment() raised
+            # a raw 422 uuid_parsing on a non-UUID value -- so the agent that
+            # followed the retired instruction to the letter got a Postgres-shaped
+            # parse error naming `experiment_id`, and nothing that said "assets are
+            # gone". Any ref kind retired later would leak the same way.
+            known = sorted([*getters, EntityType.ARTIFACT.value])
+            raise errors.ValidationError(
+                f"unknown ref kind {kind!r} in {ref!r}; supported kinds are {known} "
+                f"(assets were folded into artifacts: use artifact:<name>)",
+                status=422,
+            )
         for candidate in getters:
             try:
                 return candidate, getters[candidate](value)
-            except errors.NotFoundError:
+            except (errors.NotFoundError, errors.ValidationError):
+                # ValidationError too: a bare id that is not a UUID makes the
+                # backend's path validator raise 422, not 404, and letting that
+                # escape reports a parse failure for whichever kind happened to be
+                # tried first rather than "nothing matches this ref".
                 continue
         raise errors.NotFoundError(f"no run, experiment, project, or group matches {ref}")
 
@@ -333,6 +391,11 @@ class ResearchOSSource:
 
     def experiment_artifacts(self, experiment_id: str) -> list[dict]:
         return self.client.list_experiment_artifacts(experiment_id)
+
+    def artifact_versions(self, artifact_id: str) -> list[dict]:
+        """The artifact's version chain, newest first — what the reuse check reads
+        once :meth:`artifact_by_name` has turned a name into an identity."""
+        return self.client.list_artifact_versions(artifact_id)
 
     def run_events(self, run_id: str) -> list[dict]:
         return self.client.events.for_run(run_id)
