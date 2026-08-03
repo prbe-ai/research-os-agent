@@ -94,6 +94,78 @@ def test_a_malformed_spec_fails_here_not_as_a_server_422():
     assert "kind" in str(excinfo.value)
 
 
+# -- the widened operator set ----------------------------------------------
+def test_power_and_modulo_ride_the_python_operators():
+    a, b = expr.series("a"), expr.series("b")
+    assert expr.spec(a**2)["expression"]["fn"] == "pow"
+    assert expr.spec(2**a)["expression"]["left"] == {"op": "const", "value": 2.0}
+    assert expr.spec(a % b)["expression"]["fn"] == "mod"
+
+
+def test_comparisons_build_masks_not_booleans():
+    """`a > b` has to be a 0/1 CURVE — it composes with arithmetic and feeds
+    cond. Returning a bool would silently collapse a whole series to one value."""
+    node = expr.spec(expr.series("a") > expr.series("b"))["expression"]
+    assert node["op"] == "cmp" and node["fn"] == "gt"
+
+
+def test_an_expr_refuses_to_be_truthy():
+    """Follows from the above: `if a > b:` is a bug, so it raises rather than
+    evaluating an always-true object."""
+    with pytest.raises(TypeError, match="curve, not a condition"):
+        bool(expr.series("a") > expr.series("b"))
+
+
+def test_cond_expresses_the_divide_by_zero_guard():
+    a, b = expr.series("a"), expr.series("b")
+    node = expr.spec(expr.cond(b != 0, a / b, 0))["expression"]
+    assert node["op"] == "cond"
+    assert node["when"]["fn"] == "ne"
+    assert node["then"]["fn"] == "div"
+    assert node["otherwise"] == {"op": "const", "value": 0.0}
+
+
+def test_clamp_and_coalesce_chain_off_an_expr():
+    a = expr.series("a")
+    assert expr.spec(a.clamp(0, 1))["expression"]["op"] == "clamp"
+    assert expr.spec(a.coalesce(-1))["expression"]["op"] == "coalesce"
+
+
+@pytest.mark.parametrize(
+    "builder",
+    ["log2", "log1p", "expm1", "cbrt", "reciprocal", "sign", "floor", "ceil",
+     "trunc", "sigmoid", "tanh", "relu", "sin", "cos", "tan", "asin", "acos",
+     "atan", "sinh", "cosh"],
+)
+def test_every_unary_builder_validates(builder):
+    node = expr.spec(getattr(expr, builder)(expr.series("a")))["expression"]
+    assert node["op"] == "unary" and node["fn"] == builder
+
+
+@pytest.mark.parametrize(
+    ("builder", "fn"),
+    [("min_", "min"), ("max_", "max"), ("mod", "mod"), ("hypot", "hypot"),
+     ("atan2", "atan2"), ("pow_", "pow")],
+)
+def test_every_binary_builder_validates(builder, fn):
+    node = expr.spec(getattr(expr, builder)(expr.series("a"), expr.series("b")))["expression"]
+    assert node["op"] == "binary" and node["fn"] == fn
+
+
+def test_builtin_shadowing_names_carry_a_trailing_underscore():
+    """min/max/round/pow are builtins; shadowing them in a module an agent does
+    `from probe.expr import *` on would be hostile."""
+    for name in ("min_", "max_", "round_", "pow_"):
+        assert name in expr.__all__
+    for name in ("min", "max", "round", "pow"):
+        assert name not in expr.__all__
+
+
+def test_an_unknown_operator_is_refused_by_name():
+    with pytest.raises(ValueError, match="unknown cmp fn"):
+        expr.cmp("approximately", expr.series("a"), 1)
+
+
 # -- views through the SDK --------------------------------------------------
 def test_create_list_rename_and_delete_a_view(client, app):
     run = open_run(client, experiment="views")

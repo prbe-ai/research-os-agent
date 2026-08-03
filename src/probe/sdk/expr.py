@@ -37,22 +37,28 @@ from ..models import MetricViewSpec
 
 __all__ = [
     "Expr",
-    "const",
-    "ema",
-    "exp",
-    "log",
-    "log10",
-    "neg",
-    "series",
-    "sma",
-    "spec",
-    "sqrt",
+    "acos", "asin", "atan", "atan2",
+    "cbrt", "ceil", "clamp", "cmp", "coalesce", "cond", "const", "cos", "cosh",
+    "ema", "exp", "expm1",
+    "floor", "hypot",
+    "log", "log10", "log1p", "log2",
+    "max_", "min_", "mod", "neg",
+    "pow_", "reciprocal", "relu", "round_",
+    "series", "sigmoid", "sign", "sin", "sinh", "sma", "spec", "sqrt",
+    "tan", "tanh", "trunc",
 ]
 
 # Server-side names; mirrored here so a typo is a KeyError in this module rather
 # than a 422 from a route that already parsed the rest of the body.
-_BINARY = {"add", "sub", "mul", "div"}
-_UNARY = {"log", "log10", "exp", "abs", "neg", "sqrt"}
+_BINARY = {"add", "sub", "mul", "div", "pow", "mod", "min", "max", "hypot", "atan2"}
+_UNARY = {
+    "log", "log10", "log2", "log1p", "exp", "expm1",
+    "sqrt", "cbrt", "abs", "neg", "sign", "reciprocal",
+    "floor", "ceil", "round", "trunc",
+    "sigmoid", "tanh", "relu",
+    "sin", "cos", "tan", "asin", "acos", "atan", "sinh", "cosh",
+}
+_CMP = {"gt", "gte", "lt", "lte", "eq", "ne"}
 
 
 def _node(value: "Expr | dict | int | float") -> dict:
@@ -124,6 +130,18 @@ class Expr:
     def __rtruediv__(self, other: Any) -> "Expr":
         return self._binary("div", other, flip=True)
 
+    def __pow__(self, other: Any) -> "Expr":
+        return self._binary("pow", other)
+
+    def __rpow__(self, other: Any) -> "Expr":
+        return self._binary("pow", other, flip=True)
+
+    def __mod__(self, other: Any) -> "Expr":
+        return self._binary("mod", other)
+
+    def __rmod__(self, other: Any) -> "Expr":
+        return self._binary("mod", other, flip=True)
+
     def __neg__(self) -> "Expr":
         return neg(self)
 
@@ -139,6 +157,47 @@ class Expr:
     def sma(self, window: int = 10) -> "Expr":
         """Simple moving average over the aligned result."""
         return sma(self, window=window)
+
+    # -- comparison -------------------------------------------------------
+    # These build MASK nodes rather than returning bools, so `a > b` is a curve
+    # of 0/1 you can multiply by or feed to `cond`. That makes Expr
+    # deliberately non-boolean: `if a > b` in Python would be a bug, so
+    # __bool__ raises rather than letting one through.
+    def __gt__(self, other: Any) -> "Expr":
+        return cmp("gt", self, other)
+
+    def __ge__(self, other: Any) -> "Expr":
+        return cmp("gte", self, other)
+
+    def __lt__(self, other: Any) -> "Expr":
+        return cmp("lt", self, other)
+
+    def __le__(self, other: Any) -> "Expr":
+        return cmp("lte", self, other)
+
+    def __eq__(self, other: Any) -> "Expr":  # type: ignore[override]
+        return cmp("eq", self, other)
+
+    def __ne__(self, other: Any) -> "Expr":  # type: ignore[override]
+        return cmp("ne", self, other)
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __bool__(self) -> bool:
+        raise TypeError(
+            "an Expr is a curve, not a condition: `a > b` builds a 0/1 mask, so "
+            "`if a > b` cannot work. Use expr.cond(a > b, then, otherwise)."
+        )
+
+    # -- guards -----------------------------------------------------------
+    def clamp(self, lo: Any, hi: Any) -> "Expr":
+        """Bound this curve to [lo, hi]."""
+        return clamp(self, lo, hi)
+
+    def coalesce(self, fallback: Any) -> "Expr":
+        """Replace non-finite results (a divide-by-zero) with `fallback`,
+        keeping the step instead of dropping it."""
+        return coalesce(self, fallback)
 
     def __repr__(self) -> str:
         return f"Expr({self._node!r})"
@@ -201,6 +260,167 @@ def ema(operand: "Expr | dict", *, factor: float = 0.6) -> Expr:
 
 def sma(operand: "Expr | dict", *, window: int = 10) -> Expr:
     return Expr({"op": "smooth", "fn": "sma", "window": window, "operand": _node(operand)})
+
+
+def log2(operand: "Expr | dict") -> Expr:
+    return _unary("log2", operand)
+
+
+def log1p(operand: "Expr | dict") -> Expr:
+    """log(1 + x), accurate for small x — where a converged loss lives."""
+    return _unary("log1p", operand)
+
+
+def expm1(operand: "Expr | dict") -> Expr:
+    """exp(x) − 1, accurate for small x."""
+    return _unary("expm1", operand)
+
+
+def cbrt(operand: "Expr | dict") -> Expr:
+    """Cube root. Defined for negatives, unlike sqrt."""
+    return _unary("cbrt", operand)
+
+
+def reciprocal(operand: "Expr | dict") -> Expr:
+    return _unary("reciprocal", operand)
+
+
+def sign(operand: "Expr | dict") -> Expr:
+    return _unary("sign", operand)
+
+
+def floor(operand: "Expr | dict") -> Expr:
+    return _unary("floor", operand)
+
+
+def ceil(operand: "Expr | dict") -> Expr:
+    return _unary("ceil", operand)
+
+
+def round_(operand: "Expr | dict") -> Expr:
+    """Trailing underscore: `round` is a builtin worth not shadowing."""
+    return _unary("round", operand)
+
+
+def trunc(operand: "Expr | dict") -> Expr:
+    return _unary("trunc", operand)
+
+
+def sigmoid(operand: "Expr | dict") -> Expr:
+    """1/(1+e^-x) — a logit series is only readable once squashed."""
+    return _unary("sigmoid", operand)
+
+
+def tanh(operand: "Expr | dict") -> Expr:
+    return _unary("tanh", operand)
+
+
+def relu(operand: "Expr | dict") -> Expr:
+    return _unary("relu", operand)
+
+
+def sin(operand: "Expr | dict") -> Expr:
+    return _unary("sin", operand)
+
+
+def cos(operand: "Expr | dict") -> Expr:
+    return _unary("cos", operand)
+
+
+def tan(operand: "Expr | dict") -> Expr:
+    return _unary("tan", operand)
+
+
+def asin(operand: "Expr | dict") -> Expr:
+    return _unary("asin", operand)
+
+
+def acos(operand: "Expr | dict") -> Expr:
+    return _unary("acos", operand)
+
+
+def atan(operand: "Expr | dict") -> Expr:
+    return _unary("atan", operand)
+
+
+def sinh(operand: "Expr | dict") -> Expr:
+    return _unary("sinh", operand)
+
+
+def cosh(operand: "Expr | dict") -> Expr:
+    return _unary("cosh", operand)
+
+
+def _binary_fn(fn: str, left: Any, right: Any) -> Expr:
+    if fn not in _BINARY:
+        raise ValueError(f"unknown binary fn {fn!r}; one of {sorted(_BINARY)}")
+    return Expr({"op": "binary", "fn": fn, "left": _node(left), "right": _node(right)})
+
+
+def min_(left: Any, right: Any) -> Expr:
+    """Trailing underscore: `min`/`max` are builtins worth not shadowing."""
+    return _binary_fn("min", left, right)
+
+
+def max_(left: Any, right: Any) -> Expr:
+    return _binary_fn("max", left, right)
+
+
+def mod(left: Any, right: Any) -> Expr:
+    return _binary_fn("mod", left, right)
+
+
+def hypot(left: Any, right: Any) -> Expr:
+    return _binary_fn("hypot", left, right)
+
+
+def atan2(left: Any, right: Any) -> Expr:
+    return _binary_fn("atan2", left, right)
+
+
+def pow_(left: Any, right: Any) -> Expr:
+    """`a ** b` builds this too."""
+    return _binary_fn("pow", left, right)
+
+
+def cmp(fn: str, left: Any, right: Any) -> Expr:
+    """A comparison as a 0/1 mask. Built by `a > b` and friends."""
+    if fn not in _CMP:
+        raise ValueError(f"unknown cmp fn {fn!r}; one of {sorted(_CMP)}")
+    return Expr({"op": "cmp", "fn": fn, "left": _node(left), "right": _node(right)})
+
+
+def cond(when: Any, then: Any, otherwise: Any) -> Expr:
+    """Piecewise selection — the divide-by-zero guard:
+
+        expr.cond(b != 0, a / b, 0)
+
+    keeps the step at 0 instead of dropping it as non-finite.
+    """
+    return Expr(
+        {
+            "op": "cond",
+            "when": _node(when),
+            "then": _node(then),
+            "otherwise": _node(otherwise),
+        }
+    )
+
+
+def clamp(operand: Any, lo: Any, hi: Any) -> Expr:
+    """Bound a curve to [lo, hi]. Inverted bounds evaluate to NaN, not a
+    silently chosen edge."""
+    return Expr(
+        {"op": "clamp", "operand": _node(operand), "lo": _node(lo), "hi": _node(hi)}
+    )
+
+
+def coalesce(operand: Any, fallback: Any) -> Expr:
+    """Replace a non-finite result with `fallback` — the only node that stops
+    NaN propagating."""
+    return Expr(
+        {"op": "coalesce", "operand": _node(operand), "fallback": _node(fallback)}
+    )
 
 
 def spec(expression: "Expr | dict") -> dict:
