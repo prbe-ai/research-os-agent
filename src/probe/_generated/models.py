@@ -1245,6 +1245,19 @@ class PublishRequest(BaseModel):
     include_children: bool | None = Field(True, title='Include Children')
 
 
+class Fn2(StrEnum):
+    sum = 'sum'
+    mean = 'mean'
+    median = 'median'
+    std = 'std'
+    var = 'var'
+    min = 'min'
+    max = 'max'
+    first = 'first'
+    last = 'last'
+    count = 'count'
+
+
 class ResourceKind(StrEnum):
     """
     Values match the dashboard's SharedResourceKind byte-for-byte.
@@ -1313,7 +1326,7 @@ class RunGroupPatch(BaseModel):
 
 
 class RunNode(BaseModel):
-    alive: bool | None = Field(None, title='Alive')
+    alive: bool = Field(..., title='Alive')
     created_at: AwareDatetime = Field(..., title='Created At')
     ended_at: AwareDatetime | None = Field(None, title='Ended At')
     id: UUID = Field(..., title='Id')
@@ -1395,6 +1408,14 @@ class SandboxFileSide(BaseModel):
     mode: str | None = Field(None, title='Mode')
     mtime: float | None = Field(None, title='Mtime')
     size: int | None = Field(None, title='Size')
+
+
+class Fn3(StrEnum):
+    cumsum = 'cumsum'
+    cumprod = 'cumprod'
+    cummax = 'cummax'
+    cummin = 'cummin'
+    delta = 'delta'
 
 
 class Scope(StrEnum):
@@ -1561,6 +1582,19 @@ class SessionEntityOut(BaseModel):
     slug: str | None = Field(None, title='Slug')
 
 
+class SessionTranscriptOut(BaseModel):
+    """
+    The complete normalized transcript document for one captured session.
+    """
+
+    agent: str = Field(..., title='Agent')
+    body_size_bytes: int = Field(..., ge=0, title='Body Size Bytes')
+    chunk_count: int = Field(..., ge=0, title='Chunk Count')
+    content: str = Field(..., title='Content')
+    session_id: str = Field(..., title='Session Id')
+    title: str | None = Field(None, title='Title')
+
+
 class SessionWorkOut(BaseModel):
     """
     Everything one session touched, grouped by entity type.
@@ -1576,7 +1610,7 @@ class SessionWorkOut(BaseModel):
     totals: dict[str, int] | None = Field(None, title='Totals')
 
 
-class Fn2(StrEnum):
+class Fn4(StrEnum):
     ema = 'ema'
     sma = 'sma'
 
@@ -1788,7 +1822,7 @@ class TokenOut(BaseModel):
     token_prefix: str = Field(..., title='Token Prefix')
 
 
-class Fn3(StrEnum):
+class Fn5(StrEnum):
     log = 'log'
     log10 = 'log10'
     log2 = 'log2'
@@ -1885,6 +1919,15 @@ class WideSeriesResult(BaseModel):
     next_step: int | None = Field(None, title='Next Step')
     rows: list[WideRow] = Field(..., title='Rows')
     truncated: bool | None = Field(False, title='Truncated')
+
+
+class Fn6(StrEnum):
+    mean = 'mean'
+    std = 'std'
+    var = 'var'
+    min = 'min'
+    max = 'max'
+    median = 'median'
 
 
 class WorkspaceKind(StrEnum):
@@ -2526,6 +2569,10 @@ class BinaryNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Left')
     op: Literal['binary'] = Field(..., title='Op')
     right: (
@@ -2538,6 +2585,10 @@ class BinaryNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Right')
 
 
@@ -2558,6 +2609,10 @@ class ClampNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Hi')
     lo: (
         SeriesNode
@@ -2569,6 +2624,10 @@ class ClampNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Lo')
     op: Literal['clamp'] = Field(..., title='Op')
     operand: (
@@ -2581,6 +2640,10 @@ class ClampNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Operand')
 
 
@@ -2602,6 +2665,10 @@ class CmpNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Left')
     op: Literal['cmp'] = Field(..., title='Op')
     right: (
@@ -2614,6 +2681,10 @@ class CmpNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Right')
 
 
@@ -2634,6 +2705,10 @@ class CoalesceNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Fallback')
     op: Literal['coalesce'] = Field(..., title='Op')
     operand: (
@@ -2646,6 +2721,10 @@ class CoalesceNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Operand')
 
 
@@ -2667,6 +2746,10 @@ class CondNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Otherwise')
     then: (
         SeriesNode
@@ -2678,6 +2761,10 @@ class CondNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Then')
     when: (
         SeriesNode
@@ -2689,6 +2776,10 @@ class CondNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='When')
 
 
@@ -2726,7 +2817,109 @@ class MetricViewSpec(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Expression')
+
+
+class ReduceNode(BaseModel):
+    """
+    Collapse the whole curve to one number, broadcast back over every step.
+
+    This is what makes normalization expressible: a z-score is
+    `(x - reduce(mean, x)) / reduce(std, x)`, and min-max is
+    `(x - reduce(min, x)) / (reduce(max, x) - reduce(min, x))`.
+
+    Non-finite values are excluded from the statistic — a summary that one
+    divide-by-zero turns into NaN would take the entire output curve with it.
+    A curve with nothing finite in it reduces to NaN.
+
+    SCOPE: the statistic is taken over the ALIGNED grid, which is the inner join
+    across every leaf in the expression — not over the operand's whole stored
+    curve. `zscore(a)` alone standardizes over all of `a`; the same expression
+    with a sparse `b` in it standardizes over the steps `a` and `b` share. That
+    follows from evaluating one expression on one grid, and it is the honest
+    reading (the output only exists where the join does), but it is worth
+    knowing before comparing a normalized curve against a differently-scoped
+    one. The same applies to `scan` and `window`.
+    """
+
+    fn: Fn2 = Field(..., title='Fn')
+    op: Literal['reduce'] = Field(..., title='Op')
+    operand: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
+    ) = Field(..., discriminator='op', title='Operand')
+
+
+class ScanNode(BaseModel):
+    """
+    A running value over the step axis — the first operators that are NOT
+    pointwise. `cummax` is "best so far", the most-asked-for derived curve;
+    `delta` is step-over-step change.
+
+    Non-finite inputs are excluded and the scan continues, matching `_sma` in
+    the telemetry store: one divide-by-zero mid-curve must not destroy every
+    step after it. `delta` is the exception — it is a difference, not an
+    accumulation, so a missing endpoint yields NaN for that step alone.
+    """
+
+    fn: Fn3 = Field(..., title='Fn')
+    op: Literal['scan'] = Field(..., title='Op')
+    operand: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
+    ) = Field(..., discriminator='op', title='Operand')
+
+
+class ShiftNode(BaseModel):
+    """
+    Move a curve along the step axis. Positive `by` looks BACK (x[i-by]),
+    negative looks forward. Steps with no counterpart are NaN — shifting must
+    not wrap or clamp, which would compare a value against itself.
+    """
+
+    by: int = Field(..., ge=-5000, le=5000, title='By')
+    op: Literal['shift'] = Field(..., title='Op')
+    operand: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
+    ) = Field(..., discriminator='op', title='Operand')
 
 
 class SmoothNode(BaseModel):
@@ -2737,7 +2930,7 @@ class SmoothNode(BaseModel):
     """
 
     factor: float | None = Field(0.6, ge=0.0, lt=1.0, title='Factor')
-    fn: Fn2 = Field(..., title='Fn')
+    fn: Fn4 = Field(..., title='Fn')
     op: Literal['smooth'] = Field(..., title='Op')
     operand: (
         SeriesNode
@@ -2749,6 +2942,10 @@ class SmoothNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Operand')
     window: int | None = Field(10, ge=1, le=5000, title='Window')
 
@@ -2760,7 +2957,7 @@ class UnaryNode(BaseModel):
     dropped-and-counted at the end, never an error that kills the whole read.
     """
 
-    fn: Fn3 = Field(..., title='Fn')
+    fn: Fn5 = Field(..., title='Fn')
     op: Literal['unary'] = Field(..., title='Op')
     operand: (
         SeriesNode
@@ -2772,7 +2969,41 @@ class UnaryNode(BaseModel):
         | CondNode
         | ClampNode
         | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
     ) = Field(..., discriminator='op', title='Operand')
+
+
+class WindowNode(BaseModel):
+    """
+    A trailing-window reduction. `mean` duplicates SmoothNode's sma on
+    purpose: this node is where the rest of the window statistics live, and
+    splitting mean off from std would be a trap.
+
+    Partial windows at the start use what is available, and non-finite values
+    are excluded from every window they touch (the store's `_sma` convention).
+    """
+
+    fn: Fn6 = Field(..., title='Fn')
+    op: Literal['window'] = Field(..., title='Op')
+    operand: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+        | ScanNode
+        | WindowNode
+        | ShiftNode
+        | ReduceNode
+    ) = Field(..., discriminator='op', title='Operand')
+    window: int | None = Field(10, ge=1, le=5000, title='Window')
 
 
 BinaryNode.model_rebuild()
@@ -2784,4 +3015,8 @@ MetricViewCreate.model_rebuild()
 MetricViewPatch.model_rebuild()
 MetricViewPreviewRequest.model_rebuild()
 MetricViewSpec.model_rebuild()
+ReduceNode.model_rebuild()
+ScanNode.model_rebuild()
+ShiftNode.model_rebuild()
 SmoothNode.model_rebuild()
+UnaryNode.model_rebuild()

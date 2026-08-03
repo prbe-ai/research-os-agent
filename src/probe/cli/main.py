@@ -2211,6 +2211,35 @@ def metrics_export(
             print(json.dumps(point, default=str))
 
 
+@metrics_app.command("delete")
+def metrics_delete(
+    run: str = typer.Argument(...),
+    key: str = typer.Option(..., "--key"),
+    kind: str = typer.Option("model", "--kind"),
+    dim: list[str] = typer.Option(
+        None, "--dim", metavar="k=v", help="pin ONE dimension variant"
+    ),
+    yes: bool = typer.Option(False, "--yes", help="skip the confirmation"),
+) -> None:
+    """Delete a DERIVED series and its points.
+
+    The undo for a computed metric that was wrong. Derived only — a logged
+    series is the run's captured record and the server refuses (409).
+
+    Omitting --dim addresses the dimension-less series, NOT every variant of the
+    key: a key logged per-rank needs the pin.
+    """
+    dims = _kv_pairs(dim) if dim else None
+    label = f"{kind}/{key}" + (f" {dims}" if dims else "")
+    if not yes:
+        typer.confirm(
+            f"permanently delete derived series {label} on run {run}?", abort=True
+        )
+    with _client() as c:
+        c.delete_series(run, key=key, kind=kind, dimensions=dims)
+    print(f"deleted derived series {label}")
+
+
 @app.command()
 def coordinates(run: str = typer.Argument(...)) -> None:
     """The run's coordinate catalog: every coordinate any fact landed on."""

@@ -746,9 +746,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -779,6 +783,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Left"
@@ -797,9 +813,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -830,6 +850,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Right"
@@ -1193,9 +1225,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -1226,6 +1262,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Hi"
@@ -1239,9 +1287,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -1272,6 +1324,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Lo"
@@ -1290,9 +1354,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -1323,6 +1391,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Operand"
@@ -1711,9 +1791,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -1744,6 +1828,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Left"
@@ -1762,9 +1858,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -1795,6 +1895,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Right"
@@ -1821,9 +1933,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -1854,6 +1970,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Fallback"
@@ -1872,9 +2000,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -1905,6 +2037,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Operand"
@@ -1935,9 +2079,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -1968,6 +2116,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Otherwise"
@@ -1981,9 +2141,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -2014,6 +2178,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Then"
@@ -2027,9 +2203,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -2060,6 +2240,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "When"
@@ -5313,9 +5505,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -5346,6 +5542,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Expression"
@@ -7342,6 +7550,101 @@
         "title": "PublishRequest",
         "type": "object"
       },
+      "ReduceNode": {
+        "description": "Collapse the whole curve to one number, broadcast back over every step.\n\nThis is what makes normalization expressible: a z-score is\n`(x - reduce(mean, x)) / reduce(std, x)`, and min-max is\n`(x - reduce(min, x)) / (reduce(max, x) - reduce(min, x))`.\n\nNon-finite values are excluded from the statistic \u2014 a summary that one\ndivide-by-zero turns into NaN would take the entire output curve with it.\nA curve with nothing finite in it reduces to NaN.\n\nSCOPE: the statistic is taken over the ALIGNED grid, which is the inner join\nacross every leaf in the expression \u2014 not over the operand's whole stored\ncurve. `zscore(a)` alone standardizes over all of `a`; the same expression\nwith a sparse `b` in it standardizes over the steps `a` and `b` share. That\nfollows from evaluating one expression on one grid, and it is the honest\nreading (the output only exists where the join does), but it is worth\nknowing before comparing a normalized curve against a differently-scoped\none. The same applies to `scan` and `window`.",
+        "properties": {
+          "fn": {
+            "enum": [
+              "sum",
+              "mean",
+              "median",
+              "std",
+              "var",
+              "min",
+              "max",
+              "first",
+              "last",
+              "count"
+            ],
+            "title": "Fn",
+            "type": "string"
+          },
+          "op": {
+            "const": "reduce",
+            "title": "Op",
+            "type": "string"
+          },
+          "operand": {
+            "discriminator": {
+              "mapping": {
+                "binary": "#/components/schemas/BinaryNode",
+                "clamp": "#/components/schemas/ClampNode",
+                "cmp": "#/components/schemas/CmpNode",
+                "coalesce": "#/components/schemas/CoalesceNode",
+                "cond": "#/components/schemas/CondNode",
+                "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
+                "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
+                "smooth": "#/components/schemas/SmoothNode",
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
+              },
+              "propertyName": "op"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SeriesNode"
+              },
+              {
+                "$ref": "#/components/schemas/ConstNode"
+              },
+              {
+                "$ref": "#/components/schemas/BinaryNode"
+              },
+              {
+                "$ref": "#/components/schemas/UnaryNode"
+              },
+              {
+                "$ref": "#/components/schemas/SmoothNode"
+              },
+              {
+                "$ref": "#/components/schemas/CmpNode"
+              },
+              {
+                "$ref": "#/components/schemas/CondNode"
+              },
+              {
+                "$ref": "#/components/schemas/ClampNode"
+              },
+              {
+                "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
+              }
+            ],
+            "title": "Operand"
+          }
+        },
+        "required": [
+          "op",
+          "fn",
+          "operand"
+        ],
+        "title": "ReduceNode",
+        "type": "object"
+      },
       "ResourceKind": {
         "description": "Values match the dashboard's SharedResourceKind byte-for-byte.",
         "enum": [
@@ -7957,15 +8260,8 @@
       "RunNode": {
         "properties": {
           "alive": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Alive"
+            "title": "Alive",
+            "type": "boolean"
           },
           "created_at": {
             "format": "date-time",
@@ -8025,7 +8321,8 @@
           "id",
           "name",
           "status",
-          "created_at"
+          "created_at",
+          "alive"
         ],
         "title": "RunNode",
         "type": "object"
@@ -8647,6 +8944,96 @@
           }
         },
         "title": "SandboxFileSide",
+        "type": "object"
+      },
+      "ScanNode": {
+        "description": "A running value over the step axis \u2014 the first operators that are NOT\npointwise. `cummax` is \"best so far\", the most-asked-for derived curve;\n`delta` is step-over-step change.\n\nNon-finite inputs are excluded and the scan continues, matching `_sma` in\nthe telemetry store: one divide-by-zero mid-curve must not destroy every\nstep after it. `delta` is the exception \u2014 it is a difference, not an\naccumulation, so a missing endpoint yields NaN for that step alone.",
+        "properties": {
+          "fn": {
+            "enum": [
+              "cumsum",
+              "cumprod",
+              "cummax",
+              "cummin",
+              "delta"
+            ],
+            "title": "Fn",
+            "type": "string"
+          },
+          "op": {
+            "const": "scan",
+            "title": "Op",
+            "type": "string"
+          },
+          "operand": {
+            "discriminator": {
+              "mapping": {
+                "binary": "#/components/schemas/BinaryNode",
+                "clamp": "#/components/schemas/ClampNode",
+                "cmp": "#/components/schemas/CmpNode",
+                "coalesce": "#/components/schemas/CoalesceNode",
+                "cond": "#/components/schemas/CondNode",
+                "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
+                "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
+                "smooth": "#/components/schemas/SmoothNode",
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
+              },
+              "propertyName": "op"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SeriesNode"
+              },
+              {
+                "$ref": "#/components/schemas/ConstNode"
+              },
+              {
+                "$ref": "#/components/schemas/BinaryNode"
+              },
+              {
+                "$ref": "#/components/schemas/UnaryNode"
+              },
+              {
+                "$ref": "#/components/schemas/SmoothNode"
+              },
+              {
+                "$ref": "#/components/schemas/CmpNode"
+              },
+              {
+                "$ref": "#/components/schemas/CondNode"
+              },
+              {
+                "$ref": "#/components/schemas/ClampNode"
+              },
+              {
+                "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
+              }
+            ],
+            "title": "Operand"
+          }
+        },
+        "required": [
+          "op",
+          "fn",
+          "operand"
+        ],
+        "title": "ScanNode",
         "type": "object"
       },
       "Scope": {
@@ -9507,6 +9894,53 @@
         "title": "SessionEntityOut",
         "type": "object"
       },
+      "SessionTranscriptOut": {
+        "description": "The complete normalized transcript document for one captured session.",
+        "properties": {
+          "agent": {
+            "title": "Agent",
+            "type": "string"
+          },
+          "body_size_bytes": {
+            "minimum": 0.0,
+            "title": "Body Size Bytes",
+            "type": "integer"
+          },
+          "chunk_count": {
+            "minimum": 0.0,
+            "title": "Chunk Count",
+            "type": "integer"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "session_id",
+          "agent",
+          "content",
+          "chunk_count",
+          "body_size_bytes"
+        ],
+        "title": "SessionTranscriptOut",
+        "type": "object"
+      },
       "SessionWorkOut": {
         "description": "Everything one session touched, grouped by entity type.",
         "properties": {
@@ -9579,6 +10013,91 @@
         "title": "SessionWorkOut",
         "type": "object"
       },
+      "ShiftNode": {
+        "description": "Move a curve along the step axis. Positive `by` looks BACK (x[i-by]),\nnegative looks forward. Steps with no counterpart are NaN \u2014 shifting must\nnot wrap or clamp, which would compare a value against itself.",
+        "properties": {
+          "by": {
+            "maximum": 5000.0,
+            "minimum": -5000.0,
+            "title": "By",
+            "type": "integer"
+          },
+          "op": {
+            "const": "shift",
+            "title": "Op",
+            "type": "string"
+          },
+          "operand": {
+            "discriminator": {
+              "mapping": {
+                "binary": "#/components/schemas/BinaryNode",
+                "clamp": "#/components/schemas/ClampNode",
+                "cmp": "#/components/schemas/CmpNode",
+                "coalesce": "#/components/schemas/CoalesceNode",
+                "cond": "#/components/schemas/CondNode",
+                "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
+                "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
+                "smooth": "#/components/schemas/SmoothNode",
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
+              },
+              "propertyName": "op"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SeriesNode"
+              },
+              {
+                "$ref": "#/components/schemas/ConstNode"
+              },
+              {
+                "$ref": "#/components/schemas/BinaryNode"
+              },
+              {
+                "$ref": "#/components/schemas/UnaryNode"
+              },
+              {
+                "$ref": "#/components/schemas/SmoothNode"
+              },
+              {
+                "$ref": "#/components/schemas/CmpNode"
+              },
+              {
+                "$ref": "#/components/schemas/CondNode"
+              },
+              {
+                "$ref": "#/components/schemas/ClampNode"
+              },
+              {
+                "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
+              }
+            ],
+            "title": "Operand"
+          }
+        },
+        "required": [
+          "op",
+          "by",
+          "operand"
+        ],
+        "title": "ShiftNode",
+        "type": "object"
+      },
       "SmoothNode": {
         "description": "Smoothing INSIDE the expression (EMA(loss_a / loss_b) differs from\nEMA-ing the rendered output). Reuses the store's _ema/_sma at the aligned\ngrid's full resolution. ema uses `factor`, sma uses `window`.",
         "properties": {
@@ -9611,9 +10130,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -9644,6 +10167,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Operand"
@@ -10577,9 +11112,13 @@
                 "coalesce": "#/components/schemas/CoalesceNode",
                 "cond": "#/components/schemas/CondNode",
                 "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
                 "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
                 "smooth": "#/components/schemas/SmoothNode",
-                "unary": "#/components/schemas/UnaryNode"
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
               },
               "propertyName": "op"
             },
@@ -10610,6 +11149,18 @@
               },
               {
                 "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
               }
             ],
             "title": "Operand"
@@ -10943,6 +11494,104 @@
           "rows"
         ],
         "title": "WideSeriesResult",
+        "type": "object"
+      },
+      "WindowNode": {
+        "description": "A trailing-window reduction. `mean` duplicates SmoothNode's sma on\npurpose: this node is where the rest of the window statistics live, and\nsplitting mean off from std would be a trap.\n\nPartial windows at the start use what is available, and non-finite values\nare excluded from every window they touch (the store's `_sma` convention).",
+        "properties": {
+          "fn": {
+            "enum": [
+              "mean",
+              "std",
+              "var",
+              "min",
+              "max",
+              "median"
+            ],
+            "title": "Fn",
+            "type": "string"
+          },
+          "op": {
+            "const": "window",
+            "title": "Op",
+            "type": "string"
+          },
+          "operand": {
+            "discriminator": {
+              "mapping": {
+                "binary": "#/components/schemas/BinaryNode",
+                "clamp": "#/components/schemas/ClampNode",
+                "cmp": "#/components/schemas/CmpNode",
+                "coalesce": "#/components/schemas/CoalesceNode",
+                "cond": "#/components/schemas/CondNode",
+                "const": "#/components/schemas/ConstNode",
+                "reduce": "#/components/schemas/ReduceNode",
+                "scan": "#/components/schemas/ScanNode",
+                "series": "#/components/schemas/SeriesNode",
+                "shift": "#/components/schemas/ShiftNode",
+                "smooth": "#/components/schemas/SmoothNode",
+                "unary": "#/components/schemas/UnaryNode",
+                "window": "#/components/schemas/WindowNode"
+              },
+              "propertyName": "op"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/SeriesNode"
+              },
+              {
+                "$ref": "#/components/schemas/ConstNode"
+              },
+              {
+                "$ref": "#/components/schemas/BinaryNode"
+              },
+              {
+                "$ref": "#/components/schemas/UnaryNode"
+              },
+              {
+                "$ref": "#/components/schemas/SmoothNode"
+              },
+              {
+                "$ref": "#/components/schemas/CmpNode"
+              },
+              {
+                "$ref": "#/components/schemas/CondNode"
+              },
+              {
+                "$ref": "#/components/schemas/ClampNode"
+              },
+              {
+                "$ref": "#/components/schemas/CoalesceNode"
+              },
+              {
+                "$ref": "#/components/schemas/ScanNode"
+              },
+              {
+                "$ref": "#/components/schemas/WindowNode"
+              },
+              {
+                "$ref": "#/components/schemas/ShiftNode"
+              },
+              {
+                "$ref": "#/components/schemas/ReduceNode"
+              }
+            ],
+            "title": "Operand"
+          },
+          "window": {
+            "default": 10,
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Window",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "op",
+          "fn",
+          "operand"
+        ],
+        "title": "WindowNode",
         "type": "object"
       },
       "WorkspaceKind": {
@@ -17793,6 +18442,18 @@
             }
           },
           {
+            "description": "only effectively live runs: stored status is running and the newest substantive update or explicit heartbeat is inside the liveness window",
+            "in": "query",
+            "name": "active",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "only effectively live runs: stored status is running and the newest substantive update or explicit heartbeat is inside the liveness window",
+              "title": "Active",
+              "type": "boolean"
+            }
+          },
+          {
             "description": "incumbent-id lookup as 'key:value' (fold #8), GIN @> containment",
             "in": "query",
             "name": "foreign_key",
@@ -18412,7 +19073,7 @@
     },
     "/v1/runs/{run_id}/heartbeat": {
       "post": {
-        "description": "Report that a run's process is still alive.\n\nLiveness cannot be inferred from `status` alone: it is a plain column, so a\nrun whose process dies without a final PATCH stays 'running' forever. A\nclient calls this periodically (well inside `run_heartbeat_stale_seconds`)\nand the reaper flips anything that stops beating to 'crashed'.\n\nBeating is what makes a run REAPABLE -- rows that have never beat are left\nalone forever. So this is safe to adopt gradually: a client that never calls\nit keeps exactly the old behaviour.\n\nOnly a 'running' run is stamped. Beating a finished run would resurrect it\ninto the reaper's scan for no reason, and beating a soft-deleted one would\ncontradict the tombstone.",
+        "description": "Report that a run's process is still alive.\n\nLiveness cannot be inferred from `status` alone: it is a plain column, so a\nrun whose process dies without a final PATCH stays 'running' forever. A\nclient calls this periodically (well inside `run_heartbeat_stale_seconds`).\nThe reaper uses whichever is newer: this heartbeat or substantive run/data\nactivity. Clients without heartbeat support therefore remain live while\nthey are writing data, but cannot stay 'running' forever after activity\nstops.\n\nOnly a 'running' run is stamped. Beating a finished run would resurrect it\ninto the reaper's scan for no reason.",
         "operationId": "heartbeat_run_v1_runs__run_id__heartbeat_post",
         "parameters": [
           {
@@ -19368,6 +20029,81 @@
       }
     },
     "/v1/runs/{run_id}/series": {
+      "delete": {
+        "description": "Delete a DERIVED series and its points.\n\nThe counterpart to pushing one: an agent that computed the wrong thing could\npreviously only leave it there forever. Restricted to derived series \u2014\nlogged points are the run's captured record, and no part of this problem\nneeds the power to erase those.\n\nIdentity is (kind, key, dimensions), the same triple a write uses. A key\nwith several dimension variants needs `dimensions` to say which; omitting it\naddresses the dimension-less series, not \"all of them\".",
+        "operationId": "delete_series_v1_runs__run_id__series_delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Run Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "metric kind, e.g. 'eval'",
+            "in": "query",
+            "name": "kind",
+            "required": true,
+            "schema": {
+              "description": "metric kind, e.g. 'eval'",
+              "title": "Kind",
+              "type": "string"
+            }
+          },
+          {
+            "description": "metric key, e.g. 'reward_auc'",
+            "in": "query",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "description": "metric key, e.g. 'reward_auc'",
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "description": "JSON dimension map pinning ONE variant; omit for the dimension-less series",
+            "in": "query",
+            "name": "dimensions",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "JSON dimension map pinning ONE variant; omit for the dimension-less series",
+              "title": "Dimensions"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Series",
+        "tags": [
+          "series"
+        ]
+      },
       "get": {
         "operationId": "get_series_catalog_v1_runs__run_id__series_get",
         "parameters": [
@@ -20294,6 +21030,49 @@
         "summary": "Post Series Query",
         "tags": [
           "series"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/transcript": {
+      "get": {
+        "description": "The complete normalized transcript captured for one session.\n\nUnlike `/work`, an unknown well-formed session is 404 here: the engine owns\nactual transcript existence and returns the same answer for missing and\nout-of-tenant documents.  A recorded research link does not guarantee that\ncapture was enabled on the agent's machine.",
+        "operationId": "get_session_transcript_v1_sessions__session_id__transcript_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionTranscriptOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Session Transcript",
+        "tags": [
+          "runs"
         ]
       }
     },

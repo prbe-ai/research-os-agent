@@ -299,6 +299,7 @@ class FakeApp:
         # (0087), so a test asserting a derived write has to see the envelope.
         self.metric_batches_posted: list[dict] = []
         self.views: dict[str, list[dict]] = {}
+        self.deleted_series: list[dict] = []
         self.spans_upserted = 0
         self.spans: dict[str, list[dict]] = {}
         self.blobs: dict[str, bytes] = {}
@@ -864,6 +865,21 @@ class FakeApp:
         m = _RUN_SERIES.match(path)
         if m and method == "GET":
             return httpx.Response(200, json=self.series.get(m.group(1), []))
+        if m and method == "DELETE":
+            # Records the identity triple rather than mutating a catalog: what
+            # matters on the client side is that the write identity and the
+            # delete identity are the same three fields.
+            params = request.url.params
+            raw = params.get("dimensions")
+            self.deleted_series.append(
+                {
+                    "run_id": m.group(1),
+                    "kind": params.get("kind"),
+                    "key": params.get("key"),
+                    "dimensions": json.loads(raw) if raw else None,
+                }
+            )
+            return httpx.Response(204)
 
         if path == "/v1/series/query" and method == "POST":
             # Multi-run series read, backing client.compare(). Serves whatever

@@ -1548,6 +1548,27 @@ class Client:
         params = {k: v for k, v in {"key": key, "kind": kind, "limit": limit}.items() if v is not None}
         return self.transport.get(f"/v1/runs/{run_id}/metrics", params=params or None)
 
+    def delete_series(
+        self,
+        run_id: str,
+        *,
+        key: str,
+        kind: str = "model",
+        dimensions: dict | None = None,
+    ) -> None:
+        """Delete a DERIVED series and its points — the counterpart to pushing one.
+
+        Derived only: a logged series is the run's captured record, cannot be
+        recomputed, and has no undo, so the server refuses it with a 409.
+
+        Identity is (kind, key, dimensions), the same triple a write uses.
+        `dimensions` pins ONE variant; omitting it addresses the dimension-less
+        series, not every variant of the key."""
+        params = {"kind": kind, "key": key}
+        if dimensions is not None:
+            params["dimensions"] = json.dumps(dimensions)
+        self.transport.request("DELETE", f"/v1/runs/{run_id}/series", params=params)
+
     def run_series(self, run_id: str) -> list[dict]:
         """Per-series summary for a run (key/kind/dimensions + first/last/min/max)."""
         return self.transport.get(f"/v1/runs/{run_id}/series")
