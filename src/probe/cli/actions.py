@@ -35,6 +35,7 @@ class Action(StrEnum):
 
     CONFIGURE = "configure"
     UNINSTALL = "uninstall"
+    BACKFILL = "backfill"
     UPDATE = "update"
     DIAGNOSE = "diagnose"
     EXIT = "exit"
@@ -53,6 +54,10 @@ ACTION_COPY: dict[Action, tuple[str, str]] = {
     Action.UNINSTALL: (
         "Uninstall Probe",
         "Stops capture, removes the plugins, clears local credentials.",
+    ),
+    Action.BACKFILL: (
+        "Import existing work",
+        "Point an agent at a folder; it uploads and describes what it finds.",
     ),
     Action.UPDATE: (
         "Update to the latest version",
