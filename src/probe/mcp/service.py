@@ -232,7 +232,7 @@ def _collapse_experiments(results: list[dict]) -> list[dict]:
     experiment-level hit to represent it — and the result rows carry no
     experiment linkage to tell a direct run from an attached one.
 
-    Everything else — document/file/project/asset hits — passes through too.
+    Everything else — document/file/project/artifact hits — passes through too.
     Collapse DEDUPES; it does not filter. Dropping the non-experiment rows made
     every knowledge corpus unreachable through the default call: `search_in` maps
     transcripts/documents/files straight into the backend query, the backend
@@ -578,9 +578,9 @@ def _echoes_project_scope(response: Any, project_id: str) -> bool:
 
 
 def _satisfies(version: dict, requirement: str) -> bool:
-    """Does this asset version satisfy `requirement`?
+    """Does this artifact version satisfy `requirement`?
 
-    Asset versions are MONOTONIC INTEGERS with optional labels, not semver --
+    Artifact versions are MONOTONIC INTEGERS with optional labels, not semver --
     so this supports exactly what the data supports: an exact label/version
     match, or `>=N` / `>N` / `<=N` / `<N` against the integer. Pretending to
     understand semver ranges over integer versions would answer confidently and
@@ -600,11 +600,11 @@ def _satisfies(version: dict, requirement: str) -> bool:
                 # satisfies this". That is a THIRD kind of nothing, and it is
                 # indistinguishable from a real version ceiling: the caller sees
                 # state="no_match" with completeness="complete", believes the
-                # asset is too old, and registers a duplicate -- the exact
+                # artifact is too old, and registers a duplicate -- the exact
                 # outcome this view exists to prevent. ">=2.0" is the obvious
                 # way to write this and it is not a version here.
                 raise errors.ValidationError(
-                    f"asset versions are monotonic integers, not semver: "
+                    f"artifact versions are monotonic integers, not semver: "
                     f"{requirement!r} does not name one (try '>=2', '<3', "
                     f"'==1', or a bare label)",
                     status=422,
