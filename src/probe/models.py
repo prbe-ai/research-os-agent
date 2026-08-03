@@ -10,6 +10,10 @@ When the backend contract moves: refresh ``schema/openapi.json``
 references was renamed or removed, the import or attribute use below fails fast,
 that is the drift signal working as intended.
 
+The expression-view models (``MetricViewCreate``/``Spec``/``Patch``/``Out``/``Data``,
+``MetricViewPreviewRequest``) and ``DerivedProvenance`` back the read-time view
+surface and the derived-metric write; ``probe.expr`` builds specs against them.
+
 The ``/ingest/v1/runs`` body (``IngestRunRequest`` and its nested ``IngestRun`` /
 ``IngestArtifact``) is now declared in the backend schema, so the passive push is
 generated and validated like every other write path.
@@ -22,6 +26,7 @@ from ._generated.models import (
     ArtifactPinImpact,
     ArtifactVersionCreate,
     ArtifactVersionOut,
+    DerivedProvenance,
     DownloadResponse,
     EdgeCreate,
     EventOut,
@@ -39,6 +44,12 @@ from ._generated.models import (
     LineageRelation,
     MetricBatch,
     MetricPointIn,
+    MetricViewCreate,
+    MetricViewData,
+    MetricViewOut,
+    MetricViewPatch,
+    MetricViewPreviewRequest,
+    MetricViewSpec,
     ParentRelation,
     ProjectCreate,
     RunCreate,
@@ -68,6 +79,7 @@ __all__ = [
     "ArtifactPinImpact",
     "ArtifactVersionCreate",
     "ArtifactVersionOut",
+    "DerivedProvenance",
     "DownloadResponse",
     "EdgeCreate",
     "EventOut",
@@ -85,6 +97,12 @@ __all__ = [
     "LineageRelation",
     "MetricBatch",
     "MetricPointIn",
+    "MetricViewCreate",
+    "MetricViewData",
+    "MetricViewOut",
+    "MetricViewPatch",
+    "MetricViewPreviewRequest",
+    "MetricViewSpec",
     "ParentRelation",
     "ProjectCreate",
     "RunCreate",

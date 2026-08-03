@@ -72,6 +72,10 @@ _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")
 _RUN_METRICS_GROUPED = re.compile(r"^/v1/runs/([^/]+)/metrics/grouped$")
 _RUN_METRICS_WIDE = re.compile(r"^/v1/runs/([^/]+)/metrics/wide$")
 _RUN_METRICS_EXPORT = re.compile(r"^/v1/runs/([^/]+)/metrics/export$")
+_RUN_VIEWS = re.compile(r"^/v1/runs/([^/]+)/views$")
+_RUN_VIEWS_PREVIEW = re.compile(r"^/v1/runs/([^/]+)/views/preview$")
+_RUN_VIEW_DATA = re.compile(r"^/v1/runs/([^/]+)/views/([^/]+)/data$")
+_VIEW = re.compile(r"^/v1/views/([^/]+)$")
 _RUN_COORDINATES = re.compile(r"^/v1/runs/([^/]+)/coordinates$")
 _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
 _RUN_STEPS = re.compile(r"^/v1/runs/([^/]+)/steps$")
@@ -118,6 +122,28 @@ class FakeApp:
         if not self.echoes_project_scope or not body or not body.get("project_id"):
             return response
         return {**response, "project_id": body["project_id"]}
+
+    def _view_envelope(self, spec: dict, *, view_id: str | None, name: str | None = None) -> dict:
+        """The shape both `view_data` and `preview_view` return.
+
+        Two stepped points and every disclosure field, always populated —
+        `missing_inputs` and `dropped_nonfinite` are how a client learns a curve
+        is incomplete, so a fake that omitted them would let a caller that
+        ignores them pass.
+        """
+        return {
+            "view_id": view_id,
+            "name": name,
+            "x_axis": "step",
+            "points": [
+                {"step_index": 0, "wall_clock": "2026-08-03T00:00:00Z", "value": 1.5},
+                {"step_index": 1, "wall_clock": "2026-08-03T00:01:00Z", "value": 1.25},
+            ],
+            "truncated": False,
+            "missing_inputs": [],
+            "dropped_nonfinite": 0,
+            "echo_spec": spec,
+        }
 
     def _stepped_points(self, rid: str, params, *, keys: list[str] | None = None) -> list[dict]:
         """The stepped points a grouped/wide read draws from: key/kind/step-window
@@ -269,6 +295,10 @@ class FakeApp:
         self.put_headers: list[dict[str, str]] = []
         self.gets: list[str] = []
         self.metrics_inserted = 0
+        # WHOLE batch bodies, not just points: origin/provenance are batch-level
+        # (0087), so a test asserting a derived write has to see the envelope.
+        self.metric_batches_posted: list[dict] = []
+        self.views: dict[str, list[dict]] = {}
         self.spans_upserted = 0
         self.spans: dict[str, list[dict]] = {}
         self.blobs: dict[str, bytes] = {}
@@ -604,7 +634,12 @@ class FakeApp:
                 self.fail_next_metrics = False
                 return httpx.Response(503, json={"detail": "db down"})
             points = body.get("points", [])
+            if body.get("origin") == "derived" and not body.get("provenance"):
+                return httpx.Response(
+                    422, json={"detail": "derived batch requires provenance"}
+                )
             self.metrics_inserted += len(points)
+            self.metric_batches_posted.append(body)
             self.metric_points_posted.setdefault(m.group(1), []).extend(points)
             return httpx.Response(200, json={"inserted": len(points)})
         if m and method == "GET":
@@ -617,6 +652,60 @@ class FakeApp:
             if kind is not None:
                 rows = [r for r in rows if r.get("kind") == kind]
             return httpx.Response(200, json=rows[: int(limit)] if limit else rows)
+
+        # -- expression views (0088). Storage + identity only: EVALUATION is the
+        # server's job and research-os tests it. What matters here is that the
+        # client reaches every route with the right body and reads the envelope.
+        m = _RUN_VIEWS_PREVIEW.match(path)
+        if m and method == "POST":
+            return httpx.Response(200, json=self._view_envelope(body["spec"], view_id=None))
+
+        m = _RUN_VIEWS.match(path)
+        if m and method == "POST":
+            rid = m.group(1)
+            rows = self.views.setdefault(rid, [])
+            if any(r["name"] == body["name"] for r in rows):
+                return httpx.Response(409, json={"detail": "view name already in use"})
+            row = {
+                "id": str(uuid.uuid4()),
+                "run_id": rid,
+                "name": body["name"],
+                "spec": body["spec"],
+                "created_by": "user:test",
+                "created_at": "2026-08-03T00:00:00Z",
+                "updated_at": "2026-08-03T00:00:00Z",
+            }
+            rows.append(row)
+            return httpx.Response(201, json=row)
+        if m and method == "GET":
+            return httpx.Response(200, json=self.views.get(m.group(1), []))
+
+        m = _RUN_VIEW_DATA.match(path)
+        if m and method == "GET":
+            rid, vid = m.group(1), m.group(2)
+            row = next((r for r in self.views.get(rid, []) if r["id"] == vid), None)
+            if row is None:
+                return httpx.Response(404, json={"detail": "view not found"})
+            return httpx.Response(
+                200, json=self._view_envelope(row["spec"], view_id=vid, name=row["name"])
+            )
+
+        m = _VIEW.match(path)
+        if m:
+            vid = m.group(1)
+            for rid, rows in self.views.items():
+                for i, row in enumerate(rows):
+                    if row["id"] != vid:
+                        continue
+                    if method == "PATCH":
+                        updated = {**row, **{k: v for k, v in body.items() if v is not None}}
+                        updated["updated_at"] = "2026-08-03T01:00:00Z"
+                        rows[i] = updated
+                        return httpx.Response(200, json=updated)
+                    if method == "DELETE":
+                        rows.pop(i)
+                        return httpx.Response(204)
+            return httpx.Response(404, json={"detail": "view not found"})
 
         # -- coordinate reads (0059-0062): grouped / wide / export / catalog --
         m = _RUN_METRICS_GROUPED.match(path)

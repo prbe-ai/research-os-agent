@@ -47,6 +47,7 @@ _LAZY = {
     "Settings",
     "SpanHandle",
     "active_run",
+    "expr",
     "finish",
     "init",
     "log",
@@ -60,6 +61,13 @@ _LAZY = {
 
 
 def __getattr__(name: str) -> object:
+    # `expr` is a MODULE, not a name re-exported from .sdk: `import probe` alone
+    # would not bind it, so `probe.expr.series(...)` needs this leg. Lazy for the
+    # same reason as everything else here — it pulls the generated models.
+    if name == "expr":
+        value = importlib.import_module(".expr", __name__)
+        globals()[name] = value
+        return value
     if name in _LAZY:
         value = getattr(importlib.import_module(".sdk", __name__), name)
         globals()[name] = value  # cache: the lazy import runs once per name
@@ -68,10 +76,11 @@ def __getattr__(name: str) -> object:
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | _LAZY)
+    return sorted(set(globals()) | _LAZY | {"expr"})
 
 
 if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at runtime
+    from . import expr
     from .sdk import (
         CaptureLedger,
         CaptureState,
@@ -99,6 +108,7 @@ __all__ = [
     "Settings",
     "SpanHandle",
     "active_run",
+    "expr",
     "finish",
     "init",
     "log",

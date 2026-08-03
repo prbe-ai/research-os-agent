@@ -2055,10 +2055,60 @@ def log(
     agg: Agg = typer.Option(
         None, "--agg", help="declare the key's reduce fn for grouped reads (0062)"
     ),
+    derived: bool = typer.Option(
+        False,
+        "--derived",
+        help="these values were COMPUTED after the fact, not measured live; needs --producer",
+    ),
+    producer: str = typer.Option(
+        None, "--producer", help="what computed them, e.g. claude-code or score_auc.py"
+    ),
+    note: str = typer.Option(None, "--note", help="why/how, free text"),
+    input_key: list[str] = typer.Option(
+        None, "--input", metavar="KEY", help="repeatable; stored series the computation read"
+    ),
+    code_ref: str = typer.Option(None, "--code-ref", help="repo path / commit / script"),
 ) -> None:
-    """Append metric points. --dim adds series dimensions (fold #9)."""
+    """Append metric points. --dim adds series dimensions (fold #9).
+
+    --derived marks the batch as computed rather than measured — the door for
+    backfilling a metric onto a run that has already finished. It requires
+    --producer and a --step, and records provenance beside the points so a
+    reader can always tell a computed curve from a captured one.
+    """
     metrics = _kv_pairs(metric, cast_float=True)
     dims = _kv_pairs(dim) if dim else None
+
+    if producer and not derived:
+        raise typer.BadParameter("--producer only applies to --derived")
+    if derived:
+        if not producer:
+            raise typer.BadParameter(
+                "--derived needs --producer: a computed series without provenance is "
+                "indistinguishable from a logged one"
+            )
+        if step is None:
+            raise typer.BadParameter(
+                "--derived needs an explicit --step: a backfill lands on steps that "
+                "already exist, so there is no counter to auto-increment"
+            )
+        # Deliberately synchronous: the async outbox carries `log` bodies, and a
+        # derived batch is a different shape. A backfill is not on the hot path.
+        with _client() as c:
+            _run_handle(c, run).log_derived(
+                metrics,
+                step=step,
+                producer=producer,
+                note=note,
+                inputs=list(input_key) or None,
+                code_ref=code_ref,
+                kind=kind,
+                dimensions=dims,
+                agg=agg.value if agg else None,
+            )
+        print(f"logged {len(metrics)} derived metric(s) to {run} (producer={producer})")
+        return
+
     if _conn.async_mode:
         with _async_client() as c:
             _async_run(c, run).log(
@@ -2166,6 +2216,146 @@ def coordinates(run: str = typer.Argument(...)) -> None:
     """The run's coordinate catalog: every coordinate any fact landed on."""
     with _client() as c:
         _print_json(c.list_run_coordinates(run))
+
+
+# -- expression views (read-time computed panels, research-os 0088) ---------
+# The AUTHORING surface. The dashboard renders, renames and deletes views but
+# never composes one: an expression comes from a researcher's agent session or
+# their own script, so the door it comes through is here and the SDK's
+# `probe.expr`. --spec-file is literally that path — a script writes JSON, this
+# uploads it.
+views_app = typer.Typer(
+    no_args_is_help=True, help="expression views: formulas over a run's logged series"
+)
+app.add_typer(views_app, name="views")
+
+
+def _read_spec(spec: str | None, spec_file: str | None) -> dict:
+    """Resolve --spec / --spec-file into a validated view spec.
+
+    ``--spec-file -`` reads stdin, so a generator script can pipe straight in
+    without a temp file. Validation happens here rather than at the server, so a
+    typo names its own field instead of coming back as a 422.
+    """
+    if (spec is None) == (spec_file is None):
+        raise typer.BadParameter("pass exactly one of --spec or --spec-file")
+    if spec_file is not None:
+        raw = sys.stdin.read() if spec_file == "-" else Path(spec_file).read_text()
+    else:
+        raw = spec
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"spec is not valid JSON: {exc}") from exc
+
+    from probe import expr as expr_module
+
+    try:
+        return expr_module.spec(parsed)
+    except Exception as exc:  # noqa: BLE001 -- pydantic error text is the message
+        raise typer.BadParameter(f"invalid expression spec: {exc}") from exc
+
+
+@views_app.command("list")
+def views_list(run: str = typer.Argument(...)) -> None:
+    """Every expression view on a run, with its spec and provenance."""
+    with _client() as c:
+        _print_json(c.list_views(run))
+
+
+@views_app.command("show")
+def views_show(
+    run: str = typer.Argument(...),
+    view: str = typer.Argument(..., metavar="VIEW", help="view id or name"),
+) -> None:
+    """One view, by id or by name."""
+    with _client() as c:
+        views = c.list_views(run)
+    for row in views:
+        if view in (str(row.get("id")), row.get("name")):
+            _print_json(row)
+            return
+    names = ", ".join(sorted(str(r.get("name")) for r in views)) or "none"
+    raise typer.BadParameter(f"no view {view!r} on run {run}; run has: {names}")
+
+
+@views_app.command("create")
+def views_create(
+    run: str = typer.Argument(...),
+    name: str = typer.Argument(..., help="panel title; unique per run"),
+    spec: str = typer.Option(None, "--spec", metavar="JSON", help="inline spec"),
+    spec_file: str = typer.Option(
+        None, "--spec-file", metavar="PATH", help="spec JSON from a file, or - for stdin"
+    ),
+) -> None:
+    """Save a view. Works on a completed run — a view reads, it never appends."""
+    body = _read_spec(spec, spec_file)
+    with _client() as c:
+        _print_json(c.create_view(run, name, body))
+
+
+@views_app.command("preview")
+def views_preview(
+    run: str = typer.Argument(...),
+    spec: str = typer.Option(None, "--spec", metavar="JSON"),
+    spec_file: str = typer.Option(None, "--spec-file", metavar="PATH", help="or - for stdin"),
+    step_from: int = typer.Option(None, "--step-from"),
+    step_to: int = typer.Option(None, "--step-to"),
+    max_points: int = typer.Option(None, "--max-points"),
+) -> None:
+    """Evaluate a spec WITHOUT saving it.
+
+    Run this before `create`: a spec naming a series the run never logged comes
+    back here with `missing_inputs`, instead of being saved as a panel that
+    renders empty for everyone who opens the run.
+    """
+    body = _read_spec(spec, spec_file)
+    with _client() as c:
+        _print_json(
+            c.preview_view(
+                run, body, step_from=step_from, step_to=step_to, max_points=max_points
+            )
+        )
+
+
+@views_app.command("data")
+def views_data(
+    run: str = typer.Argument(...),
+    view_id: str = typer.Argument(...),
+    step_from: int = typer.Option(None, "--step-from"),
+    step_to: int = typer.Option(None, "--step-to"),
+    max_points: int = typer.Option(None, "--max-points"),
+) -> None:
+    """Evaluate a saved view and print its curve.
+
+    Read the whole envelope, not just `points`: `missing_inputs` names series the
+    expression referenced that the run has none of, `dropped_nonfinite` counts
+    NaN/inf results, and `truncated` says the input scan hit its bound.
+    """
+    with _client() as c:
+        _print_json(
+            c.view_data(
+                run, view_id, step_from=step_from, step_to=step_to, max_points=max_points
+            )
+        )
+
+
+@views_app.command("rename")
+def views_rename(
+    view_id: str = typer.Argument(...),
+    name: str = typer.Argument(...),
+) -> None:
+    """Rename a view. The expression is untouched."""
+    with _client() as c:
+        _print_json(c.update_view(view_id, name=name))
+
+
+@views_app.command("delete")
+def views_delete(view_id: str = typer.Argument(...)) -> None:
+    """Delete a view. The series it read are untouched."""
+    with _client() as c:
+        c.delete_view(view_id)
+    print(f"deleted view {view_id}")
 
 
 series_app = typer.Typer(no_args_is_help=True, help="cross-run series reads")

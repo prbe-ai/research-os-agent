@@ -19,6 +19,8 @@ gets made. Record with the surface the run was opened with.
    | notes | `client.notes.add(run.id, "decision", "…")` | `probe note add RUN --kind decision --statement "…"` |
    | external ids | `run.link(wandb_run_id="abc")` | `probe link RUN --set wandb_run_id=abc` |
    | sub-runs | `run.child("fold-2")` | `probe run child RUN --name fold-2` |
+   | computed metrics | `run.log_derived_series("eval/auc", pts, producer="…")` | `probe log RUN eval/auc=0.9 --step 100 --derived --producer …` |
+   | expression views | `run.create_view("loss_ratio", spec)` | `probe views create RUN loss_ratio --spec-file spec.json` |
 
    Prefer the `with` form for spans in live code: it takes both timestamps off one
    clock, nests anything opened inside it, and closes the span as `failed` if the
@@ -57,23 +59,54 @@ gets made. Record with the surface the run was opened with.
      `probe outbox status` / `probe doctor`; `probe outbox retry` requeues
      dead-lettered items after you fix the cause.
 
-2. **Read back what you recorded before relying on it.** `get_entity` with
+2. **Computing a metric nobody logged? You do not need a new run.** A finished run
+   is not a sealed archive here — the series catalog is a row store, so a metric
+   you only thought of afterwards (AUROC from stored predictions, a rescored eval,
+   reward-under-the-curve) can land on the run it belongs to. Two doors, and the
+   choice is about where the arithmetic happens:
+
+   - **Derived metrics** — you compute it in Python and push the points.
+     Anything is expressible, and the points are stored. `--producer` is
+     mandatory: a derived series carries `origin="derived"` plus provenance
+     (what produced it, what it read, where the code lives), so nobody later has
+     to guess whether a curve came from the training loop or from a notebook two
+     weeks after. Use `run.log_derived_series(key, points, producer=…)` for a
+     whole curve in one request; `run.log_derived({...}, step=…, producer=…)`
+     writes a single step. `step` is required — a backfill lands on steps that
+     already exist, so there is nothing to auto-increment.
+   - **Expression views** — a formula over series the run already has,
+     stored as an AST and evaluated at READ time. No points are stored, so it
+     costs nothing until someone looks and stays correct as a live run advances.
+     Build the spec with `probe.expr` (`expr.series("train/loss") /
+     expr.series("train/entropy")`, `.ema(factor=0.9)`, bare numbers coerce), or
+     write the JSON yourself and pass `--spec-file` (`-` reads stdin).
+
+   Reach for a view when the thing you want is arithmetic over existing curves;
+   reach for a derived metric when it is anything else. `preview` before
+   `create` — a spec naming a series the run never logged comes back with
+   `missing_inputs` instead of becoming a panel that renders empty for everyone.
+
+   The dashboard renders, renames and deletes views but does not compose them.
+   Authoring them is your job, which is why both surfaces above are write doors
+   and the MCP tools stay read-only.
+
+3. **Read back what you recorded before relying on it.** `get_entity` with
    `view="trajectory"` for the spans, `view="metrics"` for the series. What you wrote
    and what landed are different claims, and only the second is evidence. In
    async mode, `probe outbox status` must be clean before a read-back can prove
    anything.
 
-3. **Version reusable outputs; do not copy them.** An asset is an artifact with a
+4. **Version reusable outputs; do not copy them.** An asset is an artifact with a
    version chain — upload it (`run.log_artifact` / `probe artifact add`), then pin
    with `probe artifact version-add`. The reuse check that decides whether you are
    pinning a version or opening a new identity is step 4 of `start-research-work`;
    the syntax is in `reference.md`.
 
-4. **Before handoff or completion**, read `view="handoff"` or `view="reproduce"`.
+5. **Before handoff or completion**, read `view="handoff"` or `view="reproduce"`.
    Report missing capture honestly: `completeness.missing` is the answer, not your
    recollection of what you logged.
 
-5. **Close with the real outcome** — `completed` / `failed` / `crashed` / `canceled`,
+6. **Close with the real outcome** — `completed` / `failed` / `crashed` / `canceled`,
    via `run.finish("failed")` or `probe run end RUN --status failed`. In-script,
    `with run:` closes the run for you and records `failed` when the loop raises.
    Minting an immutable experiment version is a separate act the researcher asks for
