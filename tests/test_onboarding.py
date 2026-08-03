@@ -66,23 +66,20 @@ def test_an_unknown_project_raises_rather_than_being_created_or_ignored(app, cli
     assert app.runs == {}
 
 
-def test_an_archived_slug_says_archived_not_missing(app, client):
-    """Archived is a THIRD outcome, and conflating it with absent is a dead end.
-
-    The unique constraint does not ignore archived rows, so the plain lookup says
-    "does not exist" and the create that advice implies says "already exists" —
-    about the same slug. `ensure_project` used to escape that via the conflict's
-    existing_id; resolution has to be able to see the archived row instead.
-    """
+def test_a_deleted_slug_is_absent_not_a_dead_end(app, client):
+    """Archiving made one slug both "does not exist" (lookup) and "already exists"
+    (create), which is why resolution needed a third outcome. Deleting frees the
+    slug, so absent means absent and the advice a NotFoundError gives is followable."""
     proj = client.create_project("folding")
-    client.archive_project(proj["id"])
+    client.delete_project(proj["id"])
 
     assert client.resolve_project("folding") is None
-    assert client.resolve_project("folding", include_archived=True)["id"] == proj["id"]
 
-    with pytest.raises(errors.NotFoundError, match="ARCHIVED") as caught:
+    with pytest.raises(errors.NotFoundError) as caught:
         client.run(project="folding", experiment="whatever", name="r1")
-    assert "probe project restore folding" in str(caught.value)
+    assert "ARCHIVED" not in str(caught.value)
+    # And the advice actually works — the slug really is creatable again.
+    assert client.create_project("folding")["id"] != proj["id"]
 
 
 def test_creating_an_experiment_with_a_positional_hypothesis_is_refused(client):
@@ -293,7 +290,7 @@ def test_cli_experiment_create_uses_the_active_project(wired, capsys):
     assert '"project_id"' in created
 
 
-def test_cli_experiment_create_rejects_unknown_and_archived_projects(wired, capsys):
+def test_cli_experiment_create_rejects_an_unknown_project(wired, capsys):
     missing = cli.main(
         [
             "experiment",
@@ -309,25 +306,27 @@ def test_cli_experiment_create_rejects_unknown_and_archived_projects(wired, caps
     captured = capsys.readouterr()
     assert "no project" in (captured.out + captured.err).lower()
 
-    assert cli.main(["project", "create", "archived-project"]) == 0
+    assert cli.main(["project", "create", "gone-project"]) == 0
     created = capsys.readouterr().out
     project_id = json.loads(created)["id"]
-    assert cli.main(["project", "archive", project_id]) == 0
+    assert cli.main(["project", "delete", project_id, "--yes"]) == 0
     capsys.readouterr()
-    archived = cli.main(
+    deleted = cli.main(
         [
             "experiment",
             "create",
-            "archived-exp",
+            "orphan-exp",
             "--hypothesis",
             "h",
             "--project",
-            "archived-project",
+            "gone-project",
         ]
     )
-    assert archived != 0
+    # A deleted project is simply gone, so this is the same plain "no project"
+    # refusal as an unknown slug — not a separate archived state.
+    assert deleted != 0
     captured = capsys.readouterr()
-    assert "archived" in (captured.out + captured.err).lower()
+    assert "no project" in (captured.out + captured.err).lower()
 
 
 def test_cli_project_patch_updates_title_and_description(wired, capsys):
@@ -514,18 +513,18 @@ def test_a_hypothesis_without_an_experiment_is_refused(app, client):
         client.run(project="folding", hypothesis="h", name="r1")
 
 
-def test_an_archived_slug_is_still_archived_on_the_create_path(app, client):
-    """c6bb237's third outcome must survive create-on-demand: creating would 409
-    on the slug, so "not found" would send you into a dead end."""
+def test_a_deleted_experiment_slug_is_recreatable_on_the_create_path(app, client):
+    """Create-on-demand used to hit the archived dead end here. A deleted
+    experiment frees its slug, so the same call now just creates a fresh one."""
     exp = _create_experiment(client, "dockq", "DockQ", hypothesis="h")
-    client.archive_experiment(exp["id"])
-    with pytest.raises(errors.NotFoundError, match="ARCHIVED"):
-        client.run(
-            project="test-project",
-            experiment="dockq",
-            hypothesis="h",
-            name="r1",
-        )
+    client.delete_experiment(exp["id"])
+    run = client.run(
+        project="test-project",
+        experiment="dockq",
+        hypothesis="h",
+        name="r1",
+    )
+    assert app.runs[run.id]["experiment_id"] != exp["id"]
 
 
 def test_losing_a_create_race_returns_the_winner(app, client):
@@ -539,10 +538,11 @@ def test_losing_a_create_race_returns_the_winner(app, client):
     calls = {"n": 0}
 
     def racy(slug, **kw):
-        # The sibling wins the race DURING our create: the two look-ups before it
-        # (present? archived?) both see nothing; the one after the 409 sees the row.
+        # The sibling wins the race DURING our create: the single look-up before
+        # it sees nothing; the one after the 409 sees the row. (It used to be two
+        # look-ups — present? archived? — before archiving was removed.)
         calls["n"] += 1
-        return None if calls["n"] <= 2 else real(slug, **kw)
+        return None if calls["n"] <= 1 else real(slug, **kw)
 
     client.resolve_experiment = racy
     assert client.ensure_experiment(
@@ -601,14 +601,14 @@ def test_an_empty_hypothesis_creates_nothing(app, client):
     assert app.experiments == {}
 
 
-def test_an_archived_project_says_archived_on_the_create_path(app, client):
-    """The existing archived-project test passes no hypothesis, so it only ever
-    exercised resolve_or_raise — never ensure_project."""
+def test_a_deleted_project_is_recreated_on_the_create_path(app, client):
+    """The create path goes through ensure_project rather than resolve_or_raise.
+    A deleted project is simply absent there, so a hypothesis-bearing run
+    rebuilds it instead of hitting the old archived dead end."""
     proj = client.create_project("folding")
-    client.archive_project(proj["id"])
-    with pytest.raises(errors.NotFoundError, match="ARCHIVED"):
-        client.run(project="folding", experiment="dockq", hypothesis="h", name="r1")
-    assert app.experiments == {}
+    client.delete_project(proj["id"])
+    client.run(project="folding", experiment="dockq", hypothesis="h", name="r1")
+    assert client.resolve_project("folding")["id"] != proj["id"]
 
 
 def test_a_near_miss_project_is_refused_on_the_create_path(app, client):

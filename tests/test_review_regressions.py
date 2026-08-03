@@ -125,15 +125,19 @@ def test_an_unknown_slug_is_a_usage_error(wired, client, capsys):
     assert "no project with id or slug" in capsys.readouterr().err
 
 
-def test_restore_finds_an_archived_project_by_slug(wired, client, capsys):
-    """Archived rows are filtered out of the default listing, so slug resolution has
-    to look again before claiming the project does not exist."""
-    proj = client.create_project("archived-one", workspace_id=_WS_MINE)
-    client.archive_project(proj["id"])
+def test_slug_resolution_no_longer_needs_a_second_hidden_listing(wired, client, capsys):
+    """Slug resolution used to list twice — once normally, once with
+    include=archived — because archived rows were filtered out of the default
+    listing and `project restore <slug>` still had to find them. Nothing is
+    hidden now, so one listing is the whole namespace."""
+    client.create_project("only-one", workspace_id=_WS_MINE)
 
-    assert cli.main(["project", "restore", "archived-one"]) == 0
+    assert cli.main(["project", "delete", "only-one", "--yes"]) == 0
+    assert "only-one deleted" in capsys.readouterr().out
 
-    assert _out(capsys)["archived_at"] is None
+    # Gone means gone: the resolver has nowhere else to look.
+    assert cli.main(["project", "delete", "only-one", "--yes"]) == 2
+    assert "no project with id or slug" in capsys.readouterr().err
 
 
 # -- ambient anchors actually applied ---------------------------------------

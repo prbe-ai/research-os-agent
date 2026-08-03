@@ -32,13 +32,13 @@ class ScopeError(RosError):
 
 
 class NotFoundError(RosError):
-    """404 - absent, other-tenant, or archived/deleted on a hidden read."""
+    """404 - absent, other-tenant, or already deleted."""
 
 
 class ConflictError(RosError):
-    """409 - natural-key conflict, archived-experiment push, deleted-run append,
-    or a lifecycle violation. The detail is an object; the useful fields are
-    surfaced as attributes."""
+    """409 - natural-key conflict, or a delete blocked because a published
+    experiment version pins something in the subtree. The detail is an object;
+    the useful fields are surfaced as attributes."""
 
     def __init__(self, message: str, *, detail: Any = None):
         super().__init__(message, status=409, detail=detail)

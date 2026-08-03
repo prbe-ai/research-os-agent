@@ -349,6 +349,69 @@ PENDING: dict[Op, str] = {
     # Operator actions with no CLI story yet.
     ("POST", "/v1/integrations/ingestion/retry-dlq"): "operator action; no CLI verb designed yet",
     ("DELETE", "/v1/workspaces/{}/files/{}"): "workspace file delete; `probe` has no file-rm verb yet",
+    #
+    # Surfaced 2026-08-02 by the `make regen` in the archive-removal pass: the
+    # public share-links surface (research-os#226) and two sandbox-state reads
+    # shipped on the backend while the checked-in schema sat stale. Newly
+    # VISIBLE debt, not new debt -- the same shape as the 2026-07-21 batch
+    # above, and the same guard doing its job. Nothing here is archive-related.
+    ("GET", "/public/v1/experiments/{}"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/experiments/{}/artifacts"): "public share read; unauthenticated browser surface, no client story yet",
+    ("POST", "/public/v1/experiments/{}/artifacts/{}/download"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/experiments/{}/artifacts/{}/preview"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/experiments/{}/runs"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/info"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/projects/{}"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/projects/{}/artifacts"): "public share read; unauthenticated browser surface, no client story yet",
+    ("POST", "/public/v1/projects/{}/artifacts/{}/download"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/projects/{}/artifacts/{}/preview"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/projects/{}/experiments"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/projects/{}/runs"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/artifacts"): "public share read; unauthenticated browser surface, no client story yet",
+    ("POST", "/public/v1/runs/{}/artifacts/{}/download"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/artifacts/{}/preview"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/bundle"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/coordinates"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/lineage"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/metrics/export"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/metrics/grouped"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/metrics/wide"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/sandbox-state/diff"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/sandbox-state/file"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/spans"): "public share read; unauthenticated browser surface, no client story yet",
+    ("POST", "/public/v1/series/query"): "public share read; unauthenticated browser surface, no client story yet",
+    ("DELETE", "/v1/experiments/{}/public"): "share-links publish control; dashboard surface today",
+    ("GET", "/v1/experiments/{}/public"): "share-links publish control; dashboard surface today",
+    ("PUT", "/v1/experiments/{}/public"): "share-links publish control; dashboard surface today",
+    ("DELETE", "/v1/projects/{}/public"): "share-links publish control; dashboard surface today",
+    ("GET", "/v1/projects/{}/public"): "share-links publish control; dashboard surface today",
+    ("PUT", "/v1/projects/{}/public"): "share-links publish control; dashboard surface today",
+    ("GET", "/v1/public-access"): "share-links publish control; dashboard surface today",
+    ("DELETE", "/v1/runs/{}/public"): "share-links publish control; dashboard surface today",
+    ("GET", "/v1/runs/{}/public"): "share-links publish control; dashboard surface today",
+    ("PUT", "/v1/runs/{}/public"): "share-links publish control; dashboard surface today",
+    ("GET", "/v1/runs/{}/sandbox-state/diff"): "sandbox-state read; `probe trial` reads these through the bundle today",
+    ("GET", "/v1/runs/{}/sandbox-state/file"): "sandbox-state read; `probe trial` reads these through the bundle today",
+    #
+    # Same batch, second pass: chart settings (research-os 0078) and the session
+    # work/artifact-session reads (0084) landed on the backend after the earlier
+    # snapshot too. Dashboard surfaces today; no `probe` verb designed yet.
+    ("PUT", "/v1/chart-settings"): "chart presentation state; dashboard surface today",
+    ("DELETE", "/v1/chart-settings"): "chart presentation state; dashboard surface today",
+    ("GET", "/v1/sessions/{}/work"): "agent-session work feed; dashboard surface today",
+    ("GET", "/v1/artifacts/{}/sessions"): "artifact session roll-up; dashboard surface today",
+    #
+    # Third pass, 2026-08-03: computed metric views (research-os 0087-0089)
+    # landed while this branch was in review. Dashboard surface today.
+    ("GET", "/v1/runs/{}/views"): "computed metric views; dashboard surface today",
+    ("POST", "/v1/runs/{}/views"): "computed metric views; dashboard surface today",
+    ("POST", "/v1/runs/{}/views/preview"): "computed metric views; dashboard surface today",
+    ("GET", "/v1/runs/{}/views/{}/data"): "computed metric views; dashboard surface today",
+    ("PATCH", "/v1/views/{}"): "computed metric views; dashboard surface today",
+    ("DELETE", "/v1/views/{}"): "computed metric views; dashboard surface today",
+    ("GET", "/public/v1/runs/{}/views"): "public share read; unauthenticated browser surface, no client story yet",
+    ("GET", "/public/v1/runs/{}/views/{}/data"): "public share read; unauthenticated browser surface, no client story yet",
 }
 
 _ALLOWED: dict[Op, str] = {**NOT_CLIENT_SURFACE, **PENDING}

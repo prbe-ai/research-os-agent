@@ -72,11 +72,6 @@ class Relation(str, Enum):
     branch = "branch"
 
 
-# The `include` query param is a closed vocabulary in the contract (a const, not a free
-# string), so it lives here rather than as a literal at each call site.
-_INCLUDE_ARCHIVED = "archived"
-
-
 class EndStatus(str, Enum):
     completed = "completed"
     failed = "failed"
@@ -1493,11 +1488,6 @@ def _project_id(client: Client, ref: str) -> str:
     for row in client.list_projects(limit=200).items:
         if row.get("slug") == ref:
             return str(row["id"])
-    # Archived projects are filtered out of the default listing; look again before
-    # claiming it does not exist, so `project restore <slug>` can find its target.
-    for row in client.list_projects(limit=200, include=_INCLUDE_ARCHIVED).items:
-        if row.get("slug") == ref:
-            return str(row["id"])
     raise typer.BadParameter(f"no project with id or slug {ref!r}")
 
 
@@ -1556,7 +1546,6 @@ def project_list(
     all_workspaces: bool = typer.Option(
         False, "--all", help="every workspace you can see (ignores --workspace and context)"
     ),
-    include_archived: bool = typer.Option(False, "--include-archived"),
     tag: list[str] = typer.Option(None, "--tag", help="filter: project must carry ALL (repeatable)"),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
     cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
@@ -1565,8 +1554,6 @@ def project_list(
     params: dict[str, Any] = {"limit": limit}
     if cursor:
         params["cursor"] = cursor
-    if include_archived:
-        params["include"] = _INCLUDE_ARCHIVED
     # Omitting workspace_id IS "all workspaces" — the server has no all-sentinel, so
     # --all means "send no filter" rather than some magic value.
     workspace_id = None if all_workspaces else _resolve_workspace(workspace)
@@ -1659,18 +1646,21 @@ def project_move(
         _print_json(c.move_project(_project_id(c, project_id), workspace))
 
 
-@project_app.command("archive")
-def project_archive(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
-    """Hide a project without destroying it."""
+@project_app.command("delete")
+def project_delete(
+    project_id: str = typer.Argument(..., help="project id or slug"),
+    yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
+) -> None:
+    """PERMANENTLY delete a project and everything in it. Irreversible."""
+    if not yes:
+        typer.confirm(
+            f"permanently delete project {project_id}? every experiment, run, "
+            f"metric and file inside it goes too, and this cannot be undone",
+            abort=True,
+        )
     with _client() as c:
-        _print_json(c.archive_project(_project_id(c, project_id)))
-
-
-@project_app.command("restore")
-def project_restore(project_id: str = typer.Argument(..., help="project id or slug")) -> None:
-    """Un-archive a project."""
-    with _client() as c:
-        _print_json(c.restore_project(_project_id(c, project_id)))
+        c.delete_project(_project_id(c, project_id))
+    print(f"{project_id} deleted")
 
 
 # -- tokens -----------------------------------------------------------------
@@ -1987,45 +1977,20 @@ def run_check(
 
 
 @run_app.command("delete")
-def run_delete(run: str = typer.Argument(...)) -> None:
-    """Soft-delete a run (reversible with `probe run restore`)."""
-    with _client() as c:
-        c.delete_run(run)
-    print(f"{run} deleted (restore with `probe run restore {run}`)")
-
-
-@run_app.command("restore")
-def run_restore(run: str = typer.Argument(...)) -> None:
-    """Un-delete a soft-deleted run."""
-    with _client() as c:
-        c.restore_run(run)
-    print(f"{run} restored")
-
-
-@run_app.command("gc")
-def run_gc(
-    run_id: list[str] = typer.Option(None, "--id", metavar="UUID", help="repeatable; purge these runs (ids, not petnames)"),
-    older_than: str = typer.Option(
-        None, "--older-than", metavar="TIMESTAMP",
-        help="purge runs deleted before this; must carry a timezone, e.g. 2026-07-01T00:00:00Z",
-    ),
+def run_delete(
+    run: str = typer.Argument(...),
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
 ) -> None:
-    """PERMANENTLY purge soft-deleted runs (owner/admin). Irreversible.
-
-    Pass exactly one selector: --id (repeatable) or --older-than.
-    """
-    if bool(run_id) == bool(older_than):
-        raise typer.BadParameter("pass exactly one of --id or --older-than")
-    target = f"{len(run_id)} run(s)" if run_id else f"every run deleted before {older_than}"
+    """PERMANENTLY delete a run and its telemetry. Irreversible."""
     if not yes:
         typer.confirm(
-            f"permanently purge {target}? spans/metrics/artifacts go too, and this cannot be undone",
+            f"permanently delete run {run}? its spans, metrics and files go too, "
+            f"and this cannot be undone",
             abort=True,
         )
     with _client() as c:
-        result = c.gc_runs(run_ids=run_id or None, older_than=older_than)
-    _print_json(result)
+        c.delete_run(run)
+    print(f"{run} deleted")
 
 
 @run_app.command("series")
@@ -3342,13 +3307,10 @@ def flush() -> None:
 
 
 @app.command()
-def get(
-    run: str = typer.Argument(...),
-    include_deleted: bool = typer.Option(False, "--include-deleted"),
-) -> None:
+def get(run: str = typer.Argument(...)) -> None:
     """Print a run."""
     with _client() as c:
-        _print_json(c.get_run(run, include_deleted=include_deleted))
+        _print_json(c.get_run(run))
 
 
 @app.command()
@@ -3481,7 +3443,6 @@ def experiment_set(
 def experiment_list(
     project: str = typer.Option(None, "--project", help="project id or slug"),
     tag: list[str] = typer.Option(None, "--tag", help="filter: experiment must carry ALL (repeatable)"),
-    include_archived: bool = typer.Option(False, "--include-archived"),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
     cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
 ) -> None:
@@ -3489,8 +3450,6 @@ def experiment_list(
     params: dict[str, Any] = {"limit": limit}
     if cursor:
         params["cursor"] = cursor
-    if include_archived:
-        params["include"] = _INCLUDE_ARCHIVED
     with _client() as c:
         page = c.list_experiments(
             project_id=_project_id(c, project) if project else None,
@@ -3521,20 +3480,21 @@ def experiment_tag(
         )
 
 
-@experiment_app.command("archive")
-def experiment_archive(experiment_id: str = typer.Argument(...)) -> None:
-    """Archive an experiment (reversible; idempotent)."""
+@experiment_app.command("delete")
+def experiment_delete(
+    experiment_id: str = typer.Argument(...),
+    yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
+) -> None:
+    """PERMANENTLY delete an experiment and its runs. Irreversible."""
+    if not yes:
+        typer.confirm(
+            f"permanently delete experiment {experiment_id}? every run, metric "
+            f"and file inside it goes too, and this cannot be undone",
+            abort=True,
+        )
     with _client() as c:
-        c.archive_experiment(experiment_id)
-    print(f"{experiment_id} archived")
-
-
-@experiment_app.command("restore")
-def experiment_restore(experiment_id: str = typer.Argument(...)) -> None:
-    """Un-archive an experiment."""
-    with _client() as c:
-        c.restore_experiment(experiment_id)
-    print(f"{experiment_id} restored")
+        c.delete_experiment(experiment_id)
+    print(f"{experiment_id} deleted")
 
 
 @experiment_app.command("edges")

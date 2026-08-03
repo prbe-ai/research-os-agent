@@ -30,7 +30,6 @@ from ..models import (
     ExperimentVersionMint,
     IngestRunRequest,
     LatestScalarsRequest,
-    RunGcRequest,
     RunGroupCreate,
     RunGroupPatch,
     ScopedUploadRequest,
@@ -477,22 +476,14 @@ class Client:
             self._verify_tags_written(tags, row, "POST /v1/projects")
         return row
 
-    def resolve_project(self, slug: str, *, include_archived: bool = False) -> dict | None:
+    def resolve_project(self, slug: str) -> dict | None:
         """Look a project up by slug. ``None`` when it does not exist.
 
         `(customer_id, slug)` is UNIQUE, so ``?slug=`` returns 0 or 1 row and an
         empty result is an unambiguous "absent" rather than "not on this page".
-
-        ``include_archived`` exists because the unique constraint does NOT ignore
-        archived rows: an archived slug reads as absent here, but creating it then
-        409s, so a caller that only asked the default question is told "does not
-        exist" and "already exists" about the same slug. The old get-or-create
-        recovered from that via the conflict's ``existing_id``; resolution has to
-        be able to SEE the archived row instead."""
-        params: dict[str, Any] = {"slug": slug}
-        if include_archived:
-            params["include"] = "archived"
-        rows = self.transport.get("/v1/projects", params=params)
+        Nothing is hidden from this read: a deleted project is gone, and its slug
+        is free again."""
+        rows = self.transport.get("/v1/projects", params={"slug": slug})
         return _exactly(rows, slug)
 
     def ensure_project(self, slug: str, name: str | None = None, **kw) -> dict:
@@ -630,12 +621,13 @@ class Client:
             f"/v1/projects/{project_id}", {"workspace_id": workspace_id}
         )
 
-    def archive_project(self, project_id: str) -> dict:
-        """Hide a project without destroying it."""
-        return self.transport.post(f"/v1/projects/{project_id}/archive", None)
+    def delete_project(self, project_id: str) -> None:
+        """PERMANENTLY delete a project and everything under it.
 
-    def restore_project(self, project_id: str) -> dict:
-        return self.transport.post(f"/v1/projects/{project_id}/restore", None)
+        Experiments, runs, telemetry and files go with it, and the slug is freed.
+        There is no archive and nothing to restore. 409 if a published experiment
+        version pins something in the tree."""
+        self.transport.delete(f"/v1/projects/{project_id}")
 
     # -- anchored artifacts / files -----------------------------------------
     # Every route below is written as its own literal call site rather than looked up
@@ -942,16 +934,12 @@ class Client:
             body["tags"] = tags
         return self.transport.post("/v1/experiments", body)
 
-    def resolve_experiment(self, slug: str, *, include_archived: bool = False) -> dict | None:
+    def resolve_experiment(self, slug: str) -> dict | None:
         """Look an experiment up by slug. ``None`` when it does not exist.
 
         Experiment slugs are UNIQUE per TENANT, not per project, so this needs no
-        project_id to disambiguate. See :meth:`resolve_project` for why
-        ``include_archived`` has to exist."""
-        params: dict[str, Any] = {"slug": slug}
-        if include_archived:
-            params["include"] = "archived"
-        rows = self.transport.get("/v1/experiments", params=params)
+        project_id to disambiguate."""
+        rows = self.transport.get("/v1/experiments", params={"slug": slug})
         return _exactly(rows, slug)
 
     def ensure_experiment(
@@ -1046,14 +1034,12 @@ class Client:
             self._verify_tags_filter(tags, page.items, "GET /v1/experiments")
         return page
 
-    def archive_experiment(self, experiment_id: str) -> dict:
-        """Hide an experiment without destroying it. Idempotent: re-archiving keeps
-        the original archive time."""
-        return self.transport.post(f"/v1/experiments/{experiment_id}/archive", None)
+    def delete_experiment(self, experiment_id: str) -> None:
+        """PERMANENTLY delete an experiment and its runs. Frees the slug.
 
-    def restore_experiment(self, experiment_id: str) -> dict:
-        """Un-archive an experiment."""
-        return self.transport.post(f"/v1/experiments/{experiment_id}/restore", None)
+        There is no archive and nothing to restore. 409 if a published experiment
+        version outside this experiment pins something under it."""
+        self.transport.delete(f"/v1/experiments/{experiment_id}")
 
     def experiment_edges(self, experiment_id: str) -> list[dict]:
         """Every lineage edge under an experiment (the run-level view is
@@ -1261,8 +1247,7 @@ class Client:
         attaches PROJECT-DIRECT — no experiment at all.
 
         Resolution is strict by default: an unknown slug raises, naming the closest
-        existing ones, and an ARCHIVED one says so rather than sending you into the
-        dead end where lookup says "missing" and create says "already exists".
+        existing ones.
 
         ``hypothesis=`` is the ONE opt-in to creation. Pass it and an absent
         experiment (and its project) is created; omit it and nothing is ever
@@ -1360,22 +1345,16 @@ class Client:
     def resolve_or_raise(self, kind: str, slug: str, *, project_id: str | None = None) -> dict:
         """Resolve a slug or raise the error that says what to do about it.
 
-        Three outcomes, three different remedies, and they must not be conflated:
-        present (return it), ARCHIVED (restore it — creating 409s, so "not found"
-        would be a lie that sends you into a dead end), absent (create it, with
-        near misses named). Both `run()` and the CLI go through here so the same
-        failure cannot exit 1 from one surface and 2 from the other."""
+        Two outcomes: present (return it) or absent (create it, with near misses
+        named). There used to be a third — ARCHIVED, where lookup said "missing"
+        and create said "already exists" about the same slug — but archiving is
+        gone, so a deleted slug is genuinely free. Both `run()` and the CLI go
+        through here so the same failure cannot exit 1 from one surface and 2
+        from the other."""
         resolve = self.resolve_project if kind == "project" else self.resolve_experiment
         found = resolve(slug)
         if found is not None:
             return found
-        archived = resolve(slug, include_archived=True)
-        if archived is not None:
-            raise errors.NotFoundError(
-                f"{kind} {slug!r} is ARCHIVED, not missing — creating it would "
-                f"conflict on the slug. Restore it with "
-                f"`probe {kind} restore {shlex.quote(slug)}`."
-            )
         listing = (
             self.list_projects(limit=200).items
             if kind == "project"
@@ -1416,18 +1395,11 @@ class Client:
                 return rows
 
     def _guard_creatable(self, kind: str, slug: str) -> None:
-        """Raise unless `slug` is safe to CREATE. Archived first, then near-miss.
+        """Raise unless `slug` is safe to CREATE (near-miss guard).
 
         Split out of ensure_* so `run()` can run it BEFORE it commits a parent:
         otherwise a refused experiment leaves a brand-new project behind, which is
         precisely the orphan identity this whole guard exists to prevent."""
-        resolve = self.resolve_project if kind == "project" else self.resolve_experiment
-        if resolve(slug, include_archived=True) is not None:
-            raise errors.NotFoundError(
-                f"{kind} {slug!r} is ARCHIVED, not missing — creating it would "
-                f"conflict on the slug. Restore it with "
-                f"`probe {kind} restore {shlex.quote(slug)}`."
-            )
         self._refuse_near_miss(kind, slug, self._all_slugs(kind))
 
     def _refuse_near_miss(self, kind: str, slug: str, existing: Iterable[dict]) -> None:
@@ -1522,9 +1494,8 @@ class Client:
         return self.transport.post(f"/v1/runs/{run_id}/heartbeat", None, idempotent=True)
 
     # -- runs (read) --------------------------------------------------------
-    def get_run(self, run_id: str, *, include_deleted: bool = False) -> dict:
-        params = {"include": "deleted"} if include_deleted else None
-        return self.transport.get(f"/v1/runs/{run_id}", params=params)
+    def get_run(self, run_id: str) -> dict:
+        return self.transport.get(f"/v1/runs/{run_id}")
 
     def update_run(
         self,
@@ -1758,30 +1729,14 @@ class Client:
     def get_span(self, span_id: str) -> dict:
         return self.transport.get(f"/v1/spans/{span_id}")
 
-    # -- lifecycle (soft-delete / restore / purge) --------------------------
-    def delete_run(self, run_id: str) -> dict:
-        """Soft-delete: hides the run until restore or gc, and keeps its natural key
-        reserved. Returns the deleted run. 404 if already deleted or absent."""
-        return self.transport.delete(f"/v1/runs/{run_id}")
+    # -- lifecycle (permanent delete) ---------------------------------------
+    def delete_run(self, run_id: str) -> None:
+        """PERMANENTLY delete a run and its telemetry. Frees its natural key.
 
-    def restore_run(self, run_id: str) -> dict:
-        """Un-delete a soft-deleted run."""
-        return self.transport.post(f"/v1/runs/{run_id}/restore", None)
-
-    def gc_runs(self, *, run_ids: list[str] | None = None, older_than: str | None = None) -> dict:
-        """PERMANENTLY purge soft-deleted runs (owner/admin). Exactly one selector:
-        an explicit id list, or everything deleted before ``older_than``.
-
-        Irreversible, and cascades to spans/metrics/artifacts. Purges DB rows only —
-        R2 blobs are not touched (deferred, backend-side)."""
-        # Truthiness, not `is None`: an empty run_ids list is not a valid selector, and
-        # sending `{"run_ids": []}` could be read server-side as an unfiltered purge.
-        if bool(run_ids) == bool(older_than):
-            raise ValueError("gc_runs needs exactly one of run_ids (non-empty) or older_than")
-        model = RunGcRequest(run_ids=run_ids, older_than=older_than)
-        return self.transport.post(
-            "/v1/runs/gc", model.model_dump(mode="json", exclude_none=True)
-        )
+        Spans, metrics, artifacts and lineage go with it; DB rows only, R2 blobs
+        are not touched (deferred, backend-side). There is nothing to restore.
+        404 if the run does not exist."""
+        self.transport.delete(f"/v1/runs/{run_id}")
 
     def presign_download(self, artifact_id: str) -> str:
         """Presigned GET URL for an artifact's blob (``POST /v1/artifacts/{id}/download``).

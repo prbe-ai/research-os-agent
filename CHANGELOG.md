@@ -2,7 +2,33 @@
 
 ## Unreleased
 
+### Removed
+
+- **Archiving is gone**, following the backend (research-os 0.88.0.0). Archiving
+  hid a project or experiment with no way to bring it back, and `run delete` was
+  a soft-delete whose only purge path was an owner-only `run gc`. Removed from
+  the SDK: `archive_project`, `restore_project`, `archive_experiment`,
+  `restore_experiment`, `restore_run`, `gc_runs`, and the `include_archived` /
+  `include_deleted` keyword arguments. Removed from the CLI:
+  `probe project archive|restore`, `probe experiment archive|restore`,
+  `probe run restore|gc`, and the `--include-archived` / `--include-deleted`
+  flags.
+
+### Added
+
+- `probe project delete` and `probe experiment delete`, plus SDK
+  `delete_project()` / `delete_experiment()`. All three delete verbs
+  (`project`, `experiment`, `run`) are permanent, take the whole subtree, and
+  prompt for confirmation unless `--yes` is passed.
+
 ### Changed
+
+- `delete_run()` returns `None` (the backend now answers 204) instead of the
+  soft-deleted run.
+- Slug resolution has two outcomes again, not three. An archived slug used to be
+  a dead end where lookup said "missing" and create said "already exists";
+  deleting frees the slug, so `resolve_or_raise` and the create guard no longer
+  carry an ARCHIVED branch.
 
 - `search_knowledge`'s `search_in` and `collapse` are now typed as enums, so
   their vocabularies ship in the tool's JSON Schema (`$defs.ToolCorpus`,
