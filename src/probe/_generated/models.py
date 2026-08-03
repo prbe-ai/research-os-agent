@@ -191,6 +191,12 @@ class Fn(StrEnum):
     sub = 'sub'
     mul = 'mul'
     div = 'div'
+    pow = 'pow'
+    mod = 'mod'
+    min = 'min'
+    max = 'max'
+    hypot = 'hypot'
+    atan2 = 'atan2'
 
 
 class BodyConsentOauthConsentPost(BaseModel):
@@ -321,6 +327,15 @@ class ClientUpdateStatus(StrEnum):
 
     update = 'update'
     required = 'required'
+
+
+class Fn1(StrEnum):
+    gt = 'gt'
+    gte = 'gte'
+    lt = 'lt'
+    lte = 'lte'
+    eq = 'eq'
+    ne = 'ne'
 
 
 class ConstNode(BaseModel):
@@ -1561,7 +1576,7 @@ class SessionWorkOut(BaseModel):
     totals: dict[str, int] | None = Field(None, title='Totals')
 
 
-class Fn1(StrEnum):
+class Fn2(StrEnum):
     ema = 'ema'
     sma = 'sma'
 
@@ -1773,13 +1788,34 @@ class TokenOut(BaseModel):
     token_prefix: str = Field(..., title='Token Prefix')
 
 
-class Fn2(StrEnum):
+class Fn3(StrEnum):
     log = 'log'
     log10 = 'log10'
+    log2 = 'log2'
+    log1p = 'log1p'
     exp = 'exp'
+    expm1 = 'expm1'
+    sqrt = 'sqrt'
+    cbrt = 'cbrt'
     abs = 'abs'
     neg = 'neg'
-    sqrt = 'sqrt'
+    sign = 'sign'
+    reciprocal = 'reciprocal'
+    floor = 'floor'
+    ceil = 'ceil'
+    round = 'round'
+    trunc = 'trunc'
+    sigmoid = 'sigmoid'
+    tanh = 'tanh'
+    relu = 'relu'
+    sin = 'sin'
+    cos = 'cos'
+    tan = 'tan'
+    asin = 'asin'
+    acos = 'acos'
+    atan = 'atan'
+    sinh = 'sinh'
+    cosh = 'cosh'
 
 
 class UploadGcRequest(BaseModel):
@@ -2474,14 +2510,186 @@ class SearchResponse(BaseModel):
 
 
 class BinaryNode(BaseModel):
+    """
+    Two operands, applied pointwise. `mod` is math.fmod (sign follows the
+    dividend), `pow` returns NaN where the result would be complex.
+    """
+
     fn: Fn = Field(..., title='Fn')
-    left: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
-        ..., discriminator='op', title='Left'
-    )
+    left: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Left')
     op: Literal['binary'] = Field(..., title='Op')
-    right: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
-        ..., discriminator='op', title='Right'
-    )
+    right: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Right')
+
+
+class ClampNode(BaseModel):
+    """
+    Bound a curve to [lo, hi]. Expressible as min(max(x, lo), hi), but that
+    reads as arithmetic; this reads as intent, and is one node instead of four
+    against the node cap.
+    """
+
+    hi: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Hi')
+    lo: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Lo')
+    op: Literal['clamp'] = Field(..., title='Op')
+    operand: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Operand')
+
+
+class CmpNode(BaseModel):
+    """
+    A comparison as a 0/1 mask, so it composes with ordinary arithmetic:
+    multiply by it to gate a term, or feed it to `cond` as a branch test.
+    NaN on either side yields NaN, never a silent False.
+    """
+
+    fn: Fn1 = Field(..., title='Fn')
+    left: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Left')
+    op: Literal['cmp'] = Field(..., title='Op')
+    right: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Right')
+
+
+class CoalesceNode(BaseModel):
+    """
+    Replace a non-finite result with a fallback. The ONLY node that does not
+    propagate NaN — everything else does, so without this a single divide-by-zero
+    silently removes that step from the curve rather than showing a chosen value.
+    """
+
+    fallback: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Fallback')
+    op: Literal['coalesce'] = Field(..., title='Op')
+    operand: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Operand')
+
+
+class CondNode(BaseModel):
+    """
+    Piecewise selection: `when` non-zero picks `then`, zero picks
+    `otherwise`. The guard for divide-by-zero — `cond(b != 0, a / b, 0)` keeps
+    the step instead of dropping it as non-finite.
+    """
+
+    op: Literal['cond'] = Field(..., title='Op')
+    otherwise: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Otherwise')
+    then: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Then')
+    when: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='When')
 
 
 class MetricViewCreate(BaseModel):
@@ -2508,9 +2716,17 @@ class MetricViewPreviewRequest(BaseModel):
 
 
 class MetricViewSpec(BaseModel):
-    expression: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
-        ..., discriminator='op', title='Expression'
-    )
+    expression: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Expression')
 
 
 class SmoothNode(BaseModel):
@@ -2521,23 +2737,49 @@ class SmoothNode(BaseModel):
     """
 
     factor: float | None = Field(0.6, ge=0.0, lt=1.0, title='Factor')
-    fn: Fn1 = Field(..., title='Fn')
+    fn: Fn2 = Field(..., title='Fn')
     op: Literal['smooth'] = Field(..., title='Op')
-    operand: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
-        ..., discriminator='op', title='Operand'
-    )
+    operand: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Operand')
     window: int | None = Field(10, ge=1, le=5000, title='Window')
 
 
 class UnaryNode(BaseModel):
-    fn: Fn2 = Field(..., title='Fn')
+    """
+    One operand, applied pointwise. Anything mathematically undefined at a
+    step (log of a negative, asin out of domain) becomes NaN there and is
+    dropped-and-counted at the end, never an error that kills the whole read.
+    """
+
+    fn: Fn3 = Field(..., title='Fn')
     op: Literal['unary'] = Field(..., title='Op')
-    operand: SeriesNode | ConstNode | BinaryNode | UnaryNode | SmoothNode = Field(
-        ..., discriminator='op', title='Operand'
-    )
+    operand: (
+        SeriesNode
+        | ConstNode
+        | BinaryNode
+        | UnaryNode
+        | SmoothNode
+        | CmpNode
+        | CondNode
+        | ClampNode
+        | CoalesceNode
+    ) = Field(..., discriminator='op', title='Operand')
 
 
 BinaryNode.model_rebuild()
+ClampNode.model_rebuild()
+CmpNode.model_rebuild()
+CoalesceNode.model_rebuild()
+CondNode.model_rebuild()
 MetricViewCreate.model_rebuild()
 MetricViewPatch.model_rebuild()
 MetricViewPreviewRequest.model_rebuild()
