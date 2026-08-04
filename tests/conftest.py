@@ -1279,7 +1279,9 @@ class FakeApp:
         # -- the other three anchors: project / experiment / workspace / shared --
         # ScopedUploadRequest is declared extra="forbid", so anything run-only that
         # reaches here is a 422 — the client is supposed to have refused it first, and
-        # this is what proves the client actually does.
+        # this is what proves the client actually does. `notes` is IN the allowlist
+        # (0095): it is the one descriptive field this contract accepts, and the
+        # absence of it is what drove agents to concatenate descriptions onto `name`.
         for pattern, anchor in (
             (_PROJ_ARTIFACT_UPLOADS, "project"),
             (_EXP_ARTIFACT_UPLOADS, "experiment"),
@@ -1288,7 +1290,7 @@ class FakeApp:
             m = pattern.match(path)
             if m and method == "POST":
                 extras = sorted(
-                    set(body) - {"name", "content_hash", "size_bytes", "content_type"}
+                    set(body) - {"name", "content_hash", "size_bytes", "content_type", "notes"}
                 )
                 if extras:
                     return httpx.Response(
@@ -1296,7 +1298,7 @@ class FakeApp:
                     )
                 return self._presign(anchor, m.group(1), body)
         if path == "/v1/shared/files/uploads" and method == "POST":
-            extras = sorted(set(body) - {"name", "content_hash", "size_bytes", "content_type"})
+            extras = sorted(set(body) - {"name", "content_hash", "size_bytes", "content_type", "notes"})
             if extras:
                 return httpx.Response(422, json={"detail": f"extra fields not permitted: {extras}"})
             return self._presign("shared", "team", body)

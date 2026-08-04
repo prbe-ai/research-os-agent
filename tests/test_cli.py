@@ -177,6 +177,46 @@ def test_artifact_add_forwards_span_content_type_and_meta(wired, capsys, tmp_pat
     assert body["meta"] == {"format": "native", "attempt": 2}
 
 
+def test_artifact_notes_reach_the_wire_on_a_project_anchor(wired, capsys, tmp_path):
+    """0095. `--meta` is run-only and ScopedUploadRequest forbids extras, so before
+    `notes` a project upload had NO way to describe itself -- which is why agents
+    concatenated the description onto `name` and broke the extension, the preview
+    and the derived folder. The name must stay a bare path."""
+    artifact = tmp_path / "tape_utils.py"
+    artifact.write_text("import torch\n")
+
+    assert cli.main(
+        [
+            "artifact",
+            "add",
+            str(artifact),
+            "--project",
+            "p1",
+            "--name",
+            "odyssey/experiments/tape_utils.py",
+            "--notes",
+            "shared TAPE plumbing: prediction heads + tokenizer glue.",
+        ]
+    ) == 0
+
+    presign = next(
+        request for request in wired.requests if request.url.path.endswith("/artifacts/uploads")
+    )
+    body = json.loads(presign.content)
+    assert body["notes"] == "shared TAPE plumbing: prediction heads + tokenizer glue."
+    assert body["name"] == "odyssey/experiments/tape_utils.py"
+
+
+def test_notes_are_not_rejected_as_a_run_only_field(wired, capsys, tmp_path):
+    """`--kind/--step/--span/--meta` are refused on a non-run anchor. `--notes`
+    must NOT join them: it is the one descriptive field every anchor accepts."""
+    artifact = tmp_path / "f.csv"
+    artifact.write_text("a,b\n")
+    assert cli.main(
+        ["artifact", "add", str(artifact), "--project", "p1", "--notes", "a description"]
+    ) == 0
+
+
 def test_global_spool_dir_reaches_the_sdk(app, tmp_path, monkeypatch, capsys):
     captured = {}
 

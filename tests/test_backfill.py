@@ -254,6 +254,21 @@ def test_the_summary_must_name_every_project_it_used(tmp_path):
     assert '"projects": ["<slug>", ...]' in prompt
 
 
+def test_the_prompt_never_names_a_door_that_does_not_open(tmp_path):
+    """Step 2 used to offer `probe note add` (no such command — it is
+    `probe notes write`) and `--meta` (run-anchor only; ScopedUploadRequest
+    forbids extras, and this import creates no runs). With both routes closed
+    the agent improvised, concatenating descriptions into --name until it hit
+    the length cap. Telling it to do the thing that works beats leaving it to
+    discover that the instructions are fiction."""
+    prompt = backfill.build_prompt(
+        folder=tmp_path, census=backfill.Census(files=3, bytes=99)
+    )
+    assert "probe note add" not in prompt
+    assert "--name" in prompt
+    assert "probe notes write" in prompt
+
+
 def test_prompt_carries_the_reference_threshold_for_large_files(tmp_path):
     prompt = backfill.build_prompt(
         folder=tmp_path, project="p", census=backfill.Census(files=1, bytes=1)
@@ -285,6 +300,46 @@ def test_prompt_states_the_denominator_so_the_agent_knows_the_scale(tmp_path):
 # -- counting back across whatever projects the agent chose ------------------
 
 
+class _Server:
+    """A server where artifacts sit at BOTH the project and its experiments.
+
+    Shaped after the real thing on purpose: an import that groups work into
+    experiments — which step 3 of the prompt asks for — leaves the project
+    listing holding only part of the total.
+    """
+
+    def __init__(self, layout: dict, broken: set[str] | None = None):
+        self.layout = layout  # slug -> {"project": n, "experiments": [n, ...]}
+        self.broken = broken or set()
+        self.seen_ids: list[str] = []
+        # One distinct, well-formed UUID per slug, so a slug that reached a
+        # route typed for a UUID is visible rather than merely wrong.
+        self.ids = {
+            slug: f"{i + 1:08d}-1111-4111-8111-111111111111"
+            for i, slug in enumerate(layout)
+        }
+        self.slugs = {v: k for k, v in self.ids.items()}
+
+    def resolve_project(self, slug):
+        if slug in self.broken:
+            raise RuntimeError("500")
+        return {"id": self.ids[slug]} if slug in self.layout else None
+
+    def list_experiments(self, project_id=None, **kw):
+        counts = self.layout[self.slugs[project_id]]["experiments"]
+        return {"items": [{"id": f"{project_id}-exp{i}"} for i in range(len(counts))]}
+
+    def list_anchored(self, anchor, anchor_id, **kw):
+        # The route types this param as a UUID; a slug would 422 in production.
+        self.seen_ids.append(anchor_id)
+        if "-exp" in str(anchor_id):
+            project_id, idx = str(anchor_id).rsplit("-exp", 1)
+            n = self.layout[self.slugs[project_id]]["experiments"][int(idx)]
+        else:
+            n = self.layout[self.slugs[anchor_id]]["project"]
+        return [{"id": i} for i in range(n)]
+
+
 def test_the_projects_come_from_the_summary_but_the_COUNT_never_does():
     """The only thing taken from the agent's own account is WHERE to look. The
     number still comes from the server and the denominator from the walk, so an
@@ -292,12 +347,64 @@ def test_the_projects_come_from_the_summary_but_the_COUNT_never_does():
     tail = 'chatter\n{"files_seen": 37, "files_landed": 999, "projects": ["a", "b"]}'
     assert backfill.summary_projects(tail) == ["a", "b"]
 
-    class Server:
-        def list_anchored(self, anchor, slug, **kw):
-            return [{"id": 1}] if slug == "a" else [{"id": 2}, {"id": 3}]
-
+    server = _Server({"a": {"project": 1, "experiments": []},
+                      "b": {"project": 2, "experiments": []}})
     # 999 claimed, 3 actually there.
-    assert backfill.count_landed_across(Server(), ["a", "b"]) == (3, False)
+    assert backfill.count_landed_across(server, ["a", "b"]) == (3, False)
+
+
+def test_the_summary_is_found_inside_the_event_stream_envelope():
+    """THE REGRESSION. Both agents are launched with an event stream, so the
+    closing JSON is a STRING INSIDE `{"type":"result","result":"..."}` — never a
+    line of its own. Matching only whole lines found it exactly when the agent
+    was not streaming, which is never, and the whole reconcile silently
+    downgraded to "could not read back" on a byte-perfect import."""
+    import json
+
+    summary = ('{"files_seen": 204, "files_landed": 204, "projects": '
+               '["odyssey-1-0"], "experiments_created": 3}')
+    envelope = json.dumps({"type": "result", "subtype": "success",
+                           "result": f"All done.\n{summary}"})
+    assert backfill.summary_projects(envelope) == ["odyssey-1-0"]
+
+    # The same run also emits it one level deeper, as a text block on an
+    # assistant message. Both shapes are taken from real `claude -p
+    # --output-format stream-json` output, not imagined.
+    assistant = json.dumps({
+        "type": "assistant",
+        "message": {"role": "assistant", "content": [{"type": "text", "text": summary}]},
+    })
+    assert backfill.summary_projects(assistant) == ["odyssey-1-0"]
+
+
+def test_a_bare_summary_line_still_parses():
+    """The non-streaming shape must keep working — the fix widens what is
+    recognised, it does not swap one exact shape for another."""
+    assert backfill.summary_projects('{"projects": ["solo"]}') == ["solo"]
+
+
+def test_experiment_anchored_artifacts_are_counted_too():
+    """A faithful import that grouped its work read back as a 40% shortfall:
+    step 3 asks the agent to attach artifacts to experiments, and those are not
+    in the project listing."""
+    server = _Server({"a": {"project": 121, "experiments": [37, 27, 19]}})
+    assert backfill.count_landed_across(server, ["a"]) == (204, False)
+
+
+def test_a_slug_is_resolved_before_it_reaches_the_artifacts_route():
+    """`/v1/projects/{id}/artifacts` types its param as a UUID, and the slugs
+    come from the agent's summary — so passing them through 422s, and the
+    reconcile swallows it as "could not read back"."""
+    server = _Server({"a": {"project": 1, "experiments": [1]}})
+    backfill.count_landed_across(server, ["a"])
+    assert server.seen_ids, "nothing was ever listed"
+    for anchor_id in server.seen_ids:
+        assert str(anchor_id).startswith(server.ids["a"]), f"{anchor_id} is not a UUID"
+
+
+def test_an_unknown_slug_is_unknown_not_zero():
+    server = _Server({"a": {"project": 1, "experiments": []}})
+    assert backfill.count_landed_across(server, ["nope"]) == (-1, False)
 
 
 def test_a_summary_with_no_projects_is_not_a_silent_zero(tmp_path, monkeypatch):
@@ -312,13 +419,11 @@ def test_one_unreadable_project_makes_the_whole_count_unknown():
     """Reporting a shortfall that is really a failed lookup would train people
     to ignore the one number this feature exists for."""
 
-    class HalfBroken:
-        def list_anchored(self, anchor, slug, **kw):
-            if slug == "broken":
-                raise RuntimeError("500")
-            return [{"id": 1}]
-
-    assert backfill.count_landed_across(HalfBroken(), ["fine", "broken"]) == (-1, False)
+    server = _Server(
+        {"fine": {"project": 1, "experiments": []}, "broken": {"project": 1, "experiments": []}},
+        broken={"broken"},
+    )
+    assert backfill.count_landed_across(server, ["fine", "broken"]) == (-1, False)
 
 
 def test_duplicate_slugs_in_the_summary_are_counted_once():
@@ -600,6 +705,23 @@ def test_count_landed_never_fails_the_import():
     assert backfill.count_landed(Broken(), "p") == (-1, False)
 
 
+#: A project with no experiments, addressed by id so no resolution is needed.
+_BARE = "33333333-3333-4333-8333-333333333333"
+
+
+class _NoExperiments:
+    """Only the project anchor answers; the experiment listing is empty."""
+
+    def __init__(self, payload):
+        self.payload = payload
+
+    def list_anchored(self, *a, **kw):
+        return self.payload
+
+    def list_experiments(self, **kw):
+        return {"items": []}
+
+
 @pytest.mark.parametrize(
     "payload,expected",
     [
@@ -609,21 +731,23 @@ def test_count_landed_never_fails_the_import():
     ],
 )
 def test_count_landed_reads_both_page_shapes(payload, expected):
-    class Fake:
-        def list_anchored(self, *a, **kw):
-            return payload
-
-    assert backfill.count_landed(Fake(), "p")[0] == expected
+    assert backfill.count_landed(_NoExperiments(payload), _BARE)[0] == expected
 
 
 def test_count_landed_flags_a_full_page_as_at_least():
-    class Fake:
-        def list_anchored(self, *a, **kw):
-            return [{"id": i} for i in range(backfill.RECONCILE_PAGE)]
-
-    count, at_least = backfill.count_landed(Fake(), "p")
+    full = [{"id": i} for i in range(backfill.RECONCILE_PAGE)]
+    count, at_least = backfill.count_landed(_NoExperiments(full), _BARE)
     assert count == backfill.RECONCILE_PAGE
     assert at_least is True
+
+
+def test_a_page_dict_is_not_read_as_zero_rows():
+    """`dict.items` is a bound method, so an attribute-first unwrap reads every
+    page dict as "no rows" — which would drop the experiment listing silently
+    and undercount instead of failing."""
+    assert backfill._rows({"items": [{"id": 1}, {"id": 2}]}) == [{"id": 1}, {"id": 2}]
+    assert backfill._rows([{"id": 1}]) == [{"id": 1}]
+    assert backfill._rows("nonsense") is None
 
 
 # -- the action -------------------------------------------------------------

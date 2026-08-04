@@ -355,10 +355,31 @@ Step 1 — upload everything of substance.
 Step 2 — say what things are.
 
     For each artifact that carries meaning — a report, a result table, a config,
-    a plot, a script someone would look for again — record a one-line description:
-    what it is, what produced it, what it shows. Use `probe note add` or --meta.
-    This is the part that makes a file findable later, and it is the part nobody
-    did at the time. It matters more than the upload.
+    a plot, a script someone would look for again — say in one line what it is,
+    what produced it, what it shows. This is the part that makes a file findable
+    later, and it is the part nobody did at the time. It matters more than the
+    upload.
+
+    The description goes in --notes:
+
+        probe artifact add --project <project> <path> \\
+            --notes "<what it is, what produced it, what it shows>"
+
+    NEVER put the description in --name. The name is the file's relative path
+    and nothing else: the folder tree is built by splitting it on '/', the
+    dashboard works out how to preview a file from the extension at its end, and
+    both break the moment a sentence is appended to it. --notes is a real field
+    on every anchor; use it and leave the name alone.
+
+    For what no single file explains — what this folder is, how the pieces
+    relate, what is missing, what a reader should not trust — write the
+    project's notes, once, at the end:
+
+        probe notes write --project <project> <file>     (or '-' for stdin)
+
+    That is ONE markdown document per project, not a per-file note. It REPLACES
+    by default, so if you split this folder across subagents, they must pass
+    --append or the last one to finish erases the rest.
 
 Step 3 — group into experiments ONLY if the evidence is there.
 
@@ -637,22 +658,136 @@ def launch_agent(
     return code == 0, "\n".join(tail)
 
 
-def count_landed(client, project: str) -> tuple[int, bool]:
-    """Artifacts now sitting at the anchor. Returns (count, at_least).
+def _rows(payload) -> list | None:
+    """The item list out of a bare list, a page dict, or a Page object.
 
-    One page, deliberately. Walking every page of a 12,000-artifact project to
-    print one number would make the cheap half of this feature the slow half;
-    hitting the page exactly reports "at least", which is honest, instead of a
-    total that is quietly a page size.
+    dict is tested BEFORE the attribute lookup: `dict.items` is a bound method,
+    so a getattr-first version reads every page dict as "no rows" and quietly
+    counts zero.
     """
+    if isinstance(payload, list):
+        return payload
+    if isinstance(payload, dict):
+        items = payload.get("items", payload)
+    else:
+        items = getattr(payload, "items", None)
+    return items if isinstance(items, list) else None
+
+
+def _project_id(client, project: str) -> str | None:
+    """`project` as a UUID. Slugs are RESOLVED, never passed through.
+
+    ``/v1/projects/{project_id}/artifacts`` types its path param as a UUID, so a
+    slug arrives as a 422 about UUID parsing rather than a lookup -- the same
+    trap :func:`resolve_anchor` documents. It matters here because the slugs come
+    from :func:`summary_projects`, i.e. the read-back is fed the one form the
+    route cannot take, and the 422 is swallowed as "could not read back".
+    """
+    from uuid import UUID
+
     try:
-        rows = client.list_anchored(_project_anchor(), project, limit=RECONCILE_PAGE)
+        UUID(project)
+    except (ValueError, AttributeError, TypeError):
+        found = client.resolve_project(project)
+        return str(found["id"]) if found else None
+    return project
+
+
+def count_landed(client, project: str) -> tuple[int, bool]:
+    """Artifacts under a project, INCLUDING its experiments. (count, at_least).
+
+    Counting only the project anchor would undercount every import that did what
+    it was told: step 3 of the prompt asks the agent to attach artifacts to an
+    experiment where the evidence supports one, and an experiment-anchored
+    artifact is not returned by the project listing. A faithful 204-file import
+    that grouped 83 of them read back as 121, printing a 40% shortfall that was
+    entirely an artifact of where the reconcile looked.
+
+    One page per anchor, deliberately. Walking every page of a 12,000-artifact
+    project to print one number would make the cheap half of this feature the
+    slow half; hitting the page exactly reports "at least", which is honest,
+    instead of a total that is quietly a page size.
+    """
+    from probe.sdk.client import Anchor
+
+    try:
+        project_id = _project_id(client, project)
+        if project_id is None:
+            return -1, False
+        counted = _rows(client.list_anchored(Anchor.PROJECT, project_id, limit=RECONCILE_PAGE))
+        if counted is None:
+            return -1, False
+        total = len(counted)
+        at_least = total >= RECONCILE_PAGE
+
+        experiments = _rows(client.list_experiments(project_id=project_id))
+        for exp in experiments or []:
+            exp_id = exp.get("id") if isinstance(exp, dict) else getattr(exp, "id", None)
+            if not exp_id:
+                continue
+            rows = _rows(client.list_anchored(Anchor.EXPERIMENT, str(exp_id), limit=RECONCILE_PAGE))
+            if rows is None:
+                return -1, False
+            total += len(rows)
+            at_least = at_least or len(rows) >= RECONCILE_PAGE
+        return total, at_least
     except Exception:  # noqa: BLE001 - reconcile must never fail the import
         return -1, False
-    items = rows.get("items", rows) if isinstance(rows, dict) else rows
-    if not isinstance(items, list):
-        return -1, False
-    return len(items), len(items) >= RECONCILE_PAGE
+
+
+def _embedded_summaries(text: str):
+    """Every ``{...}`` in `text` that parses and carries a ``projects`` list.
+
+    The summary does not arrive on a line of its own. Both agents are run with
+    an EVENT STREAM (`agent_argv`), so the closing JSON is a STRING INSIDE an
+    envelope -- `{"type":"result","result":"...done.\\n{...}"}` -- and the
+    braces of the two are nested in one line of stdout. Scanning for balanced
+    brace runs finds the inner object wherever it sits; matching only the whole
+    line finds it exactly when the agent is NOT streaming, which is never.
+    """
+    import json
+
+    def scan(blob: str):
+        depth = 0
+        start = -1
+        for i, ch in enumerate(blob):
+            if ch == "{":
+                if depth == 0:
+                    start = i
+                depth += 1
+            elif ch == "}" and depth:
+                depth -= 1
+                if depth == 0 and start >= 0:
+                    try:
+                        data = json.loads(blob[start : i + 1])
+                    except ValueError:
+                        continue
+                    if isinstance(data, dict) and isinstance(data.get("projects"), list):
+                        yield data
+
+    def strings(node):
+        """Every string anywhere in a decoded envelope."""
+        if isinstance(node, str):
+            yield node
+        elif isinstance(node, dict):
+            for value in node.values():
+                yield from strings(value)
+        elif isinstance(node, list):
+            for value in node:
+                yield from strings(value)
+
+    yield from scan(text)
+    # The inner object is a STRING FIELD of the envelope, so in the raw line its
+    # quotes are backslash-escaped and no substring of it parses. It only becomes
+    # JSON again once the envelope itself is decoded — hence the second pass over
+    # the decoded strings rather than more clever matching on the raw text.
+    try:
+        envelope = json.loads(text)
+    except ValueError:
+        return
+    for blob in strings(envelope):
+        if "projects" in blob:
+            yield from scan(blob)
 
 
 def summary_projects(tail: str) -> list[str]:
@@ -663,24 +798,23 @@ def summary_projects(tail: str) -> list[str]:
     it says WHERE to look, never how much landed. The count still comes from the
     server and the denominator still comes from the walk, so an agent that
     overstates its work cannot make the numbers agree — the gap just shows up.
-    """
-    import json
 
+    It says where to look, but nothing looks anywhere if this returns empty:
+    with no pinned `--project` there is no fallback, so a parse miss here
+    silently downgrades the whole run to "could not read back". That is what a
+    top-level-only match did -- see :func:`_embedded_summaries`.
+    """
     found: list[str] = []
     for line in reversed(tail.splitlines()):
         text = line.strip()
-        if not text.startswith("{") or "projects" not in text:
+        if "projects" not in text:
             continue
-        try:
-            data = json.loads(text)
-        except ValueError:
-            continue
-        if isinstance(data, dict) and isinstance(data.get("projects"), list):
+        for data in _embedded_summaries(text):
             for slug in data["projects"]:
                 if isinstance(slug, str) and slug and slug not in found:
                     found.append(slug)
-            if found:
-                return found
+        if found:
+            return found
     return found
 
 
@@ -702,12 +836,6 @@ def count_landed_across(client, projects: list[str]) -> tuple[int, bool]:
         total += count
         at_least = at_least or capped
     return total, at_least
-
-
-def _project_anchor():
-    from probe.sdk.client import Anchor
-
-    return Anchor.PROJECT
 
 
 def reconcile(census: Census, landed: int, at_least: bool) -> list[str]:

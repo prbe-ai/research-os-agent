@@ -169,6 +169,18 @@
             "title": "Name",
             "type": "string"
           },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
           "size_bytes": {
             "anyOf": [
               {
@@ -323,6 +335,17 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "path": {
             "default": "",
@@ -3214,6 +3237,18 @@
             "title": "Name",
             "type": "string"
           },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
           "size_bytes": {
             "anyOf": [
               {
@@ -5843,6 +5878,18 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "size_bytes": {
             "anyOf": [
@@ -9143,6 +9190,18 @@
             "title": "Name",
             "type": "string"
           },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
           "size_bytes": {
             "anyOf": [
               {
@@ -11318,6 +11377,18 @@
           "name": {
             "title": "Name",
             "type": "string"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "size_bytes": {
             "anyOf": [

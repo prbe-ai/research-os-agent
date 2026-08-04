@@ -28,6 +28,43 @@
   never checked off, and `?` (Probe has no signal) is kept distinct from `○` (ahead,
   not started) so nobody reads an unknown as a done.
 
+- **`probe artifact add --notes`** — a real description field on every anchor
+  (research-os 0095). Previously there was nowhere to put one: `--meta` is
+  run-anchor only and `ScopedUploadRequest` forbids extras, so a project or
+  experiment upload could not describe itself at all. Backfill's prompt told
+  agents to use `probe note add` (not a command — it is `probe notes write`) or
+  `--meta` (rejected), so they improvised and concatenated the description onto
+  `--name`. That breaks more than it looks: `name` is the file's relative posix
+  path, `path` is GENERATED from its dirname, and the dashboard classifies a
+  file from the extension at the end of its name and never sniffs bytes — so a
+  described artifact lost its preview, its tree leaf, and its folder.
+
+  **Requires backend 0095.** The upload contract forbids unknown fields, so a
+  CLI sending `notes` to an older backend gets a 422 — ship the backend first.
+
+### Fixed
+
+- **Backfill's reconcile never ran.** `probe backfill` finished a byte-perfect
+  204-file import and reported "could not read back the project to confirm what
+  landed" — the one number the feature exists to print. Three faults stacked:
+
+  - **The summary parser could not match its own output format.** `agent_argv`
+    launches both agents with `--output-format stream-json`, so the closing JSON
+    summary is a *string inside* a `{"type":"result","result":"..."}` envelope,
+    with its quotes escaped. `summary_projects` looked for `projects` at the top
+    level of a stdout line, so it matched only when the agent was NOT streaming —
+    which is never. It now scans the decoded envelope too (verified against real
+    `claude -p` output: the old parser returns `[]`, the new one the slug).
+    Previously masked by the pinned-anchor fallback, and exposed when the agent
+    was given ownership of project naming.
+  - **The count omitted experiment-anchored artifacts.** `count_landed` listed
+    the project anchor only, while step 3 of the prompt *tells* the agent to
+    attach artifacts to experiments. A faithful 204-file import read back as
+    121 — a 40% shortfall that was entirely where the reconcile looked.
+  - **Slugs were passed to a route typed for a UUID.** `summary_projects`
+    returns slugs; `/v1/projects/{id}/artifacts` 422s on one, and the reconcile
+    swallowed it as "could not read back". Slugs are now resolved first.
+
 ### Changed
 
 - **The project's notes moved from an artifact to a column** (research-os 0094,

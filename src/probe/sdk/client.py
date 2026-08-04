@@ -703,6 +703,7 @@ class Client:
         content_type: str | None = None,
         kind: str | None = None,
         meta: dict | None = None,
+        notes: str | None = None,
         span_id: str | None = None,
         step_index: int | None = None,
     ) -> dict:
@@ -712,6 +713,12 @@ class Client:
         non-run anchor raises here rather than letting the server 422, because
         ``ScopedUploadRequest`` forbids extras and the resulting error does not say
         which field was the problem.
+
+        ``notes`` is the exception and is accepted on EVERY anchor (0095). That is
+        the point of it: `ScopedUploadRequest` forbidding extras meant a
+        project/experiment upload had no way to describe itself at all, so agents
+        concatenated the description onto ``name`` -- which is the file's relative
+        posix path, so it broke the extension, the preview and the derived folder.
 
         Strict by design — no fail-open reference fallback. The fallback exists on
         :meth:`Run.log_artifact` so a training loop is never blocked by a flaky
@@ -746,6 +753,7 @@ class Client:
             content_type=content_type,
             kind=kind,
             meta=meta,
+            notes=notes,
             span_id=span_id,
             step_index=step_index,
         )
@@ -761,6 +769,7 @@ class Client:
         content_type: str | None = None,
         kind: str | None = None,
         meta: dict | None = None,
+        notes: str | None = None,
         span_id: str | None = None,
         step_index: int | None = None,
     ) -> dict:
@@ -772,7 +781,11 @@ class Client:
         anchor = Anchor(anchor)
         if anchor in _SCOPED_ANCHORS:
             req = ScopedUploadRequest(
-                name=name, content_hash=digest, size_bytes=size, content_type=content_type
+                name=name,
+                content_hash=digest,
+                size_bytes=size,
+                content_type=content_type,
+                notes=notes,
             )
         else:
             req = UploadRequest(
@@ -784,6 +797,7 @@ class Client:
                 step_index=step_index,
                 kind=kind,
                 meta=meta or None,
+                notes=notes,
             )
         return self._presign_anchored(
             anchor, anchor_id, req.model_dump(mode="json", exclude_none=True)
@@ -801,6 +815,7 @@ class Client:
         content_type: str | None = None,
         kind: str | None = None,
         meta: dict | None = None,
+        notes: str | None = None,
         span_id: str | None = None,
         step_index: int | None = None,
     ) -> dict:
@@ -821,6 +836,7 @@ class Client:
             content_type=content_type,
             kind=kind,
             meta=meta,
+            notes=notes,
             span_id=span_id,
             step_index=step_index,
         )
