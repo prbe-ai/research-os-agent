@@ -4,6 +4,32 @@
 
 ### Changed
 
+- **The skills now say WHEN the project is created, not just that it may be.**
+  #144 gave planning-stage work somewhere to go — notes anchor to a project, and the
+  description started granting the trigger before any run exists. It did not say when
+  the anchor itself should be made, and an agent reading it still built the scaffold
+  first and created the project afterwards, which is the one order that discards the
+  reasoning the notes were for. Step 2 now states the sequencing: create the identities
+  at the moment the work is named, before the repo and the deps, because tracking listed
+  in a brief is a standing requirement rather than a phase to schedule after setup.
+  `run_count: 0` is called out as the correct state for a project whose first run has
+  not started, since an empty project reads as premature and invites deferral.
+
+  The second half is re-entry. `start-research-work` is named for a moment, so it fired
+  once and was done; forty turns into a planning session nothing brought an agent back
+  to file the fifth decision. The body now says the skill IS the notebook and is
+  re-entered rather than run once, and the description carries the same cue — the
+  description is what decides re-firing mid-session, the body is not in context.
+
+  `track-research-work` was still gated on an open run in its description
+  (*"Trigger whenever a run is open"*), so a session with zero runs read it as
+  inapplicable. Its body had said since #144 that a note needs no run; descriptions are
+  always in context and bodies are not, so the gate was the part that counted. The
+  description now covers notes explicitly.
+
+  No behaviour change and no new surface — this is prose over the notes feature #144
+  already shipped.
+
 - **A directory that is not a git repository is now captured instead of refused.**
   `capture_manifest` raised outside a repo, so a project like `research-workflows/`
   got zero capture — not degraded capture, an error. That was defensible only
