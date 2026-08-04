@@ -80,9 +80,10 @@ class AmbiguousRef(Exception):
         return (
             f"{self.ref!r} is BOTH a {self.kind} id and a {self.kind} slug, and they are "
             f"different {self.kind}s:\n"
-            f"  --by-id    {describe(self.kind, self.by_id)}\n"
-            f"  --by-slug  {describe(self.kind, self.by_slug)}\n"
-            f"re-run with the one you meant."
+            f"  id:{self.ref}    (--by-id)    {describe(self.kind, self.by_id)}\n"
+            f"  slug:{self.ref}  (--by-slug)  {describe(self.kind, self.by_slug)}\n"
+            f"re-run with the one you meant. The id:/slug: prefix works on every command "
+            f"that takes a {self.kind}; the flags only exist on the {self.kind} verbs."
         )
 
 
@@ -152,14 +153,40 @@ def _missing(kind: str, ref: str, by: str | None) -> NotFoundError:
     return NotFoundError(f"no {kind} with id or slug {ref!r}{how}")
 
 
+def split_selector(ref: str) -> tuple[str, str | None]:
+    """``"id:abc"`` -> ``("abc", "id")``. A bare ref keeps its ``None``.
+
+    The flag-free half of the disambiguator, and the reason it exists: a ref is
+    accepted by roughly a dozen commands, but ``--by-id``/``--by-slug`` are only
+    declared on the project and experiment verbs. Without a prefix, an ambiguous
+    ``--project`` on (say) ``experiment create`` would raise an error advising two
+    flags that command does not have -- and the project whose ID is the colliding
+    string would be unaddressable there at all, since naming it IS the collision.
+
+    Two spellings for one decision is a real cost, paid because neither covers the
+    whole surface alone: the flags are discoverable in ``--help`` where the verbs
+    are destructive, the prefix works everywhere.
+    """
+    for selector in ("id", "slug"):
+        prefix = f"{selector}:"
+        if ref.startswith(prefix):
+            return ref[len(prefix) :], selector
+    return ref, None
+
+
 def resolve(client, kind: str, ref: str, *, by: str | None = None) -> Ref:
     """Resolve a project/experiment ref to its id, refusing to guess.
 
     ``by`` forces one interpretation (``"id"`` / ``"slug"``); the default tries
-    both and raises :class:`AmbiguousRef` when they disagree.
+    both and raises :class:`AmbiguousRef` when they disagree. An ``id:``/``slug:``
+    prefix on ``ref`` says the same thing and wins over ``by``, since it is the
+    more specific statement of the two and the one typed at the ref itself.
     """
     if kind not in SLUG_KINDS:  # pragma: no cover -- guards a caller typo
         raise ValueError(f"{kind!r} has no slug form; use resolve_run/an id")
+
+    ref, selector = split_selector(ref)
+    by = selector or by
 
     if by == "id":
         row = _by_id(client, kind, ref)

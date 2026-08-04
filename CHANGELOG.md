@@ -46,6 +46,18 @@
   | `run delete` | id or petname `short_id` — no disambiguator needed, a petname cannot be UUID-shaped |
   | `artifact delete` | id only — there is no by-name index and a name is anchor-scoped, so there is no second spelling to accept |
 
+  An `id:` / `slug:` prefix on the ref says the same thing as the flags and works on
+  **every** command that takes a project or experiment, which the flags do not: they are
+  declared on the project and experiment verbs, while a ref is accepted by around a dozen
+  commands. Without the prefix, an ambiguous `--project` on `experiment create` raised an
+  error naming two flags that command has no way to accept — and the project whose id *is*
+  the colliding string could not be addressed there at all, since naming it is the collision.
+
+- **`run list --experiment` and the artifact anchors take a slug.** `--experiment` shipped
+  its value straight into a UUID-typed query param, so a slug came back as a raw pydantic
+  `uuid_parsing` dump rather than a listing; the artifact anchors resolved `--project` by
+  slug but not `--experiment`, so the two flags behaved differently on the same command line.
+
   The confirmation prompt and the `deleted` line now name the **resolved** entity
   (name, handle and id) instead of echoing the string that was typed. Echoing the ref
   asks the operator to confirm their own typo, and in the collision above it is exactly

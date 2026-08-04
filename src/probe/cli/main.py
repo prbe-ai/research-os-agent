@@ -1797,9 +1797,10 @@ def _project_slug(client: Client, ref: str | None, *, by: str | None = None) -> 
     """
     if ref is None:
         return None
-    if not refs.is_uuid(ref):
-        return ref
-    return _ref(client, "project", ref, by=by).row.get("slug", ref)
+    bare, selector = refs.split_selector(ref)
+    if selector is None and not refs.is_uuid(bare):
+        return bare
+    return _ref(client, "project", ref, by=by).row.get("slug", bare)
 
 
 def _confirm_delete(yes: bool, subject: str, *, cascade: str | None = None) -> None:
@@ -2217,7 +2218,7 @@ def run_set(
 
 @run_app.command("list")
 def run_list(
-    experiment: str = typer.Option(None, "--experiment", help="experiment id"),
+    experiment: str = typer.Option(None, "--experiment", help="experiment id or slug"),
     project: str = typer.Option(None, "--project", help="project id or slug"),
     direct: bool = typer.Option(False, "--direct", help="only project-direct runs"),
     tag: list[str] = typer.Option(None, "--tag", help="filter: run must carry ALL (repeatable)"),
@@ -2230,7 +2231,10 @@ def run_list(
         params["cursor"] = cursor
     with _client() as c:
         page = c.list_runs(
-            experiment_id=experiment,
+            # Resolved, not passed through: experiment_id is a UUID-typed query
+            # param, so a slug used to come back as a raw pydantic uuid_parsing
+            # dump rather than a listing.
+            experiment_id=_ref(c, "experiment", experiment).id if experiment else None,
             project_id=_project_id(c, project) if project else None,
             direct=direct,
             tags=tag or None,
@@ -2870,29 +2874,37 @@ artifact_app = typer.Typer(no_args_is_help=True, help="artifacts")
 app.add_typer(artifact_app, name="artifact")
 
 
-def _anchor_id_for(client: Client, anchor: Anchor, anchor_id: str | None) -> str | None:
-    """Let a project anchor be named by SLUG, not only by id.
+#: Anchors whose ref has a slug spelling. Runs anchor by id or petname and are
+#: resolved server-side; workspaces and the Shared folder have ids only.
+_SLUG_ANCHORS = {Anchor.PROJECT: "project", Anchor.EXPERIMENT: "experiment"}
 
-    Every ``/v1/projects/{project_id}`` route types the path param as a UUID, so
-    a slug reaches the server as a 422 about UUID parsing. That is survivable
-    for a human who can look the id up once; it is not survivable for an agent
-    filing a few thousand artifacts, which would have to thread a uuid through
-    every command and only has to get it wrong once.
+
+def _anchor_id_for(client: Client, anchor: Anchor, anchor_id: str | None) -> str | None:
+    """Let a project or experiment anchor be named by SLUG, not only by id.
+
+    Every ``/v1/{kind}/{id}`` route types the path param as a UUID, so a slug
+    reaches the server as a 422 about UUID parsing. That is survivable for a
+    human who can look the id up once; it is not survivable for an agent filing a
+    few thousand artifacts, which would have to thread a uuid through every
+    command and only has to get it wrong once.
 
     Slugs are the handle people actually remember -- the same reason
-    :func:`_project_id` exists for the project verbs.
+    :func:`_project_id` exists for the project verbs. Experiments were left out
+    of this originally, which made ``--project my-slug`` work and ``--experiment
+    my-slug`` 422 on the same command line.
 
     ADDITIVE, never a new gate. An id passes straight through, and so does
     anything that does not resolve: this route already answers a bad anchor with
     a 422, and turning that into a local hard error would reject values that
-    were previously fine (an id this caller cannot enumerate, a project outside
-    the page `_project_id` walks). The exact `?slug=` lookup is used rather than
-    listing, so it is one request and correct past 200 projects.
+    were previously fine (an id this caller cannot enumerate). The exact
+    ``?slug=`` lookup is used rather than listing, so it is one request and
+    correct past 200 rows.
     """
-    if anchor is not Anchor.PROJECT or not anchor_id:
+    kind = _SLUG_ANCHORS.get(anchor)
+    if kind is None or not anchor_id:
         return anchor_id
     try:
-        return refs.resolve(client, "project", anchor_id).id
+        return refs.resolve(client, kind, anchor_id).id
     except refs.AmbiguousRef as exc:
         # The ONE case that does become a hard error. "Never a gate" is about
         # refs that fail to resolve; this one resolves to two different projects,

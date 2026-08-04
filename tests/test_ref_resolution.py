@@ -18,6 +18,7 @@ would pass an exit-code-only check.
 from __future__ import annotations
 
 import importlib
+import json
 import uuid
 
 import pytest
@@ -261,3 +262,67 @@ def test_the_backfill_anchor_refuses_the_collision(collision, client):
         backfill._resolve_ref(client, A_ID)
 
     assert "--by-id" in str(exc.value)
+
+
+# -- the flag-free selector ---------------------------------------------------
+def test_the_id_prefix_selects_the_project_with_that_id(collision):
+    assert cli.main(["project", "delete", f"id:{A_ID}", "--yes"]) == 0
+    assert set(collision.projects) == {B_ID}
+
+
+def test_the_slug_prefix_selects_the_project_with_that_slug(collision):
+    assert cli.main(["project", "delete", f"slug:{B_SLUG}", "--yes"]) == 0
+    assert set(collision.projects) == {A_ID}
+
+
+def test_the_prefix_works_where_the_flags_do_not_exist(collision, client):
+    """The reason the prefix exists.
+
+    `--project` is taken by roughly a dozen commands that never declare
+    --by-id/--by-slug. Without the prefix the ambiguity error there names two
+    flags the command does not have, and project A -- whose id IS the colliding
+    string -- cannot be addressed on those commands at all.
+    """
+    assert impl._project_id(client, f"id:{A_ID}") == A_ID
+
+
+def test_the_error_names_the_prefix_not_only_the_flags(collision, capsys):
+    cli.main(["project", "delete", A_ID, "--yes"])
+
+    err = capsys.readouterr().err
+    assert f"id:{A_ID}" in err and f"slug:{A_ID}" in err
+
+
+def test_an_ordinary_slug_containing_no_selector_is_untouched(app, client, monkeypatch):
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    _project(app, pid=A_ID, slug="ordinary-slug")
+
+    assert cli.main(["project", "delete", "ordinary-slug", "--yes"]) == 0
+    assert app.projects == {}
+
+
+# -- the same rule on the non-delete ref sites --------------------------------
+def test_run_list_resolves_an_experiment_slug(app, client, monkeypatch, capsys):
+    """`--experiment` shipped the slug into a UUID-typed query param, so it came
+    back as a raw pydantic uuid_parsing dump instead of a listing."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    exp = app.seed_experiment("ablation-9")
+
+    assert cli.main(["run", "list", "--experiment", "ablation-9"]) == 0
+
+    seen = json.loads(capsys.readouterr().out)
+    assert seen["items"] == [] or all(r["experiment_id"] == exp["id"] for r in seen["items"])
+
+
+def test_an_experiment_artifact_anchor_takes_a_slug(app, client, monkeypatch):
+    """`--project my-slug` resolved and `--experiment my-slug` 422'd, on the same
+    command line."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    exp = app.seed_experiment("anchor-me")
+
+    assert impl._anchor_id_for(client, impl.Anchor.EXPERIMENT, "anchor-me") == exp["id"]
+
+
+def test_a_run_anchor_is_left_alone(client):
+    """Runs have no slug: they anchor by id or petname, resolved server-side."""
+    assert impl._anchor_id_for(client, impl.Anchor.RUN, "some-run-ref") == "some-run-ref"
