@@ -25,6 +25,7 @@ import os
 import socket
 import subprocess
 import threading
+import tempfile
 import warnings
 import weakref
 from datetime import datetime, timezone
@@ -1106,6 +1107,83 @@ class Run:
         return data
 
     # -- snapshot (execution record) ----------------------------------------
+    def _upload_pending_code(
+        self,
+        manifest: dict,
+        cwd: str | None,
+        *,
+        upload: bool,
+        max_upload_bytes: int,
+        strict: bool | None,
+    ) -> dict:
+        """Store the files git cannot supply. Returns what to record in meta.
+
+        The returned ``pending_upload`` is the count that SURVIVES this call, so
+        a reader can trust it: it is 0 only when the bytes are actually stored.
+        `Client.check_run` gates `pending_code_bytes` on it.
+        """
+        pending = _snapshot.pending_entries(manifest)
+        if not pending:
+            return {"uploaded": False, "pending_upload": 0, "reason": "nothing pending"}
+        if not upload:
+            return {
+                "uploaded": False,
+                "pending_upload": len(pending),
+                "reason": "upload disabled",
+            }
+
+        root = os.path.abspath(cwd or os.getcwd())
+        tmp = tempfile.NamedTemporaryFile(prefix="probe-code-", suffix=".tar.gz", delete=False)
+        tmp.close()
+        try:
+            summary = _snapshot.build_pending_archive(
+                root, manifest, tmp.name, max_bytes=max_upload_bytes
+            )
+            rec = self.log_artifact(
+                _snapshot.CODE_BYTES_ARTIFACT,
+                path=tmp.name,
+                kind="code_bytes",
+                content_type="application/gzip",
+                meta={
+                    "n_files": summary["n_files"],
+                    "uncompressed_bytes": summary["uncompressed_bytes"],
+                    "tree_sha256": manifest.get("tree_sha256"),
+                    "paths": [e["path"] for e in pending],
+                },
+                strict=strict,
+            )
+        except _snapshot.SnapshotTooLarge:
+            raise
+        except errors.RosError:
+            # Fail-open like every other write: the training run continues, but
+            # the count stays non-zero so nothing reads this as captured.
+            if strict is True or (strict is None and not self._client.fail_open):
+                raise
+            warnings.warn(
+                f"code-bytes upload failed; {len(pending)} files remain unstored "
+                "and this run is not reproducible from the record alone.",
+                stacklevel=3,
+            )
+            return {"uploaded": False, "pending_upload": len(pending), "reason": "upload failed"}
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+        # A fail-open spooled write returns None -- unverifiable until flush, so
+        # it cannot be claimed as stored.
+        if not rec:
+            return {"uploaded": False, "pending_upload": len(pending), "reason": "spooled"}
+        return {
+            "uploaded": True,
+            "pending_upload": 0,
+            "artifact_id": rec.get("id"),
+            "archive_sha256": summary["sha256"],
+            "size_bytes": summary["size_bytes"],
+            "n_files": summary["n_files"],
+        }
+
     def snapshot(
         self,
         *,
@@ -1114,6 +1192,8 @@ class Run:
         include_gpu: bool = True,
         venv: str | None = None,
         detect_venv: bool = False,
+        upload: bool = True,
+        max_upload_bytes: int = _snapshot.DEFAULT_MAX_UPLOAD_BYTES,
         strict: bool | None = None,
     ) -> dict:
         """Capture code (git shadow ref) + deps + GPUs as a content-addressed
@@ -1135,8 +1215,19 @@ class Run:
         object database of whatever machine ran the job, so on an ephemeral box it
         stops resolving the moment that box is destroyed. ``capture_manifest``
         decides per file whether the content is already retrievable from a pushed
-        remote; anything that is not gets its bytes uploaded by the caller against
-        ``manifest['entries']``."""
+        remote.
+
+        ``upload`` (default ON) then STORES the ones it cannot. Files classified
+        ``source="blob"`` -- edited, untracked, unpushed, or no remote at all --
+        are tarred into a single ``code-bytes`` artifact and uploaded through the
+        ordinary presign flow. Without this the record holds a sha256 for those
+        files, and a sha256 verifies a file you already have rather than
+        producing one you do not: the run is identified and unreproducible.
+
+        One archive rather than one artifact per file, because manifests of 200+
+        entries are ordinary and that would be 200+ presign round-trips. The
+        archive is byte-deterministic, so the presign ``have`` check dedupes a
+        sweep of N runs over unchanged code down to a single upload."""
         git = _snapshot.capture_git_snapshot(self.id, cwd)
         manifest = _snapshot.capture_manifest(cwd)
         # Identity is hashed into the execution record; provenance is NOT --
@@ -1161,6 +1252,14 @@ class Run:
             "/v1/execution-records", record.model_dump(mode="json", exclude_none=True)
         )
         content_hash = exec_rec.get("content_hash") if exec_rec else None
+
+        # Store the bytes git cannot supply. Runs BEFORE the code-snapshot
+        # artifact is written, so its meta records the real outcome rather than
+        # a promise: `pending_upload` in that meta means those bytes are gone,
+        # and it must never say 0 because an upload was merely attempted.
+        code_bytes = self._upload_pending_code(
+            manifest, cwd, upload=upload, max_upload_bytes=max_upload_bytes, strict=strict
+        )
 
         # Pin the real runs.env_ref column (FK to the execution record just created).
         if content_hash is not None:
@@ -1193,7 +1292,13 @@ class Run:
                 "base_commit": manifest["base_commit"],
                 "remote": manifest["remote"],
                 "n_git_referenced": manifest["n_git_referenced"],
-                "n_pending_upload": manifest["n_pending_upload"],
+                # What SURVIVES, not what was classified. `check_run` gates
+                # `pending_code_bytes` on this, so it must mean "these bytes are
+                # gone" -- never "an upload was attempted". `n_classified_pending`
+                # keeps the pre-upload count for diagnostics.
+                "n_pending_upload": code_bytes["pending_upload"],
+                "n_classified_pending": manifest["n_pending_upload"],
+                "code_bytes": code_bytes,
                 # WHICH environment the deps came from. Deliberately here and
                 # not in the hashed execution record (split_env_provenance).
                 **({"env": env_provenance} if env_provenance else {}),
@@ -1203,6 +1308,7 @@ class Run:
         return {
             "git": git,
             "manifest": manifest,
+            "code_bytes": code_bytes,
             "deps": deps,
             "env_provenance": env_provenance,
             "execution_record": exec_rec,

@@ -374,6 +374,106 @@ def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
     }
 
 
+
+# Refuse rather than silently ship a partial archive. Raise it with
+# `--max-upload-mb` when a repo genuinely needs to.
+DEFAULT_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+
+CODE_BYTES_ARTIFACT = "code-bytes"
+
+
+class SnapshotTooLarge(SnapshotError):
+    """The pending bytes exceed the cap. Never truncated to fit."""
+
+
+def pending_entries(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    """The files git cannot supply -- edited, untracked, unpushed, or no remote.
+
+    These are exactly the files that make a run unreproducible on any other
+    machine: the manifest records a sha256 for them, and a sha256 verifies a file
+    you already have rather than producing one you do not.
+    """
+    return [e for e in (manifest.get("entries") or []) if e.get("source") == "blob"]
+
+
+def build_pending_archive(
+    cwd: str,
+    manifest: dict[str, Any],
+    dest: str,
+    *,
+    max_bytes: int = DEFAULT_MAX_UPLOAD_BYTES,
+) -> dict[str, Any]:
+    """Tar+gzip exactly the pending files into ``dest``. Returns a summary.
+
+    DETERMINISTIC: mtime, uid/gid, owner names and member order are all
+    normalised, and gzip's own mtime header is zeroed. Two identical trees
+    therefore produce byte-identical archives, which is what lets the upload's
+    content-addressed ``have`` check short-circuit -- a 200-run sweep over
+    unchanged code uploads once and skips the other 199.
+
+    Modes and symlinks survive: the manifest already distinguishes ``100755``
+    from ``100644`` and records ``symlink_target`` for ``120000`` entries, and a
+    restored tree that lost the executable bit does not run.
+
+    Raises :class:`SnapshotTooLarge` rather than dropping files. A silently
+    partial archive that reports success is the exact failure this whole path
+    exists to remove.
+    """
+    pending = pending_entries(manifest)
+    total = sum(int(e.get("size") or 0) for e in pending)
+    if total > max_bytes:
+        raise SnapshotTooLarge(
+            f"pending code bytes are {total / 1e6:.1f} MB, over the "
+            f"{max_bytes / 1e6:.0f} MB cap; raise --max-upload-mb or commit and "
+            "push the large files so git can supply them instead"
+        )
+
+    import gzip
+    import tarfile
+
+    # gzip mtime=0 AND filename="" so the container header is deterministic too,
+    # not just the tar. Without the explicit filename, GzipFile copies the output
+    # file's own name into the header -- so writing the same tree to two paths
+    # produced two different hashes and the upload's content-addressed dedup
+    # never fired. A test pins this.
+    with open(dest, "wb") as raw, gzip.GzipFile(
+        filename="", fileobj=raw, mode="wb", mtime=0
+    ) as gz:
+        with tarfile.open(fileobj=gz, mode="w") as archive:
+            for entry in sorted(pending, key=lambda e: e["path"]):
+                path = entry["path"]
+                full = os.path.join(cwd, path)
+                if entry.get("mode") == "120000":
+                    info = tarfile.TarInfo(path)
+                    info.type = tarfile.SYMTYPE
+                    info.linkname = entry.get("symlink_target") or os.readlink(full)
+                else:
+                    if not os.path.isfile(full):
+                        continue  # deleted between classify and archive
+                    info = tarfile.TarInfo(path)
+                    info.size = os.path.getsize(full)
+                    info.mode = 0o755 if entry.get("mode") == "100755" else 0o644
+                info.mtime = 0
+                info.uid = info.gid = 0
+                info.uname = info.gname = ""
+                if info.type == tarfile.SYMTYPE:
+                    archive.addfile(info)
+                else:
+                    with open(full, "rb") as fh:
+                        archive.addfile(info, fh)
+
+    sha, size = _file_sha256(dest)
+    return {
+        "path": dest,
+        "sha256": sha,
+        "size_bytes": size,
+        "n_files": len(pending),
+        "uncompressed_bytes": total,
+    }
+
+
+
+
 # THE enumeration -- there is deliberately only one, and it always runs inside
 # the TARGET interpreter, even when that is this process.
 #

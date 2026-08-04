@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe snapshot` now uploads the bytes git cannot supply.** Files classified
+  `source: "blob"` — edited, untracked, unpushed, or no remote at all — are tarred
+  into a single `code-bytes` artifact and stored through the ordinary presign
+  flow. Previously the record kept a sha256 for them and nothing else, and a
+  sha256 verifies a file you already have rather than producing one you do not:
+  the run was identified precisely and unreproducible. Confirmed on `bird-sql-sft`,
+  where 16 completed runs lost their code when the box was rebuilt while still
+  reading as captured.
+
+  On by default; `--no-upload` opts out. `--max-upload-mb` (256 default) refuses
+  rather than truncating — a silently partial archive reporting success is the
+  original defect in a new place. Files already retrievable from a pushed remote
+  stay references, so nothing is uploaded twice.
+
+  The archive is byte-deterministic (normalised mtime/uid/gid/owner/order, and
+  `filename=""` so gzip does not stamp the output path into its header), which
+  lets the presign `have` check collapse an N-run sweep over unchanged code to a
+  single upload. Modes and symlinks survive — a restored tree whose entrypoint
+  lost `+x` does not run.
+
+  The artifact meta’s `n_pending_upload` now reports what SURVIVES the upload,
+  not what was classified, so `check_run` gating `pending_code_bytes` on it means
+  "these bytes are gone" rather than "an upload was attempted".
+  `n_classified_pending` keeps the pre-upload count for diagnostics.
+
 ### Fixed
 
 - **Run lineage is no longer a half-answer.** `get_entity(ref="run:<id>",
@@ -181,6 +208,33 @@
   nothing validates on its behalf.
 
 ## Unreleased
+
+### Added
+
+- **`probe snapshot` now uploads the bytes git cannot supply.** Files classified
+  `source: "blob"` — edited, untracked, unpushed, or no remote at all — are tarred
+  into a single `code-bytes` artifact and stored through the ordinary presign
+  flow. Previously the record kept a sha256 for them and nothing else, and a
+  sha256 verifies a file you already have rather than producing one you do not:
+  the run was identified precisely and unreproducible. Confirmed on `bird-sql-sft`,
+  where 16 completed runs lost their code when the box was rebuilt while still
+  reading as captured.
+
+  On by default; `--no-upload` opts out. `--max-upload-mb` (256 default) refuses
+  rather than truncating — a silently partial archive reporting success is the
+  original defect in a new place. Files already retrievable from a pushed remote
+  stay references, so nothing is uploaded twice.
+
+  The archive is byte-deterministic (normalised mtime/uid/gid/owner/order, and
+  `filename=""` so gzip does not stamp the output path into its header), which
+  lets the presign `have` check collapse an N-run sweep over unchanged code to a
+  single upload. Modes and symlinks survive — a restored tree whose entrypoint
+  lost `+x` does not run.
+
+  The artifact meta’s `n_pending_upload` now reports what SURVIVES the upload,
+  not what was classified, so `check_run` gating `pending_code_bytes` on it means
+  "these bytes are gone" rather than "an upload was attempted".
+  `n_classified_pending` keeps the pre-upload count for diagnostics.
 
 ### Breaking
 
