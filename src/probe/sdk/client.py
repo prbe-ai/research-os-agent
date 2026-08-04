@@ -1252,6 +1252,7 @@ class Client:
         name: str | None = None,
         project: str | None = None,
         experiment_name: str | None = None,
+        on_conflict: str = "error",
         **run_kw,
     ) -> Run:
         """Open a run inside an experiment — or straight under a project.
@@ -1275,7 +1276,23 @@ class Client:
         ``probe experiment create`` / ``probe project create`` there.
 
         For work with no hypothesis, the honest home is a project-direct run, not an
-        experiment named after whatever directory you happened to be in."""
+        experiment named after whatever directory you happened to be in.
+
+        ``on_conflict`` decides what a duplicate ``external_id`` means.
+        ``"error"`` (the default) keeps the engine's 409: an external_id is an
+        identity, and colliding with one is a bug worth hearing about.
+        ``"supersede"`` treats the collision as a RETRY: a fresh run opens as
+        ``external_id-rN`` with ``parent_relation="retry"`` pointing at the
+        incumbent, and an incumbent that died (failed/crashed/canceled) is
+        tagged ``superseded`` so nobody trusts its partial numbers. A completed
+        incumbent is left unmarked — repeating a good run is a repeat, not a
+        correction."""
+        if on_conflict not in ("error", "supersede"):
+            raise errors.ValidationError(
+                f"on_conflict={on_conflict!r} is not a policy. Use \"error\" "
+                "(the default 409) or \"supersede\" (retry lineage under a "
+                "fresh -rN external_id)."
+            )
         if not experiment and not project:
             raise errors.ValidationError(
                 "run() needs an experiment slug — or a project slug for a "
@@ -1336,7 +1353,11 @@ class Client:
                     "one. Name the experiment or drop the group."
                 )
             run_kw.pop("group_id", None)
-            return self.create_project_run(project_id, name, **run_kw)
+            return self._create_run_superseding(
+                lambda kw, nm: self.create_project_run(project_id, nm, **kw),
+                run_kw, name, on_conflict,
+                experiment_id=None, project_id=project_id,
+            )
         if hypothesis is not None:
             exp = self.ensure_experiment(
                 experiment,
@@ -1354,7 +1375,79 @@ class Client:
                 f"experiment {experiment!r} is not in project {project!r}. "
                 "Drop the project argument, or name the one it actually belongs to."
             )
-        return self.create_run(exp["id"], name, **run_kw)
+        return self._create_run_superseding(
+            lambda kw, nm: self.create_run(exp["id"], nm, **kw),
+            run_kw, name, on_conflict,
+            experiment_id=exp["id"], project_id=None,
+        )
+
+    #: Statuses whose numbers cannot be trusted; superseding one marks it.
+    _DEAD_RUN_STATUSES = frozenset({"failed", "crashed", "canceled"})
+
+    def _create_run_superseding(
+        self,
+        create,
+        run_kw: dict,
+        name: str,
+        on_conflict: str,
+        *,
+        experiment_id: str | None,
+        project_id: str | None,
+        max_attempts: int = 5,
+    ) -> Run:
+        """``create()``, except ``on_conflict="supersede"`` turns an external_id
+        409 into retry lineage instead of an error.
+
+        The incumbent is never reopened: appending fresh steps into a
+        half-dead run splices two executions into one curve and hides that a
+        crash ever happened (the W&B ``resume="allow"`` failure mode). Instead
+        a NEW run opens as ``external_id-rN`` carrying
+        ``parent_relation="retry"`` plus ``retry_of``/``retry_attempt``
+        foreign keys, and a dead incumbent is tagged ``superseded`` — the
+        chain stays walkable from either end and every execution keeps its own
+        honest record."""
+        try:
+            return create(run_kw, name)
+        except errors.ConflictError:
+            base = run_kw.get("external_id")
+            if on_conflict != "supersede" or base is None:
+                raise
+        page = self.list_runs(experiment_id=experiment_id, project_id=project_id)
+        old = next((r for r in page.items if r.get("external_id") == base), None)
+        if old is None:
+            # The 409 is real but the incumbent is not on the first page (or
+            # belongs to another source). Superseding blind would mint lineage
+            # pointing at nothing, so the original conflict stands.
+            raise errors.ConflictError(
+                f"run {base!r} conflicts but its incumbent is not visible "
+                "here to supersede — resolve the collision by hand",
+            )
+        for n in range(2, max_attempts + 2):
+            retry_id = f"{base}-r{n}"
+            retry_kw = dict(
+                run_kw,
+                external_id=retry_id,
+                parent_run_id=old["id"],
+                parent_relation="retry",
+            )
+            try:
+                run = create(retry_kw, retry_id if name == base else name)
+                break
+            except errors.ConflictError:
+                continue
+        else:
+            raise errors.ConflictError(
+                f"no free retry slot for {base!r} after {max_attempts} "
+                "attempts — the run has been superseded that many times "
+                "already, which is worth a look before retrying again",
+            )
+        # link() is the sanctioned foreign-keys surface (create_run does not
+        # take them); per-key new-wins, so this cannot clobber anything.
+        run.link(retry_of=old["id"], retry_attempt=n)
+        if old.get("status") in self._DEAD_RUN_STATUSES:
+            tags = sorted({*(old.get("tags") or []), "superseded"})
+            self.write("PATCH", f"/v1/runs/{old['id']}", {"tags": tags})
+        return run
 
     def resolve_or_raise(self, kind: str, slug: str, *, project_id: str | None = None) -> dict:
         """Resolve a slug or raise the error that says what to do about it.
