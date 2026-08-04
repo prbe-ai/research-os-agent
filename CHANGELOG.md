@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+
+- **`show-research-timeline` skill** (plugin 0.15.0, released by dispatch). Draws the whole research arc as
+  ONE horizontal track in the session — science stages and tracking stages on a
+  single line, left to right in the order they have to occur, with the current
+  position marked and one next action under the rule. Left to right because the
+  reader's question is "how much of this is behind me", which a track answers at a
+  glance and a vertical list answers by counting — and the connector answers it
+  before any label is read, solid `━` behind the work and light `─` ahead. Drawn on
+  a 13-column grid so labels are the real word (`hypothesis`, not `hypoth`); wraps
+  to a second block past ~99 columns rather than narrowing cells or eliding stages.
+
+  The gap it closes is the moment before a launch: the command is visible and nothing
+  downstream is. Probe already holds every fact — `browse_research` has the run counts,
+  `handoff` has `series` / `span_types` / `artifact_total`, `reproduce` reports
+  `execution_record` in `missing`, the experiment knows whether it was ever versioned —
+  and hands them back one entity at a time. The skill spends those reads once and
+  renders the answer.
+
+  Two bands were the obvious shape and are the wrong one. Snapshot-after-launch is a
+  missed snapshot, and a layout that puts tracking on its own track hides precisely
+  that ordering failure. Marks are evidence-gated: only the derivable stages can
+  produce a completion mark, stages inferred from the researcher's brief are drawn but
+  never checked off, and `?` (Probe has no signal) is kept distinct from `○` (ahead,
+  not started) so nobody reads an unknown as a done.
+
 ### Changed
 
 - **The project's notes moved from an artifact to a column** (research-os 0094,

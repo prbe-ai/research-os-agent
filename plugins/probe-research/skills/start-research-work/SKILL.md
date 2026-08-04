@@ -25,6 +25,11 @@ near-miss of an existing slug rather than warning.)
    what was ruled out, what not to repeat. Add to it as you learn things
    (`probe notes write --append`); see `track-research-work`.
 
+   Those reads already carry the whole arc — draw it with `show-research-timeline`
+   before the first launch rather than describing it. What comes AFTER the run is
+   the part a researcher at a terminal cannot see, and it is what decides whether
+   the snapshot gets taken while it still can be.
+
 2. **Create the project and experiment FIRST — before the scaffold, not after it.**
    Always explicit from the CLI.
 

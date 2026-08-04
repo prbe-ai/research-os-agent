@@ -27,7 +27,12 @@ _CANONICAL = _ROOT / "skills"
 _PLUGIN = _ROOT / "plugins" / "probe-research" / "skills"
 
 # Mirrors the Makefile's sync-plugin-skills list.
-_SYNCED = ("start-research-work", "track-research-work", "capture-run-inputs")
+_SYNCED = (
+    "start-research-work",
+    "track-research-work",
+    "capture-run-inputs",
+    "show-research-timeline",
+)
 
 
 def _files(root: Path) -> dict[str, Path]:
