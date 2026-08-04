@@ -12,6 +12,19 @@ PLUGIN_DIR="${PROBE_RESEARCH_TAP_PLUGIN_DIR:-$HOME/.claude/plugins/probe-researc
 LOG_DIR="$PLUGIN_DIR/logs"
 mkdir -p "$LOG_DIR"
 
+# Prune leaked shutdown sentinels. session-end.sh deliberately never deletes
+# one (it is the last-resort stop signal for an orphaned daemon), and only a
+# later SessionStart *for the same session id* clears it — but session ids are
+# UUIDs and never recur, so without this every session leaks a file into /tmp
+# forever. Observed: 120 stale sentinels against 0 live daemons. 2 days is far
+# beyond any live session, so this can never race a running wrapper.
+#
+# The trailing slash on /tmp/ is load-bearing on macOS: /tmp is a symlink to
+# private/tmp and find defaults to -P (never follow symlinks), so `find /tmp`
+# matches the symlink itself, descends into nothing, and exits 0 having done
+# nothing at all — which the `|| true` would have hidden forever.
+find /tmp/ -maxdepth 1 -name 'probe-research-tap-watcher-*.shutdown' -mtime +2 -delete 2>/dev/null || true
+
 HOOK_INPUT="$(cat)"
 SESSION_ID=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || echo "")
 TRANSCRIPT_PATH=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("transcript_path",""))' 2>/dev/null || echo "")
@@ -138,13 +151,20 @@ fi
 # Crash-recovery wrapper: respawn up to 5 times per minute.
 # Self-terminates when shutdown sentinel exists (SessionEnd touches it).
 #
-# Why a SIGTERM trap that forwards to the python child: macOS doesn't ship
-# `setsid` so we can't put the wrapper + daemon in their own process group
-# and rely on `kill -TERM -<pgid>` to take down both at once. Instead we
-# detach via `nohup ... & disown` (POSIX-portable) and have the wrapper
-# bash forward SIGTERM/SIGINT explicitly to the python child it spawns.
+# The wrapper runs as a SESSION LEADER (see the spawn below), so its PID is
+# also its PGID and nothing outside its own group can take it down. It still
+# forwards SIGTERM/SIGINT to the python child explicitly: the child is in this
+# group, but an explicit forward is what makes a plain `kill -TERM <wrapper>`
+# (no negation) tear down both, which is the fallback session-end.sh uses for
+# pre-0.1.3 wrappers that are NOT group leaders.
+#
+# First action is rewriting the pid file with the wrapper's own $$: the hook
+# records `$!`, which is correct on the fast path but stale if the setsid shim
+# had to fork (see the spawn). Making the wrapper authoritative removes that
+# race rather than reasoning about when it can happen.
 WRAPPER_SCRIPT='
-SID="$1"; TP="$2"; CWD="$3"; PY="$4"; ROOT="$5"; LOG="$6"
+SID="$1"; TP="$2"; CWD="$3"; PY="$4"; ROOT="$5"; LOG="$6"; PIDF="$7"
+echo $$ >"$PIDF"
 SHUTDOWN="/tmp/probe-research-tap-watcher-${SID}.shutdown"
 RESTART_COUNT=0
 WINDOW_START=$(date +%s)
@@ -171,17 +191,52 @@ while true; do
 done
 '
 
-# Detach the wrapper. nohup ignores SIGHUP so it survives CC's exit; `&`
-# backgrounds it; `disown` removes it from this shell's job table so the
-# parent (this hook) can exit cleanly without reaping it. On Linux this is
-# equivalent to setsid (just without the new process group); on macOS it's
-# the only portable option since setsid isn't installed by default.
+# Detach the wrapper into ITS OWN SESSION via setsid(2).
+#
+# `nohup ... & disown` was NOT enough and this is the bug it hid: nohup only
+# ignores SIGHUP, and disown only clears the shell's job table. Neither changes
+# the process group, so the wrapper inherited the hook's PGID and any SIGTERM
+# delivered to that group killed the daemon seconds after SessionStart —
+# measured: wrapper PID 7006 / PGID 6958, dead in 14-34s, while an otherwise
+# identical setsid'd daemon ran indefinitely.
+#
+# macOS ships no setsid(1), which is what the old comment here concluded was
+# fatal — but python3 exposes os.setsid() and this hook already requires
+# python3 (it parses the hook payload above), so the capability was always
+# available. The shim setsids, then execs the wrapper IN PLACE, so $! stays the
+# wrapper's PID and PID == PGID (a true group leader).
+#
+# setsid(2) fails with EPERM if the caller is already a group leader (a shell
+# with job control puts each job in its own group). Hooks run non-interactively
+# so the fast path holds, but fall back to fork-then-setsid rather than leave
+# the daemon unisolated — the child rewrites the pid file, so a changed PID is
+# still recorded correctly.
 PYTHONPATH="$PLUGIN_ROOT" \
-    nohup /bin/bash -c "$WRAPPER_SCRIPT" wrapper \
-    "$SESSION_ID" "$TRANSCRIPT_PATH" "$CWD" "$PY" "$PLUGIN_ROOT" "$LOG_FILE" \
+    nohup "$PY" -c '
+import os, sys
+try:
+    os.setsid()
+except OSError:
+    if os.fork() != 0:
+        os._exit(0)
+    os.setsid()
+os.execv(sys.argv[1], sys.argv[1:])
+' /bin/bash -c "$WRAPPER_SCRIPT" wrapper \
+    "$SESSION_ID" "$TRANSCRIPT_PATH" "$CWD" "$PY" "$PLUGIN_ROOT" "$LOG_FILE" "$PID_FILE" \
     </dev/null >>"$LOG_FILE" 2>&1 &
-WRAPPER_PID=$!
 disown
-echo "$WRAPPER_PID" >"$PID_FILE"
+
+# The WRAPPER is the sole author of the pid file (it writes its own $$ first
+# thing). This hook deliberately does NOT also write `$!`.
+#
+# Writing both raced: whichever landed last won, and `$!` can name an
+# intermediate that is not the session leader — so the recorded pid was
+# sometimes a non-leader, which is precisely what session-end.sh's group-kill
+# decision keys on. One author, no race. Wait briefly so a concurrent
+# SessionStart for this same session sees the file and does not double-spawn.
+for _ in $(seq 1 40); do
+    [ -s "$PID_FILE" ] && break
+    sleep 0.05
+done
 
 printf '{"continue": true}\n'

@@ -21,8 +21,34 @@ touch "$SHUTDOWN_FILE"
 if [ -f "$PID_FILE" ]; then
     PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
     if [ -n "$PID" ]; then
-        # Kill the wrapper's process group so the Python child dies too.
-        kill -TERM "-$PID" 2>/dev/null || kill -TERM "$PID" 2>/dev/null || true
+        # Kill the wrapper's process group so the Python child dies too — but
+        # ONLY when the wrapper really leads that group.
+        #
+        # `kill -TERM -<PID>` names the process group whose PGID equals PID. A
+        # setsid'd wrapper (0.1.3+) leads its own group, so that is exactly the
+        # wrapper + its child. A pre-0.1.3 wrapper does NOT — it inherited the
+        # hook's PGID.
+        #
+        # The risk is narrower than "a non-leader pid hits some other group": a
+        # PGID exists only because a process with that id led the group, so
+        # while our wrapper holds pid P, no other group can have pgid P. What
+        # CAN happen is an orphaned group — the leader exits, surviving members
+        # keep the group alive, and that pgid is now a free pid. A stale pid
+        # file naming it would then signal strangers. Verify leadership before
+        # using the negated form.
+        # `|| true` is load-bearing under `set -euo pipefail`: ps exits 1 for a
+        # pid that is already gone (the common case — the wrapper may have died
+        # on its own), and without it the assignment aborts this script before
+        # the `rm -f "$PID_FILE"` below, leaking the stale pid file that this
+        # very check exists to defuse.
+        PGID=$(ps -o pgid= -p "$PID" 2>/dev/null | tr -d ' ' || true)
+        if [ -n "$PGID" ] && [ "$PGID" = "$PID" ]; then
+            kill -TERM "-$PID" 2>/dev/null || true
+        else
+            # Not a group leader: signal the wrapper alone. Its TERM trap
+            # forwards to the python child, so both still stop.
+            kill -TERM "$PID" 2>/dev/null || true
+        fi
     fi
     rm -f "$PID_FILE"
 fi
