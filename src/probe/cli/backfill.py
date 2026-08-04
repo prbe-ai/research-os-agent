@@ -566,8 +566,13 @@ def launch_agent(
     def paint() -> None:
         if not live:
             return
+        # Centred like every other page of the wizard. Left at column 0 it read
+        # as output from a different program running underneath the wizard,
+        # which is exactly what it is not.
+        from probe.cli import tui
+
         text = state.line(time.monotonic() - started)
-        out.write("\r\033[2K" + text)
+        out.write("\r\033[2K" + " " * tui.left_pad() + text)
         out.flush()
 
     stop = threading.Event()
@@ -740,7 +745,19 @@ def choose_directory(start: Path):
         children = subdirectories(here)
         own = scan(here)
 
+        # THE PATH BAR, first row and selectable. Where you are and where you
+        # can type are the same control: the path was already displayed above
+        # the list as dead text, so putting the cursor on it is the shortest
+        # route from "I have this on my clipboard" to done. Anyone arriving from
+        # a cluster shell, a Slack message or the dashboard HAS the path.
         choices: list = [questionary.Separator(" ")]
+        choices.append(
+            questionary.Choice(
+                title=f"{here}\n{tui.body_indent()}  enter to type a path · ~ works",
+                value=("type", here),
+            )
+        )
+        choices.append(questionary.Separator(" "))
         choices.append(
             questionary.Choice(
                 title=f"Import this folder\n{tui.body_indent()}  {own.describe()}",
@@ -758,20 +775,12 @@ def choose_directory(start: Path):
         if here.parent != here:
             choices.append(questionary.Separator(" "))
             choices.append(questionary.Choice(title="../", value=("cd", here.parent)))
-        # Browsing to /workspace/Michael/odyssey-infill-v3 is nine keystrokes of
-        # arrow key when the path was already on the clipboard. Anyone arriving
-        # from a cluster, a Slack message or the dashboard HAS the path.
-        choices.append(questionary.Separator(" "))
-        choices.append(
-            questionary.Choice(
-                title=f"Enter a path…\n{tui.body_indent()}  paste or type it, ~ works",
-                value=("type", here),
-            )
-        )
 
+        # The path is the first row now, so repeating it in the block above the
+        # question would print it twice on every screen.
         message = tui.framed(
             "Import existing work into Probe.",
-            tui.wrap(str(here)),
+            [],
             "Which folder?",
         )
         picked = tui.ask(

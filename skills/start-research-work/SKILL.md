@@ -1,6 +1,6 @@
 ---
 name: start-research-work
-description: Start tracked research and keep its notebook — create project and experiment if new, record the decisions and findings that shape the work, and open a run when code is about to execute. Use for any research work that produces a result someone might reproduce — training, evaluation, sweeps, ablations, data curation, docking, and the like. Also use BEFORE any run exists — when choosing an approach, rejecting one, or hitting a reproducible finding about the tools, data or environment — and when a project, experiment or run is created, or when writing a script that will run. Re-enter it throughout a session, not once at setup. Trigger for one-off and exploratory work, and when the user did not ask for tracking. Not for installs, unit tests, or routine file reading that decided nothing.
+description: Start tracked research — create project and experiment if new, then open a run. Use for any research work that produces a result someone might reproduce — training, evaluation, sweeps, ablations, data curation, docking, and the like. Also use when a project, experiment, or run is created, or when writing a script that will run. Trigger for one-off and exploratory work, and when the user did not ask for tracking. Not for installs, unit tests, or code that will not run.
 ---
 
 # Start research work
@@ -16,19 +16,17 @@ CLI the slug is hand-typed on every invocation, which is exactly where that come
 — because there the slug is written once in a file and code-reviewed. It refuses a
 near-miss of an existing slug rather than warning.)
 
-This skill is the lab notebook, and it is RE-ENTERED, not run once. "Start" names the
-first call, not the only one — the project is opened here, and every decision, finding
-and reversal after it is filed here too, for as long as the work continues. A session
-that came here once at setup and never returned has recorded the least interesting
-moment of the work.
-
 1. **Orient first.** `browse_research` if you do not know what is in this project;
    `search_knowledge` if you have terms and want prior work on this specific thing.
    Check what is already RUNNING before you launch anything — `browse_research`
    reports `active_run_count`, and duplicate GPU-hours are the expensive mistake.
 
-2. **Create the project and experiment FIRST — before the scaffold, not after it.**
-   Always explicit from the CLI.
+   Read the project's `NOTES.md` — `probe notes show`, or the `notes` on its MCP
+   `card`. It is free-text markdown the last session left for you: what was tried,
+   what was ruled out, what not to repeat. Add to it as you learn things
+   (`probe notes write --append`); see `track-research-work`.
+
+2. **Create the project and experiment.** Always explicit from the CLI.
 
    ```
    probe project create folding
@@ -50,49 +48,7 @@ moment of the work.
    experiment that already exists keeps its own (first-write-wins), so reopening one
    never rewrites it; `probe experiment set EXP --hypothesis "..."` amends it.
 
-   **Tracking named in a brief is a standing requirement, not a phase to schedule
-   after setup.** Create the identities at the moment the work is named — before the
-   repo, the deps, the config. Waiting until there is something to LOG gets the order
-   backwards: notes anchor here (step 3), so nothing setup itself decides has anywhere
-   to go until this exists, and by then those choices have been made and forgotten.
-   Empty is the correct state for a project whose first run has not started;
-   `run_count: 0` is not a reason to defer creating it.
-
-3. **Record decisions and findings as they happen — do not wait for a run.** Planning,
-   investigation and environment archaeology all happen before the first run, and that
-   is where the most irrecoverable context is generated. A note anchors to the ACTIVE
-   project, so it has somewhere to go from the moment the project exists:
-
-   ```
-   probe project use folding
-   probe note add --kind decision --statement "GKE, not DOKS — Harbor has no generic-K8s backend" \
-                  --evidence docs/findings.md#5
-   probe note list                     # reads it back, supersession resolved
-   ```
-
-   `client.notes.add(project_id, "decision", "…", anchor="project")` from the SDK;
-   `--experiment SLUG` or a RUN argument anchors it further down when that is the
-   right scope. Kinds: `intent`, `hypothesis`, `decision`, `observation`, `failure`,
-   `result`, `deviation`, `next_step`.
-
-   **The trigger is a decision or a finding, not a command.** File one when you choose
-   an approach or reject one; when you reverse something the brief assumed; when a
-   tool, dataset or environment behaves reproducibly differently than documented; when
-   you learn something the next session would otherwise re-derive. Do NOT file one for
-   reading a file, listing a directory, or a step that decided nothing — a journal
-   nobody can skim is the same as no journal.
-
-   **Reversing an earlier decision does not overwrite it.** Pass
-   `--supersedes <note_id>` and the old one is withheld on read, carrying
-   `superseded_by`, instead of sitting beside its replacement as a contradiction.
-   Filing after the fact is normal and honest: `--authority` defaults to
-   `agent_summarized`, and `--confidence` is there for a claim you are unsure of.
-
-   Read it back with `probe note list` or
-   `get_entity(ref="project:<id>", view="notes")` — that view is the answer to "why
-   this and not what the brief said", and nothing in the metrics can reconstruct it.
-
-4. **Reuse the active run** when its intent matches. Otherwise open one, with the
+3. **Reuse the active run** when its intent matches. Otherwise open one, with the
    surface that fits where the code will execute.
 
    **Writing or editing the training script → the SDK, in-process.** This is the
@@ -143,7 +99,7 @@ moment of the work.
    the project you think it is, and errors if not. Omit it to use the ambient one
    from `probe project use`.
 
-5. **Reuse before you create.** Before writing or materially changing a reusable
+4. **Reuse before you create.** Before writing or materially changing a reusable
    script, scoring method, dataset, config, image, checkpoint or container
    definition, run `get_entity(ref="artifact:<name>", view="versions")` — artifacts
    resolve by name at the shared, lab-wide level, which is where an official one
@@ -152,7 +108,7 @@ moment of the work.
    most expensive avoidable error here: two scorers with the same intent and
    different behaviour make every result that used either one unreproducible.
 
-6. **Snapshot before launch.** `run.snapshot()` / `probe snapshot RUN_ID` captures
+5. **Snapshot before launch.** `run.snapshot()` / `probe snapshot RUN_ID` captures
    code + env and pins `env_ref`. A run with no execution record cannot be reproduced
    and cannot be published. Record W&B, scheduler, pod, image and storage ids with
    `run.link(...)` / `probe link` as they appear; they land on `foreign_keys`.
@@ -165,7 +121,7 @@ moment of the work.
    else, pass `--venv PATH`; the command fails loudly rather than recording the
    CLI's own packages as the project's.
 
-7. **Tag it.** Repeatable `--tag` on `run start` / `experiment create` /
+6. **Tag it.** Repeatable `--tag` on `run start` / `experiment create` /
    `project create` (SDK `tags=[...]`). Use 1-3 lowercase-kebab tags; prefer
    `baseline`, `ablation`, `sweep`, `debug`, `smoke-test`, `prod-candidate` —
    free-form allowed. If a run's meaning changes later:

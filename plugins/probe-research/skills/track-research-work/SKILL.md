@@ -1,6 +1,6 @@
 ---
 name: track-research-work
-description: Record what research produces — per-step metrics, spans, artifacts, notes, asset versions, and a run's final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication — and for notes, which anchor to a project and need no run at all. Trigger whenever a run is open, or whenever something worth recording happens without one, rather than waiting to be asked.
+description: Record an open run — per-step metrics, spans, artifacts, asset versions, and its final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion, or publication. Trigger whenever a run is open, without waiting to be asked.
 ---
 
 # Track research work
@@ -16,8 +16,6 @@ gets made. Record with the surface the run was opened with.
    | per-device / per-actor | `run.log_hw({"gpu_temp": 88}, device=3)` | `probe log RUN gpu_temp=88 --dim device=3` |
    | structure | `with run.span("rollout", ...) as s:`, `run.step(i)` | `probe span add RUN --type rollout` |
    | outputs | `run.log_artifact("ckpt", path=...)` | `probe artifact add RUN PATH --name ckpt` |
-   | notes | `client.notes.add(run.id, "decision", "…")` | `probe note add RUN --kind decision --statement "…"` |
-   | notes, no run yet | `client.notes.add(project_id, "decision", "…", anchor="project")` | `probe note add --kind decision --statement "…"` |
    | external ids | `run.link(wandb_run_id="abc")` | `probe link RUN --set wandb_run_id=abc` |
    | sub-runs | `run.child("fold-2")` | `probe run child RUN --name fold-2` |
    | computed metrics | `run.log_derived_series("eval/auc", pts, producer="…")` | `probe log RUN eval/auc=0.9 --step 100 --derived --producer …` |
@@ -36,18 +34,23 @@ gets made. Record with the surface the run was opened with.
 
    `run.log()` takes values of any type. Numbers plot; strings, dicts, lists and
    None are stored on that step's record instead and come back under
-   `view="trajectory"`. So `run.log({"loss": l, "phase": "eval"})` is one call —
-   but a durable claim about the work still belongs in a note, not a metric key. Record intent,
-   decisions, observations, failures, results, deviations and next steps as notes
-   either way — that is the same record from both surfaces.
+   `view="trajectory"`. So `run.log({"loss": l, "phase": "eval"})` is one call.
 
-   A note does not need a run. With no RUN argument and no anchor flag it lands on
-   the ACTIVE project, which is where the decisions that PREDATE the run belong —
-   see step 3 of `start-research-work`. Reversing an earlier note is
-   `--supersedes <note_id>`, never an overwrite: `probe note list` (and
-   `view="notes"`) then withholds the old one, marked `superseded_by`, instead of
-   returning it beside its replacement as a contradiction. `--include-superseded`
-   shows the chain.
+   A durable claim about the work — why this approach, what you found, what a next
+   session should not repeat — is prose, not a metric key. It goes in the project's
+   `NOTES.md`:
+
+   ```
+   probe notes show                       # read it before you start
+   probe notes write --append <<'EOF'     # add to it, do not clobber
+   Harbor has no generic-Kubernetes backend, so DOKS is out. Using GKE.
+   EOF
+   ```
+
+   One markdown file per project, free text, no schema. An excerpt rides along on
+   the project's MCP `card`, so the next agent sees it while orienting rather than
+   having to know it exists. Use `--append` when others may be working the same
+   project: a plain write is last-one-wins.
 
    **Never block on delivery: async mode.** Any CLI write above takes `--async`
    (or `PROBE_ASYNC=1` for a whole session): the write is queued in a durable
@@ -100,15 +103,15 @@ gets made. Record with the surface the run was opened with.
    and the MCP tools stay read-only.
 
 3. **Read back what you recorded before relying on it.** `get_entity` with
-   `view="trajectory"` for the spans, `view="metrics"` for the series,
-   `view="notes"` for what was decided and why. What you wrote and what landed are
-   different claims, and only the second is evidence. In async mode, `probe outbox
-   status` must be clean before a read-back can prove anything.
+   `view="trajectory"` for the spans, `view="metrics"` for the series. What you wrote
+   and what landed are different claims, and only the second is evidence. In
+   async mode, `probe outbox status` must be clean before a read-back can prove
+   anything.
 
 4. **Version reusable outputs; do not copy them.** An asset is an artifact with a
    version chain — upload it (`run.log_artifact` / `probe artifact add`), then pin
    with `probe artifact version-add`. The reuse check that decides whether you are
-   pinning a version or opening a new identity is step 5 of `start-research-work`;
+   pinning a version or opening a new identity is step 4 of `start-research-work`;
    the syntax is in `reference.md`.
 
 5. **Before handoff or completion**, read `view="handoff"` or `view="reproduce"`.

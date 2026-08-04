@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Added
+
+- **`capture-run-inputs` skill.** `probe snapshot` captures what git can see; it
+  cannot know that `data/train.jsonl` is the dataset and `.venv` is not, because
+  `.gitignore` was written to keep a repo clean rather than to describe an
+  experiment. The plumbing for the rest shipped over 0.38.0–0.43.0 (`--include`,
+  upload, `snapshot-restore`); this is the judgment that drives it.
+
+  The skill walks the agent from `snapshot-show` (read what was missed) through
+  finding real inputs (paths the entry point opens, the launch config, `.gitignore`
+  read per-entry, base weights, env var NAMES never values) to `--include`, and
+  ends at `snapshot-restore --verify-only` so the claim is checked rather than
+  assumed. It draws the inputs/outputs line explicitly — outputs are artifacts, and
+  sweeping them into the snapshot makes "what produced this result?" unanswerable.
+
+  It also requires recording what was CONSIDERED AND REJECTED, with reasons. Once
+  scope is agent-judged, absence stops being informative: a file missing from a
+  snapshot could mean "not an input", "judged not an input", or "nobody looked",
+  and six weeks later those are indistinguishable.
+
+- `tests/test_skills_commands_exist.py` asserts every `probe ...` command a skill
+  teaches is actually registered. `test_skills_sync.py` guards the plugin copy
+  against drifting from `skills/`; it cannot catch a perfectly-synced skill that
+  teaches a renamed flag. Same invisible shape: tests pass, MCP is correct, only
+  the agent is wrong.
+
+### Added
+
+- **`probe snapshot --include GLOB`** captures inputs `.gitignore` hides. `.gitignore`
+  is right about build output and wrong about a downloaded dataset, a base
+  checkpoint, or a config kept out of the repo on purpose — those are INPUTS, and
+  the manifest had no way to name them, so they were recorded nowhere, not even as
+  a hash. Repeatable; a directory captures its files; a glob matching nothing is an
+  error rather than a silent no-op, and a path escaping the snapshot root is refused.
+
+  Size decides the outcome. Under `--reference-over-mb` (100 default) the file is
+  stored in the code-bytes archive. Above it, the path, host and sha256 are
+  recorded as `source: "reference"` and the bytes are left where they are — copying
+  a 40 GB checkpoint into every run is duplication, not reproducibility.
+
+  `probe snapshot-restore` reports a reference as OFF-PLATFORM with its uri and
+  host rather than as a failure, since the bytes exist somewhere specific. It does
+  NOT count toward `n_unavailable`, but it does keep `tree_matches` false: a reader
+  has to be able to tell "rebuilt" from "rebuilt except the checkpoint".
+
 ### Changed
 
 - **The skills now say WHEN the project is created, not just that it may be.**
@@ -50,6 +95,17 @@
   informative on its own.
 
 ### Added
+
+- **The folder picker leads with a path bar.** The current path is now the
+  first row and it is selectable: press enter on it and type or paste. Where
+  you are and where you can type are the same control, which is the shortest
+  route from "the path is already on my clipboard" to done — and anyone
+  arriving from a cluster shell, Slack or the dashboard has the path. It used
+  to be an "Enter a path…" item at the bottom of the list, below everything you
+  would have to scroll past.
+
+- The backfill progress line is centred with the rest of the wizard. Flush at
+  column 0 it read as output from a different program running underneath.
 
 - **Backfill lets the agent decide the projects, and name them.** The anchor
   used to be pinned before launch — one project, named after the folder — which
@@ -125,46 +181,32 @@
   not what was classified, so `check_run` gating `pending_code_bytes` on it means
   "these bytes are gone" rather than "an upload was attempted".
   `n_classified_pending` keeps the pre-upload count for diagnostics.
-- **A research note no longer requires a run, so planning is trackable.** Every note
-  had to attach to a run, and a run is an execution — so `probe note add --kind
-  decision` answered `Error: Missing argument 'run'`, and the one class of knowledge
-  the note vocabulary was built for (intent, decisions, findings, deviations) was the
-  one class with nowhere to live. Planning, investigation and environment archaeology
-  all happen before the first run: a session that produced six reproducible tooling
-  findings and reversed its own architecture twice recorded zero bytes, and was
-  *correct* to, because the skills said to stay silent until code ran.
+- **`probe notes` — one markdown file per project.** `probe notes show` prints the
+  project's `NOTES.md`; `probe notes write [FILE]` replaces it (stdin when no file),
+  and `--append` adds to it instead, which is what you want when two agents share a
+  project and a plain write is last-one-wins. Free text, no schema.
 
-  Notes now anchor to a **project** or an **experiment** as well as a run. With no
-  RUN argument and no anchor flag, `probe note add` lands on the active project
-  (`probe project use`), and the resolved anchor is echoed on stderr so an ambient
-  one is never silent. `client.notes.add(id, kind, statement, anchor="project")` from
-  the SDK. No backend change: `POST /v1/{projects,experiments}/{id}/artifacts` has
-  taken `kind` and `meta` since fold #22 — the run requirement was one hardcoded URL.
+  It rides along on the project's MCP `card` as an excerpt, which is the part that
+  makes it work: an agent orients with `browse_research` and a card, and a briefing
+  it has to know to ask for is one it does not read. `view="notes"` returns the whole
+  file. `client.get_project_notes()` / `set_project_notes()` from the SDK.
 
-- **`probe note list` and `get_entity(view="notes")` — the read side.** Notes were
-  write-only: nothing listed them, and `--supersedes` was stored and read by nothing,
-  so a reversed decision came back beside the one that replaced it and the record
-  contradicted itself. Both surfaces now resolve the chain through one method
-  (`client.notes.list`), so they cannot drift: a superseded note is withheld and
-  carries `superseded_by`, `--include-superseded` / `filters={"include_superseded":
-  true}` shows it, and the MCP view reports the withheld `count` rather than
-  presenting a filtered record as the complete one.
+### Removed
 
-- **A project has views other than `card`.** `_VIEWS` gained `(project, artifacts)`
-  and `(run|experiment|project, notes)`. A project-anchored artifact was previously
-  writable and unreadable over MCP — stored and invisible, which reads as captured
-  and is worse than untracked.
+- **`probe note` and its research-note vocabulary are gone**, replaced by the plain
+  markdown file above. A note was an entry with a `kind`
+  (`intent|hypothesis|decision|observation|failure|result|deviation|next_step`),
+  plus `--supersedes`, `--authority` and `--confidence`, encoded into a
+  `kind="note"` artifact. Nothing server-side ever validated, aggregated or grouped
+  by any of it — `NOTE_KINDS` was a set in the client and `agent_summarized` appears
+  nowhere in the backend — so eight kinds bought a single list filter, at the cost of
+  making every writer pick one. What people actually write is prose, and the durable
+  claims this was meant to hold were already going into markdown in the repo.
 
-  `NoteClient.add`'s first parameter is now `anchor_id` rather than `run_id`, since
-  it is no longer always a run. `run_id=` keeps working as a deprecated alias — this
-  is a published SDK, and every keyword caller on 0.36 would otherwise take a
-  TypeError from an upgrade that changed nothing they use.
-
-  Two honest limits. A note read fetches the anchor's whole artifact list and filters
-  client-side, because supersession cannot be resolved from a truncated page — a
-  `limit` here would silently return a reversed decision as current. And `--async`
-  with a project or experiment SLUG still resolves it over the network, because the
-  route needs an id; pass an id (or a RUN) for a write that touches nothing.
+  Gone with it: `client.notes`, `NoteClient`, the `EventKind` enum, and the
+  supersession machinery (a markdown file is edited, so "replaced" needs no model).
+  Project-anchored notes shipped in 0.40.0 and 0.41.0 only. Existing `kind="note"`
+  artifacts are untouched and still readable as ordinary artifacts.
 
 ### Fixed
 
@@ -175,20 +217,6 @@
   standing statement about where imported folders belong. The ambient project
   (`probe project use`, `PROBE_PROJECT`) is no longer consulted; `--project`
   names a destination explicitly when you want one.
-- **`probe note add` no longer claims to have recorded a note it did not.** A
-  UUID-shaped `--project` passed straight through unchecked, so a run id handed to
-  `--project` addressed `/v1/projects/<run-uuid>/artifacts`; the fail-open write
-  journaled the doomed op, and the command printed "note recorded" and exited 0. The
-  anchor is now fetched before the write, and a sync write that fell through to the
-  outbox says so and names `probe outbox status` instead of reporting success.
-
-- **One malformed artifact no longer makes a whole project's notes unreadable.**
-  `meta` is unvalidated free-form on every artifact route, so a row carrying a
-  non-string `note_id` or `created_at` reached the sort and raised `'<' not
-  supported between 'int' and 'str'`. Types are now checked at the boundary. A note
-  that supersedes ITSELF is also ignored rather than withheld from its own anchor —
-  the record erasing itself on read.
-
 - **The test fake's experiment-artifact listing was inverted in both directions.** It
   rolled up the artifacts of the experiment's RUNS — rows
   `GET /v1/experiments/{id}/artifacts` has never returned, it filters `experiment_id`
@@ -392,6 +420,51 @@
   nothing validates on its behalf.
 
 ## Unreleased
+
+### Added
+
+- **`capture-run-inputs` skill.** `probe snapshot` captures what git can see; it
+  cannot know that `data/train.jsonl` is the dataset and `.venv` is not, because
+  `.gitignore` was written to keep a repo clean rather than to describe an
+  experiment. The plumbing for the rest shipped over 0.38.0–0.43.0 (`--include`,
+  upload, `snapshot-restore`); this is the judgment that drives it.
+
+  The skill walks the agent from `snapshot-show` (read what was missed) through
+  finding real inputs (paths the entry point opens, the launch config, `.gitignore`
+  read per-entry, base weights, env var NAMES never values) to `--include`, and
+  ends at `snapshot-restore --verify-only` so the claim is checked rather than
+  assumed. It draws the inputs/outputs line explicitly — outputs are artifacts, and
+  sweeping them into the snapshot makes "what produced this result?" unanswerable.
+
+  It also requires recording what was CONSIDERED AND REJECTED, with reasons. Once
+  scope is agent-judged, absence stops being informative: a file missing from a
+  snapshot could mean "not an input", "judged not an input", or "nobody looked",
+  and six weeks later those are indistinguishable.
+
+- `tests/test_skills_commands_exist.py` asserts every `probe ...` command a skill
+  teaches is actually registered. `test_skills_sync.py` guards the plugin copy
+  against drifting from `skills/`; it cannot catch a perfectly-synced skill that
+  teaches a renamed flag. Same invisible shape: tests pass, MCP is correct, only
+  the agent is wrong.
+
+### Added
+
+- **`probe snapshot --include GLOB`** captures inputs `.gitignore` hides. `.gitignore`
+  is right about build output and wrong about a downloaded dataset, a base
+  checkpoint, or a config kept out of the repo on purpose — those are INPUTS, and
+  the manifest had no way to name them, so they were recorded nowhere, not even as
+  a hash. Repeatable; a directory captures its files; a glob matching nothing is an
+  error rather than a silent no-op, and a path escaping the snapshot root is refused.
+
+  Size decides the outcome. Under `--reference-over-mb` (100 default) the file is
+  stored in the code-bytes archive. Above it, the path, host and sha256 are
+  recorded as `source: "reference"` and the bytes are left where they are — copying
+  a 40 GB checkpoint into every run is duplication, not reproducibility.
+
+  `probe snapshot-restore` reports a reference as OFF-PLATFORM with its uri and
+  host rather than as a failure, since the bytes exist somewhere specific. It does
+  NOT count toward `n_unavailable`, but it does keep `tree_matches` false: a reader
+  has to be able to tell "rebuilt" from "rebuilt except the checkpoint".
 
 ### Changed
 

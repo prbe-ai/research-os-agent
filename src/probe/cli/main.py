@@ -88,17 +88,6 @@ class Agg(str, Enum):
     count = "count"
 
 
-class EventKind(str, Enum):
-    intent = "intent"
-    hypothesis = "hypothesis"
-    decision = "decision"
-    observation = "observation"
-    failure = "failure"
-    result = "result"
-    deviation = "deviation"
-    next_step = "next_step"
-
-
 class AssetMode(str, Enum):
     readonly = "readonly"
     copy = "copy"
@@ -224,7 +213,7 @@ def _kick_drainer() -> None:
 # Group name, not full path: Typer dispatches `probe run start` through the `run`
 # group, and every subcommand under these groups is run-scoped.
 _UPDATE_HOT_PATH_COMMANDS = frozenset(
-    {"log", "span", "note", "artifact", "run", "exec", "outbox"}
+    {"log", "span", "artifact", "run", "exec", "outbox"}
 )
 
 
@@ -3438,6 +3427,17 @@ def snapshot(
     max_upload_mb: int = typer.Option(
         256, "--max-upload-mb", help="refuse (never truncate) above this size"
     ),
+    include: list[str] = typer.Option(
+        None,
+        "--include",
+        metavar="GLOB",
+        help="also capture paths git ignores (datasets, checkpoints, out-of-tree configs)",
+    ),
+    reference_over_mb: int = typer.Option(
+        100,
+        "--reference-over-mb",
+        help="above this, record where a file lives instead of copying it",
+    ),
 ) -> None:
     """Non-disruptive code + env capture.
 
@@ -3462,6 +3462,8 @@ def snapshot(
             detect_venv=True,
             upload=not no_upload,
             max_upload_bytes=max_upload_mb * 1024 * 1024,
+            include=list(include) if include else None,
+            reference_over_bytes=reference_over_mb * 1024 * 1024,
         )
     m = snap["manifest"]
     cb = snap.get("code_bytes") or {}
@@ -3490,6 +3492,12 @@ def snapshot(
             f"      {cb['pending_upload']} NOT stored ({cb.get('reason')}) — "
             "this run is not reproducible from the record alone"
         )
+    for e in (m.get("entries") or []):
+        if e.get("source") == "reference":
+            print(
+                f"      referenced (too large to copy): {e['path']}  "
+                f"{e['size'] / 1e6:.0f} MB on {e.get('host')}"
+            )
     deps = snap.get("deps") or {}
     prov = snap.get("env_provenance") or {}
     if deps.get("packages") is not None:
@@ -3585,8 +3593,11 @@ def snapshot_restore(
     for f in result["files"]:
         if f["status"] == "unavailable":
             print(f"  MISSING {f['path']}  ({f['reason']})")
+    for r in result.get("referenced") or []:
+        print(f"  OFF-PLATFORM {r['path']}  -> {r['uri']} on {r['host']}")
     verb = "verified" if verify_only else "restored"
-    print(f"{result['n_restored']} {verb}, {result['n_unavailable']} unavailable")
+    ref = f", {result['n_referenced']} referenced off-platform" if result.get("n_referenced") else ""
+    print(f"{result['n_restored']} {verb}, {result['n_unavailable']} unavailable{ref}")
     print(f"tree_sha256 {result['tree_sha256']} matches={result['tree_matches']}")
     if result["n_unavailable"]:
         raise typer.Exit(1)
@@ -3768,197 +3779,66 @@ def bundle(run: str = typer.Argument(...)) -> None:
         _print_json(c.run_bundle(run))
 
 
-# -- structured research notes ----------------------------------------------
-# (backend `events` are server-emitted + read-only; a research note is stored as a
-# kind="note" artifact. `probe events` reads the backend lifecycle log.)
-note_app = typer.Typer(
-    no_args_is_help=True,
-    help="upload and read structured research knowledge (intent, decisions, findings)",
-)
-app.add_typer(note_app, name="note")
+# -- the project's notes file -------------------------------------------------
+# One markdown file per project, read and written as text. This replaced a
+# structured `probe note` command group whose kind vocabulary
+# (intent/decision/observation/...), supersession and authority field were never
+# validated or grouped by anything server-side -- eight kinds bought one list filter.
+# Prose is what people write; a fixed filename is the only thing that needed inventing.
+notes_app = typer.Typer(no_args_is_help=True, help="the project's NOTES.md")
+app.add_typer(notes_app, name="notes")
 
 
-def _note_anchor(
-    client: Client,
-    *,
-    run: str | None,
-    project: str | None,
-    experiment: str | None,
-    name_the_anchor: bool = True,
-) -> tuple[Anchor, str, str]:
-    """Resolve the one thing a note hangs off, and name it out loud.
-
-    Precedence is explicit-beats-ambient: a RUN argument, then --experiment, then
-    --project, then the ACTIVE project (`probe project use`). That last fallback is
-    the whole point of the anchorless form -- planning, investigation and design
-    decisions all happen before any run exists, and the project is the only anchor
-    guaranteed to be there at that moment. Before it, `probe note add --kind decision`
-    was `Error: Missing argument 'run'` and the knowledge went nowhere.
-
-    Returns a label as well as the id, because an ambient anchor is otherwise
-    invisible: a note filed against the wrong active project reads exactly like a
-    correct one. `name_the_anchor=False` labels with the id instead — turning an id
-    into a slug is a GET, and --async promises that a stuck network costs you
-    nothing, which a blocking read taken purely to prettify a message would break.
-    """
-    if run is not None or project is not None or experiment is not None:
-        anchor, value = _pick_anchor(
-            run=run, project=project, experiment=experiment, workspace=None, shared=False
-        )
-        if anchor is Anchor.RUN:
-            return anchor, value, f"run {value}"
-        kind = "project" if anchor is Anchor.PROJECT else "experiment"
-        try:
-            UUID(value)
-        except ValueError:
-            # resolve_or_raise, not a bare lookup: a typo'd slug then errors with the
-            # near misses named instead of 404ing on a name that nearly exists.
-            return anchor, str(client.resolve_or_raise(kind, value)["id"]), f"{kind} {value}"
-        if not name_the_anchor:
-            return anchor, value, f"{kind} {value}"
-        # A UUID is CHECKED, not trusted. It used to pass straight through, so a run
-        # id handed to --project addressed /v1/projects/<run-uuid>/artifacts, the
-        # write fail-opened to the journal, and the command still printed "note
-        # recorded" and exited 0. The note was gone and the session believed it was
-        # filed -- the exact failure this whole command exists to stop.
-        row = client.get_project(value) if kind == "project" else client.get_experiment(value)
-        return anchor, value, f"{kind} {row.get('slug') or value}"
-
-    active = resolve(base_url=_conn.base_url).project
-    if not active:
+def _notes_project(client: Client, project: str | None) -> tuple[str, str]:
+    """(project_id, label) for a notes read/write. Explicit beats the active one."""
+    resolved = resolve(project=project, base_url=_conn.base_url).project
+    if not resolved:
         raise typer.BadParameter(
-            "a note needs an anchor: pass a RUN, --project/--experiment, or set an "
-            "active project with `probe project use <slug>`"
+            "pass --project, or set an active project with `probe project use <slug>`"
         )
-    project_id = _project_id(client, active)
-    if not name_the_anchor:
-        return Anchor.PROJECT, project_id, f"project {project_id} (active)"
-    slug = _project_slug(client, active) or active
-    return Anchor.PROJECT, project_id, f"project {slug} (active)"
+    return _project_id(client, resolved), _project_slug(client, resolved) or resolved
 
 
-@note_app.command("add")
-def note_add(
-    run: str = typer.Argument(None, help="run id — omit to anchor elsewhere"),
-    kind: EventKind = typer.Option(..., "--kind"),
-    statement: str = typer.Option(..., "--statement"),
-    evidence: list[str] = typer.Option(None, "--evidence"),
-    authority: str = typer.Option("agent_summarized", "--authority"),
-    confidence: float = typer.Option(None, "--confidence"),
-    supersedes: str = typer.Option(
-        None, "--supersedes", help="note_id this reverses; `note list` resolves the chain"
-    ),
-    meta: list[str] = typer.Option(None, "--meta", metavar="k=v"),
-    project: str = typer.Option(None, "--project", help="anchor to a project (id or slug)"),
-    experiment: str = typer.Option(
-        None, "--experiment", help="anchor to an experiment (id or slug)"
-    ),
+@notes_app.command("show")
+def notes_show(
+    project: str = typer.Option(None, "--project", help="project id or slug"),
 ) -> None:
-    """Append a research note (normal experiment upload; agents/researchers/SDK).
-
-    With no RUN and no anchor flag the note lands on the ACTIVE project, so a
-    decision made while planning has somewhere to go before any run exists. A
-    superseded decision is never overwritten -- pass `--supersedes <note_id>` and
-    `probe note list` resolves the chain on read.
-    """
-    if _conn.async_mode:
-        # The id is minted HERE, not in the SDK, because an async write returns None:
-        # without it there is no note_id to hand a later `--supersedes`, and the one
-        # workflow this command exists for -- reversing an earlier decision -- would
-        # be unavailable to every async caller.
-        note_id = str(uuid4())
-        with _async_client() as c:
-            anchor, anchor_id, label = _note_anchor(
-                c, run=run, project=project, experiment=experiment,
-                name_the_anchor=False,
-            )
-            c.notes.add(
-                anchor_id,
-                kind.value,
-                statement,
-                anchor=anchor,
-                evidence_refs=evidence,
-                authority=authority,
-                confidence=confidence,
-                supersedes=supersedes,
-                note_id=note_id,
-                metadata=_kv_pairs(meta) if meta else None,
-            )
-        _kick_drainer()
-        print(f"queued note for {label} (async)", file=sys.stderr)
-        _print_json({"note_id": note_id, "queued": True})
+    """Print the project's NOTES.md. Empty output means it was never written."""
+    with _client() as c:
+        project_id, label = _notes_project(c, project)
+        text = c.get_project_notes(project_id)
+    if text is None:
+        print(f"{label} has no NOTES.md yet", file=sys.stderr)
         return
-    with _client() as c:
-        anchor, anchor_id, label = _note_anchor(
-            c, run=run, project=project, experiment=experiment
-        )
-        result = c.notes.add(
-            anchor_id,
-            kind.value,
-            statement,
-            anchor=anchor,
-            evidence_refs=evidence,
-            authority=authority,
-            confidence=confidence,
-            supersedes=supersedes,
-            metadata=_kv_pairs(meta) if meta else None,
-        )
-    if result is None:
-        # A fail-open write journals on failure and returns None. Saying "recorded"
-        # there is the lie this feature exists to stop: the drainer may yet deliver
-        # it, or dead-letter it, and only `probe outbox status` knows which.
-        print(
-            f"note QUEUED for {label} — the write did not reach the server; "
-            "`probe outbox status` before treating it as filed",
-            file=sys.stderr,
-        )
-    else:
-        print(f"note recorded on {label}", file=sys.stderr)
-    _print_json(result)
+    sys.stdout.write(text if text.endswith("\n") else text + "\n")
 
 
-@note_app.command("list")
-def note_list(
-    run: str = typer.Argument(None, help="run id — omit to read another anchor"),
-    kind: EventKind = typer.Option(None, "--kind", help="only this note kind"),
-    project: str = typer.Option(None, "--project", help="read a project (id or slug)"),
-    experiment: str = typer.Option(
-        None, "--experiment", help="read an experiment (id or slug)"
-    ),
-    include_superseded: bool = typer.Option(
+@notes_app.command("write")
+def notes_write(
+    file: str = typer.Argument(None, help="file to upload; omit or '-' to read stdin"),
+    project: str = typer.Option(None, "--project", help="project id or slug"),
+    append: bool = typer.Option(
         False,
-        "--include-superseded",
-        help="also show notes a later note reversed (marked `superseded_by`)",
+        "--append",
+        help="append to the current text instead of replacing it",
     ),
 ) -> None:
-    """Read the notes on one anchor, oldest first, with supersession resolved.
+    """Write the project's NOTES.md.
 
-    Same anchor rules as `note add`, so `probe note list` after `probe project use`
-    reads back what `probe note add` just filed. A note another note supersedes is
-    hidden unless `--include-superseded`, and then it carries `superseded_by` -- a
-    reversed decision reads as reversed rather than as a contradiction.
+    Replaces by default. `--append` reads the current text first and adds to it,
+    which is what you want when two agents are working the same project -- a plain
+    write is last-one-wins and the other's paragraph is gone.
     """
+    text = sys.stdin.read() if file in (None, "-") else Path(file).read_text()
     with _client() as c:
-        anchor, anchor_id, _ = _note_anchor(
-            c, run=run, project=project, experiment=experiment, name_the_anchor=False
-        )
-        note_kind = kind.value if kind is not None else None
-        rows = c.notes.list(
-            anchor_id, anchor=anchor, kind=note_kind, include_superseded=True
-        )
-        hidden = sum(1 for r in rows if r.get("superseded_by"))
-        if not include_superseded:
-            rows = [r for r in rows if not r.get("superseded_by")]
-    # Say what was withheld. Without this a two-note anchor whose only decision was
-    # reversed prints `[]`, which reads as "nothing was ever decided here" — the
-    # exact confident-absence this command exists to stop.
-    if hidden and not include_superseded:
-        print(
-            f"({hidden} superseded note{'s' if hidden > 1 else ''} withheld; "
-            f"--include-superseded shows them)",
-            file=sys.stderr,
-        )
-    _print_json(rows)
+        project_id, label = _notes_project(c, project)
+        if append:
+            current = c.get_project_notes(project_id)
+            if current:
+                text = current.rstrip("\n") + "\n\n" + text.lstrip("\n")
+        result = c.set_project_notes(project_id, text)
+    print(f"wrote NOTES.md on project {label}", file=sys.stderr)
+    _print_json(result)
 
 
 @app.command()
