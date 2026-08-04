@@ -26,11 +26,11 @@ the plugin.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from probe.cli import claude_cli
 from probe.cli.capabilities import (
     ENV_INGEST_TOKEN,
     MARKETPLACE,
@@ -41,7 +41,6 @@ from probe.cli.capabilities import (
     tap_plugin_dir,
 )
 
-_CLAUDE_TIMEOUT_S = 90.0
 
 
 class OffMode(StrEnum):
@@ -222,21 +221,14 @@ def _stop_daemon() -> tuple[bool, list[str]]:
 
 
 def _uninstall_plugin() -> tuple[bool, list[str]]:
-    binary = shutil.which("claude")
-    if not binary:
+    if not claude_cli.available():
         return False, ["`claude` not found, so the plugin was left installed"]
-    try:
-        completed = subprocess.run(  # noqa: S603 - fixed binary, no shell
-            [binary, "plugin", "uninstall", f"{TAP_PLUGIN_NAME}@{MARKETPLACE}"],
-            capture_output=True,
-            text=True,
-            timeout=_CLAUDE_TIMEOUT_S,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, [f"plugin uninstall failed: {exc}"]
-    if completed.returncode != 0:
-        return False, [f"plugin uninstall failed: {completed.stderr.strip()}"]
+    result = claude_cli.run(
+        ["plugin", "uninstall", f"{TAP_PLUGIN_NAME}@{MARKETPLACE}"],
+        timeout=claude_cli.CAPTURE_TIMEOUT_S,
+    )
+    if not result.ok:
+        return False, [f"plugin uninstall failed: {result.detail}"]
     return True, []
 
 

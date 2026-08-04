@@ -18,12 +18,10 @@ take the flag path, and none of them may hang waiting for a keypress.
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import sys
 from dataclasses import dataclass
 
-from probe.cli import agent_rules, autoupdate
+from probe.cli import agent_rules, autoupdate, claude_cli
 from probe.cli.capabilities import (
     MARKETPLACE,
     MARKETPLACE_REPO,
@@ -34,7 +32,11 @@ from probe.cli.capabilities import (
 )
 from probe.cli.capture import OffMode, clear_killswitch, turn_off
 
-_CLAUDE_TIMEOUT_S = 180.0
+#: How long the whole apply phase may spend before it stops STARTING new work.
+#: Not a kill switch: a `claude plugin install` cut off mid-write is how a
+#: plugin cache gets corrupted, so an in-flight step always runs to its own
+#: timeout. This only refuses to begin the next one.
+PHASE_BUDGET_S = 300.0
 
 #: What an omitted flag means on a FRESH machine (nothing configured yet).
 #: Capture defaults OFF: opting someone into transcript egress by omission is
@@ -157,6 +159,15 @@ PLAN_LABELS: dict[Capability, str] = {
     Capability.AGENT_RULES: "the rules in your global CLAUDE.md",
 }
 
+#: What the step reads when the PLUGIN is already installed and only the
+#: credential is missing. Distinct from PLAN_LABELS because "enable CLI + MCP"
+#: on such a machine promises an install that will not happen: the run's whole
+#: job there is the browser approval.
+SIGN_IN_LABELS: dict[Capability, str] = {
+    Capability.TRACKING: "sign in (the CLI + MCP plugin is already installed)",
+    Capability.CAPTURE: "sign in to pair Session capture (the plugin is already installed)",
+}
+
 
 def interactive() -> bool:
     """Whether a real human can answer a prompt. Both ends must be a TTY: a
@@ -164,41 +175,81 @@ def interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _run_claude(args: list[str]) -> tuple[bool, str]:
-    binary = shutil.which("claude")
-    if not binary:
-        return False, "`claude` not found on PATH"
-    try:
-        completed = subprocess.run(  # noqa: S603 - fixed binary, no shell
-            [binary, *args],
-            capture_output=True,
-            text=True,
-            timeout=_CLAUDE_TIMEOUT_S,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        return False, str(exc)
-    if completed.returncode != 0:
-        return False, completed.stderr.strip() or completed.stdout.strip()
-    return True, completed.stdout.strip()
+#: How an apply_* message announces that something went wrong. The wizard's
+#: progress screen has to tell a failed step from a successful one, and these
+#: helpers report failure in PROSE rather than by raising -- so the markers live
+#: here, beside the code that emits them. A copy of this tuple in main.py would
+#: drift the first time someone reworded a message, and the tick would quietly
+#: go green on a step that failed.
+_FAILURE_MARKERS = ("could not", "!")
 
 
-def install_plugin(name: str) -> tuple[bool, str]:
-    """Install one plugin, refreshing the marketplace cache FIRST.
+def reports_failure(message: str) -> bool:
+    """Whether an apply_* message is reporting a failure or a warning."""
+    return message.startswith(_FAILURE_MARKERS)
+
+
+def refresh_marketplace() -> claude_cli.Result:
+    """Bring the local marketplace copy up to date. ONCE per wizard run.
 
     `marketplace add` on an already-added marketplace does NOT refresh it, so
     without the update a fresh wizard run happily installs a stale plugin
     version -- which is exactly how a newly published plugin appears to be
     missing. The dashboard's pairing modal ships `add` and `update` as separate
     commands for the same reason.
+
+    Hoisted OUT of install_plugin, which used to do it per plugin: a run that
+    installs both plugins refreshed the same marketplace twice, and threw both
+    results away. Discarding them is why a failed refresh surfaced as Claude's
+    downstream "not found in marketplace" -- an error whose suggested fix is
+    the very command the wizard had just silently failed at.
+
+    `add` failing is NOT fatal and is not reported: the common case is "already
+    on disk", which exits non-zero on some versions. `update` is the one whose
+    success decides whether the catalog we install from is current.
     """
-    _run_claude(["plugin", "marketplace", "add", MARKETPLACE_REPO])
-    _run_claude(["plugin", "marketplace", "update", MARKETPLACE])
-    return _run_claude(["plugin", "install", f"{name}@{MARKETPLACE}"])
+    claude_cli.run(
+        ["plugin", "marketplace", "add", MARKETPLACE_REPO],
+        timeout=claude_cli.REFRESH_TIMEOUT_S,
+    )
+    return claude_cli.run(
+        ["plugin", "marketplace", "update", MARKETPLACE],
+        timeout=claude_cli.REFRESH_TIMEOUT_S,
+    )
 
 
-def uninstall_plugin(name: str) -> tuple[bool, str]:
-    return _run_claude(["plugin", "uninstall", f"{name}@{MARKETPLACE}"])
+def install_plugin(name: str, *, on_retry=None) -> claude_cli.Result:
+    """Install one plugin. Retries ONCE, after a refresh, on ANY failure.
+
+    Deliberately NOT gated on matching Claude's error text. A retry that fires
+    only when the message contains "not found in marketplace" is a guard that
+    certifies its own rot: Anthropic rewords the string, the retry silently
+    stops firing, and every test stays green. One plain rule instead -- it
+    failed, so refresh and try once more -- costs one extra attempt on a
+    genuinely broken machine and cannot fall out of sync with anyone's prose.
+
+    `on_retry` is the caller's retry BUDGET, not a notification: it returns
+    False once the run has already spent its single retry, so two plugins
+    failing cannot cost two refreshes and two reinstalls.
+    """
+    result = claude_cli.run(
+        ["plugin", "install", f"{name}@{MARKETPLACE}"],
+        timeout=claude_cli.INSTALL_TIMEOUT_S,
+    )
+    if result.ok or on_retry is None or not on_retry():
+        return result
+    refresh_marketplace()
+    return claude_cli.run(
+        ["plugin", "install", f"{name}@{MARKETPLACE}"],
+        timeout=claude_cli.INSTALL_TIMEOUT_S,
+    )
+
+
+def uninstall_plugin(name: str) -> claude_cli.Result:
+    return claude_cli.run(
+        ["plugin", "uninstall", f"{name}@{MARKETPLACE}"],
+        timeout=claude_cli.INSTALL_TIMEOUT_S,
+    )
 
 
 def grants_for(selection: Selection) -> list[str]:
@@ -323,11 +374,26 @@ def plan(caps: Capabilities, selection: Selection) -> list[str]:
                 steps.append(f"refresh {PLAN_LABELS[capability]}")
             continue
         label = PLAN_LABELS[capability]
-        steps.append(f"{'enable' if want else 'disable'} {label}")
+        if not want:
+            steps.append(f"disable {label}")
+            continue
+        # "enable X" when the plugin is ALREADY there and only the credential
+        # is missing describes work this run will not do -- and it is the
+        # common first-run case, because `capture_on` is credential-only and
+        # `tracking_on` is plugin AND login. Name the piece that is actually
+        # absent instead.
+        plugin_here = {
+            Capability.TRACKING: caps.tracking_plugin_installed,
+            Capability.CAPTURE: caps.capture_plugin_installed,
+        }.get(capability)
+        if plugin_here is True:
+            steps.append(SIGN_IN_LABELS.get(capability, f"enable {label}"))
+        else:
+            steps.append(f"enable {label}")
     return steps
 
 
-def apply_capture(caps: Capabilities, want: bool, *, mode: OffMode) -> list[str]:
+def apply_capture(caps: Capabilities, want: bool, *, mode: OffMode, on_retry=None) -> list[str]:
     """Bring capture to `want` and report honestly.
 
     Turning it OFF goes through the verified postcondition in capture.py rather
@@ -335,10 +401,20 @@ def apply_capture(caps: Capabilities, want: bool, *, mode: OffMode) -> list[str]
     """
     messages: list[str] = []
     if want:
+        # Two INDEPENDENT jobs, and conflating them is a bug in both directions.
+        # Clearing the killswitch is what actually turns capture back on for a
+        # machine that already has the plugin; installing is only needed when
+        # the plugin is absent. Gating the whole step on "plugin absent" (which
+        # this function's caller briefly did) left `.disabled` in place while
+        # the wizard reported success -- capture silently off after we said on.
+        # Gating it on "capture off" instead reinstalls a plugin that is already
+        # there. So: always clear, install only when missing.
         clear_killswitch()
-        ok, detail = install_plugin(TAP_PLUGIN_NAME)
-        if not ok:
-            messages.append(f"could not install {TAP_PLUGIN_NAME}: {detail}")
+        if caps.capture_plugin_installed:
+            return messages
+        result = install_plugin(TAP_PLUGIN_NAME, on_retry=on_retry)
+        if not result.ok:
+            messages.append(f"could not install {TAP_PLUGIN_NAME}: {result.detail}")
         return messages
     if not caps.capture_on and not caps.capture_token_sources:
         return messages
@@ -348,7 +424,7 @@ def apply_capture(caps: Capabilities, want: bool, *, mode: OffMode) -> list[str]
     return messages
 
 
-def apply_tracking(want: bool) -> list[str]:
+def apply_tracking(want: bool, *, on_retry=None) -> list[str]:
     """Bring tracking to `want`.
 
     Turning it off removes the plugin but deliberately does NOT revoke the PAT
@@ -358,13 +434,13 @@ def apply_tracking(want: bool) -> list[str]:
     """
     messages: list[str] = []
     if want:
-        ok, detail = install_plugin(TRACKING_PLUGIN_NAME)
-        if not ok:
-            messages.append(f"could not install {TRACKING_PLUGIN_NAME}: {detail}")
+        result = install_plugin(TRACKING_PLUGIN_NAME, on_retry=on_retry)
+        if not result.ok:
+            messages.append(f"could not install {TRACKING_PLUGIN_NAME}: {result.detail}")
         return messages
-    ok, detail = uninstall_plugin(TRACKING_PLUGIN_NAME)
-    if not ok:
-        messages.append(f"could not uninstall {TRACKING_PLUGIN_NAME}: {detail}")
+    result = uninstall_plugin(TRACKING_PLUGIN_NAME)
+    if not result.ok:
+        messages.append(f"could not uninstall {TRACKING_PLUGIN_NAME}: {result.detail}")
     else:
         messages.append(
             "Removed the tracking plugin. Your login is untouched — "

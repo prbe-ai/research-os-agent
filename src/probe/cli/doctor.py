@@ -196,6 +196,7 @@ def collect() -> Capabilities:
         base_url=base_url,
         tracking_plugin_installed=TRACK in plugins,
         capture_plugin_installed=TAP in plugins,
+        plugins_verified=plugins.verified,
         capture_token_sources=sources,
         capture_killswitched=(tap_plugin_dir() / ".disabled").exists(),
         capture_device_id=capture_device_id(),

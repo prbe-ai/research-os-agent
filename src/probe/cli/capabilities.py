@@ -19,10 +19,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+
+from probe.cli import claude_cli
 
 TAP_PLUGIN_NAME = "probe-research-tap"
 TRACKING_PLUGIN_NAME = "probe-research"
@@ -37,8 +38,6 @@ TAP_PLUGIN_ID = f"{TAP_PLUGIN_NAME}@{MARKETPLACE}"
 ENV_INGEST_TOKEN = "PROBE_INGEST_TOKEN"
 ENV_TAP_PLUGIN_DIR = "PROBE_RESEARCH_TAP_PLUGIN_DIR"
 ENV_CONFIG_PATH = "PROBE_CONFIG_PATH"
-
-_CLAUDE_TIMEOUT_S = 20.0
 
 
 class Capability(StrEnum):
@@ -87,6 +86,12 @@ class Capabilities:
 
     tracking_plugin_installed: bool = False
     capture_plugin_installed: bool = False
+
+    #: Whether the two flags above were actually ASKED, or merely defaulted.
+    #: False when `claude` is absent or `plugin list` could not complete -- in
+    #: which case "not installed" is an unanswered question, not a finding, and
+    #: nothing may report a failed install on the strength of it.
+    plugins_verified: bool = True
 
     capture_token_sources: tuple[TokenSource, ...] = ()
     capture_killswitched: bool = False
@@ -230,24 +235,52 @@ def capture_token_sources() -> tuple[TokenSource, ...]:
     return tuple(found)
 
 
-def installed_plugins(*, claude_bin: str | None = None) -> set[str]:
-    """Plugin names Claude Code reports as installed. Empty when `claude` is
-    absent, which is normal on a GPU pod and must not be an error."""
+@dataclass(frozen=True)
+class PluginState:
+    """What Claude Code reports installed, AND whether it managed to answer.
+
+    THE TWO ARE DIFFERENT and collapsing them is a bug. An empty `names` used
+    to mean three unrelated things at once -- the plugins are genuinely absent,
+    `claude` is not on this machine, or the query timed out -- so any caller
+    that treated "empty" as "not installed" would tell someone on a GPU pod
+    that their setup failed. `verified` separates "we looked and they are not
+    there" from "we could not look".
+    """
+
+    names: frozenset[str] = frozenset()
+    verified: bool = True
+
+    def __contains__(self, name: str) -> bool:
+        return name in self.names
+
+    def __iter__(self):
+        return iter(self.names)
+
+    def __len__(self) -> int:
+        return len(self.names)
+
+    def missing(self, wanted) -> list[str]:
+        """Names VERIFIED absent. Empty when we could not check -- an
+        unanswerable question must not read as a negative answer."""
+        if not self.verified:
+            return []
+        return [name for name in wanted if name not in self.names]
+
+
+def installed_plugins(*, claude_bin: str | None = None) -> PluginState:
+    """Plugin names Claude Code reports as installed.
+
+    `verified=False` when `claude` is absent (normal on a GPU pod and never an
+    error) or the query could not complete.
+    """
     binary = claude_bin or shutil.which("claude")
     if not binary:
-        return set()
-    try:
-        completed = subprocess.run(  # noqa: S603 - fixed binary, no shell
-            [binary, "plugin", "list"],
-            capture_output=True,
-            text=True,
-            timeout=_CLAUDE_TIMEOUT_S,
-            check=False,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return set()
+        return PluginState(verified=False)
+    result = claude_cli.run(["plugin", "list"], timeout=claude_cli.LIST_TIMEOUT_S)
+    if not result.reachable:
+        return PluginState(verified=False)
     names: set[str] = set()
-    for line in completed.stdout.splitlines():
+    for line in result.detail.splitlines():
         # `probe-research` is a PREFIX of `probe-research-tap`, so a line naming
         # the tap contains both. Longest match wins per line, otherwise having
         # only the tap installed would read as tracking being on too.
@@ -255,7 +288,9 @@ def installed_plugins(*, claude_bin: str | None = None) -> set[str]:
             names.add(TAP_PLUGIN_NAME)
         elif TRACKING_PLUGIN_NAME in line:
             names.add(TRACKING_PLUGIN_NAME)
-    return names
+    # A non-zero exit with readable output still tells us what IS installed, but
+    # not reliably what is not -- so parse it and decline to call it verified.
+    return PluginState(names=frozenset(names), verified=result.ok)
 
 
 def capture_device_id() -> str | None:

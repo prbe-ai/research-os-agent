@@ -324,3 +324,108 @@ def body_indent() -> str:
     description lines get nothing, so they carry their own pad.
     """
     return " " * (left_pad() + 2)
+
+
+#: How a step reads in the plan list, by state.
+_PENDING, _ACTIVE, _OK, _FAILED = "pending", "active", "ok", "failed"
+_MARKS = {_PENDING: "·", _ACTIVE: "»", _OK: "✔", _FAILED: "✗"}
+
+#: Width of the bar itself, inside its brackets. Comfortably under
+#: CONTENT_WIDTH so the bar plus its counter never needs wrapping.
+_BAR_WIDTH = 28
+
+
+class Progress:
+    """The install phase as ONE live screen, not a stream of lines.
+
+    The phase used to collect every message into a list and print the lot after
+    all of it had finished. Since a step here shells out to `claude` -- up to
+    six times, each with its own multi-second timeout -- that meant the screen
+    sat on "This run will:" and nothing else for minutes, which reads as a hang.
+    It also printed through `say()`, which left-pads but does NOT wrap, so a
+    200-character error from `claude` ran off the block and wrapped at the
+    terminal's right edge back to column 0.
+
+    Both problems are `page()`'s job, so this drives `page()`: it wraps, it
+    centres horizontally AND vertically, and it is already tested. Each state
+    change redraws the whole screen.
+
+    TWO RENDERINGS, because a screen and a log want opposite things:
+
+      interactive   clear + redraw the whole block, bar and all
+      piped/CI      append ONE line per step as it resolves
+
+    A redraw into a pipe would print the growing block once per step (page()
+    skips the clear when it is not interactive), which is log spam rather than
+    progress. Appending keeps `probe wizard --yes` greppable and -- the reason
+    it matters -- leaves evidence of WHICH step a wedged CI job died on.
+
+    Results accumulate rather than scrolling past: `clear()` emits \\033[3J,
+    which drops the scrollback, so anything not re-drawn is gone for good.
+    """
+
+    def __init__(self, title: str, steps: list[str]) -> None:
+        self._title = title
+        self._steps = list(steps)
+        self._state = [_PENDING] * len(steps)
+        self._results: list[str] = []
+        self._queued: list[str] = []
+
+    # -- state ---------------------------------------------------------------
+
+    def start(self, index: int) -> None:
+        if 0 <= index < len(self._state):
+            self._state[index] = _ACTIVE
+        self.render()
+
+    def finish(self, index: int, *, ok: bool = True) -> None:
+        if 0 <= index < len(self._state):
+            self._state[index] = _OK if ok else _FAILED
+            self._queued.append(
+                f"[{self._done()}/{len(self._steps)}] {self._steps[index]}"
+                f" ... {'ok' if ok else 'FAILED'}"
+            )
+        self.render()
+
+    def note(self, *lines: str) -> None:
+        """Attach output to the screen. Kept until the phase ends."""
+        for line in lines:
+            if line:
+                self._results.append(line)
+                self._queued.append(line)
+        self.render()
+
+    # -- rendering -----------------------------------------------------------
+
+    def _done(self) -> int:
+        return sum(1 for s in self._state if s in (_OK, _FAILED))
+
+    def bar(self) -> str:
+        total = len(self._steps) or 1
+        filled = round(_BAR_WIDTH * self._done() / total)
+        return f"[{'#' * filled}{'-' * (_BAR_WIDTH - filled)}]  {self._done()}/{total}"
+
+    def block(self) -> list[str]:
+        lines = [self._title, ""]
+        lines += [
+            f"  {_MARKS[state]} {step}"
+            for step, state in zip(self._steps, self._state, strict=False)
+        ]
+        lines += ["", self.bar()]
+        if self._results:
+            lines += ["", *self._results]
+        return lines
+
+    def render(self) -> None:
+        if not interactive():
+            # Append-only: emit what is NEW, never the whole block again.
+            for line in self._queued:
+                print(line)
+            self._queued.clear()
+            return
+        self._queued.clear()
+        page(self.block())
+
+    def close(self) -> None:
+        """Leave the finished screen on display, results and all."""
+        self.render()
