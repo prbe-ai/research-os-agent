@@ -3438,6 +3438,17 @@ def snapshot(
     max_upload_mb: int = typer.Option(
         256, "--max-upload-mb", help="refuse (never truncate) above this size"
     ),
+    include: list[str] = typer.Option(
+        None,
+        "--include",
+        metavar="GLOB",
+        help="also capture paths git ignores (datasets, checkpoints, out-of-tree configs)",
+    ),
+    reference_over_mb: int = typer.Option(
+        100,
+        "--reference-over-mb",
+        help="above this, record where a file lives instead of copying it",
+    ),
 ) -> None:
     """Non-disruptive code + env capture.
 
@@ -3462,6 +3473,8 @@ def snapshot(
             detect_venv=True,
             upload=not no_upload,
             max_upload_bytes=max_upload_mb * 1024 * 1024,
+            include=list(include) if include else None,
+            reference_over_bytes=reference_over_mb * 1024 * 1024,
         )
     m = snap["manifest"]
     cb = snap.get("code_bytes") or {}
@@ -3490,6 +3503,12 @@ def snapshot(
             f"      {cb['pending_upload']} NOT stored ({cb.get('reason')}) — "
             "this run is not reproducible from the record alone"
         )
+    for e in (m.get("entries") or []):
+        if e.get("source") == "reference":
+            print(
+                f"      referenced (too large to copy): {e['path']}  "
+                f"{e['size'] / 1e6:.0f} MB on {e.get('host')}"
+            )
     deps = snap.get("deps") or {}
     prov = snap.get("env_provenance") or {}
     if deps.get("packages") is not None:
@@ -3585,8 +3604,11 @@ def snapshot_restore(
     for f in result["files"]:
         if f["status"] == "unavailable":
             print(f"  MISSING {f['path']}  ({f['reason']})")
+    for r in result.get("referenced") or []:
+        print(f"  OFF-PLATFORM {r['path']}  -> {r['uri']} on {r['host']}")
     verb = "verified" if verify_only else "restored"
-    print(f"{result['n_restored']} {verb}, {result['n_unavailable']} unavailable")
+    ref = f", {result['n_referenced']} referenced off-platform" if result.get("n_referenced") else ""
+    print(f"{result['n_restored']} {verb}, {result['n_unavailable']} unavailable{ref}")
     print(f"tree_sha256 {result['tree_sha256']} matches={result['tree_matches']}")
     if result["n_unavailable"]:
         raise typer.Exit(1)

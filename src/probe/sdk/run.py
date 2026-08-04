@@ -1194,6 +1194,8 @@ class Run:
         detect_venv: bool = False,
         upload: bool = True,
         max_upload_bytes: int = _snapshot.DEFAULT_MAX_UPLOAD_BYTES,
+        include: list[str] | None = None,
+        reference_over_bytes: int = _snapshot.DEFAULT_REFERENCE_OVER_BYTES,
         strict: bool | None = None,
     ) -> dict:
         """Capture code (git shadow ref) + deps + GPUs as a content-addressed
@@ -1234,7 +1236,9 @@ class Run:
         # supplement to a git reference.
         in_repo = _snapshot.is_git_repo(cwd or os.getcwd())
         git = _snapshot.capture_git_snapshot(self.id, cwd) if in_repo else None
-        manifest = _snapshot.capture_manifest(cwd)
+        manifest = _snapshot.capture_manifest(
+            cwd, include=include, reference_over_bytes=reference_over_bytes
+        )
         # Identity is hashed into the execution record; provenance is NOT --
         # a venv path in `deps` would make two identical environments at
         # different paths produce different env_refs. See split_env_provenance.
@@ -1319,6 +1323,7 @@ class Run:
                 # keeps the pre-upload count for diagnostics.
                 "n_pending_upload": code_bytes["pending_upload"],
                 "n_classified_pending": manifest["n_pending_upload"],
+                "n_referenced_offsite": manifest.get("n_referenced_offsite", 0),
                 "code_bytes": code_bytes,
                 # WHICH environment the deps came from. Deliberately here and
                 # not in the hashed execution record (split_env_provenance).
