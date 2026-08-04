@@ -1347,13 +1347,24 @@ def test_answering_the_auto_update_question_keeps_every_other_choice(monkeypatch
         lambda want, **kw: applied.update(agent_rules=want, stale=kw.get("stale", False)) or [],
     )
     monkeypatch.setattr(
-        wizard, "apply_tracking", lambda want: applied.update(tracking=want) or []
+        wizard, "apply_tracking", lambda want, **kw: applied.update(tracking=want) or []
     )
     monkeypatch.setattr(
         wizard, "apply_auto_update", lambda want: applied.update(auto_update=want) or []
     )
     monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
     monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    # The post-apply verdict re-collects to verify the plugins actually landed.
+    # apply_tracking is stubbed here, so nothing really installs -- hand it a
+    # snapshot where the plugin IS present, or the verdict correctly reports a
+    # failed install and this test stops being about Selection at all.
+    from probe.cli import doctor as doctor_impl
+
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda *a, **k: _caps(tracking_plugin_installed=True, logged_in_as="x@y.z"),
+    )
 
     cli_main._run_wizard_action(
         Action.CONFIGURE,
@@ -1830,3 +1841,402 @@ def test_the_hook_no_longer_passes_a_channel(isolate):
 
     result = CliRunner().invoke(app, ["wizard", "--action", "diagnose", "--channel", "stable"])
     assert result.exit_code == 0, result.output + repr(result.exception)
+
+
+# --- the 2026-08-04 install phase ------------------------------------------
+#
+# A `npx probe-research` run sat on "This run will:" for minutes, then reported
+# two failed plugin installs and finished with "Restart Claude Code to finish".
+# Four separate defects, each with its own test below:
+#
+#   1. the phase buffered every message until all four steps had returned
+#   2. the marketplace refresh ran per-plugin and both results were discarded
+#   3. a failed install never reached the verdict
+#   4. the install was attempted at all -- both plugins were already present
+
+
+def test_the_install_phase_streams_instead_of_buffering():
+    """It used to collect every message into a list and print the lot after all
+    four apply steps finished. Since a step shells out to `claude`, that showed
+    a blank screen for as long as the subprocesses took -- which is the entire
+    reported symptom."""
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
+    # The tell-tale of the old shape: one list, extended by every apply, drained
+    # at the end.
+    assert "messages: list[str] = []" not in source
+    assert "for message in messages:" not in source
+    assert "tui.Progress(" in source
+
+
+def test_a_present_plugin_is_not_reinstalled(monkeypatch):
+    """THE root cause. The install was gated on `caps.tracking_on`, which is
+    "plugin installed AND logged in", and on `capture_on`, which does not look
+    at the plugin at all. A machine with both plugins present but no credential
+    yet therefore read as "both off" and reinstalled both -- and those installs
+    are the ones that failed.
+
+    Measured: `claude plugin install` on an already-installed plugin returns
+    "already installed" and does NOT upgrade it, so the work had no upside.
+    """
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    installed: list[str] = []
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "install_plugin", lambda name, **kw: installed.append(name))
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+
+    # Exactly the reported machine: both plugins on disk, no credential.
+    present = _caps(
+        tracking_plugin_installed=True,
+        capture_plugin_installed=True,
+        logged_in_as=None,
+    )
+    monkeypatch.setattr(doctor_impl, "collect", lambda *a, **k: present)
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=present,
+        base_now="https://api.test",
+        yes=True,
+        tracking=True,
+        capture=True,
+        auto_update=None,
+        agent_rules=False,
+        uninstall=False,
+        configured=True,
+    )
+
+    assert installed == [], "already-present plugins must not be reinstalled"
+
+
+def test_the_plan_says_sign_in_when_only_the_credential_is_missing():
+    """"enable CLI + MCP" on a machine whose plugin is already installed
+    describes work the run will not do. It is also the COMMON first-run case,
+    because capture_on is credential-only."""
+    from probe.cli import setup as wizard
+    from probe.cli.capabilities import Capability
+
+    caps = _caps(tracking_plugin_installed=True, capture_plugin_installed=True)
+    selection = wizard.Selection(
+        tracking=True, capture=True, auto_update=False, agent_rules=False
+    )
+    steps = wizard.plan(caps, selection)
+
+    assert any("sign in" in step for step in steps), steps
+    assert not any(step.startswith("enable CLI + MCP") for step in steps), steps
+    # And the sign-in wording exists for both capabilities that have a plugin.
+    assert set(wizard.SIGN_IN_LABELS) == {Capability.TRACKING, Capability.CAPTURE}
+
+
+def test_a_successful_install_does_no_marketplace_work(monkeypatch):
+    """install_plugin used to run `marketplace add` + `update` itself, so a run
+    installing both plugins refreshed the same marketplace twice -- and threw
+    both results away, which is why a failed refresh surfaced as Claude's
+    downstream "not found in marketplace".
+
+    The refresh is now the caller's job, once per run. Only the RETRY path may
+    refresh again, so a clean install must touch the marketplace zero times.
+    """
+    from probe.cli import claude_cli
+    from probe.cli import setup as wizard
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        claude_cli,
+        "run",
+        lambda args, *, timeout: calls.append(args) or claude_cli.Result(ok=True),
+    )
+
+    assert wizard.install_plugin("probe-research").ok is True
+    assert calls == [["plugin", "install", "probe-research@research-os-agent"]]
+    assert not any("marketplace" in a for call in calls for a in call)
+
+
+def test_refresh_marketplace_reports_the_update_result(monkeypatch):
+    """Both results used to be discarded. `update` is the one whose success
+    decides whether the catalog we install from is current, so it is the one
+    that comes back."""
+    from probe.cli import claude_cli
+    from probe.cli import setup as wizard
+
+    def fake_run(args, *, timeout):
+        if "update" in args:
+            return claude_cli.Result(ok=False, detail="network unreachable")
+        return claude_cli.Result(ok=True)
+
+    monkeypatch.setattr(claude_cli, "run", fake_run)
+
+    result = wizard.refresh_marketplace()
+    assert result.ok is False
+    assert "network unreachable" in result.detail
+
+
+def test_a_failed_install_retries_once_on_any_failure(monkeypatch):
+    """Deliberately NOT gated on matching Claude's error prose: a retry that
+    fires only on "not found in marketplace" stops firing the day Anthropic
+    rewords it, silently, with every test still green."""
+    from probe.cli import claude_cli
+    from probe.cli import setup as wizard
+
+    attempts: list[list[str]] = []
+    refreshed: list[int] = []
+
+    def fake_run(args, *, timeout):
+        attempts.append(args)
+        # Fail the first install, succeed the second.
+        if args[:2] == ["plugin", "install"]:
+            return claude_cli.Result(ok=len(refreshed) > 0, detail="whatever went wrong")
+        return claude_cli.Result(ok=True)
+
+    monkeypatch.setattr(claude_cli, "run", fake_run)
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: refreshed.append(1))
+
+    budget = [1]
+
+    def may_retry():
+        if budget[0] <= 0:
+            return False
+        budget[0] -= 1
+        return True
+
+    result = wizard.install_plugin("probe-research", on_retry=may_retry)
+
+    assert result.ok is True
+    assert len(refreshed) == 1, "the retry must refresh first"
+    installs = [a for a in attempts if a[:2] == ["plugin", "install"]]
+    assert len(installs) == 2, "exactly one retry"
+
+
+def test_the_retry_budget_is_per_run_not_per_plugin(monkeypatch):
+    """Two plugins failing must not cost two refreshes and two reinstalls: that
+    is how a fix for an 18-minute worst case becomes a 30-minute one."""
+    from probe.cli import claude_cli
+    from probe.cli import setup as wizard
+
+    refreshed: list[int] = []
+    monkeypatch.setattr(
+        claude_cli, "run", lambda args, *, timeout: claude_cli.Result(ok=False, detail="no")
+    )
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: refreshed.append(1))
+
+    budget = [1]
+
+    def may_retry():
+        if budget[0] <= 0:
+            return False
+        budget[0] -= 1
+        return True
+
+    wizard.install_plugin("probe-research", on_retry=may_retry)
+    wizard.install_plugin("probe-research-tap", on_retry=may_retry)
+
+    assert len(refreshed) == 1, "the second plugin must find the budget spent"
+
+
+def test_a_verified_absent_plugin_fails_the_run(monkeypatch):
+    """"Restart Claude Code to finish" after a failed install reads as success:
+    the user restarts, finds Probe absent, and has no idea why."""
+    import sys
+
+    import typer
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "apply_tracking", lambda want, **kw: [])
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    # Verified: we asked, and the plugin is not there.
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda *a, **k: _caps(tracking_plugin_installed=False, plugins_verified=True),
+    )
+
+    with pytest.raises(typer.Exit) as excinfo:
+        cli_main._run_wizard_action(
+            Action.CONFIGURE,
+            caps=_caps(),
+            base_now="https://api.test",
+            yes=True,
+            tracking=True,
+            capture=False,
+            auto_update=None,
+            agent_rules=False,
+            uninstall=False,
+            configured=True,
+        )
+    assert excinfo.value.exit_code == 1
+
+
+def test_an_unverifiable_plugin_does_not_fail_the_run(monkeypatch):
+    """`claude` absent is normal on a GPU pod. Swapping a silent failure for a
+    false alarm on machines that are fine would be the worse bug -- it trains
+    people to ignore the message."""
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "apply_tracking", lambda want, **kw: [])
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    # We could NOT ask. Absent is an unanswered question, not a finding.
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda *a, **k: _caps(tracking_plugin_installed=False, plugins_verified=False),
+    )
+
+    # Must NOT raise.
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=_caps(),
+        base_now="https://api.test",
+        yes=True,
+        tracking=True,
+        capture=False,
+        auto_update=None,
+        agent_rules=False,
+        uninstall=False,
+        configured=True,
+    )
+
+
+def test_plugin_state_will_not_report_absence_it_did_not_verify():
+    from probe.cli.capabilities import PluginState
+
+    verified = PluginState(names=frozenset({"probe-research"}), verified=True)
+    assert verified.missing(["probe-research", "probe-research-tap"]) == ["probe-research-tap"]
+
+    unknown = PluginState(verified=False)
+    assert unknown.missing(["probe-research"]) == [], "an unanswered question is not a no"
+
+
+def test_installed_plugins_is_unverified_without_claude(monkeypatch):
+    from probe.cli import capabilities
+
+    monkeypatch.setattr(capabilities.shutil, "which", lambda _: None)
+    state = capabilities.installed_plugins()
+    assert state.verified is False
+    assert len(state) == 0
+
+
+# --- the progress screen ----------------------------------------------------
+
+
+def test_progress_redraws_one_centred_screen_on_a_terminal(monkeypatch, capsys):
+    """The install phase must look like the menu that led into it: same column,
+    wrapped inside the block, vertically centred. It used to print through
+    say(), which left-pads but does NOT wrap, so a 200-character error from
+    `claude` ran off the block and wrapped at the terminal's right edge back to
+    column 0."""
+    from probe.cli import tui
+
+    monkeypatch.setenv("COLUMNS", "120")
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    monkeypatch.setattr(tui, "clear", lambda: None)
+    monkeypatch.setattr(tui, "rows", lambda: 40)
+
+    progress = tui.Progress("This run will:", ["enable A", "enable B"])
+    progress.start(0)
+    progress.finish(0, ok=True)
+    progress.note("could not install probe-research: " + "x" * 200)
+
+    body = [ln.strip() for ln in capsys.readouterr().out.split("\n") if ln.strip()]
+    assert all(len(ln) <= tui.CONTENT_WIDTH for ln in body), "must wrap inside the block"
+
+
+def test_progress_marks_a_failed_step_distinctly(monkeypatch, capsys):
+    from probe.cli import tui
+
+    monkeypatch.setenv("COLUMNS", "120")
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    monkeypatch.setattr(tui, "clear", lambda: None)
+    monkeypatch.setattr(tui, "rows", lambda: 40)
+
+    progress = tui.Progress("This run will:", ["enable A", "enable B"])
+    progress.finish(0, ok=True)
+    progress.finish(1, ok=False)
+    block = "\n".join(progress.block())
+
+    assert "✔ enable A" in block
+    assert "✗ enable B" in block, "a failure must not read as a tick"
+
+
+def test_the_bar_tracks_completed_steps(monkeypatch):
+    from probe.cli import tui
+
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    progress = tui.Progress("t", ["a", "b", "c", "d"])
+    assert progress.bar().endswith("0/4")
+    progress.finish(0)
+    progress.finish(1)
+    assert progress.bar().endswith("2/4")
+    assert progress.bar().count("#") == len(progress.bar().split("]")[0]) // 2
+
+
+def test_progress_appends_one_line_per_step_when_piped(monkeypatch, capsys):
+    """A screen and a log want opposite things. page() skips the clear when it
+    is not interactive, so redrawing into a pipe prints the whole growing block
+    once per step -- log spam, not progress. And `probe wizard --yes` is the
+    one path where a human is NOT watching, so its log is the only evidence of
+    which step a wedged CI job died on."""
+    from probe.cli import tui
+
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+
+    progress = tui.Progress("This run will:", ["enable A", "enable B"])
+    progress.start(0)
+    progress.finish(0, ok=True)
+    progress.start(1)
+    progress.finish(1, ok=False)
+
+    out = capsys.readouterr().out
+    lines = [ln for ln in out.split("\n") if ln.strip()]
+    assert lines == ["[1/2] enable A ... ok", "[2/2] enable B ... FAILED"]
+    assert "This run will:" not in out, "the block must not be reprinted per step"
+
+
+def test_results_persist_across_redraws(monkeypatch, capsys):
+    """clear() emits \\033[3J, which drops the scrollback. Anything not
+    re-drawn is gone for good, so a failure message from step 1 must still be
+    on screen after step 4 redraws."""
+    from probe.cli import tui
+
+    monkeypatch.setenv("COLUMNS", "120")
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    monkeypatch.setattr(tui, "clear", lambda: None)
+    monkeypatch.setattr(tui, "rows", lambda: 40)
+
+    progress = tui.Progress("t", ["a", "b"])
+    progress.note("could not install probe-research")
+    progress.finish(1, ok=True)
+
+    assert "could not install probe-research" in "\n".join(progress.block())

@@ -23,6 +23,8 @@ from pathlib import Path
 
 import httpx
 
+from probe.cli import claude_cli
+
 # Resolved once, at import (H8): `is_newer` runs AFTER the tree is replaced, and a
 # deferred `import packaging` there could fail; loading it now keeps it in memory.
 try:
@@ -35,7 +37,6 @@ LEGACY_DIST = "probe-agent"  # pre-2026-07-15 name; owns the same `probe` binary
 PLUGIN_ID = "probe-research@research-os-agent"
 MARKETPLACE = "research-os-agent"
 
-_CLAUDE_TIMEOUT_S = 90.0
 _UPGRADE_TIMEOUT_S = 300.0
 _HTTP_TIMEOUT_S = 5.0
 
@@ -355,17 +356,10 @@ def update_plugin(target_latest: str | None) -> PluginResult:
     before = installed_plugin_version()
     completed = True
     for args in (["plugin", "marketplace", "update", MARKETPLACE], ["plugin", "update", PLUGIN_ID]):
-        try:
-            r = subprocess.run(
-                [claude, *args],
-                stdin=subprocess.DEVNULL,          # no TTY -> no raw-mode on the parent terminal
-                capture_output=True, text=True,
-                timeout=_CLAUDE_TIMEOUT_S,
-            )
-            if r.returncode != 0:
-                completed = False
-                break
-        except (subprocess.TimeoutExpired, OSError):
+        # claude_cli carries the DEVNULL this loop already knew it needed --
+        # no TTY -> no raw-mode on the parent terminal. It is now the only
+        # copy of that rule, rather than the one place out of four with it.
+        if not claude_cli.run(args, timeout=claude_cli.CAPTURE_TIMEOUT_S).ok:
             completed = False
             break
 

@@ -952,7 +952,10 @@ def _run_wizard_action(
     already streamed (the configure path has to, because a browser approval
     prints a URL you are meant to read while it waits).
     """
+    import time
+
     from probe.cli import actions as actions_mod
+    from probe.cli import capabilities
     from probe.cli import doctor as doctor_impl
     from probe.cli import setup as wizard
     from probe.cli import tui
@@ -1073,74 +1076,181 @@ def _run_wizard_action(
             ),
         ]
 
-    # From here it STREAMS. Installing a plugin can take a minute and a browser
-    # approval prints a URL you are meant to act on while it waits, so this is
-    # the one page that cannot be buffered and centred as a block -- it is
-    # written while it happens. Centred left-to-right, at least, so it stays in
-    # the same column as the prompt that led here.
+    # From here it STREAMS, through a Progress screen that redraws on every
+    # state change. Installing a plugin shells out to `claude` and a browser
+    # approval prints a URL you are meant to act on while it waits, so this
+    # page cannot be buffered -- it is written while it happens. It used to
+    # collect every message and print them only after all four steps returned,
+    # which showed a blank screen for as long as the subprocesses took.
     tui.clear()
-    tui.say("This run will:")
-    for step in steps:
-        tui.say(f"  - {step}")
-    tui.say()
+    progress = tui.Progress("This run will:", steps)
+    progress.render()
 
-    messages: list[str] = []
-    if selection.tracking != caps.tracking_on:
-        messages.extend(wizard.apply_tracking(selection.tracking))
-    if selection.capture != caps.capture_on:
-        messages.extend(
-            wizard.apply_capture(
+    # The single retry BUDGET for this run. install_plugin() calls it to ask
+    # whether it may try again; the first caller to fail spends it. Per-plugin
+    # retries would multiply refreshes by the number of failures, which is how
+    # a fix for a 3-minute wait turns into a 30-minute one.
+    _retry_budget = [1]
+
+    def _may_retry() -> bool:
+        if _retry_budget[0] <= 0:
+            return False
+        _retry_budget[0] -= 1
+        return True
+
+    deadline = time.monotonic() + wizard.PHASE_BUDGET_S
+    skipped: list[str] = []
+
+    def _run_step(index: int, label: str, fn) -> list[str]:
+        """Run one apply step, unless the phase has already run out of time.
+
+        The budget refuses to START work; it never interrupts a step already in
+        flight. A `claude plugin install` killed mid-write is how a plugin cache
+        gets corrupted, so a slow step is allowed to finish on its own timeout.
+        """
+        if time.monotonic() > deadline:
+            skipped.append(label)
+            return []
+        progress.start(index)
+        try:
+            out = list(fn())
+        except Exception as exc:  # noqa: BLE001 - one bad step must not eat the rest
+            progress.finish(index, ok=False)
+            progress.note(f"! {label}: {exc}")
+            return []
+        # A step reports failure in prose, not by raising: the apply_* helpers
+        # return "could not install ..." strings. Treat those as failures so the
+        # tick mark matches what the line says.
+        ok = not any(m.startswith(("could not", "!")) for m in out)
+        progress.finish(index, ok=ok)
+        if out:
+            progress.note(*out)
+        return out
+
+    # The install decision reads the PLUGIN fact, not the composite capability.
+    # `caps.tracking_on` is "plugin installed AND logged in", and `capture_on`
+    # does not look at the plugin at all -- so a machine with both plugins
+    # present but no credential yet read as "both off" and reinstalled both.
+    # Measured: `claude plugin install` on an already-installed plugin returns
+    # "already installed" and does NOT upgrade it, so that work was pure waste
+    # -- and it was the step that failed, on the one path a new user is on.
+    index = 0
+    if selection.tracking and not caps.tracking_plugin_installed:
+        _run_step(index, steps[index], lambda: wizard.apply_tracking(True, on_retry=_may_retry))
+        index += 1
+    elif not selection.tracking and caps.tracking_plugin_installed:
+        _run_step(index, steps[index], lambda: wizard.apply_tracking(False))
+        index += 1
+
+    if selection.capture != caps.capture_plugin_installed or (
+        not selection.capture and caps.capture_on
+    ):
+        _run_step(
+            index,
+            steps[index] if index < len(steps) else "session capture",
+            lambda: wizard.apply_capture(
                 caps,
                 selection.capture,
                 mode=OffMode.UNINSTALL if uninstall else OffMode.DISABLE,
-            )
+                on_retry=_may_retry,
+            ),
         )
+        index += 1
+
     if selection.auto_update != caps.auto_update_enabled:
-        messages.extend(wizard.apply_auto_update(selection.auto_update))
-    if selection.agent_rules != caps.agent_rules_installed or caps.agent_rules_stale:
-        messages.extend(
-            wizard.apply_agent_rules(selection.agent_rules, stale=caps.agent_rules_stale)
+        _run_step(
+            index,
+            steps[index] if index < len(steps) else "automatic updates",
+            lambda: wizard.apply_auto_update(selection.auto_update),
         )
-    for message in messages:
-        tui.say(message)
+        index += 1
+    if selection.agent_rules != caps.agent_rules_installed or caps.agent_rules_stale:
+        _run_step(
+            index,
+            steps[index] if index < len(steps) else "CLAUDE.md rules",
+            lambda: wizard.apply_agent_rules(
+                selection.agent_rules, stale=caps.agent_rules_stale
+            ),
+        )
+        index += 1
+
+    if skipped:
+        progress.note(
+            f"! stopped after {wizard.PHASE_BUDGET_S:.0f}s without starting: "
+            f"{', '.join(skipped)}. Re-run `probe wizard` to finish."
+        )
 
     needs = wizard.needs_authorization(caps, selection)
     granted: dict = {}
     if needs:
-        tui.say()
-        tui.say(f"One browser approval covers everything you ticked ({', '.join(needs)}).")
+        progress.note(
+            "", f"One browser approval covers everything you ticked ({', '.join(needs)})."
+        )
         granted, auth_messages = wizard.authorize(
             needs,
             base_url=base_now,
-            # The wizard's own printer: the approval URL is the one line the
-            # user has to act on, and leaving it at column 0 while everything
-            # around it is centred reads as a rendering fault.
-            on_prompt=lambda prompt: (
-                tui.say(f"  visit: {prompt.verification_uri_complete}"),
-                tui.say(f"  code:  {prompt.user_code}"),
+            # The approval URL is the one line the user has to act on, so it
+            # goes onto the same centred screen as everything else -- left at
+            # column 0 while its surroundings are centred it reads as a
+            # rendering fault.
+            on_prompt=lambda prompt: progress.note(
+                f"  visit: {prompt.verification_uri_complete}",
+                f"  code:  {prompt.user_code}",
             ),
             open_browser=True,
         )
-        for message in auth_messages:
-            tui.say(message)
+        if auth_messages:
+            progress.note(*auth_messages)
+
+    # THE VERDICT. Verify the postcondition rather than trusting the install
+    # command: on the run that prompted this fix both installs reported failure
+    # while both plugins were in fact present, so believing the exit status
+    # would have cried wolf. `plugins.missing()` answers only when it actually
+    # managed to look -- an absent `claude` is normal on a GPU pod and must
+    # never be reported as a failed install.
+    # ONE re-collect, reused. collect() already runs `claude plugin list`, so
+    # asking installed_plugins() again would pay for the same subprocess twice.
+    after = doctor_impl.collect()
+    wanted_plugins = []
+    if selection.tracking and not after.tracking_plugin_installed:
+        wanted_plugins.append(capabilities.TRACKING_PLUGIN_NAME)
+    if selection.capture and not after.capture_plugin_installed:
+        wanted_plugins.append(capabilities.TAP_PLUGIN_NAME)
+    # Only names we VERIFIED absent. An unanswerable question is not a negative
+    # answer: `claude` missing is normal on a GPU pod and must never read as a
+    # failed install.
+    absent = wanted_plugins if after.plugins_verified else []
 
     missing = [grant for grant in needs if grant not in granted]
-    if missing:
-        # "Restart Claude Code to finish" after a FAILED approval reads as
-        # success: the user restarts, finds the capability off, and has no idea
-        # why. Say what actually happened instead.
-        tui.say()
-        tui.say(
-            f"Not finished — no credential for: {', '.join(missing)}. "
-            "Run the wizard again once you can approve in a browser."
+    if missing or absent:
+        # "Restart Claude Code to finish" after a FAILED run reads as success:
+        # the user restarts, finds the capability off, and has no idea why.
+        reasons = []
+        if absent:
+            reasons.append(f"these plugins did not install: {', '.join(absent)}")
+        if missing:
+            reasons.append(f"no credential for: {', '.join(missing)}")
+        progress.note("", f"Not finished — {'; '.join(reasons)}.", "Re-run `probe wizard` to retry.")
+        progress.close()
+        for message in _register_local_capabilities(
+            after, settings=resolve(base_url=base_now)
+        ):
+            tui.say(message)
+        raise typer.Exit(1)
+
+    if wanted_plugins and not after.plugins_verified:
+        # Could not ask. Say so rather than claiming either outcome.
+        progress.note(
+            "",
+            "Could not confirm the plugins are installed (Claude Code did not answer). "
+            "Run `probe doctor` to check.",
         )
-    else:
-        notice = wizard.restart_notice(caps, selection)
-        if notice:
-            tui.say()
-            tui.say(notice)
+    notice = wizard.restart_notice(caps, selection)
+    if notice:
+        progress.note("", notice)
+    progress.close()
     for message in _register_local_capabilities(
-        doctor_impl.collect(),
+        after,
         settings=resolve(base_url=base_now),
     ):
         tui.say(message)
