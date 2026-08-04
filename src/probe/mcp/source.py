@@ -516,9 +516,6 @@ class ResearchOSSource:
     def experiment_artifacts(self, experiment_id: str) -> list[dict]:
         return self.client.list_experiment_artifacts(experiment_id)
 
-    def project_notes(self, project_id: str) -> str | None:
-        return self.client.get_project_notes(project_id)
-
     def project_artifacts(self, project_id: str) -> list[dict]:
         return self.client.list_project_artifacts(project_id)
 

@@ -289,7 +289,7 @@ def test_help_offers_upload_and_no_stale_hook_adapter(capsys):
     rc = cli.main(["--help"])
     assert rc == 0
     output = capsys.readouterr().out
-    assert "the project's NOTES.md" in output
+    assert "the project's notes" in output
     assert "internal coding-agent adapter commands" not in output
     # Invoking it must fail outright, not just be undocumented. Asserted by
     # exit code rather than by scanning help text for "hook": rich wraps the

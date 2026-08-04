@@ -11,7 +11,6 @@ from itertools import islice
 from typing import Any
 
 from ..sdk import errors
-from ..sdk.client import PROJECT_NOTES_FILE
 from .contract import (
     BackendCorpus,
     BackendSearchState,
@@ -491,7 +490,7 @@ class _ViewData:
 # (entity kind, view) -> builder method. Explicit and greppable: this table IS the
 # answer to "what can I read about a run?", and _checked_view derives its error
 # message from it, so a view can never be advertised without a builder behind it.
-#: How much of NOTES.md rides along on the project card before it defers to
+#: How much of the notes rides along on the project card before it defers to
 #: `view="notes"`. Bounded because a card is the cheap glance.
 _NOTES_CARD_EXCERPT = 1200
 
@@ -1317,21 +1316,17 @@ class ResearchReadService:
         )
 
     def _view_project_card(self, entity: dict, request: _Req) -> _ViewData:
-        """The project card, carrying its NOTES.md.
+        """The project card, carrying the project's notes.
 
-        The only card that makes an extra call, and deliberately: orientation is
-        `browse_research` then a card, and a briefing an agent has to KNOW to ask for
-        is one it does not read. Bounded to an excerpt so a long file cannot blow the
-        token budget of what is supposed to be the cheap glance -- `view="notes"` has
-        the rest. Projects are read far less often than runs, which is what makes the
-        call affordable here and nowhere else.
+        Read straight off the entity, which `source.get` already fetched: since
+        research-os 0094 the notes are a COLUMN on the project row, so this costs no
+        request at all. That is what makes putting them on the card affordable --
+        orientation is `browse_research` then a card, and a briefing an agent has to
+        KNOW to ask for is one it does not read. Bounded to an excerpt so a long
+        document cannot blow the token budget of what is supposed to be the cheap
+        glance; `view="notes"` has the rest.
         """
-        try:
-            text = self.source.project_notes(str(entity["id"]))
-        except errors.RosError:
-            # A card that starts failing because a notes read hiccuped is worse than
-            # a card without notes. Absence is reported, never raised.
-            return _ViewData(payload={"notes": {"unavailable": True}})
+        text = entity.get("notes")
         if not text:
             return _ViewData()
         excerpt = text[:_NOTES_CARD_EXCERPT]
@@ -1342,10 +1337,9 @@ class ResearchReadService:
         return _ViewData(payload={"notes": notes})
 
     def _view_project_notes(self, entity: dict, request: _Req) -> _ViewData:
-        """The project's NOTES.md in full, as text. No schema: it is a markdown file
-        that agents read and write, not a record type."""
-        text = self.source.project_notes(str(entity["id"]))
-        return _ViewData(payload={"notes": text, "file": PROJECT_NOTES_FILE})
+        """The project's notes in full. No schema: free-text markdown that agents
+        read and write, not a record type. Also off the already-fetched row."""
+        return _ViewData(payload={"notes": entity.get("notes")})
 
     def _view_project_artifacts(self, entity: dict, request: _Req) -> _ViewData:
         return _ViewData(

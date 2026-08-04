@@ -9,10 +9,10 @@ equivalent standing rule. Same agent, same session, same tools. The only
 asymmetry was which surface carried the instruction.
 
 WHAT GOES IN IT IS THE WHOLE DESIGN. This block names SURFACES, never procedures.
-Procedures rot: in eight days the note vocabulary was added (#144), replaced by
-`NOTES.md` (#150), and re-triggered (#149). Any copy of the commands written
-before today would now be teaching `probe note add --kind decision`, which no
-longer exists. This file cannot be reached by a release -- it lives in the
+Procedures rot: in eight days the note vocabulary was added (#144), re-triggered
+(#149), replaced by a markdown file (#150), and then moved off artifacts onto a
+project column. Any copy of the commands written before today would now be
+teaching `probe note add --kind decision`, which no longer exists. This file cannot be reached by a release -- it lives in the
 researcher's home directory on their machine -- so anything version-specific in
 it is stale the moment the skills change and stays stale forever. Naming the
 skills and letting THEM carry the detail is what makes an unreachable copy safe.

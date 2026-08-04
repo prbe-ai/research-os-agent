@@ -117,6 +117,9 @@ class FakeApp:
     # tenant-wide. The echo is the only thing distinguishing the two, so the
     # fake has to be able to be both.
     echoes_project_scope = True
+    # Set False to model a backend PREDATING research-os 0094: it accepts the
+    # unknown `notes` field on a project PATCH, drops it, and still answers 200.
+    stores_project_notes = True
     # Set False to model a backend PREDATING project-direct runs (0054): the
     # /v1/projects/{id}/runs route 404s FastAPI-style, GET /v1/runs ignores the
     # project_id/direct params, and run rows carry NO project_id field — the
@@ -493,6 +496,14 @@ class FakeApp:
             for field in ("name", "description", "metadata"):
                 if body.get(field) is not None:
                     row[field] = body[field]
+            # `notes` is gated so the fake can be a backend on EITHER side of
+            # research-os 0094. ProjectPatch does not forbid extra fields, so a
+            # pre-0094 server takes `notes`, ignores it, and answers 200 -- the write
+            # vanishes and the caller is told it worked. Being able to be both is the
+            # only way to test that the client notices (same shape as
+            # `echoes_project_scope`).
+            if self.stores_project_notes and body.get("notes") is not None:
+                row["notes"] = body["notes"]
             return httpx.Response(200, json=row)
 
         # -- workspaces --

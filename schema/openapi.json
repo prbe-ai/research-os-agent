@@ -5974,6 +5974,17 @@
             "title": "Name",
             "type": "string"
           },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
           "session_total": {
             "default": 0,
             "title": "Session Total",
@@ -6235,6 +6246,18 @@
               }
             ],
             "title": "Name"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 100000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "tags": {
             "anyOf": [
@@ -16674,7 +16697,7 @@
     },
     "/v1/experiments/{experiment_id}/edges": {
       "get": {
-        "description": "Every edge touching a run or artifact that belongs to this experiment.\n\nDerives the same run -> artifact `produces` edges the run-level route does.\nDeriving in one place and not the other is worse than deriving in neither:\nthe experiment graph would read as empty while each of its runs' graphs was\npopulated, and a caller comparing the two would conclude edges were being\nlost somewhere between them.\n\nBounded at MAX_LIST_LIMIT, same as the run route -- an experiment fans out\nover every run it owns, so it is the wider of the two.",
+        "description": "Every edge touching a run or artifact that belongs to this experiment.\n\nDerives the same run -> artifact `produces` edges the run-level route does.\nDeriving in one place and not the other is worse than deriving in neither:\nthe experiment graph would read as empty while each of its runs' graphs was\npopulated, and a caller comparing the two would conclude edges were being\nlost somewhere between them.\n\n`limit` is opt-in and unset by default, and stored edges sort ahead of\nderived ones, for the same reasons as the run route above -- an experiment\nfans out over every run it owns, so it is the wider of the two and the one\nwhere a silent cap would bite first.",
         "operationId": "list_experiment_edges_v1_experiments__experiment_id__edges_get",
         "parameters": [
           {
@@ -16685,6 +16708,24 @@
               "format": "uuid",
               "title": "Experiment Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           }
         ],
@@ -19126,7 +19167,7 @@
     },
     "/v1/runs/{run_id}/edges": {
       "get": {
-        "description": "Stored edges PLUS the run -> artifact `produces` edges derived from\n`artifacts.run_id`.\n\nWhy derive: nothing ever wrote a `produces` edge. `add_edge` is reachable\nonly by hand or via `probe edge add`, and `log_artifact()` does not call it,\nso `lineage_edges` is empty for essentially every run -- which is why the\nlineage view answered \"no lineage\" for runs that had plainly produced\noutput. The fact was never missing, only unexpressed: `artifacts.run_id` has\nrecorded it since the table existed.\n\nDeriving at read time rather than materializing on artifact create means no\nbackfill for existing runs and no second copy to drift. Derived rows are\nflagged `derived: true` and carry no `id` -- see LineageEdgeOut.\n\nNOT covered here: `consumes`. A run declaring which asset version it read\nhas no recording surface at all today, so there is nothing to derive from.\nThat needs an SDK affordance before it can appear in this response, and an\nempty `consumes` set is honest until it exists.\n\nBOUNDED at MAX_LIST_LIMIT. Before deriving, this route returned ~0 rows for\nessentially every run, so being unbounded cost nothing; deriving turns it\ninto one row per artifact, and a run with 50k artifacts is an ordinary\nagentic-RL run, not an abuse case. The sibling `/v1/runs/{id}/artifacts`\ncaps at the same number for the same reason.",
+        "description": "Stored edges PLUS the run -> artifact `produces` edges derived from\n`artifacts.run_id`.\n\nWhy derive: nothing ever wrote a `produces` edge. `add_edge` is reachable\nonly by hand or via `probe edge add`, and `log_artifact()` does not call it,\nso `lineage_edges` is empty for essentially every run -- which is why the\nlineage view answered \"no lineage\" for runs that had plainly produced\noutput. The fact was never missing, only unexpressed: `artifacts.run_id` has\nrecorded it since the table existed.\n\nDeriving at read time rather than materializing on artifact create means no\nbackfill for existing runs and no second copy to drift. Derived rows are\nflagged `derived: true` and carry no `id` -- see LineageEdgeOut.\n\nNOT covered here: `consumes`. A run declaring which asset version it read\nhas no recording surface at all today, so there is nothing to derive from.\nThat needs an SDK affordance before it can appear in this response, and an\nempty `consumes` set is honest until it exists.\n\n`limit` is OPT-IN and unset by default, matching\n`/v1/runs/{id}/artifacts`: this route has always been unbounded, and capping\nit silently would truncate results with no way for a caller to notice. That\nmatters more here than on most routes -- the defect being fixed is \"lineage\nreads as empty\", and a silent cap would trade it for \"lineage reads as 98%\ncomplete\", which is undetectable rather than merely wrong.\n\nSTORED EDGES SORT FIRST, ahead of derived ones, so a `limit` can only ever\nshed derived rows. Ordering purely by recency would let a run's newest\nartifacts evict a hand-written `consumes` or `evaluates_on` edge that no\nother read route exposes -- turning a bound into silent data loss for the\none kind of edge someone deliberately recorded.",
         "operationId": "list_run_edges_v1_runs__run_id__edges_get",
         "parameters": [
           {
@@ -19137,6 +19178,24 @@
               "format": "uuid",
               "title": "Run Id",
               "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maximum": 1000,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
             }
           }
         ],

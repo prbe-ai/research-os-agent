@@ -14,7 +14,6 @@ import json
 import os
 import shlex
 import sys
-import tempfile
 import threading
 import warnings
 import weakref
@@ -82,12 +81,6 @@ def _touch_run_lease(path: str) -> None:
         run_lock.renew_lease_if_stale(run_ref)
     except Exception:  # noqa: BLE001 -- see docstring
         pass
-
-#: The one file per project that agents read and write. A fixed name is the whole
-#: convention -- without it every agent invents its own and none of them find each
-#: other's.
-PROJECT_NOTES_FILE = "NOTES.md"
-
 
 class Anchor(str, Enum):
     """What an artifact hangs off.
@@ -2282,44 +2275,48 @@ class Client:
         return self.transport.get(f"/v1/projects/{project_id}/artifacts")
 
     # -- the project's notes file ------------------------------------------
-    # One markdown file per project that agents read and write. Deliberately NOT a
-    # schema: an earlier attempt gave notes a kind vocabulary
+    # One markdown document per project that agents read and write. Deliberately NOT
+    # a schema: an earlier attempt gave notes a kind vocabulary
     # (intent/decision/observation/...), supersession and an authority field, and
-    # none of it was ever validated, aggregated or grouped by anything server-side --
-    # eight kinds bought one list filter. Prose is what people actually write, and
-    # markdown is what every other tool here already reads.
+    # nothing server-side validated, aggregated or grouped by any of it -- eight
+    # kinds bought one list filter. Prose is what people actually write.
+    #
+    # It is a COLUMN on the project (research-os 0094), not an artifact. The artifact
+    # version was the first implementation and it was wrong twice over: artifact
+    # identity is anchor+name+content_hash, so every edit appended a new row and a
+    # project's artifact list filled with copies of one file; and reading a paragraph
+    # cost three round trips (list -> presign -> R2 GET). The column rides along on
+    # the project row, so an orienting caller gets the notes with NO extra request.
 
     def get_project_notes(self, project_id: str) -> str | None:
-        """The project's ``NOTES.md``, or None if it was never written."""
-        # A project is an ARTIFACT anchor (identity = anchor+name+content_hash), so
-        # each edit lands as a NEW row under the same name and the newest one is the
-        # current text. Picked by created_at rather than by the listing's order: the
-        # route documents `created_at DESC`, but "which paragraph is current" is not a
-        # thing to infer from a sort the server could change without breaking anyone
-        # else. Reverse-sorted so a tie on the stamp is at least deterministic.
-        candidates = [
-            r for r in self.list_project_artifacts(project_id)
-            if r.get("name") == PROJECT_NOTES_FILE and r.get("status") == "complete"
-        ]
-        if not candidates:
-            return None
-        newest = max(
-            candidates, key=lambda r: (r.get("created_at") or "", str(r.get("id") or ""))
-        )
-        return self.download_artifact(str(newest["id"])).decode("utf-8")
+        """The project's notes, or None when nobody has written any.
 
-    def set_project_notes(self, project_id: str, text: str) -> dict:
-        """Replace the project's ``NOTES.md``. Returns the artifact row."""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = Path(tmp) / PROJECT_NOTES_FILE
-            path.write_text(text, encoding="utf-8")
-            return self.upload_file(
-                Anchor.PROJECT,
-                project_id,
-                PROJECT_NOTES_FILE,
-                str(path),
-                content_type="text/markdown",
+        Note that `GET /v1/projects/{id}` already returns this, so a caller that
+        holds the project row should read `row["notes"]` rather than call here --
+        the point of the column is that the text costs no second request."""
+        return self.get_project(project_id).get("notes")
+
+    def set_project_notes(self, project_id: str, text: str) -> str:
+        """Replace the project's notes and return what the server actually stored.
+
+        The read-back is not belt-and-braces. `ProjectPatch` does not forbid extra
+        fields, so a backend PREDATING 0094 accepts `notes`, ignores it, and answers
+        200 -- the write vanishes and the caller is told it succeeded. Returning the
+        stored value makes that detectable instead of silent."""
+        queued = self.write("PATCH", f"/v1/projects/{project_id}", {"notes": text})
+        if queued is None:
+            # Journaled (async mode) or fail-open-spooled: nothing reached the server,
+            # so there is nothing to read back. Verifying here would report a failure
+            # for a write that is simply still in the outbox.
+            return text
+        stored = self.get_project(project_id).get("notes")
+        if stored != text:
+            raise errors.RosError(
+                "the server did not store the notes: this backend predates the "
+                "projects.notes column (research-os 0094) and silently ignored the "
+                "field. Upgrade the backend."
             )
+        return stored
 
     def query_series(self, run_ids: list[str], **kw) -> dict:
         return self.transport.post(

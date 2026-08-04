@@ -94,7 +94,7 @@ class View(StrEnum):
     # empty lineage for runs that had plainly produced artifacts.
     LINEAGE = "lineage"
     EVENTS = "events"  # the append-only lifecycle log
-    NOTES = "notes"  # a project's NOTES.md, as text
+    NOTES = "notes"  # a project's free-text markdown notes
     GROUPS = "groups"  # sweeps/ensembles under an experiment
     VERSIONS = "versions"  # immutable published manifests
 
