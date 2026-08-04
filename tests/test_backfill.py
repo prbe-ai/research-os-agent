@@ -143,30 +143,50 @@ def test_the_anchor_is_a_uuid_never_a_slug(tmp_path):
     assert slug == "odyssey"
 
 
-def test_configured_project_wins_over_the_derived_slug(tmp_path):
+def test_an_explicitly_named_project_wins_over_the_derived_slug(tmp_path):
     client = _FakeClient()
-    project_id, _ = backfill.resolve_anchor(client, tmp_path, configured=FAKE_ID)
+    project_id, _ = backfill.resolve_anchor(client, tmp_path, requested=FAKE_ID)
     assert project_id == FAKE_ID
     assert client.ensured == []
 
 
-def test_a_configured_slug_is_resolved_to_its_id(tmp_path):
-    # PROBE_PROJECT takes a slug, so the configured value is not always an id.
+def test_a_named_slug_is_resolved_to_its_id(tmp_path):
+    # --project takes either form.
     client = _FakeClient(existing={"id": FAKE_ID, "slug": "already-here"})
-    project_id, slug = backfill.resolve_anchor(client, tmp_path, configured="already-here")
+    project_id, slug = backfill.resolve_anchor(client, tmp_path, requested="already-here")
     assert project_id == FAKE_ID
     assert slug == "already-here"
 
 
-def test_an_unknown_configured_slug_fails_loudly(tmp_path):
+def test_an_unknown_named_slug_fails_loudly(tmp_path):
     with pytest.raises(ValueError, match="no project"):
-        backfill.resolve_anchor(_FakeClient(existing=None), tmp_path, configured="ghost")
+        backfill.resolve_anchor(_FakeClient(existing=None), tmp_path, requested="ghost")
 
 
 def test_existing_project_is_reused_not_forked(tmp_path):
     client = _FakeClient(existing={"id": FAKE_ID, "slug": "already-here"})
     project_id, slug = backfill.resolve_anchor(client, tmp_path)
     assert (project_id, slug) == (FAKE_ID, "already-here")
+
+
+def test_the_ambient_active_project_is_not_consulted(monkeypatch, tmp_path):
+    """`probe project use` sets where new RUNS go; it is not a statement that
+    every folder imported from here on belongs there. Honouring it meant
+    pointing at one folder and watching its artifacts land somewhere unrelated."""
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = __import__("inspect").getsource(sys.modules["probe.cli.main"].backfill)
+    assert "configured_project" not in source
+    # The destination comes from --project or the folder, never from resolve().
+    assert "project=project" in source
+
+    folder = tmp_path / "anthrogen-backfill-test"
+    folder.mkdir()
+    client = _FakeClient(existing=None)
+    _, slug = backfill.resolve_anchor(client, folder)
+    assert slug == "anthrogen-backfill-test"
 
 
 def test_creation_goes_through_the_near_miss_guard(tmp_path):

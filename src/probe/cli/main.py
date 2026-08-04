@@ -681,6 +681,9 @@ def backfill(
     agent: str = typer.Option(
         None, "--agent", help="claude | codex — omit to use whichever is installed, or be asked"
     ),
+    project: str = typer.Option(
+        None, "--project", help="import into this project; omit to use one named for the folder"
+    ),
 ) -> None:
     """Import work you have already done: point an agent at a folder.
 
@@ -721,7 +724,7 @@ def backfill(
     lines = backfill_impl.run(
         client_factory=_client,
         folder=Path(folder) if folder else None,
-        configured_project=resolve(base_url=_conn.base_url).project,
+        project=project,
         interactive=wizard.interactive(),
         agent=chosen,
     )
@@ -1012,7 +1015,6 @@ def _run_wizard_action(
             client_factory=_client,
             start=Path.cwd(),
             folder=Path(folder) if folder else None,
-            configured_project=resolve(base_url=base_now).project,
             interactive=wizard.interactive(),
         )
 

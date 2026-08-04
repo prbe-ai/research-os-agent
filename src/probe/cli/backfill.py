@@ -199,7 +199,7 @@ def slug_for(folder: Path) -> str:
     return cleaned or "backfill"
 
 
-def resolve_anchor(client, folder: Path, *, configured: str | None = None) -> tuple[str, str]:
+def resolve_anchor(client, folder: Path, *, requested: str | None = None) -> tuple[str, str]:
     """The project this folder imports into, as ``(project_id, slug)``.
 
     Returns the UUID, never the slug, because that is what the agent's commands
@@ -207,24 +207,33 @@ def resolve_anchor(client, folder: Path, *, configured: str | None = None) -> tu
     UUID, so a slug arrives as a 422 about UUID parsing rather than a lookup.
     The slug rides along only to be shown to a human.
 
-    An explicitly configured active project always wins -- someone who ran
-    `probe project use` has already answered this question, and importing
-    somewhere else would be the wrong kind of helpful. It may be either form
-    (`PROBE_PROJECT` takes a slug), so it is resolved the same way.
+    THE FOLDER DECIDES, unless someone names a project on this command.
+
+    The AMBIENT active project (`probe project use`, `PROBE_PROJECT`) is
+    deliberately NOT consulted. It used to win, on the reasoning that whoever
+    set it had already answered this question -- but it answers a different
+    one. `project use` sets where new RUNS go by default; it is not a statement
+    that every folder imported from here on belongs there. Honouring it meant
+    pointing at `anthrogen-backfill-test` and watching 37 artifacts land in
+    whatever project happened to be active, which is a surprising place to have
+    to go looking for them.
+
+    `requested` is an explicit `--project` on this invocation, in either form
+    (id or slug), and it still wins.
 
     Creation goes through ``ensure_project``, whose near-miss guard refuses a
     slug that looks like a typo of one already there. A folder called
     `odyssey-v2` sitting next to an existing `odyssey_v2` should stop, not
     quietly open a second identity for the same work.
     """
-    if configured:
-        return _resolve_ref(client, configured)
+    if requested:
+        return _resolve_ref(client, requested)
     proj = client.ensure_project(slug_for(folder), name=folder.resolve().name)
     return str(proj["id"]), proj.get("slug") or slug_for(folder)
 
 
 def _resolve_ref(client, ref: str) -> tuple[str, str]:
-    """A configured project id OR slug -> ``(project_id, slug)``."""
+    """An explicitly named project id OR slug -> ``(project_id, slug)``."""
     from uuid import UUID
 
     try:
@@ -826,7 +835,7 @@ def run(
     client_factory,
     start: Path | None = None,
     folder: Path | None = None,
-    configured_project: str | None = None,
+    project: str | None = None,
     interactive: bool = True,
     agent: Agent | None = None,
 ) -> list[str]:
@@ -834,6 +843,7 @@ def run(
 
     `folder` skips the picker and `agent` skips the agent prompt, which is what
     makes this reachable from `--action backfill` on a box with no TTY.
+    `project` names the destination explicitly; omitted, the FOLDER decides.
     """
     from probe.cli import tui
 
@@ -862,7 +872,7 @@ def run(
 
     try:
         with client_factory() as client:
-            project_id, slug = resolve_anchor(client, target, configured=configured_project)
+            project_id, slug = resolve_anchor(client, target, requested=project)
     except Exception as exc:  # noqa: BLE001 - a credential problem is the likely cause
         return [
             f"Could not resolve a project to import into: {exc}",
