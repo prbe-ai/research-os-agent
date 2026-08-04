@@ -1070,6 +1070,10 @@ def _run_wizard_action(
         )
     if selection.auto_update != caps.auto_update_enabled:
         messages.extend(wizard.apply_auto_update(selection.auto_update))
+    if selection.agent_rules != caps.agent_rules_installed or caps.agent_rules_stale:
+        messages.extend(
+            wizard.apply_agent_rules(selection.agent_rules, stale=caps.agent_rules_stale)
+        )
     for message in messages:
         tui.say(message)
 

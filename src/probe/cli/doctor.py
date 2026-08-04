@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import shutil
 
-from probe.cli import autoupdate
+from probe.cli import agent_rules, autoupdate
 from probe.cli.capabilities import (
     ENV_INGEST_TOKEN,
     TAP_PLUGIN_NAME,
@@ -81,6 +81,18 @@ def render(caps: Capabilities) -> str:
         lines.append(_row("Credential from", _SOURCE_LABEL[source]))
     if not caps.capture_token_sources:
         lines.append(_row("Credential", "none — this device is not paired"))
+    lines.append("")
+
+    lines.append("Agent rules")
+    lines.append(
+        _row("Global CLAUDE.md", "installed" if caps.agent_rules_installed else "not added")
+    )
+    # Reported separately from installed/absent. A block from an older release
+    # still LOADS, so it reads as working while teaching superseded wording --
+    # and this file is the one copy no release can reach, so nothing else would
+    # ever surface it. `probe wizard` rewrites it in place.
+    if caps.agent_rules_stale:
+        lines.append(_row("", "outdated wording -- re-run `probe wizard` to refresh"))
     lines.append("")
 
     lines.append("Auto-update")
@@ -187,6 +199,10 @@ def collect() -> Capabilities:
         capture_token_sources=sources,
         capture_killswitched=(tap_plugin_dir() / ".disabled").exists(),
         capture_device_id=capture_device_id(),
+        agent_rules_installed=agent_rules.is_installed(),
+        agent_rules_stale=(
+            agent_rules.is_installed() and not agent_rules.is_current()
+        ),
         auto_update_enabled=settings_autoupdate.enabled,
         last_update_attempt=(
             settings_autoupdate.last_attempt.describe()
