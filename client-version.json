@@ -1,5 +1,5 @@
 {
-  "cli": { "latest": "0.48.2", "min": "0.6.0" },
-  "plugin": { "latest": "0.15.0", "min": "0.6.0" },
+  "cli": { "latest": "0.48.3", "min": "0.6.0" },
+  "plugin": { "latest": "0.15.1", "min": "0.6.0" },
   "advisory": null
 }
