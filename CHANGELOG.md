@@ -4,6 +4,39 @@
 
 ### Added
 
+- **`probe wizard` can write a tracking pointer into your global `CLAUDE.md`.**
+  A skill has to be SELECTED before its body is read; `CLAUDE.md` is in context on
+  every turn. That difference decides whether tracking happens. Observed directly:
+  a session whose `CLAUDE.md` mandated searching Probe before design work used the
+  READ surfaces perfectly for its whole length and never registered a project, an
+  experiment or a note — because the write side had no equivalent standing rule.
+  Same agent, same tools, same session; the only asymmetry was which surface
+  carried the instruction.
+
+  The block names SURFACES, never procedures. Procedures rot: in eight days the
+  note vocabulary was added (#144), replaced by `NOTES.md` (#150) and re-triggered
+  (#149), so a block naming `probe note add --kind` would now be teaching a command
+  that does not exist. This file lives in the researcher's home directory and no
+  release can reach it, so anything version-specific in it is stale forever.
+  Naming the two skills and letting THEM carry the commands is what makes an
+  unreachable copy safe.
+
+  It is user-global, so it also loads while fixing an unrelated CSS bug. The rule
+  is therefore conditional on the work being research rather than an unconditional
+  order — a block that tells an agent to register a project during frontend work
+  teaches the agent that the block does not apply to it, which costs it authority
+  in the sessions it was written for.
+
+  Opt-in on the wizard menu, defaulting on for a fresh machine and preserving the
+  existing choice on a re-run, matching every other row. Everything outside the
+  markers is preserved byte for byte; re-running never appends a second block; the
+  wording is versioned so an outdated block is rewritten in place rather than
+  left to drift, and `probe doctor` reports it as outdated instead of merely
+  present. Unticking removes the block and leaves the file — a file in someone's
+  home directory is not ours to delete.
+
+### Added
+
 - **`capture-run-inputs` skill.** `probe snapshot` captures what git can see; it
   cannot know that `data/train.jsonl` is the dataset and `.venv` is not, because
   `.gitignore` was written to keep a repo clean rather than to describe an

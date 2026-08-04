@@ -95,12 +95,12 @@ def test_explicit_flags_always_win():
 def test_capture_only_asks_for_capture_alone():
     """Someone who ticked only session capture must not be handed a
     read/write/delete PAT they never asked for."""
-    grants = setup.grants_for(setup.Selection(tracking=False, capture=True, auto_update=False))
+    grants = setup.grants_for(setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False))
     assert grants == ["capture"]
 
 
 def test_tracking_asks_for_a_separate_read_only_mcp_credential():
-    grants = setup.grants_for(setup.Selection(tracking=True, capture=True, auto_update=False))
+    grants = setup.grants_for(setup.Selection(tracking=True, capture=True, auto_update=False, agent_rules=False))
     assert grants == ["api", "mcp", "capture"]
 
 
@@ -255,7 +255,7 @@ def test_the_plan_lists_only_what_actually_changes():
         auto_update_enabled=True,
     )
     steps = setup.plan(
-        caps, setup.Selection(tracking=True, capture=True, auto_update=True)
+        caps, setup.Selection(tracking=True, capture=True, auto_update=True, agent_rules=False)
     )
 
     assert len(steps) == 1
@@ -270,7 +270,7 @@ def test_no_change_means_no_plan():
         capture_token_sources=(TokenSource.PAIRED_FILE,),
         auto_update_enabled=True,
     )
-    selection = setup.Selection(tracking=True, capture=True, auto_update=True)
+    selection = setup.Selection(tracking=True, capture=True, auto_update=True, agent_rules=False)
     assert setup.plan(caps, selection) == []
 
 
@@ -307,7 +307,11 @@ def test_menu_rows_are_capabilities_not_plugin_names():
     what the thing does."""
     # AUTO_UPDATE is asked separately now: it is a policy about the
     # capabilities, not one of them.
-    assert set(setup.MENU_COPY) == {Capability.TRACKING, Capability.CAPTURE}
+    assert set(setup.MENU_COPY) == {
+        Capability.TRACKING,
+        Capability.CAPTURE,
+        Capability.AGENT_RULES,
+    }
     for title, detail in setup.MENU_COPY.values():
         assert "probe-research" not in title
         assert not any("probe-research" in line for line in detail)
@@ -408,6 +412,7 @@ def test_an_all_off_install_is_not_mistaken_for_a_fresh_machine():
         Capability.TRACKING: False,
         Capability.CAPTURE: False,
         Capability.AUTO_UPDATE: False,
+        Capability.AGENT_RULES: False,
     }
     assert all_off.configured is True
 
@@ -439,7 +444,7 @@ def test_setup_requests_only_the_grants_it_still_needs():
         logged_in_as="richard@prbe.ai",
         capture_token_sources=(TokenSource.PAIRED_FILE,),
     )
-    everything = setup.Selection(tracking=True, capture=True, auto_update=True)
+    everything = setup.Selection(tracking=True, capture=True, auto_update=True, agent_rules=False)
     assert setup.needs_authorization(fully_set_up, everything) == []
 
     # Logged in, but capture was never paired: ask for capture ALONE.
@@ -748,14 +753,14 @@ def test_installing_a_plugin_tells_you_to_restart_claude_code():
     session the user is sitting in — the last mile of the exact problem this
     feature exists to solve."""
     fresh = _caps()
-    turning_on = setup.Selection(tracking=True, capture=False, auto_update=False)
+    turning_on = setup.Selection(tracking=True, capture=False, auto_update=False, agent_rules=False)
     notice = setup.restart_notice(fresh, turning_on)
     assert notice and "Restart Claude Code" in notice
 
 
 def test_capture_alone_also_needs_a_restart():
     notice = setup.restart_notice(
-        _caps(), setup.Selection(tracking=False, capture=True, auto_update=False)
+        _caps(), setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False)
     )
     assert notice is not None
 
@@ -767,13 +772,13 @@ def test_an_auto_update_only_change_does_not_send_you_off_to_restart():
         logged_in_as="richard@prbe.ai",
         capture_token_sources=(TokenSource.PAIRED_FILE,),
     )
-    same_plugins = setup.Selection(tracking=True, capture=True, auto_update=True)
+    same_plugins = setup.Selection(tracking=True, capture=True, auto_update=True, agent_rules=False)
     assert setup.restart_notice(already, same_plugins) is None
 
 
 def test_turning_a_plugin_OFF_also_needs_a_restart():
     already = _caps(tracking_plugin_installed=True, logged_in_as="richard@prbe.ai")
-    turning_off = setup.Selection(tracking=False, capture=False, auto_update=False)
+    turning_off = setup.Selection(tracking=False, capture=False, auto_update=False, agent_rules=False)
     assert setup.restart_notice(already, turning_off) is not None
 
 

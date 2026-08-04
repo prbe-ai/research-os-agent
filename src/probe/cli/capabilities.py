@@ -55,6 +55,9 @@ class Capability(StrEnum):
     AUTO_UPDATE = "auto_update"
     """Keeps the CLI and plugins current in the background."""
 
+    AGENT_RULES = "agent_rules"
+    """A pointer to the tracking skills in the user's global CLAUDE.md."""
+
 
 class TokenSource(StrEnum):
     """WHERE a capture credential resolves from.
@@ -88,6 +91,9 @@ class Capabilities:
     capture_token_sources: tuple[TokenSource, ...] = ()
     capture_killswitched: bool = False
     capture_device_id: str | None = None
+
+    agent_rules_installed: bool = False
+    agent_rules_stale: bool = False
 
     auto_update_enabled: bool = False
     last_update_attempt: str | None = None
@@ -142,6 +148,7 @@ class Capabilities:
                 bool(self.capture_token_sources),
                 self.capture_killswitched,
                 self.auto_update_enabled,
+                self.agent_rules_installed,
                 self.last_update_attempt is not None,
             )
         )
@@ -151,6 +158,7 @@ class Capabilities:
             Capability.TRACKING: self.tracking_on,
             Capability.CAPTURE: self.capture_on,
             Capability.AUTO_UPDATE: self.auto_update_enabled,
+            Capability.AGENT_RULES: self.agent_rules_installed,
         }
 
 

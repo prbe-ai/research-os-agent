@@ -23,7 +23,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-from probe.cli import autoupdate
+from probe.cli import agent_rules, autoupdate
 from probe.cli.capabilities import (
     MARKETPLACE,
     MARKETPLACE_REPO,
@@ -43,6 +43,7 @@ FRESH_DEFAULTS: dict[Capability, bool] = {
     Capability.TRACKING: True,
     Capability.CAPTURE: False,
     Capability.AUTO_UPDATE: True,
+    Capability.AGENT_RULES: True,
 }
 
 
@@ -53,12 +54,14 @@ class Selection:
     tracking: bool
     capture: bool
     auto_update: bool
+    agent_rules: bool
 
     def as_map(self) -> dict[Capability, bool]:
         return {
             Capability.TRACKING: self.tracking,
             Capability.CAPTURE: self.capture,
             Capability.AUTO_UPDATE: self.auto_update,
+            Capability.AGENT_RULES: self.agent_rules,
         }
 
 
@@ -68,6 +71,7 @@ def resolve_selection(
     tracking: bool | None,
     capture: bool | None,
     auto_update: bool | None,
+    agent_rules: bool | None = None,
     configured: bool | None = None,
 ) -> Selection:
     """The flag truth table. An omitted flag means one thing, and only one.
@@ -88,6 +92,7 @@ def resolve_selection(
         Capability.TRACKING: tracking,
         Capability.CAPTURE: capture,
         Capability.AUTO_UPDATE: auto_update,
+        Capability.AGENT_RULES: agent_rules,
     }
     resolved = {
         capability: (value if value is not None else fallback[capability])
@@ -97,6 +102,7 @@ def resolve_selection(
         tracking=resolved[Capability.TRACKING],
         capture=resolved[Capability.CAPTURE],
         auto_update=resolved[Capability.AUTO_UPDATE],
+        agent_rules=resolved[Capability.AGENT_RULES],
     )
 
 
@@ -111,6 +117,13 @@ MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
         "Session capture -> knowledgebase",
         (
             "Sends this device's Claude Code sessions so your team can search them.",
+        ),
+    ),
+    Capability.AGENT_RULES: (
+        "Tracking rule in your global CLAUDE.md  (recommended)",
+        (
+            "Tells agents to register research work before designing it.",
+            "A short managed block; your own text is never touched.",
         ),
     ),
 }
@@ -142,6 +155,7 @@ PLAN_LABELS: dict[Capability, str] = {
     Capability.TRACKING: MENU_COPY[Capability.TRACKING][0],
     Capability.CAPTURE: MENU_COPY[Capability.CAPTURE][0],
     Capability.AUTO_UPDATE: "automatic updates",
+    Capability.AGENT_RULES: MENU_COPY[Capability.AGENT_RULES][0],
 }
 
 
@@ -359,6 +373,34 @@ def apply_auto_update(want: bool) -> list[str]:
     return ["Auto-update on."]
 
 
+def apply_agent_rules(want: bool, *, stale: bool = False) -> list[str]:
+    """Write or drop the CLAUDE.md pointer block.
+
+    `stale` re-writes an already-installed block whose version moved, which is
+    the only way a wording fix reaches a machine that ticked this once and never
+    re-ran the wizard.
+    """
+    path = agent_rules.memory_path()
+    try:
+        if want:
+            changed = agent_rules.install(path)
+        else:
+            changed = agent_rules.remove(path)
+    except OSError as exc:
+        return [f"Could not update {path}: {exc}. Nothing else was affected."]
+
+    if not want:
+        return ["Removed the Probe block from your global CLAUDE.md."] if changed else []
+    if stale and changed:
+        return [f"Refreshed the Probe block in {path}."]
+    if changed:
+        return [
+            f"Added a Probe tracking rule to {path}. It points at the skills and "
+            "leaves the rest of the file alone."
+        ]
+    return []
+
+
 def run_menu(defaults: dict[Capability, bool]):
     """The capability checkbox. Returns None (quit), tui.BACK, or a Selection.
 
@@ -404,6 +446,7 @@ def run_menu(defaults: dict[Capability, bool]):
     return Selection(
         tracking=Capability.TRACKING in chosen,
         capture=Capability.CAPTURE in chosen,
+        agent_rules=Capability.AGENT_RULES in chosen,
         # Carried through untouched; ask_auto_update owns this one.
         auto_update=defaults[Capability.AUTO_UPDATE],
     )
