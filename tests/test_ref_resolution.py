@@ -326,3 +326,146 @@ def test_an_experiment_artifact_anchor_takes_a_slug(app, client, monkeypatch):
 def test_a_run_anchor_is_left_alone(client):
     """Runs have no slug: they anchor by id or petname, resolved server-side."""
     assert impl._anchor_id_for(client, impl.Anchor.RUN, "some-run-ref") == "some-run-ref"
+
+
+# -- review findings on this diff ---------------------------------------------
+def test_a_colon_slug_is_still_addressable_via_the_selector(app, client, monkeypatch):
+    """The prefix is reserved, so a bare `id:foo` means "resolve foo as an id".
+
+    Found reviewing this diff: introducing the selector introduced a smaller copy
+    of the bug it fixes. It fails CLOSED (nothing is deleted) rather than hitting
+    the wrong row, and `slug:` reaches the literal name -- only the first prefix
+    is consumed. New ones are refused backend-side.
+    """
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    _project(app, pid=A_ID, slug="id:foo")
+
+    assert cli.main(["project", "delete", "slug:id:foo", "--yes"]) == 0
+    assert app.projects == {}
+
+
+def test_a_bare_colon_slug_names_the_stripped_ref_in_the_error(app, client, monkeypatch, capsys):
+    """Reporting only the remainder answers a question nobody asked."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    _project(app, pid=A_ID, slug="id:foo")
+
+    assert cli.main(["project", "delete", "id:foo", "--yes"]) == 2
+    err = capsys.readouterr().err
+    assert "'id:foo'" in err and "'foo'" in err
+    assert A_ID in app.projects
+
+
+def test_an_unambiguous_anchor_costs_one_request_not_two(app, client, monkeypatch):
+    """`_anchor_id_for` is what an agent filing thousands of artifacts pays for.
+
+    It was 0 requests for a UUID before this branch and 2 after, because the
+    ambiguity check fetched the id as well. The slug lookup alone answers the only
+    question this caller has, so the id fetch is skipped when it misses.
+    """
+    _project(app, pid=A_ID, slug="anchor-proj")
+    seen: list[str] = []
+    original = client.transport.get
+    monkeypatch.setattr(
+        client.transport, "get", lambda path, **kw: (seen.append(path), original(path, **kw))[1]
+    )
+
+    assert impl._anchor_id_for(client, impl.Anchor.PROJECT, A_ID) == A_ID
+    assert len(seen) == 1, seen
+
+
+def test_a_delete_verb_still_verifies_the_id_exists(app, client, monkeypatch):
+    """verify=False is the anchor's licence, not everyone's: a delete that names a
+    missing id must say so locally rather than let the server 404 mid-cascade."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+
+    assert cli.main(["project", "delete", A_ID, "--yes"]) == 2
+
+
+# -- findings from the cross-model adversarial pass ----------------------------
+def test_a_prefix_contradicting_the_flag_is_refused(collision):
+    """`slug:X --by-id` used to silently do the slug -- the opposite of the word
+    the operator has in their own command line."""
+    code = cli.main(["project", "delete", f"slug:{A_ID}", "--by-id", "--yes"])
+
+    assert code != 0
+    assert set(collision.projects) == {A_ID, B_ID}
+
+
+def test_a_prefix_agreeing_with_the_flag_is_fine(collision):
+    assert cli.main(["project", "delete", f"id:{A_ID}", "--by-id", "--yes"]) == 0
+    assert set(collision.projects) == {B_ID}
+
+
+def test_experiment_set_resolves_a_slug(app, client, monkeypatch, capsys):
+    """`experiment delete <slug>` worked while `experiment set <slug>` 422'd."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    exp = app.seed_experiment("amend-me")
+
+    assert cli.main(["experiment", "set", "amend-me", "--name", "renamed"]) == 0
+    assert json.loads(capsys.readouterr().out)["id"] == exp["id"]
+
+
+def test_experiment_tag_resolves_a_slug(app, client, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    exp = app.seed_experiment("tag-me")
+
+    assert cli.main(["experiment", "tag", "tag-me", "baseline"]) == 0
+    assert json.loads(capsys.readouterr().out)["id"] == exp["id"]
+
+
+def test_an_async_artifact_anchor_is_resolved_before_it_is_queued(app, client, monkeypatch):
+    """The async branch returned BEFORE the anchor was resolved, so a queued write
+    carried the raw ref into the journal and was POSTed minutes later by the
+    drainer -- a 422 nobody is watching, or a collision filed against the wrong
+    project with no operator present."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    monkeypatch.setattr(impl, "_async_client", lambda: client)
+    proj = _project(app, pid=A_ID, slug="async-anchor")
+    queued: list[tuple] = []
+    monkeypatch.setattr(
+        impl, "_artifact_add_async", lambda anchor, anchor_id, *a, **kw: queued.append((anchor, anchor_id))
+    )
+    # The root callback recomputes _conn.async_mode on every invocation, so
+    # setting the attribute here would be overwritten before the command runs.
+    monkeypatch.setenv("PROBE_ASYNC", "1")
+
+    cli.main(["artifact", "add", "--uri", "s3://x/y", "--name", "n", "--project", "async-anchor"])
+
+    assert queued and queued[0][1] == proj["id"], queued
+
+
+def test_a_backend_that_ignores_the_slug_filter_refuses_rather_than_guesses(
+    collision, app, client, monkeypatch
+):
+    """FastAPI DROPS a query param a route does not declare, so an engine
+    predating ?slug= answers an unfiltered page. Reading that as "no slug
+    matched" is the premise this treats a UUID-shaped ref as an id on -- the
+    exact misresolution the module exists to stop, resurrected on old backends.
+    """
+    # A real tenant, so the unfiltered page is a page. The collision sits BEYOND
+    # it -- Codex's scenario, and the only one a server can actually produce: it
+    # has no reason to omit B from a page it did not filter.
+    for i in range(30):
+        _project(app, pid=str(uuid.uuid4()), slug=f"filler-{i:03d}")
+    original = client.transport.get
+
+    def unfiltered(path, *, params=None):
+        if path == "/v1/projects" and params and "slug" in params:
+            rows = original(path, params=None)
+            listing = rows.get("items", rows) if isinstance(rows, dict) else rows
+            return [r for r in listing if r["id"] != B_ID]
+        return original(path, params=params)
+
+    monkeypatch.setattr(client.transport, "get", unfiltered)
+
+    code = cli.main(["project", "delete", A_ID, "--yes"])
+
+    assert code != 0
+    # Both halves of the collision survive; the fillers are noise.
+    assert A_ID in collision.projects and B_ID in collision.projects
+
+
+def test_the_filtered_backend_is_unaffected(collision):
+    """The guard keys on row count, so a real ?slug= answer never trips it."""
+    assert cli.main(["project", "delete", "id:" + A_ID, "--yes"]) == 0
+    assert set(collision.projects) == {B_ID}

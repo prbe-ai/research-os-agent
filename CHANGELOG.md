@@ -46,6 +46,12 @@
   | `run delete` | id or petname `short_id` — no disambiguator needed, a petname cannot be UUID-shaped |
   | `artifact delete` | id only — there is no by-name index and a name is anchor-scoped, so there is no second spelling to accept |
 
+  The confirmation prompt and the `deleted` line now name the **resolved** entity
+  (name, handle and id) instead of echoing the string that was typed. Echoing the ref
+  asks the operator to confirm their own typo, and in the collision above it is exactly
+  the string that does not identify what is about to go. Resolution therefore happens
+  *before* the prompt, which is the ordering the confirmation is worth anything under.
+
   An `id:` / `slug:` prefix on the ref says the same thing as the flags and works on
   **every** command that takes a project or experiment, which the flags do not: they are
   declared on the project and experiment verbs, while a ref is accepted by around a dozen
@@ -53,16 +59,33 @@
   error naming two flags that command has no way to accept — and the project whose id *is*
   the colliding string could not be addressed there at all, since naming it is the collision.
 
+- **Contradicting the flag with the prefix is refused**, not ranked:
+  `project delete slug:X --by-id` used to run the slug and leave the operator reading
+  the word "id" in their own command. A disambiguator that picks a winner is the thing
+  it exists to remove.
+
+- **A queued (`--async`) artifact resolves its anchor before it is queued.** The async
+  branch returned before the resolve on the sync path, so a raw ref went into the journal
+  and the drainer POSTed it minutes later — an unresolved slug became a 422 nobody is
+  watching, and an id/slug collision filed the upload against the wrong project with no
+  operator present. Offline it still costs nothing: an unresolvable ref passes through
+  rather than gating the enqueue.
+
+- **A backend that ignores `?slug=` is refused instead of trusted.** FastAPI silently
+  DROPS a query parameter a route does not declare, so an engine predating the filter
+  (a rolled-back data plane, an older self-hosted install) answers an unfiltered page.
+  Reading that as "no slug matched" is the premise a UUID-shaped ref is treated as an id
+  on — the original misresolution, resurrected wherever the filter is missing. Detected
+  by row count, the one signal that survives the drop: an exact match on a UNIQUE column
+  returns 0 or 1 row, so 2+ means nobody filtered.
+
+- **`experiment set` and `experiment tag` resolve a slug.** `experiment delete <slug>`
+  worked while `experiment set <slug>` 422'd against the same UUID-typed route.
+
 - **`run list --experiment` and the artifact anchors take a slug.** `--experiment` shipped
   its value straight into a UUID-typed query param, so a slug came back as a raw pydantic
   `uuid_parsing` dump rather than a listing; the artifact anchors resolved `--project` by
   slug but not `--experiment`, so the two flags behaved differently on the same command line.
-
-  The confirmation prompt and the `deleted` line now name the **resolved** entity
-  (name, handle and id) instead of echoing the string that was typed. Echoing the ref
-  asks the operator to confirm their own typo, and in the collision above it is exactly
-  the string that does not identify what is about to go. Resolution therefore happens
-  *before* the prompt, which is the ordering the confirmation is worth anything under.
 
 - **The Claude Code tap daemon died seconds after every SessionStart**
   (`probe-research-tap` 0.1.3). Transcripts silently stopped reaching

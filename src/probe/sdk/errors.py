@@ -92,3 +92,18 @@ def error_for(status: int, detail: Any) -> RosError:
     if cls is None:
         cls = ServerError if status >= 500 else RosError
     return cls(_detail_message(detail), status=status, detail=detail)
+
+
+class UnfilteredListing(RosError):
+    """A ``?slug=`` lookup came back unfiltered, so a MISS proves nothing.
+
+    FastAPI silently DROPS a query parameter a route does not declare, so an
+    engine predating the filter answers an unfiltered first page. ``_exactly``
+    degrades that to "absent", which is right for get-or-create and wrong for
+    anything deciding whether a UUID-shaped ref is an id: there, "not a slug" is
+    the premise the whole decision rests on.
+
+    Detected by row count -- the one signal that survives the drop, since an
+    exact match on a UNIQUE column returns 0 or 1.
+    """
+

@@ -57,7 +57,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from ..sdk.errors import NotFoundError
+from ..sdk.errors import NotFoundError, UnfilteredListing
 
 # The handle that is not the id, per kind. Runs are excluded deliberately: their
 # short_id is server-minted, so it is resolved server-side (see resolve_run).
@@ -84,6 +84,21 @@ class AmbiguousRef(Exception):
             f"  slug:{self.ref}  (--by-slug)  {describe(self.kind, self.by_slug)}\n"
             f"re-run with the one you meant. The id:/slug: prefix works on every command "
             f"that takes a {self.kind}; the flags only exist on the {self.kind} verbs."
+        )
+
+
+class ConflictingSelectors(Exception):
+    """``slug:X --by-id``: the ref and the flag name different spellings.
+
+    Refused rather than ranked. This is a disambiguator -- a rule for picking a
+    winner is the exact thing it exists to remove, and the losing half is still
+    sitting in the command the operator is reading back.
+    """
+
+    def __init__(self, typed: str, selector: str, flag: str) -> None:
+        super().__init__(
+            f"{typed!r} says --by-{selector} and the flags say --by-{flag}. "
+            f"Drop one: keep the prefix, or keep the flag."
         )
 
 
@@ -143,14 +158,39 @@ def _by_id(client, kind: str, ref: str) -> dict | None:
         return None
 
 
-def _by_slug(client, kind: str, ref: str) -> dict | None:
-    """The entity whose slug is ``ref``, or None. Server-side, uncapped."""
-    return getattr(client, f"resolve_{kind}")(ref)
+def _by_slug(client, kind: str, ref: str, *, strict: bool = False) -> dict | None:
+    """The entity whose slug is ``ref``, or None. Server-side, uncapped.
+
+    ``strict`` refuses to read a MISS from a backend that never applied
+    ``?slug=`` -- see :class:`probe.sdk.errors.UnfilteredListing`. Only the
+    ambiguity check asks for it: a HIT is trustworthy either way, because the
+    SDK verifies the slug it got back rather than taking the first row.
+
+    Kept as an SDK call rather than a direct transport read: the route literals
+    live there, and ``tests/test_parity`` checks every call the client makes
+    against the declared schema -- which an f-string path defeats.
+    """
+    resolver = getattr(client, f"resolve_{kind}")
+    if not strict:
+        return resolver(ref)
+    try:
+        return resolver(ref, strict=True)
+    except TypeError:
+        # A stub or an older SDK without the keyword. Losing the guard is the
+        # documented degradation; losing the lookup would be a false absence.
+        return resolver(ref)
 
 
-def _missing(kind: str, ref: str, by: str | None) -> NotFoundError:
+def _missing(kind: str, ref: str, by: str | None, *, typed: str | None = None) -> NotFoundError:
+    """``typed`` is the string as the operator wrote it, when a selector was stripped.
+
+    Reporting the stripped remainder would answer a question they did not ask:
+    someone who typed ``id:foo`` and reads ``no project with id 'foo'`` has to work
+    out that the prefix was consumed rather than part of the name.
+    """
     how = {"id": " (as an id)", "slug": " (as a slug)"}.get(by or "", "")
-    return NotFoundError(f"no {kind} with id or slug {ref!r}{how}")
+    shown = f"{typed!r} -> {ref!r}" if typed and typed != ref else repr(ref)
+    return NotFoundError(f"no {kind} with id or slug {shown}{how}")
 
 
 def split_selector(ref: str) -> tuple[str, str | None]:
@@ -166,6 +206,12 @@ def split_selector(ref: str) -> tuple[str, str | None]:
     Two spellings for one decision is a real cost, paid because neither covers the
     whole surface alone: the flags are discoverable in ``--help`` where the verbs
     are destructive, the prefix works everywhere.
+
+    ``id:``/``slug:`` are therefore RESERVED at the front of a ref. A project
+    literally slugged ``id:foo`` is addressed as ``slug:id:foo`` (only the first
+    prefix is consumed), and the backend refuses to mint new ones -- the same
+    argument as the UUID-shaped slug, since a prefix that can also be a name is
+    the same one-string-two-meanings bug this module exists to end.
     """
     for selector in ("id", "slug"):
         prefix = f"{selector}:"
@@ -174,18 +220,30 @@ def split_selector(ref: str) -> tuple[str, str | None]:
     return ref, None
 
 
-def resolve(client, kind: str, ref: str, *, by: str | None = None) -> Ref:
+def resolve(client, kind: str, ref: str, *, by: str | None = None, verify: bool = True) -> Ref:
     """Resolve a project/experiment ref to its id, refusing to guess.
 
     ``by`` forces one interpretation (``"id"`` / ``"slug"``); the default tries
     both and raises :class:`AmbiguousRef` when they disagree. An ``id:``/``slug:``
-    prefix on ``ref`` says the same thing and wins over ``by``, since it is the
-    more specific statement of the two and the one typed at the ref itself.
+    prefix on ``ref`` says the same thing. Agreeing is fine and either may be
+    omitted, but a prefix that CONTRADICTS the flag raises: silently letting one
+    win means ``project delete slug:X --by-id`` deletes the by-slug project while
+    the operator is reading the word "id" in their own command.
+
+    ``verify=False`` skips confirming that an id-shaped ref actually EXISTS, for
+    callers that were never a gate (the artifact anchors) and let the server
+    answer a bad ref. It costs one request instead of two on the common path: the
+    slug lookup alone already answers "is this ambiguous", which is the only
+    question those callers need. Leave it True wherever absence should be a local
+    error rather than a 404 later -- every verb that names a thing to change.
     """
     if kind not in SLUG_KINDS:  # pragma: no cover -- guards a caller typo
         raise ValueError(f"{kind!r} has no slug form; use resolve_run/an id")
 
+    typed = ref
     ref, selector = split_selector(ref)
+    if selector and by and selector != by:
+        raise ConflictingSelectors(typed, selector, by)
     by = selector or by
 
     if by == "id":
@@ -193,8 +251,15 @@ def resolve(client, kind: str, ref: str, *, by: str | None = None) -> Ref:
     elif by == "slug":
         row = _by_slug(client, kind, ref)
     else:
+        # Slug first: it is the lookup that decides ambiguity, and when it misses
+        # an unverified caller is already done. Ordering it second would pay for
+        # the id fetch on every anchor that was never in doubt.
+        # strict only when the ref could be an id: that is the only case where a
+        # false "not a slug" silently redirects to a different entity.
+        hit_slug = _by_slug(client, kind, ref, strict=is_uuid(ref))
+        if hit_slug is None and not verify and is_uuid(ref):
+            return Ref(ref, f"{kind} {ref}", {"id": ref})
         hit_id = _by_id(client, kind, ref)
-        hit_slug = _by_slug(client, kind, ref)
         # Same entity via both spellings (a slug equal to its OWN id) is not a
         # conflict -- either answer is the same answer.
         if hit_id and hit_slug and str(hit_id["id"]) != str(hit_slug["id"]):
@@ -202,7 +267,7 @@ def resolve(client, kind: str, ref: str, *, by: str | None = None) -> Ref:
         row = hit_id or hit_slug
 
     if row is None:
-        raise _missing(kind, ref, by)
+        raise _missing(kind, ref, by, typed=typed)
     return Ref(str(row["id"]), describe(kind, row), row)
 
 

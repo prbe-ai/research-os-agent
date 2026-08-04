@@ -157,7 +157,7 @@ def _merge_wide_page(merged: dict, page: dict) -> None:
         merged["rows"].append({**row, "values": values})
 
 
-def _exactly(rows: list[dict], slug: str) -> dict | None:
+def _exactly(rows: list[dict], slug: str, *, strict: bool = False) -> dict | None:
     """The row whose slug actually MATCHES, or None.
 
     Never `rows[0]`. FastAPI silently drops a query parameter it does not
@@ -175,6 +175,12 @@ def _exactly(rows: list[dict], slug: str) -> dict | None:
     for row in rows or ():
         if row.get("slug") == slug:
             return row
+    if strict and len(rows or ()) > 1:
+        # A miss from a listing nobody filtered is not an absence. Only callers
+        # deciding id-vs-slug ask for strict; get-or-create still wants "absent".
+        raise errors.UnfilteredListing(
+            f"this backend did not apply ?slug={slug!r} (returned {len(rows)} rows)"
+        )
     return None
 
 
@@ -490,7 +496,7 @@ class Client:
             self._verify_tags_written(tags, row, "POST /v1/projects")
         return row
 
-    def resolve_project(self, slug: str) -> dict | None:
+    def resolve_project(self, slug: str, *, strict: bool = False) -> dict | None:
         """Look a project up by slug. ``None`` when it does not exist.
 
         `(customer_id, slug)` is UNIQUE, so ``?slug=`` returns 0 or 1 row and an
@@ -498,7 +504,7 @@ class Client:
         Nothing is hidden from this read: a deleted project is gone, and its slug
         is free again."""
         rows = self.transport.get("/v1/projects", params={"slug": slug})
-        return _exactly(rows, slug)
+        return _exactly(rows, slug, strict=strict)
 
     def ensure_project(self, slug: str, name: str | None = None, **kw) -> dict:
         """Get-or-create a project by slug. SDK-only; see :meth:`run`.
@@ -964,13 +970,13 @@ class Client:
             body["tags"] = tags
         return self.transport.post("/v1/experiments", body)
 
-    def resolve_experiment(self, slug: str) -> dict | None:
+    def resolve_experiment(self, slug: str, *, strict: bool = False) -> dict | None:
         """Look an experiment up by slug. ``None`` when it does not exist.
 
         Experiment slugs are UNIQUE per TENANT, not per project, so this needs no
         project_id to disambiguate."""
         rows = self.transport.get("/v1/experiments", params={"slug": slug})
-        return _exactly(rows, slug)
+        return _exactly(rows, slug, strict=strict)
 
     def ensure_experiment(
         self,

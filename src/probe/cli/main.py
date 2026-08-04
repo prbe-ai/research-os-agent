@@ -49,7 +49,7 @@ from ..sdk.config import (
 )
 from ..sdk.tags import canonical_tags
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
-from ..sdk.errors import NotFoundError
+from ..sdk.errors import NotFoundError, UnfilteredListing
 from ..sdk.hashing import reference_fields
 from ..sdk.surface import Surface
 from . import refs
@@ -1762,7 +1762,7 @@ def _ref(client: Client, kind: str, ref: str, *, by: str | None = None) -> refs.
         if kind == "run":
             return refs.resolve_run(client, ref)
         return refs.resolve(client, kind, ref, by=by)
-    except (refs.AmbiguousRef, NotFoundError) as exc:
+    except (refs.AmbiguousRef, refs.ConflictingSelectors, UnfilteredListing, NotFoundError) as exc:
         raise typer.BadParameter(str(exc)) from None
 
 
@@ -2904,7 +2904,11 @@ def _anchor_id_for(client: Client, anchor: Anchor, anchor_id: str | None) -> str
     if kind is None or not anchor_id:
         return anchor_id
     try:
-        return refs.resolve(client, kind, anchor_id).id
+        # verify=False: this was never a gate, so it does not need to confirm the
+        # id exists -- only that it is not ALSO somebody's slug. One request on
+        # the common path, which matters here more than anywhere: this is the
+        # resolver an agent filing a few thousand artifacts pays for.
+        return refs.resolve(client, kind, anchor_id, verify=False).id
     except refs.AmbiguousRef as exc:
         # The ONE case that does become a hard error. "Never a gate" is about
         # refs that fail to resolve; this one resolves to two different projects,
@@ -3223,6 +3227,20 @@ def artifact_add(
             )
 
     if _conn.async_mode:
+        if anchor in _SLUG_ANCHORS:
+            # The async branch used to return without ever reaching the resolve
+            # on the sync path below, so a queued write carried the raw ref into
+            # the journal and the drainer POSTed it minutes later: an unresolved
+            # slug became a 422 nobody is watching, and an id/slug collision
+            # filed the upload against the wrong project with no operator
+            # present. Sync and async have to agree on what a ref means.
+            #
+            # This is one request against async's bounded-enqueue promise, and it
+            # is bounded (one indexed lookup) -- and offline it costs nothing,
+            # because _anchor_id_for passes an unresolvable ref straight through
+            # rather than gating on it.
+            with _client() as c:
+                anchor_id = _anchor_id_for(c, anchor, anchor_id)
         _artifact_add_async(
             anchor, anchor_id, resolved,
             path=path, uri=uri, reference=reference, hash_content=hash_content,
@@ -4256,17 +4274,22 @@ def experiment_create(
 
 @experiment_app.command("set")
 def experiment_set(
-    experiment_id: str = typer.Argument(...),
+    experiment_id: str = typer.Argument(..., help="experiment id or slug"),
     hypothesis: str = typer.Option(None, "--hypothesis", help="replace the hypothesis"),
     name: str = typer.Option(None, "--name"),
     description: str = typer.Option(None, "--description"),
+    by_id: bool = BY_ID,
+    by_slug: bool = BY_SLUG,
 ) -> None:
     """Amend an experiment's hypothesis, name, or description after creation."""
     if hypothesis is None and name is None and description is None:
         raise typer.BadParameter("pass at least one of --hypothesis/--name/--description")
     with _client() as c:
         result = c.update_experiment(
-            experiment_id, hypothesis=hypothesis, name=name, description=description
+            _ref(c, "experiment", experiment_id, by=_by(by_id, by_slug)).id,
+            hypothesis=hypothesis,
+            name=name,
+            description=description,
         )
     _print_json(result)
 
@@ -4293,21 +4316,24 @@ def experiment_list(
 
 @experiment_app.command("tag")
 def experiment_tag(
-    experiment_id: str = typer.Argument(...),
+    experiment_id: str = typer.Argument(..., help="experiment id or slug"),
     add: list[str] = typer.Argument(None, help="tags to add"),
     remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
     replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
+    by_id: bool = BY_ID,
+    by_slug: bool = BY_SLUG,
 ) -> None:
     """Tag an experiment: positional args add, --remove drops, --set replaces; bare lists."""
     with _client() as c:
+        eid = _ref(c, "experiment", experiment_id, by=_by(by_id, by_slug)).id
         _print_json(
             _tag_verb_flow(
-                experiment_id,
-                c.get_experiment(experiment_id).get("tags"),
+                eid,
+                c.get_experiment(eid).get("tags"),
                 add,
                 remove,
                 replace,
-                lambda wanted: c.update_experiment(experiment_id, tags=wanted),
+                lambda wanted: c.update_experiment(eid, tags=wanted),
             )
         )
 
