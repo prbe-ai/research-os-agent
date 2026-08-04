@@ -678,6 +678,9 @@ def whoami() -> None:
 @app.command()
 def backfill(
     folder: str = typer.Argument(None, help="folder to import; omit to pick one interactively"),
+    agent: str = typer.Option(
+        None, "--agent", help="claude | codex — omit to use whichever is installed, or be asked"
+    ),
 ) -> None:
     """Import work you have already done: point an agent at a folder.
 
@@ -703,6 +706,14 @@ def backfill(
     # lands nothing.
     from probe.cli.bootstrap import ensure_persistent_install
 
+    try:
+        chosen = backfill_impl.Agent(agent) if agent else None
+    except ValueError:
+        raise typer.BadParameter(
+            f"unknown agent {agent!r}; expected one of: "
+            f"{', '.join(a.value for a in backfill_impl.Agent)}"
+        ) from None
+
     boot = ensure_persistent_install()
     if boot.message:
         print(boot.message)
@@ -712,6 +723,7 @@ def backfill(
         folder=Path(folder) if folder else None,
         configured_project=resolve(base_url=_conn.base_url).project,
         interactive=wizard.interactive(),
+        agent=chosen,
     )
     if lines:
         tui.page(lines) if wizard.interactive() else print("\n".join(lines))
