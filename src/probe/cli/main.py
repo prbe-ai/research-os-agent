@@ -3383,12 +3383,20 @@ def snapshot(
     ),
     no_env: bool = typer.Option(False, "--no-env"),
     no_gpu: bool = typer.Option(False, "--no-gpu"),
+    no_upload: bool = typer.Option(
+        False, "--no-upload", help="do NOT store the bytes git cannot supply"
+    ),
+    max_upload_mb: int = typer.Option(
+        256, "--max-upload-mb", help="refuse (never truncate) above this size"
+    ),
 ) -> None:
     """Non-disruptive code + env capture.
 
-    Each file is recorded as retrievable from a pushed remote, or as still needing
-    its bytes uploaded. A non-zero `pending upload` count means this snapshot alone
-    does NOT make the run reproducible.
+    Files git can already supply from a pushed remote are recorded as references.
+    Everything else — edited, untracked, unpushed, or no remote at all — has its
+    BYTES uploaded as a `code-bytes` artifact, because a sha256 verifies a file
+    you already have rather than producing one you do not. `--no-upload` skips
+    that, and the run is then not reproducible from the record alone.
 
     The dependency set comes from the PROJECT's virtualenv, not this CLI's. `probe`
     is normally a uv-tool install with its own interpreter, so recording the
@@ -3403,13 +3411,24 @@ def snapshot(
             venv=venv,
             # The CLI is never the process that runs the code.
             detect_venv=True,
+            upload=not no_upload,
+            max_upload_bytes=max_upload_mb * 1024 * 1024,
         )
     m = snap["manifest"]
+    cb = snap.get("code_bytes") or {}
     print(f"snapshot {snap['git']['commit'][:12]} -> {snap['git']['ref']}")
-    print(
-        f"code: {m['n_git_referenced']} referenced from {m['base_commit'][:12] if m['base_commit'] else 'no pushed base'}"
-        f", {m['n_pending_upload']} pending upload"
-    )
+    base = m["base_commit"][:12] if m["base_commit"] else "no pushed base"
+    print(f"code: {m['n_git_referenced']} referenced from {base}")
+    if cb.get("uploaded"):
+        print(
+            f"      {cb['n_files']} uploaded ({cb['size_bytes'] / 1e6:.2f} MB, "
+            f"{cb['archive_sha256'][:12]})"
+        )
+    elif cb.get("pending_upload"):
+        print(
+            f"      {cb['pending_upload']} NOT stored ({cb.get('reason')}) — "
+            "this run is not reproducible from the record alone"
+        )
     deps = snap.get("deps") or {}
     prov = snap.get("env_provenance") or {}
     if deps.get("packages") is not None:
