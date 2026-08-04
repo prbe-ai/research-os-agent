@@ -4,6 +4,32 @@
 
 ### Added
 
+- **`capture-run-inputs` skill.** `probe snapshot` captures what git can see; it
+  cannot know that `data/train.jsonl` is the dataset and `.venv` is not, because
+  `.gitignore` was written to keep a repo clean rather than to describe an
+  experiment. The plumbing for the rest shipped over 0.38.0–0.43.0 (`--include`,
+  upload, `snapshot-restore`); this is the judgment that drives it.
+
+  The skill walks the agent from `snapshot-show` (read what was missed) through
+  finding real inputs (paths the entry point opens, the launch config, `.gitignore`
+  read per-entry, base weights, env var NAMES never values) to `--include`, and
+  ends at `snapshot-restore --verify-only` so the claim is checked rather than
+  assumed. It draws the inputs/outputs line explicitly — outputs are artifacts, and
+  sweeping them into the snapshot makes "what produced this result?" unanswerable.
+
+  It also requires recording what was CONSIDERED AND REJECTED, with reasons. Once
+  scope is agent-judged, absence stops being informative: a file missing from a
+  snapshot could mean "not an input", "judged not an input", or "nobody looked",
+  and six weeks later those are indistinguishable.
+
+- `tests/test_skills_commands_exist.py` asserts every `probe ...` command a skill
+  teaches is actually registered. `test_skills_sync.py` guards the plugin copy
+  against drifting from `skills/`; it cannot catch a perfectly-synced skill that
+  teaches a renamed flag. Same invisible shape: tests pass, MCP is correct, only
+  the agent is wrong.
+
+### Added
+
 - **`probe snapshot --include GLOB`** captures inputs `.gitignore` hides. `.gitignore`
   is right about build output and wrong about a downloaded dataset, a base
   checkpoint, or a config kept out of the repo on purpose — those are INPUTS, and
@@ -396,6 +422,32 @@
   nothing validates on its behalf.
 
 ## Unreleased
+
+### Added
+
+- **`capture-run-inputs` skill.** `probe snapshot` captures what git can see; it
+  cannot know that `data/train.jsonl` is the dataset and `.venv` is not, because
+  `.gitignore` was written to keep a repo clean rather than to describe an
+  experiment. The plumbing for the rest shipped over 0.38.0–0.43.0 (`--include`,
+  upload, `snapshot-restore`); this is the judgment that drives it.
+
+  The skill walks the agent from `snapshot-show` (read what was missed) through
+  finding real inputs (paths the entry point opens, the launch config, `.gitignore`
+  read per-entry, base weights, env var NAMES never values) to `--include`, and
+  ends at `snapshot-restore --verify-only` so the claim is checked rather than
+  assumed. It draws the inputs/outputs line explicitly — outputs are artifacts, and
+  sweeping them into the snapshot makes "what produced this result?" unanswerable.
+
+  It also requires recording what was CONSIDERED AND REJECTED, with reasons. Once
+  scope is agent-judged, absence stops being informative: a file missing from a
+  snapshot could mean "not an input", "judged not an input", or "nobody looked",
+  and six weeks later those are indistinguishable.
+
+- `tests/test_skills_commands_exist.py` asserts every `probe ...` command a skill
+  teaches is actually registered. `test_skills_sync.py` guards the plugin copy
+  against drifting from `skills/`; it cannot catch a perfectly-synced skill that
+  teaches a renamed flag. Same invisible shape: tests pass, MCP is correct, only
+  the agent is wrong.
 
 ### Added
 
