@@ -139,3 +139,43 @@ def test_user_facing_docs_do_not_advertise_the_retired_surface() -> None:
             assert "deprecat" in text.lower(), (
                 f"{rel} names retired tools without marking them deprecated"
             )
+
+
+def test_every_skill_description_parses_as_yaml() -> None:
+    """A description that does not parse takes the whole skill down, silently.
+
+    The guards above compare the three copies to each other and check that the
+    tool names are real. Neither reads the frontmatter as YAML, so a `: ` inside
+    a plain scalar -- `reproduce: training, evaluation` -- terminates the scalar,
+    breaks the document, and the skill stops loading. Every test still passes,
+    the copies are still byte-identical, and the only casualty is the agent,
+    which now has no instructions at all.
+
+    Caught by writing exactly that bug into a description and watching this
+    file's other tests go green on it. `: ` is the whole trap: it is the one
+    two-character sequence that ends a plain scalar, and skill descriptions are
+    prose full of colons.
+    """
+    yaml = pytest.importorskip("yaml")
+
+    for skill in _SYNCED:
+        text = (_CANONICAL / skill / "SKILL.md").read_text()
+        assert text.startswith("---\n"), f"{skill}: SKILL.md has no frontmatter block"
+        _, frontmatter, _ = text.split("---", 2)
+
+        try:
+            parsed = yaml.safe_load(frontmatter)
+        except yaml.YAMLError as exc:  # pragma: no cover - the failure message is the point
+            pytest.fail(f"{skill}: frontmatter is not valid YAML -- {exc}")
+
+        assert isinstance(parsed, dict), f"{skill}: frontmatter did not parse to a mapping"
+        assert parsed.get("name") == skill, f"{skill}: name field does not match its directory"
+
+        description = parsed.get("description")
+        assert isinstance(description, str) and description.strip(), (
+            f"{skill}: description is missing or empty after parsing"
+        )
+        assert ": " not in description, (
+            f"{skill}: description contains a ': ' sequence, which terminates the plain "
+            f"scalar and breaks the frontmatter. Use an em-dash."
+        )
