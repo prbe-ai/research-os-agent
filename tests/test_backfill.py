@@ -16,6 +16,19 @@ import pytest
 from probe.cli import backfill
 
 
+@pytest.fixture(autouse=True)
+def _agents_installed(monkeypatch):
+    """Pretend both agents are on PATH.
+
+    Without this the suite passes on a laptop with Claude Code installed and
+    fails in CI, which has neither — every `run()` test would stop at "No coding
+    agent found" long before reaching what it meant to assert. A test about
+    folders must not depend on what the machine happens to have installed.
+    Tests that care about availability override this themselves.
+    """
+    monkeypatch.setattr(backfill, "which_agent", lambda a: f"/usr/bin/{a.value}")
+
+
 def _tree(root: Path) -> Path:
     """A folder shaped like the ones this feature meets: real work, build noise."""
     (root / "notes").mkdir(parents=True)
@@ -438,12 +451,11 @@ def test_the_copy_does_not_claim_codex_is_tool_restricted():
 def test_the_agent_binary_is_resolved_off_path_not_a_shell(monkeypatch):
     """`codex` is commonly shadowed by a shell alias. A PATH lookup with no
     shell cannot see one; `shell=True` would have swallowed our arguments."""
-    import inspect
-
-    source = inspect.getsource(backfill.which_agent)
-    assert "shutil.which" in source
-    launch = inspect.getsource(backfill.launch_agent)
-    assert "shell=True" not in launch
+    # Read the MODULE FILE, not the attribute: the autouse fixture replaces
+    # `which_agent` with a stub, and getsource would inspect that instead.
+    source = Path(backfill.__file__).read_text()
+    assert "def which_agent" in source and "shutil.which" in source
+    assert "shell=True" not in source
 
 
 def test_agent_toolset_is_probe_and_reads_only():
@@ -456,7 +468,8 @@ def test_agent_toolset_is_probe_and_reads_only():
 
 
 def test_missing_claude_is_a_message_not_a_traceback(tmp_path, monkeypatch):
-    monkeypatch.setattr(backfill.shutil, "which", lambda _: None)
+    # Overrides the autouse "both installed" fixture on purpose.
+    monkeypatch.setattr(backfill, "which_agent", lambda a: None)
     ok, msg = backfill.launch_agent(tmp_path, "prompt")
     assert ok is False
     assert "not on PATH" in msg
@@ -512,6 +525,28 @@ def test_a_file_is_not_a_folder(tmp_path):
     target.write_text("x")
     lines = backfill.run(client_factory=_FakeClient, folder=target, interactive=False)
     assert "not a directory" in lines[0]
+
+
+def test_a_bad_path_is_reported_before_a_missing_agent(tmp_path, monkeypatch):
+    """Telling someone to install an agent when they mistyped a path is a wrong
+    answer to the question they actually asked."""
+    monkeypatch.setattr(backfill, "which_agent", lambda a: None)
+    target = tmp_path / "a.txt"
+    target.write_text("x")
+    lines = backfill.run(client_factory=_FakeClient, folder=target, interactive=False)
+    assert "not a directory" in lines[0]
+
+
+def test_a_missing_agent_creates_no_project(tmp_path, monkeypatch):
+    """Agent availability is a free local check and project creation is a
+    network write. Getting that order wrong leaves an empty project behind on
+    every machine that cannot run the import at all."""
+    monkeypatch.setattr(backfill, "which_agent", lambda a: None)
+    _tree(tmp_path)
+    client = _FakeClient()
+    lines = backfill.run(client_factory=lambda: client, folder=tmp_path, interactive=False)
+    assert "No coding agent found" in lines[0]
+    assert client.ensured == []
 
 
 def test_an_empty_folder_launches_no_agent(tmp_path, monkeypatch):

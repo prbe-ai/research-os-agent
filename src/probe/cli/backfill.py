@@ -856,12 +856,16 @@ def run(
             return []
         target = picked
 
-    chosen, agent_error = resolve_agent(agent, interactive=interactive)
-    if agent_error:
-        return [agent_error]
-    if chosen is None or chosen is tui.BACK:
-        return []
-
+    # Order here is deliberate: cheapest and most certain first, and nothing
+    # that MUTATES anything until every local check has passed.
+    #
+    #   1. the path            local, free — and telling someone to install an
+    #                          agent when they mistyped a path is a wrong answer
+    #   2. the census          local, cheap
+    #   3. the agent           local, free — BEFORE the project, so a machine
+    #                          with no agent cannot leave an empty project behind
+    #   4. the project         network, CREATES a row
+    #   5. the agent run
     target = Path(target).resolve()
     if not target.is_dir():
         return [f"{target} is not a directory."]
@@ -869,6 +873,12 @@ def run(
     census = scan(target)
     if census.files == 0:
         return [f"{target} has no files to import."]
+
+    chosen, agent_error = resolve_agent(agent, interactive=interactive)
+    if agent_error:
+        return [agent_error]
+    if chosen is None or chosen is tui.BACK:
+        return []
 
     try:
         with client_factory() as client:
