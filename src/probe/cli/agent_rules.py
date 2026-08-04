@@ -29,6 +29,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from probe.sdk.durable import write_text_atomic
+
 BEGIN_MARKER = "<!-- probe-research:begin (managed by `probe wizard`) -->"
 END_MARKER = "<!-- probe-research:end -->"
 
@@ -69,21 +71,44 @@ def render_block(*, version: int = POINTER_VERSION) -> str:
     return f"{BEGIN_MARKER}\n<!-- v{version} -->\n{POINTER_BODY}{END_MARKER}\n"
 
 
+class DamagedBlock(Exception):
+    """The markers are present but are not one clean BEGIN/END pair.
+
+    Its whole job is to stop us GUESSING which bytes are ours. Every guess is a
+    span, and every span we rewrite deletes whatever a researcher wrote inside
+    it -- so a file we cannot read unambiguously is one we refuse to touch.
+    """
+
+
 def _find_block(text: str) -> tuple[int, int] | None:
-    """Span of the managed block in `text`, or None.
+    """Span of the managed block in `text`, or None when there is none.
 
     Returns the OUTER span (marker to marker inclusive) so a rewrite replaces
     the markers too -- otherwise a marker rename would orphan the old pair and
     the next install would append a second block below it.
+
+    Raises DamagedBlock for anything that is not exactly one pair. It used to
+    return None for an orphan BEGIN, and `install` reads None as "append" --
+    which produced TWO opening markers and one close. On the NEXT run this
+    function walked from the orphan BEGIN to our real END and the rewrite
+    swallowed everything between them: the researcher's own rules, silently,
+    while reporting "Refreshed the Probe block". The file this module exists to
+    write to is the one it destroyed.
     """
-    start = text.find(BEGIN_MARKER)
-    if start == -1:
+    opens = text.count(BEGIN_MARKER)
+    closes = text.count(END_MARKER)
+    if opens == 0 and closes == 0:
         return None
+    if opens != 1 or closes != 1:
+        raise DamagedBlock(
+            f"expected one {BEGIN_MARKER}/{END_MARKER} pair, found {opens}/{closes}"
+        )
+    start = text.find(BEGIN_MARKER)
     end = text.find(END_MARKER, start)
     if end == -1:
-        # An opening marker with no close means someone deleted the end marker
-        # by hand. Appending would nest a block inside a block; refuse instead.
-        return None
+        # The close exists but sits ABOVE the open, so there is no span to speak
+        # of -- someone reordered the file by hand.
+        raise DamagedBlock("the end marker precedes the begin marker")
     return start, end + len(END_MARKER)
 
 
@@ -98,7 +123,13 @@ def installed_version(path: Path | None = None) -> int | None:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
-    span = _find_block(text)
+    try:
+        span = _find_block(text)
+    except DamagedBlock:
+        # PRESENT and unusable. Reporting absence here would make the wizard
+        # append a second block to a file that already has a stray marker,
+        # which is exactly how the damage compounds.
+        return 0
     if span is None:
         return None
     block = text[span[0] : span[1]]
@@ -135,7 +166,7 @@ def install(path: Path | None = None) -> bool:
         original = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(block, encoding="utf-8")
+        write_text_atomic(path, block)
         return True
 
     span = _find_block(original)
@@ -149,7 +180,7 @@ def install(path: Path | None = None) -> bool:
 
     if updated == original:
         return False
-    path.write_text(updated, encoding="utf-8")
+    write_text_atomic(path, updated)
     return True
 
 
@@ -162,13 +193,18 @@ def remove(path: Path | None = None) -> bool:
     path = path or memory_path()
     try:
         original = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except FileNotFoundError:
         return False
+    # OSError and UnicodeDecodeError PROPAGATE. They used to be swallowed into
+    # `False`, which the caller renders as "nothing to do" and prints nothing at
+    # all: the researcher unticked the row, saw silence, and the rule kept
+    # firing in every session. "I could not read it" is not "it is already
+    # clean", and only one of those is safe to report as success.
     span = _find_block(original)
     if span is None:
         return False
     updated = (original[: span[0]].rstrip("\n") + "\n" + original[span[1] :].lstrip("\n")).lstrip("\n")
     if updated.strip() == "":
         updated = ""
-    path.write_text(updated, encoding="utf-8")
+    write_text_atomic(path, updated)
     return True
