@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Changed
+
+- **A directory that is not a git repository is now captured instead of refused.**
+  `capture_manifest` raised outside a repo, so a project like `research-workflows/`
+  got zero capture — not degraded capture, an error. That was defensible only
+  while no uploader existed: the one case with NOTHING retrievable anywhere was
+  the one turned away. With upload shipped (0.38.0) it is now the case that needs
+  storing most.
+
+  There is no reference half without git, so every file is `source: "blob"` and
+  every file is uploaded; `base_commit`, `remote` and `vcs` are null and no shadow
+  ref is taken.
+
+  The concern behind the old refusal was real and is now a filter rather than a
+  refusal. `SKIP_DIRS` drops what a lockfile rebuilds (`.venv`, `node_modules`,
+  `__pycache__`, caches), and credential-shaped names (`.env`, `*.pem`, `id_rsa*`,
+  `credentials*`) are excluded so that auto-uploading a working directory is not
+  how a secret leaves the machine. Everything excluded is REPORTED in
+  `manifest["skipped"]` with a reason — once a filter exists, absence stops being
+  informative on its own.
+
 ### Added
 
 - **`probe snapshot-restore RUN_ID DEST`** rebuilds a run's captured working tree.
@@ -313,6 +334,27 @@
   nothing validates on its behalf.
 
 ## Unreleased
+
+### Changed
+
+- **A directory that is not a git repository is now captured instead of refused.**
+  `capture_manifest` raised outside a repo, so a project like `research-workflows/`
+  got zero capture — not degraded capture, an error. That was defensible only
+  while no uploader existed: the one case with NOTHING retrievable anywhere was
+  the one turned away. With upload shipped (0.38.0) it is now the case that needs
+  storing most.
+
+  There is no reference half without git, so every file is `source: "blob"` and
+  every file is uploaded; `base_commit`, `remote` and `vcs` are null and no shadow
+  ref is taken.
+
+  The concern behind the old refusal was real and is now a filter rather than a
+  refusal. `SKIP_DIRS` drops what a lockfile rebuilds (`.venv`, `node_modules`,
+  `__pycache__`, caches), and credential-shaped names (`.env`, `*.pem`, `id_rsa*`,
+  `credentials*`) are excluded so that auto-uploading a working directory is not
+  how a secret leaves the machine. Everything excluded is REPORTED in
+  `manifest["skipped"]` with a reason — once a filter exists, absence stops being
+  informative on its own.
 
 ### Added
 

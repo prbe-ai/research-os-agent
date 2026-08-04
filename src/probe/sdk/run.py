@@ -1228,7 +1228,12 @@ class Run:
         entries are ordinary and that would be 200+ presign round-trips. The
         archive is byte-deterministic, so the presign ``have`` check dedupes a
         sweep of N runs over unchanged code down to a single upload."""
-        git = _snapshot.capture_git_snapshot(self.id, cwd)
+        # No repo means no shadow ref to take -- and nothing retrievable from
+        # anywhere, so the manifest marks every file for upload and the
+        # code-bytes artifact becomes the whole code record rather than a
+        # supplement to a git reference.
+        in_repo = _snapshot.is_git_repo(cwd or os.getcwd())
+        git = _snapshot.capture_git_snapshot(self.id, cwd) if in_repo else None
         manifest = _snapshot.capture_manifest(cwd)
         # Identity is hashed into the execution record; provenance is NOT --
         # a venv path in `deps` would make two identical environments at
@@ -1244,7 +1249,10 @@ class Run:
             else {}
         )
         record = ExecutionRecordCreate(
-            code={"git": git, "manifest": manifest},
+            # `git` is omitted rather than stored as null when there is no repo:
+            # the execution record is content-addressed, and a null key would make
+            # a non-git capture hash differently from the same one taken later.
+            code={"manifest": manifest, **({"git": git} if git else {})},
             deps=deps,
             hardware={"gpu": _snapshot.capture_gpu()} if include_gpu else {},
         )
@@ -1279,14 +1287,27 @@ class Run:
         # Record the shadow commit as a reference artifact for lineage. The
         # manifest travels with it so a reader can tell, without fetching
         # anything, which files this reference can actually still supply.
+        # Outside a repo there is no shadow ref to point at, so the uri names the
+        # code-bytes artifact instead. `check_run` requires a code_snapshot row to
+        # exist at all, and a non-git run is no less captured for lacking a commit.
+        code_uri = (
+            f"git:{git['ref']}#{git['commit']}"
+            if git
+            else f"probe-artifact:{code_bytes.get('artifact_id')}"
+            if code_bytes.get("artifact_id")
+            else None
+        )
         self.log_artifact(
             "code-snapshot",
-            uri=f"git:{git['ref']}#{git['commit']}",
+            uri=code_uri,
             kind="code_snapshot",
             is_reference=True,
+            allow_missing=True,
             meta={
-                "branch": git.get("branch"),
-                "dirty": git.get("dirty"),
+                "vcs": "git" if git else None,
+                "branch": git.get("branch") if git else None,
+                "dirty": git.get("dirty") if git else None,
+                "skipped": manifest.get("skipped") or None,
                 "env_ref": content_hash,
                 "tree_sha256": manifest["tree_sha256"],
                 "base_commit": manifest["base_commit"],

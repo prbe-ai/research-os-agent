@@ -3431,7 +3431,16 @@ def snapshot(
         )
     m = snap["manifest"]
     cb = snap.get("code_bytes") or {}
-    print(f"snapshot {snap['git']['commit'][:12]} -> {snap['git']['ref']}")
+    g = snap.get("git")
+    if g:
+        print(f"snapshot {g['commit'][:12]} -> {g['ref']}")
+    else:
+        skipped = (m.get("skipped") or [])
+        secrets = sum(1 for s in skipped if s["reason"] == "secret")
+        print(f"snapshot (no git repo) — every file uploaded, {len(m['entries'])} files")
+        if skipped:
+            note = f", {secrets} credential-shaped" if secrets else ""
+            print(f"      skipped {len(skipped)} paths (generated{note})")
     base = m["base_commit"][:12] if m["base_commit"] else "no pushed base"
     print(f"code: {m['n_git_referenced']} referenced from {base}")
     if cb.get("uploaded"):

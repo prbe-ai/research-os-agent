@@ -96,15 +96,31 @@ def test_no_remote_uploads_everything(tmp_path):
     assert pushed_base(str(work)) == (None, None)
 
 
-def test_not_a_git_repo_is_refused(tmp_path):
-    """Walking an arbitrary directory has no .gitignore to honour, so the first
-    thing it would sweep up is the .env the git path excludes."""
+def test_not_a_git_repo_is_captured_but_never_sweeps_up_secrets(tmp_path):
+    """This used to raise. Refusing was defensible only while no uploader
+    existed: a directory with nothing retrievable ANYWHERE was the one case
+    turned away, and it is the case that needs storing most.
+
+    The concern behind the old refusal was real and still holds -- a bare
+    directory has no .gitignore, so the walk must not ship a .env off the
+    machine. That is now a filter rather than a refusal, and the filter is
+    what this pins.
+    """
     plain = tmp_path / "plain"
     plain.mkdir()
     (plain / "a.py").write_text("a = 1\n")
-    (plain / ".env") .write_text("PROBE_TOKEN=secret\n")
-    with pytest.raises(SnapshotError):
-        capture_manifest(str(plain))
+    (plain / ".env").write_text("PROBE_TOKEN=secret\n")
+    (plain / "server.pem").write_text("-----BEGIN PRIVATE KEY-----\n")
+
+    m = capture_manifest(str(plain))
+
+    assert _by_path(m).keys() == {"a.py"}
+    assert m["n_pending_upload"] == 1, "no git means everything must be uploaded"
+    assert m["n_git_referenced"] == 0
+    assert m["base_commit"] is None and m["remote"] is None
+    # excluded AND reported -- absence has to be distinguishable from oversight
+    assert {s["path"] for s in m["skipped"]} == {".env", "server.pem"}
+    assert {s["reason"] for s in m["skipped"]} == {"secret"}
 
 
 def test_deleted_tracked_file_absent_from_manifest(repo):

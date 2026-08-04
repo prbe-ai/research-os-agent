@@ -276,6 +276,122 @@ def _file_sha256(path: str) -> tuple[str, int]:
     return h.hexdigest(), n
 
 
+# Directories that are rebuilt from a lockfile or a cache, never authored. Left
+# in, the first snapshot of an ordinary Python project uploads a few hundred MB
+# of `.venv` and calls it the experiment's code.
+SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn",
+    ".venv", "venv", "env", "virtualenv",
+    "node_modules", "__pycache__", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+    ".ipynb_checkpoints", ".tox", ".eggs", "site-packages",
+})
+
+# Secret-shaped names. A directory walk with no `.gitignore` to honour would
+# otherwise ship credentials off the machine as a side effect of tracking an
+# experiment -- the exact hazard the git path avoids for free. Excluded by
+# default and REPORTED, so a caller who genuinely needs one knows it is absent.
+SKIP_SECRETS = (
+    ".env", ".env.local", ".netrc", ".npmrc", ".pypirc",
+    "credentials", "credentials.json", "secrets.json", "service-account.json",
+)
+SKIP_SECRET_SUFFIXES = (".pem", ".key", ".p12", ".pfx", ".keystore")
+SKIP_SECRET_PREFIXES = ("id_rsa", "id_ed25519", "id_ecdsa", ".env.")
+SKIP_FILE_SUFFIXES = (".pyc", ".pyo", ".so", ".o", ".DS_Store")
+
+
+def _skip_reason(name: str) -> str | None:
+    """Why this filename is excluded from a non-git capture, or None."""
+    lowered = name.lower()
+    if name in SKIP_SECRETS or lowered.startswith(SKIP_SECRET_PREFIXES):
+        return "secret"
+    if lowered.endswith(SKIP_SECRET_SUFFIXES):
+        return "secret"
+    if lowered.endswith(SKIP_FILE_SUFFIXES) or name == ".DS_Store":
+        return "generated"
+    return None
+
+
+def capture_directory_manifest(cwd: str | None = None) -> dict[str, Any]:
+    """Manifest for a directory that is NOT a git repository.
+
+    Same shape as :func:`capture_manifest`, with two differences that follow from
+    there being no git: every entry is ``source="blob"`` (nothing is retrievable
+    from anywhere, so everything must be uploaded), and ``base_commit``/``remote``
+    are None.
+
+    The exclusions are the whole design. Git gave the classifier `.gitignore` for
+    free; a bare directory has nothing, so the defaults have to be conservative in
+    the one direction that matters. ``SKIP_DIRS`` drops what a lockfile rebuilds,
+    and ``SKIP_SECRETS`` drops credential-shaped files -- auto-uploading a working
+    directory must not be how a `.env` leaves the machine.
+
+    Everything skipped is REPORTED in ``skipped``, because once a filter exists,
+    absence from the manifest stops being informative on its own: a reader has to
+    be able to tell "not an input" from "excluded by policy".
+    """
+    cwd = os.path.abspath(cwd or os.getcwd())
+    if not os.path.isdir(cwd):
+        raise SnapshotError(f"{cwd} is not a directory")
+
+    entries: list[dict[str, Any]] = []
+    skipped: list[dict[str, str]] = []
+    for root, dirnames, filenames in os.walk(cwd):
+        for name in sorted(dirnames):
+            if name in SKIP_DIRS:
+                skipped.append(
+                    {
+                        "path": os.path.relpath(os.path.join(root, name), cwd),
+                        "reason": "generated",
+                    }
+                )
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS)
+
+        for name in sorted(filenames):
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, cwd)
+            reason = _skip_reason(name)
+            if reason is not None:
+                skipped.append({"path": rel, "reason": reason})
+                continue
+            if os.path.islink(full):
+                target = os.readlink(full)
+                entries.append({
+                    "path": rel,
+                    "mode": "120000",
+                    "sha256": hashlib.sha256(target.encode()).hexdigest(),
+                    "size": len(target.encode()),
+                    "source": "blob",
+                    "symlink_target": target,
+                })
+                continue
+            if not os.path.isfile(full):
+                continue
+            sha, size = _file_sha256(full)
+            entries.append({
+                "path": rel,
+                "mode": "100755" if os.access(full, os.X_OK) else "100644",
+                "sha256": sha,
+                "size": size,
+                "source": "blob",
+            })
+
+    entries.sort(key=lambda e: e["path"])
+    digest = hashlib.sha256()
+    for e in entries:
+        digest.update(f"{e['path']}\0{e['mode']}\0{e['sha256']}\n".encode())
+
+    return {
+        "entries": entries,
+        "tree_sha256": digest.hexdigest(),
+        "base_commit": None,
+        "remote": None,
+        "n_git_referenced": 0,
+        "n_pending_upload": len(entries),
+        "vcs": None,
+        "skipped": skipped,
+    }
+
+
 def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
     """Classify each captured file as retrievable-from-git or needing upload.
 
@@ -298,14 +414,15 @@ def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
     dirty file would compare as different code. Symlinks participate as their
     target so a retarget is visible.
 
-    Raises :class:`SnapshotError` if ``cwd`` is not a git repository -- matching
-    ``capture_git_snapshot``. Walking an arbitrary directory would have no
-    ``.gitignore`` to honour, and the first thing it would sweep up is the
-    ``.env`` the git path is careful to exclude.
+    Outside a git repository this delegates to :func:`capture_directory_manifest`
+    rather than raising. There is no reference half without git -- no pushed base,
+    no blob ids -- so every file is ``source="blob"`` and every file gets uploaded.
+    That used to raise, which was defensible only while no uploader existed: the
+    directory with NOTHING retrievable anywhere was the one case refused outright.
     """
     cwd = cwd or os.getcwd()
     if not is_git_repo(cwd):
-        raise SnapshotError(f"{cwd} is not a git repository")
+        return capture_directory_manifest(cwd)
 
     base, remote = pushed_base(cwd)
     paths = sorted(
