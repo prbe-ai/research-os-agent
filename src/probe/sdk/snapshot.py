@@ -28,6 +28,7 @@ from functools import lru_cache
 from typing import Any
 
 from .errors import RosError
+from .hashing import local_file_uri
 
 
 class SnapshotError(RosError):
@@ -276,6 +277,80 @@ def _file_sha256(path: str) -> tuple[str, int]:
     return h.hexdigest(), n
 
 
+#: Above this, an included file is RECORDED rather than uploaded. A base
+#: checkpoint or a dataset shard is an input whose identity matters and whose
+#: bytes are already sitting on a shared volume; copying tens of GB per run to
+#: re-store what is already there is not reproducibility, it is duplication.
+DEFAULT_REFERENCE_OVER_BYTES = 100 * 1024 * 1024
+
+
+def _include_entries(
+    cwd: str,
+    include: list[str],
+    already: set[str],
+    *,
+    reference_over_bytes: int,
+) -> list[dict[str, Any]]:
+    """Manifest entries for explicitly named paths git would not offer.
+
+    ``.gitignore`` is right about build output and wrong about a downloaded
+    dataset, a base checkpoint, or a config deliberately kept out of the repo.
+    Those are INPUTS, and the manifest had no way to name them -- so they were
+    recorded nowhere, not even as a hash.
+
+    Two outcomes, decided by size:
+
+    ``source="blob"``      small enough to store; travels in the code-bytes archive.
+    ``source="reference"`` too large; the path, host and sha256 are recorded so the
+                           file is identified and verifiable, and restore reports
+                           where it lives instead of pretending it can rebuild it.
+
+    Deliberately NOT recursive by default: a glob names what it names. Passing a
+    directory captures it whole, which is the caller's explicit choice.
+    """
+    import glob as _glob
+    import socket
+
+    found: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pattern in include:
+        matches = _glob.glob(os.path.join(cwd, pattern), recursive=True)
+        if not matches:
+            raise SnapshotError(f"--include {pattern!r} matched no files under {cwd}")
+        for match in sorted(matches):
+            targets = [match]
+            if os.path.isdir(match):
+                targets = sorted(
+                    os.path.join(root, name)
+                    for root, dirs, files in os.walk(match)
+                    for name in files
+                    if not any(part in SKIP_DIRS for part in root.split(os.sep))
+                )
+            for full in targets:
+                rel = os.path.relpath(full, cwd)
+                if rel.startswith("..") or os.path.isabs(rel):
+                    raise SnapshotError(f"--include {pattern!r} escapes {cwd}: {rel}")
+                if rel in already or rel in seen or not os.path.isfile(full):
+                    continue
+                seen.add(rel)
+                sha, size = _file_sha256(full)
+                entry: dict[str, Any] = {
+                    "path": rel,
+                    "mode": "100755" if os.access(full, os.X_OK) else "100644",
+                    "sha256": sha,
+                    "size": size,
+                    "included": True,
+                }
+                if size > reference_over_bytes:
+                    entry["source"] = "reference"
+                    entry["uri"] = local_file_uri(os.path.abspath(full))
+                    entry["host"] = socket.gethostname()
+                else:
+                    entry["source"] = "blob"
+                found.append(entry)
+    return found
+
+
 # Directories that are rebuilt from a lockfile or a cache, never authored. Left
 # in, the first snapshot of an ordinary Python project uploads a few hundred MB
 # of `.venv` and calls it the experiment's code.
@@ -311,7 +386,12 @@ def _skip_reason(name: str) -> str | None:
     return None
 
 
-def capture_directory_manifest(cwd: str | None = None) -> dict[str, Any]:
+def capture_directory_manifest(
+    cwd: str | None = None,
+    *,
+    include: list[str] | None = None,
+    reference_over_bytes: int = DEFAULT_REFERENCE_OVER_BYTES,
+) -> dict[str, Any]:
     """Manifest for a directory that is NOT a git repository.
 
     Same shape as :func:`capture_manifest`, with two differences that follow from
@@ -375,6 +455,15 @@ def capture_directory_manifest(cwd: str | None = None) -> dict[str, Any]:
                 "source": "blob",
             })
 
+    if include:
+        entries.extend(
+            _include_entries(
+                cwd,
+                include,
+                {e["path"] for e in entries},
+                reference_over_bytes=reference_over_bytes,
+            )
+        )
     entries.sort(key=lambda e: e["path"])
     digest = hashlib.sha256()
     for e in entries:
@@ -386,13 +475,19 @@ def capture_directory_manifest(cwd: str | None = None) -> dict[str, Any]:
         "base_commit": None,
         "remote": None,
         "n_git_referenced": 0,
-        "n_pending_upload": len(entries),
+        "n_pending_upload": sum(1 for e in entries if e["source"] == "blob"),
+        "n_referenced_offsite": sum(1 for e in entries if e["source"] == "reference"),
         "vcs": None,
         "skipped": skipped,
     }
 
 
-def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
+def capture_manifest(
+    cwd: str | None = None,
+    *,
+    include: list[str] | None = None,
+    reference_over_bytes: int = DEFAULT_REFERENCE_OVER_BYTES,
+) -> dict[str, Any]:
     """Classify each captured file as retrievable-from-git or needing upload.
 
     CLASSIFICATION ONLY. Nothing here moves bytes: a ``source="blob"`` entry
@@ -476,6 +571,17 @@ def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
             entry["source"] = "blob"
         entries.append(entry)
 
+    if include:
+        entries.extend(
+            _include_entries(
+                cwd,
+                include,
+                {e["path"] for e in entries},
+                reference_over_bytes=reference_over_bytes,
+            )
+        )
+        entries.sort(key=lambda e: e["path"])
+
     digest = hashlib.sha256()
     for e in entries:
         digest.update(f"{e['path']}\0{e['mode']}\0{e['sha256']}\n".encode())
@@ -488,6 +594,7 @@ def capture_manifest(cwd: str | None = None) -> dict[str, Any]:
         "remote": remote,
         "n_git_referenced": sum(1 for e in entries if e["source"] == "git"),
         "n_pending_upload": sum(1 for e in entries if e["source"] == "blob"),
+        "n_referenced_offsite": sum(1 for e in entries if e["source"] == "reference"),
     }
 
 
@@ -509,6 +616,10 @@ def pending_entries(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     These are exactly the files that make a run unreproducible on any other
     machine: the manifest records a sha256 for them, and a sha256 verifies a file
     you already have rather than producing one you do not.
+
+    ``source="reference"`` is deliberately excluded: those are the deliberately
+    off-platform ones (a base checkpoint on a shared volume), identified and
+    verifiable but not copied.
     """
     return [e for e in (manifest.get("entries") or []) if e.get("source") == "blob"]
 

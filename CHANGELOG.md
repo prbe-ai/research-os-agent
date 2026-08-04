@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe snapshot --include GLOB`** captures inputs `.gitignore` hides. `.gitignore`
+  is right about build output and wrong about a downloaded dataset, a base
+  checkpoint, or a config kept out of the repo on purpose — those are INPUTS, and
+  the manifest had no way to name them, so they were recorded nowhere, not even as
+  a hash. Repeatable; a directory captures its files; a glob matching nothing is an
+  error rather than a silent no-op, and a path escaping the snapshot root is refused.
+
+  Size decides the outcome. Under `--reference-over-mb` (100 default) the file is
+  stored in the code-bytes archive. Above it, the path, host and sha256 are
+  recorded as `source: "reference"` and the bytes are left where they are — copying
+  a 40 GB checkpoint into every run is duplication, not reproducibility.
+
+  `probe snapshot-restore` reports a reference as OFF-PLATFORM with its uri and
+  host rather than as a failure, since the bytes exist somewhere specific. It does
+  NOT count toward `n_unavailable`, but it does keep `tree_matches` false: a reader
+  has to be able to tell "rebuilt" from "rebuilt except the checkpoint".
+
 ### Changed
 
 - **A directory that is not a git repository is now captured instead of refused.**
@@ -366,6 +385,25 @@
   nothing validates on its behalf.
 
 ## Unreleased
+
+### Added
+
+- **`probe snapshot --include GLOB`** captures inputs `.gitignore` hides. `.gitignore`
+  is right about build output and wrong about a downloaded dataset, a base
+  checkpoint, or a config kept out of the repo on purpose — those are INPUTS, and
+  the manifest had no way to name them, so they were recorded nowhere, not even as
+  a hash. Repeatable; a directory captures its files; a glob matching nothing is an
+  error rather than a silent no-op, and a path escaping the snapshot root is refused.
+
+  Size decides the outcome. Under `--reference-over-mb` (100 default) the file is
+  stored in the code-bytes archive. Above it, the path, host and sha256 are
+  recorded as `source: "reference"` and the bytes are left where they are — copying
+  a 40 GB checkpoint into every run is duplication, not reproducibility.
+
+  `probe snapshot-restore` reports a reference as OFF-PLATFORM with its uri and
+  host rather than as a failure, since the bytes exist somewhere specific. It does
+  NOT count toward `n_unavailable`, but it does keep `tree_matches` false: a reader
+  has to be able to tell "rebuilt" from "rebuilt except the checkpoint".
 
 ### Changed
 

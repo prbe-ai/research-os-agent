@@ -150,6 +150,22 @@ def restore_snapshot(
                         data = proc.stdout
                     else:
                         reason = f"blob {entry.get('blob', '')[:12]} not in the fetched commit"
+            elif source == "reference":
+                # Deliberately off-platform: too large to copy per run, so the
+                # record identifies it rather than storing it. Not a failure and
+                # not a restore -- reported as its own outcome so a reader knows
+                # the file exists somewhere specific and is not here.
+                results.append(
+                    {
+                        "path": path,
+                        "source": source,
+                        "status": "referenced",
+                        "uri": entry.get("uri"),
+                        "host": entry.get("host"),
+                        "sha256": entry.get("sha256"),
+                    }
+                )
+                continue
             elif source == "blob":
                 if tar is None:
                     reason = "code-bytes archive unavailable"
@@ -191,6 +207,7 @@ def restore_snapshot(
             subprocess.run(["rm", "-rf", tmp_repo], capture_output=True)
 
     unavailable = [r for r in results if r["status"] == "unavailable"]
+    referenced = [r for r in results if r["status"] == "referenced"]
     # Recompute the tree identity over what we actually produced. It can only
     # match when every file resolved, which is precisely the claim being made.
     digest = hashlib.sha256()
@@ -202,10 +219,20 @@ def restore_snapshot(
 
     return {
         "files": results,
-        "n_restored": len(results) - len(unavailable),
+        "n_restored": len(results) - len(unavailable) - len(referenced),
         "n_unavailable": len(unavailable),
+        # Off-platform by design, so NOT counted as a failure -- but the tree on
+        # disk is still incomplete, so `tree_matches` stays False. A reader has to
+        # be able to tell "rebuilt" from "rebuilt except the 40GB checkpoint".
+        "n_referenced": len(referenced),
+        "referenced": [
+            {"path": r["path"], "uri": r.get("uri"), "host": r.get("host")}
+            for r in referenced
+        ],
         "tree_sha256": tree,
-        "tree_matches": tree == manifest.get("tree_sha256") and not unavailable,
+        "tree_matches": (
+            tree == manifest.get("tree_sha256") and not unavailable and not referenced
+        ),
     }
 
 
