@@ -120,11 +120,8 @@ MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
         ),
     ),
     Capability.AGENT_RULES: (
-        "Tracking rule in your global CLAUDE.md  (recommended)",
-        (
-            "Tells agents to register research work before designing it.",
-            "A short managed block; your own text is never touched.",
-        ),
+        "Rules in your global CLAUDE.md  (recommended)",
+        ("Actively encourage agents to use Probe Research tools when doing research.",),
     ),
 }
 # The picker is a picker. The full disclosure of what leaves the machine --

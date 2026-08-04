@@ -14,6 +14,7 @@ Auth: `probe login --device` runs the browser handoff (RFC 8628) and captures th
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -788,6 +789,11 @@ def wizard(
     auto_update: Optional[bool] = typer.Option(  # noqa: UP007
         None, "--auto-update/--no-auto-update", help="keep the CLI and plugins current"
     ),
+    agent_rules: Optional[bool] = typer.Option(  # noqa: UP007
+        None,
+        "--agent-rules/--no-agent-rules",
+        help="managed Probe block in your global CLAUDE.md",
+    ),
     channel: str = typer.Option(  # noqa: ARG001 - compat, see below
         None,
         "--channel",
@@ -840,7 +846,9 @@ def wizard(
 
     caps = doctor_impl.collect()
     configured = caps.configured
-    explicit_flags = any(f is not None for f in (tracking, capture, auto_update))
+    explicit_flags = any(
+        f is not None for f in (tracking, capture, auto_update, agent_rules)
+    )
 
     from probe.cli import actions as actions_mod
 
@@ -891,6 +899,7 @@ def wizard(
             tracking=tracking,
             capture=capture,
             auto_update=auto_update,
+            agent_rules=agent_rules,
             uninstall=uninstall,
             configured=configured,
             folder=folder,
@@ -931,6 +940,7 @@ def _run_wizard_action(
     tracking,
     capture,
     auto_update,
+    agent_rules,
     uninstall: bool,
     configured: bool,
     folder: str | None = None,
@@ -1014,9 +1024,12 @@ def _run_wizard_action(
         tracking=tracking,
         capture=capture,
         auto_update=auto_update,
+        agent_rules=agent_rules,
         configured=configured,
     )
-    explicit_flags = any(f is not None for f in (tracking, capture, auto_update))
+    explicit_flags = any(
+        f is not None for f in (tracking, capture, auto_update, agent_rules)
+    )
     if not yes and not explicit_flags and wizard.interactive():
         tui.clear()
         chosen = wizard.run_menu(selection.as_map())
@@ -1030,11 +1043,12 @@ def _run_wizard_action(
         wants_updates = wizard.ask_auto_update(selection.auto_update)
         if wants_updates is None or wants_updates is tui.BACK:
             return []
-        selection = wizard.Selection(
-            tracking=selection.tracking,
-            capture=selection.capture,
-            auto_update=bool(wants_updates),
-        )
+        # `replace`, never a hand-rolled `Selection(...)`. Re-listing the fields
+        # here is a copy of the dataclass that nothing keeps in sync: adding
+        # `agent_rules` to Selection left this call one argument short, and
+        # since every test stubs `interactive()` to False, the TypeError only
+        # ever fired for a real user answering the auto-update question.
+        selection = dataclasses.replace(selection, auto_update=bool(wants_updates))
 
     steps = wizard.plan(caps, selection)
     if not steps:

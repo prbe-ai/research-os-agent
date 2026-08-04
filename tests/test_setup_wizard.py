@@ -1049,6 +1049,7 @@ def test_noop_wizard_rerun_still_refreshes_server_snapshot(monkeypatch):
         tracking=True,
         capture=False,
         auto_update=True,
+        agent_rules=False,
         uninstall=False,
         configured=True,
     )
@@ -1088,6 +1089,7 @@ def test_update_publishes_to_the_explicit_wizard_backend(monkeypatch):
         tracking=None,
         capture=None,
         auto_update=None,
+        agent_rules=None,
         uninstall=False,
         configured=False,
     )
@@ -1135,6 +1137,7 @@ def test_uninstall_preserves_token_and_explicit_backend_for_final_snapshot(
         tracking=None,
         capture=None,
         auto_update=None,
+        agent_rules=None,
         uninstall=True,
         configured=True,
     )
@@ -1235,6 +1238,80 @@ def test_auto_update_is_asked_after_the_capabilities_not_inside_them():
     source = inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
     assert "ask_auto_update" in source
     assert source.index("run_menu") < source.index("ask_auto_update")
+
+
+def test_answering_the_auto_update_question_keeps_every_other_choice(monkeypatch):
+    """The 0.48.0 crash. `_run_wizard_action` rebuilt the Selection by hand
+    after the auto-update confirm, so adding `agent_rules` to the dataclass
+    left that call one argument short:
+
+        TypeError: Selection.__init__() missing 1 required positional
+        argument: 'agent_rules'
+
+    It shipped because the whole block sits behind `interactive()`, which is
+    False under pytest, and the pty test quits at the first menu -- nothing
+    executed the line AFTER the confirm was answered. This test answers it.
+    """
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    picked = wizard.Selection(
+        tracking=True, capture=False, auto_update=False, agent_rules=True
+    )
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+    monkeypatch.setattr(tui, "clear", lambda: None)
+    monkeypatch.setattr(tui, "say", lambda *a, **k: None)
+    monkeypatch.setattr(wizard, "interactive", lambda: True)
+    monkeypatch.setattr(wizard, "run_menu", lambda defaults: picked)
+    monkeypatch.setattr(wizard, "ask_auto_update", lambda default: True)
+
+    applied: list[tuple[bool, bool]] = []
+    monkeypatch.setattr(
+        wizard,
+        "apply_agent_rules",
+        lambda want, **kw: applied.append((want, kw.get("stale", False))) or [],
+    )
+    monkeypatch.setattr(wizard, "apply_tracking", lambda want: [])
+    monkeypatch.setattr(wizard, "apply_auto_update", lambda want: [])
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=_caps(),
+        base_now="https://api.test",
+        yes=False,
+        tracking=None,
+        capture=None,
+        auto_update=None,
+        agent_rules=None,
+        uninstall=False,
+        configured=False,
+    )
+
+    # The ticked box survived the auto-update answer instead of being dropped.
+    assert applied == [(True, False)]
+
+
+def test_every_capability_is_reachable_as_a_flag():
+    """The wizard's own contract: "Every capability is also a flag". Only the
+    flags work headlessly, and agent_rules writes to a file OUTSIDE the repo --
+    `--yes` on a fresh machine must have a way to decline it."""
+    import inspect
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli.capabilities import Capability
+
+    cli_main = sys.modules["probe.cli.main"]
+    params = inspect.signature(cli_main.wizard).parameters
+    for capability in Capability:
+        assert capability.value in params, f"no --{capability.value.replace('_', '-')} flag"
 
 
 def test_both_recommended_options_say_so():
