@@ -3435,11 +3435,14 @@ def snapshot(
     if g:
         print(f"snapshot {g['commit'][:12]} -> {g['ref']}")
     else:
-        skipped = (m.get("skipped") or [])
-        secrets = sum(1 for s in skipped if s["reason"] == "secret")
+        skipped = m.get("skipped") or []
+        # A COUNT, never a path or a value -- naming it `secrets` made CodeQL
+        # read the printed integer as the credential itself, and it read that
+        # way to humans too.
+        n_credential_shaped = sum(1 for s in skipped if s["reason"] == "secret")
         print(f"snapshot (no git repo) — every file uploaded, {len(m['entries'])} files")
         if skipped:
-            note = f", {secrets} credential-shaped" if secrets else ""
+            note = f", {n_credential_shaped} credential-shaped" if n_credential_shaped else ""
             print(f"      skipped {len(skipped)} paths (generated{note})")
     base = m["base_commit"][:12] if m["base_commit"] else "no pushed base"
     print(f"code: {m['n_git_referenced']} referenced from {base}")
