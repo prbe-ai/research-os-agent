@@ -18149,7 +18149,6 @@
             "name": "project_id",
             "required": true,
             "schema": {
-              "format": "uuid",
               "title": "Project Id",
               "type": "string"
             }
@@ -18228,7 +18227,6 @@
             "name": "project_id",
             "required": true,
             "schema": {
-              "format": "uuid",
               "title": "Project Id",
               "type": "string"
             }
@@ -18281,7 +18279,6 @@
             "name": "project_id",
             "required": true,
             "schema": {
-              "format": "uuid",
               "title": "Project Id",
               "type": "string"
             }
