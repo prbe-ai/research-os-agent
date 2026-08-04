@@ -4,6 +4,14 @@
 
 ### Fixed
 
+- **Backfill imports into a project named for the folder, not the ambient
+  active one.** Pointing at `anthrogen-backfill-test` put its artifacts in
+  whatever `probe project use` had last been set to — a place nobody would
+  think to look. `project use` sets where new *runs* go; it was never a
+  standing statement about where imported folders belong. The ambient project
+  (`probe project use`, `PROBE_PROJECT`) is no longer consulted; `--project`
+  names a destination explicitly when you want one.
+
 - **Run lineage is no longer a half-answer.** `get_entity(ref="run:<id>",
   view="lineage")` walked `parent_run_id` only — fork/retry parentage — and
   never read the edge table, so a run that consumed a dataset version and
@@ -104,6 +112,24 @@
   flags.
 
 ### Added
+
+- **Backfill shows what the agent is doing.** A bare `claude -p` prints nothing
+  until it exits, so an import over a real folder sat silent for minutes and
+  read as frozen. Both agents are now asked for a JSONL event stream and the
+  run renders as one self-updating line — `⠹ 1:07 · 14/37 · uploading
+  docq_scores.csv` — counting uploads against the census, so the number you
+  watch is the denominator the reconcile checks at the end. Not the transcript:
+  an agent transcript is thousands of lines nobody reads.
+
+- **`probe backfill --agent claude|codex`.** Asked only when both are installed
+  and neither was named. The two are confined differently and the picker says
+  so rather than implying parity: Claude takes a tool allowlist (`Bash(probe:*)`
+  — it cannot write, delete or fetch), Codex takes a filesystem+network sandbox,
+  which bounds where commands act but not which ones run.
+
+- **Paste a path in the folder picker.** "Enter a path…" accepts quotes, `~`
+  and relative paths, and re-asks on a bad one rather than dropping you back
+  into a browser two directories away.
 
 - **`probe backfill`** — a top-level command, so `npx probe-research backfill`
   works from zero. Arguments are forwarded verbatim by the npm launcher, so the
