@@ -1,6 +1,6 @@
 ---
 name: start-research-work
-description: Start tracked research — create project and experiment if new, then open a run. Use for any research work that produces a result someone might reproduce — training, evaluation, sweeps, ablations, data curation, docking, and the like. Also use when a project, experiment, or run is created, or when writing a script that will run. Trigger for one-off and exploratory work, and when the user did not ask for tracking. Not for installs, unit tests, or code that will not run.
+description: Start tracked research and keep its notes — create the project and experiment before the work, not after it, and open a run when code is about to execute. Use for anything someone might need to reproduce, including DESIGNING it before anything runs — training, evaluation, sweeps, ablations, data curation, docking. Re-enter it all session, not once at setup — when you choose an approach or reject one, when the user overrides you, when a tool or dataset behaves differently than documented, and before context is compacted or the session ends. A plan-first or approval-gated brief does not defer this — registering entities is not the gated action. Trigger for one-off and exploratory work, when writing a script that will run, and when the user did not ask for tracking. Not for installs, unit tests, or reading that decided nothing.
 ---
 
 # Start research work
@@ -26,7 +26,8 @@ near-miss of an existing slug rather than warning.)
    what was ruled out, what not to repeat. Add to it as you learn things
    (`probe notes write --append`); see `track-research-work`.
 
-2. **Create the project and experiment.** Always explicit from the CLI.
+2. **Create the project and experiment FIRST — before the scaffold, not after it.**
+   Always explicit from the CLI.
 
    ```
    probe project create folding
@@ -47,6 +48,20 @@ near-miss of an existing slug rather than warning.)
    in later — an omitted one used to become a permanent `[auto]` placeholder. An
    experiment that already exists keeps its own (first-write-wins), so reopening one
    never rewrites it; `probe experiment set EXP --hypothesis "..."` amends it.
+
+   **Do this first.** Tracking named in a brief is a standing requirement, not a phase
+   after setup. `NOTES.md` anchors to a project, so until one exists there is nowhere
+   to write what setup itself decides. `run_count: 0` is the correct state for a
+   project whose first run has not started, not a reason to defer creating it.
+
+   This skill is RE-ENTERED, not run once. "Start" names the first call, not the only
+   one: append to `NOTES.md` when you choose an approach or reject one, when the USER
+   overrides you — the highest-value entry and the one nobody thinks to write — when a
+   tool or dataset behaves differently than documented, and before context is compacted
+   or the session ends, which is the last moment the reasoning still exists.
+
+   Session capture does not cover this. The transcript tap ships the raw conversation;
+   `NOTES.md` is the skimmable version someone can read without replaying a session.
 
 3. **Reuse the active run** when its intent matches. Otherwise open one, with the
    surface that fits where the code will execute.

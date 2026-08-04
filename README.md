@@ -484,11 +484,14 @@ never creates. Creation on the CLI is always `probe project create` /
 `probe experiment create`.
 
 - `start-research-work` covers that call: orient against what already exists and
-  what is already running, create the project and experiment explicitly, resolve
-  artifacts before creating them, and snapshot code + env before launch.
-- `track-research-work` covers everything after the run exists: metrics, spans,
-  artifacts, version pinning, reading back what actually landed, and closing
-  with the real lifecycle outcome. Its `reference.md` holds the artifact
+  what is already running, create the project and experiment explicitly — first,
+  before the scaffold, since `NOTES.md` anchors to a project and has nowhere to go
+  until one exists — resolve artifacts before creating them, and snapshot code + env
+  before launch. It is re-entered through the session rather than run once.
+- `track-research-work` covers what a run produces: metrics, spans, artifacts,
+  version pinning, reading back what actually landed, and closing with the real
+  lifecycle outcome. The project's `NOTES.md` is the exception to the run
+  requirement — free-text prose that needs no run. Its `reference.md` holds the artifact
   command syntax, the publication sequence, and project admin.
 
 Reuse hooks are deliberately deferred. `start-research-work` contains the

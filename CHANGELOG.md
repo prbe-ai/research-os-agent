@@ -49,6 +49,38 @@
 
 ### Changed
 
+- **The skills now say WHEN the project is created, and that they are re-entered.**
+  The trigger to fire before a run exists was added in #144 and removed again in #150
+  along with the note vocabulary it was written for. The mechanism #150 put in its
+  place is better and the gap it left is the same one: an agent reading these still
+  built the scaffold first and created the project afterwards, which is the one order
+  that discards the reasoning `NOTES.md` exists to hold.
+
+  Step 2 states the sequencing — create the identities at the moment the work is named,
+  before the repo and the deps, because `NOTES.md` anchors to a project and has nowhere
+  to go until one exists. `run_count: 0` is named as the correct state for a project
+  whose first run has not started, since an empty project reads as premature and
+  invites exactly that deferral.
+
+  Re-entry is the other half. `start-research-work` is named for a moment, so it fired
+  once and was done; forty turns into a planning session nothing brought an agent back.
+  Both the body and the description now say it is re-entered, and name the four moments
+  that were uncovered: choosing or rejecting an approach, the USER overriding you, a
+  tool behaving differently than documented, and the point just before context is
+  compacted or the session ends. It also draws the line against session capture — the
+  transcript tap ships the raw conversation, `NOTES.md` is the skimmable version.
+
+  `track-research-work` lost `notes` from its description in #150, so a session with
+  zero runs read it as inapplicable; its description covers `NOTES.md` again, and a
+  session that opened no run now has a closing act instead of ending silently.
+
+- **`test_skills_sync.py` now parses the frontmatter it guards.** It compared the three
+  copies and validated tool names, but never read the YAML — so a `: ` inside a
+  description (`reproduce: training, evaluation`) terminated the plain scalar, broke the
+  document, and stopped the skill loading entirely while every test stayed green. Found
+  by writing that bug and watching the suite pass on it. Verified by breaking it again
+  after: exit 1 with the bug, exit 0 without.
+
 - **A directory that is not a git repository is now captured instead of refused.**
   `capture_manifest` raised outside a repo, so a project like `research-workflows/`
   got zero capture — not degraded capture, an error. That was defensible only

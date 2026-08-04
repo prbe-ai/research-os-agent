@@ -1,6 +1,6 @@
 ---
 name: track-research-work
-description: Record an open run — per-step metrics, spans, artifacts, asset versions, and its final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion, or publication. Trigger whenever a run is open, without waiting to be asked.
+description: Record what research produces — per-step metrics, spans, artifacts, asset versions, a run's final status, and the project's NOTES.md, which is prose and needs no run at all. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication. Trigger whenever a run is open, or whenever something worth recording happens without one, rather than waiting to be asked.
 ---
 
 # Track research work
@@ -117,6 +117,10 @@ gets made. Record with the surface the run was opened with.
 5. **Before handoff or completion**, read `view="handoff"` or `view="reproduce"`.
    Report missing capture honestly: `completeness.missing` is the answer, not your
    recollection of what you logged.
+
+   A session that opened no run still ends. Append what you would do next and what is
+   still unresolved to `NOTES.md`, or planning work ends silently and the next session
+   restarts from the brief.
 
 6. **Close with the real outcome** — `completed` / `failed` / `crashed` / `canceled`,
    via `run.finish("failed")` or `probe run end RUN --status failed`. In-script,
