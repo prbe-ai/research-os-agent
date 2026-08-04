@@ -16,6 +16,19 @@ import pytest
 from probe.cli import backfill
 
 
+@pytest.fixture(autouse=True)
+def _agents_installed(monkeypatch):
+    """Pretend both agents are on PATH.
+
+    Without this the suite passes on a laptop with Claude Code installed and
+    fails in CI, which has neither — every `run()` test would stop at "No coding
+    agent found" long before reaching what it meant to assert. A test about
+    folders must not depend on what the machine happens to have installed.
+    Tests that care about availability override this themselves.
+    """
+    monkeypatch.setattr(backfill, "which_agent", lambda a: f"/usr/bin/{a.value}")
+
+
 def _tree(root: Path) -> Path:
     """A folder shaped like the ones this feature meets: real work, build noise."""
     (root / "notes").mkdir(parents=True)
@@ -143,30 +156,50 @@ def test_the_anchor_is_a_uuid_never_a_slug(tmp_path):
     assert slug == "odyssey"
 
 
-def test_configured_project_wins_over_the_derived_slug(tmp_path):
+def test_an_explicitly_named_project_wins_over_the_derived_slug(tmp_path):
     client = _FakeClient()
-    project_id, _ = backfill.resolve_anchor(client, tmp_path, configured=FAKE_ID)
+    project_id, _ = backfill.resolve_anchor(client, tmp_path, requested=FAKE_ID)
     assert project_id == FAKE_ID
     assert client.ensured == []
 
 
-def test_a_configured_slug_is_resolved_to_its_id(tmp_path):
-    # PROBE_PROJECT takes a slug, so the configured value is not always an id.
+def test_a_named_slug_is_resolved_to_its_id(tmp_path):
+    # --project takes either form.
     client = _FakeClient(existing={"id": FAKE_ID, "slug": "already-here"})
-    project_id, slug = backfill.resolve_anchor(client, tmp_path, configured="already-here")
+    project_id, slug = backfill.resolve_anchor(client, tmp_path, requested="already-here")
     assert project_id == FAKE_ID
     assert slug == "already-here"
 
 
-def test_an_unknown_configured_slug_fails_loudly(tmp_path):
+def test_an_unknown_named_slug_fails_loudly(tmp_path):
     with pytest.raises(ValueError, match="no project"):
-        backfill.resolve_anchor(_FakeClient(existing=None), tmp_path, configured="ghost")
+        backfill.resolve_anchor(_FakeClient(existing=None), tmp_path, requested="ghost")
 
 
 def test_existing_project_is_reused_not_forked(tmp_path):
     client = _FakeClient(existing={"id": FAKE_ID, "slug": "already-here"})
     project_id, slug = backfill.resolve_anchor(client, tmp_path)
     assert (project_id, slug) == (FAKE_ID, "already-here")
+
+
+def test_the_ambient_active_project_is_not_consulted(monkeypatch, tmp_path):
+    """`probe project use` sets where new RUNS go; it is not a statement that
+    every folder imported from here on belongs there. Honouring it meant
+    pointing at one folder and watching its artifacts land somewhere unrelated."""
+    import sys
+
+    import probe.cli.main  # noqa: F401
+
+    source = __import__("inspect").getsource(sys.modules["probe.cli.main"].backfill)
+    assert "configured_project" not in source
+    # The destination comes from --project or the folder, never from resolve().
+    assert "project=project" in source
+
+    folder = tmp_path / "anthrogen-backfill-test"
+    folder.mkdir()
+    client = _FakeClient(existing=None)
+    _, slug = backfill.resolve_anchor(client, folder)
+    assert slug == "anthrogen-backfill-test"
 
 
 def test_creation_goes_through_the_near_miss_guard(tmp_path):
@@ -219,6 +252,212 @@ def test_prompt_states_the_denominator_so_the_agent_knows_the_scale(tmp_path):
 # -- the agent launch -------------------------------------------------------
 
 
+# -- showing what the agent is doing ----------------------------------------
+
+
+def test_both_agents_are_asked_for_an_event_stream():
+    """A bare `claude -p` prints NOTHING until it exits, so a long import was
+    indistinguishable from a hang — which is exactly how it looked. The event
+    stream is the only signal that the agent is alive."""
+    claude = backfill.agent_argv(backfill.Agent.CLAUDE, "/b/claude", "p", Path("/w"))
+    assert "--output-format" in claude and "stream-json" in claude
+    # stream-json emits only the final result without --verbose.
+    assert "--verbose" in claude
+    codex = backfill.agent_argv(backfill.Agent.CODEX, "/b/codex", "p", Path("/w"))
+    assert "--json" in codex
+
+
+def _fold(lines, total=37):
+    state = backfill.Activity(total=total)
+    changed = [backfill.fold_event(ln, state) for ln in lines]
+    return state, changed
+
+
+def test_non_json_noise_never_blanks_the_display():
+    """Claude prints the connectors warning to stdout and Codex a stdin notice
+    plus tracing. A parser that treated those as fatal would go dark for the
+    rest of the run."""
+    state, changed = _fold(
+        [
+            "⚠ claude.ai connectors are disabled because ANTHROPIC_API_KEY is set",
+            "Reading additional input from stdin...",
+            "2026-08-04T00:21:10Z ERROR codex_core::session: failed to load skill",
+            "",
+            "not json at all {",
+        ]
+    )
+    assert not any(changed)
+    assert state.uploaded == 0
+
+
+def test_claude_uploads_are_counted_against_the_denominator():
+    ev = (
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash",'
+        '"input":{"command":"probe artifact add --project abc /w/results.csv",'
+        '"description":"Upload results.csv"}}]}}'
+    )
+    state, _ = _fold([ev, ev, ev])
+    assert state.uploaded == 3
+    assert "3/37" in state.line(1.0)
+
+
+def test_codex_uploads_are_counted_too():
+    ev = (
+        '{"type":"item.started","item":{"type":"command_execution",'
+        '"command":"/bin/zsh -lc \'probe artifact add --project abc /w/train.py\'"}}'
+    )
+    state, _ = _fold([ev, ev])
+    assert state.uploaded == 2
+
+
+def test_an_upload_is_not_double_counted_when_codex_completes_it():
+    # item.started AND item.completed both carry the command; only one may count.
+    started = '{"type":"item.started","item":{"type":"command_execution","command":"probe artifact add x"}}'
+    completed = '{"type":"item.completed","item":{"type":"command_execution","command":"probe artifact add x","exit_code":0}}'
+    state, _ = _fold([started, completed])
+    assert state.uploaded == 1
+
+
+def test_reads_and_searches_read_as_activity_not_uploads():
+    state, _ = _fold(
+        [
+            '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read",'
+            '"input":{"file_path":"/w/Xian/esm3-baseline/run.log"}}]}}'
+        ]
+    )
+    assert state.uploaded == 0
+    assert state.doing == "reading run.log"
+
+
+def test_the_status_line_is_one_line_and_stays_narrow():
+    state = backfill.Activity(total=12431, uploaded=999)
+    state.doing = "uploading " + "a-really-long-file-name" * 8
+    line = state.line(3725.0)
+    assert "\n" not in line
+    assert len(line) <= 80
+    assert "…" in line  # truncated rather than wrapped
+
+
+def test_the_clock_reads_as_minutes_and_seconds():
+    assert "1:07" in backfill.Activity(total=1).line(67.0)
+    assert "0:05" in backfill.Activity(total=1).line(5.0)
+
+
+def test_the_spinner_advances_so_a_quiet_turn_is_not_a_hang():
+    state = backfill.Activity(total=1)
+    first = state.line(1.0)
+    state.ticks += 1
+    assert state.line(1.0) != first
+
+
+def test_an_upload_command_is_shortened_to_the_filename():
+    got = backfill._shorten(
+        "/bin/zsh -lc 'probe artifact add --project 3f7c1a52-0d64-4e2f-9c31-0b8a5d6e1f90 "
+        "/workspace/Michael/odyssey-infill-v3/results/docq_scores.csv'"
+    )
+    assert got == "uploading docq_scores.csv"
+
+
+# -- choosing between Claude Code and Codex ---------------------------------
+
+
+def test_codex_is_told_to_skip_the_git_repo_check():
+    """Codex REFUSES to run outside a git repository. A research folder on a
+    shared mount is virtually never one, so without this every Codex backfill
+    dies before reading a byte."""
+    argv = backfill.agent_argv(
+        backfill.Agent.CODEX, "/usr/bin/codex", "p", Path("/workspace/Michael")
+    )
+    assert "--skip-git-repo-check" in argv
+
+
+def test_codex_gets_network_because_uploading_needs_it():
+    # read-only would be the tighter sandbox, and it has no network — so the
+    # agent would read the whole folder and fail every `probe artifact add`.
+    argv = backfill.agent_argv(backfill.Agent.CODEX, "/usr/bin/codex", "p", Path("/w"))
+    assert "workspace-write" in argv
+    assert "sandbox_workspace_write.network_access=true" in argv
+
+
+def test_codex_is_told_its_working_root_explicitly():
+    # Codex scopes its sandbox to -C, not to the inherited cwd.
+    argv = backfill.agent_argv(backfill.Agent.CODEX, "/usr/bin/codex", "p", Path("/workspace/X"))
+    assert argv[argv.index("-C") + 1] == "/workspace/X"
+
+
+def test_each_agent_is_told_how_to_handle_a_big_folder_in_its_own_terms():
+    # Claude has a Task tool and can fan out; Codex does not, and telling it to
+    # "use subagents" would invite it to invent one.
+    assert "subagents" in backfill._subdivide_line(backfill.Agent.CLAUDE)
+    assert "subagents" not in backfill._subdivide_line(backfill.Agent.CODEX)
+    assert "Do not stop at a sample" in backfill._subdivide_line(backfill.Agent.CODEX)
+
+
+def test_the_prompt_carries_the_right_subdivide_instruction(tmp_path):
+    for agent in backfill.Agent:
+        prompt = backfill.build_prompt(
+            folder=tmp_path, project="p", census=backfill.Census(files=1, bytes=1), agent=agent
+        )
+        assert backfill._subdivide_line(agent) in prompt
+
+
+def test_a_single_installed_agent_is_used_without_asking(monkeypatch):
+    monkeypatch.setattr(
+        backfill, "which_agent", lambda a: "/bin/claude" if a is backfill.Agent.CLAUDE else None
+    )
+    assert backfill.resolve_agent(None, interactive=True) == (backfill.Agent.CLAUDE, None)
+
+
+def test_no_agent_at_all_says_what_is_missing(monkeypatch):
+    monkeypatch.setattr(backfill, "which_agent", lambda a: None)
+    chosen, error = backfill.resolve_agent(None, interactive=True)
+    assert chosen is None
+    assert "Claude Code or Codex" in error
+
+
+def test_an_explicit_agent_is_never_silently_swapped(monkeypatch):
+    """Someone who passed --agent codex wants CODEX. Quietly running the other
+    one over their filesystem is the wrong kind of helpful."""
+    monkeypatch.setattr(
+        backfill, "which_agent", lambda a: "/bin/claude" if a is backfill.Agent.CLAUDE else None
+    )
+    chosen, error = backfill.resolve_agent(backfill.Agent.CODEX, interactive=True)
+    assert chosen is None
+    assert "not on PATH" in error and "codex" in error
+
+
+def test_two_agents_and_no_tty_takes_the_first_rather_than_prompting(monkeypatch):
+    monkeypatch.setattr(backfill, "which_agent", lambda a: "/bin/" + a.value)
+    assert backfill.resolve_agent(None, interactive=False) == (backfill.Agent.CLAUDE, None)
+
+
+def test_every_agent_has_menu_copy():
+    assert set(backfill.AGENT_COPY) == set(backfill.Agent)
+    for title, detail in backfill.AGENT_COPY.values():
+        assert title and detail
+        assert len(title) + 5 <= 80
+        assert len(detail) + 5 <= 80
+
+
+def test_the_copy_does_not_claim_codex_is_tool_restricted():
+    """Codex confines WHERE commands act, not WHICH run. Claiming otherwise
+    would be a security promise the sandbox does not make."""
+    claude_detail = backfill.AGENT_COPY[backfill.Agent.CLAUDE][1]
+    codex_detail = backfill.AGENT_COPY[backfill.Agent.CODEX][1]
+    assert "cannot write" in claude_detail
+    assert "any command" in codex_detail
+
+
+def test_the_agent_binary_is_resolved_off_path_not_a_shell(monkeypatch):
+    """`codex` is commonly shadowed by a shell alias. A PATH lookup with no
+    shell cannot see one; `shell=True` would have swallowed our arguments."""
+    # Read the MODULE FILE, not the attribute: the autouse fixture replaces
+    # `which_agent` with a stub, and getsource would inspect that instead.
+    source = Path(backfill.__file__).read_text()
+    assert "def which_agent" in source and "shutil.which" in source
+    assert "shell=True" not in source
+
+
 def test_agent_toolset_is_probe_and_reads_only():
     # This runs unattended over folders nobody audited: no write, no delete, no
     # network beyond the probe CLI itself.
@@ -229,7 +468,8 @@ def test_agent_toolset_is_probe_and_reads_only():
 
 
 def test_missing_claude_is_a_message_not_a_traceback(tmp_path, monkeypatch):
-    monkeypatch.setattr(backfill.shutil, "which", lambda _: None)
+    # Overrides the autouse "both installed" fixture on purpose.
+    monkeypatch.setattr(backfill, "which_agent", lambda a: None)
     ok, msg = backfill.launch_agent(tmp_path, "prompt")
     assert ok is False
     assert "not on PATH" in msg
@@ -287,6 +527,28 @@ def test_a_file_is_not_a_folder(tmp_path):
     assert "not a directory" in lines[0]
 
 
+def test_a_bad_path_is_reported_before_a_missing_agent(tmp_path, monkeypatch):
+    """Telling someone to install an agent when they mistyped a path is a wrong
+    answer to the question they actually asked."""
+    monkeypatch.setattr(backfill, "which_agent", lambda a: None)
+    target = tmp_path / "a.txt"
+    target.write_text("x")
+    lines = backfill.run(client_factory=_FakeClient, folder=target, interactive=False)
+    assert "not a directory" in lines[0]
+
+
+def test_a_missing_agent_creates_no_project(tmp_path, monkeypatch):
+    """Agent availability is a free local check and project creation is a
+    network write. Getting that order wrong leaves an empty project behind on
+    every machine that cannot run the import at all."""
+    monkeypatch.setattr(backfill, "which_agent", lambda a: None)
+    _tree(tmp_path)
+    client = _FakeClient()
+    lines = backfill.run(client_factory=lambda: client, folder=tmp_path, interactive=False)
+    assert "No coding agent found" in lines[0]
+    assert client.ensured == []
+
+
 def test_an_empty_folder_launches_no_agent(tmp_path, monkeypatch):
     launched = []
     monkeypatch.setattr(backfill, "launch_agent", lambda *a, **kw: launched.append(a))
@@ -324,6 +586,76 @@ def test_the_happy_path_reports_the_denominator(tmp_path, monkeypatch):
     assert seen["folder"] == tmp_path.resolve()
     assert "--project" in seen["prompt"]
     assert any("3 files found on disk · 3 artifacts" in ln for ln in lines)
+
+
+# -- pasting a path instead of browsing --------------------------------------
+
+
+class _Answers:
+    """Stand in for tui.ask: hand back queued answers, record the prompts."""
+
+    def __init__(self, *answers):
+        self.answers = list(answers)
+        self.calls = 0
+
+    def __call__(self, question, height=None):
+        self.calls += 1
+        return self.answers.pop(0)
+
+
+def test_a_pasted_path_is_accepted(tmp_path, monkeypatch):
+    target = tmp_path / "odyssey-infill-v3"
+    target.mkdir()
+    monkeypatch.setattr("probe.cli.tui.ask", _Answers(str(target)))
+    assert backfill.ask_path(tmp_path) == target.resolve()
+
+
+def test_a_pasted_path_survives_quotes_and_whitespace(tmp_path, monkeypatch):
+    # Paths pasted out of Slack or a shell routinely arrive wrapped.
+    target = tmp_path / "sap-bench"
+    target.mkdir()
+    monkeypatch.setattr("probe.cli.tui.ask", _Answers(f"  '{target}'  "))
+    assert backfill.ask_path(tmp_path) == target.resolve()
+
+
+def test_a_tilde_path_expands(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "work").mkdir()
+    monkeypatch.setattr("probe.cli.tui.ask", _Answers("~/work"))
+    assert backfill.ask_path(tmp_path) == (tmp_path / "work").resolve()
+
+
+def test_a_relative_path_resolves_against_where_you_were_browsing(tmp_path, monkeypatch):
+    (tmp_path / "Michael" / "v3").mkdir(parents=True)
+    monkeypatch.setattr("probe.cli.tui.ask", _Answers("Michael/v3"))
+    assert backfill.ask_path(tmp_path) == (tmp_path / "Michael" / "v3").resolve()
+
+
+def test_a_bad_path_re_asks_rather_than_dumping_you_out(tmp_path, monkeypatch):
+    """A pasted path is routinely missing a segment. Failing back into a browser
+    two directories away is a worse answer than asking again."""
+    good = tmp_path / "real"
+    good.mkdir()
+    answers = _Answers(str(tmp_path / "typo"), str(good))
+    monkeypatch.setattr("probe.cli.tui.ask", answers)
+    assert backfill.ask_path(tmp_path) == good.resolve()
+    assert answers.calls == 2
+
+
+def test_a_file_is_rejected_like_a_missing_folder(tmp_path, monkeypatch):
+    f = tmp_path / "notes.md"
+    f.write_text("x")
+    good = tmp_path / "real"
+    good.mkdir()
+    monkeypatch.setattr("probe.cli.tui.ask", _Answers(str(f), str(good)))
+    assert backfill.ask_path(tmp_path) == good.resolve()
+
+
+def test_escaping_the_path_prompt_returns_to_the_browser(tmp_path, monkeypatch):
+    from probe.cli import tui
+
+    monkeypatch.setattr("probe.cli.tui.ask", _Answers(tui.BACK))
+    assert backfill.ask_path(tmp_path) is tui.BACK
 
 
 # -- `probe backfill`, the command the dashboard hands out -------------------
@@ -372,7 +704,7 @@ def test_the_command_passes_its_folder_through(monkeypatch, tmp_path):
     seen = {}
     _stub_bootstrap(monkeypatch)
     monkeypatch.setattr("probe.cli.backfill.run", lambda **kw: seen.update(kw) or ["done"])
-    cli_main.backfill(folder=str(tmp_path))
+    cli_main.backfill(folder=str(tmp_path), agent=None)
     assert seen["folder"] == Path(str(tmp_path))
     assert seen["client_factory"] is cli_main._client
 
@@ -382,7 +714,7 @@ def test_the_command_with_no_folder_leaves_the_picker_to_decide(monkeypatch):
     seen = {}
     _stub_bootstrap(monkeypatch)
     monkeypatch.setattr("probe.cli.backfill.run", lambda **kw: seen.update(kw) or [])
-    cli_main.backfill(folder=None)
+    cli_main.backfill(folder=None, agent=None)
     assert seen["folder"] is None
 
 

@@ -30,7 +30,10 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 #: Never walked, never offered, never counted. Not a judgment call about what
@@ -72,11 +75,54 @@ COUNT_CAP = 20_000
 #: ceiling. Hitting it exactly means "at least this many", never "this many".
 RECONCILE_PAGE = 1_000
 
-#: The agent may call the probe CLI and READ files. It may not write, delete,
-#: or reach the network by any other route. Backfill is a read-and-upload job,
-#: so anything broader is blast radius with no upside -- and this runs
-#: unattended over folders whose contents nobody has audited.
+class Agent(StrEnum):
+    """Which coding agent reads the folder.
+
+    Both are driven headlessly and both do the work the same way -- read files,
+    shell out to `probe artifact add` -- but they are CONFINED differently, and
+    the difference is not cosmetic. See CONFINEMENT below.
+    """
+
+    CLAUDE = "claude"
+    CODEX = "codex"
+
+
+#: Display name and the one-line honest description of what each agent may do.
+#: Shown at the picker, because "an agent is about to read this folder
+#: unattended" is a decision someone should make with the isolation in view.
+AGENT_COPY: dict[Agent, tuple[str, str]] = {
+    Agent.CLAUDE: (
+        "Claude Code",
+        "Limited to the probe CLI and reading — it cannot write, delete or fetch.",
+    ),
+    Agent.CODEX: (
+        "Codex",
+        "Sandboxed to this folder, but any command is allowed inside it.",
+    ),
+}
+
+#: CONFINEMENT, Claude Code: a TOOL ALLOWLIST. It may call the probe CLI and
+#: read; it may not write, delete, or reach the network by any other route.
+#: Backfill is a read-and-upload job, so anything broader is blast radius with
+#: no upside -- and this runs unattended over folders nobody has audited.
 AGENT_TOOLS = "Bash(probe:*),Read,Glob,Grep,Task"
+
+#: CONFINEMENT, Codex: a FILESYSTEM+NETWORK SANDBOX, which is a coarser
+#: instrument. Codex confines where commands may act, not WHICH commands run,
+#: so there is no equivalent of `Bash(probe:*)` -- inside the sandbox the agent
+#: may run anything. That is why AGENT_COPY says so out loud.
+#:
+#: `workspace-write` rather than `read-only` because the upload has to reach the
+#: network, and read-only mode has none. `--skip-git-repo-check` is REQUIRED,
+#: not tidiness: Codex refuses to run outside a git repo, and a research folder
+#: on a shared mount is virtually never one.
+CODEX_ARGS = (
+    "-s",
+    "workspace-write",
+    "-c",
+    "sandbox_workspace_write.network_access=true",
+    "--skip-git-repo-check",
+)
 
 
 @dataclass(frozen=True)
@@ -153,7 +199,7 @@ def slug_for(folder: Path) -> str:
     return cleaned or "backfill"
 
 
-def resolve_anchor(client, folder: Path, *, configured: str | None = None) -> tuple[str, str]:
+def resolve_anchor(client, folder: Path, *, requested: str | None = None) -> tuple[str, str]:
     """The project this folder imports into, as ``(project_id, slug)``.
 
     Returns the UUID, never the slug, because that is what the agent's commands
@@ -161,24 +207,33 @@ def resolve_anchor(client, folder: Path, *, configured: str | None = None) -> tu
     UUID, so a slug arrives as a 422 about UUID parsing rather than a lookup.
     The slug rides along only to be shown to a human.
 
-    An explicitly configured active project always wins -- someone who ran
-    `probe project use` has already answered this question, and importing
-    somewhere else would be the wrong kind of helpful. It may be either form
-    (`PROBE_PROJECT` takes a slug), so it is resolved the same way.
+    THE FOLDER DECIDES, unless someone names a project on this command.
+
+    The AMBIENT active project (`probe project use`, `PROBE_PROJECT`) is
+    deliberately NOT consulted. It used to win, on the reasoning that whoever
+    set it had already answered this question -- but it answers a different
+    one. `project use` sets where new RUNS go by default; it is not a statement
+    that every folder imported from here on belongs there. Honouring it meant
+    pointing at `anthrogen-backfill-test` and watching 37 artifacts land in
+    whatever project happened to be active, which is a surprising place to have
+    to go looking for them.
+
+    `requested` is an explicit `--project` on this invocation, in either form
+    (id or slug), and it still wins.
 
     Creation goes through ``ensure_project``, whose near-miss guard refuses a
     slug that looks like a typo of one already there. A folder called
     `odyssey-v2` sitting next to an existing `odyssey_v2` should stop, not
     quietly open a second identity for the same work.
     """
-    if configured:
-        return _resolve_ref(client, configured)
+    if requested:
+        return _resolve_ref(client, requested)
     proj = client.ensure_project(slug_for(folder), name=folder.resolve().name)
     return str(proj["id"]), proj.get("slug") or slug_for(folder)
 
 
 def _resolve_ref(client, ref: str) -> tuple[str, str]:
-    """A configured project id OR slug -> ``(project_id, slug)``."""
+    """An explicitly named project id OR slug -> ``(project_id, slug)``."""
     from uuid import UUID
 
     try:
@@ -194,7 +249,34 @@ def _resolve_ref(client, ref: str) -> tuple[str, str]:
         return ref, ref
 
 
-def build_prompt(*, folder: Path, project: str, census: Census, slug: str | None = None) -> str:
+def _subdivide_line(agent: Agent) -> str:
+    """How to handle a big folder — which differs by what the agent HAS.
+
+    Claude has a Task tool, so it can fan out over the subdirectories itself.
+    Codex has no equivalent; telling it to "use subagents" would invite it to
+    invent something, so it is told to work through the folder in passes
+    instead.
+    """
+    if agent is Agent.CLAUDE:
+        return (
+            "If the folder is large or clearly splits into several independent pieces\n"
+            "of work, subdivide it and use subagents — one per piece, each with this\n"
+            "same anchor."
+        )
+    return (
+        "If the folder is large, work through it one subdirectory at a time and\n"
+        "keep going until every one is done. Do not stop at a sample."
+    )
+
+
+def build_prompt(
+    *,
+    folder: Path,
+    project: str,
+    census: Census,
+    slug: str | None = None,
+    agent: Agent = Agent.CLAUDE,
+) -> str:
     """The prompt the wizard hands the agent.
 
     This is the actual deliverable of the feature: the user never writes it,
@@ -248,8 +330,7 @@ Step 3 — group ONLY if the evidence is there.
     Artifacts at the project level are findable; an invented experiment is a
     wrong answer that looks like a right one.
 
-If the folder is large or clearly splits into several independent pieces of work,
-subdivide it and use subagents — one per piece, each with this same anchor.
+{_subdivide_line(agent)}
 
 Finish with a JSON summary on its own line:
 {{"files_seen": N, "files_landed": N, "files_skipped": N, "experiments_created": N,
@@ -257,29 +338,209 @@ Finish with a JSON summary on its own line:
 """
 
 
+def which_agent(agent: Agent) -> str | None:
+    """The agent's real binary, or None.
+
+    `shutil.which`, never a shell: `codex` in particular is commonly SHADOWED by
+    a shell alias (a local wrapper here), and an alias would silently swallow
+    the arguments below. A PATH lookup with no shell cannot see one.
+    """
+    return shutil.which(agent.value)
+
+
+def available_agents() -> list[Agent]:
+    """Installed agents, in menu order. Empty means backfill cannot run."""
+    return [a for a in Agent if which_agent(a) is not None]
+
+
+def agent_argv(agent: Agent, binary: str, prompt: str, folder: Path) -> list[str]:
+    """The headless invocation for one agent.
+
+    Both are asked for a JSONL EVENT STREAM, and that is not a preference. A
+    bare `claude -p` prints nothing at all until the whole run finishes, so a
+    backfill over a real folder sat silent for minutes and read as hung -- which
+    is exactly what it looked like. The event stream is the only way to know the
+    agent is alive, and the only way to count what it has done so far.
+
+    Claude takes its working directory from the process (`cwd=`); Codex needs it
+    named explicitly with `-C`, because it resolves its workspace -- the thing
+    its sandbox is scoped to -- from that flag rather than from cwd.
+    """
+    if agent is Agent.CLAUDE:
+        return [
+            binary,
+            "-p",
+            prompt,
+            "--output-format",
+            "stream-json",
+            "--verbose",  # required: stream-json emits only the result without it
+            "--allowedTools",
+            AGENT_TOOLS,
+        ]
+    return [binary, "exec", "--json", *CODEX_ARGS, "-C", str(folder), prompt]
+
+
+#: Spinner frames. Something has to MOVE while the agent is thinking, or a long
+#: quiet turn is indistinguishable from a hang -- the bug this replaced.
+_SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+#: How an upload is recognised in either agent's event stream. Counting these
+#: is what turns "still going" into "14 of 37".
+_UPLOAD_MARKER = "artifact add"
+
+
+@dataclass
+class Activity:
+    """Live state of one agent run, folded from its event stream."""
+
+    total: int
+    uploaded: int = 0
+    doing: str = "starting up"
+    ticks: int = 0
+
+    def line(self, elapsed: float) -> str:
+        mins, secs = divmod(int(elapsed), 60)
+        done = f"{self.uploaded}/{self.total}" if self.uploaded else f"0/{self.total}"
+        doing = self.doing if len(self.doing) <= 46 else self.doing[:45] + "…"
+        return f"  {_SPIN[self.ticks % len(_SPIN)]} {mins}:{secs:02d} · {done} · {doing}"
+
+
+def _shorten(command: str) -> str:
+    """A shell command as a phrase worth showing on one line.
+
+    The interesting part of `probe artifact add --project <uuid> /long/path`
+    is the filename, and the uuid is the least interesting thing in it.
+    """
+    text = " ".join(command.split())
+    for wrapper in ("/bin/zsh -lc ", "/bin/bash -lc ", "/bin/sh -c "):
+        if text.startswith(wrapper):
+            text = text[len(wrapper) :].strip("'\"")
+    if _UPLOAD_MARKER in text:
+        parts = [p for p in text.split() if not p.startswith("--") and p not in ("probe", "artifact", "add")]
+        # Drop the project id; keep the path.
+        paths = [p for p in parts if "/" in p or "." in p]
+        return f"uploading {Path(paths[-1]).name}" if paths else "uploading"
+    return text
+
+
+def fold_event(raw: str, state: Activity) -> bool:
+    """Fold one stdout line into `state`. True if it said something new.
+
+    Tolerant by construction: both agents interleave NON-JSON on stdout (Claude
+    prints the connectors warning there, Codex a stdin notice and tracing), and
+    a parser that treated that as fatal would blank the display for the rest of
+    the run.
+    """
+    import json
+
+    line = raw.strip()
+    if not line or not line.startswith("{"):
+        return False
+    try:
+        event = json.loads(line)
+    except ValueError:
+        return False
+    if not isinstance(event, dict):
+        return False
+
+    kind = event.get("type")
+
+    # Claude: assistant turns carry tool_use blocks.
+    if kind == "assistant":
+        for block in event.get("message", {}).get("content", []) or []:
+            if block.get("type") != "tool_use":
+                continue
+            args = block.get("input") or {}
+            name = block.get("name", "")
+            if name == "Bash":
+                command = str(args.get("command", ""))
+                if _UPLOAD_MARKER in command:
+                    state.uploaded += 1
+                state.doing = str(args.get("description") or _shorten(command))
+            elif args.get("file_path"):
+                state.doing = f"reading {Path(str(args['file_path'])).name}"
+            elif args.get("pattern"):
+                state.doing = f"searching {args['pattern']}"
+            else:
+                state.doing = name.lower() or "working"
+            return True
+        return False
+
+    # Codex: item.started / item.completed carry command_execution + messages.
+    if kind in ("item.started", "item.completed"):
+        item = event.get("item") or {}
+        if item.get("type") == "command_execution":
+            command = str(item.get("command", ""))
+            if kind == "item.started":
+                if _UPLOAD_MARKER in command:
+                    state.uploaded += 1
+                state.doing = _shorten(command)
+                return True
+        elif item.get("type") == "agent_message" and kind == "item.completed":
+            text = " ".join(str(item.get("text", "")).split())
+            if text:
+                state.doing = text
+                return True
+        return False
+
+    if kind == "turn.started":
+        state.doing = "thinking"
+        return True
+    return False
+
+
 def launch_agent(
     folder: Path,
     prompt: str,
     *,
+    agent: Agent = Agent.CLAUDE,
     timeout: float | None = None,
     stream=None,
+    progress: bool = True,
+    total: int = 0,
 ) -> tuple[bool, str]:
-    """Run one headless Claude agent inside `folder`. Streams as it goes.
+    """Run one headless agent inside `folder`, showing what it is doing.
 
-    Streamed rather than captured because this is the long step -- minutes to
-    hours -- and a wizard that prints nothing until it finishes is
-    indistinguishable from a wizard that has hung. The tail is returned so the
-    caller can pull the agent's JSON summary out of it.
+    ONE self-updating line, not the transcript. A raw agent transcript is
+    thousands of lines nobody reads, and the previous version showed neither --
+    a bare `claude -p` emits nothing until it exits, so a long import was
+    indistinguishable from a hang. What a watcher actually needs is that it is
+    alive, roughly how far along it is, and what it is touching right now.
+
+    `total` is the census, so the counter reads against the denominator the
+    reconcile will check. The tail is returned so the caller can pull the
+    agent's JSON summary out of it.
     """
-    binary = shutil.which("claude")
+    binary = which_agent(agent)
     if not binary:
-        return False, "`claude` is not on PATH — install Claude Code to use backfill"
+        name = AGENT_COPY[agent][0]
+        return False, f"`{agent.value}` is not on PATH — install {name}, or pick the other agent"
 
     out = stream if stream is not None else sys.stdout
+    live = progress and hasattr(out, "isatty") and out.isatty()
+    state = Activity(total=total or 0)
+    started = time.monotonic()
     tail: list[str] = []
+
+    def paint() -> None:
+        if not live:
+            return
+        text = state.line(time.monotonic() - started)
+        out.write("\r\033[2K" + text)
+        out.flush()
+
+    stop = threading.Event()
+
+    def tick() -> None:
+        # The spinner has to advance on its own: an agent can think for a minute
+        # between events, and a frozen spinner is the thing we set out to fix.
+        while not stop.wait(0.12):
+            state.ticks += 1
+            paint()
+
     try:
         proc = subprocess.Popen(  # noqa: S603 - fixed binary, no shell
-            [binary, "-p", prompt, "--allowedTools", AGENT_TOOLS],
+            agent_argv(agent, binary, prompt, folder),
             cwd=str(folder),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -289,13 +550,27 @@ def launch_agent(
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)
 
+    ticker = threading.Thread(target=tick, daemon=True)
+    if live:
+        ticker.start()
+
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
-            out.write(line)
-            out.flush()
             tail.append(line.rstrip("\n"))
             del tail[:-40]
+            changed = fold_event(line, state)
+            if live:
+                if changed:
+                    paint()
+            elif changed:
+                # No TTY (a pipe, a CI log): one plain line per step. Rewriting
+                # with \r into a log file produces an unreadable single line.
+                out.write(f"  {state.uploaded}/{state.total} · {state.doing}\n")
+                out.flush()
+            elif not progress:
+                out.write(line)
+                out.flush()
         code = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         proc.kill()
@@ -304,6 +579,14 @@ def launch_agent(
         # Ctrl-C should stop the agent, not orphan it holding the folder.
         proc.kill()
         return False, "interrupted"
+    finally:
+        # Always: an abandoned ticker keeps repainting over whatever the wizard
+        # prints next, and the status line must not outlive the run either way.
+        stop.set()
+        if live:
+            ticker.join(timeout=1.0)
+            out.write("\r\033[2K")
+            out.flush()
 
     return code == 0, "\n".join(tail)
 
@@ -385,6 +668,16 @@ def choose_directory(start: Path):
         if here.parent != here:
             choices.append(questionary.Separator(" "))
             choices.append(questionary.Choice(title="../", value=("cd", here.parent)))
+        # Browsing to /workspace/Michael/odyssey-infill-v3 is nine keystrokes of
+        # arrow key when the path was already on the clipboard. Anyone arriving
+        # from a cluster, a Slack message or the dashboard HAS the path.
+        choices.append(questionary.Separator(" "))
+        choices.append(
+            questionary.Choice(
+                title=f"Enter a path…\n{tui.body_indent()}  paste or type it, ~ works",
+                value=("type", here),
+            )
+        )
 
         message = tui.framed(
             "Import existing work into Probe.",
@@ -405,12 +698,136 @@ def choose_directory(start: Path):
         if picked is None or picked is tui.BACK:
             return picked
         if isinstance(picked, tuple):
-            here = picked[1].resolve()
+            kind, target = picked
+            if kind == "cd":
+                here = target.resolve()
+                continue
+            typed = ask_path(target)
+            if typed is None or typed is tui.BACK:
+                continue  # back to the browser, not out of the picker
+            # Land the browser ON it rather than importing blind: the counts are
+            # the whole point of this screen, and a pasted path deserves them
+            # too. `Import this folder` is then one keypress away.
+            here = typed
             continue
         return picked
 
 
+def ask_path(default: Path):
+    """Prompt for a directory. Returns a resolved Path, None, or tui.BACK.
+
+    Re-asks rather than failing: a path pasted from Slack or a cluster shell is
+    routinely missing a segment or wrapped in quotes, and dropping the user back
+    into a browser two directories away is a worse answer than asking again.
+    """
+    import questionary
+
+    from probe.cli import tui
+
+    while True:
+        answer = tui.ask(
+            questionary.path(
+                tui.framed(
+                    "Import existing work into Probe.",
+                    tui.wrap("Paste or type the folder. `~` and relative paths work."),
+                    "Path:",
+                ),
+                default=str(default),
+                only_directories=True,
+                style=tui.style(),
+                qmark=tui.qmark(),
+            )
+        )
+        if answer is None or answer is tui.BACK:
+            return answer
+        text = str(answer).strip().strip("'\"")
+        if not text:
+            return tui.BACK
+        candidate = Path(text).expanduser()
+        if not candidate.is_absolute():
+            candidate = (default / candidate).resolve()
+        candidate = candidate.expanduser().resolve()
+        if candidate.is_dir():
+            return candidate
+        tui.say()
+        tui.say(f"{candidate} is not a folder." if candidate.exists() else f"No such folder: {candidate}")
+        tui.say()
+
+
 # -- the wizard action ------------------------------------------------------
+
+
+def choose_agent(available: list[Agent]):
+    """Pick the agent. Returns an Agent, None (quit), or tui.BACK.
+
+    Only ever reached with a real choice to make -- `resolve_agent` answers it
+    without asking when one agent is installed, which is the common case.
+    """
+    import questionary
+
+    from probe.cli import tui
+
+    choices: list = [questionary.Separator(" ")]
+    for index, agent in enumerate(available):
+        if index:
+            choices.append(questionary.Separator(" "))
+        title, detail = AGENT_COPY[agent]
+        choices.append(
+            questionary.Choice(title=f"{title}\n{tui.body_indent()}  {detail}", value=agent)
+        )
+
+    message = tui.framed(
+        "Both agents are installed here.",
+        tui.wrap("It reads the folder and uploads what it finds. They differ in what else they can do."),
+        "Which agent should read it?",
+    )
+    return tui.ask(
+        questionary.select(
+            message,
+            choices=choices,
+            instruction="(arrow keys, enter to choose, esc goes back)",
+            style=tui.style(),
+            qmark=tui.qmark(),
+            pointer=tui.pointer(),
+        ),
+        height=tui.content_height(message, choices),
+    )
+
+
+def resolve_agent(requested: Agent | None, *, interactive: bool) -> tuple[object, str | None]:
+    """Which agent runs, as ``(choice, error)``.
+
+    A TUPLE rather than a union return, because `Agent` is a `StrEnum` and
+    therefore IS a str: an `isinstance(result, str)` check meant to catch the
+    error case swallows every successful one too, and `run` then returns the
+    enum where the caller expected output lines. Separate slots cannot be
+    confused that way.
+
+    `choice` is an Agent, None (quit), or tui.BACK. An explicit `--agent` wins
+    and is NOT silently downgraded when that agent is missing: someone who named
+    one wants that one, and quietly running the other over their filesystem is
+    the wrong kind of helpful.
+    """
+    from probe.cli import tui
+
+    if requested is not None:
+        if which_agent(requested) is None:
+            name = AGENT_COPY[requested][0]
+            return None, (
+                f"`{requested.value}` is not on PATH — install {name}, or drop --agent to pick."
+            )
+        return requested, None
+
+    available = available_agents()
+    if not available:
+        return None, (
+            "No coding agent found. Backfill needs Claude Code or Codex on PATH — "
+            "the agent is what reads the folder."
+        )
+    if len(available) == 1 or not interactive:
+        return available[0], None
+    tui.clear()
+    return choose_agent(available), None
 
 
 def run(
@@ -418,13 +835,15 @@ def run(
     client_factory,
     start: Path | None = None,
     folder: Path | None = None,
-    configured_project: str | None = None,
+    project: str | None = None,
     interactive: bool = True,
+    agent: Agent | None = None,
 ) -> list[str]:
     """The `Import existing work` action. Returns the lines the wizard pages.
 
-    `folder` skips the picker, which is what makes this reachable from
-    `--action backfill` on a box with no TTY.
+    `folder` skips the picker and `agent` skips the agent prompt, which is what
+    makes this reachable from `--action backfill` on a box with no TTY.
+    `project` names the destination explicitly; omitted, the FOLDER decides.
     """
     from probe.cli import tui
 
@@ -437,6 +856,16 @@ def run(
             return []
         target = picked
 
+    # Order here is deliberate: cheapest and most certain first, and nothing
+    # that MUTATES anything until every local check has passed.
+    #
+    #   1. the path            local, free — and telling someone to install an
+    #                          agent when they mistyped a path is a wrong answer
+    #   2. the census          local, cheap
+    #   3. the agent           local, free — BEFORE the project, so a machine
+    #                          with no agent cannot leave an empty project behind
+    #   4. the project         network, CREATES a row
+    #   5. the agent run
     target = Path(target).resolve()
     if not target.is_dir():
         return [f"{target} is not a directory."]
@@ -445,23 +874,31 @@ def run(
     if census.files == 0:
         return [f"{target} has no files to import."]
 
+    chosen, agent_error = resolve_agent(agent, interactive=interactive)
+    if agent_error:
+        return [agent_error]
+    if chosen is None or chosen is tui.BACK:
+        return []
+
     try:
         with client_factory() as client:
-            project_id, slug = resolve_anchor(client, target, configured=configured_project)
+            project_id, slug = resolve_anchor(client, target, requested=project)
     except Exception as exc:  # noqa: BLE001 - a credential problem is the likely cause
         return [
             f"Could not resolve a project to import into: {exc}",
             "Run `probe login`, or `probe project use <slug>` to pick one, and try again.",
         ]
 
-    prompt = build_prompt(folder=target, project=project_id, census=census, slug=slug)
+    prompt = build_prompt(
+        folder=target, project=project_id, census=census, slug=slug, agent=chosen
+    )
 
     tui.say()
     tui.say(f"Importing {target} into project `{slug}`.")
-    tui.say(f"{census.describe()} — the agent is reading them now.")
+    tui.say(f"{census.describe()} — {AGENT_COPY[chosen][0]} is reading them now.")
     tui.say()
 
-    ok, tail = launch_agent(target, prompt)
+    ok, tail = launch_agent(target, prompt, agent=chosen, total=census.files)
 
     try:
         with client_factory() as client:
