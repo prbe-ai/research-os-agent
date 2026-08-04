@@ -331,3 +331,76 @@ def test_the_asset_command_group_is_gone(wired):
     so the group is removed rather than left to fail at runtime. An unknown
     command is a usage error (exit 2), never a success."""
     assert cli.main(["asset", "list"]) == 2
+
+
+def test_artifact_list_accepts_a_project_slug(wired, capsys):
+    """`--project` takes the slug people remember, not only the uuid.
+
+    Every ``/v1/projects/{project_id}`` route types the path param as a UUID, so
+    a slug reached the server as a 422 about UUID parsing rather than a lookup.
+    `experiment list --project` and `project patch` both took a slug, so the one
+    listing that did not was indistinguishable from a malformed request.
+    """
+    assert cli.main(["artifact", "list", "--project", "p"]) == 0
+
+    listing = next(
+        r for r in wired.requests if "/artifacts" in r.url.path and r.method == "GET"
+    )
+    assert "p" not in listing.url.path.rsplit("/", 1)[-1], (
+        "the slug reached the server unresolved"
+    )
+
+
+def _one_artifact(tmp_path, capsys) -> str:
+    """Create a run + artifact through the CLI and return the artifact id."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r-del"])
+    run_id = capsys.readouterr().out.strip()
+    f = tmp_path / "a.txt"
+    f.write_text("x\n")
+    cli.main(["artifact", "add", run_id, str(f), "--name", "a.txt"])
+    capsys.readouterr()
+    cli.main(["artifact", "list", run_id])
+    listed = json.loads(capsys.readouterr().out.strip())
+    return listed[0]["id"]
+
+
+def _spy_confirm(monkeypatch):
+    """Record confirm calls. `probe.cli.main` is the entry-point FUNCTION
+    re-exported in __init__, which shadows the submodule of the same name."""
+    import importlib
+
+    cli_main = importlib.import_module("probe.cli.main")
+    seen: list[tuple[str, dict]] = []
+    monkeypatch.setattr(
+        cli_main.typer, "confirm", lambda text, **kw: (seen.append((text, kw)), True)[1]
+    )
+    return seen
+
+
+def test_artifact_delete_confirms_like_every_other_delete(
+    wired, capsys, monkeypatch, tmp_path
+):
+    """`artifact delete` took no --yes and prompted for nothing.
+
+    Its four siblings all guard themselves, so passing --yes here — the habit the
+    rest of the CLI teaches — failed the whole batch instead. That was the lucky
+    outcome: accepted-and-ignored would have destroyed the rows before anyone
+    read them.
+    """
+    artifact_id = _one_artifact(tmp_path, capsys)
+    seen = _spy_confirm(monkeypatch)
+
+    assert cli.main(["artifact", "delete", artifact_id]) == 0
+    assert len(seen) == 1
+    text, kwargs = seen[0]
+    assert f"permanently delete artifact {artifact_id}" in text
+    assert kwargs.get("abort") is True, "a declined prompt must abort, not fall through"
+
+
+def test_delete_yes_skips_the_prompt(wired, capsys, monkeypatch, tmp_path):
+    """--yes is the documented escape hatch on every delete verb, now including this one."""
+    artifact_id = _one_artifact(tmp_path, capsys)
+    seen = _spy_confirm(monkeypatch)
+
+    assert cli.main(["artifact", "delete", artifact_id, "--yes"]) == 0
+    assert seen == []
