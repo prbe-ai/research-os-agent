@@ -63,7 +63,7 @@ regen-mcp-schema:
 # shipping a plugin that teaches the old thing. Adding a skill? Update this list AND
 # _SYNCED in that test.
 sync-plugin-skills:
-	@for s in start-research-work track-research-work; do \
+	@for s in start-research-work track-research-work capture-run-inputs; do \
 	  rm -rf plugins/probe-research/skills/$$s; mkdir -p plugins/probe-research/skills/$$s; \
 	  cp -R skills/$$s/. plugins/probe-research/skills/$$s/; done
 	@echo "synced skills -> plugins/probe-research/skills"
