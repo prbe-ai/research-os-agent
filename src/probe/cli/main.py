@@ -2166,7 +2166,13 @@ def log(
     metric: list[str] = typer.Argument(..., metavar="key=value..."),
     step: int = typer.Option(None, "--step"),
     kind: str = typer.Option("model", "--kind"),
-    dim: list[str] = typer.Option(None, "--dim", metavar="k=v"),
+    dim: list[str] = typer.Option(
+        None,
+        "--dim",
+        metavar="k=v",
+        help="LOW-CARDINALITY grouping axis (split/seed/rank). Never an id — each "
+        "distinct value is its own one-point series, i.e. a tile, not a graph",
+    ),
     agg: Agg = typer.Option(
         None, "--agg", help="declare the key's reduce fn for grouped reads (0062)"
     ),
@@ -2185,6 +2191,19 @@ def log(
     code_ref: str = typer.Option(None, "--code-ref", help="repo path / commit / script"),
 ) -> None:
     """Append metric points. --dim adds series dimensions (fold #9).
+
+    Shape first: a series is (run, kind, key, dims), so every distinct --dim
+    combination is a SEPARATE series, and a one-point series renders as a scalar
+    tile, not a graph. Only --step makes a curve; spreading values across a
+    dimension does not. Budget series ≈ the product of your --dim cardinalities
+    and keep it under ~50. This fails SILENTLY — every call succeeds and the
+    values are right; the only symptom is an unreadable run page — so check with
+    `probe metrics grouped` / the run's series list rather than assuming.
+
+    Per-sample identity (example_id, row id, uuid, filename) has NO door here:
+    the SDK puts it in `labels`, and this command has no --label. Log per-item
+    detail as an artifact (`probe artifact add`) and leave metrics for the
+    handful of numbers a human should see.
 
     --derived marks the batch as computed rather than measured — the door for
     backfilling a metric onto a run that has already finished. It requires

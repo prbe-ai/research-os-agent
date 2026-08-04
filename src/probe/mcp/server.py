@@ -642,6 +642,14 @@ def create_server(
         by: coordinate axes to split on; one cell per combination of values.
         where: coordinate filter, matched type-faithfully ({"rank": 1} matches
             the int 1, never the string "1").
+        step_bucket: width of the step window each cell reduces over. The
+            reduction buckets by STEP FIRST, then by `by`, so points written at
+            auto-incrementing steps (the SDK default when `step=` is omitted)
+            land one per bucket and come back as one group of n=1 each — the
+            grouping looks like it silently did nothing. Pass an explicitly LARGE
+            step_bucket (e.g. 1_000_000) to pool a family logged across many
+            steps, and check `n` on the rows: if every n is 1, you are bucketing
+            by step, not grouping by your axis.
         A `by` axis or `where` key naming no coordinate of this key is an error,
         not an empty result; a key logged under several kinds needs `kind`.
 
