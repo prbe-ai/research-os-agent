@@ -36,13 +36,15 @@ END_MARKER = "<!-- probe-research:end -->"
 
 #: Bumped when POINTER_BODY changes, so an older installed block is recognised
 #: as stale and rewritten instead of being left in place or duplicated.
-POINTER_VERSION = 1
+POINTER_VERSION = 2
 
 POINTER_BODY = """## Probe research tracking
 
 When the work is research -- training, evaluation, sweeps, ablations, data
-curation, benchmarks, or designing any of them -- register the project and
-experiment in Probe BEFORE designing or scaffolding, not after a run exists.
+curation, benchmarks, designing any of them, or building and provisioning the
+pipelines, data and hardware they run on -- register the project in Probe
+BEFORE designing or scaffolding, not after a run exists; add the experiment
+when there is a hypothesis to test.
 Append decisions, findings and reversals to the project's notes as they happen,
 and read them on arrival. A plan-first or approval-gated brief does not defer
 this: registering is not the gated action.
