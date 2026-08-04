@@ -976,6 +976,19 @@ def _run_wizard_action(
         lines = list(outcome.lines)
         if outcome.restart_needed:
             lines += ["", "Restart Claude Code to apply the plugin update."]
+        # The pointer block lives in the researcher's home directory, so no
+        # release can reach it: updating the CLI ships new POINTER_BODY wording
+        # that the installed block never picks up, and this action -- the one an
+        # upgrading machine actually takes -- used to leave it on whatever
+        # version it was first written at. Gated on already-installed-and-stale,
+        # so a machine that declined the block stays declined; `want=True` here
+        # would install one behind the researcher's back.
+        #
+        # A process cannot write wording it does not have, so the refresh lands
+        # on the first invocation AFTER the upgrade, not this one. It converges;
+        # it is not instant.
+        if caps.agent_rules_stale:
+            lines += wizard.apply_agent_rules(True, stale=True)
         lines += _register_local_capabilities(
             doctor_impl.collect(),
             settings=resolve(base_url=base_now),

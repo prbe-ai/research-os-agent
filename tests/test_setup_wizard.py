@@ -1099,6 +1099,74 @@ def test_update_publishes_to_the_explicit_wizard_backend(monkeypatch):
     assert seen[0][1].base_url == "https://self-hosted.test"
 
 
+def _update_action(monkeypatch, caps):
+    """Run the UPDATE action against a stubbed updater, returning (lines, calls).
+
+    `calls` records every apply_agent_rules invocation, so a test can assert the
+    block was left ALONE as easily as it can assert it was rewritten.
+    """
+    import sys
+    from types import SimpleNamespace
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor, setup
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    calls = []
+    monkeypatch.setattr(
+        "probe.cli.upgrading.perform_update",
+        lambda **kwargs: SimpleNamespace(lines=["updated"], restart_needed=False),
+    )
+    monkeypatch.setattr(doctor, "collect", lambda: _caps())
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    monkeypatch.setattr(
+        setup,
+        "apply_agent_rules",
+        lambda want, **kwargs: calls.append((want, kwargs)) or ["refreshed"],
+    )
+
+    lines = cli_main._run_wizard_action(
+        Action.UPDATE,
+        caps=caps,
+        base_now="https://api.test",
+        yes=True,
+        tracking=None,
+        capture=None,
+        auto_update=None,
+        agent_rules=None,
+        uninstall=False,
+        configured=False,
+    )
+    return lines, calls
+
+
+def test_update_refreshes_a_stale_pointer_block(monkeypatch):
+    """The one copy no release can reach.
+
+    POINTER_BODY ships inside the CLI, but the block it wrote lives in the
+    researcher's home directory. Before this, UPDATE upgraded the CLI and left
+    the block on whatever version it was first written at -- so a wording fix
+    reached only machines that happened to re-run the CONFIGURE path.
+    """
+    lines, calls = _update_action(monkeypatch, _caps(agent_rules_stale=True))
+
+    assert calls == [(True, {"stale": True})]
+    assert "refreshed" in lines
+
+
+def test_update_does_not_install_a_pointer_block_that_was_never_wanted(monkeypatch):
+    """Declining the block must survive an upgrade.
+
+    `agent_rules_stale` is `is_installed() and not is_current()`, so a machine
+    that never took the block reads as not-stale. Refreshing on anything looser
+    would write into a researcher's CLAUDE.md they deliberately kept clean.
+    """
+    _, calls = _update_action(monkeypatch, _caps(agent_rules_installed=False))
+
+    assert calls == []
+
+
 def test_uninstall_preserves_token_and_explicit_backend_for_final_snapshot(
     monkeypatch,
 ):
