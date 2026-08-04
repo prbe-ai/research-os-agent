@@ -1125,11 +1125,14 @@ class FakeApp:
 
         m = re.match(r"^/v1/experiments/([^/]+)/artifacts$", path)
         if m and method == "GET":
-            # Mirrors the backend: an artifact belongs to the experiment when its
-            # run does (or when it was filed on the experiment directly).
+            # Mirrors app/artifacts/experiment_router.py: `experiment_id = $1`, and
+            # nothing else. This used to roll up the artifacts of the experiment's
+            # RUNS -- rows the real route has never returned -- while reading the
+            # directly-filed ones from the wrong key, so it missed the only rows that
+            # DO belong here. Both halves inverted: it invented an inheritance the
+            # backend does not implement and hid the anchor the backend does.
             eid = m.group(1)
-            run_ids = {r for r, row in self.runs.items() if row.get("experiment_id") == eid}
-            rows = [a for rid in run_ids for a in self.artifacts.get(rid, [])]
+            rows = list(self.artifacts.get(f"experiment:{eid}", []))
             rows += [a for a in self.artifacts.get(eid, []) if a.get("experiment_id") == eid]
             return httpx.Response(200, json=rows)
 
@@ -1282,6 +1285,12 @@ class FakeApp:
                     "id": aid, "name": body["name"], "uri": body.get("uri"),
                     "is_reference": bool(body.get("is_reference")),
                     "kind": body.get("kind") or "file", "status": "complete",
+                    # `meta` is PERSISTED, like ExperimentArtifactCreate/
+                    # ProjectArtifactCreate declare and apply_artifact stores. The fake
+                    # used to drop it, which is the shape of guard that certifies its
+                    # own rot: a research note IS its `meta`, so a note test would have
+                    # gone green against a fake that threw the note away.
+                    "meta": body.get("meta") or {},
                     f"{anchor}_id": m.group(1),
                 }
                 self.artifacts.setdefault(f"{anchor}:{m.group(1)}", []).append(row)

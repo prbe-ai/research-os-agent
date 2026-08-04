@@ -564,10 +564,10 @@ def create_server(
         `card` (the default) returns `available_views` for that entity, so one
         call tells you what else you can ask for:
 
-          run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events
-          experiment  card | artifacts | lineage | groups | versions
+          run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events | notes
+          experiment  card | artifacts | lineage | groups | versions | notes
           artifact    card | versions
-          project     card
+          project     card | artifacts | notes
           group       card
 
         `ref="artifact:<name>"` with `view="versions"` is the reuse check before you
@@ -587,6 +587,17 @@ def create_server(
         response carries the versions that DO, so this is a real version ceiling,
         not an absent artifact: pin a new version of the SAME artifact rather than
         opening a second identity. Never edit a published version in place.
+
+        `notes` is the DECISION JOURNAL -- intent, hypotheses, decisions,
+        observations, failures, results, deviations, next steps. Read it on a
+        PROJECT to recover the planning that PREDATES every run: why this approach
+        and not the one in the brief. It answers "why", and it is the one view whose
+        absence is invisible from the metrics. Supersession is RESOLVED: a decision a
+        later note reversed is withheld and counted under `superseded` rather than
+        returned beside the decision that replaced it, so the record cannot read as
+        self-contradictory. `filters={"kind": "decision"}` narrows;
+        `filters={"include_superseded": true}` returns the reversed ones, each
+        carrying `superseded_by`.
 
         `trajectory` = the run's actual spans, `reproduce` = hypothesis + resolved
         env_ref, `handoff` = what a new session needs; the other views are what

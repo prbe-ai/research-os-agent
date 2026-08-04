@@ -11,6 +11,7 @@ from itertools import islice
 from typing import Any
 
 from ..sdk import errors
+from ..sdk.events import NOTE_KINDS
 from .contract import (
     BackendCorpus,
     BackendSearchState,
@@ -458,6 +459,11 @@ class _Req:
 
     filters: dict[str, Any]
     offset: int
+    # The entity kind the view was asked for. Only builders shared across kinds need
+    # it -- `_view_notes` serves run, experiment and project, and the entity dict
+    # alone cannot say which one it is without guessing from which id fields happen
+    # to be populated.
+    kind: str = ""
 
 
 @dataclass
@@ -499,12 +505,19 @@ _VIEWS: dict[tuple[str, str], str] = {
     (EntityType.RUN, View.HANDOFF): "_view_handoff",
     (EntityType.RUN, View.LINEAGE): "_view_run_lineage",
     (EntityType.RUN, View.EVENTS): "_view_events",
+    (EntityType.RUN, View.NOTES): "_view_notes",
     (EntityType.EXPERIMENT, View.CARD): "_view_card",
     (EntityType.EXPERIMENT, View.ARTIFACTS): "_view_experiment_artifacts",
     (EntityType.EXPERIMENT, View.LINEAGE): "_view_experiment_lineage",
     (EntityType.EXPERIMENT, View.GROUPS): "_view_groups",
     (EntityType.EXPERIMENT, View.VERSIONS): "_view_versions",
+    (EntityType.EXPERIMENT, View.NOTES): "_view_notes",
     (EntityType.PROJECT, View.CARD): "_view_card",
+    # A project's only view used to be `card`, so a project-anchored artifact was
+    # write-only over MCP -- stored and unreadable, which reads as captured and is
+    # worse than untracked. `notes` is where the planning record comes back.
+    (EntityType.PROJECT, View.ARTIFACTS): "_view_project_artifacts",
+    (EntityType.PROJECT, View.NOTES): "_view_notes",
     (EntityType.GROUP, View.CARD): "_view_card",
     # Artifacts: the reuse-before-create seam, reached by NAME. This is where the
     # retired `asset:<name>` check went -- #143 folded assets into artifacts, and
@@ -535,6 +548,12 @@ _VIEW_FILTERS: dict[tuple[str, str], set[str]] = {
     # takes no filter, so this is an honest client-side narrowing of a fully-read
     # chain rather than a filter the backend silently ignored.
     (EntityType.ARTIFACT, View.VERSIONS): {"requirement"},
+    # Same client-side honesty on all three notes views: the note `kind` lives in the
+    # artifact's `meta`, which no backend route filters on, so the whole anchor is
+    # read and narrowed here. `include_superseded` is not a filter at all -- it widens.
+    (EntityType.RUN, View.NOTES): {"kind", "include_superseded"},
+    (EntityType.EXPERIMENT, View.NOTES): {"kind", "include_superseded"},
+    (EntityType.PROJECT, View.NOTES): {"kind", "include_superseded"},
     # `at` is deliberately absent: the SDK accepted it and never read it, and
     # no backend as-of resolution exists. Advertising a parameter that silently
     # does nothing is worse than not having one.
@@ -1137,6 +1156,7 @@ class ResearchReadService:
         request = _Req(
             filters=self._checked_filters(kind, view, filters),
             offset=_split_get_cursor(cursor, view),
+            kind=kind,
         )
         result: _ViewData = getattr(self, _VIEWS[(kind, view)])(entity, request)
 
@@ -1305,6 +1325,58 @@ class ResearchReadService:
         return _ViewData(
             rows=self.source.experiment_artifacts(str(entity["id"])), rows_key="artifacts"
         )
+
+    def _view_project_artifacts(self, entity: dict, request: _Req) -> _ViewData:
+        return _ViewData(
+            rows=self.source.project_artifacts(str(entity["id"])), rows_key="artifacts"
+        )
+
+    def _view_notes(self, entity: dict, request: _Req) -> _ViewData:
+        """The anchor's research notes, oldest first, supersession RESOLVED.
+
+        One builder for all three anchors: the note encoding does not change with
+        what it hangs off, and a per-kind copy is how the CLI and MCP would come to
+        answer "what was decided?" differently.
+
+        `superseded_by` is the load-bearing field. A reversed decision (DOKS dropped
+        for GKE) is never overwritten, so without resolving the chain both readings
+        come back side by side and the record contradicts itself.
+        """
+        note_kind = request.filters.get("kind")
+        if note_kind is not None and note_kind not in NOTE_KINDS:
+            # Typed here rather than letting the SDK's bare ValueError escape: every
+            # other rejected filter on this seam is a 422 that names what IS accepted,
+            # and an agent that gets an untyped crash for a typo'd kind reads it as
+            # the view being broken rather than the argument being wrong.
+            raise errors.ValidationError(
+                f"unknown note kind {note_kind!r}; accepted: {sorted(NOTE_KINDS)}",
+                status=422,
+            )
+        include = bool(request.filters.get("include_superseded"))
+        # Always read the resolved chain WHOLE, then decide what to show. The count of
+        # what was left out has to be reportable: a default view that silently drops
+        # the reversed decisions looks like the complete record, which is the same
+        # failure as a truncated page emitted without `next_cursor`.
+        rows = self.source.notes(
+            request.kind,
+            str(entity["id"]),
+            kind=request.filters.get("kind"),
+            include_superseded=True,
+        )
+        hidden = sum(1 for r in rows if r.get("superseded_by"))
+        if not include:
+            rows = [r for r in rows if not r.get("superseded_by")]
+        payload: dict = {"filters": request.filters or None}
+        if hidden:
+            payload["superseded"] = {
+                "count": hidden,
+                "shown": include,
+                "note": (
+                    "notes a later note reversed. They carry `superseded_by`; "
+                    "pass filters={\"include_superseded\": true} to read them."
+                ),
+            }
+        return _ViewData(payload=payload, rows=rows, rows_key="notes")
 
     def _hypothesis_of(self, entity: dict, missing: list[str]) -> str | None:
         """A run's hypothesis lives on its experiment. Appends to `missing` rather

@@ -533,6 +533,9 @@ Most earlier gaps are closed by Probe Research v0.4 (PR #13). Now wired:
   surfaced on reads (`run.foreign_keys`, `run.short_id`).
 - **Events read.** `client.events.list()` / `for_run()` (server-emitted lifecycle log).
   Research notes moved to `client.notes.add()` (stored as `kind="note"` artifacts).
+  They anchor to a run, an experiment or a PROJECT — the project anchor is what lets
+  a decision be recorded before any run exists. `client.notes.list()` /
+  `probe note list` read them back with `supersedes` resolved.
 
 ### Remaining
 

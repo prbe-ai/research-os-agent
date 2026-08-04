@@ -744,8 +744,9 @@ def test_browse_annotates_nodes_with_ref_and_available_views(app, client):
     [node] = envelope["data"]["projects"]
     assert node["ref"] == "project:11111111-1111-1111-1111-111111111111"
     assert node["entity_type"] == "project"
-    # Derived, never hand-written: a project has exactly one view today.
-    assert node["available_views"] == ["card"]
+    # Derived, never hand-written. A project used to advertise `card` alone, which
+    # made project-anchored artifacts write-only over MCP -- stored and unreadable.
+    assert node["available_views"] == ["artifacts", "card", "notes"]
     assert envelope["completeness"]["state"] == "complete"
     # Unexpanded levels stay None -- distinct from [] (expanded, empty).
     assert envelope["data"]["experiments"] is None

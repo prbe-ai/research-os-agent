@@ -2267,6 +2267,14 @@ class Client:
     def list_experiment_artifacts(self, experiment_id: str) -> list[dict]:
         return self.transport.get(f"/v1/experiments/{experiment_id}/artifacts")
 
+    def list_project_artifacts(self, project_id: str) -> list[dict]:
+        """Project-wide shared data (fold #22) — the sibling of the experiment read.
+
+        Written as its own literal call site rather than routed through
+        :meth:`list_anchored`, for the same reason every anchored route above is:
+        the contract-parity guard resolves paths from the AST."""
+        return self.transport.get(f"/v1/projects/{project_id}/artifacts")
+
     def query_series(self, run_ids: list[str], **kw) -> dict:
         return self.transport.post(
             "/v1/series/query", {"run_ids": run_ids, **kw}, idempotent=True

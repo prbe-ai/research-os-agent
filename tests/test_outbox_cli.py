@@ -304,10 +304,17 @@ def test_async_note_add_queues_and_validates_first(wired_async, outbox_dir, caps
         "--statement", "use the journal",
     ])
     assert rc == 0
-    assert "queued note" in capsys.readouterr().out
-    assert len(wired_async.requests) == before
+    out = capsys.readouterr()
+    assert "queued note" in out.err
+    # The note_id is EMITTED even though the async write returns nothing. Without it
+    # there is no id to hand a later `--supersedes`, so reversing a decision -- the
+    # one workflow supersession exists for -- would be closed to every async caller.
+    queued = json.loads(out.out)
+    assert queued["queued"] is True
+    assert len(wired_async.requests) == before, "resolving the anchor must not hit the network"
     (_, op), = Journal(outbox_dir).pending()
     assert op["body"]["kind"] == "note" and op["run_ref"] == run_id
+    assert op["body"]["meta"]["note_id"] == queued["note_id"]
     assert cli_drain(wired_async, outbox_dir).clean
     # Client-side validation still fails FAST, before anything is queued
     # (ValueError propagates exactly as in the sync path).

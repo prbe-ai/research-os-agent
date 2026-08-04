@@ -177,6 +177,132 @@ def test_artifact_add_forwards_span_content_type_and_meta(wired, capsys, tmp_pat
     assert body["meta"] == {"format": "native", "attempt": 2}
 
 
+def test_note_add_with_no_run_lands_on_the_active_project(wired, capsys):
+    """The command from the bug report. `probe note add --kind decision` used to be
+    `Error: Missing argument 'run'`, which is why a session that produced six
+    findings and reversed its own architecture recorded nothing: planning happens
+    before the first run, and a note that required one had nowhere to go."""
+    cli.main(["project", "use", "p"])
+    capsys.readouterr()
+
+    assert cli.main(
+        [
+            "note", "add",
+            "--kind", "decision",
+            "--statement", "GKE, not DOKS",
+            "--evidence", "docs/findings.md#5",
+        ]
+    ) == 0
+    # The resolved anchor is announced, on stderr so it cannot corrupt the JSON on
+    # stdout. An ambient anchor is invisible otherwise, and a note filed against the
+    # wrong active project reads exactly like a correct one.
+    assert "note recorded on project p (active)" in capsys.readouterr().err
+
+    assert cli.main(["note", "list"]) == 0
+    [note] = json.loads(capsys.readouterr().out)
+    assert note["kind"] == "decision"
+    assert note["statement"] == "GKE, not DOKS"
+    assert note["evidence_refs"] == ["docs/findings.md#5"]
+
+
+def test_note_add_still_takes_a_run_positionally(wired, capsys):
+    """The pre-anchor form is what every existing script and the skills table use;
+    the RUN argument only became optional, never moved."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+
+    assert cli.main(
+        ["note", "add", run_id, "--kind", "observation", "--statement", "loss diverged"]
+    ) == 0
+    capsys.readouterr()
+
+    assert cli.main(["note", "list", run_id]) == 0
+    [note] = json.loads(capsys.readouterr().out)
+    assert note["statement"] == "loss diverged"
+
+
+def test_note_list_says_what_it_withheld(wired, capsys):
+    """A two-note project whose only decision was reversed printed `[]` — which reads
+    as "nothing was ever decided here", the exact confident-absence this command
+    exists to stop. The MCP view reported the count; the CLI said nothing."""
+    cli.main(["project", "use", "p"])
+    cli.main(["note", "add", "--kind", "decision", "--statement", "DOKS"])
+    capsys.readouterr()
+    cli.main(["note", "list"])
+    [doks] = json.loads(capsys.readouterr().out)
+    cli.main(
+        ["note", "add", "--kind", "decision", "--statement", "GKE",
+         "--supersedes", doks["note_id"]]
+    )
+    capsys.readouterr()
+
+    assert cli.main(["note", "list"]) == 0
+    out = capsys.readouterr()
+    assert [n["statement"] for n in json.loads(out.out)] == ["GKE"]
+    assert "1 superseded note withheld" in out.err
+
+    # Nothing withheld, nothing said — neither when the chain is shown...
+    assert cli.main(["note", "list", "--include-superseded"]) == 0
+    assert "withheld" not in capsys.readouterr().err
+    # ...nor when the kind filter excludes the superseded note entirely. Counting it
+    # there would report a withholding that did not happen for this question.
+    assert cli.main(["note", "list", "--kind", "observation"]) == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out) == []
+    assert "withheld" not in out.err
+
+
+def test_note_add_without_a_run_or_an_active_project_says_what_to_do(wired, capsys):
+    assert cli.main(["note", "add", "--kind", "intent", "--statement", "s"]) != 0
+    assert "probe project use" in capsys.readouterr().err
+
+
+def test_a_uuid_anchor_is_checked_before_the_write(wired, capsys):
+    """A UUID used to pass straight through. A run id handed to --project addressed
+    /v1/projects/<run-uuid>/artifacts, the fail-open write journaled it, and the
+    command still printed "note recorded" and exited 0 — the note gone and the
+    session believing it was filed. That is the exact failure this command exists
+    to stop, reproduced by the command itself."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+
+    rc = cli.main(
+        ["note", "add", "--project", run_id, "--kind", "decision", "--statement", "s"]
+    )
+    assert rc != 0
+
+    # And nothing was written to the wrong anchor on the way to failing.
+    assert not any(
+        r.url.path == f"/v1/projects/{run_id}/artifacts" for r in wired.requests
+    )
+
+
+def test_note_list_hides_a_superseded_decision_unless_asked(wired, capsys):
+    cli.main(["project", "use", "p"])
+    cli.main(["note", "add", "--kind", "decision", "--statement", "DOKS"])
+    capsys.readouterr()
+    assert cli.main(["note", "list"]) == 0
+    [doks] = json.loads(capsys.readouterr().out)
+
+    cli.main(
+        [
+            "note", "add",
+            "--kind", "decision",
+            "--statement", "GKE",
+            "--supersedes", doks["note_id"],
+        ]
+    )
+    capsys.readouterr()
+
+    assert cli.main(["note", "list"]) == 0
+    assert [n["statement"] for n in json.loads(capsys.readouterr().out)] == ["GKE"]
+
+    assert cli.main(["note", "list", "--include-superseded"]) == 0
+    both = json.loads(capsys.readouterr().out)
+    assert [n["statement"] for n in both] == ["DOKS", "GKE"]
+    assert both[0]["superseded_by"] == both[1]["note_id"]
+
+
 def test_global_spool_dir_reaches_the_sdk(app, tmp_path, monkeypatch, capsys):
     captured = {}
 
@@ -289,7 +415,7 @@ def test_help_offers_upload_and_no_stale_hook_adapter(capsys):
     rc = cli.main(["--help"])
     assert rc == 0
     output = capsys.readouterr().out
-    assert "upload structured research knowledge" in output
+    assert "structured research knowledge" in output
     assert "internal coding-agent adapter commands" not in output
     # Invoking it must fail outright, not just be undocumented. Asserted by
     # exit code rather than by scanning help text for "hook": rich wraps the

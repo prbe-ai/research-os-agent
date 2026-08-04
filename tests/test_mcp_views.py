@@ -422,6 +422,95 @@ def test_a_run_with_no_parent_ids_at_all_still_says_the_experiment_is_missing(cl
     assert "experiment" in result["completeness"]["missing"]
 
 
+def test_a_projects_notes_view_is_the_planning_record(client, app):
+    """A project used to advertise `card` alone, so the knowledge produced before
+    the first run had nowhere to be READ from even once it had somewhere to be
+    written. This is the view that answers "why this and not the brief"."""
+    project = client.create_project("shakedown")
+    client.notes.add(
+        project["id"],
+        "observation",
+        "Harbor has no generic-Kubernetes backend",
+        anchor="project",
+        evidence_refs=["docs/findings.md#5"],
+    )
+    doks = client.notes.add(
+        project["id"], "decision", "DOKS for the data plane", anchor="project"
+    )
+    client.notes.add(
+        project["id"],
+        "decision",
+        "GKE — the GPU decision makes it native",
+        anchor="project",
+        supersedes=doks["meta"]["note_id"],
+    )
+
+    result = _service(client).get_entity(f"project:{project['id']}", view="notes")
+
+    assert [n["statement"] for n in result["data"]["notes"]] == [
+        "Harbor has no generic-Kubernetes backend",
+        "GKE — the GPU decision makes it native",
+    ]
+    # Withheld, but never SILENTLY: a default view that drops the reversed decisions
+    # and says nothing looks like the complete record.
+    assert result["data"]["superseded"]["count"] == 1
+    assert result["data"]["superseded"]["shown"] is False
+    assert result["completeness"]["state"] == "complete"
+
+
+def test_the_notes_view_narrows_by_kind_and_can_show_the_reversed_ones(client, app):
+    project = client.create_project("filters")
+    first = client.notes.add(project["id"], "decision", "a", anchor="project")
+    client.notes.add(project["id"], "observation", "b", anchor="project")
+    client.notes.add(
+        project["id"], "decision", "c", anchor="project",
+        supersedes=first["meta"]["note_id"],
+    )
+    service = _service(client)
+
+    narrowed = service.get_entity(
+        f"project:{project['id']}", view="notes", filters={"kind": "decision"}
+    )
+    assert [n["statement"] for n in narrowed["data"]["notes"]] == ["c"]
+
+    widened = service.get_entity(
+        f"project:{project['id']}", view="notes",
+        filters={"kind": "decision", "include_superseded": True},
+    )
+    statements = [n["statement"] for n in widened["data"]["notes"]]
+    assert statements == ["a", "c"]
+    assert widened["data"]["notes"][0]["superseded_by"]
+    assert widened["data"]["superseded"]["shown"] is True
+
+    with pytest.raises(errors.ValidationError):
+        service.get_entity(
+            f"project:{project['id']}", view="notes", filters={"step_from": 1}
+        )
+
+    # A typo'd kind is a 422 that names what IS accepted, not the SDK's bare
+    # ValueError escaping the tool layer — an agent reads an untyped crash as the
+    # view being broken rather than its own argument being wrong.
+    with pytest.raises(errors.ValidationError, match="unknown note kind"):
+        service.get_entity(
+            f"project:{project['id']}", view="notes", filters={"kind": "desicion"}
+        )
+
+
+def test_notes_read_the_same_on_a_run_as_on_a_project(client, app):
+    """One builder for all three anchors. A per-kind copy is how the CLI and MCP
+    would come to answer "what was decided?" differently."""
+    rid, experiment_id, _, _ = _populated(client, app)
+    client.notes.add(rid, "next_step", "rerun with seed 7")
+    client.notes.add(experiment_id, "intent", "sweep the kl coefficient", anchor="experiment")
+
+    service = _service(client)
+    run_notes = service.get_entity(f"run:{rid}", view="notes")["data"]["notes"]
+    exp_notes = service.get_entity(f"experiment:{experiment_id}", view="notes")["data"]["notes"]
+
+    assert [n["statement"] for n in run_notes] == ["rerun with seed 7"]
+    assert [n["statement"] for n in exp_notes] == ["sweep the kl coefficient"]
+
+
 def test_an_empty_filter_value_is_dropped_not_echoed_as_applied(client, app):
     """`{"key": ""}` is falsy, so it fell through to the series path while echoing
     filters={"key": ""} back — a filter reported as applied that nothing honored."""
