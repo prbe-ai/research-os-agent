@@ -106,6 +106,11 @@ _WS_OTHER = "22222222-2222-2222-2222-222222222222"
 _T0 = "2026-01-01T00:00:00Z"
 
 
+def _newest_first(rows: list[dict]) -> list[dict]:
+    """`order_by="created_at DESC"`, as app/artifacts/{project,experiment}_router.py do."""
+    return sorted(rows, key=lambda r: r.get("created_at") or "", reverse=True)
+
+
 class FakeApp:
     # Set False to model a backend PREDATING server-side project scope: it
     # accepts the unknown `project_id` body field, ignores it, and answers
@@ -187,6 +192,7 @@ class FakeApp:
             "content_type": body.get("content_type"),
             "status": "complete" if have else "pending",
             "is_reference": False,
+            "created_at": self._stamp(),
             f"{anchor}_id": anchor_id,
         }
         self.artifacts.setdefault(f"{anchor}:{anchor_id}", []).append(row)
@@ -257,6 +263,11 @@ class FakeApp:
         # one confirm handler can find a row whatever it hangs off, exactly like the
         # server's single confirm core.
         self.artifacts: dict[str, list[dict]] = {}
+        # Artifact rows are STAMPED and the anchored listings come back newest
+        # first, like the real routers (`order_by="created_at DESC"`). The fake
+        # used to omit created_at entirely and answer in insertion order -- the
+        # exact opposite -- so 'which row is current?' was backwards here and
+        # right in production.
         # Re-index fan-outs triggered by a project move, so a test can assert the
         # descendant reprojection actually fired.
         self.reindexed: list[str] = []
@@ -335,6 +346,11 @@ class FakeApp:
         self.requests.append(request)
         method = request.method
         path = request.url.path
+        # Per-path fault injection. Set `app.fail_paths = {"/v1/..."}` to make ONE
+        # route 500 while the rest of the fake stays healthy -- the shape you need to
+        # test that a degraded dependency is REPORTED rather than propagated.
+        if path in getattr(self, "fail_paths", ()):
+            return httpx.Response(500, json={"detail": "injected failure"})
         try:
             body = json.loads(request.content) if request.content else {}
         except (json.JSONDecodeError, ValueError):
@@ -1134,7 +1150,7 @@ class FakeApp:
             eid = m.group(1)
             rows = list(self.artifacts.get(f"experiment:{eid}", []))
             rows += [a for a in self.artifacts.get(eid, []) if a.get("experiment_id") == eid]
-            return httpx.Response(200, json=rows)
+            return httpx.Response(200, json=_newest_first(rows))
 
         m = re.match(r"^/v1/experiments/([^/]+)/edges$", path)
         if m and method == "GET":
@@ -1291,14 +1307,15 @@ class FakeApp:
                     # own rot: a research note IS its `meta`, so a note test would have
                     # gone green against a fake that threw the note away.
                     "meta": body.get("meta") or {},
+                    "created_at": self._stamp(),
                     f"{anchor}_id": m.group(1),
                 }
                 self.artifacts.setdefault(f"{anchor}:{m.group(1)}", []).append(row)
                 return httpx.Response(201, json=row)
             if m and method == "GET":
-                return httpx.Response(
-                    200, json=self.artifacts.get(f"{anchor}:{m.group(1)}", [])
-                )
+                return httpx.Response(200, json=_newest_first(
+                    self.artifacts.get(f"{anchor}:{m.group(1)}", [])
+                ))
 
         m = _WS_FILES.match(path)
         if m and method == "GET":

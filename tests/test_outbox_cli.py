@@ -296,36 +296,6 @@ def test_async_span_add_queues_and_prints_id(wired_async, outbox_dir, capsys):
     assert cli_drain(wired_async, outbox_dir).clean
 
 
-def test_async_note_add_queues_and_validates_first(wired_async, outbox_dir, capsys):
-    run_id = start_run(wired_async)
-    before = len(wired_async.requests)
-    rc = cli.main([
-        "--async", "note", "add", run_id, "--kind", "decision",
-        "--statement", "use the journal",
-    ])
-    assert rc == 0
-    out = capsys.readouterr()
-    assert "queued note" in out.err
-    # The note_id is EMITTED even though the async write returns nothing. Without it
-    # there is no id to hand a later `--supersedes`, so reversing a decision -- the
-    # one workflow supersession exists for -- would be closed to every async caller.
-    queued = json.loads(out.out)
-    assert queued["queued"] is True
-    assert len(wired_async.requests) == before, "resolving the anchor must not hit the network"
-    (_, op), = Journal(outbox_dir).pending()
-    assert op["body"]["kind"] == "note" and op["run_ref"] == run_id
-    assert op["body"]["meta"]["note_id"] == queued["note_id"]
-    assert cli_drain(wired_async, outbox_dir).clean
-    # Client-side validation still fails FAST, before anything is queued
-    # (ValueError propagates exactly as in the sync path).
-    with pytest.raises(ValueError, match="statement"):
-        cli.main([
-            "--async", "note", "add", run_id, "--kind", "decision",
-            "--statement", "  ",
-        ])
-    assert Journal(outbox_dir).pending() == []
-
-
 def test_async_big_file_defers_hash_and_ping(wired_async, outbox_dir, tmp_path, monkeypatch, capsys):
     run_id = start_run(wired_async)
     monkeypatch.setattr("probe.sdk.journal.INLINE_HASH_MAX_BYTES", 8)

@@ -33,7 +33,7 @@ therefore have capability parity; they differ only in ergonomics.
 
 | Surface | SDK | CLI | Intended caller |
 |---|---|---|---|
-| Experiment upload | `Client.run`, `Run.log/span/log_artifact/snapshot/link/execute`, `Client.events`, `Client.promote` | `run`, `log`, `span`, `artifact`, `snapshot`, `link`, `exec`, `event`, `promote` | Researchers, agents, notebooks, training/platform code |
+| Experiment upload | `Client.run`, `Run.log/span/log_artifact/snapshot/link/execute`, `Client.events`, `Client.promote` | `run`, `log`, `span`, `artifact`, `snapshot`, `link`, `exec`, `notes`, `promote` | Researchers, agents, notebooks, training/platform code |
 | Ambient upload | `probe.init/log/log_hw/log_artifact/span/finish`, `probe.active_run` | n/a (a CLI call has no ambient run) | Training scripts, and library code with no handle to pass |
 | Session adapter | `Client.sessions.attach/checkpoint/detach` | `probe hook session ...` | **Future deterministic hooks/broker only** |
 | Artifact reuse check | `Client.list_anchored(Anchor.SHARED, prefix=…)` + `list_artifact_versions`, normally behind MCP | `probe artifact versions` | Agent through read-only MCP |
@@ -42,8 +42,7 @@ therefore have capability parity; they differ only in ergonomics.
 
 Session commands do not upload metrics or experiment outputs. They correlate a
 coding-agent session with a run and checkpoint redacted transcript metadata.
-Conversely, `event add` is normal experiment knowledge upload even when a hook
-eventually calls it. No hooks are installed in this release.
+No hooks are installed in this release.
 
 ## Install
 
@@ -320,7 +319,8 @@ probe link $RUN --set wandb_run_id=abc --set gpu_job=rp-9931
 probe log $RUN loss=0.42 dockq=0.71 --step 42
 probe span add $RUN --type rollout --name rollout-0 --step 1
 probe artifact add $RUN ./final.sif --kind artifact
-probe event add $RUN --kind decision --statement "Use DockQ scorer v3" --evidence tool:91
+probe notes show                      # the project's NOTES.md
+probe notes write --append ./note.md  # free-text markdown, one file per project
 probe exec $RUN -- python train.py --config dockq.yaml
 probe run check $RUN
 probe run end $RUN --status completed
@@ -487,7 +487,7 @@ never creates. Creation on the CLI is always `probe project create` /
   what is already running, create the project and experiment explicitly, resolve
   artifacts before creating them, and snapshot code + env before launch.
 - `track-research-work` covers everything after the run exists: metrics, spans,
-  artifacts, notes, version pinning, reading back what actually landed, and closing
+  artifacts, version pinning, reading back what actually landed, and closing
   with the real lifecycle outcome. Its `reference.md` holds the artifact
   command syntax, the publication sequence, and project admin.
 
@@ -532,10 +532,6 @@ Most earlier gaps are closed by Probe Research v0.4 (PR #13). Now wired:
 - **foreign_keys.** first-class on the ingest path (`run['foreign_keys']`, fold #8) and
   surfaced on reads (`run.foreign_keys`, `run.short_id`).
 - **Events read.** `client.events.list()` / `for_run()` (server-emitted lifecycle log).
-  Research notes moved to `client.notes.add()` (stored as `kind="note"` artifacts).
-  They anchor to a run, an experiment or a PROJECT — the project anchor is what lets
-  a decision be recorded before any run exists. `client.notes.list()` /
-  `probe note list` read them back with `supersedes` resolved.
 
 ### Remaining
 
