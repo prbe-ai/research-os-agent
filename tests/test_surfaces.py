@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import sys
+
+import pytest
+
+from probe.sdk.client import Anchor
 from tests.conftest import open_run
 
 
@@ -21,6 +25,88 @@ def test_research_note_is_normal_experiment_upload(client, app):
     note = app.artifacts[run.id][0]["meta"]
     assert note["kind"] == "decision"
     assert note["evidence_refs"] == ["tool:91"]
+
+
+def test_a_note_lands_on_a_project_before_any_run_exists(client, app):
+    """The gap this closes: planning, investigation and architecture decisions all
+    happen BEFORE the first run, and a note that required one had nowhere to go.
+
+    Asserted through the round trip, not the request: the note IS its `meta`, so a
+    write that reached the right route with the payload dropped would look identical
+    from the call site.
+    """
+    project = client.create_project("planning")
+
+    result = client.notes.add(
+        project["id"],
+        "decision",
+        "GKE, not DOKS",
+        anchor=Anchor.PROJECT,
+        evidence_refs=["docs/findings.md#5"],
+    )
+
+    assert result["kind"] == "note"
+    assert result["project_id"] == project["id"]
+    [note] = client.notes.list(project["id"], anchor=Anchor.PROJECT)
+    assert note["statement"] == "GKE, not DOKS"
+    assert note["evidence_refs"] == ["docs/findings.md#5"]
+    assert note["authority"] == "agent_summarized"
+
+
+def test_a_note_refuses_a_file_anchor_by_name(client):
+    """Workspace and Shared carry no `meta`, so the note would arrive stripped. The
+    server cannot say that usefully -- it sees a field it does not declare -- so the
+    refusal names the anchor and lists the ones that work."""
+    with pytest.raises(ValueError, match="file anchor"):
+        client.notes.add("x", "decision", "s", anchor=Anchor.WORKSPACE)
+    with pytest.raises(ValueError, match="unknown anchor"):
+        client.notes.add("x", "decision", "s", anchor="sideways")
+
+
+def test_a_superseded_decision_reads_as_superseded_not_as_a_contradiction(client):
+    """`--supersedes` was stored and read by NOTHING, so a reversed decision came
+    back beside the one that replaced it and the record contradicted itself."""
+    project = client.create_project("reversal")
+    first = client.notes.add(
+        project["id"], "decision", "DOKS for the data plane", anchor=Anchor.PROJECT
+    )
+    client.notes.add(
+        project["id"],
+        "decision",
+        "GKE — Harbor has no generic-K8s backend",
+        anchor=Anchor.PROJECT,
+        supersedes=first["meta"]["note_id"],
+    )
+
+    [current] = client.notes.list(project["id"], anchor=Anchor.PROJECT)
+    assert current["statement"].startswith("GKE")
+    assert "superseded_by" not in current
+
+    both = client.notes.list(
+        project["id"], anchor=Anchor.PROJECT, include_superseded=True
+    )
+    assert [n["statement"] for n in both] == [
+        "DOKS for the data plane",
+        "GKE — Harbor has no generic-K8s backend",
+    ]
+    assert both[0]["superseded_by"] == both[1]["note_id"]
+
+
+def test_note_list_skips_artifacts_that_are_not_notes(client, app):
+    """A `kind="note"` artifact without the note encoding is somebody else's row.
+    Skipping it is the point: inventing a `statement` for it would put a fabricated
+    claim in a decision journal."""
+    project = client.create_project("mixed")
+    client.notes.add(project["id"], "observation", "real", anchor=Anchor.PROJECT)
+    app.artifacts[f"project:{project['id']}"].append(
+        {"id": "x", "name": "stray", "kind": "note", "meta": {"free": "form"}}
+    )
+    app.artifacts[f"project:{project['id']}"].append(
+        {"id": "y", "name": "ckpt", "kind": "file", "meta": {}}
+    )
+
+    notes = client.notes.list(project["id"], anchor=Anchor.PROJECT)
+    assert [n["statement"] for n in notes] == ["real"]
 
 
 def test_events_read_surface_is_read_only(client, app):
