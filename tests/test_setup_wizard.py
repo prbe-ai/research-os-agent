@@ -2375,3 +2375,95 @@ def test_every_failure_message_the_wizard_emits_is_classified_as_one():
         if not rendered.startswith(("could not", "!")):
             continue  # a success message; nothing to assert
         assert wizard.reports_failure(rendered), f"unclassified failure: {template}"
+
+
+def test_the_marketplace_is_refreshed_before_the_first_install(monkeypatch):
+    """Caught by adversarial review of the hoist itself.
+
+    Hoisting the refresh OUT of install_plugin is only half the change: the
+    caller has to actually do it. Without that, the first attempt installs from
+    whatever stale copy is on disk -- the exact failure the original code's
+    comment warned about ("a fresh wizard run happily installs a stale plugin
+    version ... how a newly published plugin appears to be missing") -- and on a
+    machine that never added the marketplace at all, attempt one ALWAYS fails
+    and only the retry repairs it.
+    """
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    order: list[str] = []
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: order.append("refresh"))
+    monkeypatch.setattr(
+        wizard, "install_plugin", lambda name, **kw: order.append(f"install:{name}")
+    )
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda *a, **k: _caps(tracking_plugin_installed=True, plugins_verified=True),
+    )
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=_caps(),  # nothing installed -> a real install is needed
+        base_now="https://api.test",
+        yes=True,
+        tracking=True,
+        capture=False,
+        auto_update=None,
+        agent_rules=False,
+        uninstall=False,
+        configured=True,
+    )
+
+    assert "refresh" in order, "the marketplace must be refreshed before installing"
+    assert order.index("refresh") < order.index("install:probe-research")
+
+
+def test_no_install_means_no_marketplace_refresh(monkeypatch):
+    """The refresh is two `claude` subprocesses. A run that installs nothing --
+    the common re-run -- must not pay for them."""
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    refreshed: list[int] = []
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: refreshed.append(1))
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+
+    already = _caps(
+        tracking_plugin_installed=True, logged_in_as="x@y.z", plugins_verified=True
+    )
+    monkeypatch.setattr(doctor_impl, "collect", lambda *a, **k: already)
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=already,
+        base_now="https://api.test",
+        yes=True,
+        tracking=True,
+        capture=False,
+        auto_update=True,
+        agent_rules=False,
+        uninstall=False,
+        configured=True,
+    )
+
+    assert refreshed == [], "a run with nothing to install must not refresh"

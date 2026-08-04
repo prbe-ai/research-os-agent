@@ -1161,6 +1161,33 @@ def _run_wizard_action(
                 ),
             )
         )
+    # The refresh is hoisted out of install_plugin (it used to run per plugin,
+    # discarding both results), so the CALLER owns it now -- and owning it means
+    # actually doing it. Without this the first attempt installs from whatever
+    # stale copy is on disk, which is the failure the original comment warned
+    # about, and a machine that never added the marketplace fails attempt one
+    # every time and is only repaired by the retry.
+    #
+    # Prepended, not appended: it has to happen BEFORE any install. And only
+    # when something is actually being installed -- it is two `claude`
+    # subprocesses, and the common re-run installs nothing.
+    def _refresh() -> list[str]:
+        """Adapts refresh_marketplace's Result to the message list a step returns.
+
+        A failed refresh is REPORTED, not swallowed -- discarding it is what
+        made the original bug present as Claude's downstream "not found in
+        marketplace". It does not abort the run: the install can still succeed
+        from the copy already on disk, and if it does not, the retry gets
+        another go at the refresh.
+        """
+        result = wizard.refresh_marketplace()
+        if result is not None and not getattr(result, "ok", True):
+            return [f"! could not refresh the marketplace: {result.detail}"]
+        return []
+
+    if any("install" in label for label, action in work if action is not None):
+        work.insert(0, ("refresh the plugin marketplace", _refresh))
+
     # The browser approval is REAL WORK and the longest wait in the run -- it
     # blocks on a human in a browser. Leaving it off the list is what made a
     # sign-in-only run sit at 0/2 with nothing moving.
