@@ -3811,7 +3811,7 @@ def bundle(run: str = typer.Argument(...)) -> None:
 # (intent/decision/observation/...), supersession and authority field were never
 # validated or grouped by anything server-side -- eight kinds bought one list filter.
 # Prose is what people write; a fixed filename is the only thing that needed inventing.
-notes_app = typer.Typer(no_args_is_help=True, help="the project's NOTES.md")
+notes_app = typer.Typer(no_args_is_help=True, help="the project's notes (free-text markdown)")
 app.add_typer(notes_app, name="notes")
 
 
@@ -3829,12 +3829,12 @@ def _notes_project(client: Client, project: str | None) -> tuple[str, str]:
 def notes_show(
     project: str = typer.Option(None, "--project", help="project id or slug"),
 ) -> None:
-    """Print the project's NOTES.md. Empty output means it was never written."""
+    """Print the project's notes. Empty output means none were ever written."""
     with _client() as c:
         project_id, label = _notes_project(c, project)
         text = c.get_project_notes(project_id)
     if text is None:
-        print(f"{label} has no NOTES.md yet", file=sys.stderr)
+        print(f"{label} has no notes yet", file=sys.stderr)
         return
     sys.stdout.write(text if text.endswith("\n") else text + "\n")
 
@@ -3849,7 +3849,7 @@ def notes_write(
         help="append to the current text instead of replacing it",
     ),
 ) -> None:
-    """Write the project's NOTES.md.
+    """Write the project's notes.
 
     Replaces by default. `--append` reads the current text first and adds to it,
     which is what you want when two agents are working the same project -- a plain
@@ -3862,9 +3862,12 @@ def notes_write(
             current = c.get_project_notes(project_id)
             if current:
                 text = current.rstrip("\n") + "\n\n" + text.lstrip("\n")
-        result = c.set_project_notes(project_id, text)
-    print(f"wrote NOTES.md on project {label}", file=sys.stderr)
-    _print_json(result)
+        stored = c.set_project_notes(project_id, text)
+    print(f"wrote notes on project {label}", file=sys.stderr)
+    # The stored length, not the document. Echoing the whole thing back on stdout
+    # made `notes write` unpipeable and buried the one fact a caller wants, which is
+    # that the server holds what was sent -- `notes show` is how you read it.
+    _print_json({"project": label, "chars": len(stored)})
 
 
 @app.command()

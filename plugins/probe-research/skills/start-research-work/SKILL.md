@@ -21,8 +21,7 @@ near-miss of an existing slug rather than warning.)
    Check what is already RUNNING before you launch anything — `browse_research`
    reports `active_run_count`, and duplicate GPU-hours are the expensive mistake.
 
-   Read the project's `NOTES.md` — `probe notes show`, or the `notes` on its MCP
-   `card`. It is free-text markdown the last session left for you: what was tried,
+   Read the project's notes — `probe notes show`, or the `notes` on its MCP `card`. It is free-text markdown the last session left for you: what was tried,
    what was ruled out, what not to repeat. Add to it as you learn things
    (`probe notes write --append`); see `track-research-work`.
 
@@ -50,18 +49,18 @@ near-miss of an existing slug rather than warning.)
    never rewrites it; `probe experiment set EXP --hypothesis "..."` amends it.
 
    **Do this first.** Tracking named in a brief is a standing requirement, not a phase
-   after setup. `NOTES.md` anchors to a project, so until one exists there is nowhere
+   after setup. The notes hang off a project, so until one exists there is nowhere
    to write what setup itself decides. `run_count: 0` is the correct state for a
    project whose first run has not started, not a reason to defer creating it.
 
    This skill is RE-ENTERED, not run once. "Start" names the first call, not the only
-   one: append to `NOTES.md` when you choose an approach or reject one, when the USER
+   one: append to the notes when you choose an approach or reject one, when the USER
    overrides you — the highest-value entry and the one nobody thinks to write — when a
    tool or dataset behaves differently than documented, and before context is compacted
    or the session ends, which is the last moment the reasoning still exists.
 
    Session capture does not cover this. The transcript tap ships the raw conversation;
-   `NOTES.md` is the skimmable version someone can read without replaying a session.
+   the notes are the skimmable version someone can read without replaying a session.
 
 3. **Reuse the active run** when its intent matches. Otherwise open one, with the
    surface that fits where the code will execute.

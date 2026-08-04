@@ -588,7 +588,7 @@ def create_server(
         not an absent artifact: pin a new version of the SAME artifact rather than
         opening a second identity. Never edit a published version in place.
 
-        `notes` is the project's NOTES.md -- one markdown file per project that
+        `notes` is the project's notes -- one free-text markdown document per project that
         agents read and write. Free text, no schema: it is where the things a new
         session should know about this project live (why this approach, what was
         already tried, what not to repeat). An excerpt rides along on the project

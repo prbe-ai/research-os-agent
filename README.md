@@ -319,7 +319,7 @@ probe link $RUN --set wandb_run_id=abc --set gpu_job=rp-9931
 probe log $RUN loss=0.42 dockq=0.71 --step 42
 probe span add $RUN --type rollout --name rollout-0 --step 1
 probe artifact add $RUN ./final.sif --kind artifact
-probe notes show                      # the project's NOTES.md
+probe notes show                      # the project's notes
 probe notes write --append ./note.md  # free-text markdown, one file per project
 probe exec $RUN -- python train.py --config dockq.yaml
 probe run check $RUN
@@ -485,12 +485,12 @@ never creates. Creation on the CLI is always `probe project create` /
 
 - `start-research-work` covers that call: orient against what already exists and
   what is already running, create the project and experiment explicitly — first,
-  before the scaffold, since `NOTES.md` anchors to a project and has nowhere to go
+  before the scaffold, since the notes hang off a project and have nowhere to go
   until one exists — resolve artifacts before creating them, and snapshot code + env
   before launch. It is re-entered through the session rather than run once.
 - `track-research-work` covers what a run produces: metrics, spans, artifacts,
   version pinning, reading back what actually landed, and closing with the real
-  lifecycle outcome. The project's `NOTES.md` is the exception to the run
+  lifecycle outcome. The project's notes are the exception to the run
   requirement — free-text prose that needs no run. Its `reference.md` holds the artifact
   command syntax, the publication sequence, and project admin.
 

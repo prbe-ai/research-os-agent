@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Changed
+
+- **The project's notes moved from an artifact to a column** (research-os 0094,
+  backend 0.102.0.0). `probe notes show` / `write` are unchanged; what changed is
+  underneath, and it fixes what the artifact version got wrong:
+
+  - **Editing replaces instead of accumulating.** Artifact identity is
+    `anchor+name+content_hash`, so every edit appended a *new* row — a project's
+    artifact list filled with copies of one file. A column is edited in place.
+  - **Reading costs nothing.** The notes come back on `GET /v1/projects/{id}`, the
+    call `get_entity` already makes to resolve the project, so the excerpt on the
+    project card is free. The artifact version paid three round trips (list →
+    presign → R2 GET) on the cheapest, most-used read in the tool, and pushed
+    ~250 bytes of markdown through the blob store to do it.
+
+  `set_project_notes` **reads back what the server stored** and raises if it differs.
+  `ProjectPatch` does not forbid extra fields, so a backend predating 0094 accepts
+  `notes`, ignores it, and answers 200 — without the check the write vanishes and the
+  caller is told it succeeded. Requires backend ≥ 0.102.0.0.
+
+  `probe notes write` now prints a `{project, chars}` confirmation rather than
+  echoing the whole document back on stdout.
+
 ### Fixed
 
 - **`npx probe-research` now runs the latest CLI instead of freezing on whatever
@@ -252,8 +275,8 @@
   not what was classified, so `check_run` gating `pending_code_bytes` on it means
   "these bytes are gone" rather than "an upload was attempted".
   `n_classified_pending` keeps the pre-upload count for diagnostics.
-- **`probe notes` — one markdown file per project.** `probe notes show` prints the
-  project's `NOTES.md`; `probe notes write [FILE]` replaces it (stdin when no file),
+- **`probe notes` — one free-text markdown document per project.** `probe notes
+  show` prints it; `probe notes write [FILE]` replaces it (stdin when no file),
   and `--append` adds to it instead, which is what you want when two agents share a
   project and a plain write is last-one-wins. Free text, no schema.
 

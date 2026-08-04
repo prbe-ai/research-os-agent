@@ -1102,6 +1102,7 @@ class ProjectDetailOut(BaseModel):
     id: UUID = Field(..., title='Id')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
+    notes: str | None = Field(None, title='Notes')
     session_total: int | None = Field(0, title='Session Total')
     sessions: list[AgentSessionOut] | None = Field(None, title='Sessions')
     slug: str = Field(..., title='Slug')
@@ -1128,6 +1129,10 @@ class Name2(RootModel[str]):
     root: str = Field(..., min_length=1, title='Name')
 
 
+class Notes(RootModel[str]):
+    root: str = Field(..., max_length=100000, title='Notes')
+
+
 class ProjectPatch(BaseModel):
     """
     Field-replace PATCH (D9). Only provided fields change; None = untouched.
@@ -1139,6 +1144,7 @@ class ProjectPatch(BaseModel):
     description: str | None = Field(None, title='Description')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: Name2 | None = Field(None, title='Name')
+    notes: Notes | None = Field(None, title='Notes')
     tags: list[str] | None = Field(None, title='Tags')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
 
