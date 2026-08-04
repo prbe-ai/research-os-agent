@@ -25,6 +25,17 @@
 
 ### Added
 
+- **The folder picker leads with a path bar.** The current path is now the
+  first row and it is selectable: press enter on it and type or paste. Where
+  you are and where you can type are the same control, which is the shortest
+  route from "the path is already on my clipboard" to done — and anyone
+  arriving from a cluster shell, Slack or the dashboard has the path. It used
+  to be an "Enter a path…" item at the bottom of the list, below everything you
+  would have to scroll past.
+
+- The backfill progress line is centred with the rest of the wizard. Flush at
+  column 0 it read as output from a different program running underneath.
+
 - **Backfill lets the agent decide the projects, and name them.** The anchor
   used to be pinned before launch — one project, named after the folder — which
   collapsed `/workspace` (Michael's work, Xian's work, Connor's work) into a

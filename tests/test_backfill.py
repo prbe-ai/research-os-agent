@@ -443,6 +443,35 @@ def test_an_upload_command_is_shortened_to_the_filename():
     assert got == "uploading docq_scores.csv"
 
 
+def test_the_progress_line_is_centred_like_every_other_page():
+    """Left at column 0 it read as output from a different program running
+    underneath the wizard, which is exactly what it is not."""
+    import inspect
+
+    source = inspect.getsource(backfill.launch_agent)
+    assert "tui.left_pad()" in source
+    assert '"\\r\\033[2K" + " " * tui.left_pad()' in source
+
+
+def test_the_path_is_the_first_row_and_is_selectable():
+    """Where you are and where you can type are the same control — the shortest
+    route from "this is on my clipboard" to done."""
+    import inspect
+
+    source = inspect.getsource(backfill.choose_directory)
+    first = source.index('value=("type", here)')
+    assert first < source.index('value=here'), "the path bar must precede Import this folder"
+    assert first < source.index('value=("cd", path)'), "the path bar must precede the children"
+
+
+def test_the_path_is_not_printed_twice():
+    # It used to sit in the block above the question AND is now a row.
+    import inspect
+
+    source = inspect.getsource(backfill.choose_directory)
+    assert "tui.wrap(str(here))" not in source
+
+
 # -- choosing between Claude Code and Codex ---------------------------------
 
 
