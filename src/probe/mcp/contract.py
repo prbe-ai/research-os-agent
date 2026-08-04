@@ -94,10 +94,7 @@ class View(StrEnum):
     # empty lineage for runs that had plainly produced artifacts.
     LINEAGE = "lineage"
     EVENTS = "events"  # the append-only lifecycle log
-    # Structured research notes (intent/decision/observation/...), supersession
-    # RESOLVED. On a PROJECT this is the planning record: the decisions and findings
-    # that predate every run, which had nowhere to live while notes required one.
-    NOTES = "notes"
+    NOTES = "notes"  # a project's NOTES.md, as text
     GROUPS = "groups"  # sweeps/ensembles under an experiment
     VERSIONS = "versions"  # immutable published manifests
 

@@ -564,8 +564,8 @@ def create_server(
         `card` (the default) returns `available_views` for that entity, so one
         call tells you what else you can ask for:
 
-          run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events | notes
-          experiment  card | artifacts | lineage | groups | versions | notes
+          run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events
+          experiment  card | artifacts | lineage | groups | versions
           artifact    card | versions
           project     card | artifacts | notes
           group       card
@@ -588,16 +588,12 @@ def create_server(
         not an absent artifact: pin a new version of the SAME artifact rather than
         opening a second identity. Never edit a published version in place.
 
-        `notes` is the DECISION JOURNAL -- intent, hypotheses, decisions,
-        observations, failures, results, deviations, next steps. Read it on a
-        PROJECT to recover the planning that PREDATES every run: why this approach
-        and not the one in the brief. It answers "why", and it is the one view whose
-        absence is invisible from the metrics. Supersession is RESOLVED: a decision a
-        later note reversed is withheld and counted under `superseded` rather than
-        returned beside the decision that replaced it, so the record cannot read as
-        self-contradictory. `filters={"kind": "decision"}` narrows;
-        `filters={"include_superseded": true}` returns the reversed ones, each
-        carrying `superseded_by`.
+        `notes` is the project's NOTES.md -- one markdown file per project that
+        agents read and write. Free text, no schema: it is where the things a new
+        session should know about this project live (why this approach, what was
+        already tried, what not to repeat). An excerpt rides along on the project
+        `card`, so you have usually already seen it by the time you would ask; this
+        view returns the whole file. Write it with `probe notes write`.
 
         `trajectory` = the run's actual spans, `reproduce` = hypothesis + resolved
         env_ref, `handoff` = what a new session needs; the other views are what

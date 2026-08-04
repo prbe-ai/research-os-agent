@@ -516,31 +516,11 @@ class ResearchOSSource:
     def experiment_artifacts(self, experiment_id: str) -> list[dict]:
         return self.client.list_experiment_artifacts(experiment_id)
 
+    def project_notes(self, project_id: str) -> str | None:
+        return self.client.get_project_notes(project_id)
+
     def project_artifacts(self, project_id: str) -> list[dict]:
         return self.client.list_project_artifacts(project_id)
-
-    def notes(
-        self,
-        entity_kind: str,
-        entity_id: str,
-        *,
-        kind: str | None = None,
-        include_superseded: bool = False,
-    ) -> list[dict]:
-        """The anchor's research notes, supersession resolved by the SDK.
-
-        `entity_kind` is the MCP entity type ("run"/"experiment"/"project"), which is
-        also the anchor's wire name, so it passes straight through. Resolution stays
-        in ``client.notes.list`` rather than being re-implemented here: the CLI reads
-        the same method, and a second copy is how the two surfaces would drift into
-        disagreeing about which decision is current.
-        """
-        return self.client.notes.list(
-            entity_id,
-            anchor=entity_kind,
-            kind=kind,
-            include_superseded=include_superseded,
-        )
 
     def artifact_versions(self, artifact_id: str) -> list[dict]:
         """The artifact's version chain, newest first — what the reuse check reads

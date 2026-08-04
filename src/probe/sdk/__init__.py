@@ -28,7 +28,6 @@ _LAZY: dict[str, str] = {
     "Settings": "config",
     "resolve": "config",
     "EventsReadClient": "events",
-    "NoteClient": "events",
     "active_run": "fluent",
     "finish": "fluent",
     "init": "fluent",
@@ -65,7 +64,7 @@ if TYPE_CHECKING:  # eager names for type checkers / IDEs; never executed at run
     )
     from .client import Client
     from .config import Settings, resolve
-    from .events import EventsReadClient, NoteClient
+    from .events import EventsReadClient
     from .fluent import active_run, finish, init, log, log_artifact, log_hw, span
     from .run import Run, SpanHandle
     from .unit_context import UnitContext
@@ -78,7 +77,6 @@ __all__ = [
     "Client",
     "Comparison",
     "EventsReadClient",
-    "NoteClient",
     "Run",
     "Settings",
     "SpanHandle",
