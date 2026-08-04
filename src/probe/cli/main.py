@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import typer
 from pydantic import ValidationError
@@ -3738,6 +3738,7 @@ def _note_anchor(
     run: str | None,
     project: str | None,
     experiment: str | None,
+    name_the_anchor: bool = True,
 ) -> tuple[Anchor, str, str]:
     """Resolve the one thing a note hangs off, and name it out loud.
 
@@ -3750,7 +3751,9 @@ def _note_anchor(
 
     Returns a label as well as the id, because an ambient anchor is otherwise
     invisible: a note filed against the wrong active project reads exactly like a
-    correct one.
+    correct one. `name_the_anchor=False` labels with the id instead — turning an id
+    into a slug is a GET, and --async promises that a stuck network costs you
+    nothing, which a blocking read taken purely to prettify a message would break.
     """
     if run is not None or project is not None or experiment is not None:
         anchor, value = _pick_anchor(
@@ -3765,7 +3768,15 @@ def _note_anchor(
             # resolve_or_raise, not a bare lookup: a typo'd slug then errors with the
             # near misses named instead of 404ing on a name that nearly exists.
             return anchor, str(client.resolve_or_raise(kind, value)["id"]), f"{kind} {value}"
-        return anchor, value, f"{kind} {value}"
+        if not name_the_anchor:
+            return anchor, value, f"{kind} {value}"
+        # A UUID is CHECKED, not trusted. It used to pass straight through, so a run
+        # id handed to --project addressed /v1/projects/<run-uuid>/artifacts, the
+        # write fail-opened to the journal, and the command still printed "note
+        # recorded" and exited 0. The note was gone and the session believed it was
+        # filed -- the exact failure this whole command exists to stop.
+        row = client.get_project(value) if kind == "project" else client.get_experiment(value)
+        return anchor, value, f"{kind} {row.get('slug') or value}"
 
     active = resolve(base_url=_conn.base_url).project
     if not active:
@@ -3773,8 +3784,11 @@ def _note_anchor(
             "a note needs an anchor: pass a RUN, --project/--experiment, or set an "
             "active project with `probe project use <slug>`"
         )
+    project_id = _project_id(client, active)
+    if not name_the_anchor:
+        return Anchor.PROJECT, project_id, f"project {project_id} (active)"
     slug = _project_slug(client, active) or active
-    return Anchor.PROJECT, _project_id(client, active), f"project {slug} (active)"
+    return Anchor.PROJECT, project_id, f"project {slug} (active)"
 
 
 @note_app.command("add")
@@ -3802,9 +3816,15 @@ def note_add(
     `probe note list` resolves the chain on read.
     """
     if _conn.async_mode:
+        # The id is minted HERE, not in the SDK, because an async write returns None:
+        # without it there is no note_id to hand a later `--supersedes`, and the one
+        # workflow this command exists for -- reversing an earlier decision -- would
+        # be unavailable to every async caller.
+        note_id = str(uuid4())
         with _async_client() as c:
             anchor, anchor_id, label = _note_anchor(
-                c, run=run, project=project, experiment=experiment
+                c, run=run, project=project, experiment=experiment,
+                name_the_anchor=False,
             )
             c.notes.add(
                 anchor_id,
@@ -3815,10 +3835,12 @@ def note_add(
                 authority=authority,
                 confidence=confidence,
                 supersedes=supersedes,
+                note_id=note_id,
                 metadata=_kv_pairs(meta) if meta else None,
             )
         _kick_drainer()
-        print(f"queued note for {label} (async)")
+        print(f"queued note for {label} (async)", file=sys.stderr)
+        _print_json({"note_id": note_id, "queued": True})
         return
     with _client() as c:
         anchor, anchor_id, label = _note_anchor(
@@ -3835,7 +3857,17 @@ def note_add(
             supersedes=supersedes,
             metadata=_kv_pairs(meta) if meta else None,
         )
-    print(f"note recorded on {label}", file=sys.stderr)
+    if result is None:
+        # A fail-open write journals on failure and returns None. Saying "recorded"
+        # there is the lie this feature exists to stop: the drainer may yet deliver
+        # it, or dead-letter it, and only `probe outbox status` knows which.
+        print(
+            f"note QUEUED for {label} — the write did not reach the server; "
+            "`probe outbox status` before treating it as filed",
+            file=sys.stderr,
+        )
+    else:
+        print(f"note recorded on {label}", file=sys.stderr)
     _print_json(result)
 
 
@@ -3862,16 +3894,25 @@ def note_list(
     """
     with _client() as c:
         anchor, anchor_id, _ = _note_anchor(
-            c, run=run, project=project, experiment=experiment
+            c, run=run, project=project, experiment=experiment, name_the_anchor=False
         )
-        _print_json(
-            c.notes.list(
-                anchor_id,
-                anchor=anchor,
-                kind=kind.value if kind is not None else None,
-                include_superseded=include_superseded,
-            )
+        note_kind = kind.value if kind is not None else None
+        rows = c.notes.list(
+            anchor_id, anchor=anchor, kind=note_kind, include_superseded=True
         )
+        hidden = sum(1 for r in rows if r.get("superseded_by"))
+        if not include_superseded:
+            rows = [r for r in rows if not r.get("superseded_by")]
+    # Say what was withheld. Without this a two-note anchor whose only decision was
+    # reversed prints `[]`, which reads as "nothing was ever decided here" — the
+    # exact confident-absence this command exists to stop.
+    if hidden and not include_superseded:
+        print(
+            f"({hidden} superseded note{'s' if hidden > 1 else ''} withheld; "
+            f"--include-superseded shows them)",
+            file=sys.stderr,
+        )
+    _print_json(rows)
 
 
 @app.command()

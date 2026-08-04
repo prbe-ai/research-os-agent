@@ -77,9 +77,9 @@ class NoteClient:
 
     def add(
         self,
-        anchor_id: str,
-        kind: str,
-        statement: str,
+        anchor_id: str | None = None,
+        kind: str | None = None,
+        statement: str | None = None,
         *,
         anchor: "Anchor | str" = Anchor.RUN,
         evidence_refs: list[str] | None = None,
@@ -89,10 +89,24 @@ class NoteClient:
         note_id: str | None = None,
         metadata: dict[str, Any] | None = None,
         strict: bool | None = None,
+        run_id: str | None = None,
     ) -> dict | None:
         """Append one note to ``anchor_id``, which is a run id unless ``anchor`` says
         otherwise. ``supersedes`` takes an earlier note's ``note_id``; nothing is
-        overwritten, and :meth:`list` is what resolves the chain on read."""
+        overwritten, and :meth:`list` is what resolves the chain on read.
+
+        ``run_id=`` is the pre-anchor spelling of the first argument, kept working
+        because this is a PUBLISHED SDK: the parameter was renamed when notes stopped
+        being run-only, and every keyword caller on 0.36 would otherwise get a
+        TypeError from an upgrade that changed nothing they use."""
+        if run_id is not None:
+            if anchor_id is not None:
+                raise TypeError("pass anchor_id or run_id, not both")
+            anchor_id = run_id
+        if anchor_id is None:
+            raise TypeError("add() missing required argument: 'anchor_id'")
+        if kind is None or statement is None:
+            raise TypeError("add() missing required arguments: 'kind' and 'statement'")
         resolved = self._anchor(anchor)
         if kind not in NOTE_KINDS:
             raise ValueError(f"kind must be one of {sorted(NOTE_KINDS)}")
@@ -151,6 +165,11 @@ class NoteClient:
         the same question differently. Without it ``--supersedes`` was written and
         read by nothing, and a reversed decision came back as a contradiction.
 
+        Supersession resolves WITHIN one anchor. A run note naming a project note's
+        ``note_id`` does not reverse it here — this read never leaves the anchor it
+        was given, so the project decision still reads as current. Reverse a decision
+        on the anchor it was filed against.
+
         `kind="note"` narrows SERVER-side on a run (that route filters) and
         client-side on an experiment or project (those routes take no filters at
         all). Either way the whole anchor is read before ``kind`` is applied, so the
@@ -167,17 +186,29 @@ class NoteClient:
             if row.get("kind") != "note":
                 continue
             meta = row.get("meta")
-            if not isinstance(meta, dict) or "note_id" not in meta:
-                # An artifact someone else wrote under kind="note" without the note
-                # encoding. Skipping is right: guessing a shape for it would put a
-                # fabricated statement in a decision journal.
+            # `meta` is an unvalidated free-form dict on every artifact route, so
+            # nothing upstream guarantees the note encoding OR its TYPES. Requiring a
+            # string note_id is the gate: without it a row carrying `note_id: 17` (or
+            # a note-shaped blob some other tool wrote) reached the sort below and
+            # raised `'<' not supported between 'int' and 'str'` -- one malformed
+            # artifact anywhere in a project took down the whole journal read.
+            if not isinstance(meta, dict) or not isinstance(meta.get("note_id"), str):
                 continue
             notes.append({**meta, "artifact_id": row.get("id")})
-        notes.sort(key=lambda n: (n.get("created_at") or "", n.get("note_id") or ""))
+        # Coerced, not trusted: `created_at` is whatever was written. Sorting on a
+        # non-string is the same crash by another field.
+        notes.sort(
+            key=lambda n: (
+                n["created_at"] if isinstance(n.get("created_at"), str) else "",
+                n["note_id"],
+            )
+        )
         superseded: dict[str, str] = {}
         for note in notes:
             target = note.get("supersedes")
-            if target:
+            # A note cannot reverse ITSELF. Left in, the self-link withheld the note
+            # from its own anchor -- the record erasing itself on read.
+            if isinstance(target, str) and target and target != note["note_id"]:
                 superseded[target] = note["note_id"]
         out = []
         for note in notes:

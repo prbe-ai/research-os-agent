@@ -109,6 +109,54 @@ def test_note_list_skips_artifacts_that_are_not_notes(client, app):
     assert [n["statement"] for n in notes] == ["real"]
 
 
+def test_one_malformed_note_row_does_not_take_down_the_whole_journal(client, app):
+    """`meta` is unvalidated free-form on every artifact route, so nothing upstream
+    guarantees the note encoding OR its types. A row carrying a non-string `note_id`
+    or `created_at` reached the sort and raised
+    `'<' not supported between 'int' and 'str'` — one bad artifact anywhere in a
+    project made every decision in it unreadable."""
+    project = client.create_project("malformed")
+    client.notes.add(project["id"], "decision", "the real one", anchor=Anchor.PROJECT)
+    bucket = app.artifacts[f"project:{project['id']}"]
+    bucket.append({"id": "a", "name": "n1", "kind": "note",
+                   "meta": {"note_id": 17, "created_at": "2026-01-01", "statement": "x"}})
+    bucket.append({"id": "b", "name": "n2", "kind": "note",
+                   "meta": {"note_id": "ok", "created_at": 17, "statement": "sorts anyway"}})
+
+    notes = client.notes.list(project["id"], anchor=Anchor.PROJECT)
+    # The int note_id is rejected outright; the int created_at sorts as absent.
+    assert [n["statement"] for n in notes] == ["sorts anyway", "the real one"]
+
+
+def test_a_note_cannot_supersede_itself_into_invisibility(client, app):
+    """A self-link withheld the note from its own anchor — the record erasing itself
+    on read, with nothing left to say it had ever been written."""
+    project = client.create_project("selflink")
+    note = client.notes.add(
+        project["id"], "decision", "stands", anchor=Anchor.PROJECT, note_id="n1",
+        supersedes="n1",
+    )
+    assert note["meta"]["supersedes"] == "n1"
+
+    [current] = client.notes.list(project["id"], anchor=Anchor.PROJECT)
+    assert current["statement"] == "stands"
+    assert "superseded_by" not in current
+
+
+def test_the_pre_anchor_run_id_keyword_still_works(client):
+    """This is a PUBLISHED SDK. The first parameter was renamed when notes stopped
+    being run-only, so every 0.36 caller writing `notes.add(run_id=...)` would have
+    taken a TypeError from an upgrade that changed nothing they use."""
+    run = open_run(client, experiment="e", name="r")
+    result = client.notes.add(run_id=run.id, kind="decision", statement="still works")
+    assert result["kind"] == "note"
+    [note] = client.notes.list(run.id)
+    assert note["statement"] == "still works"
+
+    with pytest.raises(TypeError, match="not both"):
+        client.notes.add(run.id, "decision", "s", run_id=run.id)
+
+
 def test_events_read_surface_is_read_only(client, app):
     run = open_run(client, experiment="e", name="r")
     # client.events is the read surface (backend lifecycle log); no write method.

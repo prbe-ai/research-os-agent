@@ -11,6 +11,7 @@ from itertools import islice
 from typing import Any
 
 from ..sdk import errors
+from ..sdk.events import NOTE_KINDS
 from .contract import (
     BackendCorpus,
     BackendSearchState,
@@ -1341,6 +1342,16 @@ class ResearchReadService:
         for GKE) is never overwritten, so without resolving the chain both readings
         come back side by side and the record contradicts itself.
         """
+        note_kind = request.filters.get("kind")
+        if note_kind is not None and note_kind not in NOTE_KINDS:
+            # Typed here rather than letting the SDK's bare ValueError escape: every
+            # other rejected filter on this seam is a 422 that names what IS accepted,
+            # and an agent that gets an untyped crash for a typo'd kind reads it as
+            # the view being broken rather than the argument being wrong.
+            raise errors.ValidationError(
+                f"unknown note kind {note_kind!r}; accepted: {sorted(NOTE_KINDS)}",
+                status=422,
+            )
         include = bool(request.filters.get("include_superseded"))
         # Always read the resolved chain WHOLE, then decide what to show. The count of
         # what was left out has to be reportable: a default view that silently drops

@@ -487,6 +487,14 @@ def test_the_notes_view_narrows_by_kind_and_can_show_the_reversed_ones(client, a
             f"project:{project['id']}", view="notes", filters={"step_from": 1}
         )
 
+    # A typo'd kind is a 422 that names what IS accepted, not the SDK's bare
+    # ValueError escaping the tool layer — an agent reads an untyped crash as the
+    # view being broken rather than its own argument being wrong.
+    with pytest.raises(errors.ValidationError, match="unknown note kind"):
+        service.get_entity(
+            f"project:{project['id']}", view="notes", filters={"kind": "desicion"}
+        )
+
 
 def test_notes_read_the_same_on_a_run_as_on_a_project(client, app):
     """One builder for all three anchors. A per-kind copy is how the CLI and MCP

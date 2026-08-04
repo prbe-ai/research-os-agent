@@ -221,9 +221,60 @@ def test_note_add_still_takes_a_run_positionally(wired, capsys):
     assert note["statement"] == "loss diverged"
 
 
+def test_note_list_says_what_it_withheld(wired, capsys):
+    """A two-note project whose only decision was reversed printed `[]` — which reads
+    as "nothing was ever decided here", the exact confident-absence this command
+    exists to stop. The MCP view reported the count; the CLI said nothing."""
+    cli.main(["project", "use", "p"])
+    cli.main(["note", "add", "--kind", "decision", "--statement", "DOKS"])
+    capsys.readouterr()
+    cli.main(["note", "list"])
+    [doks] = json.loads(capsys.readouterr().out)
+    cli.main(
+        ["note", "add", "--kind", "decision", "--statement", "GKE",
+         "--supersedes", doks["note_id"]]
+    )
+    capsys.readouterr()
+
+    assert cli.main(["note", "list"]) == 0
+    out = capsys.readouterr()
+    assert [n["statement"] for n in json.loads(out.out)] == ["GKE"]
+    assert "1 superseded note withheld" in out.err
+
+    # Nothing withheld, nothing said — neither when the chain is shown...
+    assert cli.main(["note", "list", "--include-superseded"]) == 0
+    assert "withheld" not in capsys.readouterr().err
+    # ...nor when the kind filter excludes the superseded note entirely. Counting it
+    # there would report a withholding that did not happen for this question.
+    assert cli.main(["note", "list", "--kind", "observation"]) == 0
+    out = capsys.readouterr()
+    assert json.loads(out.out) == []
+    assert "withheld" not in out.err
+
+
 def test_note_add_without_a_run_or_an_active_project_says_what_to_do(wired, capsys):
     assert cli.main(["note", "add", "--kind", "intent", "--statement", "s"]) != 0
     assert "probe project use" in capsys.readouterr().err
+
+
+def test_a_uuid_anchor_is_checked_before_the_write(wired, capsys):
+    """A UUID used to pass straight through. A run id handed to --project addressed
+    /v1/projects/<run-uuid>/artifacts, the fail-open write journaled it, and the
+    command still printed "note recorded" and exited 0 — the note gone and the
+    session believing it was filed. That is the exact failure this command exists
+    to stop, reproduced by the command itself."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+
+    rc = cli.main(
+        ["note", "add", "--project", run_id, "--kind", "decision", "--statement", "s"]
+    )
+    assert rc != 0
+
+    # And nothing was written to the wrong anchor on the way to failing.
+    assert not any(
+        r.url.path == f"/v1/projects/{run_id}/artifacts" for r in wired.requests
+    )
 
 
 def test_note_list_hides_a_superseded_decision_unless_asked(wired, capsys):

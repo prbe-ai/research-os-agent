@@ -76,6 +76,17 @@
   writable and unreadable over MCP — stored and invisible, which reads as captured
   and is worse than untracked.
 
+  `NoteClient.add`'s first parameter is now `anchor_id` rather than `run_id`, since
+  it is no longer always a run. `run_id=` keeps working as a deprecated alias — this
+  is a published SDK, and every keyword caller on 0.36 would otherwise take a
+  TypeError from an upgrade that changed nothing they use.
+
+  Two honest limits. A note read fetches the anchor's whole artifact list and filters
+  client-side, because supersession cannot be resolved from a truncated page — a
+  `limit` here would silently return a reversed decision as current. And `--async`
+  with a project or experiment SLUG still resolves it over the network, because the
+  route needs an id; pass an id (or a RUN) for a write that touches nothing.
+
 ### Fixed
 
 - **Backfill imports into a project named for the folder, not the ambient
@@ -85,6 +96,20 @@
   standing statement about where imported folders belong. The ambient project
   (`probe project use`, `PROBE_PROJECT`) is no longer consulted; `--project`
   names a destination explicitly when you want one.
+- **`probe note add` no longer claims to have recorded a note it did not.** A
+  UUID-shaped `--project` passed straight through unchecked, so a run id handed to
+  `--project` addressed `/v1/projects/<run-uuid>/artifacts`; the fail-open write
+  journaled the doomed op, and the command printed "note recorded" and exited 0. The
+  anchor is now fetched before the write, and a sync write that fell through to the
+  outbox says so and names `probe outbox status` instead of reporting success.
+
+- **One malformed artifact no longer makes a whole project's notes unreadable.**
+  `meta` is unvalidated free-form on every artifact route, so a row carrying a
+  non-string `note_id` or `created_at` reached the sort and raised `'<' not
+  supported between 'int' and 'str'`. Types are now checked at the boundary. A note
+  that supersedes ITSELF is also ignored rather than withheld from its own anchor —
+  the record erasing itself on read.
+
 - **The test fake's experiment-artifact listing was inverted in both directions.** It
   rolled up the artifacts of the experiment's RUNS — rows
   `GET /v1/experiments/{id}/artifacts` has never returned, it filters `experiment_id`
