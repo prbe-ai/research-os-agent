@@ -1578,6 +1578,29 @@ def _project_slug(client: Client, ref: str | None) -> str | None:
     return client.get_project(ref).get("slug", ref)
 
 
+def _confirm_delete(yes: bool, subject: str, *, cascade: str | None = None) -> None:
+    """The one confirmation path for every irreversible delete verb.
+
+    This was spelled by hand in four places and forgotten entirely in a fifth:
+    ``artifact delete`` took no ``--yes`` and prompted for nothing, so the flag
+    that guards the *cascading* deletes was rejected by the one that deletes
+    silently. Passing ``--yes`` there — the habit every other delete teaches —
+    failed the whole batch, which is the good outcome; had it been accepted and
+    ignored, the artifacts would have been gone before anyone read them.
+
+    A verb that forgets to prompt is indistinguishable from one that decided not
+    to, so the decision belongs here rather than being re-made per verb.
+
+    ``cascade`` names what else goes; omit it when nothing else does.
+    """
+    if yes:
+        return
+    question = f"permanently delete {subject}?"
+    if cascade:
+        question += f" {cascade}, and this cannot be undone"
+    typer.confirm(question, abort=True)
+
+
 @project_app.command("create")
 def project_create(
     slug: str = typer.Argument(..., help="url-safe identifier, unique per tenant"),
@@ -1719,12 +1742,11 @@ def project_delete(
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
 ) -> None:
     """PERMANENTLY delete a project and everything in it. Irreversible."""
-    if not yes:
-        typer.confirm(
-            f"permanently delete project {project_id}? every experiment, run, "
-            f"metric and file inside it goes too, and this cannot be undone",
-            abort=True,
-        )
+    _confirm_delete(
+        yes,
+        f"project {project_id}",
+        cascade="every experiment, run, metric and file inside it goes too",
+    )
     with _client() as c:
         c.delete_project(_project_id(c, project_id))
     print(f"{project_id} deleted")
@@ -2049,12 +2071,7 @@ def run_delete(
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
 ) -> None:
     """PERMANENTLY delete a run and its telemetry. Irreversible."""
-    if not yes:
-        typer.confirm(
-            f"permanently delete run {run}? its spans, metrics and files go too, "
-            f"and this cannot be undone",
-            abort=True,
-        )
+    _confirm_delete(yes, f"run {run}", cascade="its spans, metrics and files go too")
     with _client() as c:
         c.delete_run(run)
     print(f"{run} deleted")
@@ -2298,10 +2315,7 @@ def metrics_delete(
     """
     dims = _kv_pairs(dim) if dim else None
     label = f"{kind}/{key}" + (f" {dims}" if dims else "")
-    if not yes:
-        typer.confirm(
-            f"permanently delete derived series {label} on run {run}?", abort=True
-        )
+    _confirm_delete(yes, f"derived series {label} on run {run}")
     with _client() as c:
         c.delete_series(run, key=key, kind=kind, dimensions=dims)
     print(f"deleted derived series {label}")
@@ -3121,8 +3135,16 @@ def artifact_version_add(
 
 
 @artifact_app.command("delete")
-def artifact_delete(artifact_id: str = typer.Argument(...)) -> None:
-    """Delete an artifact."""
+def artifact_delete(
+    artifact_id: str = typer.Argument(...),
+    yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
+) -> None:
+    """PERMANENTLY delete an artifact. Irreversible."""
+    _confirm_delete(
+        yes,
+        f"artifact {artifact_id}",
+        cascade="its stored bytes and version history go with it",
+    )
     with _client() as c:
         c.delete_artifact(artifact_id)
     print(f"artifact {artifact_id} deleted")
@@ -3959,12 +3981,11 @@ def experiment_delete(
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
 ) -> None:
     """PERMANENTLY delete an experiment and its runs. Irreversible."""
-    if not yes:
-        typer.confirm(
-            f"permanently delete experiment {experiment_id}? every run, metric "
-            f"and file inside it goes too, and this cannot be undone",
-            abort=True,
-        )
+    _confirm_delete(
+        yes,
+        f"experiment {experiment_id}",
+        cascade="every run, metric and file inside it goes too",
+    )
     with _client() as c:
         c.delete_experiment(experiment_id)
     print(f"{experiment_id} deleted")
