@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`npx probe-research` now runs the latest CLI instead of freezing on whatever
+  you already had.** The launcher handed off to any local `probe` at or above
+  `MIN_CLI` and never asked whether something newer existed. A floor is satisfied
+  forever, so every user who had ever installed the CLI was pinned to it — and
+  `npx <tool>` is the one command whose whole contract is "run the latest".
+
+  This is the same freeze the `--refresh` flag exists to prevent one branch below
+  (uv serving whatever it resolved on day one). It was found there, fixed there,
+  and left standing in the handoff branch.
+
+  The launcher now reads `cli.latest` from `/v1/client-version` — the same
+  manifest the SessionStart nudge reads, so the two cannot disagree about what
+  latest means — and falls through to a fetch when the local install is behind.
+  `PROBE_BASE_URL` is honoured, because a self-hosted tenant's latest is not this
+  one's. Every failure falls OPEN to the local install: offline, proxied, non-200,
+  malformed version, or slower than 1.5s all run what you have. A currency check
+  that can strand someone offline is worse than the staleness it fixes.
+
+  Fetching also had to change, and this was the half that nearly shipped doing
+  nothing. The spec was `>=MIN_CLI`, which an already-installed stale version
+  satisfies, so `uv tool run` handed back the exact version just declared out of
+  date — the launcher printed "fetching the latest" and changed nothing. Measured
+  end to end: 0.46.0 detected as behind 0.47.0, then 0.46.0 returned. The spec now
+  resolves to the newest known version, never below the floor.
+
+- **DEP0190 on every launcher run.** `has()` paired an args array with
+  `shell: true`, which Node deprecated because the arguments are concatenated
+  rather than escaped. It printed a security warning on the from-zero entry point.
+  Now one shell string.
+
 ### Added
 
 - **`probe wizard` can write a tracking pointer into your global `CLAUDE.md`.**
