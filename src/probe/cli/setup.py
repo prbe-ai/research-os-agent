@@ -152,7 +152,9 @@ PLAN_LABELS: dict[Capability, str] = {
     Capability.TRACKING: MENU_COPY[Capability.TRACKING][0],
     Capability.CAPTURE: MENU_COPY[Capability.CAPTURE][0],
     Capability.AUTO_UPDATE: "automatic updates",
-    Capability.AGENT_RULES: MENU_COPY[Capability.AGENT_RULES][0],
+    # Its own noun, not the menu title: "enable Rules in your global CLAUDE.md
+    # (recommended)" reads as a checkbox that wandered into the plan.
+    Capability.AGENT_RULES: "the rules in your global CLAUDE.md",
 }
 
 
@@ -311,6 +313,14 @@ def plan(caps: Capabilities, selection: Selection) -> list[str]:
     for capability, want in wanted.items():
         have = current[capability]
         if want == have:
+            # A STALE block is installed-and-wrong, so want == have and this
+            # loop skipped it -- plan() came back empty, the caller returned
+            # "Nothing to change", and the refresh branch below it never ran.
+            # `probe doctor` meanwhile said "outdated wording -- re-run
+            # 'probe wizard'", so the two commands sent the user in a circle
+            # and a POINTER_VERSION bump could never reach a machine at all.
+            if capability is Capability.AGENT_RULES and want and caps.agent_rules_stale:
+                steps.append(f"refresh {PLAN_LABELS[capability]}")
             continue
         label = PLAN_LABELS[capability]
         steps.append(f"{'enable' if want else 'disable'} {label}")
@@ -383,7 +393,16 @@ def apply_agent_rules(want: bool, *, stale: bool = False) -> list[str]:
             changed = agent_rules.install(path)
         else:
             changed = agent_rules.remove(path)
-    except OSError as exc:
+    except agent_rules.DamagedBlock as exc:
+        return [
+            f"! Left {path} alone: {exc}.",
+            "  Delete the stray probe-research marker by hand, then re-run this.",
+        ]
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError is a ValueError, so the OSError guard never caught
+        # it: one latin-1 character in a researcher's own CLAUDE.md took the
+        # whole wizard down with a traceback, mid-install. "Nothing else was
+        # affected" is only true because the write is atomic.
         return [f"Could not update {path}: {exc}. Nothing else was affected."]
 
     if not want:
@@ -574,6 +593,13 @@ def remove_everything(caps: Capabilities) -> list[str]:
     ok, detail = uninstall_plugin(TRACKING_PLUGIN_NAME)
     if not ok and "not found" not in detail.lower():
         messages.append(f"! could not remove {TRACKING_PLUGIN_NAME}: {detail}")
+
+    # The block lives OUTSIDE the repo, in the researcher's global CLAUDE.md,
+    # and removal used to skip it entirely -- so "Removed." left every agent in
+    # every repository still being told to use skills this very call had just
+    # uninstalled. It also keeps `Capabilities.configured` True forever, so a
+    # fully removed device can never look fresh again.
+    messages.extend(apply_agent_rules(False))
 
     autoupdate.save(enabled=False)
     messages.append(

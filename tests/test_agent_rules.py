@@ -130,11 +130,87 @@ def test_an_opening_marker_with_no_close_is_refused_not_nested(memory: Path) -> 
     memory.parent.mkdir(parents=True, exist_ok=True)
     memory.write_text(f"{_USER_TEXT}\n{agent_rules.BEGIN_MARKER}\nhalf a block\n")
 
-    assert agent_rules.installed_version(memory) is None
-    agent_rules.install(memory)
+    # PRESENT-and-unusable, not absent: absent is what made the caller append.
+    assert agent_rules.installed_version(memory) == 0
+    with pytest.raises(agent_rules.DamagedBlock):
+        agent_rules.install(memory)
 
-    text = memory.read_text()
-    assert text.count(agent_rules.END_MARKER) == 1
+    assert memory.read_text() == f"{_USER_TEXT}\n{agent_rules.BEGIN_MARKER}\nhalf a block\n"
+
+
+def test_a_stray_marker_never_eats_the_researchers_own_rules(memory: Path) -> None:
+    """The one that got away.
+
+    An orphan BEGIN made `install` append (None read as "absent"), leaving TWO
+    opens and one close. The NEXT run then spanned from the orphan open to our
+    real close and rewrote everything between -- the researcher's own rules,
+    gone, while the wizard printed "Refreshed the Probe block". Two ordinary
+    runs, no warning, no backup.
+
+    A researcher can get a stray marker just by pasting the PR that introduced
+    it: #153's body quotes the marker in a fenced block.
+    """
+    memory.parent.mkdir(parents=True, exist_ok=True)
+    memory.write_text(f"{agent_rules.BEGIN_MARKER}\n\n{_USER_TEXT}")
+
+    for _ in range(2):
+        with pytest.raises(agent_rules.DamagedBlock):
+            agent_rules.install(memory)
+
+    assert "Never write in a Git repo's primary checkout" in memory.read_text()
+
+
+def test_a_second_complete_block_is_damage_not_a_target(memory: Path) -> None:
+    """Two full pairs: rewriting either one is a guess about which is ours."""
+    memory.parent.mkdir(parents=True, exist_ok=True)
+    agent_rules.install(memory)
+    memory.write_text(memory.read_text() + _USER_TEXT + agent_rules.render_block())
+
+    with pytest.raises(agent_rules.DamagedBlock):
+        agent_rules.install(memory)
+    with pytest.raises(agent_rules.DamagedBlock):
+        agent_rules.remove(memory)
+    assert "Never write in a Git repo's primary checkout" in memory.read_text()
+
+
+def test_a_file_we_cannot_decode_is_reported_not_raised(memory: Path) -> None:
+    """One latin-1 character in a researcher's own CLAUDE.md used to take the
+    whole wizard down with a traceback, mid-install: UnicodeDecodeError is a
+    ValueError, so the `except OSError` around the call never saw it."""
+    from probe.cli import setup as wizard
+
+    memory.parent.mkdir(parents=True, exist_ok=True)
+    memory.write_bytes("# Caf\xe9 rules\n".encode("latin-1"))
+
+    with pytest.raises(UnicodeDecodeError):
+        agent_rules.install(memory)
+
+    messages = wizard.apply_agent_rules(True)
+    assert messages and "Could not update" in messages[0]
+    assert memory.read_bytes() == "# Caf\xe9 rules\n".encode("latin-1")
+
+
+def test_removal_reports_a_file_it_could_not_read(memory: Path) -> None:
+    """Swallowing the read error rendered as silence: the researcher unticked
+    the row, saw nothing printed, and the rule kept firing every session."""
+    from probe.cli import setup as wizard
+
+    memory.parent.mkdir(parents=True, exist_ok=True)
+    memory.write_bytes("caf\xe9\n".encode("latin-1"))
+
+    messages = wizard.apply_agent_rules(False)
+    assert messages and "Could not update" in messages[0]
+
+
+def test_the_write_is_atomic(memory: Path) -> None:
+    """A truncate-then-write on the user's global memory file leaves it in
+    pieces if the process dies mid-write -- and a truncated file is exactly the
+    stray-marker state that costs the researcher their rules."""
+    import inspect
+
+    source = inspect.getsource(agent_rules)
+    assert "write_text_atomic" in source
+    assert ".write_text(" not in source, "every write to CLAUDE.md must be atomic"
 
 
 def test_a_block_with_an_unparseable_version_is_present_not_absent(memory: Path) -> None:

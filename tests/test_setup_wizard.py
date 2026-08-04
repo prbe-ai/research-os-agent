@@ -1270,14 +1270,20 @@ def test_answering_the_auto_update_question_keeps_every_other_choice(monkeypatch
     monkeypatch.setattr(wizard, "run_menu", lambda defaults: picked)
     monkeypatch.setattr(wizard, "ask_auto_update", lambda default: True)
 
-    applied: list[tuple[bool, bool]] = []
+    # Record EVERY apply, not just agent_rules: the bug was a field-by-field
+    # copy, so a future one that scrambles two fields must fail here too.
+    applied: dict[str, bool] = {}
     monkeypatch.setattr(
         wizard,
         "apply_agent_rules",
-        lambda want, **kw: applied.append((want, kw.get("stale", False))) or [],
+        lambda want, **kw: applied.update(agent_rules=want, stale=kw.get("stale", False)) or [],
     )
-    monkeypatch.setattr(wizard, "apply_tracking", lambda want: [])
-    monkeypatch.setattr(wizard, "apply_auto_update", lambda want: [])
+    monkeypatch.setattr(
+        wizard, "apply_tracking", lambda want: applied.update(tracking=want) or []
+    )
+    monkeypatch.setattr(
+        wizard, "apply_auto_update", lambda want: applied.update(auto_update=want) or []
+    )
     monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
     monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
 
@@ -1294,8 +1300,14 @@ def test_answering_the_auto_update_question_keeps_every_other_choice(monkeypatch
         configured=False,
     )
 
-    # The ticked box survived the auto-update answer instead of being dropped.
-    assert applied == [(True, False)]
+    # Every ticked box survived the auto-update answer instead of being dropped,
+    # and the answer itself landed on the field it was asked about.
+    assert applied == {
+        "tracking": True,
+        "agent_rules": True,
+        "stale": False,
+        "auto_update": True,
+    }
 
 
 def test_every_capability_is_reachable_as_a_flag():
@@ -1312,6 +1324,88 @@ def test_every_capability_is_reachable_as_a_flag():
     params = inspect.signature(cli_main.wizard).parameters
     for capability in Capability:
         assert capability.value in params, f"no --{capability.value.replace('_', '-')} flag"
+
+
+def test_the_agent_rules_flag_actually_parses(monkeypatch):
+    """A signature check proves the parameter exists, not that typer spells the
+    option the way a user types it -- `--agent-rulez` would pass that one.
+
+    Asserted on the Selection that reaches `plan()`, not on an apply: whether an
+    apply fires depends on what this MACHINE already has installed, and a test
+    that reads the developer's own ~/.claude is not a test.
+    """
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from probe.cli import bootstrap
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli.main import app
+
+    seen: list = []
+    monkeypatch.setattr(
+        bootstrap, "ensure_persistent_install", lambda: SimpleNamespace(message="")
+    )
+    monkeypatch.setattr(doctor_impl, "collect", lambda: _caps())
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "plan", lambda caps, selection: seen.append(selection) or [])
+
+    for flag, expected in (("--agent-rules", True), ("--no-agent-rules", False)):
+        seen.clear()
+        result = CliRunner().invoke(
+            app, ["wizard", "--action", "configure", "--yes", flag]
+        )
+        assert result.exit_code == 0, result.output
+        assert seen and seen[0].agent_rules is expected, f"{flag} did not parse"
+
+
+def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_path):
+    """"Removed." used to be false outside the repo: the plugin went, the
+    credential went, and the global CLAUDE.md kept telling every agent in every
+    repository to use the two skills this call had just uninstalled.
+
+    It also pinned `Capabilities.configured` True forever, so a device that had
+    removed everything could never look fresh again."""
+    from types import SimpleNamespace
+
+    from probe.cli import agent_rules
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    memory = tmp_path / "CLAUDE.md"
+    memory.write_text("# mine\n", encoding="utf-8")
+    agent_rules.install(memory)
+    assert agent_rules.is_installed(memory)
+
+    monkeypatch.setattr(setup, "turn_off", lambda mode: SimpleNamespace(
+        summary=lambda: "capture off", warnings=()
+    ))
+    monkeypatch.setattr(setup, "uninstall_plugin", lambda name: (True, "removed"))
+    monkeypatch.setattr(setup.autoupdate, "save", lambda **kw: None)
+
+    messages = setup.remove_everything(_caps(agent_rules_installed=True))
+
+    assert not agent_rules.is_installed(memory), "the block outlived 'Removed.'"
+    assert memory.read_text() == "# mine\n", "and the user's own text survived"
+    assert any("CLAUDE.md" in m for m in messages), "removal must be reported"
+
+
+def test_a_stale_block_is_something_to_do_not_nothing_to_change():
+    """`plan()` skipped any capability where want == have, and a STALE block is
+    installed-and-wrong, so the refresh never made it into the plan: the wizard
+    said "Nothing to change" while `probe doctor` said "re-run probe wizard".
+    A POINTER_VERSION bump could not reach a machine at all."""
+    stale = _caps(agent_rules_installed=True, agent_rules_stale=True)
+    keep = setup.Selection(
+        tracking=False, capture=False, auto_update=False, agent_rules=True
+    )
+
+    steps = setup.plan(stale, keep)
+
+    assert steps and "refresh" in steps[0], f"stale block produced no plan: {steps}"
+    # And a current block is still a no-op, or every run would rewrite the file.
+    current = _caps(agent_rules_installed=True, agent_rules_stale=False)
+    assert setup.plan(current, keep) == []
 
 
 def test_both_recommended_options_say_so():
