@@ -2240,3 +2240,63 @@ def test_results_persist_across_redraws(monkeypatch, capsys):
     progress.finish(1, ok=True)
 
     assert "could not install probe-research" in "\n".join(progress.block())
+
+
+def test_the_progress_bar_tracks_real_work_not_plan_lines(monkeypatch, capsys):
+    """Caught by the pty smoke test, not by any unit test.
+
+    The bar was built from `plan()`'s steps and indexed positionally by the
+    apply loop. Those stopped being 1:1 the moment plan() learned to say "sign
+    in" for a machine whose plugin is already installed: a sign-in-only run
+    showed "0/2" and never moved, because the actual work happened in the
+    authorization phase, which no step covered.
+
+    The browser approval is the LONGEST wait in the run -- it blocks on a human
+    -- so it has to be one of the tracked steps.
+    """
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    rendered: list[list[str]] = []
+
+    class Recorder(tui.Progress):
+        def render(self):
+            rendered.append(list(self.block()))
+            super().render()
+
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(tui, "Progress", Recorder)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: ["api", "mcp"])
+    monkeypatch.setattr(wizard, "authorize", lambda *a, **k: ({"api": {}, "mcp": {}}, []))
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+
+    # Plugin already present, credential missing: nothing to install, so the
+    # ONLY work is the sign-in.
+    present = _caps(tracking_plugin_installed=True, plugins_verified=True)
+    monkeypatch.setattr(doctor_impl, "collect", lambda *a, **k: present)
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=present,
+        base_now="https://api.test",
+        yes=True,
+        tracking=True,
+        capture=False,
+        auto_update=None,
+        agent_rules=False,
+        uninstall=False,
+        configured=True,
+    )
+
+    final = rendered[-1]
+    assert any("sign in" in line for line in final), final
+    bar = next(line for line in final if line.startswith("["))
+    assert bar.endswith("1/1"), f"the sign-in must count as work: {bar}"
+    assert not bar.endswith("0/1"), "the bar must not sit at zero through the whole run"

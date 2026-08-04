@@ -1082,10 +1082,6 @@ def _run_wizard_action(
     # page cannot be buffered -- it is written while it happens. It used to
     # collect every message and print them only after all four steps returned,
     # which showed a blank screen for as long as the subprocesses took.
-    tui.clear()
-    progress = tui.Progress("This run will:", steps)
-    progress.render()
-
     # The single retry BUDGET for this run. install_plugin() calls it to ask
     # whether it may try again; the first caller to fail spends it. Per-plugin
     # retries would multiply refreshes by the number of failures, which is how
@@ -1097,6 +1093,77 @@ def _run_wizard_action(
             return False
         _retry_budget[0] -= 1
         return True
+
+    # THE WORK LIST, built before anything renders. Deliberately NOT `steps`
+    # from plan(): the two stopped being 1:1 the moment plan() learned to say
+    # "sign in" for a machine whose plugin is already installed. Indexing one
+    # by the other's position left the bar pinned at 0/2 while the run did its
+    # real work in the authorization phase, which no step covered.
+    #
+    # The install decision reads the PLUGIN fact, not the composite capability.
+    # `caps.tracking_on` is "plugin installed AND logged in", and `capture_on`
+    # does not look at the plugin at all -- so a machine with both plugins
+    # present but no credential yet read as "both off" and reinstalled both.
+    # Measured: `claude plugin install` on an already-installed plugin returns
+    # "already installed" and does NOT upgrade it, so that work was pure waste
+    # -- and it was the step that failed, on the one path a new user is on.
+    needs = wizard.needs_authorization(caps, selection)
+    work: list[tuple[str, object]] = []
+
+    if selection.tracking and not caps.tracking_plugin_installed:
+        work.append(
+            ("install the CLI + MCP plugin", lambda: wizard.apply_tracking(True, on_retry=_may_retry))
+        )
+    elif not selection.tracking and caps.tracking_plugin_installed:
+        work.append(("remove the CLI + MCP plugin", lambda: wizard.apply_tracking(False)))
+
+    if selection.capture and not caps.capture_plugin_installed:
+        work.append(
+            (
+                "install the Session capture plugin",
+                lambda: wizard.apply_capture(
+                    caps, True, mode=OffMode.DISABLE, on_retry=_may_retry
+                ),
+            )
+        )
+    elif not selection.capture and (caps.capture_plugin_installed or caps.capture_on):
+        work.append(
+            (
+                "turn Session capture off",
+                lambda: wizard.apply_capture(
+                    caps,
+                    False,
+                    mode=OffMode.UNINSTALL if uninstall else OffMode.DISABLE,
+                ),
+            )
+        )
+
+    if selection.auto_update != caps.auto_update_enabled:
+        work.append(
+            (
+                f"{'enable' if selection.auto_update else 'disable'} automatic updates",
+                lambda: wizard.apply_auto_update(selection.auto_update),
+            )
+        )
+    if selection.agent_rules != caps.agent_rules_installed or caps.agent_rules_stale:
+        work.append(
+            (
+                "write the rules into your global CLAUDE.md",
+                lambda: wizard.apply_agent_rules(
+                    selection.agent_rules, stale=caps.agent_rules_stale
+                ),
+            )
+        )
+    # The browser approval is REAL WORK and the longest wait in the run -- it
+    # blocks on a human in a browser. Leaving it off the list is what made a
+    # sign-in-only run sit at 0/2 with nothing moving.
+    auth_index = len(work) if needs else None
+    if needs:
+        work.append((f"sign in ({', '.join(needs)})", None))
+
+    tui.clear()
+    progress = tui.Progress("This run will:", [label for label, _ in work])
+    progress.render()
 
     deadline = time.monotonic() + wizard.PHASE_BUDGET_S
     skipped: list[str] = []
@@ -1127,52 +1194,10 @@ def _run_wizard_action(
             progress.note(*out)
         return out
 
-    # The install decision reads the PLUGIN fact, not the composite capability.
-    # `caps.tracking_on` is "plugin installed AND logged in", and `capture_on`
-    # does not look at the plugin at all -- so a machine with both plugins
-    # present but no credential yet read as "both off" and reinstalled both.
-    # Measured: `claude plugin install` on an already-installed plugin returns
-    # "already installed" and does NOT upgrade it, so that work was pure waste
-    # -- and it was the step that failed, on the one path a new user is on.
-    index = 0
-    if selection.tracking and not caps.tracking_plugin_installed:
-        _run_step(index, steps[index], lambda: wizard.apply_tracking(True, on_retry=_may_retry))
-        index += 1
-    elif not selection.tracking and caps.tracking_plugin_installed:
-        _run_step(index, steps[index], lambda: wizard.apply_tracking(False))
-        index += 1
-
-    if selection.capture != caps.capture_plugin_installed or (
-        not selection.capture and caps.capture_on
-    ):
-        _run_step(
-            index,
-            steps[index] if index < len(steps) else "session capture",
-            lambda: wizard.apply_capture(
-                caps,
-                selection.capture,
-                mode=OffMode.UNINSTALL if uninstall else OffMode.DISABLE,
-                on_retry=_may_retry,
-            ),
-        )
-        index += 1
-
-    if selection.auto_update != caps.auto_update_enabled:
-        _run_step(
-            index,
-            steps[index] if index < len(steps) else "automatic updates",
-            lambda: wizard.apply_auto_update(selection.auto_update),
-        )
-        index += 1
-    if selection.agent_rules != caps.agent_rules_installed or caps.agent_rules_stale:
-        _run_step(
-            index,
-            steps[index] if index < len(steps) else "CLAUDE.md rules",
-            lambda: wizard.apply_agent_rules(
-                selection.agent_rules, stale=caps.agent_rules_stale
-            ),
-        )
-        index += 1
+    for position, (label, action) in enumerate(work):
+        if action is None:
+            continue  # the authorization step, run below
+        _run_step(position, label, action)
 
     if skipped:
         progress.note(
@@ -1180,9 +1205,9 @@ def _run_wizard_action(
             f"{', '.join(skipped)}. Re-run `probe wizard` to finish."
         )
 
-    needs = wizard.needs_authorization(caps, selection)
     granted: dict = {}
     if needs:
+        progress.start(auth_index)
         progress.note(
             "", f"One browser approval covers everything you ticked ({', '.join(needs)})."
         )
@@ -1199,6 +1224,7 @@ def _run_wizard_action(
             ),
             open_browser=True,
         )
+        progress.finish(auth_index, ok=not [g for g in needs if g not in granted])
         if auth_messages:
             progress.note(*auth_messages)
 
