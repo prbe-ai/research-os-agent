@@ -1,6 +1,6 @@
 ---
 name: start-research-work
-description: Start tracked research — create project and experiment if new, record the decisions and findings that shape the work, and open a run when code is about to execute. Use for any research work that produces a result someone might reproduce — training, evaluation, sweeps, ablations, data curation, docking, and the like. Also use BEFORE any run exists — when choosing an approach, rejecting one, or hitting a reproducible finding about the tools, data or environment — and when a project, experiment or run is created, or when writing a script that will run. Trigger for one-off and exploratory work, and when the user did not ask for tracking. Not for installs, unit tests, or routine file reading that decided nothing.
+description: Start tracked research and keep its notebook — create project and experiment if new, record the decisions and findings that shape the work, and open a run when code is about to execute. Use for any research work that produces a result someone might reproduce — training, evaluation, sweeps, ablations, data curation, docking, and the like. Also use BEFORE any run exists — when choosing an approach, rejecting one, or hitting a reproducible finding about the tools, data or environment — and when a project, experiment or run is created, or when writing a script that will run. Re-enter it throughout a session, not once at setup. Trigger for one-off and exploratory work, and when the user did not ask for tracking. Not for installs, unit tests, or routine file reading that decided nothing.
 ---
 
 # Start research work
@@ -16,12 +16,19 @@ CLI the slug is hand-typed on every invocation, which is exactly where that come
 — because there the slug is written once in a file and code-reviewed. It refuses a
 near-miss of an existing slug rather than warning.)
 
+This skill is the lab notebook, and it is RE-ENTERED, not run once. "Start" names the
+first call, not the only one — the project is opened here, and every decision, finding
+and reversal after it is filed here too, for as long as the work continues. A session
+that came here once at setup and never returned has recorded the least interesting
+moment of the work.
+
 1. **Orient first.** `browse_research` if you do not know what is in this project;
    `search_knowledge` if you have terms and want prior work on this specific thing.
    Check what is already RUNNING before you launch anything — `browse_research`
    reports `active_run_count`, and duplicate GPU-hours are the expensive mistake.
 
-2. **Create the project and experiment.** Always explicit from the CLI.
+2. **Create the project and experiment FIRST — before the scaffold, not after it.**
+   Always explicit from the CLI.
 
    ```
    probe project create folding
@@ -42,6 +49,14 @@ near-miss of an existing slug rather than warning.)
    in later — an omitted one used to become a permanent `[auto]` placeholder. An
    experiment that already exists keeps its own (first-write-wins), so reopening one
    never rewrites it; `probe experiment set EXP --hypothesis "..."` amends it.
+
+   **Tracking named in a brief is a standing requirement, not a phase to schedule
+   after setup.** Create the identities at the moment the work is named — before the
+   repo, the deps, the config. Waiting until there is something to LOG gets the order
+   backwards: notes anchor here (step 3), so nothing setup itself decides has anywhere
+   to go until this exists, and by then those choices have been made and forgotten.
+   Empty is the correct state for a project whose first run has not started;
+   `run_count: 0` is not a reason to defer creating it.
 
 3. **Record decisions and findings as they happen — do not wait for a run.** Planning,
    investigation and environment archaeology all happen before the first run, and that
