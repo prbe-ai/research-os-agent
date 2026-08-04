@@ -215,13 +215,43 @@ def test_creation_goes_through_the_near_miss_guard(tmp_path):
 # -- the prompt (the actual deliverable) ------------------------------------
 
 
-def test_prompt_pins_the_anchor_and_forbids_inventing_another(tmp_path):
+def test_by_default_the_agent_decides_the_projects(tmp_path):
+    """A folder is not automatically one project. `/workspace` with three
+    researchers under it is at least three, and collapsing that into one named
+    after the directory is a wrong answer no naming discipline fixes."""
+    prompt = backfill.build_prompt(folder=tmp_path, census=backfill.Census(files=47, bytes=1))
+    assert "YOU DECIDE THE PROJECTS" in prompt
+    assert "probe project list" in prompt
+    assert "REUSE BEFORE YOU CREATE" in prompt
+
+
+def test_the_agent_is_told_to_name_for_the_work_not_the_directory(tmp_path):
+    prompt = backfill.build_prompt(folder=tmp_path, census=backfill.Census(files=1, bytes=1))
+    assert "Name them for the WORK, not the directory" in prompt
+    # The counter-examples matter more than the rule.
+    assert "`workspace`, `data` and `michael` are not" in prompt
+
+
+def test_reuse_is_argued_for_not_just_asserted(tmp_path):
+    # The failure is invisible when it happens, so the prompt has to say WHY.
+    prompt = backfill.build_prompt(folder=tmp_path, census=backfill.Census(files=1, bytes=1))
+    assert "nobody can undo" in prompt
+    assert "odyssey_infill_v3" in prompt  # the near-miss that splits a record
+
+
+def test_an_explicit_project_pins_everything_to_it(tmp_path):
     prompt = backfill.build_prompt(
-        folder=tmp_path, project="odyssey", census=backfill.Census(files=47, bytes=1)
+        folder=tmp_path, census=backfill.Census(files=1, bytes=1), project="odyssey"
     )
     assert "--project odyssey" in prompt
-    assert "do not change" in prompt.lower()
-    assert "do not create another project" in prompt.lower()
+    assert "Do not create any other project" in prompt
+    assert "YOU DECIDE THE PROJECTS" not in prompt
+
+
+def test_the_summary_must_name_every_project_it_used(tmp_path):
+    # It is how the import gets checked; without it nothing can be counted back.
+    prompt = backfill.build_prompt(folder=tmp_path, census=backfill.Census(files=9, bytes=1))
+    assert '"projects": ["<slug>", ...]' in prompt
 
 
 def test_prompt_carries_the_reference_threshold_for_large_files(tmp_path):
@@ -250,6 +280,61 @@ def test_prompt_states_the_denominator_so_the_agent_knows_the_scale(tmp_path):
 
 
 # -- the agent launch -------------------------------------------------------
+
+
+# -- counting back across whatever projects the agent chose ------------------
+
+
+def test_the_projects_come_from_the_summary_but_the_COUNT_never_does():
+    """The only thing taken from the agent's own account is WHERE to look. The
+    number still comes from the server and the denominator from the walk, so an
+    agent that overstates its work cannot make the two agree."""
+    tail = 'chatter\n{"files_seen": 37, "files_landed": 999, "projects": ["a", "b"]}'
+    assert backfill.summary_projects(tail) == ["a", "b"]
+
+    class Server:
+        def list_anchored(self, anchor, slug, **kw):
+            return [{"id": 1}] if slug == "a" else [{"id": 2}, {"id": 3}]
+
+    # 999 claimed, 3 actually there.
+    assert backfill.count_landed_across(Server(), ["a", "b"]) == (3, False)
+
+
+def test_a_summary_with_no_projects_is_not_a_silent_zero(tmp_path, monkeypatch):
+    _tree(tmp_path)
+    monkeypatch.setattr(backfill, "launch_agent", lambda *a, **kw: (True, "no json at all"))
+    lines = backfill.run(client_factory=_FakeClient, folder=tmp_path, interactive=False)
+    assert any("named no projects" in ln for ln in lines)
+    assert any("could not read back" in ln for ln in lines)
+
+
+def test_one_unreadable_project_makes_the_whole_count_unknown():
+    """Reporting a shortfall that is really a failed lookup would train people
+    to ignore the one number this feature exists for."""
+
+    class HalfBroken:
+        def list_anchored(self, anchor, slug, **kw):
+            if slug == "broken":
+                raise RuntimeError("500")
+            return [{"id": 1}]
+
+    assert backfill.count_landed_across(HalfBroken(), ["fine", "broken"]) == (-1, False)
+
+
+def test_duplicate_slugs_in_the_summary_are_counted_once():
+    tail = '{"projects": ["a", "a", "b"]}'
+    assert backfill.summary_projects(tail) == ["a", "b"]
+
+
+def test_a_pinned_project_is_counted_even_if_the_agent_says_nothing(tmp_path, monkeypatch):
+    _tree(tmp_path)
+    monkeypatch.setattr(backfill, "launch_agent", lambda *a, **kw: (True, ""))
+    monkeypatch.setattr(backfill, "count_landed", lambda *a, **kw: (3, False))
+    client = _FakeClient(existing={"id": FAKE_ID, "slug": "pinned"})
+    lines = backfill.run(
+        client_factory=lambda: client, folder=tmp_path, interactive=False, project="pinned"
+    )
+    assert any("3 artifacts" in ln for ln in lines)
 
 
 # -- showing what the agent is doing ----------------------------------------
@@ -567,7 +652,11 @@ def test_a_credential_problem_names_the_fix(tmp_path, monkeypatch):
         def __exit__(self, *a):
             return False
 
-    lines = backfill.run(client_factory=Unauthorized, folder=tmp_path, interactive=False)
+    # Only a NAMED project is resolved up front; that is the path that can fail
+    # on credentials before the agent starts.
+    lines = backfill.run(
+        client_factory=Unauthorized, folder=tmp_path, interactive=False, project="pinned"
+    )
     assert "probe login" in lines[1]
 
 
@@ -578,13 +667,14 @@ def test_the_happy_path_reports_the_denominator(tmp_path, monkeypatch):
     def fake_launch(folder, prompt, **kw):
         seen["folder"] = folder
         seen["prompt"] = prompt
-        return True, ""
+        return True, '{"files_seen": 3, "files_landed": 3, "projects": ["odyssey"]}'
 
     monkeypatch.setattr(backfill, "launch_agent", fake_launch)
     monkeypatch.setattr(backfill, "count_landed", lambda *a, **kw: (3, False))
     lines = backfill.run(client_factory=_FakeClient, folder=tmp_path, interactive=False)
     assert seen["folder"] == tmp_path.resolve()
     assert "--project" in seen["prompt"]
+    assert any("Projects: odyssey" in ln for ln in lines)
     assert any("3 files found on disk · 3 artifacts" in ln for ln in lines)
 
 
@@ -720,7 +810,9 @@ def test_the_command_with_no_folder_leaves_the_picker_to_decide(monkeypatch):
 
 def test_a_failed_agent_says_rerunning_is_safe(tmp_path, monkeypatch):
     _tree(tmp_path)
-    monkeypatch.setattr(backfill, "launch_agent", lambda *a, **kw: (False, "boom"))
+    monkeypatch.setattr(
+        backfill, "launch_agent", lambda *a, **kw: (False, '{"projects": ["p"]}\nboom')
+    )
     monkeypatch.setattr(backfill, "count_landed", lambda *a, **kw: (1, False))
     lines = backfill.run(client_factory=_FakeClient, folder=tmp_path, interactive=False)
     assert any("deduplicated server-side" in ln for ln in lines)

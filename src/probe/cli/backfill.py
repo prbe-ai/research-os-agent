@@ -272,41 +272,79 @@ def _subdivide_line(agent: Agent) -> str:
 def build_prompt(
     *,
     folder: Path,
-    project: str,
     census: Census,
-    slug: str | None = None,
+    project: str | None = None,
     agent: Agent = Agent.CLAUDE,
 ) -> str:
     """The prompt the wizard hands the agent.
 
-    This is the actual deliverable of the feature: the user never writes it,
-    and every rule that keeps the import honest lives here rather than in code
-    the agent cannot see. The negative rules matter most -- fixed anchor,
-    bounded scope, and explicit permission NOT to group. An agent that declines
-    to invent an experiment is doing the right thing; files at the project
-    level are findable, and a wrong experiment is worse than no experiment.
+    This is the actual deliverable of the feature: the user never writes it, and
+    every rule that keeps the import honest lives here rather than in code the
+    agent cannot see.
+
+    THE AGENT OWNS THE PROJECT STRUCTURE. An earlier version pinned one project,
+    resolved before launch, on the reasoning that an agent free to name things
+    would fork identities. That traded a real problem for a worse one: a folder
+    like `/workspace` holds Michael's work, Xian's work and Connor's work, and
+    collapsing three lines of research into one project named after the
+    directory is a wrong answer that no amount of naming discipline fixes. The
+    shape of the work is exactly the judgment we are paying an agent for.
+
+    What replaces the pin is DISCIPLINE, not a lock: list what exists, reuse
+    before creating, and let `ensure_project`'s near-miss guard refuse a slug
+    that reads as a typo of one already there. `--project` still forces a single
+    destination for anyone who wants the old behaviour.
     """
+    fixed = f"""
+EVERYTHING GOES IN ONE PROJECT, named by the person who started this:
+
+    --project {project}
+
+Do not create any other project. If some of this work does not belong there,
+say so in your summary rather than filing it elsewhere.
+""" if project else """
+YOU DECIDE THE PROJECTS. This is the judgement you are here for.
+
+    First, see what already exists:
+        probe project list
+
+    Then decide. A folder is not automatically one project. `/workspace` with
+    three researchers' directories under it is at least three; a single
+    experiment directory is one. Split where the WORK is genuinely separate —
+    different question, different model, different line of research — and keep
+    it together where it is not.
+
+    REUSE BEFORE YOU CREATE. If a project for this work already exists, file
+    into it. Two projects for the same research is the one mistake here that
+    nobody can undo later, and it is much easier to make than it looks: a
+    second run that invents `odyssey-infill-v3` next to an existing
+    `odyssey_infill_v3` has silently split the record in half.
+
+    Name them for the WORK, not the directory. `odyssey-infill-v3` and
+    `esm3-baseline` are names someone will recognise in six months;
+    `workspace`, `data` and `michael` are not. Read enough of the folder to
+    name it honestly before you create anything.
+
+        probe project create <slug> --name "<human name>"
+
+    `--project` takes the slug or the id, so you can use the slug you just
+    chose in every command that follows.
+"""
     return f"""\
-You are backfilling ONE folder of existing research work into Probe.
+You are backfilling existing research work into Probe.
 
 FOLDER: {folder}
 This folder and its subdirectories are your entire scope. Do not read outside it.
 A deterministic walk counted {census.files:,} files here — roughly what you should
 expect to account for.
-
-ANCHOR (fixed — do not change, do not create another project):
-    --project {project}{f"        (the project named `{slug}`)" if slug else ""}
-
-    That is a project id, and it is what `--project` wants: those routes type the
-    path parameter as a UUID, so passing the name instead comes back as a 422.
-
+{fixed}
 Step 1 — upload everything of substance.
 
     files under {human_bytes(REFERENCE_ABOVE_BYTES)}:
-        probe artifact add --project {project} <path>
+        probe artifact add --project <project> <path>
 
     files over {human_bytes(REFERENCE_ABOVE_BYTES)} (checkpoints, datasets, archives):
-        probe artifact add --project {project} <path> --reference --allow-missing
+        probe artifact add --project <project> <path> --reference --allow-missing
 
     The second form records the PATH and uploads no bytes. Use it for anything
     large. Do NOT pass --hash on those: fingerprinting a 10GB file over a shared
@@ -322,19 +360,22 @@ Step 2 — say what things are.
     This is the part that makes a file findable later, and it is the part nobody
     did at the time. It matters more than the upload.
 
-Step 3 — group ONLY if the evidence is there.
+Step 3 — group into experiments ONLY if the evidence is there.
 
-    If this folder plainly IS one experiment — a hypothesis, a method, a result
-    you can point at — create it and attach the artifacts to it.
-    If that would be a guess, DO NOT. Leave everything at the project level.
+    If some part of this plainly IS one experiment — a hypothesis, a method, a
+    result you can point at — create it and attach those artifacts.
+    If that would be a guess, DO NOT. Leave them at the project level.
     Artifacts at the project level are findable; an invented experiment is a
     wrong answer that looks like a right one.
 
 {_subdivide_line(agent)}
 
-Finish with a JSON summary on its own line:
-{{"files_seen": N, "files_landed": N, "files_skipped": N, "experiments_created": N,
-  "summary": "one sentence on what this folder contains"}}
+Finish with a JSON summary on its own line. `projects` must list every project
+you filed into, by slug — it is how the import is checked against the {census.files:,}
+files counted above:
+{{{{"files_seen": N, "files_landed": N, "files_skipped": N,
+  "projects": ["<slug>", ...], "experiments_created": N,
+  "summary": "one sentence on what this folder contains"}}}}
 """
 
 
@@ -609,6 +650,55 @@ def count_landed(client, project: str) -> tuple[int, bool]:
     return len(items), len(items) >= RECONCILE_PAGE
 
 
+def summary_projects(tail: str) -> list[str]:
+    """The project slugs the agent says it filed into.
+
+    Parsed from its closing JSON summary. This is the ONLY thing taken from the
+    agent's own account of the run, and deliberately the least load-bearing one:
+    it says WHERE to look, never how much landed. The count still comes from the
+    server and the denominator still comes from the walk, so an agent that
+    overstates its work cannot make the numbers agree — the gap just shows up.
+    """
+    import json
+
+    found: list[str] = []
+    for line in reversed(tail.splitlines()):
+        text = line.strip()
+        if not text.startswith("{") or "projects" not in text:
+            continue
+        try:
+            data = json.loads(text)
+        except ValueError:
+            continue
+        if isinstance(data, dict) and isinstance(data.get("projects"), list):
+            for slug in data["projects"]:
+                if isinstance(slug, str) and slug and slug not in found:
+                    found.append(slug)
+            if found:
+                return found
+    return found
+
+
+def count_landed_across(client, projects: list[str]) -> tuple[int, bool]:
+    """Artifacts across every project the agent used. Returns (count, at_least).
+
+    A project that cannot be read counts as unknown for the whole reconcile
+    rather than silently zero: reporting a shortfall that is really a failed
+    lookup would train people to ignore the one number this feature exists for.
+    """
+    if not projects:
+        return -1, False
+    total = 0
+    at_least = False
+    for slug in projects:
+        count, capped = count_landed(client, slug)
+        if count < 0:
+            return -1, False
+        total += count
+        at_least = at_least or capped
+    return total, at_least
+
+
 def _project_anchor():
     from probe.sdk.client import Anchor
 
@@ -880,34 +970,47 @@ def run(
     if chosen is None or chosen is tui.BACK:
         return []
 
-    try:
-        with client_factory() as client:
-            project_id, slug = resolve_anchor(client, target, requested=project)
-    except Exception as exc:  # noqa: BLE001 - a credential problem is the likely cause
-        return [
-            f"Could not resolve a project to import into: {exc}",
-            "Run `probe login`, or `probe project use <slug>` to pick one, and try again.",
-        ]
+    # A named --project is resolved HERE so a bad one fails before the agent
+    # spends twenty minutes reading a folder. Unnamed, nothing is resolved:
+    # the agent decides the projects, and the read-back finds out which.
+    pinned = None
+    if project:
+        try:
+            with client_factory() as client:
+                _, pinned = resolve_anchor(client, target, requested=project)
+        except Exception as exc:  # noqa: BLE001 - a credential problem is likely
+            return [
+                f"Could not resolve project {project!r}: {exc}",
+                "Run `probe login`, or drop --project and let the agent choose.",
+            ]
 
-    prompt = build_prompt(
-        folder=target, project=project_id, census=census, slug=slug, agent=chosen
-    )
+    prompt = build_prompt(folder=target, census=census, project=pinned, agent=chosen)
 
     tui.say()
-    tui.say(f"Importing {target} into project `{slug}`.")
+    where = f"into project `{pinned}`" if pinned else "— the agent will choose the projects"
+    tui.say(f"Importing {target} {where}.")
     tui.say(f"{census.describe()} — {AGENT_COPY[chosen][0]} is reading them now.")
     tui.say()
 
     ok, tail = launch_agent(target, prompt, agent=chosen, total=census.files)
 
+    reported = summary_projects(tail) or ([pinned] if pinned else [])
     try:
         with client_factory() as client:
-            landed, at_least = count_landed(client, project_id)
+            landed, at_least = count_landed_across(client, reported)
     except Exception:  # noqa: BLE001 - never fail the import on the read-back
         landed, at_least = -1, False
 
-    lines = [f"Imported {target}", f"Project: {slug}", ""]
+    lines = [f"Imported {target}"]
+    if reported:
+        lines.append("Projects: " + ", ".join(reported))
+    lines.append("")
     lines += reconcile(census, landed, at_least)
+    if not reported:
+        lines += [
+            "The agent named no projects, so nothing could be counted back. "
+            "Check `probe project list` before re-running."
+        ]
     if not ok:
         lines += ["", f"The agent did not finish cleanly: {tail.splitlines()[-1] if tail else ''}"]
         lines += ["Re-running is safe — identical content is deduplicated server-side."]
