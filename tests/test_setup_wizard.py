@@ -2300,3 +2300,78 @@ def test_the_progress_bar_tracks_real_work_not_plan_lines(monkeypatch, capsys):
     bar = next(line for line in final if line.startswith("["))
     assert bar.endswith("1/1"), f"the sign-in must count as work: {bar}"
     assert not bar.endswith("0/1"), "the bar must not sit at zero through the whole run"
+
+
+def test_ticking_capture_clears_the_killswitch_even_when_the_plugin_is_present(monkeypatch):
+    """Regression introduced while fixing the reinstall bug, caught in review.
+
+    Gating the capture step on "plugin absent" skipped `apply_capture(True)`
+    entirely on a machine whose tap plugin was installed but killswitched. The
+    `.disabled` file survived, capture stayed off, and the wizard reported
+    success -- the inverse of the failure capture.py calls the worst available
+    bug ("we told you it was off and it wasn't").
+    """
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    cleared: list[int] = []
+    installed: list[str] = []
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "clear_killswitch", lambda: cleared.append(1))
+    monkeypatch.setattr(wizard, "install_plugin", lambda name, **kw: installed.append(name))
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+
+    # Plugin installed, credential present, but the killswitch is ON -- so
+    # capture_on is False and the user ticking it must actually turn it on.
+    killswitched = _caps(
+        capture_plugin_installed=True,
+        capture_killswitched=True,
+        capture_token_sources=(TokenSource.PAIRED_FILE,),
+        plugins_verified=True,
+    )
+    monkeypatch.setattr(doctor_impl, "collect", lambda *a, **k: killswitched)
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=killswitched,
+        base_now="https://api.test",
+        yes=True,
+        tracking=False,
+        capture=True,
+        auto_update=None,
+        agent_rules=False,
+        uninstall=False,
+        configured=True,
+    )
+
+    assert cleared, "the killswitch must be cleared when capture is ticked on"
+    assert installed == [], "a present plugin must still not be reinstalled"
+
+
+def test_every_failure_message_the_wizard_emits_is_classified_as_one():
+    """The progress tick decides ✔ vs ✗ from these strings. If a message the
+    apply_* helpers can emit is not recognised, the screen shows a tick over a
+    line that says the step failed."""
+    import inspect
+    import re
+
+    from probe.cli import setup as wizard
+
+    source = inspect.getsource(wizard)
+    # Every literal the module appends as a failure/warning message.
+    emitted = re.findall(r'messages\.append\(\s*f?"([^"]+)"', source)
+    emitted += re.findall(r'return \[\s*f?"(! [^"]+)"', source)
+    assert emitted, "expected to find failure messages in setup.py"
+    for template in emitted:
+        rendered = template.replace("{", "").replace("}", "")
+        if not rendered.startswith(("could not", "!")):
+            continue  # a success message; nothing to assert
+        assert wizard.reports_failure(rendered), f"unclassified failure: {template}"

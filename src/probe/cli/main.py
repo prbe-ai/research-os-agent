@@ -1117,10 +1117,17 @@ def _run_wizard_action(
     elif not selection.tracking and caps.tracking_plugin_installed:
         work.append(("remove the CLI + MCP plugin", lambda: wizard.apply_tracking(False)))
 
-    if selection.capture and not caps.capture_plugin_installed:
+    if selection.capture and not caps.capture_on:
+        # NOT gated on "plugin absent": the killswitch is cleared here too, and
+        # a killswitched machine with the plugin already installed needs that
+        # clear or capture stays off while the run reports success.
+        # apply_capture skips the install itself when the plugin is present, so
+        # this cannot reintroduce the reinstall.
         work.append(
             (
-                "install the Session capture plugin",
+                "install the Session capture plugin"
+                if not caps.capture_plugin_installed
+                else "re-enable Session capture",
                 lambda: wizard.apply_capture(
                     caps, True, mode=OffMode.DISABLE, on_retry=_may_retry
                 ),
@@ -1186,9 +1193,10 @@ def _run_wizard_action(
             progress.note(f"! {label}: {exc}")
             return []
         # A step reports failure in prose, not by raising: the apply_* helpers
-        # return "could not install ..." strings. Treat those as failures so the
-        # tick mark matches what the line says.
-        ok = not any(m.startswith(("could not", "!")) for m in out)
+        # return "could not install ..." strings. The classifier lives next to
+        # the producers in setup.py so a reworded message cannot leave the tick
+        # mark disagreeing with the line printed underneath it.
+        ok = not any(wizard.reports_failure(m) for m in out)
         progress.finish(index, ok=ok)
         if out:
             progress.note(*out)

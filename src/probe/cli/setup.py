@@ -175,6 +175,20 @@ def interactive() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
+#: How an apply_* message announces that something went wrong. The wizard's
+#: progress screen has to tell a failed step from a successful one, and these
+#: helpers report failure in PROSE rather than by raising -- so the markers live
+#: here, beside the code that emits them. A copy of this tuple in main.py would
+#: drift the first time someone reworded a message, and the tick would quietly
+#: go green on a step that failed.
+_FAILURE_MARKERS = ("could not", "!")
+
+
+def reports_failure(message: str) -> bool:
+    """Whether an apply_* message is reporting a failure or a warning."""
+    return message.startswith(_FAILURE_MARKERS)
+
+
 def refresh_marketplace() -> claude_cli.Result:
     """Bring the local marketplace copy up to date. ONCE per wizard run.
 
@@ -387,7 +401,17 @@ def apply_capture(caps: Capabilities, want: bool, *, mode: OffMode, on_retry=Non
     """
     messages: list[str] = []
     if want:
+        # Two INDEPENDENT jobs, and conflating them is a bug in both directions.
+        # Clearing the killswitch is what actually turns capture back on for a
+        # machine that already has the plugin; installing is only needed when
+        # the plugin is absent. Gating the whole step on "plugin absent" (which
+        # this function's caller briefly did) left `.disabled` in place while
+        # the wizard reported success -- capture silently off after we said on.
+        # Gating it on "capture off" instead reinstalls a plugin that is already
+        # there. So: always clear, install only when missing.
         clear_killswitch()
+        if caps.capture_plugin_installed:
+            return messages
         result = install_plugin(TAP_PLUGIN_NAME, on_retry=on_retry)
         if not result.ok:
             messages.append(f"could not install {TAP_PLUGIN_NAME}: {result.detail}")
