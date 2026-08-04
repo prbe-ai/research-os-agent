@@ -80,8 +80,13 @@ test("the CLI floor is NOT this package's own version", () => {
 
 test("the spec is a floor, never an exact pin", () => {
   // `==` demands a PyPI release that may not exist for a launcher-only bump.
-  assert.ok(/\$\{DIST\}>=\$\{wanted\}/.test(source));
-  assert.ok(!/\$\{DIST\}==\$\{wanted\}/.test(source));
+  assert.ok(/\$\{DIST\}>=\$\{target\}/.test(source));
+  assert.ok(!/\$\{DIST\}==/.test(source));
+  // `target` is the newest KNOWN version, never below the floor.
+  assert.ok(
+    /const target = latest && atLeast\(latest, wanted\) \? latest : wanted/.test(source),
+    "the resolved spec must prefer the published latest and never drop below MIN_CLI",
+  );
 });
 
 test("MIN_CLI actually exists on PyPI", () => {
@@ -156,4 +161,99 @@ test("every fallback refreshes, or users freeze on their first version", () => {
 test("never falls back to a bare pip install", () => {
   // On a researcher's machine that usually means conda or system Python.
   assert.ok(!/pip3?\s+install/.test(source.replace(/^\s*\*.*$/gm, "")));
+});
+
+// --- currency check -------------------------------------------------------
+//
+// The floor answers "is this install too old to work". It cannot answer "is
+// this install the latest", because a floor stays satisfied forever. `npx
+// <tool>` means run the latest, so a satisfied floor was freezing every
+// existing user on whatever they already had -- the same freeze the `--refresh`
+// flag exists to prevent in the fetch branch, left standing in the handoff one.
+
+test("the handoff is gated on being current, not only above the floor", () => {
+  // The whole bug in one assertion: the early return must not be reachable
+  // from the floor check alone.
+  assert.ok(
+    /await latestVersion\(\)/.test(source),
+    "the handoff branch must consult the published manifest",
+  );
+  assert.ok(
+    !/if \(found && atLeast\(found, wanted\)\) return run\("probe", forwarded\)/.test(source),
+    "handing off on the floor alone is the freeze this check removes",
+  );
+});
+
+test("an unknown latest still runs the local install", () => {
+  // Offline, proxied, self-hosted without the route, or just slow. A currency
+  // check that strands a user offline is worse than the staleness it fixes.
+  assert.ok(
+    /if \(!latest \|\| atLeast\(found, latest\)\) return run\("probe", forwarded\)/.test(source),
+    "a null latest must fall open to the local install",
+  );
+  assert.ok(/return null;/.test(source), "manifest failures must resolve to null");
+});
+
+test("every manifest failure path is caught, none throw", () => {
+  const fn = source.match(/async function latestVersion\(\)[\s\S]*?\n}\n/)[0];
+  assert.ok(/try \{/.test(fn) && /\} catch \{/.test(fn), "must not propagate a fetch error");
+  assert.ok(/AbortSignal\.timeout\(/.test(fn), "must bound how long it can stall");
+  assert.ok(/res\.ok/.test(fn), "a non-200 is not a version");
+});
+
+test("the currency check cannot stall a command for long", () => {
+  // It runs on every invocation that has a usable local probe, i.e. the common
+  // path. A slow manifest must not be felt as a slow CLI.
+  const ms = parseInt(source.match(/const MANIFEST_TIMEOUT_MS = (\d+)/)[1], 10);
+  assert.ok(ms > 0 && ms <= 2000, `timeout must be short and non-zero, got ${ms}`);
+});
+
+test("a malformed version in the manifest is rejected, not compared", () => {
+  // atLeast() parses junk as zeros, so "latest": "banana" would compare as
+  // 0.0.0 and silently mean "you are current" forever.
+  const fn = source.match(/async function latestVersion\(\)[\s\S]*?\n}\n/)[0];
+  assert.ok(/typeof found === "string"/.test(fn), "must type-check the field");
+  assert.ok(/\\d\+\(\\\.\\d\+\)\+|\\d/.test(fn), "must shape-check the version string");
+});
+
+test("the manifest host follows PROBE_BASE_URL", () => {
+  // A self-hosted tenant's latest is not this one's. Asking the wrong host
+  // tells them they are behind forever, and every run refetches.
+  assert.ok(/PROBE_BASE_URL/.test(source), "must honour the base-url override");
+  assert.ok(
+    /\/v1\/client-version/.test(source),
+    "must read the same manifest the SessionStart nudge reads",
+  );
+});
+
+test("a rejected promise exits non-zero", () => {
+  // An unhandled rejection can exit 0 on some Node builds, which reads as
+  // success to whatever invoked the launcher.
+  assert.ok(/main\(\)\.catch\(/.test(source), "main must have a rejection handler");
+  assert.ok(
+    /process\.exit\(1\)/.test(source.match(/main\(\)\.catch\([\s\S]*$/)[0]),
+    "the rejection handler must exit non-zero",
+  );
+});
+
+test("the fetch resolves to the latest, not merely the floor", () => {
+  // The half-fix that shipped nothing: detecting "0.46.0 is behind 0.47.0" and
+  // then fetching `>=0.36.0` makes uv reuse the installed 0.46.0, so the
+  // launcher prints "fetching the latest" and changes nothing. Measured.
+  assert.ok(
+    !/"--from", `\$\{DIST\}>=\$\{wanted\}`/.test(source),
+    "no fetch may be constrained by the floor when a newer version is known",
+  );
+  const uvCalls = source.match(/"tool",\s*"run",[^\]]+/g) || [];
+  for (const call of uvCalls) {
+    assert.ok(/"--from", spec/.test(call), `fetch must use the resolved spec: ${call}`);
+  }
+});
+
+test("has() does not pair an args array with shell:true", () => {
+  // DEP0190. Node deprecated it because the args are concatenated, not escaped,
+  // and it printed a security warning on every run of the from-zero entry point.
+  const fn = source.match(/function has\(cmd\)[\s\S]*?\n}\n/)[0];
+  assert.ok(!/spawnSync\([^,]+,\s*\w*args\w*,/.test(fn), "must not pass an args array");
+  assert.ok(/spawnSync\(line, \{/.test(fn), "must pass a single shell string");
 });

@@ -28,6 +28,20 @@ const os = require("node:os");
 const DIST = "probe-research";
 
 /**
+ * Where the published-version manifest lives. The SessionStart hook already
+ * reads this exact endpoint to decide whether to nudge, so the launcher and the
+ * nudge cannot disagree about what "latest" means.
+ *
+ * `PROBE_BASE_URL` is honoured for the same reason the hook honours it: a
+ * self-hosted tenant's latest is not this one's, and asking the wrong host
+ * would tell them they are behind forever.
+ */
+const MANIFEST_PATH = "/v1/client-version";
+const DEFAULT_BASE = "https://api.research.prbe.ai";
+/** How long a currency check may delay a command that could already run. */
+const MANIFEST_TIMEOUT_MS = 1500;
+
+/**
  * The minimum CLI version this launcher needs — NOT this package's own version.
  *
  * npm and PyPI release INDEPENDENTLY. This package can take a launcher-only
@@ -86,10 +100,43 @@ function installedVersion() {
   return m ? m[1] : null;
 }
 
+function baseUrl() {
+  const env = process.env.PROBE_BASE_URL;
+  if (env && /^https?:\/\//.test(env)) return env.replace(/\/+$/, "");
+  return DEFAULT_BASE;
+}
+
+/**
+ * The newest published CLI, or null if that cannot be established quickly.
+ *
+ * NULL IS THE IMPORTANT RETURN. Offline, behind a proxy, self-hosted with the
+ * route absent, or simply slow -- every one of those must leave a working local
+ * install runnable. A currency check that can strand a user offline is worse
+ * than the staleness it fixes, so every failure here falls open.
+ */
+async function latestVersion() {
+  try {
+    const res = await fetch(`${baseUrl()}${MANIFEST_PATH}`, {
+      signal: AbortSignal.timeout(MANIFEST_TIMEOUT_MS),
+      headers: { accept: "application/json" },
+    });
+    if (!res.ok) return null;
+    const body = await res.json();
+    const found = body && body.cli && body.cli.latest;
+    return typeof found === "string" && /^\d+(\.\d+)+$/.test(found) ? found : null;
+  } catch {
+    return null;
+  }
+}
+
 function has(cmd) {
-  const probe = process.platform === "win32" ? "where" : "command";
-  const args = process.platform === "win32" ? [cmd] : ["-v", cmd];
-  const r = spawnSync(probe, args, { stdio: "ignore", shell: true });
+  // ONE shell string, never (command, args[], shell:true): Node deprecated that
+  // pairing in DEP0190 because the args are concatenated rather than escaped,
+  // and it printed a security warning on every single launcher run. `cmd` is a
+  // literal at all three call sites, so there is nothing to escape here -- but
+  // a warning users see on the from-zero entry point is its own problem.
+  const line = process.platform === "win32" ? `where ${cmd}` : `command -v ${cmd}`;
+  const r = spawnSync(line, { stdio: "ignore", shell: true });
   return r.status === 0;
 }
 
@@ -104,27 +151,50 @@ function run(cmd, args) {
   process.exit(r.status === null ? 1 : r.status);
 }
 
-function main() {
+async function main() {
   const args = process.argv.slice(2);
   // `npx probe-research` with no arguments runs the wizard — that is the entire
   // reason this package exists, so it should not require remembering a verb.
   const forwarded = args.length ? args : ["wizard"];
   const wanted = MIN_CLI;
 
-  // Only hand off to an existing install if it is at least as new as this
-  // launcher. Otherwise fall through and let uv/pipx fetch a matching CLI.
+  // Hand off to an existing install only when it is BOTH above the floor and
+  // current. The floor alone is not enough, and that was the bug: `npx <tool>`
+  // means "run the latest", but a floor is satisfied forever, so anyone who had
+  // ever installed the CLI was frozen on it and npx silently never delivered
+  // another update.
+  //
+  // That is the same failure the `--refresh` flag below exists to fix -- uv
+  // serving whatever it resolved on day one -- in the other branch. It was
+  // fixed there and left standing here.
+  let latest = null;
   if (has("probe")) {
     const found = installedVersion();
-    if (found && atLeast(found, wanted)) return run("probe", forwarded);
-    console.error(
-      `probe-research: installed probe ${found || "(unknown version)"} is older than ` +
-        `${wanted}; fetching the latest…`,
-    );
+    if (found && atLeast(found, wanted)) {
+      latest = await latestVersion();
+      // Unknown latest means run what we have: see latestVersion's contract.
+      if (!latest || atLeast(found, latest)) return run("probe", forwarded);
+      console.error(
+        `probe-research: probe ${found} is behind ${latest}; fetching the latest…`,
+      );
+    } else {
+      console.error(
+        `probe-research: installed probe ${found || "(unknown version)"} is older than ` +
+          `${wanted}; fetching the latest…`,
+      );
+    }
   }
   // A FLOOR, not an exact pin. Unpinned, `uv tool run --from probe-research`
   // reuses an already-installed 0.8.2 tool; pinned exactly, it demands a PyPI
   // version that may not exist. `>=` fixes both.
-  const spec = `${DIST}>=${wanted}`;
+  // Resolve to the newest version we actually know about, not merely the floor.
+  // `uv tool run` reuses an installed tool that satisfies the constraint, so a
+  // stale 0.46.0 satisfies `>=0.36.0` and uv hands back the very version we
+  // just decided was out of date -- the currency check above would print
+  // "fetching the latest" and then change nothing. Measured exactly that before
+  // this line existed.
+  const target = latest && atLeast(latest, wanted) ? latest : wanted;
+  const spec = `${DIST}>=${target}`;
   // REFRESH. uv caches the ENVIRONMENT it built for a requirement, so a range
   // like `>=0.10.0` keeps serving whatever it resolved the FIRST time — every
   // user frozen on the version they happened to run on day one, with the
@@ -162,8 +232,13 @@ function main() {
   // because it was resolved before the install ran.
   const uv = `${os.homedir()}/.local/bin/uv`;
   return run(uv, [
-    "tool", "run", "--refresh", "--from", `${DIST}>=${wanted}`, "probe", ...forwarded,
+    "tool", "run", "--refresh", "--from", spec, "probe", ...forwarded,
   ]);
 }
 
-main();
+main().catch((err) => {
+  // A throw here would exit 0 under an unhandled rejection on some Node builds,
+  // which reads as success to whatever invoked the launcher.
+  console.error(`probe-research: ${err && err.message ? err.message : err}`);
+  process.exit(1);
+});
