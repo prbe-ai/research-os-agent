@@ -4,6 +4,54 @@
 
 ### Fixed
 
+- **A ref that is both a project id and a project slug no longer silently resolves to
+  one of them.** `_project_id` parsed the ref as a UUID and, when that worked, returned
+  it as an id without ever asking whether a *slug* matched too. A project whose slug was
+  UUID-shaped was therefore unreachable by slug — and worse, naming it addressed
+  whichever project owned that UUID as its id. Observed 2026-08-04 with two live
+  projects, where slug `6fa49e87-…` belonged to one and id `6fa49e87-…` to another:
+  `probe project delete 6fa49e87-…`, meaning the first, would have permanently deleted
+  the second. Exit 0, a `deleted` line naming the ref, and nothing to restore.
+
+  Both spellings still resolve. Only the genuine collision is refused, and it names both
+  candidates so the operator can pick with `--by-id` / `--by-slug` rather than being told
+  "ambiguous" and left to guess. `--yes` does not skip the check: there is no answer to
+  "are you sure" that says *which* project was meant, and scripts pass `--yes` by default.
+
+  Reachable from 8 call sites including `project get / use / patch / tag / move / delete`.
+  The inverse resolver (`_project_slug`) had the bug mirrored, and the two anchor
+  resolvers — `_anchor_id_for` (artifact uploads) and the backfill's `_resolve_ref` —
+  had it in a quieter form, where the cost is an import filed into a stranger's project
+  instead of a deletion. All four now share `probe.cli.refs`.
+
+- **Slug lookups no longer stop at 200 rows.** Resolution scanned
+  `list_projects(limit=200)`, so a slug on project 201+ raised `no project with id or
+  slug X` — a false absence indistinguishable from a real one, and one that gets acted
+  on by creating a duplicate. It is a server-side `?slug=` on a UNIQUE column now: 0 or
+  1 row, no paging, no cap.
+
+### Changed
+
+- **Every `delete` verb takes the same ref forms and prompts the same way.** They had
+  drifted: `project delete` took an id or a slug, `experiment delete` took ids only (a
+  slug 422'd against the UUID-typed route), and `run delete` took ids only even though
+  `run get` had accepted a petname `short_id` all along. Learning the habit from one verb
+  and using it on the next got you a 422 at best. All four now route through one path
+  that resolves, confirms, then deletes by canonical id:
+
+  | verb | accepts |
+  |---|---|
+  | `project delete` | id or slug (`--by-id`/`--by-slug` when both) |
+  | `experiment delete` | id or slug (`--by-id`/`--by-slug` when both) |
+  | `run delete` | id or petname `short_id` — no disambiguator needed, a petname cannot be UUID-shaped |
+  | `artifact delete` | id only — there is no by-name index and a name is anchor-scoped, so there is no second spelling to accept |
+
+  The confirmation prompt and the `deleted` line now name the **resolved** entity
+  (name, handle and id) instead of echoing the string that was typed. Echoing the ref
+  asks the operator to confirm their own typo, and in the collision above it is exactly
+  the string that does not identify what is about to go. Resolution therefore happens
+  *before* the prompt, which is the ordering the confirmation is worth anything under.
+
 - **The Claude Code tap daemon died seconds after every SessionStart**
   (`probe-research-tap` 0.1.3). Transcripts silently stopped reaching
   research-os: sessions showed full artifact and experiment linkage next to
