@@ -2563,6 +2563,39 @@ artifact_app = typer.Typer(no_args_is_help=True, help="artifacts")
 app.add_typer(artifact_app, name="artifact")
 
 
+def _anchor_id_for(client: Client, anchor: Anchor, anchor_id: str | None) -> str | None:
+    """Let a project anchor be named by SLUG, not only by id.
+
+    Every ``/v1/projects/{project_id}`` route types the path param as a UUID, so
+    a slug reaches the server as a 422 about UUID parsing. That is survivable
+    for a human who can look the id up once; it is not survivable for an agent
+    filing a few thousand artifacts, which would have to thread a uuid through
+    every command and only has to get it wrong once.
+
+    Slugs are the handle people actually remember -- the same reason
+    :func:`_project_id` exists for the project verbs.
+
+    ADDITIVE, never a new gate. An id passes straight through, and so does
+    anything that does not resolve: this route already answers a bad anchor with
+    a 422, and turning that into a local hard error would reject values that
+    were previously fine (an id this caller cannot enumerate, a project outside
+    the page `_project_id` walks). The exact `?slug=` lookup is used rather than
+    listing, so it is one request and correct past 200 projects.
+    """
+    if anchor is not Anchor.PROJECT or not anchor_id:
+        return anchor_id
+    try:
+        UUID(anchor_id)
+        return anchor_id
+    except ValueError:
+        pass
+    try:
+        found = client.resolve_project(anchor_id)
+    except Exception:  # noqa: BLE001 - resolution is a convenience, never a gate
+        return anchor_id
+    return str(found["id"]) if found else anchor_id
+
+
 def _pick_anchor(
     *,
     run: str | None,
@@ -2876,6 +2909,7 @@ def artifact_add(
         print(f"artifact {resolved!r} recorded on {anchor_id}")
         return
     with _client() as c:
+        anchor_id = _anchor_id_for(c, anchor, anchor_id)
         if reference:
             fields = reference_fields(
                 path, hash_content=hash_content, allow_missing=allow_missing
@@ -2927,7 +2961,7 @@ def artifact_list(
                 f"--kind/--step-from/--step-to are run-only filters; "
                 f"the {anchor.value} listing does not accept them"
             )
-        _print_json(c.list_anchored(anchor, anchor_id))
+        _print_json(c.list_anchored(anchor, _anchor_id_for(c, anchor, anchor_id)))
 
 
 @artifact_app.command("download")

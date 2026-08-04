@@ -25,6 +25,38 @@
 
 ### Added
 
+- **Backfill lets the agent decide the projects, and name them.** The anchor
+  used to be pinned before launch — one project, named after the folder — which
+  collapsed `/workspace` (Michael's work, Xian's work, Connor's work) into a
+  single project called `workspace`. The shape of the work is the judgement the
+  agent is there for, so it now decides how many projects, which existing ones
+  to file into, and what to call them. `--project` still forces one destination,
+  and is resolved before launch so a bad name fails in a second rather than
+  after twenty minutes of reading.
+
+  What replaces the pin is discipline plus a backstop: the prompt makes the
+  agent list what exists and reuse before creating (and argues why — the
+  `odyssey-infill-v3` / `odyssey_infill_v3` near-miss splits a record in half
+  invisibly), names are directed at the work rather than the directory, and
+  `ensure_project`'s near-miss guard still refuses a typo-shaped slug whoever
+  chose it.
+
+- **`--project` accepts a slug** on `probe artifact add` and `probe artifact
+  list`, not only a project id. Additive, never a new gate: an id passes
+  through and so does anything that does not resolve, since the route already
+  answers a bad anchor with a 422. Uses the exact `?slug=` lookup, so it is one
+  request and correct past 200 projects.
+
+  This is what makes agent-chosen projects workable — otherwise the agent would
+  have to capture a uuid at creation and thread it through several thousand
+  commands, and only has to get that wrong once.
+
+  The reconcile follows suit: the agent's summary names every project it filed
+  into, and that is the only thing taken from its own account of the run. It
+  says where to look; the server still says how many and the walk still says how
+  many there should be, so an agent that overstates its work cannot make the two
+  agree. No projects named is reported as uncounted, never as zero.
+
 - **`probe snapshot-restore RUN_ID DEST`** rebuilds a run's captured working tree.
   Files git can supply are fetched from the recorded remote (one depth-1 fetch of
   the base commit, not one per file); the rest come from the uploaded `code-bytes`
