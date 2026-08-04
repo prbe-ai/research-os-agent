@@ -78,8 +78,18 @@ near-miss of an existing slug rather than warning.)
    run.snapshot()                                    # code + env, pins env_ref
    for step, batch in enumerate(loader):
        run.log({"loss": loss, "reward": reward}, step=step)      # the curve
+   run.log({"accuracy": acc}, step=None, agg="mean")             # the headline: ONE series
+   run.log_artifact("predictions", path="preds.jsonl")           # per-example detail
    run.finish()                     # or `with run:` — closes even on an exception
    ```
+
+   Those three lines are the three shapes, and the split between them is a
+   decision you make BEFORE writing the call, not a formatting detail: dimensions
+   are low-cardinality grouping axes, per-example identity belongs in the
+   artifact, and only `step=` produces a curve. Putting an `example_id` in
+   dimensions mints one single-point series per example and turns the run page
+   into a wall of scalar tiles, silently. `track-research-work` step 1 has the
+   shape table and the assertion that catches it.
 
    `import probe` needs `probe-research` in the script's own environment
    (`uv add probe-research` / `pip install probe-research`) — the wizard's CLI

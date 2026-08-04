@@ -441,8 +441,10 @@ class Run:
                     ...                            # nested: child = parent ∪ child
 
         ``coords`` are the bounded grouping axes (SERIES identity: rank/split/...,
-        never a per-sample id and never the step axis); ``labels`` are unbounded
-        per-sample drill-down ids (POINT identity only). Nested units merge with
+        never a per-sample id and never the step axis — an ambient coord is applied
+        to EVERY point in the block, so a per-sample one shreds the block into
+        one-point series, see :meth:`log`); ``labels`` are unbounded per-sample
+        drill-down ids (POINT identity only). Nested units merge with
         the child winning per key; a key may not end up in both maps
         (``ValueError``, mirroring the server's 422). The context is contextvar-
         scoped: thread- and asyncio-task-local, restored on exit, and folded into
@@ -466,15 +468,50 @@ class Run:
     ):
         """Append metric points. Fail-open by default (spools on failure).
 
-        ``dimensions`` is a bounded flat label map (<=8 keys); it widens the series
-        identity to ``(run,kind,key,dims_hash)`` (fold #9). ``labels`` is the
-        per-sample drill-down map (<=32 keys, POINT identity only) and ``span_id``
-        an optional exemplar pointer to the span the value was produced under.
-        Both maps merge over the ambient :meth:`unit` context (the explicit call
-        site wins per key); a key in both maps raises ``ValueError``.
-        Dimension-less points stay byte-identical. Built through the generated
-        ``MetricBatch``/``MetricPointIn``, so schema drift fails here, not as a
-        server 422.
+        DECIDE THE SHAPE BEFORE YOU CALL THIS. Series identity is
+        ``(run,kind,key,dims_hash)``, so every distinct ``dimensions`` combination
+        is a SEPARATE series — and a series holding one point has nothing to plot,
+        so it renders as a scalar tile rather than a graph. Each metric is one of
+        three shapes:
+
+        * **curve** (loss, lr, reward over time) — one series, many points,
+          distinguished by ``step``. ONLY ``step`` makes a curve; spreading values
+          across a dimension does not.
+        * **headline scalar** (final accuracy) — one series, one point, 0-2
+          low-cardinality dims.
+        * **breakdown** (accuracy by category) — one series per category value.
+
+        Budget it at the write: series ≈ the PRODUCT of your dimension
+        cardinalities. Past ~50 you have designed a wall of tiles. That failure is
+        silent — every call succeeds, the values are correct, the data stays fully
+        queryable, and the only symptom is an unreadable run page — so assert the
+        count after the first run instead of eyeballing the dashboard::
+
+            series = client.run_series(run.id)     # one row per series
+            assert len(series) < 50, f"{len(series)} series — a wall of tiles"
+
+        ``dimensions`` is a bounded flat label map (<=8 keys) of the LOW-CARDINALITY
+        axes you actually intend to group by — split, seed, rank, difficulty,
+        category. Never an identifier: ``example_id``, a row id, a uuid, a
+        filename, a per-field name each mint their own one-point series (500
+        examples logged with ``example_id`` as a dimension = 500 series = 500
+        tiles and zero graphs). Per-sample identity goes in ``labels`` instead
+        (<=32 keys, POINT identity only — it does NOT widen the series), and
+        per-item detail belongs in an artifact, which is where analysis code reads
+        it from anyway. Metrics are for what a human should see; artifacts are for
+        what code reads. ``span_id`` is an optional exemplar pointer to the span
+        the value was produced under. Both maps merge over the ambient
+        :meth:`unit` context (the explicit call site wins per key); a key in both
+        maps raises ``ValueError``. Dimension-less points stay byte-identical.
+        Built through the generated ``MetricBatch``/``MetricPointIn``, so schema
+        drift fails here, not as a server 422.
+
+        The headline number must be exactly ONE series: a computed view resolves a
+        key and REFUSES one carrying several dimension variants ("series X has N
+        dimension variants"). So never log a headline scalar and a per-item cloud
+        under the same key — use two (``accuracy`` and ``accuracy_per_example``),
+        and put the high-cardinality one under its own ``kind`` so the run page
+        shows the handful of numbers that matter while the detail stays queryable.
 
         ``agg`` DECLARES the key's reduce fn (mean|sum|min|max|count) so a later
         grouped read can omit its own (server 0062: an omitted read-side ``agg``

@@ -36,6 +36,34 @@ gets made. Record with the surface the run was opened with.
    None are stored on that step's record instead and come back under
    `view="trajectory"`. So `run.log({"loss": l, "phase": "eval"})` is one call.
 
+   **Decide the shape before you log.** A series is a key plus a dimension
+   combination, so every distinct combination is a separate series — and a series
+   holding one point has nothing to plot, so it renders as a scalar tile. Each
+   metric is one of three shapes:
+
+   | shape | how to log it | renders as |
+   |---|---|---|
+   | curve (loss, lr, reward over time) | one series, many points, differing in `step=` | a line chart |
+   | headline scalar (final accuracy) | one series, one point, 0–2 low-cardinality dims | a stat tile |
+   | breakdown (accuracy by category) | one series per category value, cardinality under ~20 | N tiles, or a grouped read |
+
+   Dimensions are the LOW-CARDINALITY axes you intend to group by — split, seed,
+   rank, category. Never an identifier: `example_id`, a row id, a uuid, a filename,
+   a per-field name each mint their own one-point series, so 500 examples logged
+   with `example_id` as a dimension is 500 series, 500 tiles and zero graphs. Only
+   `step=` makes a curve; spreading values across a dimension does not. Per-sample
+   ids go in `labels=` instead (POINT identity — it does not widen the series), and
+   per-item detail goes in an artifact, which is what analysis code reads anyway.
+   Budget it: series ≈ the product of your dimension cardinalities, and past ~50 you
+   have designed a wall of tiles.
+
+   Two that only bite later. The headline number must be exactly ONE series — a
+   computed view resolves a key and refuses one carrying several dimension
+   variants — so keep `accuracy` and `accuracy_per_example` as separate keys, and
+   give the high-cardinality one its own `kind=` so the run page still shows the
+   handful of numbers a human wants. And declare `agg="mean"` at the write, so
+   every later reader gets the right reduction without having to name one.
+
    A durable claim about the work — why this approach, what you found, what a next
    session should not repeat — is prose, not a metric key. It goes in the project's
    notes:
@@ -107,6 +135,23 @@ gets made. Record with the surface the run was opened with.
    and what landed are different claims, and only the second is evidence. In
    async mode, `probe outbox status` must be clean before a read-back can prove
    anything.
+
+   After the FIRST run of any new logging code, assert the shape rather than
+   eyeballing the dashboard — a bad shape is silent, since every call succeeds and
+   the values are correct:
+
+   ```python
+   series = client.run_series(run.id)      # one row per (key, kind, dimensions)
+   assert len(series) < 50, f"{len(series)} series — a wall of tiles, not graphs"
+   ```
+
+   If the series count is close to your point count, every series holds one point
+   and you have logged tiles and no graphs. Fix the shape before spending compute
+   on more runs. When checking a breakdown pools the way you intended, pass an
+   explicitly large `step_bucket` to `get_metrics_grouped` and confirm the rows
+   come back with `n > 1`: the reduction buckets by step first, so points written
+   at auto-incremented steps return one group per point and the grouping appears
+   to do nothing.
 
 4. **Version reusable outputs; do not copy them.** An asset is an artifact with a
    version chain — upload it (`run.log_artifact` / `probe artifact add`), then pin
