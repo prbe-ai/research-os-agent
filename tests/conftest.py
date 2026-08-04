@@ -1170,6 +1170,16 @@ class FakeApp:
                 vers.append(v)
                 return httpx.Response(201, json=v)
             if method == "GET":
+                # 404 on an UNKNOWN id, exactly like the route: it calls
+                # `require_artifact(conn, artifact_id)` before listing, which raises
+                # 404 "artifact not found" for an absent or soft-deleted row
+                # (research-os app/artifacts/versions_router.py). Returning 200 + []
+                # here would conflate "this artifact has no versions yet" with "no
+                # such artifact" -- opposite answers, and the second is the one a
+                # caller may use as an existence probe. A fake that cannot tell them
+                # apart certifies a client that cannot either.
+                if self._find_artifact(aid) is None:
+                    return httpx.Response(404, json={"detail": "artifact not found"})
                 return httpx.Response(200, json=self.artifact_versions.get(aid, []))
 
         # -- lineage edges (fold #2) --
