@@ -20,6 +20,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -3464,6 +3465,71 @@ def snapshot_show(
         f"{manifest.get('n_git_referenced', 0)} referenced, "
         f"{manifest.get('n_pending_upload', 0)} pending upload"
     )
+
+
+@app.command("snapshot-restore")
+def snapshot_restore(
+    run: str = typer.Argument(...),
+    dest: str = typer.Argument(None, help="directory to rebuild into; omit with --verify-only"),
+    verify_only: bool = typer.Option(
+        False, "--verify-only", help="resolve and hash everything, write nothing"
+    ),
+) -> None:
+    """Rebuild a run's captured working tree, or say exactly what is missing.
+
+    Files git can supply are fetched from the recorded remote; the rest come from
+    the uploaded `code-bytes` archive. Every file is verified against the sha256
+    the manifest recorded — a mismatch is reported UNAVAILABLE and never written,
+    so this cannot hand back a tree that only looks right.
+
+    Exits non-zero if any file could not be produced.
+    """
+    from ..sdk.restore import restore_snapshot
+
+    if not verify_only and not dest:
+        raise typer.BadParameter("DEST is required unless --verify-only is passed")
+
+    with _client() as c:
+        handle = _run_handle(c, run)
+        env_ref = handle.data.get("env_ref")
+        if not env_ref:
+            print(f"error: run {run} has no execution record to restore", file=sys.stderr)
+            raise typer.Exit(1)
+        record = c.transport.get(f"/v1/execution-records/{env_ref}")
+        manifest = ((record or {}).get("code") or {}).get("manifest") or {}
+
+        archive = None
+        tmp = None
+        rows = c.list_run_artifacts(handle.id, kind="code_bytes") or []
+        rows = rows.get("items", rows) if isinstance(rows, dict) else rows
+        if rows:
+            tmp = tempfile.NamedTemporaryFile(prefix="probe-code-", suffix=".tar.gz", delete=False)
+            tmp.close()
+            try:
+                c.download_artifact_to(rows[0]["id"], tmp.name)
+                archive = tmp.name
+            except Exception as exc:  # noqa: BLE001 -- reported per file below
+                print(f"warning: could not download code-bytes: {exc}", file=sys.stderr)
+
+    try:
+        result = restore_snapshot(
+            manifest, dest or ".", archive_path=archive, verify_only=verify_only
+        )
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+    for f in result["files"]:
+        if f["status"] == "unavailable":
+            print(f"  MISSING {f['path']}  ({f['reason']})")
+    verb = "verified" if verify_only else "restored"
+    print(f"{result['n_restored']} {verb}, {result['n_unavailable']} unavailable")
+    print(f"tree_sha256 {result['tree_sha256']} matches={result['tree_matches']}")
+    if result["n_unavailable"]:
+        raise typer.Exit(1)
 
 
 # -- outbox (the async write journal) ---------------------------------------

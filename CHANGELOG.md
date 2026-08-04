@@ -4,6 +4,24 @@
 
 ### Added
 
+- **`probe snapshot-restore RUN_ID DEST`** rebuilds a run's captured working tree.
+  Files git can supply are fetched from the recorded remote (one depth-1 fetch of
+  the base commit, not one per file); the rest come from the uploaded `code-bytes`
+  archive. Storing bytes without a way to reassemble them moved the gap rather
+  than closing it.
+
+  Every file is verified against the sha256 the manifest recorded, and the rebuilt
+  tree against `tree_sha256`. A mismatch is reported UNAVAILABLE and **never
+  written** — the `probe.sandbox-state/1` rule: degrade to "unavailable", never to
+  a wrong answer. The command exits non-zero if any file could not be produced,
+  and reports per file rather than all-or-nothing, so an unreachable remote still
+  restores what the archive holds.
+
+  `--verify-only` resolves and hashes everything without writing, which is how a
+  fleet gets swept for "which of these can actually be rebuilt?".
+
+### Added
+
 - **`probe snapshot` now uploads the bytes git cannot supply.** Files classified
   `source: "blob"` — edited, untracked, unpushed, or no remote at all — are tarred
   into a single `code-bytes` artifact and stored through the ordinary presign
@@ -208,6 +226,24 @@
   nothing validates on its behalf.
 
 ## Unreleased
+
+### Added
+
+- **`probe snapshot-restore RUN_ID DEST`** rebuilds a run's captured working tree.
+  Files git can supply are fetched from the recorded remote (one depth-1 fetch of
+  the base commit, not one per file); the rest come from the uploaded `code-bytes`
+  archive. Storing bytes without a way to reassemble them moved the gap rather
+  than closing it.
+
+  Every file is verified against the sha256 the manifest recorded, and the rebuilt
+  tree against `tree_sha256`. A mismatch is reported UNAVAILABLE and **never
+  written** — the `probe.sandbox-state/1` rule: degrade to "unavailable", never to
+  a wrong answer. The command exits non-zero if any file could not be produced,
+  and reports per file rather than all-or-nothing, so an unreachable remote still
+  restores what the archive holds.
+
+  `--verify-only` resolves and hashes everything without writing, which is how a
+  fleet gets swept for "which of these can actually be rebuilt?".
 
 ### Added
 
