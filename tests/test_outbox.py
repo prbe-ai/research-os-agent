@@ -338,7 +338,7 @@ def test_flush_delivers_journaled_writes(app, tmp_path):
 
 
 def test_maybe_spawn_declines_when_idle_or_paused(tmp_path, monkeypatch):
-    from probe.cli import outbox_worker
+    from probe.sdk import outbox_worker
 
     journal = journal_at(tmp_path)
     assert outbox_worker.maybe_spawn(str(journal.dir)) is False  # empty
@@ -351,7 +351,7 @@ def test_maybe_spawn_declines_when_idle_or_paused(tmp_path, monkeypatch):
 
 
 def test_worker_loop_backs_off_then_exits_when_empty(tmp_path, monkeypatch):
-    from probe.cli import outbox_worker
+    from probe.sdk import outbox_worker
     from probe.sdk.journal import DrainReport
 
     reports = [
@@ -366,7 +366,7 @@ def test_worker_loop_backs_off_then_exits_when_empty(tmp_path, monkeypatch):
 
 
 def test_worker_loop_exits_hard_on_auth_block(tmp_path, monkeypatch):
-    from probe.cli import outbox_worker
+    from probe.sdk import outbox_worker
     from probe.sdk.journal import DrainReport
 
     monkeypatch.setattr(
@@ -515,7 +515,7 @@ def test_drain_lock_contention_reports_without_touching_queue(tmp_path):
 
 
 def test_maybe_spawn_spawns_detached_worker(tmp_path, monkeypatch):
-    from probe.cli import outbox_worker
+    from probe.sdk import outbox_worker
 
     journal = journal_at(tmp_path)
     journal.append_http("POST", "/v1/x", {})
@@ -525,7 +525,7 @@ def test_maybe_spawn_spawns_detached_worker(tmp_path, monkeypatch):
     )
     assert outbox_worker.maybe_spawn(str(journal.dir)) is True
     argv, kw = calls[0]
-    assert argv[1:3] == ["-m", "probe.cli.outbox_worker"]
+    assert argv[1:3] == ["-m", "probe.sdk.outbox_worker"]
     assert kw["start_new_session"] is True
     import stat as stat_module
 
@@ -534,7 +534,7 @@ def test_maybe_spawn_spawns_detached_worker(tmp_path, monkeypatch):
 
 
 def test_worker_run_exits_4_when_paused(tmp_path):
-    from probe.cli import outbox_worker
+    from probe.sdk import outbox_worker
 
     journal = journal_at(tmp_path)
     journal.append_http("POST", "/v1/x", {})
@@ -648,7 +648,7 @@ def test_custom_journal_dir_never_steals_the_global_spool(tmp_path, monkeypatch)
 
 
 def test_clear_auth_block_reopens_spawning(tmp_path):
-    from probe.cli import outbox_worker
+    from probe.sdk import outbox_worker
 
     journal = journal_at(tmp_path)
     journal.append_http("POST", "/v1/x", {})
