@@ -289,17 +289,16 @@ def test_the_prompt_demands_a_description_on_what_it_creates(tmp_path):
 def test_the_prompt_bounds_how_long_a_description_may_be(tmp_path):
     """Asking for a description without bounding it produced a 566-char one.
 
-    The overview clamps the field to two lines, and the server's own generated
-    descriptions cap at 240 chars — so an unbounded ask puts the back half of the
-    text somewhere nobody reads it. Both creates carry the bound: the experiment
-    line used to invite the opposite ("record WHY you believed this was a real
-    experiment — the files that convinced you"), which is notes-shaped prose
-    aimed at a two-line field."""
+    A description is a description: what the thing is, 1-3 sentences, and nothing
+    else loaded into it. Both creates carry the bound. The experiment line used to
+    invite the opposite ("record WHY you believed this was a real experiment — the
+    files that convinced you"), which is notes-shaped prose in a field the overview
+    clamps to two lines."""
     prompt = backfill.build_prompt(
         folder=tmp_path, census=backfill.Census(files=3, bytes=99)
     )
     # Both the project create and the experiment create state it.
-    assert prompt.count("under 240 chars") == 2
+    assert prompt.count("1-3 sentences") == 3
     # The provenance the experiment line used to want is redirected, not dropped.
     assert "probe notes write" in prompt
 

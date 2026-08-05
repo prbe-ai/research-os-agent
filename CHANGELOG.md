@@ -97,14 +97,14 @@
   only when a child RUN reaches a terminal status, so anything ending without one
   stays blank permanently.
 
-- **A description now has a stated length.** Asking for one without bounding it
-  produced a 566-char, five-sentence description on the `odyssey` project. The
-  overview clamps the field to two lines and the server's own `description`
-  generation kind caps at 240 chars, so the back half was written into a place
-  nobody reads. Both creates now say "1-2 sentences, under 240 chars"; the
-  backfill's experiment line, which had asked for the provenance reasoning that
-  justified creating the experiment, sends that to `probe notes write` instead —
-  it is worth keeping, just not in a two-line field.
+- **A description now has a stated length: 1-3 sentences.** Asking for one
+  without bounding it produced a 566-char, five-sentence description on the
+  `odyssey` project, which the overview then clamped to two lines — the back half
+  written somewhere nobody reads. Both creates now say so, and the ask is just a
+  description of the thing rather than a field carrying other freight: the
+  backfill's experiment line had asked for the provenance reasoning that
+  justified creating the experiment, and that goes to `probe notes write`
+  instead — worth keeping, just not here.
 
 - **Backfill now writes a description for every project and experiment it
   creates.** The prompt showed `project create` with only `--name`, so whether a

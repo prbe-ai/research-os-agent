@@ -45,12 +45,10 @@ near-miss of an existing slug rather than warning.)
    raise if the slug is taken, so re-running a setup script is a loud no-op rather
    than a silent second identity.
 
-   **Always pass `--description` — one or two sentences, under 240 characters.**
-   It is the first thing anyone sees under the title, and a container without one
-   reads as "Add description" to every visitor. The hypothesis says what you
-   expect; the description says what the work IS — the model, the data, the metric.
-   That bound is the server's own: the overview clamps this field to two lines, so
-   a third sentence is not read, it is hidden.
+   **Always pass `--description`: what the thing is, in 1-3 sentences.** It is the
+   first thing anyone sees under the title, and a container without one reads as
+   "Add description" to every visitor. The hypothesis says what you expect; the
+   description says what the work IS — the model, the data, the metric.
 
    Nothing reliably fills it in later. The server generates a description only
    when a child RUN reaches a terminal status, so anything that ends without one
