@@ -698,7 +698,7 @@ def _rows(payload) -> list | None:
 
 
 def _project_id(client, project: str) -> str | None:
-    """`project` as a UUID. Slugs are RESOLVED, never passed through.
+    """`project` as a UUID. A bare ref is a SLUG; ids arrive as `id:<uuid>`.
 
     ``/v1/projects/{project_id}/artifacts`` types its path param as a UUID, so a
     slug arrives as a 422 about UUID parsing rather than a lookup -- the same
@@ -706,14 +706,14 @@ def _project_id(client, project: str) -> str | None:
     from :func:`summary_projects`, i.e. the read-back is fed the one form the
     route cannot take, and the 422 is swallowed as "could not read back".
     """
-    from uuid import UUID
+    from . import refs
 
     try:
-        UUID(project)
-    except (ValueError, AttributeError, TypeError):
-        found = client.resolve_project(project)
-        return str(found["id"]) if found else None
-    return project
+        # verify=False: this is a READ-BACK, so an `id:` ref needs no round trip
+        # to confirm what it already states, and one fewer request per project.
+        return refs.resolve(client, "project", project, verify=False).id
+    except Exception:  # noqa: BLE001 - a read-back miss degrades, never raises here
+        return None
 
 
 def count_landed(client, project: str) -> tuple[int, bool]:

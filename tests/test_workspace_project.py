@@ -237,6 +237,9 @@ def test_cli_artifact_add_shifts_the_positional_under_an_anchor(
 ):
     """`add ./f.bin --project P` — the single positional is the PATH, not a run."""
     monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    # An anchor must now NAME something: a ref that does not resolve is an error
+    # rather than a raw string handed to a UUID-typed route.
+    client.create_project("p1", workspace_id=_WS_MINE)
     blob = tmp_path / "f.bin"
     blob.write_bytes(b"x")
 

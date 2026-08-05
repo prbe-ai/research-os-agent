@@ -1825,6 +1825,21 @@ def _ref(client: Client, kind: str, ref: str) -> refs.Ref:
         raise typer.BadParameter(str(exc)) from None
 
 
+def _ambient_project(explicit: str | None, **kw) -> str | None:
+    """The project ref to use, canonicalising ONLY the ambient one.
+
+    ``from_ambient`` reads a bare UUID as an id, which is right for a value the
+    TOOL stored and catastrophically wrong for one a person typed: rewriting an
+    explicit ``--project <uuid-shaped-slug>`` to ``id:`` is the original bug, back.
+    ``resolve()`` merges flag/env/context into one string and forgets which won,
+    so the provenance has to be decided here, before it is lost.
+    """
+    merged = resolve(project=explicit, **kw).project
+    if explicit is not None:
+        return explicit  # typed by a person: a bare ref is a slug, full stop.
+    return refs.from_ambient(merged)
+
+
 def _project_id(client: Client, ref: str) -> str:
     """A project SLUG (or ``id:<uuid>``) -> the id every route wants.
 
@@ -2172,7 +2187,7 @@ def run_start(
     # This is what makes `probe project use` mean something: without it the ambient
     # project would be stored and displayed but never actually applied to a write.
     # Explicit flag still wins, so scripts never depend on a developer's context.
-    resolved_project = refs.from_ambient(resolve(project=project).project)
+    resolved_project = _ambient_project(project)
     if not experiment and not resolved_project:
         # Fail in CLI vocabulary before the SDK's run()-phrased error can leak.
         raise errors.ValidationError(
@@ -2943,14 +2958,17 @@ def _anchor_id_for(client: Client, anchor: Anchor, anchor_id: str | None) -> str
     kind = _SLUG_ANCHORS.get(anchor)
     if kind is None or not anchor_id:
         return anchor_id
-    try:
-        # verify=False: this was never a gate, so an `id:` ref does not need a
-        # round trip to confirm it exists -- it IS the id. That makes the agent
-        # path (thousands of artifacts, anchor named once per call) cost one
-        # request for a slug and none for an id.
-        return refs.resolve(client, kind, anchor_id, verify=False).id
-    except Exception:  # noqa: BLE001 - resolution is a convenience, never a gate
-        return anchor_id
+    # verify=False: an `id:` ref does not need a round trip to confirm it exists
+    # -- it IS the id, and returns without touching the network. That keeps the
+    # agent path (thousands of artifacts) at one request for a slug, none for an id.
+    #
+    # This used to swallow every error and pass the raw ref through, on a
+    # "never a gate" rationale that slug-default invalidates: the route types its
+    # path param as a UUID, so passing a bare UUID through is not a no-op -- the
+    # SERVER reads it as an id and files the upload against whichever project owns
+    # it. That is the misresolution this whole grammar exists to end, so a failed
+    # lookup is now an error instead of a silent redirect.
+    return refs.resolve(client, kind, anchor_id, verify=False).id
 
 
 def _pick_anchor(
@@ -4198,7 +4216,7 @@ app.add_typer(notes_app, name="notes")
 
 def _notes_project(client: Client, project: str | None) -> tuple[str, str]:
     """(project_id, label) for a notes read/write. Explicit beats the active one."""
-    resolved = refs.from_ambient(resolve(project=project, base_url=_conn.base_url).project)
+    resolved = _ambient_project(project, base_url=_conn.base_url)
     if not resolved:
         raise typer.BadParameter(
             "pass --project, or set an active project with `probe project use <slug>`"
@@ -4284,7 +4302,7 @@ def experiment_create(
     `--hypothesis` is required here for that reason — this is the moment you know
     what you are testing, and nothing later goes back to fill it in.
     """
-    resolved_project = refs.from_ambient(resolve(project=project).project)
+    resolved_project = _ambient_project(project)
     if not resolved_project:
         raise errors.ValidationError(
             "pass --project, or set an active project with `probe project use`"

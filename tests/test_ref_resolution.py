@@ -420,3 +420,74 @@ def test_run_start_without_a_slug_still_gets_a_petname(app, client, monkeypatch,
 
     rid = capsys.readouterr().out.strip()
     assert app.runs[rid]["short_id"], "the server still names it"
+
+
+# -- findings from the cross-model adversarial pass ----------------------------
+def test_an_explicit_uuid_shaped_slug_is_not_rewritten_as_an_id(app, client, monkeypatch, capsys):
+    """THE regression of the regression.
+
+    `from_ambient` reads a bare UUID as an id, which is right for a value the tool
+    stored and catastrophically wrong for one a person typed. `resolve()` merges
+    flag/env/context into one string and forgets which won, so an explicit
+    `--project <uuid-shaped-slug>` was being rewritten to `id:` -- the original
+    bug, reintroduced one layer up.
+    """
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    _project(app, pid=A_ID, slug=A_SLUG, name="Parity smoke")
+    _project(app, pid=B_ID, slug=B_SLUG)  # slug IS A's id
+    app.seed_experiment("e", project_id=B_ID)
+
+    # B_SLUG is A_ID. Explicitly passed, it must mean B (the slug), never A.
+    assert impl._ambient_project(B_SLUG) == B_SLUG
+
+
+def test_the_stored_anchor_is_still_read_as_an_id(app, client, monkeypatch):
+    """The other half: a bare UUID that came from the CONTEXT is machine-written
+    and is still read as an id."""
+    from probe.sdk.config import save_context
+
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    _project(app, pid=A_ID, slug=A_SLUG)
+    save_context({"workspace": {"id": _WS_MINE, "project": A_ID}})
+
+    assert impl._ambient_project(None) == f"id:{A_ID}"
+
+
+def test_an_artifact_anchor_that_does_not_resolve_is_an_error(app, client, monkeypatch):
+    """It used to swallow every failure and pass the raw ref through, on a
+    "never a gate" rationale slug-default invalidates: the route types its path
+    param as a UUID, so a bare UUID passed through is read BY THE SERVER as an id
+    and files the upload against whichever project owns it."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    _project(app, pid=A_ID, slug=A_SLUG)
+
+    with pytest.raises(Exception):
+        impl._anchor_id_for(client, impl.Anchor.PROJECT, B_ID)
+
+
+def test_a_name_match_on_a_paged_listing_refuses(app, client, monkeypatch, capsys):
+    """"Exactly one match" cannot be proven from one page."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    for i in range(260):
+        _project(app, pid=str(uuid.uuid4()), slug=f"filler-{i:03d}", name="Duplicate")
+
+    assert cli.main(["project", "delete", "name:Duplicate", "--yes"]) != 0
+    assert len(app.projects) == 260, "nothing deleted while uniqueness is unproven"
+
+
+def test_a_backend_that_drops_the_run_slug_is_not_a_success(app, client, monkeypatch):
+    """Pydantic ignores an undeclared body field, so an older backend creates a
+    randomly-named run and returns 201 -- and the caller exits 0 believing it owns
+    a handle it does not."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    app.seed_experiment("nightly")
+    original = client.transport.post
+
+    def drops_slug(path, body=None, **kw):
+        if isinstance(body, dict):
+            body = {k: v for k, v in body.items() if k != "slug"}
+        return original(path, body, **kw)
+
+    monkeypatch.setattr(client.transport, "post", drops_slug)
+
+    assert cli.main(["run", "start", "--experiment", "nightly", "--slug", "nightly-eval"]) != 0

@@ -276,7 +276,12 @@ def _by_name(client, kind: str, name: str) -> Ref:
     a row named something else.
     """
     lister = getattr(client, f"list_{kind}s")
-    rows = list(lister(name=name, limit=200).items)
+    page = lister(name=name, limit=200)
+    rows = list(page.items)
+    if page.next_cursor:
+        # "Exactly one match" cannot be proven from one page. Rather than page the
+        # whole tenant to answer a question the slug answers in one request, say so.
+        raise AmbiguousName(kind, name, rows[:5])
     matched = [row for row in rows if str(row.get("name", "")).lower() == name.lower()]
     if len(matched) != len(rows):
         raise NameFilterUnsupported(kind, name)

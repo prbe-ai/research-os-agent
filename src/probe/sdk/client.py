@@ -42,6 +42,7 @@ from ..models import (
 )
 from . import config as config_module
 from . import errors
+from .errors import CapabilityUnavailable
 from .config import Settings, resolve
 from .tags import canonical_tags
 from .hashing import fingerprint
@@ -1272,8 +1273,27 @@ class Client:
         )
         # Literal call site: the tests/test_parity.py AST scan must see the route.
         data = self.transport.post(f"/v1/experiments/{experiment_id}/runs", body)
+        self._verify_slug_written(slug, data)
         self._warn_if_notes_dropped(notes, data, "runs")
         return self._wrap_run(data, heartbeat=heartbeat)
+
+    @staticmethod
+    def _verify_slug_written(slug: str | None, row: dict) -> None:
+        """A backend predating run slugs DROPS the field and names the run itself.
+
+        Pydantic ignores an undeclared body field by default, so the create
+        succeeds, returns 201, and hands back a random petname -- and the caller
+        exits 0 believing it owns a handle it does not. Reading the stored value
+        back is the only thing that tells the two apart.
+        """
+        if slug is None:
+            return
+        written = row.get("short_id")
+        if written != slug:
+            raise CapabilityUnavailable(
+                f"this backend ignored the run slug {slug!r} (it stored "
+                f"{written!r}); run slugs need research-os >= 0.110.0.0"
+            )
 
     def create_project_run(
         self,
@@ -1332,6 +1352,7 @@ class Client:
                     detail=exc.detail,
                 ) from exc
             raise
+        self._verify_slug_written(slug, data)
         self._warn_if_notes_dropped(notes, data, "runs")
         return self._wrap_run(data, heartbeat=heartbeat)
 
