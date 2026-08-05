@@ -1193,15 +1193,24 @@ def _run_wizard_action(
     # The browser approval is REAL WORK and the longest wait in the run -- it
     # blocks on a human in a browser. Leaving it off the list is what made a
     # sign-in-only run sit at 0/2 with nothing moving.
-    auth_index = len(work) if needs else None
+    #
+    # It goes FIRST, ahead of the marketplace refresh and both installs. The
+    # tracking plugin ships an `.mcp.json` pointing at the hosted MCP, and the
+    # credential it serves is the one this step mints -- so installing before
+    # signing in publishes a server that provably cannot authenticate, for as
+    # long as a human takes to approve it in a browser. Claude Code answering a
+    # connect in that window gets a 401 carrying a `WWW-Authenticate` challenge,
+    # discovers an authorization server from it, and pins the server to OAuth:
+    # the user then has to go to `/mcp` and authenticate a device this very run
+    # had already authorized. Credential first, and the window does not exist.
+    auth_index = 0 if needs else None
     if needs:
-        work.append((f"sign in ({', '.join(needs)})", None))
+        work.insert(0, (f"sign in ({', '.join(needs)})", None))
 
     tui.clear()
     progress = tui.Progress("This run will:", [label for label, _ in work])
     progress.render()
 
-    deadline = time.monotonic() + wizard.PHASE_BUDGET_S
     skipped: list[str] = []
 
     def _run_step(index: int, label: str, fn) -> list[str]:
@@ -1231,17 +1240,6 @@ def _run_wizard_action(
             progress.note(*out)
         return out
 
-    for position, (label, action) in enumerate(work):
-        if action is None:
-            continue  # the authorization step, run below
-        _run_step(position, label, action)
-
-    if skipped:
-        progress.note(
-            f"! stopped after {wizard.PHASE_BUDGET_S:.0f}s without starting: "
-            f"{', '.join(skipped)}. Re-run `probe wizard` to finish."
-        )
-
     granted: dict = {}
     if needs:
         progress.start(auth_index)
@@ -1264,6 +1262,24 @@ def _run_wizard_action(
         progress.finish(auth_index, ok=not [g for g in needs if g not in granted])
         if auth_messages:
             progress.note(*auth_messages)
+
+    # Started AFTER the approval, not before it. The budget bounds the work this
+    # process does; the browser approval is a human deciding, and clocking it
+    # against the same 300s would let a slow reader consume the entire budget and
+    # leave every install "stopped without starting" -- a run that signed in and
+    # installed nothing.
+    deadline = time.monotonic() + wizard.PHASE_BUDGET_S
+
+    for position, (label, action) in enumerate(work):
+        if action is None:
+            continue  # the authorization step, run above
+        _run_step(position, label, action)
+
+    if skipped:
+        progress.note(
+            f"! stopped after {wizard.PHASE_BUDGET_S:.0f}s without starting: "
+            f"{', '.join(skipped)}. Re-run `probe wizard` to finish."
+        )
 
     # THE VERDICT. Verify the postcondition rather than trusting the install
     # command: on the run that prompted this fix both installs reported failure

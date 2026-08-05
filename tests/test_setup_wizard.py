@@ -2467,3 +2467,75 @@ def test_no_install_means_no_marketplace_refresh(monkeypatch):
     )
 
     assert refreshed == [], "a run with nothing to install must not refresh"
+
+
+def test_the_credential_is_minted_before_the_plugin_is_installed(monkeypatch):
+    """The tracking plugin publishes an MCP server it cannot yet authenticate.
+
+    `plugins/probe-research/.mcp.json` points at the hosted MCP and resolves its
+    bearer through a headers helper that reads the token this run mints. Install
+    first and there is a window -- as long as a human takes to approve a browser
+    prompt -- where the server is on disk with no credential behind it. A connect
+    in that window is unauthenticated, the edge answers 401 with a
+    `WWW-Authenticate` challenge, and Claude Code discovers an authorization
+    server and pins the connection to OAuth. The user then has to open `/mcp` and
+    authenticate a device the installer had already authorized, which is the
+    symptom this ordering exists to prevent.
+
+    Asserted on the observable call order, not on the work list, because the list
+    is an implementation detail and the window is not.
+    """
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import claude_cli
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    order: list[str] = []
+
+    def _install(name, **kw):
+        order.append(f"install:{name}")
+        # A real Result, not None. The step swallows an AttributeError and marks
+        # itself failed, so a bare stub would leave this test passing on an
+        # install that never ran the code path it is timing.
+        return claude_cli.Result(ok=True)
+
+    def _authorize(grants, **kw):
+        order.append("authorize")
+        return {grant: {"token": f"probe_pat_{grant}"} for grant in grants}, []
+
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: order.append("refresh"))
+    monkeypatch.setattr(wizard, "install_plugin", _install)
+    monkeypatch.setattr(wizard, "authorize", _authorize)
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda *a, **k: _caps(
+            tracking_plugin_installed=True, logged_in_as="x@y.z", plugins_verified=True
+        ),
+    )
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=_caps(),  # a genuinely fresh machine: no plugin, no credential
+        base_now="https://api.test",
+        yes=True,
+        tracking=True,
+        capture=False,
+        auto_update=None,
+        agent_rules=False,
+        uninstall=False,
+        configured=False,
+    )
+
+    assert "authorize" in order, "a fresh machine must run the browser approval"
+    assert order.index("authorize") < order.index("install:probe-research"), (
+        f"the plugin was installed before it had a credential to serve: {order}"
+    )
