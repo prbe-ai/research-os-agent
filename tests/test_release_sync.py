@@ -37,6 +37,9 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 _MANIFEST = _ROOT / "client-version.json"
 _PLUGIN_JSON = _ROOT / "plugins" / "probe-research" / ".claude-plugin" / "plugin.json"
+_TAP_PLUGIN_JSON = (
+    _ROOT / "plugins" / "probe-research-tap" / ".claude-plugin" / "plugin.json"
+)
 _PYPROJECT = _ROOT / "pyproject.toml"
 
 _REMEDY = (
@@ -58,6 +61,28 @@ def test_manifest_plugin_latest_matches_plugin_json() -> None:
         f"client-version.json plugin.latest is {advertised!r} but plugin.json is "
         f"{actual!r}. The SessionStart hook nudges off the manifest, so plugin "
         f"{actual} ships to nobody.\n{_REMEDY}"
+    )
+
+
+def test_manifest_tap_latest_matches_tap_plugin_json() -> None:
+    """Same contract as the plugin above, for probe-research-tap.
+
+    The tap needs this MORE than the other two, not less. It has no release
+    workflow — the marketplace serves it from main, so merging IS the release
+    and nothing writes the manifest for you. And its failure is silent by
+    construction: a stale tap still authenticates, still links sessions to
+    projects, and simply never delivers a transcript. The 0.1.3 fix (daemons
+    dying seconds after SessionStart) is exactly that shape — a user left on
+    0.1.2 sees a healthy-looking session and no transcript, with the only
+    evidence a line in a local log file.
+    """
+    advertised = _manifest()["tap"]["latest"]
+    actual = json.loads(_TAP_PLUGIN_JSON.read_text(encoding="utf-8"))["version"]
+    assert advertised == actual, (
+        f"client-version.json tap.latest is {advertised!r} but the tap's "
+        f"plugin.json is {actual!r}. The SessionStart hook nudges off the "
+        f"manifest, so tap {actual} ships to nobody who does not auto-update.\n"
+        "The tap has no release workflow: bump BOTH files in the same commit."
     )
 
 

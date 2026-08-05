@@ -128,6 +128,30 @@ def _local_plugin(plugin_json: str):
         return None
 
 
+def _local_tap():
+    """The transcript tap's installed version, or None if it is not installed.
+
+    Read from the tap's own state dir rather than Claude Code's plugin cache:
+    the cache path is version-qualified (…/probe-research-tap/<version>/) so
+    finding it means globbing and guessing which of several cached copies is
+    live, while `.installed_version` is written by the tap's SessionStart hook
+    and names the version that actually RAN. That is the one worth warning
+    about — a cached-but-never-run copy has captured nothing.
+
+    None (not installed / never run) is a normal answer, and main() skips any
+    component whose local version is unknown, so users without the tap are
+    never nudged about it.
+    """
+    path = os.environ.get("PROBE_RESEARCH_TAP_PLUGIN_DIR") or os.path.join(
+        os.path.expanduser("~"), ".claude", "plugins", "probe-research-tap"
+    )
+    try:
+        with open(os.path.join(path, ".installed_version")) as f:
+            return (f.read() or "").strip() or None
+    except Exception:
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Auto-update (opt-in via `probe setup`).
 #
@@ -208,10 +232,11 @@ def main() -> None:
     local = {
         "cli": _local_cli(os.environ.get("PROBE_BIN") or "probe"),
         "plugin": _local_plugin(os.environ.get("PROBE_PLUGIN_JSON") or ""),
+        "tap": _local_tap(),
     }
 
     nudges, below_min = [], []
-    for key, label in (("cli", "CLI"), ("plugin", "plugin")):
+    for key, label in (("cli", "CLI"), ("plugin", "plugin"), ("tap", "transcript tap")):
         info = manifest.get(key)
         if not isinstance(info, dict):  # a malformed field disables only that key
             continue
@@ -233,10 +258,16 @@ def main() -> None:
     # it; older CLIs get the raw sequence (which upgrades them to one that does).
     local_cli = local.get("cli")
     has_update_cmd = bool(local_cli) and not _remote_gt_local(local_cli, UPDATE_CMD_MIN_CLI)
+    # The raw sequence updates the tap too when that is what is stale —
+    # otherwise the nudge names a component and then hands over commands that
+    # cannot fix it. `probe update` covers all three itself.
+    tap_stale = any(label == "transcript tap" for label, _, _ in nudges + below_min)
     cmds = "probe update" if has_update_cmd else (
         "uv tool upgrade probe-research && "
         "claude plugin marketplace update research-os-agent && "
         "claude plugin update probe-research@research-os-agent"
+        + (" && claude plugin update probe-research-tap@research-os-agent"
+           if tap_stale else "")
     )
     advisory = manifest.get("advisory")
 
