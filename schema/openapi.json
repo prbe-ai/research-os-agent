@@ -3297,8 +3297,16 @@
             "type": "string"
           },
           "name": {
-            "title": "Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           },
           "project_id": {
             "format": "uuid",
@@ -3319,7 +3327,6 @@
         },
         "required": [
           "slug",
-          "name",
           "hypothesis",
           "project_id"
         ],
@@ -4311,6 +4318,18 @@
             ],
             "default": null,
             "title": "Name"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Notes"
           },
           "parent_external_id": {
             "anyOf": [
@@ -5939,8 +5958,16 @@
             "type": "object"
           },
           "name": {
-            "title": "Name",
-            "type": "string"
+            "anyOf": [
+              {
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
           },
           "slug": {
             "title": "Slug",
@@ -5967,8 +5994,7 @@
           }
         },
         "required": [
-          "slug",
-          "name"
+          "slug"
         ],
         "title": "ProjectCreate",
         "type": "object"
@@ -7974,6 +8000,18 @@
             ],
             "title": "Name"
           },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
           "parent_relation": {
             "anyOf": [
               {
@@ -8159,6 +8197,17 @@
             "title": "Name Customized",
             "type": "boolean"
           },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
           "parent_relation": {
             "anyOf": [
               {
@@ -8259,6 +8308,18 @@
             "title": "Name",
             "type": "string"
           },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
           "spec": {
             "additionalProperties": true,
             "title": "Spec",
@@ -8300,6 +8361,17 @@
             "title": "Name",
             "type": "string"
           },
+          "notes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
+          },
           "spec": {
             "additionalProperties": true,
             "title": "Spec",
@@ -8331,6 +8403,18 @@
               }
             ],
             "title": "Name"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "spec": {
             "anyOf": [
@@ -8687,6 +8771,18 @@
               }
             ],
             "title": "Name"
+          },
+          "notes": {
+            "anyOf": [
+              {
+                "maxLength": 4000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Notes"
           },
           "status": {
             "anyOf": [

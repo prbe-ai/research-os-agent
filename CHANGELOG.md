@@ -2,6 +2,40 @@
 
 ## Unreleased
 
+### Added
+
+- **`notes` on runs and run groups** (research-os 0096) — reachable from
+  `create_run`, `create_project_run`, `update_run`, `create_group` and
+  `update_group`.
+
+  The schema regen alone did not deliver this. The SDK builds its request bodies
+  as hand-written dicts rather than from the generated models, so a widened
+  backend contract lands in `probe._generated.models` and nowhere a caller can
+  touch — the field was present in the types and unreachable in practice.
+
+  `notes` is not a second `description`. A description says what the run is;
+  notes is what a later reader should distrust about it ("suspect, the dataloader
+  was stale"). With one field the two compete, which is why the server carries
+  both. On a group it matters more: `name` is part of the group's uniqueness key
+  within its experiment, so prose appended there changes the row's identity and
+  mints a second group instead of describing the one that exists.
+
+  Omitting the field leaves any existing note alone; passing `""` clears it.
+
+  A backend predating 0096 accepts the unknown field, drops it, and answers 2xx —
+  the caveat vanishes and the caller is told it succeeded. The SDK now **warns**
+  on that, keying off the row these calls already return (no extra request). It
+  warns rather than raising, unlike `set_project_notes`: create has already made
+  the entity by the time the response is in hand, so raising would leave a run on
+  the server and an exception in the caller's lap.
+
+### Changed
+
+- Regenerated `schema/openapi.json` + `src/probe/_generated/models.py` against
+  research-os v0.107.0.0. Beyond `notes`, this picks up `name` becoming OPTIONAL
+  on `ExperimentCreate` and `ProjectCreate` — a widening the client had not
+  reflected, matching what 0080 already did for runs.
+
 ### Fixed
 
 - **A ref that is both a project id and a project slug no longer silently resolves to

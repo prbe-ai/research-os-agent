@@ -1083,6 +1083,31 @@ class Client:
         return self.transport.get(f"/v1/experiments/{experiment_id}/edges")
 
     # -- run groups (sweeps / ensembles) ------------------------------------
+    @staticmethod
+    def _warn_if_notes_dropped(sent: str | None, row: dict, what: str) -> None:
+        """Surface the silent drop when the backend predates research-os 0096.
+
+        Neither RunPatch/RunCreate nor the group schemas forbid extra fields, so an
+        older backend ACCEPTS `notes`, ignores it, and answers 2xx -- the caveat
+        vanishes and the caller is told it succeeded. This is the 0094 hazard, and
+        the check is free: create and PATCH both return the row, so nothing extra
+        is fetched.
+
+        WARN rather than raise, unlike `set_project_notes`. That call's only effect
+        is the notes write, so failing it loses nothing. These calls have already
+        created or mutated the entity by the time the response is in hand -- raising
+        would leave a run created on the server and an exception in the caller's
+        lap, which is worse than a dropped note.
+        """
+        if sent is None or "notes" in row:
+            return
+        warnings.warn(
+            f"this research-os backend predates `notes` on {what} (0096): it "
+            "accepted the field, ignored it, and answered 2xx, so the note was "
+            "NOT stored. Upgrade the backend to >= 0.107.0.0.",
+            stacklevel=3,
+        )
+
     def create_group(
         self,
         experiment_id: str,
@@ -1090,17 +1115,27 @@ class Client:
         *,
         kind: str = "group",
         spec: dict | None = None,
+        notes: str | None = None,
     ) -> dict:
         """Create a run group under an experiment — coordination metadata for a
         sweep or ensemble; ``spec`` holds e.g. the search space.
 
         Pass the returned ``id`` to :meth:`create_run` as ``group_id`` to file a run
-        under it. 409 if the name is taken within the experiment."""
-        model = RunGroupCreate(name=name, kind=kind, spec=spec or {})
-        return self.transport.post(
+        under it. 409 if the name is taken within the experiment.
+
+        ``notes`` (server 0096) is free text about the sweep itself — what varies,
+        what it was testing, why it was abandoned. Put it HERE rather than in
+        ``name``: the name is part of the group's uniqueness key within the
+        experiment, so a description appended to it does not merely read badly, it
+        changes the row's identity and mints a second group instead of colliding
+        with the one it describes."""
+        model = RunGroupCreate(name=name, kind=kind, spec=spec or {}, notes=notes)
+        row = self.transport.post(
             f"/v1/experiments/{experiment_id}/groups",
             model.model_dump(mode="json", exclude_none=True),
         )
+        self._warn_if_notes_dropped(notes, row, "run groups")
+        return row
 
     def list_groups(self, experiment_id: str) -> list[dict]:
         return self.transport.get(f"/v1/experiments/{experiment_id}/groups")
@@ -1109,14 +1144,25 @@ class Client:
         return self.transport.get(f"/v1/groups/{group_id}")
 
     def update_group(
-        self, group_id: str, *, name: str | None = None, spec: dict | None = None
+        self,
+        group_id: str,
+        *,
+        name: str | None = None,
+        spec: dict | None = None,
+        notes: str | None = None,
     ) -> dict:
-        """Field-replace PATCH: only the fields you pass change."""
-        model = RunGroupPatch(name=name, spec=spec)
+        """Field-replace PATCH: only the fields you pass change.
+
+        ``notes`` is the field most likely to be written here rather than at
+        create — what a sweep was actually testing tends to be known after it has
+        run. Omitting it leaves any existing note alone; passing ``""`` clears it."""
+        model = RunGroupPatch(name=name, spec=spec, notes=notes)
         body = model.model_dump(mode="json", exclude_none=True)
         if not body:
-            raise ValueError("update_group needs at least one of name/spec")
-        return self.transport.patch(f"/v1/groups/{group_id}", body)
+            raise ValueError("update_group needs at least one of name/spec/notes")
+        row = self.transport.patch(f"/v1/groups/{group_id}", body)
+        self._warn_if_notes_dropped(notes, row, "run groups")
+        return row
 
     # -- runs (create) ------------------------------------------------------
     @staticmethod
@@ -1124,6 +1170,7 @@ class Client:
         name: str,
         *,
         description: str | None,
+        notes: str | None,
         source: str,
         external_id: str | None,
         parent_run_id: str | None,
@@ -1137,6 +1184,11 @@ class Client:
         body: dict[str, Any] = {"name": name, "source": source}
         if description is not None:
             body["description"] = description
+        # Separate from `description` on purpose (server 0096): a description says
+        # what the run IS, notes is the caveat a later reader needs ("suspect, the
+        # dataloader was stale"). With one field the two compete.
+        if notes is not None:
+            body["notes"] = notes
         if external_id is not None:
             body["external_id"] = external_id
         if parent_run_id is not None:
@@ -1183,6 +1235,7 @@ class Client:
         name: str,
         *,
         description: str | None = None,
+        notes: str | None = None,
         source: str = "api",
         external_id: str | None = None,
         parent_run_id: str | None = None,
@@ -1197,6 +1250,7 @@ class Client:
         body = self._run_create_body(
             name,
             description=description,
+            notes=notes,
             source=source,
             external_id=external_id,
             parent_run_id=parent_run_id,
@@ -1209,6 +1263,7 @@ class Client:
         )
         # Literal call site: the tests/test_parity.py AST scan must see the route.
         data = self.transport.post(f"/v1/experiments/{experiment_id}/runs", body)
+        self._warn_if_notes_dropped(notes, data, "runs")
         return self._wrap_run(data, heartbeat=heartbeat)
 
     def create_project_run(
@@ -1217,6 +1272,7 @@ class Client:
         name: str,
         *,
         description: str | None = None,
+        notes: str | None = None,
         source: str = "api",
         external_id: str | None = None,
         parent_run_id: str | None = None,
@@ -1236,6 +1292,7 @@ class Client:
         body = self._run_create_body(
             name,
             description=description,
+            notes=notes,
             source=source,
             external_id=external_id,
             parent_run_id=parent_run_id,
@@ -1264,6 +1321,7 @@ class Client:
                     detail=exc.detail,
                 ) from exc
             raise
+        self._warn_if_notes_dropped(notes, data, "runs")
         return self._wrap_run(data, heartbeat=heartbeat)
 
     def run(
@@ -1632,16 +1690,31 @@ class Client:
         *,
         name: str | None = None,
         description: str | None = None,
+        notes: str | None = None,
     ) -> dict:
-        """PATCH /v1/runs/{id} — amend a run's human title or description."""
+        """PATCH /v1/runs/{id} — amend a run's title, description or notes.
+
+        ``notes`` (server 0096) is the door that matters most for that field: a
+        run's caveat is nearly always learned after the run finished. It is NOT a
+        second description — a description says what the run is, notes says what a
+        later reader should distrust about it, and writing the caveat into
+        ``description`` means destroying the description to keep it.
+
+        Omitting a field leaves it alone; passing ``""`` for ``notes`` clears it."""
         body = {
             key: value
-            for key, value in {"name": name, "description": description}.items()
+            for key, value in {
+                "name": name,
+                "description": description,
+                "notes": notes,
+            }.items()
             if value is not None
         }
         if not body:
-            raise ValueError("update_run needs at least one of name/description")
-        return self.transport.patch(f"/v1/runs/{run_id}", body)
+            raise ValueError("update_run needs at least one of name/description/notes")
+        row = self.transport.patch(f"/v1/runs/{run_id}", body)
+        self._warn_if_notes_dropped(notes, row, "runs")
+        return row
 
     def run_bundle(self, run_id: str) -> dict:
         return self.transport.get(f"/v1/runs/{run_id}/bundle")
