@@ -20,6 +20,30 @@
 
 ### Added
 
+- **A dashboard `url` on every project, experiment and run, and skills that hand it
+  back.** Nothing in the agent surface emitted a link before this: the CLI printed
+  uuids, MCP entities carried `id` and `ref`, and an agent reporting "the run
+  finished, it is tracked in Probe" left the researcher to go and find it. Which
+  they mostly did not — the friction is small and it lands exactly when their
+  attention has moved on.
+
+  So the link is now DATA, not something a model reconstructs. `run start`,
+  `run end`, `project create` and `experiment create` print it; every MCP browse
+  node and `card` carries it as `url`; in-script it is `run.url`. The skills say to
+  echo what they were given, and specifically not to assemble one — an invented URL
+  is indistinguishable from a real one until it 404s in someone's browser.
+
+  The origin is derived from the API host (`api.research.prbe.ai` →
+  `research.prbe.ai`) and nothing else is inferred. Where that implies no dashboard
+  — a self-hosted API, a dev box, and above all the hosted MCP's own in-cluster
+  Service URL — deployment sets `PROBE_DASHBOARD_URL` (now set for the hosted MCP in
+  `deploy/mcp/k8s.yaml`), and absent that the key is omitted entirely. Declining is
+  deliberate: falling back to the public host would hand a self-hosted install links
+  into somebody else's tenant.
+
+  CLI links go to **stderr**. `RUN=$(probe run start ...)` still captures a bare id,
+  and `probe project create | jq` still reads one JSON document.
+
 - **`--notes` on `run set`, `group set` and `group create`.** The column has existed
   server-side since research-os 0096 and the SDK has written it since — `update_run`,
   `update_group` and `create_group` all take `notes`, complete with the pre-0096

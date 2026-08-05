@@ -66,6 +66,12 @@ spec:
             # Same-cluster: point at the internal API service to avoid LB hairpin.
             # Swap to https://api.research.prbe.ai if calling the public endpoint.
             - { name: PROBE_BASE_URL, value: "http://research-os.research.svc.cluster.local:8080" }
+            # REQUIRED here, and only because of the line above: entity payloads
+            # carry a `url` to the dashboard page, derived from the API host --
+            # and this pod's API host is a cluster-internal Service that names no
+            # public dashboard at all. Without this, sdk.links correctly declines
+            # to guess and every response ships with no link.
+            - { name: PROBE_DASHBOARD_URL, value: "https://research.prbe.ai" }
             # Concurrent threaded tool calls per process (server.py _limiters).
             # 16, not the code default 40: the 1Gi memory ceiling below was
             # sized under effectively-serialized dispatch, and N concurrent
