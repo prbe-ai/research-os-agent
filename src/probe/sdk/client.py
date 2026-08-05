@@ -1612,7 +1612,11 @@ class Client:
         ``run.execute()`` snapshots twice; the second is cheap (same tree →
         same execution record via server dedupe, code-bytes deduped by the
         presign have-check) and overwrites the launch block with the more
-        specific child argv — intended."""
+        specific child argv — intended. This dedupe is genuine even in a git
+        repo: the execution record hashes the code MANIFEST only, never the
+        per-snapshot shadow commit (design doc D1), so two snapshots of an
+        unchanged tree always land on the same content_hash regardless of how
+        many shadow refs were minted along the way."""
         if on_conflict not in ("auto", "error", "supersede", "resume"):
             raise errors.ValidationError(
                 f"on_conflict={on_conflict!r} is not a policy. Use \"auto\" "

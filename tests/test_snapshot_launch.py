@@ -40,6 +40,19 @@ def test_snapshot_deps_include_lockfile_hashes(client, tmp_path):
     assert locks and locks[0]["path"] == "uv.lock" and locks[0]["sha256"]
 
 
+def test_same_tree_same_execution_record(client, tmp_path):
+    """Identity is the code MANIFEST (design doc D1); git provenance -- a
+    per-snapshot commit sha + run-id ref -- must NOT be hashed into the
+    execution record, or two runs over an identical (non-git) tree would
+    mint distinct execution records and never dedupe."""
+    (tmp_path / "a.py").write_text("a\n")
+    run1 = open_run(client, experiment="exp-dedupe-1")
+    run2 = open_run(client, experiment="exp-dedupe-2")
+    h1 = run1.snapshot(cwd=str(tmp_path), include_env=False, include_gpu=False)["content_hash"]
+    h2 = run2.snapshot(cwd=str(tmp_path), include_env=False, include_gpu=False)["content_hash"]
+    assert h1 == h2
+
+
 def test_execute_auto_snapshots(client, tmp_path, monkeypatch):
     monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
     (tmp_path / "job.py").write_text("print('ok')\n")

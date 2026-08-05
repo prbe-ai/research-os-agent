@@ -1368,10 +1368,15 @@ class Run:
         if lockfiles:
             deps = {**deps, "lockfiles": lockfiles}
         record = ExecutionRecordCreate(
-            # `git` is omitted rather than stored as null when there is no repo:
-            # the execution record is content-addressed, and a null key would make
-            # a non-git capture hash differently from the same one taken later.
-            code={"manifest": manifest, **({"git": git} if git else {})},
+            # `git` is deliberately NOT hashed into the execution record (design
+            # doc D1): the identity table names the code MANIFEST as identity,
+            # and `git` here carries a per-snapshot commit sha + this run's id
+            # (see capture_git_snapshot, whose shadow commit message embeds
+            # run_id) -- hashing it would mint a unique execution record on
+            # every snapshot and destroy dedup. The shadow ref is provenance,
+            # not identity, and already rides the code-snapshot artifact below
+            # (uri `git:ref#commit`, branch/dirty in its meta).
+            code={"manifest": manifest},
             deps=deps,
             hardware=(
                 {"gpu": _snapshot.capture_gpu(), **_snapshot.capture_system()}
