@@ -270,6 +270,80 @@ def test_run_end_async_is_ordered_behind_the_runs_data(
     assert wired_async.metric_points_posted[run_id]
 
 
+# -- bounded finish (parity F3) ----------------------------------------------
+
+
+def test_run_end_flush_timeout_defers_the_close(
+    wired_async, outbox_dir, monkeypatch, capsys
+):
+    run_id = start_run(wired_async)
+    cli.main(["--async", "log", run_id, "loss=1.0", "--step", "1"])
+    monkeypatch.setattr(  # every barrier pass parks transiently
+        "probe.sdk.journal.drain",
+        lambda j, run_ref=None, **k: DrainReport(
+            remaining=1, stopped_transient=True, errors=["net down"]
+        ),
+    )
+    rc = cli.main(
+        ["--spool-dir", str(outbox_dir), "run", "end", run_id, "--flush-timeout", "0.2"]
+    )
+    assert rc == 0
+    assert "end queued" in capsys.readouterr().err
+    ops = [op for _, op in Journal(outbox_dir).pending()]
+    assert [op["method"] for op in ops] == ["POST", "PATCH"], (
+        "the deferred close must sit BEHIND the run's queued data"
+    )
+    accounting = ops[-1]["body"]["summary"]["probe_finish"]
+    assert accounting["deferred"] is True and accounting["pending_at_exit"] == 1
+    assert wired_async.runs[run_id]["status"] != "completed"
+    assert "draining" in wired_async.runs[run_id]["tags"], "beacon marked intent"
+    # The network comes back: everything lands, in order, and the tag clears.
+    assert cli_drain(wired_async, outbox_dir).clean
+    row = wired_async.runs[run_id]
+    assert row["status"] == "completed"
+    assert "draining" not in row["tags"]
+    assert row["summary"]["probe_finish"]["deferred"] is True
+    assert wired_async.metric_points_posted[run_id]
+
+
+def test_run_end_flush_timeout_closes_normally_when_it_drains_in_time(
+    wired_async, outbox_dir, monkeypatch, capsys
+):
+    run_id = start_run(wired_async)
+    cli.main(["--async", "log", run_id, "loss=1.0", "--step", "1"])
+    fake = make_client(wired_async)
+    monkeypatch.setattr(  # a drain that can actually reach the fake app
+        "probe.sdk.journal.drain",
+        lambda j, run_ref=None, **k: drain(
+            j, run_ref=run_ref, client_factory=lambda ctx: fake
+        ),
+    )
+    rc = cli.main(
+        ["--spool-dir", str(outbox_dir), "run", "end", run_id, "--flush-timeout", "5"]
+    )
+    fake.close()
+    assert rc == 0
+    row = wired_async.runs[run_id]
+    assert row["status"] == "completed"
+    assert "probe_finish" not in (row.get("summary") or {}), (
+        "an in-time bounded close is an ordinary close"
+    )
+
+
+def test_run_end_flush_timeout_still_refuses_dead_letters(
+    wired_async, outbox_dir, capsys
+):
+    run_id = start_run(wired_async)
+    journal = Journal(outbox_dir)
+    journal.append_http("POST", f"/v1/runs/{run_id}/badroute", {})
+    assert not cli_drain(wired_async, outbox_dir).clean  # dead-letters it
+    rc = cli.main(
+        ["--spool-dir", str(outbox_dir), "run", "end", run_id, "--flush-timeout", "0.2"]
+    )
+    assert rc == 2
+    assert "NOT closed" in capsys.readouterr().err
+
+
 # -- review-pass additions (testing specialist) -------------------------------
 
 

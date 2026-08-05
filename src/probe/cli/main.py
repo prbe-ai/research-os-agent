@@ -22,6 +22,7 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -2411,6 +2412,15 @@ def run_tag(
 def run_end(
     run: str = run_ref(),
     status: EndStatus = typer.Option(EndStatus.completed, "--status"),
+    flush_timeout: Optional[float] = typer.Option(
+        None,
+        "--flush-timeout",
+        envvar="PROBE_FINISH_TIMEOUT_SEC",
+        help="Bounded barrier (F3): keep draining this run's ops up to N "
+        "seconds, then queue the close BEHIND whatever remains and exit 0 -- "
+        "for jobs that must not hold hardware on a dead API. Dead letters "
+        "and auth blocks still exit 2.",
+    ),
 ) -> None:
     """Close a run.
 
@@ -2433,12 +2443,56 @@ def run_end(
     from ..sdk.journal import drain
 
     journal = _journal()
-    report = drain(journal, run_ref=run)
+    if flush_timeout is None:
+        report = drain(journal, run_ref=run)
+    else:
+        deadline = time.monotonic() + max(flush_timeout, 0.0)
+        while True:
+            report = drain(journal, run_ref=run)
+            left = [op for _, op in journal.pending() if op.get("run_ref") == run]
+            newly_dead = [op for _, op in journal.failed() if op.get("run_ref") == run]
+            if (
+                not left
+                or newly_dead
+                or report.auth_blocked
+                or time.monotonic() >= deadline
+            ):
+                break
+            time.sleep(min(0.25, max(deadline - time.monotonic(), 0.0)))
     dead = [op for _, op in journal.failed() if op.get("run_ref") == run]
     # Anything of this run's still queued after the drain (paused journal, a
     # skipped pass, any future skip condition) also blocks the close -- the
     # barrier promise is about the RESULT, not about which flag tripped.
     still_queued = [op for _, op in journal.pending() if op.get("run_ref") == run]
+    if (
+        flush_timeout is not None
+        and still_queued
+        and not dead
+        and not report.auth_blocked
+    ):
+        # Bounded barrier expired on retryable ops only: queue the close
+        # BEHIND them (F3) and let the detached worker land everything. Dead
+        # letters and auth blocks fall through to exit 2 -- deferring cannot
+        # heal a permanent rejection, and a worker never runs auth-blocked.
+        with _client() as c:
+            _async_run(c, run)._queue_deferred_finish(
+                status.value, None, len(still_queued)
+            )
+        typer.echo(
+            f"end queued for {run} -> {status.value} behind "
+            f"{len(still_queued)} pending op(s); the background worker keeps "
+            "retrying — `probe outbox watch` to follow",
+            err=True,
+        )
+        # The local writer is done even though the close rides the queue; a
+        # held lease would only delay an upgrade (the cheap failure mode).
+        try:
+            from . import run_lock
+
+            run_lock.clear_lease(run)
+        except Exception:  # noqa: BLE001 -- an expiring lease is the backstop
+            pass
+        return
     if report.auth_blocked or report.stopped_transient or dead or still_queued:
         detail = "; ".join(
             report.errors[-3:] or [op.get("last_error") or "?" for op in dead[:3]]
