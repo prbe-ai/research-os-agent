@@ -163,7 +163,7 @@ def test_patch_refuses_workspace_and_points_at_move(client, monkeypatch, capsys)
     monkeypatch.setattr(cli, "Client", lambda **kw: client)
     proj = client.create_project("p", workspace_id=_WS_MINE)
 
-    code = cli.main(["project", "patch", proj["id"], "--workspace", _WS_OTHER])
+    code = cli.main(["project", "patch", f"id:{proj['id']}", "--workspace", _WS_OTHER])
 
     assert code != 0
     assert "probe project move" in capsys.readouterr().err
@@ -177,11 +177,13 @@ def test_project_use_pins_the_owning_workspace(client, monkeypatch, capsys):
     save_context({"workspace": {"id": _WS_MINE, "project": None}})
     proj = client.create_project("elsewhere", workspace_id=_WS_OTHER)
 
-    assert cli.main(["project", "use", proj["id"]]) == 0
+    assert cli.main(["project", "use", f"id:{proj['id']}"]) == 0
 
     anchor = load_context()["workspace"]
     assert anchor["id"] == _WS_OTHER
-    assert anchor["project"] == proj["id"]
+    # `project use` records the EXPLICIT id form: an id survives a rename where a
+    # slug does not, but a bare id would read as a slug when it flows back in.
+    assert anchor["project"] == f"id:{proj['id']}"
 
 
 # -- anchored artifacts ------------------------------------------------------

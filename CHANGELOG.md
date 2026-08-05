@@ -2,6 +2,56 @@
 
 ## Unreleased
 
+### Changed
+
+- **A bare ref is now always the SLUG. An id is written `id:<uuid>`, a name
+  `name:<text>`.** BREAKING for anyone passing a bare UUID.
+
+  ```
+  probe project delete folding              # slug (the normal case)
+  probe project delete id:6fa49e87-...      # id
+  probe project delete name:"Parity smoke"  # human name
+  ```
+
+  The previous rule accepted either spelling bare and worked out which was meant.
+  That is the shape Git has, and `fatal: ambiguous argument` is the same error class.
+  Here it failed in the worst available way: a UUID-shaped *slug* addressed whichever
+  project owned that UUID as its *id*, and `probe project delete` took the wrong one
+  with a success exit. The release before this one detected the collision and refused;
+  this removes it — a collision can no longer be **expressed**, so there is no case to
+  detect, no ranking rule, and no error to read.
+
+  **Why a prefix and not a `--uuid` flag:** one command line takes more than one ref
+  (`probe run start --project folding --experiment dockq-sweep`), and a flag cannot say
+  which of them it applies to. `--project-uuid` / `--experiment-uuid` multiplies per ref
+  per verb. A prefix rides on the ref itself, so one spelling covers every position.
+
+  **`--by-id` / `--by-slug` are gone.** They existed only for a collision that can no
+  longer be expressed, and two spellings for one decision was the wart.
+
+  **Migration is loud and safe.** A bare UUID no longer resolves, and the error names
+  the exact edit:
+
+  ```
+  '6fa49e87-...' is not a project slug -- it is a project ID.
+  A bare ref is always the slug, so write it as id:6fa49e87-...
+  ```
+
+  Nothing can resolve to the *wrong* entity while you migrate, because the old reading
+  no longer exists. `probe project use` now records the explicit `id:` form, and a bare
+  UUID already in a context file or `PROBE_PROJECT` is still read as an id — that value
+  was written by the tool, not typed by a person.
+
+- **`name:<text>` resolves by human name**, backed by the new `?name=` exact filter
+  (research-os 0.110.0.0). Names are not unique, so it resolves only on exactly one
+  match; two or more lists the candidates **with their slugs** and refuses. A ref may
+  be about to feed a `delete`, so it never resolves through a relevance score — fuzzy
+  discovery stays `probe search`.
+
+  A backend that never declared `?name=` DROPS it and answers an unfiltered page. That
+  is detected exactly — a genuine name response cannot contain a row named something
+  else — and refused rather than acted on.
+
 ### Added
 
 - **`notes` on runs and run groups** (research-os 0096) — reachable from

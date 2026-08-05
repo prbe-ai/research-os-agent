@@ -1181,8 +1181,14 @@ class Client:
         tags: list[str] | None,
         metadata: dict | None,
         labeled_point_budget: int | None,
+        slug: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"name": name, "source": source}
+        # The run's own slug (server 0.110.0.0), stored in the `short_id` column.
+        # Omitted = the server mints a petname, which stays the normal case. A
+        # TAKEN one is a 409, never a silent substitution.
+        if slug is not None:
+            body["slug"] = slug
         if description is not None:
             body["description"] = description
         # Separate from `description` on purpose (server 0096): a description says
@@ -1247,9 +1253,11 @@ class Client:
         metadata: dict | None = None,
         heartbeat: bool = True,
         labeled_point_budget: int | None = None,
+        slug: str | None = None,
     ) -> Run:
         body = self._run_create_body(
             name,
+            slug=slug,
             description=description,
             notes=notes,
             source=source,
@@ -1283,6 +1291,7 @@ class Client:
         metadata: dict | None = None,
         heartbeat: bool = True,
         labeled_point_budget: int | None = None,
+        slug: str | None = None,
     ) -> Run:
         """POST /v1/projects/{id}/runs — open a PROJECT-DIRECT run (W&B shape).
 
@@ -1292,6 +1301,7 @@ class Client:
         """
         body = self._run_create_body(
             name,
+            slug=slug,
             description=description,
             notes=notes,
             source=source,

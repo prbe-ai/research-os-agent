@@ -158,7 +158,7 @@ def test_the_anchor_is_a_uuid_never_a_slug(tmp_path):
 
 def test_an_explicitly_named_project_wins_over_the_derived_slug(tmp_path):
     client = _FakeClient()
-    project_id, _ = backfill.resolve_anchor(client, tmp_path, requested=FAKE_ID)
+    project_id, _ = backfill.resolve_anchor(client, tmp_path, requested=f"id:{FAKE_ID}")
     assert project_id == FAKE_ID
     assert client.ensured == []
 

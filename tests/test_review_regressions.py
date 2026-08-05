@@ -122,7 +122,9 @@ def test_an_unknown_slug_is_a_usage_error(wired, client, capsys):
     code = cli.main(["project", "get", "does-not-exist"])
 
     assert code == 2
-    assert "no project with id or slug" in capsys.readouterr().err
+    # A bare ref is the SLUG now, so the error names the slug it looked for and
+    # points at the `id:` form rather than implying both were tried.
+    assert "no project with slug" in capsys.readouterr().err
 
 
 def test_slug_resolution_no_longer_needs_a_second_hidden_listing(wired, client, capsys):
@@ -140,7 +142,9 @@ def test_slug_resolution_no_longer_needs_a_second_hidden_listing(wired, client, 
 
     # Gone means gone: the resolver has nowhere else to look.
     assert cli.main(["project", "delete", "only-one", "--yes"]) == 2
-    assert "no project with id or slug" in capsys.readouterr().err
+    # A bare ref is the SLUG now, so the error names the slug it looked for and
+    # points at the `id:` form rather than implying both were tried.
+    assert "no project with slug" in capsys.readouterr().err
 
 
 # -- ambient anchors actually applied ---------------------------------------
