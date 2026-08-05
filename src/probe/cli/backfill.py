@@ -329,7 +329,18 @@ YOU DECIDE THE PROJECTS. This is the judgement you are here for.
     `workspace`, `data` and `michael` are not. Read enough of the folder to
     name it honestly before you create anything.
 
-        probe project create <slug> --name "<human name>"
+        probe project create <slug> --name "<human name>" \\
+            --description "<what this body of work IS — 1-2 sentences, under 240 chars>" \\
+            --tag <topic> --tag <model-or-dataset>
+
+    ALWAYS pass --description, and keep it inside that bound — the overview
+    clamps the field to two lines, so a third sentence is not read, it is hidden.
+    It is the first thing anyone sees under the project's title, and nothing else
+    fills it in: the server generates a description only when a child RUN reaches
+    a terminal status, and importing a folder creates no runs — so a project left
+    undescribed here stays undescribed forever, reading as "Add description" to
+    every visitor. Say what the work is and what it produced, not that it was
+    imported.
 
     `--project` takes the slug or the id, so you can use the slug you just
     chose in every command that follows.
@@ -392,6 +403,16 @@ Step 3 — group into experiments ONLY if the evidence is there.
     If that would be a guess, DO NOT. Leave them at the project level.
     Artifacts at the project level are findable; an invented experiment is a
     wrong answer that looks like a right one.
+
+        probe experiment create <slug> --project <project> \\
+            --name "<human name>" --hypothesis "<what it tests>" \\
+            --description "<what was run — 1-2 sentences, under 240 chars>"
+
+    --description here too, and for the same reason: only a terminal run
+    generates one, and this import creates none. Same bound — say what was run,
+    on which model and which data. The files that convinced you this was a real
+    experiment go in `probe notes write`, not here: that reasoning is worth
+    keeping and is longer than a field the overview clamps to two lines.
 
 {_subdivide_line(agent)}
 

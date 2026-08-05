@@ -269,6 +269,41 @@ def test_the_prompt_never_names_a_door_that_does_not_open(tmp_path):
     assert "probe notes write" in prompt
 
 
+def test_the_prompt_demands_a_description_on_what_it_creates(tmp_path):
+    """A backfilled project read "Add description" under its title forever.
+
+    Nothing else fills it in: the server generates a description only when a
+    child RUN reaches a terminal status, and importing a folder creates no runs.
+    So an undescribed project stays undescribed permanently — and whether one
+    appeared at all was luck, because the prompt showed `project create` with
+    only --name. One import wrote a description unprompted; the next did not."""
+    prompt = backfill.build_prompt(
+        folder=tmp_path, census=backfill.Census(files=3, bytes=99)
+    )
+    assert "--description" in prompt
+    assert "ALWAYS pass --description" in prompt
+    # And it says WHY, so the rule survives a future edit that trims the prompt.
+    assert "creates no runs" in prompt
+
+
+def test_the_prompt_bounds_how_long_a_description_may_be(tmp_path):
+    """Asking for a description without bounding it produced a 566-char one.
+
+    The overview clamps the field to two lines, and the server's own generated
+    descriptions cap at 240 chars — so an unbounded ask puts the back half of the
+    text somewhere nobody reads it. Both creates carry the bound: the experiment
+    line used to invite the opposite ("record WHY you believed this was a real
+    experiment — the files that convinced you"), which is notes-shaped prose
+    aimed at a two-line field."""
+    prompt = backfill.build_prompt(
+        folder=tmp_path, census=backfill.Census(files=3, bytes=99)
+    )
+    # Both the project create and the experiment create state it.
+    assert prompt.count("under 240 chars") == 2
+    # The provenance the experiment line used to want is redirected, not dropped.
+    assert "probe notes write" in prompt
+
+
 def test_prompt_carries_the_reference_threshold_for_large_files(tmp_path):
     prompt = backfill.build_prompt(
         folder=tmp_path, project="p", census=backfill.Census(files=1, bytes=1)

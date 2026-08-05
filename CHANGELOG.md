@@ -38,6 +38,34 @@
 
 ### Fixed
 
+- **`start-research-work` now asks for a description on projects, experiments and
+  runs.** The skill showed `probe project create folding` with no `--description`
+  and told the agent to tag but never to describe, so containers created through
+  the normal tracking path landed blank — 7 of 17 projects and 32 of 42
+  experiments in the reference lab have no description, every one created by an
+  agent that was never asked for one. Nothing fills it in later: generation runs
+  only when a child RUN reaches a terminal status, so anything ending without one
+  stays blank permanently.
+
+- **A description now has a stated length.** Asking for one without bounding it
+  produced a 566-char, five-sentence description on the `odyssey` project. The
+  overview clamps the field to two lines and the server's own `description`
+  generation kind caps at 240 chars, so the back half was written into a place
+  nobody reads. Both creates now say "1-2 sentences, under 240 chars"; the
+  backfill's experiment line, which had asked for the provenance reasoning that
+  justified creating the experiment, sends that to `probe notes write` instead —
+  it is worth keeping, just not in a two-line field.
+
+- **Backfill now writes a description for every project and experiment it
+  creates.** The prompt showed `project create` with only `--name`, so whether a
+  description appeared was luck — one import wrote one unprompted, the next left
+  it empty, and the project read "Add description" under its title. Nothing else
+  fills that in: the server generates a description only when a child RUN reaches
+  a terminal status, and importing a folder creates no runs, so an undescribed
+  backfill stays undescribed permanently. `--description` (plus `--tag`) is now
+  explicit on both `project create` and `experiment create`, with the reason
+  stated so a later trim of the prompt does not quietly drop it again.
+
 - **A ref that is both a project id and a project slug no longer silently resolves to
   one of them.** `_project_id` parsed the ref as a UUID and, when that worked, returned
   it as an id without ever asking whether a *slug* matched too. A project whose slug was
@@ -63,8 +91,6 @@
   slug X` — a false absence indistinguishable from a real one, and one that gets acted
   on by creating a duplicate. It is a server-side `?slug=` on a UNIQUE column now: 0 or
   1 row, no paging, no cap.
-
-### Changed
 
 - **Every `delete` verb takes the same ref forms and prompts the same way.** They had
   drifted: `project delete` took an id or a slug, `experiment delete` took ids only (a

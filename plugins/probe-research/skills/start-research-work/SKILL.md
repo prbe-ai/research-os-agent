@@ -34,13 +34,28 @@ near-miss of an existing slug rather than warning.)
    Always explicit from the CLI.
 
    ```
-   probe project create folding
-   probe experiment create dockq-sweep --project folding --hypothesis "temp 0.7 beats 1.0"
+   probe project create folding \
+       --description "Antibody-antigen structure prediction; DockQ on the SAbDab split."
+   probe experiment create dockq-sweep --project folding \
+       --hypothesis "temp 0.7 beats 1.0" \
+       --description "Sampling-temperature sweep over the 1.2B checkpoint, DockQ on 200 held-out complexes."
    ```
 
    `client.create_project(...)` / `client.create_experiment(...)` from the SDK. Both
    raise if the slug is taken, so re-running a setup script is a loud no-op rather
    than a silent second identity.
+
+   **Always pass `--description` — one or two sentences, under 240 characters.**
+   It is the first thing anyone sees under the title, and a container without one
+   reads as "Add description" to every visitor. The hypothesis says what you
+   expect; the description says what the work IS — the model, the data, the metric.
+   That bound is the server's own: the overview clamps this field to two lines, so
+   a third sentence is not read, it is hidden.
+
+   Nothing reliably fills it in later. The server generates a description only
+   when a child RUN reaches a terminal status, so anything that ends without one
+   — an abandoned run, a project used purely to hold artifacts, an import — stays
+   blank permanently.
 
    Work with no hypothesis does not need an experiment at all: open a
    PROJECT-DIRECT run (`probe run start --project folding`, or
@@ -150,7 +165,13 @@ near-miss of an existing slug rather than warning.)
    else, pass `--venv PATH`; the command fails loudly rather than recording the
    CLI's own packages as the project's.
 
-6. **Tag it.** Repeatable `--tag` on `run start` / `experiment create` /
+6. **Describe it and tag it.** `--description` takes free text on `run start` too,
+   not just the two containers — one line on what THIS run changes relative to the
+   last one ("same config, lr 3e-4 instead of 1e-4") is what makes a run list
+   readable six weeks later, when every run is named after a timestamp and a
+   petname. Amend later with `probe run set RUN --description "..."`.
+
+   Repeatable `--tag` on `run start` / `experiment create` /
    `project create` (SDK `tags=[...]`). Use 1-3 lowercase-kebab tags; prefer
    `baseline`, `ablation`, `sweep`, `debug`, `smoke-test`, `prod-candidate` —
    free-form allowed. If a run's meaning changes later:
