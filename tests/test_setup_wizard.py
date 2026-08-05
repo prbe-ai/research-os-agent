@@ -45,15 +45,41 @@ def _caps(**overrides) -> Capabilities:
 # --- the flag truth table --------------------------------------------------
 
 
-def test_fresh_machine_uses_defaults_and_capture_is_off():
-    """Omitting flags on a fresh machine must NOT opt anyone into transcript
-    egress. That is the consent failure this whole feature exists to prevent."""
+def test_fresh_machine_defaults_everything_on():
+    """A fresh machine gets every capability, capture included.
+
+    This INVERTS the original default and the inversion is deliberate, so the
+    assertion is kept rather than deleted: capture used to default off, and a
+    silent flip back would be a privacy regression nobody would notice. What
+    now carries the consent is the menu -- a ticked, labelled row saying what
+    capture sends and where, under the cursor before Next is reachable.
+    """
     selection = setup.resolve_selection(
         _caps(), tracking=None, capture=None, auto_update=None, configured=False
     )
     assert selection.tracking is True
-    assert selection.capture is False
+    assert selection.capture is True
     assert selection.auto_update is True
+    assert selection.agent_rules is True
+
+
+def test_the_capture_row_still_says_what_it_sends_and_where():
+    """Load-bearing now that capture ships ticked. The row IS the disclosure --
+    if it stops naming what leaves the machine, a pre-ticked box becomes a
+    grant made in silence, which is the thing the default-off used to prevent."""
+    _, detail = setup.MENU_COPY[Capability.CAPTURE]
+    blob = " ".join(detail)
+    assert "this device's" in blob
+    assert "Claude Code sessions" in blob
+
+
+def test_a_scripted_yes_can_still_decline_capture():
+    """`--yes` has no screen, so it is the path the new default changes most.
+    The flag has to remain a real off switch for anyone automating installs."""
+    selection = setup.resolve_selection(
+        _caps(), tracking=None, capture=False, auto_update=None, configured=False
+    )
+    assert selection.capture is False, "--no-capture must beat the default"
 
 
 def test_rerun_preserves_capture_when_the_flag_is_omitted():
@@ -2549,12 +2575,7 @@ def _built_menu(defaults=None):
     from probe.cli import setup as wizard
     from probe.cli import tui
 
-    defaults = defaults or {
-        Capability.TRACKING: True,
-        Capability.CAPTURE: False,
-        Capability.AGENT_RULES: True,
-        Capability.AUTO_UPDATE: True,
-    }
+    defaults = defaults or dict(wizard.FRESH_DEFAULTS)
     tui.use_checkmarks()
     indent = tui.body_indent()
     rows, choices = {}, [questionary.Separator(" ")]
@@ -2643,20 +2664,43 @@ def test_enter_on_next_submits():
     exited = _press_enter(question, control)
     assert "result" in exited, "enter on Next must submit"
     assert setup.NEXT not in exited["result"], "the action row is not a capability"
-    assert set(exited["result"]) == {Capability.TRACKING, Capability.AGENT_RULES}
+    expected = {c for c, on in setup.FRESH_DEFAULTS.items() if on} - {Capability.AUTO_UPDATE}
+    assert set(exited["result"]) == expected
 
 
-def test_clicking_straight_to_next_grants_only_the_defaults():
-    """THE CONSENT PROPERTY. A Next row means people accept defaults without
-    touching a row, so the defaults ARE the grant. Capture ships every prompt,
-    file body and tool result off the machine, and it must stay OFF for anyone
-    who just clicks through."""
-    question, control, _ = _built_menu()
+def test_clicking_straight_to_next_grants_exactly_the_defaults():
+    """A Next row means people accept defaults without touching a row, so the
+    defaults ARE the grant. Everything ships on now, capture included, so what
+    this pins is that clicking through grants the defaults and NOTHING MORE --
+    no row silently on that the screen did not show ticked."""
+    defaults = {
+        Capability.TRACKING: True,
+        Capability.CAPTURE: True,
+        Capability.AGENT_RULES: False,  # deliberately off, to prove it stays off
+        Capability.AUTO_UPDATE: True,
+    }
+    question, control, _ = _built_menu(defaults)
     control.pointed_at = control.choices.index(
         next(c for c in control.choices if getattr(c, "value", None) == setup.NEXT)
     )
     granted = set(_press_enter(question, control)["result"])
-    assert Capability.CAPTURE not in granted, "clicking through must not opt into egress"
+    assert granted == {Capability.TRACKING, Capability.CAPTURE}
+    assert Capability.AGENT_RULES not in granted, "an unticked row must stay unticked"
+
+
+def test_the_capture_row_is_visibly_ticked_before_next_is_reachable():
+    """What replaced the default-off as the consent gate. The grant has to be ON
+    SCREEN and refusable: capture ticked, labelled, and above the Next row so it
+    is passed over on the way there."""
+    from probe.cli import tui
+
+    _, control, _ = _built_menu()
+    values = [getattr(c, "value", None) for c in control.choices]
+    assert values.index(Capability.CAPTURE) < values.index(setup.NEXT)
+
+    rendered = "".join(t[1] for t in control._get_choice_tokens())
+    capture_line = next(ln for ln in rendered.split("\n") if "Session capture" in ln)
+    assert tui.TICK in capture_line, "capture must show as ticked, not merely be on"
 
 
 def test_the_box_redraws_when_a_row_is_toggled():
@@ -2665,11 +2709,20 @@ def test_the_box_redraws_when_a_row_is_toggled():
     from probe.cli import tui
 
     question, control, rows = _built_menu()
-    control.pointed_at = control.choices.index(rows[Capability.CAPTURE])
-    assert rows[Capability.CAPTURE].title.lstrip().startswith(tui.UNTICK)
+    row = rows[Capability.CAPTURE]
+    control.pointed_at = control.choices.index(row)
+    # Direction-agnostic: what matters is the box FOLLOWS the selection, not
+    # which way it starts. Pinning the start couples this to FRESH_DEFAULTS,
+    # which is a product decision that moves.
+    before = row.title.lstrip()[0]
+    assert before in (tui.TICK, tui.UNTICK)
 
     _press_enter(question, control)
-    assert rows[Capability.CAPTURE].title.lstrip().startswith(tui.TICK), "box must follow"
+    after = row.title.lstrip()[0]
+    assert after != before, "box must follow the toggle"
+    assert after in (tui.TICK, tui.UNTICK)
+    on_now = Capability.CAPTURE in control.selected_options
+    assert after == (tui.TICK if on_now else tui.UNTICK), "box must match the selection"
 
 
 def test_the_instruction_line_names_enter_not_space():

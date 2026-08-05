@@ -39,11 +39,28 @@ from probe.cli.capture import OffMode, clear_killswitch, turn_off
 PHASE_BUDGET_S = 300.0
 
 #: What an omitted flag means on a FRESH machine (nothing configured yet).
-#: Capture defaults OFF: opting someone into transcript egress by omission is
-#: exactly the consent failure this feature exists to prevent.
+#:
+#: EVERYTHING ON, capture included. This reverses the original default and the
+#: reversal is deliberate, so the reasoning it replaces is recorded here rather
+#: than deleted: capture used to default OFF because opting someone into
+#: transcript egress by omission was judged the consent failure the menu exists
+#: to prevent.
+#:
+#: What now carries that weight instead is the menu itself. Capture is a TICKED,
+#: LABELLED row that says what it sends and where -- "Sends this device's Claude
+#: Code sessions so your team can search them" -- sitting under the cursor
+#: before the Next row is reachable, and one keystroke unticks it. The grant is
+#: on screen and refusable; it is no longer inferred from silence.
+#:
+#: The `--yes` path has NO screen, so it is the one that changed most: a
+#: scripted `probe wizard --yes` on a fresh box now enables capture where it
+#: previously would not. Anyone automating an install who does not want that
+#: passes `--no-capture`, and a RE-RUN still PRESERVES rather than defaults
+#: (see resolve_selection), so this can never switch capture on behind someone
+#: who already turned it off.
 FRESH_DEFAULTS: dict[Capability, bool] = {
     Capability.TRACKING: True,
-    Capability.CAPTURE: False,
+    Capability.CAPTURE: True,
     Capability.AUTO_UPDATE: True,
     Capability.AGENT_RULES: True,
 }
