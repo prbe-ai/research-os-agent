@@ -15,6 +15,7 @@ import os
 import shlex
 import sys
 import threading
+import uuid
 import warnings
 import weakref
 from collections.abc import Iterable, Mapping
@@ -1252,7 +1253,7 @@ class Client:
         name: str | None = None,
         project: str | None = None,
         experiment_name: str | None = None,
-        on_conflict: str = "error",
+        on_conflict: str = "auto",
         **run_kw,
     ) -> Run:
         """Open a run inside an experiment — or straight under a project.
@@ -1279,19 +1280,25 @@ class Client:
         experiment named after whatever directory you happened to be in.
 
         ``on_conflict`` decides what a duplicate ``external_id`` means.
-        ``"error"`` (the default) keeps the engine's 409: an external_id is an
-        identity, and colliding with one is a bug worth hearing about.
-        ``"supersede"`` treats the collision as a RETRY: a fresh run opens as
-        ``external_id-rN`` with ``parent_relation="retry"`` pointing at the
-        incumbent, and an incumbent that died (failed/crashed/canceled) is
-        tagged ``superseded`` so nobody trusts its partial numbers. A completed
-        incumbent is left unmarked — repeating a good run is a repeat, not a
-        correction."""
-        if on_conflict not in ("error", "supersede"):
+        ``"auto"`` (the default) reads the incumbent's state: dead
+        (failed/crashed/canceled) → RESUME it in place — same run, same curve,
+        recovery on the record; completed or still alive → the 409 stands,
+        because repeating a good run or hijacking a live one must be
+        deliberate. ``"resume"`` demands the resume and errors when the
+        incumbent is not dead. ``"supersede"`` treats the collision as a
+        from-scratch RETRY: a fresh run opens as ``external_id-rN`` with
+        ``parent_relation="retry"`` pointing at the incumbent, and a dead
+        incumbent is tagged ``superseded`` so nobody trusts its partial
+        numbers (a completed one is left unmarked — a repeat is not a
+        correction). ``"error"`` keeps the bare 409. The two recovery policies
+        split on step continuity: resume continues the curve past the crash
+        point (checkpointed relaunch), supersede replays it from step 0."""
+        if on_conflict not in ("auto", "error", "supersede", "resume"):
             raise errors.ValidationError(
-                f"on_conflict={on_conflict!r} is not a policy. Use \"error\" "
-                "(the default 409) or \"supersede\" (retry lineage under a "
-                "fresh -rN external_id)."
+                f"on_conflict={on_conflict!r} is not a policy. Use \"auto\" "
+                "(resume a dead incumbent, else 409), \"resume\" (demand it), "
+                "\"supersede\" (retry lineage under a fresh -rN external_id), "
+                "or \"error\" (the bare 409)."
             )
         if not experiment and not project:
             raise errors.ValidationError(
@@ -1353,7 +1360,7 @@ class Client:
                     "one. Name the experiment or drop the group."
                 )
             run_kw.pop("group_id", None)
-            return self._create_run_superseding(
+            return self._create_run_with_policy(
                 lambda kw, nm: self.create_project_run(project_id, nm, **kw),
                 run_kw, name, on_conflict,
                 experiment_id=None, project_id=project_id,
@@ -1375,7 +1382,7 @@ class Client:
                 f"experiment {experiment!r} is not in project {project!r}. "
                 "Drop the project argument, or name the one it actually belongs to."
             )
-        return self._create_run_superseding(
+        return self._create_run_with_policy(
             lambda kw, nm: self.create_run(exp["id"], nm, **kw),
             run_kw, name, on_conflict,
             experiment_id=exp["id"], project_id=None,
@@ -1384,7 +1391,7 @@ class Client:
     #: Statuses whose numbers cannot be trusted; superseding one marks it.
     _DEAD_RUN_STATUSES = frozenset({"failed", "crashed", "canceled"})
 
-    def _create_run_superseding(
+    def _create_run_with_policy(
         self,
         create,
         run_kw: dict,
@@ -1395,32 +1402,47 @@ class Client:
         project_id: str | None,
         max_attempts: int = 5,
     ) -> Run:
-        """``create()``, except ``on_conflict="supersede"`` turns an external_id
-        409 into retry lineage instead of an error.
+        """``create()``, except an external_id 409 is resolved by policy.
 
-        The incumbent is never reopened: appending fresh steps into a
-        half-dead run splices two executions into one curve and hides that a
-        crash ever happened (the W&B ``resume="allow"`` failure mode). Instead
-        a NEW run opens as ``external_id-rN`` carrying
-        ``parent_relation="retry"`` plus ``retry_of``/``retry_attempt``
-        foreign keys, and a dead incumbent is tagged ``superseded`` — the
-        chain stays walkable from either end and every execution keeps its own
-        honest record."""
+        RESUME reopens the incumbent in place — same identity, same curve —
+        which is only honest when the relaunch continues from a checkpoint;
+        the step guard on the returned handle enforces that. SUPERSEDE opens a
+        NEW run as ``external_id-rN`` carrying ``parent_relation="retry"``
+        plus ``retry_of``/``retry_attempt`` foreign keys, for the relaunch
+        that replays from step 0 (appending that into a half-dead run would
+        splice two executions into one curve — the W&B ``resume="allow"``
+        failure mode). Either way a dead incumbent's partial record survives:
+        resume continues it, supersede tags it ``superseded``."""
         try:
             return create(run_kw, name)
         except errors.ConflictError:
             base = run_kw.get("external_id")
-            if on_conflict != "supersede" or base is None:
+            if on_conflict == "error" or base is None:
                 raise
         page = self.list_runs(experiment_id=experiment_id, project_id=project_id)
         old = next((r for r in page.items if r.get("external_id") == base), None)
         if old is None:
             # The 409 is real but the incumbent is not on the first page (or
-            # belongs to another source). Superseding blind would mint lineage
-            # pointing at nothing, so the original conflict stands.
+            # belongs to another source). Acting on it blind would resume or
+            # supersede the wrong thing, so the original conflict stands.
             raise errors.ConflictError(
                 f"run {base!r} conflicts but its incumbent is not visible "
-                "here to supersede — resolve the collision by hand",
+                "here — resolve the collision by hand",
+            )
+        status = old.get("status")
+        if on_conflict in ("auto", "resume"):
+            if status in self._DEAD_RUN_STATUSES:
+                return self._resume_run(old, run_kw)
+            if status == "completed":
+                raise errors.ConflictError(
+                    f"run {base!r} already completed — resuming would append "
+                    "onto a good record. Repeat it deliberately with "
+                    'on_conflict="supersede".'
+                )
+            raise errors.ConflictError(
+                f"run {base!r} is {status} and its writer may still be alive "
+                "— refusing to hijack an open run. If it is truly dead, wait "
+                "for the reaper to mark it crashed, or supersede explicitly."
             )
         for n in range(2, max_attempts + 2):
             retry_id = f"{base}-r{n}"
@@ -1448,6 +1470,66 @@ class Client:
             tags = sorted({*(old.get("tags") or []), "superseded"})
             self.write("PATCH", f"/v1/runs/{old['id']}", {"tags": tags})
         return run
+
+    def _resume_run(self, old: dict, run_kw: dict) -> Run:
+        """Reopen a dead incumbent and hand back a live handle on it.
+
+        The session id minted here is the writer fingerprint the reopen
+        registers (research-os#364): the engine's write epoch bumps, so a
+        zombie predecessor still logging can be told apart from this process.
+        The receipt's ``last_step`` arms the handle's resume guard. Snapshot
+        again after this returns — each attempt's code+env is its own
+        execution record."""
+        session_id = str(uuid.uuid4())
+        receipt = self.reopen_run(old["id"], session_id=session_id)
+        row = receipt.get("run") or receipt
+        return self.attach_run(
+            row,
+            heartbeat=run_kw.get("heartbeat", True),
+            session_id=session_id,
+            resume_from_step=receipt.get("last_step"),
+        )
+
+    def reopen_run(self, run_id: str, *, session_id: str) -> dict:
+        """``POST /v1/runs/{id}/reopen`` — flip a dead run back to running.
+
+        Returns the reopen receipt: the updated row plus ``write_epoch`` and
+        ``last_step``. The caller just resolved the run, so a 404 here is the
+        ROUTE missing, not the run — a backend that predates reopen
+        (research-os#364) — and is translated into the actionable message
+        rather than passed through as \"run not found\"."""
+        try:
+            return self.transport.post(
+                f"/v1/runs/{run_id}/reopen", {"session_id": session_id}
+            )
+        except errors.NotFoundError as exc:
+            raise errors.NotFoundError(
+                "this backend predates run reopen (research-os#364): upgrade "
+                'the server, or relaunch with on_conflict="supersede"'
+            ) from exc
+
+    def attach_run(
+        self,
+        run: str | dict,
+        *,
+        heartbeat: bool = True,
+        session_id: str | None = None,
+        resume_from_step: int | None = None,
+    ) -> Run:
+        """A live handle on an EXISTING run row (or id) in this process.
+
+        The counterpart of create, through the same construction boundary
+        (`_wrap_run`), so the heartbeat and auto-update-lock story is
+        identical. ``resume_from_step`` arms the monotonic-step guard and
+        floors the auto-step counters, so a resumed process cannot re-log
+        steps the first execution already wrote."""
+        data = self.get_run(run) if isinstance(run, str) else run
+        handle = self._wrap_run(data, heartbeat=heartbeat)
+        if session_id is not None:
+            handle.session_id = session_id
+        if resume_from_step is not None:
+            handle.arm_resume_guard(resume_from_step)
+        return handle
 
     def resolve_or_raise(self, kind: str, slug: str, *, project_id: str | None = None) -> dict:
         """Resolve a slug or raise the error that says what to do about it.
