@@ -170,11 +170,64 @@ def use_checkmarks() -> None:
     `common` does `from questionary.constants import INDICATOR_SELECTED`, so the
     name is bound at import time and patching `questionary.constants` has no
     effect. The module that actually reads it is the one to patch.
+
+    Still used by prompts that let questionary draw the box. The capability
+    picker draws its own -- see `TICK` / `UNTICK` and `checkbox_control`.
     """
     from questionary.prompts import common
 
     common.INDICATOR_SELECTED = "✔"
     common.INDICATOR_UNSELECTED = "○"
+
+
+#: The box we draw OURSELVES, on rows that carry one.
+TICK = "✔"
+UNTICK = "○"
+
+
+def checkbox_control(question):
+    """The questionary InquirerControl behind a checkbox prompt, or None.
+
+    Reached through the layout because `checkbox()` keeps the control in a
+    closure and hands back only a Question. Same posture as
+    `center_vertically`: questionary is pinned `>=2.0,<3`, the codebase already
+    patches its module-level indicator constants, and every reach-in here is
+    guarded so a reshuffle degrades the prompt instead of breaking it.
+    """
+    try:
+        from questionary.prompts.common import InquirerControl
+
+        def walk(container):
+            for child in getattr(container, "children", []) or []:
+                yield from walk(child)
+            inner = getattr(container, "content", None)
+            if isinstance(inner, InquirerControl):
+                yield inner
+            elif inner is not None:
+                yield from walk(inner)
+
+        return next(walk(question.application.layout.container), None)
+    except Exception:  # noqa: BLE001 - a prompt that renders is worth more than a box
+        return None
+
+
+def draw_own_boxes(question) -> bool:
+    """Stop questionary drawing the box, so WE decide which rows get one.
+
+    `use_indicator` is all-rows-or-nothing and `checkbox()` does not expose it
+    (passing it reaches PromptSession and raises), so it is set on the control
+    after construction. The reason we want it off at all: a row you can put the
+    cursor on ALWAYS gets a box, and an action row -- "Next" -- rendered as
+    `○ Next` reads as an option someone forgot to tick.
+
+    Returns whether it worked, so the caller can fall back to questionary's own
+    box rather than shipping a picker with no boxes at all.
+    """
+    control = checkbox_control(question)
+    if control is None:
+        return False
+    control.use_indicator = False
+    return True
 
 
 def content_height(message: str, choices=()) -> int:

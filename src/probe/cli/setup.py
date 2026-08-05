@@ -493,8 +493,41 @@ def apply_agent_rules(want: bool, *, stale: bool = False) -> list[str]:
     return []
 
 
+#: The value of the row that ENDS the picker. Not a capability, never returned
+#: in a Selection, and deliberately last -- the cursor starts on the first
+#: capability, so the choices are in front of you before the way out is.
+NEXT = "__next__"
+
+#: What that row says. A verb, not a noun: every other row is a thing you turn
+#: on, and this one is the only thing you DO.
+NEXT_TITLE = "Next  ›  continue with these settings"
+
+
+def _menu_row(title: str, detail: tuple[str, ...], *, checked: bool, indent: str) -> str:
+    """One capability row, box included.
+
+    WE draw the box (see tui.draw_own_boxes). questionary's own is
+    all-rows-or-nothing, and the "Next" row must not have one -- `○ Next` reads
+    as an option someone forgot to tick rather than the way forward.
+    """
+    from probe.cli import tui
+
+    box = tui.TICK if checked else tui.UNTICK
+    # The box sits on the title line only; wrapped detail lines clear it, so
+    # they do not read as further options.
+    return f"\n{indent}  ".join((f"{box} {title}", *detail))
+
+
 def run_menu(defaults: dict[Capability, bool]):
     """The capability checkbox. Returns None (quit), tui.BACK, or a Selection.
+
+    ENTER ACTIVATES THE ROW UNDER THE CURSOR. On a capability that means toggle;
+    on the "Next" row it means done. questionary's default is space-toggles /
+    enter-submits, which is the checkbox convention but leaves the way out
+    invisible -- people read three rows with no apparent way forward and start
+    ticking things to find one. One rule ("enter does the thing you are looking
+    at") plus a visible Next row removes the guesswork. Space still toggles, for
+    anyone who already has the muscle memory.
 
     questionary is imported HERE, inside the call, and never at module scope:
     cli/__init__ eagerly imports cli/main, and `probe log` runs inside training
@@ -504,34 +537,38 @@ def run_menu(defaults: dict[Capability, bool]):
 
     from probe.cli import tui
 
-    tui.use_checkmarks()
+    tui.use_checkmarks()  # the fallback path, if we cannot take the box over
 
+    indent = tui.body_indent()
+    rows: dict[Capability, questionary.Choice] = {}
     choices: list = [questionary.Separator(" ")]
     for index, (capability, (title, detail)) in enumerate(MENU_COPY.items()):
         if index:
             choices.append(questionary.Separator(" "))
-        choices.append(
-            questionary.Choice(
-                title=f"\n{tui.body_indent()}  ".join((title, *detail)),
-                value=capability,
-                checked=defaults[capability],
-            )
+        row = questionary.Choice(
+            title=_menu_row(title, detail, checked=defaults[capability], indent=indent),
+            value=capability,
+            checked=defaults[capability],
         )
+        rows[capability] = row
+        choices.append(row)
+    choices.append(questionary.Separator(" "))
+    choices.append(questionary.Choice(title=NEXT_TITLE, value=NEXT))
 
     message = tui.framed(
         "Choose what Probe does on this device.", [], "What should Probe Research do here?"
     )
-    picked = tui.ask(
-        questionary.checkbox(
-            message,
-            choices=choices,
-            instruction="(space toggles, enter confirms, esc goes back)",
-            style=tui.style(),
-            qmark=tui.qmark(),
-            pointer=tui.pointer(),
-        ),
-        height=tui.content_height(message, choices),
+    question = questionary.checkbox(
+        message,
+        choices=choices,
+        instruction="(enter toggles a row, or picks Next · esc goes back)",
+        style=tui.style(),
+        qmark=tui.qmark(),
+        pointer=tui.pointer(),
     )
+    _bind_menu_keys(question, rows, indent=indent)
+
+    picked = tui.ask(question, height=tui.content_height(message, choices))
     if picked is None or picked is tui.BACK:
         return picked
     chosen = set(picked)
@@ -542,6 +579,70 @@ def run_menu(defaults: dict[Capability, bool]):
         # Carried through untouched; ask_auto_update owns this one.
         auto_update=defaults[Capability.AUTO_UPDATE],
     )
+
+
+def _bind_menu_keys(question, rows: dict[Capability, object], *, indent: str) -> None:
+    """Make enter activate the pointed row, and keep our boxes in sync.
+
+    Every reach into questionary is guarded. If any of it stops working the
+    prompt still runs with the library's own behaviour (space toggles, enter
+    submits) rather than failing to render -- a picker that looks slightly wrong
+    beats a wizard that cannot ask the question at all.
+    """
+    from probe.cli import tui
+
+    own_boxes = tui.draw_own_boxes(question)
+    control = tui.checkbox_control(question)
+    if control is None:
+        return  # library defaults; enter still submits, space still toggles
+
+    def restyle(capability: Capability) -> None:
+        """Redraw one row's box. Only ours to do when we took the box over."""
+        if not own_boxes:
+            return
+        row = rows.get(capability)
+        if row is None:
+            return
+        title, detail = MENU_COPY[capability]
+        row.title = _menu_row(
+            title, detail, checked=capability in control.selected_options, indent=indent
+        )
+
+    def toggle(capability: Capability) -> None:
+        if capability in control.selected_options:
+            control.selected_options.remove(capability)
+        else:
+            control.selected_options.append(capability)
+        restyle(capability)
+
+    for capability in rows:
+        restyle(capability)
+
+    try:
+        bindings = question.application.key_bindings
+
+        @bindings.add("c-m", eager=True)  # Enter
+        def _(event) -> None:  # pragma: no cover - requires a live terminal
+            pointed = control.get_pointed_at()
+            if pointed is None or pointed.value == NEXT:
+                control.is_answered = True
+                event.app.exit(result=[c for c in control.selected_options if c != NEXT])
+                return
+            toggle(pointed.value)
+
+        @bindings.add(" ", eager=True)
+        def _(event) -> None:  # pragma: no cover - requires a live terminal
+            pointed = control.get_pointed_at()
+            if pointed is None:
+                return
+            if pointed.value == NEXT:
+                control.is_answered = True
+                event.app.exit(result=[c for c in control.selected_options if c != NEXT])
+                return
+            toggle(pointed.value)
+
+    except Exception:  # noqa: BLE001 - never let a binding break the prompt
+        pass
 
 
 def ask_auto_update(default: bool):
