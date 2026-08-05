@@ -202,3 +202,102 @@ def capture_runtime(
     if container:
         info["container"] = container
     return info, errors
+
+
+_ARGV_SEED = re.compile(r"^--?([\w-]*seed[\w-]*?)(?:=(.*))?$", re.IGNORECASE)
+
+
+def capture_determinism(
+    argv: list[str] | None = None, config: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], list[str]]:
+    """Seed evidence with provenance. `detected` = observed from the outside
+    (env, argv, an already-imported framework); `declared` = the caller put it
+    in config. Absence of seeds is recorded as an empty list — honest, not an
+    error."""
+    errors: list[str] = []
+    seeds: list[dict[str, Any]] = []
+    # Declared (config) entries are appended before detected (env/argv/framework)
+    # ones, so a name shared by both -- e.g. a `seed` in config that also shows
+    # up on the command line -- resolves to the detected value when a caller
+    # dedupes by name: what actually governed the run outranks what was merely
+    # configured for it.
+    for key, value in sorted((config or {}).items()):
+        if key == "seeds" and isinstance(value, dict):
+            for sub, sval in sorted(value.items()):
+                seeds.append({
+                    "name": f"seeds.{sub}", "value": sval,
+                    "provenance": "declared", "source": "config",
+                })
+        elif re.search(r"(^|_)seed(s)?$", key, re.IGNORECASE):
+            seeds.append({
+                "name": key, "value": value,
+                "provenance": "declared", "source": "config",
+            })
+    hashseed = os.environ.get("PYTHONHASHSEED")
+    if hashseed is not None:
+        seeds.append({
+            "name": "PYTHONHASHSEED", "value": hashseed,
+            "provenance": "detected", "source": "env",
+        })
+    args = list(argv) if argv is not None else list(sys.argv)
+    for i, arg in enumerate(args):
+        m = _ARGV_SEED.match(arg)
+        if not m:
+            continue
+        value = m.group(2)
+        if value is None and i + 1 < len(args) and not args[i + 1].startswith("-"):
+            value = args[i + 1]
+        seeds.append({
+            "name": m.group(1), "value": value,
+            "provenance": "detected", "source": "argv",
+        })
+    # Frameworks are read from sys.modules, NEVER imported: importing torch
+    # costs seconds and pulls CUDA context into a process that may not want it.
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        try:
+            seeds.append({
+                "name": "torch.initial_seed", "value": int(torch.initial_seed()),
+                "provenance": "detected", "source": "torch",
+            })
+        except Exception as exc:
+            errors.append(f"torch seed: {exc}")
+    if "numpy" in sys.modules:
+        seeds.append({
+            "name": "numpy.random", "value": None,
+            "provenance": "detected", "source": "numpy",
+            "note": "generator present; state not captured",
+        })
+    return {"seeds": seeds}, errors
+
+
+def build_launch_block(
+    *,
+    argv: list[str] | None = None,
+    cwd: str | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compose the launch block. NEVER raises — a capture bug must not take
+    down the run it is documenting (design principle: block claims, not runs)."""
+    from probe import __version__
+
+    errors: list[str] = []
+    block: dict[str, Any] = {"schema": LAUNCH_SCHEMA, "probe_version": __version__}
+    try:
+        block["process"], errs = capture_process(argv=argv, cwd=cwd)
+        errors += errs
+    except Exception as exc:
+        errors.append(f"process: {exc}")
+    try:
+        block["runtime"], errs = capture_runtime()
+        errors += errs
+    except Exception as exc:
+        errors.append(f"runtime: {exc}")
+    try:
+        block["determinism"], errs = capture_determinism(argv=argv, config=config)
+        errors += errs
+    except Exception as exc:
+        errors.append(f"determinism: {exc}")
+    if errors:
+        block["errors"] = errors
+    return block

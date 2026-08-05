@@ -3,7 +3,14 @@ from __future__ import annotations
 
 import sys
 
-from probe.sdk.launch import capture_process, capture_runtime, scrub_argv
+from probe.sdk.launch import (
+    LAUNCH_SCHEMA,
+    build_launch_block,
+    capture_determinism,
+    capture_process,
+    capture_runtime,
+    scrub_argv,
+)
 
 
 def test_scrub_argv_redacts_flag_value_pairs():
@@ -89,3 +96,40 @@ def test_runtime_container_k8s(monkeypatch, tmp_path):
     info, _ = capture_runtime(_dockerenv_path=str(tmp_path / "nope"))
     assert info["container"]["detected_via"] == "kubernetes"
     assert info["container"]["pod"] == "trainer-abc123"
+
+
+def _seed_names(info):
+    return {s["name"]: s for s in info["seeds"]}
+
+
+def test_determinism_from_argv_and_env(monkeypatch):
+    monkeypatch.setenv("PYTHONHASHSEED", "0")
+    info, errors = capture_determinism(argv=["train.py", "--seed", "42", "--data-seed=7"])
+    seeds = _seed_names(info)
+    assert seeds["PYTHONHASHSEED"]["value"] == "0"
+    assert seeds["seed"]["value"] == "42"
+    assert seeds["seed"]["provenance"] == "detected"
+    assert seeds["data-seed"]["value"] == "7"
+    assert errors == []
+
+
+def test_determinism_declared_config_seeds():
+    info, _ = capture_determinism(argv=[], config={"lr": 1e-4, "seed": 1234, "seeds": {"torch": 1, "numpy": 2}})
+    seeds = _seed_names(info)
+    assert seeds["seed"]["provenance"] == "declared"
+    assert seeds["seeds.torch"]["value"] == 1
+    assert seeds["seeds.numpy"]["value"] == 2
+
+
+def test_determinism_no_seeds_is_honest():
+    info, _ = capture_determinism(argv=["train.py"], config={})
+    assert info["seeds"] == [] or all(s["source"] != "argv" for s in info["seeds"])
+
+
+def test_build_launch_block_composes_and_never_raises(monkeypatch):
+    block = build_launch_block(argv=["train.py", "--seed", "3"], config={"seed": 3})
+    assert block["schema"] == LAUNCH_SCHEMA
+    assert block["process"]["argv"] == ["train.py", "--seed", "3"]
+    assert block["runtime"]["env_names"]
+    assert _seed_names(block["determinism"])["seed"]["value"] == "3"
+    assert "probe_version" in block
