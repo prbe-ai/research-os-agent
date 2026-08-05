@@ -12,7 +12,9 @@ import os
 
 import pytest
 
-from probe.cli import autoupdate, capture, doctor, setup
+from probe.cli import autoupdate, capture
+from probe.cli import capabilities as capabilities_mod
+from probe.cli import doctor, setup
 from probe.cli.capabilities import (
     ENV_INGEST_TOKEN,
     Capabilities,
@@ -2743,3 +2745,211 @@ def test_next_is_the_last_row_and_the_cursor_does_not_start_on_it():
     assert values[-1] == setup.NEXT, "Next must be last"
     assert control.get_pointed_at().value is not setup.NEXT
     assert control.get_pointed_at().value is Capability.TRACKING
+
+
+# --- the credential gate --------------------------------------------------
+
+
+def test_a_refused_approval_installs_nothing(monkeypatch):
+    """A cancelled browser approval must not leave a plugin behind.
+
+    The tracking plugin publishes an MCP server whose bearer comes from the
+    credential this run failed to mint. Installing it anyway puts an `.mcp.json`
+    on disk with nothing behind it, and the first unauthenticated connect is
+    answered with a `WWW-Authenticate` challenge that pins Claude Code to OAuth --
+    so the user is sent to `/mcp` to authenticate a device that was never
+    authorized at all. Leaving the machine as it was is the honest outcome of a
+    refused approval.
+    """
+    import sys
+
+    import typer
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import claude_cli
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    order: list[str] = []
+
+    def _install(name, **kw):
+        order.append(f"install:{name}")
+        return claude_cli.Result(ok=True)
+
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: order.append("refresh"))
+    monkeypatch.setattr(wizard, "install_plugin", _install)
+    # The user closed the browser tab: approved nothing, minted nothing.
+    monkeypatch.setattr(
+        wizard, "authorize", lambda grants, **kw: (order.append("authorize"), ({}, []))[1]
+    )
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    monkeypatch.setattr(doctor_impl, "collect", lambda *a, **k: _caps())
+
+    with pytest.raises(typer.Exit):
+        cli_main._run_wizard_action(
+            Action.CONFIGURE,
+            caps=_caps(),
+            base_now="https://api.test",
+            yes=True,
+            tracking=True,
+            capture=False,
+            auto_update=None,
+            agent_rules=False,
+            uninstall=False,
+            configured=False,
+        )
+
+    assert "authorize" in order
+    assert not [step for step in order if step.startswith("install:")], (
+        f"a plugin was installed with no credential behind it: {order}"
+    )
+
+
+def test_a_partial_grant_installs_only_what_it_can_authenticate(monkeypatch):
+    """One failed grant must not veto the capability that DID get its credential.
+
+    Refusing both would punish someone whose tracking approval succeeded for a
+    capture grant the server declined -- and the two are independent plugins with
+    independent credentials.
+    """
+    import sys
+
+    import typer
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import claude_cli
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    order: list[str] = []
+
+    def _install(name, **kw):
+        order.append(f"install:{name}")
+        return claude_cli.Result(ok=True)
+
+    def _authorize(grants, **kw):
+        # api + mcp came back; capture did not.
+        return {g: {"token": f"probe_pat_{g}"} for g in grants if g != "capture"}, []
+
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: None)
+    monkeypatch.setattr(wizard, "install_plugin", _install)
+    monkeypatch.setattr(wizard, "authorize", _authorize)
+    monkeypatch.setattr(wizard, "clear_killswitch", lambda: None)
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda *a, **k: _caps(tracking_plugin_installed=True, logged_in_as="x@y.z"),
+    )
+
+    with pytest.raises(typer.Exit):
+        cli_main._run_wizard_action(
+            Action.CONFIGURE,
+            caps=_caps(),
+            base_now="https://api.test",
+            yes=True,
+            tracking=True,
+            capture=True,
+            auto_update=None,
+            agent_rules=False,
+            uninstall=False,
+            configured=False,
+        )
+
+    assert f"install:{capabilities_mod.TRACKING_PLUGIN_NAME}" in order, (
+        f"tracking had its credential and must still install: {order}"
+    )
+    assert f"install:{capabilities_mod.TAP_PLUGIN_NAME}" not in order, (
+        f"capture had no credential and must not install: {order}"
+    )
+
+
+def test_turning_a_capability_off_is_never_gated_on_a_credential(monkeypatch):
+    """Removal must work when minting fails.
+
+    Gating an uninstall on a grant would trap someone on the very plugin they
+    just asked to remove -- and removal needs no credential to be correct.
+    """
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import claude_cli
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    order: list[str] = []
+
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(
+        wizard,
+        "uninstall_plugin",
+        lambda name: (order.append(f"uninstall:{name}"), claude_cli.Result(ok=True))[1],
+    )
+    monkeypatch.setattr(wizard, "authorize", lambda grants, **kw: ({}, []))
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+    monkeypatch.setattr(doctor_impl, "collect", lambda *a, **k: _caps())
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=_caps(tracking_plugin_installed=True, logged_in_as="x@y.z"),
+        base_now="https://api.test",
+        yes=True,
+        tracking=False,
+        capture=False,
+        auto_update=None,
+        agent_rules=False,
+        uninstall=False,
+        configured=True,
+    )
+
+    assert f"uninstall:{capabilities_mod.TRACKING_PLUGIN_NAME}" in order
+
+
+def test_a_rerun_that_already_holds_its_grants_is_not_gated():
+    """`granted` is empty on a healthy re-run -- nothing was requested. Reading
+    that as failure would refuse to install on every machine already signed in."""
+    from probe.cli.capabilities import Capability
+
+    assert setup.blocked_by_missing_grants(
+        Capability.TRACKING, needed=[], granted={}
+    ) == []
+    assert setup.blocked_by_missing_grants(
+        Capability.TRACKING, needed=["api", "mcp"], granted={"api": {}, "mcp": {}}
+    ) == []
+    assert setup.blocked_by_missing_grants(
+        Capability.TRACKING, needed=["api", "mcp"], granted={"api": {}}
+    ) == ["mcp"]
+
+
+def test_the_grant_table_is_the_only_source_of_what_a_capability_needs():
+    """grants_for and the gate must read ONE table. Two hardcoded lists is how a
+    third grant gets added to the request and not to the check."""
+    from probe.cli.capabilities import Capability
+
+    everything = setup.Selection(
+        tracking=True, capture=True, auto_update=False, agent_rules=False
+    )
+    requested = set(setup.grants_for(everything))
+    tabled = {g for grants in setup.CAPABILITY_GRANTS.values() for g in grants}
+    assert requested == tabled
+
+    for capability in (Capability.TRACKING, Capability.CAPTURE):
+        needed = list(setup.CAPABILITY_GRANTS[capability])
+        # Every grant the table names must be able to block its own capability.
+        assert setup.blocked_by_missing_grants(
+            capability, needed=needed, granted={}
+        ) == needed

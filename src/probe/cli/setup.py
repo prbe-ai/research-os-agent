@@ -269,21 +269,48 @@ def uninstall_plugin(name: str) -> claude_cli.Result:
     )
 
 
-def grants_for(selection: Selection) -> list[str]:
-    """The grant set for ONE browser approval.
+#: What each capability's plugin cannot work without.
+#:
+#: `api` rides along with tracking because the CLI needs a credential to be useful
+#: at all; `mcp` is the separate read-only one so the MCP surface cannot write. A
+#: capture-only selection asks for capture alone -- deliberately, so someone who
+#: wanted only transcript capture is not handed read/write/delete they never asked
+#: for.
+#:
+#: ONE table, read by both `grants_for` (what to request) and
+#: `blocked_by_missing_grants` (what may install once the answer is back). They were
+#: two hardcoded lists for about a day, which is exactly long enough for a third
+#: grant to be added to one and not the other -- and the failure mode of that skew
+#: is an install gated on a credential nobody asked for, or worse, not gated at all.
+CAPABILITY_GRANTS: dict[Capability, tuple[str, ...]] = {
+    Capability.TRACKING: ("api", "mcp"),
+    Capability.CAPTURE: ("capture",),
+}
 
-    `api` rides along with tracking because the CLI needs a credential to be
-    useful at all; `mcp` is the separate read-only one so the MCP surface cannot
-    write. A capture-only selection asks for capture alone -- deliberately, so
-    someone who wanted only transcript capture is not handed read/write/delete
-    they never asked for.
-    """
+
+def grants_for(selection: Selection) -> list[str]:
+    """The grant set for ONE browser approval."""
     grants: list[str] = []
-    if selection.tracking:
-        grants.extend(["api", "mcp"])
-    if selection.capture:
-        grants.append("capture")
+    for capability, wanted in CAPABILITY_GRANTS.items():
+        if selection.as_map()[capability]:
+            grants.extend(wanted)
     return grants
+
+
+def blocked_by_missing_grants(
+    capability: Capability, *, needed: list[str], granted: dict
+) -> list[str]:
+    """The grants this capability requires that the run TRIED and FAILED to get.
+
+    Only grants in `needed` count. A re-run that already holds `api`/`mcp` never
+    asks for them again, so they are absent from `granted` for the good reason --
+    reading that as failure would refuse to install on every healthy machine.
+    """
+    return [
+        grant
+        for grant in CAPABILITY_GRANTS.get(capability, ())
+        if grant in needed and grant not in granted
+    ]
 
 
 def needs_authorization(caps: Capabilities, selection: Selection) -> list[str]:
