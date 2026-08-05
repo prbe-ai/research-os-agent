@@ -91,3 +91,14 @@ def test_client_run_snapshot_param_overrides(client, monkeypatch):
     )
     row = client.run_bundle(run.id)["run"]
     assert "launch" not in (row.get("metadata") or {})
+
+
+def test_execute_span_attributes_are_scrubbed(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    run = open_run(client, experiment="exp-span-scrub")
+    run.execute([sys.executable, "-c", "pass", "--api-key", "sk-live12345678"], cwd=str(tmp_path))
+    spans = client.transport.get(f"/v1/runs/{run.id}/spans")
+    process_spans = [s for s in spans if s.get("span_type") == "process"]
+    assert process_spans
+    for span in process_spans:
+        assert "sk-live12345678" not in str(span.get("attributes"))

@@ -1731,6 +1731,12 @@ class Run:
         """
         if not argv:
             raise ValueError("argv must not be empty")
+        # Span attributes are persisted telemetry, not the launch mechanism --
+        # they must carry the SAME scrubbed argv the launch block ships, never
+        # the raw one. The raw argv is kept only for the actual subprocess
+        # invocation and for `snapshot(argv=argv)` below, which scrubs
+        # internally and needs the raw form for entrypoint detection.
+        scrubbed_argv, _ = _launch.scrub_argv(list(argv))
         # Every executed run snapshots by default (design D3). detect_venv=True
         # because THIS interpreter is the launcher, not the environment being
         # recorded -- see Run.snapshot's docstring. Failure never blocks the
@@ -1751,7 +1757,7 @@ class Run:
             name=os.path.basename(argv[0]),
             status="running",
             started_at=started_at,
-            attributes={"argv": argv, "cwd": os.path.abspath(cwd or os.getcwd())},
+            attributes={"argv": scrubbed_argv, "cwd": os.path.abspath(cwd or os.getcwd())},
         )
         process_env = {**os.environ, **(env or {}), "PROBE_RUN_ID": self.id}
         try:
@@ -1764,7 +1770,7 @@ class Run:
                 status="failed",
                 started_at=started_at,
                 ended_at=_now(),
-                attributes={"argv": argv, "cwd": os.path.abspath(cwd or os.getcwd())},
+                attributes={"argv": scrubbed_argv, "cwd": os.path.abspath(cwd or os.getcwd())},
             )
             raise
         self.span(
@@ -1775,7 +1781,7 @@ class Run:
             started_at=started_at,
             ended_at=_now(),
             attributes={
-                "argv": argv,
+                "argv": scrubbed_argv,
                 "cwd": os.path.abspath(cwd or os.getcwd()),
                 "exit_code": result.returncode,
             },
