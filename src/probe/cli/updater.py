@@ -35,6 +35,13 @@ except Exception:  # pragma: no cover - packaging is a transitive dep, usually p
 DIST = "probe-research"
 LEGACY_DIST = "probe-agent"  # pre-2026-07-15 name; owns the same `probe` binary
 PLUGIN_ID = "probe-research@research-os-agent"
+# The transcript tap ships from the same marketplace as a SEPARATE plugin, so
+# `claude plugin update probe-research@…` never touched it. Leaving it out made
+# `probe update` a command that reports success while the component whose
+# staleness is invisible (a stale tap captures nothing and says nothing) stays
+# behind. Updated alongside, and NOT fatal if absent — plenty of users have the
+# CLI and plugin without ever installing the tap.
+TAP_PLUGIN_ID = "probe-research-tap@research-os-agent"
 MARKETPLACE = "research-os-agent"
 
 _UPGRADE_TIMEOUT_S = 300.0
@@ -363,6 +370,16 @@ def update_plugin(target_latest: str | None) -> PluginResult:
             completed = False
             break
 
+    # The tap, best-effort and deliberately OUTSIDE `completed`: it is a
+    # separate plugin that many users do not have, so `claude` failing here
+    # means "not installed" far more often than "update broken". Letting that
+    # flip `completed` would report the whole update as failed to everyone
+    # without a tap. The marketplace refresh above already ran, so this is just
+    # the install step.
+    claude_cli.run(
+        ["plugin", "update", TAP_PLUGIN_ID], timeout=claude_cli.CAPTURE_TIMEOUT_S
+    )
+
     after = installed_plugin_version()
     changed = is_newer(after, before)
     # H1: trust the observed version, not claude's exit code. "Confirmed" = the plugin
@@ -383,5 +400,6 @@ def update_plugin(target_latest: str | None) -> PluginResult:
 def manual_plugin_commands() -> str:
     return (
         f"claude plugin marketplace update {MARKETPLACE}\n"
-        f"claude plugin update {PLUGIN_ID}"
+        f"claude plugin update {PLUGIN_ID}\n"
+        f"claude plugin update {TAP_PLUGIN_ID}  # skip if you do not have the tap"
     )
