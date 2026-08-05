@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sys
 
-from probe.sdk.launch import capture_process, scrub_argv
+from probe.sdk.launch import capture_process, capture_runtime, scrub_argv
 
 
 def test_scrub_argv_redacts_flag_value_pairs():
@@ -54,3 +54,38 @@ def test_capture_process_records_identity(tmp_path):
 def test_capture_process_defaults_to_sys_argv():
     info, _ = capture_process()
     assert info["argv"] == scrub_argv(sys.argv)[0]
+
+
+def test_runtime_env_names_but_not_values(monkeypatch):
+    monkeypatch.setenv("MY_DB_PASSWORD", "hunter2")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0,1")
+    monkeypatch.setenv("NCCL_DEBUG", "INFO")
+    info, errors = capture_runtime()
+    assert "MY_DB_PASSWORD" in info["env_names"]
+    assert "MY_DB_PASSWORD" not in info["env_values"]
+    assert info["env_values"]["CUDA_VISIBLE_DEVICES"] == "0,1"
+    assert info["env_values"]["NCCL_DEBUG"] == "INFO"
+    assert errors == []
+
+
+def test_runtime_allowlist_extension(monkeypatch):
+    monkeypatch.setenv("PROBE_ENV_ALLOWLIST", "+MY_SHARD_ID")
+    monkeypatch.setenv("MY_SHARD_ID", "7")
+    info, _ = capture_runtime()
+    assert info["env_values"]["MY_SHARD_ID"] == "7"
+
+
+def test_runtime_container_absent_on_bare_host(monkeypatch, tmp_path):
+    # No /.dockerenv, no KUBERNETES_SERVICE_HOST → no container key (macOS CI
+    # hosts and bare-metal Linux both land here).
+    monkeypatch.delenv("KUBERNETES_SERVICE_HOST", raising=False)
+    info, _ = capture_runtime(_dockerenv_path=str(tmp_path / "nope"))
+    assert "container" not in info
+
+
+def test_runtime_container_k8s(monkeypatch, tmp_path):
+    monkeypatch.setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+    monkeypatch.setenv("HOSTNAME", "trainer-abc123")
+    info, _ = capture_runtime(_dockerenv_path=str(tmp_path / "nope"))
+    assert info["container"]["detected_via"] == "kubernetes"
+    assert info["container"]["pod"] == "trainer-abc123"

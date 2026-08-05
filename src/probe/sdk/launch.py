@@ -140,3 +140,65 @@ def capture_process(
     if launcher:
         info["launcher"] = launcher
     return info, errors
+
+
+#: Values captured only for these names — everything else is name-only.
+#: Extensible per-site via PROBE_ENV_ALLOWLIST="+VAR1,VAR2". NCCL_* is
+#: value-captured wholesale: knob names are the reproduction surface there.
+ENV_ALLOWLIST = frozenset({
+    "CUDA_VISIBLE_DEVICES", "WORLD_SIZE", "RANK", "LOCAL_RANK",
+    "MASTER_ADDR", "MASTER_PORT", "OMP_NUM_THREADS", "PYTHONHASHSEED",
+    "SLURM_JOB_ID", "SLURM_ARRAY_TASK_ID",
+})
+
+
+def _allowlist() -> frozenset[str]:
+    extra = os.environ.get("PROBE_ENV_ALLOWLIST", "")
+    names = {v.strip() for v in extra.lstrip("+").split(",") if v.strip()}
+    return ENV_ALLOWLIST | names
+
+
+def _detect_container(_dockerenv_path: str = "/.dockerenv") -> dict[str, Any] | None:
+    """Container context, provenance-tagged. Image identity is PROVENANCE, not
+    correctness (design doc D1 / the 2026-07-29 begin-state-bytes decision)."""
+    via = None
+    if os.environ.get("KUBERNETES_SERVICE_HOST"):
+        via = "kubernetes"
+    elif os.path.exists(_dockerenv_path):
+        via = "dockerenv"
+    else:
+        try:
+            with open("/proc/1/cgroup") as fh:
+                text = fh.read()
+            if any(marker in text for marker in ("docker", "containerd", "kubepods")):
+                via = "cgroup"
+        except OSError:
+            pass
+    if via is None:
+        return None
+    info: dict[str, Any] = {"detected_via": via}
+    image = os.environ.get("PROBE_CONTAINER_IMAGE") or os.environ.get("IMAGE")
+    if image:
+        info["image"] = image
+    if via == "kubernetes" and os.environ.get("HOSTNAME"):
+        info["pod"] = os.environ["HOSTNAME"]
+    return info
+
+
+def capture_runtime(
+    _dockerenv_path: str = "/.dockerenv",
+) -> tuple[dict[str, Any], list[str]]:
+    """Env-var names (all), values (allowlist + NCCL_* only), container context."""
+    errors: list[str] = []
+    allow = _allowlist()
+    names = sorted(os.environ)
+    info: dict[str, Any] = {
+        "env_names": names,
+        "env_values": {
+            k: os.environ[k] for k in names if k in allow or k.startswith("NCCL_")
+        },
+    }
+    container = _detect_container(_dockerenv_path)
+    if container:
+        info["container"] = container
+    return info, errors
