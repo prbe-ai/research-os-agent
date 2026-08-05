@@ -624,6 +624,9 @@ class FakeApp:
 
         m = _EXP_RUNS.match(path)
         if m and method == "POST":
+            conflict = self._run_external_id_conflict(body)
+            if conflict is not None:
+                return conflict
             rid = str(uuid.uuid4())
             eid = m.group(1)
             # Mirror the engine: an attached run inherits ITS EXPERIMENT'S
@@ -651,6 +654,9 @@ class FakeApp:
                 return httpx.Response(
                     422, json={"detail": "group_id requires an experiment-attached run"}
                 )
+            conflict = self._run_external_id_conflict(body)
+            if conflict is not None:
+                return conflict
             rid = str(uuid.uuid4())
             row = self._new_run(rid, None, body, project_id=m.group(1))
             return httpx.Response(201, json=row)
@@ -1438,6 +1444,21 @@ class FakeApp:
 
         return httpx.Response(404, json={"detail": f"no fake route for {method} {path}"})
 
+    def _run_external_id_conflict(self, body: dict) -> httpx.Response | None:
+        """Mirror the engine's UNIQUE (customer_id, source, external_id): without
+        this the fake happily mints duplicate run identities and the supersede
+        path in ``run(on_conflict=...)`` has nothing real to test against."""
+        ext = (body or {}).get("external_id")
+        if ext is None:
+            return None
+        source = (body or {}).get("source", "api")
+        for _row in self.runs.values():
+            if _row.get("external_id") == ext and _row.get("source", "api") == source:
+                return httpx.Response(409, json={"detail": {
+                    "message": "run with this (source, external_id) already exists",
+                    "existing_id": _row["id"]}})
+        return None
+
     def _new_run(
         self,
         rid: str,
@@ -1457,6 +1478,8 @@ class FakeApp:
             "description": body.get("description"),
             "status": "running",
             "source": body.get("source", "api"),
+            "external_id": body.get("external_id"),
+            "tags": body.get("tags", []),
             "metadata": body.get("metadata", {}),
             "config": body.get("config", {}),
             "parent_run_id": body.get("parent_run_id"),
