@@ -121,6 +121,11 @@ class FakeApp:
     # Set False to model a backend PREDATING research-os 0094: it accepts the
     # unknown `notes` field on a project PATCH, drops it, and still answers 200.
     stores_project_notes = True
+    # Set False to model a backend PREDATING research-os 0096: it accepts the
+    # unknown `notes` field on run and group create/PATCH, drops it, and still
+    # answers 2xx -- so the row comes back with NO `notes` key at all, which is
+    # what the SDK's silent-drop warning keys on.
+    stores_entity_notes = True
     # Set False to model a backend PREDATING project-direct runs (0054): the
     # /v1/projects/{id}/runs route 404s FastAPI-style, GET /v1/runs ignores the
     # project_id/direct params, and run rows carry NO project_id field — the
@@ -1084,6 +1089,10 @@ class FakeApp:
             for k, v in body.items():
                 if k == "foreign_keys":  # per-key new-wins merge (mirrors the backend)
                     row["foreign_keys"] = {**(row.get("foreign_keys") or {}), **v}
+                elif k == "notes" and not self.stores_entity_notes:
+                    # Pre-0096: the field is unknown, so it is accepted and dropped
+                    # rather than rejected -- the row keeps no `notes` key at all.
+                    continue
                 else:
                     row[k] = v
             return httpx.Response(200, json=row)
@@ -1105,6 +1114,8 @@ class FakeApp:
             row = {"id": gid, "customer_id": "lab-42", "experiment_id": eid,
                    "kind": body.get("kind", "group"), "name": body["name"],
                    "spec": body.get("spec", {}), "created_at": "2026-07-15T00:00:00Z"}
+            if self.stores_entity_notes:
+                row["notes"] = body.get("notes")
             self.groups[gid] = row
             return httpx.Response(201, json=row)
         if m and method == "GET":
@@ -1119,7 +1130,10 @@ class FakeApp:
             if row is None:
                 return httpx.Response(404, json={"detail": "group not found"})
             if method == "PATCH":
-                row.update({k: v for k, v in body.items() if v is not None})
+                patch = {k: v for k, v in body.items() if v is not None}
+                if not self.stores_entity_notes:
+                    patch.pop("notes", None)
+                row.update(patch)
             return httpx.Response(200, json=row)
 
         # -- permanent delete --
@@ -1532,6 +1546,8 @@ class FakeApp:
             "customer_id": "lab-42",
             "created_at": self._stamp(),
         }
+        if self.stores_entity_notes:
+            row["notes"] = body.get("notes")
         self.runs[rid] = row
         return row
 

@@ -508,10 +508,14 @@ class ExperimentArtifactCreate(BaseModel):
     uri: str | None = Field(None, title='Uri')
 
 
+class Name(RootModel[str]):
+    root: str = Field(..., min_length=1, title='Name')
+
+
 class ExperimentCreate(BaseModel):
     description: str | None = Field(None, title='Description')
     hypothesis: str = Field(..., min_length=1, title='Hypothesis')
-    name: str = Field(..., title='Name')
+    name: Name | None = Field(None, title='Name')
     project_id: UUID = Field(..., title='Project Id')
     slug: str = Field(..., title='Slug')
     tags: list[str] | None = Field(None, title='Tags')
@@ -572,10 +576,6 @@ class ExperimentOut(BaseModel):
 
 class Hypothesis(RootModel[str]):
     root: str = Field(..., min_length=1, title='Hypothesis')
-
-
-class Name(RootModel[str]):
-    root: str = Field(..., min_length=1, title='Name')
 
 
 class ExperimentPatch(BaseModel):
@@ -1002,7 +1002,7 @@ class MetricViewOut(BaseModel):
     updated_at: AwareDatetime = Field(..., title='Updated At')
 
 
-class Name1(RootModel[str]):
+class Name2(RootModel[str]):
     root: str = Field(..., max_length=200, min_length=1, title='Name')
 
 
@@ -1085,10 +1085,14 @@ class ProjectArtifactCreate(BaseModel):
     uri: str | None = Field(None, title='Uri')
 
 
+class Name3(RootModel[str]):
+    root: str = Field(..., min_length=1, title='Name')
+
+
 class ProjectCreate(BaseModel):
     description: str | None = Field(None, title='Description')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: str = Field(..., title='Name')
+    name: Name3 | None = Field(None, title='Name')
     slug: str = Field(..., title='Slug')
     tags: list[str] | None = Field(None, title='Tags')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
@@ -1133,10 +1137,6 @@ class ProjectOut(BaseModel):
     workspace_id: UUID | None = Field(..., title='Workspace Id')
 
 
-class Name2(RootModel[str]):
-    root: str = Field(..., min_length=1, title='Name')
-
-
 class Notes3(RootModel[str]):
     root: str = Field(..., max_length=100000, title='Notes')
 
@@ -1151,7 +1151,7 @@ class ProjectPatch(BaseModel):
 
     description: str | None = Field(None, title='Description')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: Name2 | None = Field(None, title='Name')
+    name: Name3 | None = Field(None, title='Name')
     notes: Notes3 | None = Field(None, title='Notes')
     tags: list[str] | None = Field(None, title='Tags')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
@@ -1315,6 +1315,10 @@ class LabeledPointBudget(RootModel[int]):
     root: int = Field(..., ge=1, le=100000000, title='Labeled Point Budget')
 
 
+class Notes4(RootModel[str]):
+    root: str = Field(..., max_length=4000, title='Notes')
+
+
 class RunCreate(BaseModel):
     config: dict[str, Any] | None = Field(None, title='Config')
     description: str | None = Field(None, title='Description')
@@ -1326,7 +1330,8 @@ class RunCreate(BaseModel):
         None, title='Labeled Point Budget'
     )
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: Name2 | None = Field(None, title='Name')
+    name: Name3 | None = Field(None, title='Name')
+    notes: Notes4 | None = Field(None, title='Notes')
     parent_relation: ParentRelation | None = None
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
     source: str | None = Field('api', title='Source')
@@ -1336,6 +1341,7 @@ class RunCreate(BaseModel):
 class RunGroupCreate(BaseModel):
     kind: str | None = Field('group', title='Kind')
     name: str = Field(..., title='Name')
+    notes: Notes4 | None = Field(None, title='Notes')
     spec: dict[str, Any] | None = Field(None, title='Spec')
 
 
@@ -1346,6 +1352,7 @@ class RunGroupOut(BaseModel):
     id: UUID = Field(..., title='Id')
     kind: str = Field(..., title='Kind')
     name: str = Field(..., title='Name')
+    notes: str | None = Field(None, title='Notes')
     spec: dict[str, Any] | None = Field(None, title='Spec')
 
 
@@ -1354,7 +1361,8 @@ class RunGroupPatch(BaseModel):
     Field-replace PATCH (D9). Only provided fields change; None = untouched.
     """
 
-    name: Name2 | None = Field(None, title='Name')
+    name: Name3 | None = Field(None, title='Name')
+    notes: Notes4 | None = Field(None, title='Notes')
     spec: dict[str, Any] | None = Field(None, title='Spec')
 
 
@@ -1461,10 +1469,6 @@ class Scope(StrEnum):
     write = 'write'
     delete = 'delete'
     admin = 'admin'
-
-
-class Notes4(RootModel[str]):
-    root: str = Field(..., max_length=4000, title='Notes')
 
 
 class ScopedUploadRequest(BaseModel):
@@ -2200,6 +2204,7 @@ class IngestRun(BaseModel):
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str | None = Field(None, title='Name')
+    notes: str | None = Field(None, title='Notes')
     parent_external_id: str | None = Field(None, title='Parent External Id')
     parent_relation: ParentRelation | None = None
     source: str | None = Field('api', title='Source')
@@ -2360,6 +2365,7 @@ class RunDetailOut(BaseModel):
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: str = Field(..., title='Name')
     name_customized: bool | None = Field(False, title='Name Customized')
+    notes: str | None = Field(None, title='Notes')
     parent_relation: ParentRelation | None = None
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
     project_id: UUID = Field(..., title='Project Id')
@@ -2411,7 +2417,8 @@ class RunPatch(BaseModel):
     env_ref: str | None = Field(None, title='Env Ref')
     foreign_keys: dict[str, Any] | None = Field(None, title='Foreign Keys')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
-    name: Name2 | None = Field(None, title='Name')
+    name: Name3 | None = Field(None, title='Name')
+    notes: Notes4 | None = Field(None, title='Notes')
     status: RunStatus | None = None
     summary: dict[str, Any] | None = Field(None, title='Summary')
     tags: list[str] | None = Field(None, title='Tags')
@@ -2830,7 +2837,7 @@ class MetricViewCreate(BaseModel):
 
 
 class MetricViewPatch(BaseModel):
-    name: Name1 | None = Field(None, title='Name')
+    name: Name2 | None = Field(None, title='Name')
     spec: MetricViewSpec | None = None
 
 
