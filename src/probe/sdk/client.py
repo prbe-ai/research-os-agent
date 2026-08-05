@@ -13,6 +13,7 @@ import difflib
 import json
 import os
 import shlex
+import socket
 import sys
 import threading
 import time
@@ -263,6 +264,23 @@ class Client:
         # A worker fork only makes sense for default-transport clients, but a
         # FORCED kick (deferred finish, F3) must work from sync clients too.
         self._default_transport = transport is None
+        # Producer accounting (parity F4). Long-lived writers get a
+        # per-process identity; the CLI surface shares one per-host id -- a
+        # training loop of thousands of `probe --async log` invocations is ONE
+        # producer line, not thousands of registry files (sequences stay safe:
+        # allocation reads the registry under the append lock).
+        self._seal_producer_on_close = False
+        if async_writes:
+            host = socket.gethostname()
+            if surface == Surface.CLI.value:
+                producer_id = f"cli:{host}"
+            else:
+                producer_id = f"{surface}:{host}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
+                self._seal_producer_on_close = True
+            try:
+                self.journal.register_producer(producer_id, role=surface)
+            except Exception:  # noqa: BLE001 -- accounting must never block writes
+                pass
         self._auto_drain = (
             async_writes
             and auto_drain
@@ -298,6 +316,11 @@ class Client:
         # The exporter drains over this client's transport; join it first.
         if self._exporter is not None:
             self._exporter.close()
+        if self._seal_producer_on_close:
+            try:
+                self.journal.seal_producer()
+            except Exception:  # noqa: BLE001 -- accounting must never block close
+                pass
         # Beats ride this client's transport; leaving them running would spin a
         # thread per unfinished run against a closed httpx client every interval.
         for stop in list(self._run_heartbeat_stops):

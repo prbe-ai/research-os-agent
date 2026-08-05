@@ -4224,6 +4224,18 @@ def outbox_status(
         "oldest_pending": pending[0][1].get("enqueued_at") if pending else None,
         "last_error": status.get("last_error"),
     }
+    producers = journal.producer_report()
+    if producers:
+        summary["producers"] = [
+            {
+                "producer_id": p.get("producer_id"),
+                "role": p.get("role"),
+                "last_sequence": p.get("last_sequence"),
+                "state": p.get("state"),
+                "gaps": p.get("gaps") or [],
+            }
+            for p in producers
+        ]
     if verbose:
         def row(op: dict, state: str) -> dict:
             return {
