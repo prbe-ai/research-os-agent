@@ -4,6 +4,89 @@
 
 ### Fixed
 
+- **A ref that is both a project id and a project slug no longer silently resolves to
+  one of them.** `_project_id` parsed the ref as a UUID and, when that worked, returned
+  it as an id without ever asking whether a *slug* matched too. A project whose slug was
+  UUID-shaped was therefore unreachable by slug — and worse, naming it addressed
+  whichever project owned that UUID as its id. Observed 2026-08-04 with two live
+  projects, where slug `6fa49e87-…` belonged to one and id `6fa49e87-…` to another:
+  `probe project delete 6fa49e87-…`, meaning the first, would have permanently deleted
+  the second. Exit 0, a `deleted` line naming the ref, and nothing to restore.
+
+  Both spellings still resolve. Only the genuine collision is refused, and it names both
+  candidates so the operator can pick with `--by-id` / `--by-slug` rather than being told
+  "ambiguous" and left to guess. `--yes` does not skip the check: there is no answer to
+  "are you sure" that says *which* project was meant, and scripts pass `--yes` by default.
+
+  Reachable from 8 call sites including `project get / use / patch / tag / move / delete`.
+  The inverse resolver (`_project_slug`) had the bug mirrored, and the two anchor
+  resolvers — `_anchor_id_for` (artifact uploads) and the backfill's `_resolve_ref` —
+  had it in a quieter form, where the cost is an import filed into a stranger's project
+  instead of a deletion. All four now share `probe.cli.refs`.
+
+- **Slug lookups no longer stop at 200 rows.** Resolution scanned
+  `list_projects(limit=200)`, so a slug on project 201+ raised `no project with id or
+  slug X` — a false absence indistinguishable from a real one, and one that gets acted
+  on by creating a duplicate. It is a server-side `?slug=` on a UNIQUE column now: 0 or
+  1 row, no paging, no cap.
+
+### Changed
+
+- **Every `delete` verb takes the same ref forms and prompts the same way.** They had
+  drifted: `project delete` took an id or a slug, `experiment delete` took ids only (a
+  slug 422'd against the UUID-typed route), and `run delete` took ids only even though
+  `run get` had accepted a petname `short_id` all along. Learning the habit from one verb
+  and using it on the next got you a 422 at best. All four now route through one path
+  that resolves, confirms, then deletes by canonical id:
+
+  | verb | accepts |
+  |---|---|
+  | `project delete` | id or slug (`--by-id`/`--by-slug` when both) |
+  | `experiment delete` | id or slug (`--by-id`/`--by-slug` when both) |
+  | `run delete` | id or petname `short_id` — no disambiguator needed, a petname cannot be UUID-shaped |
+  | `artifact delete` | id only — there is no by-name index and a name is anchor-scoped, so there is no second spelling to accept |
+
+  The confirmation prompt and the `deleted` line now name the **resolved** entity
+  (name, handle and id) instead of echoing the string that was typed. Echoing the ref
+  asks the operator to confirm their own typo, and in the collision above it is exactly
+  the string that does not identify what is about to go. Resolution therefore happens
+  *before* the prompt, which is the ordering the confirmation is worth anything under.
+
+  An `id:` / `slug:` prefix on the ref says the same thing as the flags and works on
+  **every** command that takes a project or experiment, which the flags do not: they are
+  declared on the project and experiment verbs, while a ref is accepted by around a dozen
+  commands. Without the prefix, an ambiguous `--project` on `experiment create` raised an
+  error naming two flags that command has no way to accept — and the project whose id *is*
+  the colliding string could not be addressed there at all, since naming it is the collision.
+
+- **Contradicting the flag with the prefix is refused**, not ranked:
+  `project delete slug:X --by-id` used to run the slug and leave the operator reading
+  the word "id" in their own command. A disambiguator that picks a winner is the thing
+  it exists to remove.
+
+- **A queued (`--async`) artifact resolves its anchor before it is queued.** The async
+  branch returned before the resolve on the sync path, so a raw ref went into the journal
+  and the drainer POSTed it minutes later — an unresolved slug became a 422 nobody is
+  watching, and an id/slug collision filed the upload against the wrong project with no
+  operator present. Offline it still costs nothing: an unresolvable ref passes through
+  rather than gating the enqueue.
+
+- **A backend that ignores `?slug=` is refused instead of trusted.** FastAPI silently
+  DROPS a query parameter a route does not declare, so an engine predating the filter
+  (a rolled-back data plane, an older self-hosted install) answers an unfiltered page.
+  Reading that as "no slug matched" is the premise a UUID-shaped ref is treated as an id
+  on — the original misresolution, resurrected wherever the filter is missing. Detected
+  by row count, the one signal that survives the drop: an exact match on a UNIQUE column
+  returns 0 or 1 row, so 2+ means nobody filtered.
+
+- **`experiment set` and `experiment tag` resolve a slug.** `experiment delete <slug>`
+  worked while `experiment set <slug>` 422'd against the same UUID-typed route.
+
+- **`run list --experiment` and the artifact anchors take a slug.** `--experiment` shipped
+  its value straight into a UUID-typed query param, so a slug came back as a raw pydantic
+  `uuid_parsing` dump rather than a listing; the artifact anchors resolved `--project` by
+  slug but not `--experiment`, so the two flags behaved differently on the same command line.
+
 - **The Claude Code tap daemon died seconds after every SessionStart**
   (`probe-research-tap` 0.1.3). Transcripts silently stopped reaching
   research-os: sessions showed full artifact and experiment linkage next to

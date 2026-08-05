@@ -130,10 +130,13 @@ def test_slug_resolution_no_longer_needs_a_second_hidden_listing(wired, client, 
     include=archived — because archived rows were filtered out of the default
     listing and `project restore <slug>` still had to find them. Nothing is
     hidden now, so one listing is the whole namespace."""
-    client.create_project("only-one", workspace_id=_WS_MINE)
+    proj = client.create_project("only-one", workspace_id=_WS_MINE)
 
     assert cli.main(["project", "delete", "only-one", "--yes"]) == 0
-    assert "only-one deleted" in capsys.readouterr().out
+    # The line names the RESOLVED project (slug and id), not the ref that was
+    # typed -- see refs.describe and the id/slug collision it exists for.
+    out = capsys.readouterr().out
+    assert "only-one" in out and proj["id"] in out and "deleted" in out
 
     # Gone means gone: the resolver has nowhere else to look.
     assert cli.main(["project", "delete", "only-one", "--yes"]) == 2

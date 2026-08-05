@@ -1021,6 +1021,15 @@ class FakeApp:
             rid = m.group(1)
             row = self.runs.get(rid)
             if row is None:
+                # GET /v1/runs/{run_ref} is the ONE item route whose path param is
+                # an untyped string rather than format:uuid -- the server resolves
+                # a petname short_id here. Mirror that before the auto-vivify
+                # fallback below, or a short_id becomes a brand-new run's id and
+                # every by-petname assertion passes against a fiction.
+                row = next(
+                    (r for r in self.runs.values() if r.get("short_id") == rid), None
+                )
+            if row is None:
                 row = self._new_run(rid, "exp", {"name": "r"})
             return httpx.Response(200, json=row)
         if m and method == "PATCH":

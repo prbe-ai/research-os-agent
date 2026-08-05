@@ -36,6 +36,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
+from ..sdk.errors import NotFoundError
+
 #: Never walked, never offered, never counted. Not a judgment call about what
 #: is interesting -- these are machine-generated trees whose file counts would
 #: swamp the denominator and whose contents nobody wrote.
@@ -233,20 +235,22 @@ def resolve_anchor(client, folder: Path, *, requested: str | None = None) -> tup
 
 
 def _resolve_ref(client, ref: str) -> tuple[str, str]:
-    """An explicitly named project id OR slug -> ``(project_id, slug)``."""
-    from uuid import UUID
+    """An explicitly named project id OR slug -> ``(project_id, slug)``.
+
+    Shares :mod:`probe.cli.refs` with the project verbs so an anchor cannot mean
+    one project here and another one there. A ref that is BOTH an id and a slug
+    raises rather than picking: this anchors every artifact the backfill uploads,
+    so guessing wrong files someone's whole import into a stranger's project.
+    """
+    from . import refs
 
     try:
-        UUID(ref)
-    except ValueError:
-        found = client.resolve_project(ref)
-        if found is None:
-            raise ValueError(f"no project with id or slug {ref!r}") from None
-        return str(found["id"]), found.get("slug") or ref
-    try:
-        return ref, client.get_project(ref).get("slug") or ref
-    except Exception:  # noqa: BLE001 - the id is what matters; the slug is decoration
-        return ref, ref
+        found = refs.resolve(client, "project", ref)
+    except refs.AmbiguousRef as exc:
+        raise ValueError(str(exc)) from None
+    except NotFoundError:
+        raise ValueError(f"no project with id or slug {ref!r}") from None
+    return found.id, found.row.get("slug") or ref
 
 
 def _subdivide_line(agent: Agent) -> str:
