@@ -81,6 +81,7 @@ _RUN_SPANS = re.compile(r"^/v1/runs/([^/]+)/spans$")
 _RUN_STEPS = re.compile(r"^/v1/runs/([^/]+)/steps$")
 _RUN_SERIES = re.compile(r"^/v1/runs/([^/]+)/series$")
 _RUN_ARTIFACTS = re.compile(r"^/v1/runs/([^/]+)/artifacts$")
+_RUN_REOPEN = re.compile(r"^/v1/runs/([^/]+)/reopen$")
 _RUN_BUNDLE = re.compile(r"^/v1/runs/([^/]+)/bundle$")
 _RUN_LINEAGE = re.compile(r"^/v1/runs/([^/]+)/lineage$")
 _RUN_ITEM = re.compile(r"^/v1/runs/([^/]+)$")
@@ -125,6 +126,9 @@ class FakeApp:
     # project_id/direct params, and run rows carry NO project_id field — the
     # exact shapes the SDK's old-backend guards key on.
     supports_project_direct = True
+    # Set False to model a backend PREDATING run reopen (research-os#364): the
+    # /v1/runs/{id}/reopen route 404s FastAPI-style.
+    supports_reopen = True
 
     def _echo_scope(self, response: dict, body: dict | None) -> dict:
         if not self.echoes_project_scope or not body or not body.get("project_id"):
@@ -621,6 +625,40 @@ class FakeApp:
                 return httpx.Response(404, json={"detail": "not found"})
             row.update(body)
             return httpx.Response(200, json=row)
+
+        m = _RUN_REOPEN.match(path)
+        if m and method == "POST":
+            if not self.supports_reopen:
+                # Pre-#364: the route does not exist — FastAPI's route-level
+                # 404, NOT the handler's "run not found".
+                return httpx.Response(404, json={"detail": "Not Found"})
+            row = self.runs.get(m.group(1))
+            if row is None:
+                return httpx.Response(404, json={"detail": "run not found"})
+            if row["status"] not in ("failed", "crashed", "canceled"):
+                return httpx.Response(409, json={"detail": {
+                    "message": f"run is {row['status']}; only a dead run reopens"}})
+            stored = self.metric_points.get(row["id"], []) + \
+                self.metric_points_posted.get(row["id"], [])
+            steps = [p["step_index"] for p in stored
+                     if p.get("step_index") is not None]
+            last_step = max(steps) if steps else None
+            prior_status = row["status"]
+            row["status"] = "running"
+            row["ended_at"] = None
+            row["write_epoch"] = row.get("write_epoch", 1) + 1
+            row["current_session_id"] = (body or {}).get("session_id")
+            row.setdefault("recoveries", []).append({
+                "at": self._stamp(),
+                "prior_status": prior_status,
+                "last_step": last_step,
+                "session_id": row["current_session_id"],
+            })
+            return httpx.Response(200, json={
+                "run": row,
+                "write_epoch": row["write_epoch"],
+                "last_step": last_step,
+            })
 
         m = _EXP_RUNS.match(path)
         if m and method == "POST":

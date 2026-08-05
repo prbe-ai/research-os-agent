@@ -316,6 +316,15 @@ class Run:
         # threads reading the same counter would put two points on one step.
         self._steps: dict[str, int] = {}
         self._steps_lock = threading.Lock()
+        # Writer-session identity (research-os#364): one id per handle, so the
+        # engine can tell which process produced a write once a run has been
+        # reopened. A reattached handle gets the id its reopen registered.
+        self.session_id: str = str(uuid4())
+        # Armed by attach_run() after a reopen: the last step the previous
+        # execution wrote. Explicit steps at or below it are refused, and
+        # auto-steps start above it.
+        self._resume_from_step: int | None = None
+        self._auto_step_floor = 0
 
     def _hold_run_lock(self, *, process_bound: bool) -> None:
         """Claim this box against an auto-update while the run is open.
@@ -359,9 +368,17 @@ class Run:
 
     def _next_step(self, kind: str) -> int:
         with self._steps_lock:
-            step = self._steps.get(kind, 0)
+            step = self._steps.get(kind, self._auto_step_floor)
             self._steps[kind] = step + 1
             return step
+
+    def arm_resume_guard(self, last_step: int) -> None:
+        """Called on attach after a reopen: refuse explicit steps the first
+        execution already wrote, and start auto-steps above them — a resumed
+        process must continue the curve, never re-log it."""
+        self._resume_from_step = last_step
+        with self._steps_lock:
+            self._auto_step_floor = last_step + 1
 
     def _note_step(self, kind: str, step: int) -> None:
         """Move the auto counter past an explicitly-given step.
@@ -518,6 +535,22 @@ class Run:
         resolves to the declared one, else mean; conflicting declarations 422).
         The producer knows whether a count sums or a loss averages; declaring it
         at the write is what saves every reader from guessing."""
+        # Resume guard (research-os#364): a resumed run continues its curve. A
+        # step at or below the resume point means the process restarted from
+        # scratch — that is a RETRY, and appending it here would splice two
+        # executions into one series.
+        if (
+            self._resume_from_step is not None
+            and step is not _UNSET
+            and step is not None
+            and step <= self._resume_from_step
+        ):
+            raise errors.ValidationError(
+                f"step {step} <= resume point {self._resume_from_step} on a "
+                "resumed run — this looks like a from-scratch retry, which "
+                "cannot append into the first execution's curve. Relaunch "
+                'with on_conflict="supersede" instead.'
+            )
         numeric: dict[str, float] = {}
         other: dict[str, Any] = {}
         for key, value in metrics.items():

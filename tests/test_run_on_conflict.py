@@ -1,8 +1,8 @@
-"""run(on_conflict=...) — what a duplicate external_id means.
+"""run(on_conflict=...) — the supersede policy for duplicate external_ids.
 
-Default stays the engine's 409. "supersede" opens external_id-rN with
-parent_relation="retry" lineage, and marks a dead incumbent "superseded"
-instead of reopening it (reopening splices two executions into one curve).
+"supersede" opens external_id-rN with parent_relation="retry" lineage and
+marks a dead incumbent "superseded" — the from-scratch-retry half. The
+resume half (auto/resume policies) lives in test_run_resume.py.
 """
 
 from __future__ import annotations
@@ -28,10 +28,19 @@ def lab(client):
     return client
 
 
-def test_duplicate_external_id_still_409s_by_default(lab, app):
+def test_duplicate_of_a_live_run_still_conflicts_by_default(lab, app):
+    # The fake leaves a fresh run "running", so the default (auto) policy
+    # refuses to hijack it rather than resuming or superseding.
     _open(lab)
     with pytest.raises(errors.ConflictError) as excinfo:
         _open(lab)
+    assert "alive" in str(excinfo.value)
+
+
+def test_explicit_error_policy_keeps_the_bare_409(lab, app):
+    _open(lab)
+    with pytest.raises(errors.ConflictError) as excinfo:
+        _open(lab, on_conflict="error")
     assert "already exists" in str(excinfo.value)
 
 
