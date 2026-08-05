@@ -45,15 +45,26 @@ near-miss of an existing slug rather than warning.)
    raise if the slug is taken, so re-running a setup script is a loud no-op rather
    than a silent second identity.
 
-   **Always pass `--description`: what the thing is, in 1-3 sentences.** It is the
-   first thing anyone sees under the title, and a container without one reads as
-   "Add description" to every visitor. The hypothesis says what you expect; the
-   description says what the work IS — the model, the data, the metric.
+   **Always pass `--description`: what the thing is.** Length is not the point —
+   a few words beats a blank field, and three sentences is the ceiling rather than
+   the target. It is the first thing anyone sees under the title, and a container
+   without one reads as "Add description" to every visitor. The hypothesis says
+   what you expect; the description says what the work IS — the model, the data,
+   the metric.
 
    Nothing reliably fills it in later. The server generates a description only
    when a child RUN reaches a terminal status, so anything that ends without one
    — an abandoned run, a project used purely to hold artifacts, an import — stays
    blank permanently.
+
+   Missed one, or inherited a blank container? Add it after the fact. The verb
+   differs per kind, and there is no `project set`:
+
+   ```
+   probe project patch <project> --description "..."
+   probe experiment set <experiment> --description "..."
+   probe run set <run> --description "..."
+   ```
 
    Work with no hypothesis does not need an experiment at all: open a
    PROJECT-DIRECT run (`probe run start --project folding`, or

@@ -119,14 +119,23 @@
   only when a child RUN reaches a terminal status, so anything ending without one
   stays blank permanently.
 
-- **A description now has a stated length: 1-3 sentences.** Asking for one
-  without bounding it produced a 566-char, five-sentence description on the
-  `odyssey` project, which the overview then clamped to two lines — the back half
-  written somewhere nobody reads. Both creates now say so, and the ask is just a
-  description of the thing rather than a field carrying other freight: the
+- **A description has a ceiling, not a target: up to 3 sentences, and a few words
+  is fine.** Asking for one without bounding it produced a 566-char, five-sentence
+  description on the `odyssey` project, which the overview then clamped to two
+  lines — the back half written somewhere nobody reads. The point is that the
+  field is WRITTEN; length is not the interesting part. The ask is also just a
+  description of the thing now, rather than a field carrying other freight: the
   backfill's experiment line had asked for the provenance reasoning that
   justified creating the experiment, and that goes to `probe notes write`
   instead — worth keeping, just not here.
+
+- **The prompt and skill now name the amend verb for each kind.** A description
+  missed at create is recoverable, but nothing said how, and the verbs disagree:
+  projects amend with `probe project patch`, experiments and runs with `set`.
+  **There is no `probe project set`** — an agent that learned `experiment set`
+  and guessed got `No such command`, which is how `probe note add` shipped once
+  before. A test now asserts the prompt names `project patch` and never
+  `project set`.
 
 - **Backfill now writes a description for every project and experiment it
   creates.** The prompt showed `project create` with only `--name`, so whether a

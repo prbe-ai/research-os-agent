@@ -289,18 +289,34 @@ def test_the_prompt_demands_a_description_on_what_it_creates(tmp_path):
 def test_the_prompt_bounds_how_long_a_description_may_be(tmp_path):
     """Asking for a description without bounding it produced a 566-char one.
 
-    A description is a description: what the thing is, 1-3 sentences, and nothing
-    else loaded into it. Both creates carry the bound. The experiment line used to
-    invite the opposite ("record WHY you believed this was a real experiment — the
-    files that convinced you"), which is notes-shaped prose in a field the overview
-    clamps to two lines."""
+    Three sentences is a CEILING, not a target — a few words beats a blank field,
+    and the point is that something is written. Both creates say so. The experiment
+    line used to invite the opposite ("record WHY you believed this was a real
+    experiment — the files that convinced you"), which is notes-shaped prose in a
+    field the overview clamps to two lines."""
     prompt = backfill.build_prompt(
         folder=tmp_path, census=backfill.Census(files=3, bytes=99)
     )
-    # Both the project create and the experiment create state it.
-    assert prompt.count("1-3 sentences") == 3
+    # Both the project create and the experiment create state the ceiling.
+    assert prompt.count("up to 3 sentences") == 2
+    assert "the point is that it is WRITTEN" in prompt
     # The provenance the experiment line used to want is redirected, not dropped.
     assert "probe notes write" in prompt
+
+
+def test_the_prompt_names_the_real_amend_verb_for_each_kind(tmp_path):
+    """`probe project set` does not exist — the verb is `patch`.
+
+    Projects amend with `patch`, experiments and runs with `set`. An agent that
+    learns one and guesses the others gets `No such command`, which is how the
+    prompt shipped `probe note add` once before. A description missed at create
+    is recoverable, but only if the prompt names a door that opens."""
+    prompt = backfill.build_prompt(
+        folder=tmp_path, census=backfill.Census(files=3, bytes=99)
+    )
+    assert "probe project patch" in prompt
+    assert "probe experiment set" in prompt
+    assert "probe project set" not in prompt
 
 
 def test_prompt_carries_the_reference_threshold_for_large_files(tmp_path):

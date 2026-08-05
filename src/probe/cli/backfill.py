@@ -328,13 +328,15 @@ YOU DECIDE THE PROJECTS. This is the judgement you are here for.
     name it honestly before you create anything.
 
         probe project create <slug> --name "<human name>" \\
-            --description "<what this project is, 1-3 sentences>" \\
+            --description "<what this project is, up to 3 sentences>" \\
             --tag <topic> --tag <model-or-dataset>
 
-    ALWAYS pass --description: a plain description of the project, 1-3 sentences,
-    no more. Nothing else fills it in — the server generates one only when a child
-    RUN reaches a terminal status, and importing a folder creates no runs, so a
-    project left undescribed here stays undescribed forever.
+    ALWAYS pass --description: a plain description of the project. A few words is
+    fine and three sentences is the ceiling — the point is that it is WRITTEN.
+    Nothing else fills it in — the server generates one only when a child RUN
+    reaches a terminal status, and importing a folder creates no runs, so a
+    project left undescribed here stays undescribed forever. Missed one? Add it
+    with `probe project patch <slug> --description "..."`.
 
     `--project` takes the SLUG -- the one you just chose -- in every command
     that follows. (An id needs the `id:` prefix: `--project id:<uuid>`.)
@@ -400,11 +402,12 @@ Step 3 — group into experiments ONLY if the evidence is there.
 
         probe experiment create <slug> --project <project> \\
             --name "<human name>" --hypothesis "<what it tests>" \\
-            --description "<what this experiment is, 1-3 sentences>"
+            --description "<what this experiment is, up to 3 sentences>"
 
     --description here too, and for the same reason: only a terminal run
-    generates one, and this import creates none. The files that convinced you
-    this was a real experiment go in `probe notes write`, not here.
+    generates one, and this import creates none. Missed one? Add it with
+    `probe experiment set <slug> --description "..."`. The files that convinced
+    you this was a real experiment go in `probe notes write`, not here.
 
 {_subdivide_line(agent)}
 
