@@ -53,6 +53,33 @@
 
 ### Fixed
 
+- **A fresh install no longer sends you to `/mcp` to authenticate a device it had
+  just authorized.** Two causes, one symptom. The plugin's headers helper looked up
+  a top-level `mcp_token` — the v1 config shape — while the wizard has written v2,
+  with the credential under `contexts.<current_context>`, since named contexts
+  landed. So the fast path returned nothing on every install this product has ever
+  produced, and the surface silently rode on its last-resort CLI fallback: fine on a
+  machine with `probe` reachable from Claude Code's launch environment, a hard
+  failure anywhere else. And the wizard installed the plugin *before* minting the
+  credential it serves, leaving an `.mcp.json` on disk with nothing behind it for as
+  long as a human takes to approve a browser prompt.
+
+  Either way the request goes out unauthenticated, and the edge answers 401 with a
+  `WWW-Authenticate` challenge — which is exactly what makes Claude Code discover an
+  authorization server and pin the connection to OAuth. The helper now reads both
+  shapes (an unknown `current_context` falls back to `default`, never to a sibling:
+  another context's credential would point the MCP at an endpoint the user is not
+  on), and the browser approval runs first, ahead of the marketplace refresh and both
+  installs. The phase budget starts after the approval rather than before it, so a
+  slow reader can no longer consume the whole 300s and produce a run that signed in
+  and installed nothing.
+
+  The config read had no test at all — every existing one injected
+  `PROBE_MCP_TOKEN` or exercised the CLI fallback against an empty config dir, so a
+  read that never once matched production stayed green. The new ones run with a
+  `PATH` holding a python3 and no `probe`, so the read under test is the only thing
+  that can answer.
+
 - **`npx probe-research` now runs the latest CLI instead of freezing on whatever
   you already had.** The launcher handed off to any local `probe` at or above
   `MIN_CLI` and never asked whether something newer existed. A floor is satisfied
