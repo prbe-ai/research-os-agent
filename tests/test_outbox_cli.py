@@ -270,6 +270,23 @@ def test_run_end_async_is_ordered_behind_the_runs_data(
     assert wired_async.metric_points_posted[run_id]
 
 
+# -- producer accounting (parity F4) ------------------------------------------
+
+
+def test_outbox_status_reports_producers(wired_async, outbox_dir, capsys):
+    run_id = start_run(wired_async)
+    cli.main(["--async", "log", run_id, "loss=1.0", "--step", "1"])
+    capsys.readouterr()
+    rc = cli.main(["--spool-dir", str(outbox_dir), "outbox", "status"])
+    assert rc == 2  # pending op
+    summary = json.loads(capsys.readouterr().out)
+    (producer,) = summary["producers"]
+    assert producer["last_sequence"] == 1
+    assert producer["gaps"] == []
+    (_, op), = Journal(outbox_dir).pending()
+    assert op["producer_sequence"] == 1
+
+
 # -- bounded finish (parity F3) ----------------------------------------------
 
 

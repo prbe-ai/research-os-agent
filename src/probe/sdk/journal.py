@@ -16,6 +16,9 @@ data and the journal may live on shared storage):
     <dir>/status.json                    single-stat summary for the banner
     <dir>/paused                         marker: drains are suspended
     <dir>/.append.lock / .drain.lock     flock sidecars
+    <dir>/producers/<producer>.json      per-writer accounting (parity F4):
+                                         sequence high-water, capture gaps,
+                                         open/closed state
 
 Ops never carry credentials: they pin a context NAME + base_url (5A) and the
 drain resolves tokens fresh via ``config.resolve``. Import of this module must
@@ -32,6 +35,8 @@ Op schema (``probe.outbox/1``)::
       "context": {"name": <str|null>, "base_url": <str>},
       "enqueued_at": <iso8601>,
       "attempts": <int>, "last_error": <str|null>,
+      # when the writer registered with the producer registry (F4):
+      "producer_id": <str>, "producer_sequence": <int>,
       # kind == "http":
       "method": ..., "path": ..., "body": {...} | null,
       # kind == "upload":
@@ -98,6 +103,12 @@ def _inline_hash_max() -> int:
 INLINE_HASH_MAX_BYTES = _inline_hash_max()
 
 _RUN_PATH = re.compile(r"^/v1/runs/([^/]+)(?:/|$)")
+
+_SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def _safe_component(value: str) -> str:
+    return _SAFE_COMPONENT.sub("_", value)[:120] or "producer"
 
 # Transient-when-status statuses beyond the typed transport/server errors.
 _TRANSIENT_STATUSES = {408, 429}
@@ -180,8 +191,12 @@ class Journal:
         self.paused_file = self.dir / "paused"
         self.append_lock = self.dir / ".append.lock"
         self.drain_lock = self.dir / ".drain.lock"
+        self.producers_dir = self.dir / "producers"
         #: default {"name", "base_url"} pin stamped onto appended ops.
         self.context = context
+        #: parity F4: set via register_producer; None = unstamped ops.
+        self._producer_id: str | None = None
+        self._producer_role: str | None = None
 
     # -- layout -------------------------------------------------------------
     def _ensure(self) -> None:
@@ -236,6 +251,16 @@ class Journal:
     def _append(self, op: dict, *, before_write=None) -> str:
         self._ensure()
         with file_lock(self.append_lock):
+            if self._producer_id is not None:
+                # Sequence allocation reads the registry INSIDE the lock, not
+                # an in-memory counter: a producer_id shared across processes
+                # (the CLI's per-host one) must never mint the same sequence
+                # twice (parity F4).
+                record = self._read_producer_locked()
+                sequence = int(record.get("last_sequence") or 0) + 1
+                op["producer_id"] = self._producer_id
+                op["producer_sequence"] = sequence
+                self._update_producer_locked(record, last_sequence=sequence)
             if before_write is not None:
                 # Runs INSIDE the lock, before the op file exists -- used by
                 # append_upload to publish its staged blob atomically with the
@@ -331,6 +356,104 @@ class Journal:
         }
         self._append(op, before_write=publish)
         return {"op_id": op["op_id"], "blob": digest, "size_bytes": size_bytes}
+
+    # -- producer registry (parity F4) --------------------------------------
+    def _producer_file(self) -> Path:
+        return self.producers_dir / f"{_safe_component(self._producer_id)}.json"
+
+    def _read_producer_locked(self) -> dict:
+        try:
+            return json.loads(self._producer_file().read_text())
+        except (OSError, json.JSONDecodeError, ValueError):
+            return {}
+
+    def _update_producer_locked(
+        self,
+        record: dict,
+        *,
+        last_sequence: int | None = None,
+        gap: dict | None = None,
+        state: str | None = None,
+    ) -> None:
+        record.setdefault("schema", SCHEMA)
+        record.setdefault("producer_id", self._producer_id)
+        record.setdefault("role", self._producer_role)
+        record.setdefault("registered_at", now_iso())
+        record.setdefault("last_sequence", 0)
+        record.setdefault("gaps", [])
+        record.setdefault("closed_at", None)
+        if last_sequence is not None:
+            record["last_sequence"] = max(int(record["last_sequence"]), last_sequence)
+        if gap is not None:
+            record["gaps"].append(gap)
+        if state is not None:
+            record["state"] = state
+            record["closed_at"] = now_iso() if state == "closed" else None
+        else:
+            record.setdefault("state", "open")
+        write_text_atomic(
+            self._producer_file(), json.dumps(record, indent=2) + "\n", mode=0o600
+        )
+
+    def register_producer(self, producer_id: str, *, role: str = "sdk") -> None:
+        """Join this journal's producer registry.
+
+        Sequences make silent capture loss VISIBLE: every subsequent append
+        stamps ``producer_id`` + a per-producer sequence, and the registry
+        records the high-water mark. A registry that says N with no op --
+        queued, dead-lettered, or delivered -- ever stamped N is a write lost
+        between the caller and the journal; ``note_capture_gap`` records
+        those the caller catches itself. Re-registering an existing id
+        resumes its sequence (restarts, and ids deliberately shared across
+        short-lived processes, both continue the same line).
+        """
+        self._ensure()
+        self.producers_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.chmod(self.producers_dir, 0o700)
+        except OSError:
+            pass
+        self._producer_id = producer_id
+        self._producer_role = role
+        with file_lock(self.append_lock):
+            record = self._read_producer_locked()
+            self._update_producer_locked(record, state="open")
+
+    def note_capture_gap(self, reason: str) -> None:
+        """Burn a sequence for a write that never reached the journal, so the
+        loss is a visible hole instead of silence (Miles' capture_gaps)."""
+        if self._producer_id is None:
+            return
+        with file_lock(self.append_lock):
+            record = self._read_producer_locked()
+            sequence = int(record.get("last_sequence") or 0) + 1
+            self._update_producer_locked(
+                record,
+                last_sequence=sequence,
+                gap={"sequence": sequence, "reason": reason, "at": now_iso()},
+            )
+
+    def seal_producer(self) -> None:
+        """Mark this producer cleanly closed. A producer left "open" whose
+        process is gone is a crashed writer -- the report shows exactly that."""
+        if self._producer_id is None or not self.producers_dir.exists():
+            return
+        with file_lock(self.append_lock):
+            record = self._read_producer_locked()
+            self._update_producer_locked(record, state="closed")
+
+    def producer_report(self) -> list[dict]:
+        if not self.producers_dir.exists():
+            return []
+        out: list[dict] = []
+        for path in sorted(self.producers_dir.iterdir()):
+            if not path.name.endswith(".json"):
+                continue
+            try:
+                out.append(json.loads(path.read_text()))
+            except (OSError, json.JSONDecodeError, ValueError):
+                continue
+        return out
 
     # -- reads --------------------------------------------------------------
     @staticmethod
