@@ -38,6 +38,15 @@
 
 ### Fixed
 
+- **`start-research-work` now asks for a description on projects, experiments and
+  runs.** The skill showed `probe project create folding` with no `--description`
+  and told the agent to tag but never to describe, so containers created through
+  the normal tracking path landed blank — 7 of 17 projects and 22 of 28
+  experiments in the reference lab have no description, every one created by an
+  agent that was never asked for one. Nothing fills it in later: generation runs
+  only when a child RUN reaches a terminal status, so anything ending without one
+  stays blank permanently.
+
 - **Backfill now writes a description for every project and experiment it
   creates.** The prompt showed `project create` with only `--name`, so whether a
   description appeared was luck — one import wrote one unprompted, the next left
