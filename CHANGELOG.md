@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The Claude Code tap daemon died seconds after every SessionStart**
+  (`probe-research-tap` 0.1.3). Transcripts silently stopped reaching
+  research-os: sessions showed full artifact and experiment linkage next to
+  "No transcript for this session". On one machine, **zero** tap daemons were
+  alive against 120 leaked shutdown sentinels, and a live session's daemon had
+  exited 34 seconds in while its transcript kept growing for another 35 minutes.
+
+  `session-start.sh` detached the wrapper with `nohup ... & disown`. Neither
+  changes the process group: `nohup` only ignores SIGHUP and `disown` only
+  clears the shell's job table. So the wrapper inherited the hook's PGID and
+  any SIGTERM delivered to that group took the daemon with it. Measured
+  directly — wrapper PID 7006, PGID 6958, identical to the spawner's.
+
+  The old comment concluded this was unavoidable because macOS ships no
+  `setsid(1)`. That is true of the binary and irrelevant: `python3` exposes
+  `os.setsid()`, and the hook already requires python3 to parse its own hook
+  payload. The wrapper now launches through a shim that setsids and then execs
+  in place, so it is a real session leader (PID == PGID) and nothing outside
+  its own group can reach it.
+
+  Also fixed, both found by the new tests rather than by reading:
+
+  - `session-end.sh` used `kill -TERM "-$PID"` unconditionally. A PGID only
+    exists because some process with that id led the group, so a non-leader pid
+    cannot collide with a live group — but an orphaned group whose leader has
+    exited *does* keep its pgid while that pid becomes free, so a stale pid file
+    could signal strangers. It now verifies leadership before using the group
+    form.
+  - Shutdown sentinels leaked forever (`session-end.sh` never deletes one and
+    only a later SessionStart *for the same session id* clears it, but session
+    ids are UUIDs and never recur). Now pruned after 2 days — with a trailing
+    slash on `/tmp/`, because `/tmp` is a symlink on macOS and `find` defaults
+    to not following it, so the obvious spelling exits 0 having done nothing.
+
+  The hooks had no test coverage at all, which is why a daemon that died in
+  every real session shipped green. `tests/test_hook_spawn.py` drives the actual
+  shell scripts and pins session leadership, survival of a spawner-group kill,
+  teardown, the stale-pid group-kill guard, and sentinel pruning. Each assertion
+  was verified against a deliberately reintroduced bug.
+
 ### Added
 
 - **`show-research-timeline` skill** (plugin 0.15.0, released by dispatch). Draws the whole research arc as
