@@ -1,6 +1,6 @@
 ---
 name: track-research-work
-description: Record what research produces — per-step metrics, spans, artifacts, asset versions, a run's final status, and the project's notes, which are prose and need no run at all. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication. Trigger whenever a run is open, or whenever something worth recording happens without one — including when a tool, dataset or environment the research depends on behaved differently than documented, or you had to substitute infrastructure you could not get — rather than waiting to be asked.
+description: Record what research produces — per-step metrics, spans, artifacts, asset versions, a run's final status, and the notes that hang off a project, a run or a run group, which are prose and need no run at all. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication. Trigger whenever a run is open, or whenever something worth recording happens without one — including when a tool, dataset or environment the research depends on behaved differently than documented, when you had to substitute infrastructure you could not get, and when a run's number turns out to measure nothing because the harness was broken rather than because the thing under test failed — rather than waiting to be asked.
 ---
 
 # Track research work
@@ -65,20 +65,40 @@ gets made. Record with the surface the run was opened with.
    every later reader gets the right reduction without having to name one.
 
    A durable claim about the work — why this approach, what you found, what a next
-   session should not repeat — is prose, not a metric key. It goes in the project's
-   notes:
+   session should not repeat — is prose, not a metric key. Prose has three homes, and
+   picking the wrong one is why findings end up in commit messages instead:
+
+   | what you are writing | where it goes |
+   |---|---|
+   | anything a person arriving at this project must know | the PROJECT's notes |
+   | why THIS run's number should be distrusted | that RUN's notes |
+   | what a sweep or a campaign of runs concluded | that GROUP's notes |
 
    ```
    probe notes show                       # read it before you start
    probe notes write --append <<'EOF'     # add to it, do not clobber
    Harbor has no generic-Kubernetes backend, so DOKS is out. Using GKE.
    EOF
+
+   probe run set   RUN --notes "Scored 0.0 by a broken verifier; see project notes."
+   probe group set GRP --notes "Every us-central1 zone was out of H100s."
    ```
 
-   One free-text markdown document per project, no schema. An excerpt rides along on
-   the project's MCP `card`, so the next agent sees it while orienting rather than
-   having to know it exists. Use `--append` when others may be working the same
-   project: a plain write is last-one-wins.
+   The project's is one free-text markdown document, no schema, and an excerpt rides
+   along on the project's MCP `card` — so the next agent sees it while orienting
+   rather than having to know it exists. **That surfacing is why the project's notes
+   are the default.** Run and group notes are read only by someone already looking at
+   that row, so a claim that matters beyond one run belongs in the project's notes
+   even if it was learned inside one. Use `--append` when others may be working the
+   same project: a plain write is last-one-wins.
+
+   Notes are NOT a second description. A description says what the thing IS and is
+   written before it runs; notes say what a later reader should distrust, and are
+   nearly always learned afterwards. With one field the two compete, and the caveat
+   wins by destroying the description. All three take `@file` or `-` for stdin.
+
+   Experiments have no notes field — a claim about an experiment goes in the
+   project's notes, or in `probe experiment set --description`.
 
    **Never block on delivery: async mode.** Any CLI write above takes `--async`
    (or `PROBE_ASYNC=1` for a whole session): the write is queued in a durable
@@ -173,13 +193,37 @@ gets made. Record with the surface the run was opened with.
    Minting an immutable experiment version is a separate act the researcher asks for
    explicitly; see `reference.md`.
 
+   **Status cannot say "the harness was broken", and must not be made to.** Those
+   four values are LIFECYCLE — whether the process finished — and the reaper, the
+   dashboard and every "is this run alive" check branch on them. A run whose verifier
+   was wrong ran fine and is honestly `completed`; what is wrong is the NUMBER, not
+   the execution. So mark it where meaning lives, not where lifecycle lives:
+
+   ```
+   probe run tag RUN invalid
+   probe run set RUN --notes "Scored by pytest exit code, not per-test: 40 of 113
+   P2P tests were uncollectable (pre-existing circular import), so the whole run
+   reported 0.0. Re-scored per-test in smoke-oracle-pertest."
+   ```
+
+   The tag is what a reader scanning a list sees; the notes are why. Neither works
+   alone — a bare `invalid` says "do not believe this" without saying what to believe
+   instead, and notes with no tag are invisible until someone opens the row.
+
+   Do this the moment the harness bug is found, not at the end. A streak of 0.0s that
+   nobody marked reads as a result, and it is the most expensive kind of wrong: it
+   looks like a finding, so the next person reasons from it.
+
 Liveness follows the surface. An SDK handle beats for the life of its process and
 stops when you finish it, so there is nothing to do. A CLI-opened run is detached and
 does not beat at all — do not bolt a beat onto one you cannot keep beating for the
 whole run: a run that beats once and then goes quiet is reaped as `crashed`.
 
-Outcome changed the run's meaning (flaky, superseded, promoted)? Retro-tag it:
-`probe run tag RUN_ID <tag> [--remove <tag>]` (also `experiment tag` / `project tag`).
+Outcome changed the run's meaning (flaky, superseded, promoted, `invalid`)? Retro-tag
+it: `probe run tag RUN_ID <tag> [--remove <tag>]` (also `experiment tag` /
+`project tag`), and say why in `probe run set RUN_ID --notes`. A finished run is not
+sealed — tags, description and notes all stay editable, so "we only understood this
+afterwards" is never a reason to leave the record wrong.
 
 Do not invoke `probe hook ...`; those are reserved for deterministic coding-agent hooks.
 
