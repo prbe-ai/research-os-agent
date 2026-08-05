@@ -1,6 +1,10 @@
 """Run.snapshot() writes the launch block and lockfile identity."""
 from __future__ import annotations
 
+import sys
+
+import pytest
+
 from tests.conftest import open_run
 
 
@@ -34,3 +38,56 @@ def test_snapshot_deps_include_lockfile_hashes(client, tmp_path):
     snap = run.snapshot(cwd=str(tmp_path), include_env=False, include_gpu=False)
     locks = snap["deps"].get("lockfiles")
     assert locks and locks[0]["path"] == "uv.lock" and locks[0]["sha256"]
+
+
+def test_execute_auto_snapshots(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    (tmp_path / "job.py").write_text("print('ok')\n")
+    run = open_run(client, experiment="exp-exec")
+    run.execute([sys.executable, "job.py"], cwd=str(tmp_path))
+    row = client.run_bundle(run.id)["run"]
+    launch = (row.get("metadata") or {}).get("launch")
+    assert launch is not None
+    assert launch["process"]["argv"] == [sys.executable, "job.py"]
+
+
+def test_execute_auto_snapshot_opt_out(client, tmp_path):
+    run = open_run(client, experiment="exp-exec-off")
+    run.execute([sys.executable, "-c", "pass"], cwd=str(tmp_path))
+    row = client.run_bundle(run.id)["run"]
+    assert "launch" not in (row.get("metadata") or {})
+
+
+def test_execute_survives_snapshot_failure(client, tmp_path, monkeypatch):
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    run = open_run(client, experiment="exp-boom")
+    monkeypatch.setattr(
+        type(run), "snapshot",
+        lambda self, **kw: (_ for _ in ()).throw(RuntimeError("capture exploded")),
+    )
+    with pytest.warns(UserWarning, match="auto-snapshot failed"):
+        result = run.execute([sys.executable, "-c", "pass"], cwd=str(tmp_path))
+    assert result.returncode == 0  # block claims, never runs
+
+
+def test_client_run_auto_snapshots(client, monkeypatch):
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    run = client.run(
+        project="proj-auto",
+        experiment="exp-auto-open",
+        hypothesis="auto-snapshot opens",
+    )
+    row = client.run_bundle(run.id)["run"]
+    assert "launch" in (row.get("metadata") or {})
+
+
+def test_client_run_snapshot_param_overrides(client, monkeypatch):
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    run = client.run(
+        project="proj-auto2",
+        experiment="exp-no-snap",
+        hypothesis="param wins",
+        snapshot=False,
+    )
+    row = client.run_bundle(run.id)["run"]
+    assert "launch" not in (row.get("metadata") or {})

@@ -1718,6 +1718,20 @@ class Run:
         """
         if not argv:
             raise ValueError("argv must not be empty")
+        # Every executed run snapshots by default (design D3). detect_venv=True
+        # because THIS interpreter is the launcher, not the environment being
+        # recorded -- see Run.snapshot's docstring. Failure never blocks the
+        # child: strict mode is the only exception, and it is opt-in.
+        if os.environ.get("PROBE_AUTO_SNAPSHOT", "1") != "0":
+            try:
+                self.snapshot(cwd=cwd, detect_venv=True, argv=argv)
+            except Exception as exc:
+                if os.environ.get("PROBE_REQUIRE_COMPLETE") == "1":
+                    raise
+                warnings.warn(
+                    f"auto-snapshot failed; run continues uncaptured: {exc}",
+                    stacklevel=2,
+                )
         started_at = _now()
         span_id = self.span(
             "process",

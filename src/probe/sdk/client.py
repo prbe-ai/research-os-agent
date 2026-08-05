@@ -1531,13 +1531,16 @@ class Client:
         experiment_name: str | None = None,
         on_conflict: str = "auto",
         hw: bool | None = None,
+        snapshot: bool | None = None,
         **run_kw,
     ) -> Run:
         """Open a run — full resolution/creation/``on_conflict`` semantics in
         :meth:`_run_impl` (unchanged). ``hw=True`` (or ``PROBE_HW=1``) also
         starts the opt-in hardware collector when this process is the
         node-local leader. Best-effort by contract: a broken collector never
-        touches the run (docs/2026-08-05-hw-metrics-design.md)."""
+        touches the run (docs/2026-08-05-hw-metrics-design.md). ``snapshot``
+        controls the open-time auto-snapshot: ``None`` follows
+        ``PROBE_AUTO_SNAPSHOT`` (default on), ``False`` skips, ``True`` forces."""
         handle = self._run_impl(
             experiment=experiment,
             hypothesis=hypothesis,
@@ -1545,6 +1548,7 @@ class Client:
             project=project,
             experiment_name=experiment_name,
             on_conflict=on_conflict,
+            snapshot=snapshot,
             **run_kw,
         )
         from probe.hw import integration as hw_integration
@@ -1561,6 +1565,7 @@ class Client:
         project: str | None = None,
         experiment_name: str | None = None,
         on_conflict: str = "auto",
+        snapshot: bool | None = None,
         **run_kw,
     ) -> Run:
         """Open a run inside an experiment — or straight under a project.
@@ -1599,7 +1604,15 @@ class Client:
         numbers (a completed one is left unmarked — a repeat is not a
         correction). ``"error"`` keeps the bare 409. The two recovery policies
         split on step continuity: resume continues the curve past the crash
-        point (checkpointed relaunch), supersede replays it from step 0."""
+        point (checkpointed relaunch), supersede replays it from step 0.
+
+        ``snapshot`` — None (default) follows ``PROBE_AUTO_SNAPSHOT`` (on
+        unless set to "0"); False skips the auto-capture; True forces it
+        regardless of the env var. A run opened here and then driven through
+        ``run.execute()`` snapshots twice; the second is cheap (same tree →
+        same execution record via server dedupe, code-bytes deduped by the
+        presign have-check) and overwrites the launch block with the more
+        specific child argv — intended."""
         if on_conflict not in ("auto", "error", "supersede", "resume"):
             raise errors.ValidationError(
                 f"on_conflict={on_conflict!r} is not a policy. Use \"auto\" "
@@ -1667,11 +1680,13 @@ class Client:
                     "one. Name the experiment or drop the group."
                 )
             run_kw.pop("group_id", None)
-            return self._create_run_with_policy(
+            handle = self._create_run_with_policy(
                 lambda kw, nm: self.create_project_run(project_id, nm, **kw),
                 run_kw, name, on_conflict,
                 experiment_id=None, project_id=project_id,
             )
+            self._maybe_auto_snapshot(handle, snapshot)
+            return handle
         if hypothesis is not None:
             exp = self.ensure_experiment(
                 experiment,
@@ -1689,11 +1704,33 @@ class Client:
                 f"experiment {experiment!r} is not in project {project!r}. "
                 "Drop the project argument, or name the one it actually belongs to."
             )
-        return self._create_run_with_policy(
+        handle = self._create_run_with_policy(
             lambda kw, nm: self.create_run(exp["id"], nm, **kw),
             run_kw, name, on_conflict,
             experiment_id=exp["id"], project_id=None,
         )
+        self._maybe_auto_snapshot(handle, snapshot)
+        return handle
+
+    @staticmethod
+    def _maybe_auto_snapshot(handle: Run, snapshot: bool | None) -> None:
+        """Auto-snapshot hook for ``run()`` (design D3). ``snapshot=None``
+        follows ``PROBE_AUTO_SNAPSHOT`` (default on); best-effort like
+        ``execute()``'s hook -- failure warns rather than losing the run,
+        except under ``PROBE_REQUIRE_COMPLETE=1`` (Task 10's --strict)."""
+        auto = snapshot if snapshot is not None else (
+            os.environ.get("PROBE_AUTO_SNAPSHOT", "1") != "0"
+        )
+        if auto:
+            try:
+                handle.snapshot()  # in-process: THIS interpreter is the env
+            except Exception as exc:
+                if os.environ.get("PROBE_REQUIRE_COMPLETE") == "1":
+                    raise
+                warnings.warn(
+                    f"auto-snapshot failed; run continues uncaptured: {exc}",
+                    stacklevel=2,
+                )
 
     #: Statuses whose numbers cannot be trusted; superseding one marks it.
     _DEAD_RUN_STATUSES = frozenset({"failed", "crashed", "canceled"})

@@ -1836,6 +1836,14 @@ def _no_background_heartbeat(monkeypatch):
     monkeypatch.setenv("PROBE_HEARTBEAT_SECONDS", "0")
 
 
+@pytest.fixture(autouse=True)
+def _no_auto_snapshot(monkeypatch):
+    """Auto-snapshot (Task 8) would make every client.run() in this suite
+    snapshot the working tree. Tests that exercise the auto path re-enable it
+    explicitly."""
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "0")
+
+
 @pytest.fixture
 def app() -> FakeApp:
     return FakeApp()
