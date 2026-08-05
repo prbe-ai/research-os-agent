@@ -20,7 +20,7 @@ import time
 import uuid
 import warnings
 import weakref
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -204,6 +204,7 @@ class Client:
         async_writes: bool = False,
         auto_drain: bool = True,
         drain_interval: float | None = None,
+        redact: "Callable[[dict], dict] | bool | None" = None,
         surface: str = Surface.SDK.value,
         client_headers: Mapping[str, str] | None = None,
     ):
@@ -269,6 +270,15 @@ class Client:
         # training loop of thousands of `probe --async log` invocations is ONE
         # producer line, not thousands of registry files (sequences stay safe:
         # allocation reads the registry under the append lock).
+        # Parity F5: scrub payloads at CAPTURE -- before bytes hit the journal
+        # (commonly on shared storage) or the wire. True selects the standard
+        # scrubber; a callable brings your own. Default None: untouched.
+        if redact is True:
+            from .redaction import default_scrub
+
+            self._redact: Callable | None = default_scrub
+        else:
+            self._redact = redact or None
         self._seal_producer_on_close = False
         if async_writes:
             host = socket.gethostname()
@@ -347,6 +357,8 @@ class Client:
         # lands mid-run. No-ops for process-bound runs, which hold an flock and
         # have no lease file, and skips the write until the lease is half spent.
         _touch_run_lease(path)
+        if self._redact is not None and body is not None:
+            body = self._redact(body)
         if self.async_writes:
             self.journal.append_http(method, path, body)
             self._after_enqueue()

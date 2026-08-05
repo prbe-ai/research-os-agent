@@ -551,13 +551,17 @@ class Journal:
         cleared it, so delivery stayed stopped forever after one 401)."""
         self.write_status(auth_blocked_since=None)
 
-    def retry_failed(self, op_id: str | None = None) -> int:
-        """Requeue dead letters (one op, or all). Files keep their names, so a
-        retried op re-enters at its original FIFO position."""
+    def retry_failed(
+        self, op_id: str | None = None, *, run_ref: str | None = None
+    ) -> int:
+        """Requeue dead letters (one op, one run's, or all). Files keep their
+        names, so a retried op re-enters at its original FIFO position."""
         moved = 0
         with file_lock(self.append_lock):
             for path, op in self._read_dir(self.failed_dir):
                 if op_id is not None and op.get("op_id") != op_id:
+                    continue
+                if run_ref is not None and op.get("run_ref") != run_ref:
                     continue
                 os.replace(path, self.ops_dir / path.name)
                 moved += 1
