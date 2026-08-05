@@ -270,6 +270,95 @@ def test_run_end_async_is_ordered_behind_the_runs_data(
     assert wired_async.metric_points_posted[run_id]
 
 
+# -- legacy Miles queue import (P6 migration) ----------------------------------
+
+
+def _miles_record(run_id, *, seq, rtype="metrics", **extra):
+    record = {
+        "schema_version": "miles.probe.metrics/v2",
+        "run_id": run_id,
+        "type": rtype,
+        "created_at": f"2026-08-01T00:00:{seq:02d}Z",
+    }
+    record.update(extra)
+    return record
+
+
+def test_outbox_import_miles_replays_through_the_sdk(
+    wired_async, outbox_dir, tmp_path, capsys
+):
+    run_id = start_run(wired_async)
+    legacy = tmp_path / "miles-queue"
+    (legacy / "pending").mkdir(parents=True)
+    (legacy / "inflight").mkdir(parents=True)
+    # inflight was mid-delivery at crash time; Miles' own recovery requeues it
+    # FIRST, and the import must preserve that order.
+    (legacy / "inflight" / "000001.json").write_text(
+        json.dumps(_miles_record(run_id, seq=1, metrics={"loss": 0.9}, step=1))
+    )
+    (legacy / "pending" / "000002.json").write_text(
+        json.dumps(_miles_record(run_id, seq=2, metrics={"loss": 0.5}, step=2))
+    )
+    (legacy / "pending" / "000003.json").write_text(
+        json.dumps(
+            _miles_record(
+                run_id, seq=3, rtype="finish", status="completed",
+                summary={"final_loss": 0.5},
+            )
+        )
+    )
+    rc = cli.main(
+        ["--spool-dir", str(outbox_dir), "outbox", "import-miles", str(legacy), "--delete"]
+    )
+    assert rc == 0
+    assert "imported 3 record(s)" in capsys.readouterr().out
+    ops = [op for _, op in Journal(outbox_dir).pending()]
+    assert [op["method"] for op in ops] == ["POST", "POST", "PATCH"], (
+        "metrics land BEFORE the close, inflight before pending"
+    )
+    steps = [p["step_index"] for op in ops[:2] for p in op["body"]["points"]]
+    assert steps == [1, 2]
+    assert list((legacy / "pending").iterdir()) == []
+    assert list((legacy / "inflight").iterdir()) == []
+    assert cli_drain(wired_async, outbox_dir).clean
+    assert wired_async.runs[run_id]["status"] == "completed"
+    assert wired_async.metric_points_posted[run_id]
+
+
+def test_outbox_import_miles_keeps_what_it_cannot_read(
+    wired_async, outbox_dir, tmp_path, capsys
+):
+    run_id = start_run(wired_async)
+    legacy = tmp_path / "miles-queue"
+    (legacy / "pending").mkdir(parents=True)
+    good = legacy / "pending" / "000001.json"
+    good.write_text(
+        json.dumps(_miles_record(run_id, seq=1, metrics={"loss": 1.0}, step=1))
+    )
+    alien = legacy / "pending" / "000002.json"
+    alien.write_text(
+        json.dumps(
+            {"schema_version": "miles.probe.metrics/v99", "run_id": run_id, "type": "metrics"}
+        )
+    )
+    rc = cli.main(
+        ["--spool-dir", str(outbox_dir), "outbox", "import-miles", str(legacy), "--delete"]
+    )
+    assert rc == 2
+    out = capsys.readouterr().out
+    assert "imported 1" in out and "skipped 1" in out
+    assert alien.exists(), "an unreadable record must never be deleted"
+    assert not good.exists()
+
+
+def test_outbox_import_miles_rejects_a_non_queue_directory(
+    wired_async, tmp_path, capsys
+):
+    rc = cli.main(["outbox", "import-miles", str(tmp_path / "not-a-queue")])
+    assert rc == 2
+    assert "does not look like" in capsys.readouterr().err
+
+
 # -- run-scoped repair (parity F6) ---------------------------------------------
 
 

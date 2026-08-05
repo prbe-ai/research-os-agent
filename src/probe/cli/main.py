@@ -4352,6 +4352,93 @@ def flush() -> None:
     _drain_foreground()
 
 
+@outbox_app.command("import-miles")
+def outbox_import_miles(
+    queue_dir: Path = typer.Argument(
+        ..., help="a legacy Miles durable metric queue directory"
+    ),
+    delete: bool = typer.Option(
+        False, "--delete", help="remove records after a successful import"
+    ),
+) -> None:
+    """Fold a legacy Miles durable metric queue into the outbox (P6 migration).
+
+    Records replay in the exporter's recovery order (inflight first -- those
+    were mid-delivery at crash time and Miles' own recovery requeues them --
+    then pending, each sorted) THROUGH the SDK's own composition path:
+    run.log()/set_status() on an async client. The wire bodies are therefore
+    identical to a live run's, and delivery rides the normal drainer.
+    Unknown schemas and unparseable records are kept on disk and exit 2.
+    """
+    from ..integrations.miles import _DRAINABLE_QUEUE_SCHEMAS
+
+    root = Path(queue_dir).expanduser()
+    if not (root / "pending").is_dir() and not (root / "inflight").is_dir():
+        typer.echo(
+            f"{root} does not look like a Miles metric queue "
+            "(no pending/ or inflight/)",
+            err=True,
+        )
+        raise typer.Exit(2)
+    records: list[tuple[Path, dict | None]] = []
+    for sub in ("inflight", "pending"):
+        directory = root / sub
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("*.json")):
+            try:
+                records.append((path, json.loads(path.read_text())))
+            except (OSError, json.JSONDecodeError, ValueError):
+                records.append((path, None))
+    imported: list[Path] = []
+    skipped = 0
+    with _async_client() as c:
+        handles: dict[str, Any] = {}
+        for path, record in records:
+            if (
+                record is None
+                or record.get("schema_version") not in _DRAINABLE_QUEUE_SCHEMAS
+                or not record.get("run_id")
+            ):
+                skipped += 1
+                continue
+            run_id = str(record["run_id"])
+            handle = handles.get(run_id)
+            if handle is None:
+                handle = handles[run_id] = _async_run(c, run_id)
+            if record.get("type") == "metrics":
+                handle.log(
+                    record.get("metrics") or {},
+                    step=record.get("step"),
+                    kind=record.get("kind") or "model",
+                    wall_clock=record.get("created_at"),
+                    dimensions=record.get("dimensions"),
+                    labels=record.get("labels"),
+                    span_id=record.get("span_id"),
+                )
+            elif record.get("type") == "finish":
+                handle.set_status(
+                    record.get("status") or "completed",
+                    ended_at=record.get("created_at"),
+                    summary=record.get("summary") or {},
+                )
+            else:
+                skipped += 1
+                continue
+            imported.append(path)
+    if delete:
+        for path in imported:
+            path.unlink(missing_ok=True)
+    _kick_drainer()
+    print(
+        f"imported {len(imported)} record(s) into the outbox"
+        + (f", skipped {skipped}" if skipped else "")
+        + ("" if delete else f"; originals kept in {root}")
+    )
+    if skipped:
+        raise typer.Exit(2)
+
+
 @app.command()
 def get(run: str = run_ref()) -> None:
     """Print a run."""
