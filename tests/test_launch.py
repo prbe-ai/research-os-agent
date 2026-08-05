@@ -11,6 +11,7 @@ from probe.sdk.launch import (
     capture_runtime,
     scrub_argv,
 )
+from probe.sdk.snapshot import capture_system
 
 
 def test_scrub_argv_redacts_flag_value_pairs():
@@ -133,3 +134,13 @@ def test_build_launch_block_composes_and_never_raises(monkeypatch):
     assert block["runtime"]["env_names"]
     assert _seed_names(block["determinism"])["seed"]["value"] == "3"
     assert "probe_version" in block
+
+
+def test_capture_system_shape():
+    info = capture_system()
+    assert info["os"]["platform"]
+    assert info["os"]["machine"]
+    assert info["cpu"]["count"] >= 1
+    # cuda/cudnn only when torch is already loaded or nvcc exists — absent here
+    # is legitimate; the key must then be missing, not null.
+    assert info.get("cuda") is None or info["cuda"].get("runtime")

@@ -20,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -1034,3 +1035,60 @@ def capture_gpu() -> list[dict[str, Any]]:
                 }
             )
     return gpus
+
+
+def capture_system() -> dict[str, Any]:
+    """Machine-stable identity: OS, CPU/RAM, CUDA stack. Joins the GPU inventory
+    under ``execution_records.hardware`` — hashed into env identity, which is
+    correct because two runs on identical nodes must still share one record.
+    Per-launch facts (hostname, env values) belong in the launch block instead."""
+    info: dict[str, Any] = {
+        "os": {
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "python_implementation": platform.python_implementation(),
+        },
+        "cpu": {"count": os.cpu_count() or 0},
+    }
+    try:
+        with open("/etc/os-release") as fh:
+            for line in fh:
+                if line.startswith("PRETTY_NAME="):
+                    info["os"]["distro"] = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except OSError:
+        pass
+    libc = platform.libc_ver()
+    if libc[0]:
+        info["os"]["libc"] = f"{libc[0]} {libc[1]}"
+    try:
+        names = os.sysconf_names
+        if "SC_PAGE_SIZE" in names and "SC_PHYS_PAGES" in names:
+            info["cpu"]["mem_total_bytes"] = (
+                os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+            )
+    except (OSError, ValueError, AttributeError):
+        pass
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        try:
+            runtime = getattr(getattr(torch, "version", None), "cuda", None)
+            if runtime:
+                cuda: dict[str, Any] = {"runtime": runtime}
+                cudnn = torch.backends.cudnn.version()
+                if cudnn:
+                    cuda["cudnn"] = cudnn
+                info["cuda"] = cuda
+        except Exception:
+            pass
+    else:
+        try:
+            out = subprocess.run(
+                ["nvcc", "--version"], capture_output=True, text=True, timeout=5
+            )
+            m = re.search(r"release ([\d.]+)", out.stdout)
+            if m:
+                info["cuda"] = {"runtime": m.group(1)}
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return info
