@@ -27,11 +27,16 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # Stdlib-only leaf: importing it does NOT pull httpx (see the lazy package init),
 # so a distributed actor keeps writing metric batches without the network stack.
 from ..sdk.capture import stable_span_id
+
+# Redaction folded into the SDK (outbox<->Miles parity F5/P6): one scrubber,
+# shared with Client(redact=True). Local underscore names kept so every
+# existing caller and test stays byte-for-byte unchanged.
+from ..sdk.redaction import is_sensitive_key as _is_sensitive_key
+from ..sdk.redaction import scrub_string as _scrub_string
 from ..sdk.durable import (
     file_lock as _file_lock,
 )
@@ -57,36 +62,6 @@ logger = logging.getLogger(__name__)
 # run's empty coordinate, exactly as they always did.
 QUEUE_SCHEMA_VERSION = "miles.probe.metrics/v2"
 _DRAINABLE_QUEUE_SCHEMAS = frozenset({"miles.probe.metrics/v1", QUEUE_SCHEMA_VERSION})
-_CREDENTIAL_URI = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
-_SENSITIVE_KEYS = {
-    "api_key",
-    "apikey",
-    "aws_access_key_id",
-    "authorization",
-    "auth_token",
-    "access_token",
-    "bearer_token",
-    "cookie",
-    "credential",
-    "credentials",
-    "id_token",
-    "password",
-    "private_key",
-    "refresh_token",
-    "secret",
-    "token",
-    "wandb_key",
-}
-_MODEL_TOKEN_KEYS = {
-    "bos_token",
-    "cls_token",
-    "eos_token",
-    "mask_token",
-    "pad_token",
-    "sep_token",
-    "stop_token",
-    "unk_token",
-}
 _OPAQUE_CONFIG_KEYS = {"env", "env_report", "env_vars", "environment_variables"}
 _JOB_ENV_LINKS = {
     "SLURM_JOB_ID": "slurm_job_id",
@@ -115,36 +90,6 @@ def _safe_component(value: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9._-]", "_", value).strip("._-")[:64] or "run"
     digest = hashlib.sha256(value.encode()).hexdigest()[:12]
     return f"{slug}-{digest}"
-
-
-def _is_sensitive_key(key: str) -> bool:
-    normalized = re.sub(r"[^a-z0-9]+", "_", key.lower()).strip("_")
-    parts = set(normalized.split("_"))
-    token_secret = normalized.endswith("_token") and normalized not in _MODEL_TOKEN_KEYS
-    signed_secret = normalized.endswith(("_signature", "_sig"))
-    return (
-        normalized in _SENSITIVE_KEYS
-        or token_secret
-        or signed_secret
-        or bool(parts & {"password", "secret", "credential", "credentials"})
-    )
-
-
-def _scrub_string(value: str) -> str:
-    scrubbed = _CREDENTIAL_URI.sub(r"\g<scheme><redacted>@", value)
-    try:
-        parsed = urlsplit(scrubbed)
-    except ValueError:
-        return scrubbed
-    if not parsed.scheme or not parsed.netloc or not parsed.query:
-        return scrubbed
-    query = [
-        (key, "<redacted>" if _is_sensitive_key(key) else item)
-        for key, item in parse_qsl(parsed.query, keep_blank_values=True)
-    ]
-    return urlunsplit(
-        (parsed.scheme, parsed.netloc, parsed.path, urlencode(query), parsed.fragment)
-    )
 
 
 def _json_safe(value: Any, *, key: str = "") -> Any:
