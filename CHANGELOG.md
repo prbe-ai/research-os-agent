@@ -41,6 +41,31 @@
 
 ### Changed
 
+- **The skills now say that a LABELED POINT IS NEVER PLOTTED.** They previously
+  pointed agents straight into this: per-sample ids "go in `labels=` instead", with
+  nothing anywhere saying that charts read the unlabeled stream only
+  (`labels_hash = <empty>`, `app/telemetry/store.py`). So an agent that correctly
+  moved a high-cardinality identifier out of `dimensions` and into `labels` went from
+  128 blank charts to one blank chart and read that as a fix.
+
+  Observed on `rollouts-300` in `swe-smith-shakedown`: 300 trials, 129 series, **zero**
+  plottable points. The data was complete and correct the whole time — every point
+  carried `instance_id`, so the dashboard drew nothing and said "No unlabeled points
+  to plot", which reads like the run logged nothing.
+
+  A curve and per-sample identity are now documented as two different writes, with
+  separate keys, and the rule is generalised: anything that makes a point unique is
+  fatal to a chart in BOTH fields — it shatters the series in `dimensions` and
+  removes the point from plotting in `labels`. Per-item identity belongs in an
+  artifact.
+
+  The suggested post-run self-check grew a second assertion, because the existing one
+  passes on exactly this bug: it counts series, so an all-labeled run with one series
+  sails through. Both are needed — they fail on opposite mistakes, and the half-fix
+  that moves an identifier from one field to the other trips only the new one.
+  Verified against production: the run that "fixed" the shape passes the old
+  assertion and fails the new one.
+
 - **The skills route to the whole capture surface, not just the parts that need a
   run.** Findings during implementation, infrastructure that could not be
   provisioned, and runs whose numbers measure nothing all had working doors and

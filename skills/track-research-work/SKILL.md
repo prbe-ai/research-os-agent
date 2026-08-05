@@ -57,6 +57,35 @@ gets made. Record with the surface the run was opened with.
    Budget it: series ≈ the product of your dimension cardinalities, and past ~50 you
    have designed a wall of tiles.
 
+   **A LABELED POINT IS NEVER PLOTTED. This is the one that gets people, because
+   moving an identifier out of dimensions and into labels looks like the fix and is
+   only half of one.** Charts read the unlabeled stream only — the server filters on
+   `labels_hash = <empty>` — so a point carrying ANY label is excluded from every
+   graph before drawing. Labels exist to make a point addressable in the per-sample
+   views, not to annotate a plottable one. Label every point and the chart says "No
+   unlabeled points to plot", which reads like the run logged nothing while the data
+   sits there intact.
+
+   So a curve and per-sample identity are two different writes, and you make both:
+
+   ```python
+   for i, trial in enumerate(trials):
+       run.log({"reward": trial.reward}, step=i)                    # THE CURVE: no labels
+       run.log({"reward_sample": trial.reward}, step=i,             # the per-sample record
+               labels={"instance_id": trial.id, "repo": trial.repo})
+   ```
+
+   Separate keys, deliberately: one key logged both ways gives you a series whose
+   points are half plottable and a chart that silently shows a subset. If you only
+   want one, keep the unlabeled curve — per-item detail belongs in an artifact
+   anyway, and that is what analysis code reads.
+
+   The rule generalises past this case. Anything that makes a point unique — a
+   sample id, a repo name, a filename, a trial uuid — is fatal to a chart in BOTH
+   fields: in `dimensions` it shatters one curve into hundreds of one-point series,
+   and in `labels` it removes the point from plotting entirely. Neither field is
+   where per-item identity earns its keep; an artifact is.
+
    Two that only bite later. The headline number must be exactly ONE series — a
    computed view resolves a key and refuses one carrying several dimension
    variants — so keep `accuracy` and `accuracy_per_example` as separate keys, and
@@ -163,11 +192,22 @@ gets made. Record with the surface the run was opened with.
    ```python
    series = client.run_series(run.id)      # one row per (key, kind, dimensions)
    assert len(series) < 50, f"{len(series)} series — a wall of tiles, not graphs"
+
+   # ...and that ANYTHING is plottable. The check above passes happily when every
+   # point is labeled, which is exactly one blank chart instead of fifty.
+   plottable = [s for s in series if s["point_count"] > 1 and not s["has_labeled_points"]]
+   assert plottable, "every point is labeled or single — nothing will draw"
    ```
+
+   Both assertions, not either. They fail on opposite mistakes and each one passes
+   the other's: an identifier in `dimensions` trips the first, an identifier in
+   `labels` trips only the second, and the half-fix that moves it from one to the
+   other trips the second while making the first look repaired.
 
    If the series count is close to your point count, every series holds one point
    and you have logged tiles and no graphs. Fix the shape before spending compute
-   on more runs. When checking a breakdown pools the way you intended, pass an
+   on more runs. Do this on a 2-instance run, not after 300: the shape is identical
+   and the mistake costs two minutes instead of an afternoon. When checking a breakdown pools the way you intended, pass an
    explicitly large `step_bucket` to `get_metrics_grouped` and confirm the rows
    come back with `n > 1`: the reduction buckets by step first, so points written
    at auto-incremented steps return one group per point and the grouping appears
