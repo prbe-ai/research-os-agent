@@ -4,6 +4,28 @@
 
 ### Changed
 
+- **Workspaces take a slug, like everything else.** `WorkspaceOut` has carried one
+  all along — `UNIQUE (customer_id, slug)` — and the CLI simply refused to accept it,
+  so `workspace get / rename / use`, `--workspace` on `project create / list / move`,
+  and the workspace artifact anchor all demanded a UUID. They take the slug now
+  (`probe workspace use mine`), with `id:<uuid>` and `name:<text>` as elsewhere.
+
+  That closes the last gap in the ref grammar for kinds that have a slug. Run groups,
+  views and shared files still have none server-side; artifacts are excluded by design.
+
+  Resolution reads the whole workspace listing rather than a server-side filter, which
+  is correct **here and nowhere else**: `GET /v1/workspaces` is deliberately unpaginated
+  (one per team member, no cursor), so the list is complete and a miss is a real
+  absence. The same scan over *projects* is what capped resolution at 200 rows and
+  reported live projects as missing — the code says so, so nobody copies it to a
+  paginated endpoint.
+
+  BREAKING in the same shape as the rest: a bare workspace UUID no longer resolves, and
+  the error names the edit. The ambient workspace (`workspace use`, `PROBE_WORKSPACE`)
+  is unaffected — it was written by the tool, not typed by a person.
+
+### Changed
+
 - **A bare ref is now always the SLUG. An id is written `id:<uuid>`, a name
   `name:<text>`.** BREAKING for anyone passing a bare UUID.
 

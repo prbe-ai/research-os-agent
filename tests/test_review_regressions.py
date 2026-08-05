@@ -92,7 +92,9 @@ def test_a_run_positional_plus_an_anchor_flag_is_a_usage_error(wired, client, tm
 def test_uri_on_a_file_anchor_is_a_usage_error_not_a_traceback(wired, client, capsys):
     """A file IS its bytes, so there is no reference-only form — but the SDK's
     ValueError was not in main()'s handler chain and printed a traceback."""
-    code = cli.main(["artifact", "add", "--uri", "s3://b/k", "--name", "n", "--workspace", _WS_MINE])
+    code = cli.main(
+        ["artifact", "add", "--uri", "s3://b/k", "--name", "n", "--workspace", f"id:{_WS_MINE}"]
+    )
 
     assert code == 2
     assert "cannot be" in capsys.readouterr().err

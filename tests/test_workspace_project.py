@@ -69,7 +69,7 @@ def test_workspace_use_clears_the_active_project(client, monkeypatch, capsys):
     monkeypatch.setattr(cli, "Client", lambda **kw: client)
     save_context({"workspace": {"id": _WS_OTHER, "project": "stale-project"}})
 
-    assert cli.main(["workspace", "use", _WS_MINE]) == 0
+    assert cli.main(["workspace", "use", f"id:{_WS_MINE}"]) == 0
 
     anchor = load_context()["workspace"]
     assert anchor["id"] == _WS_MINE
@@ -163,7 +163,7 @@ def test_patch_refuses_workspace_and_points_at_move(client, monkeypatch, capsys)
     monkeypatch.setattr(cli, "Client", lambda **kw: client)
     proj = client.create_project("p", workspace_id=_WS_MINE)
 
-    code = cli.main(["project", "patch", f"id:{proj['id']}", "--workspace", _WS_OTHER])
+    code = cli.main(["project", "patch", f"id:{proj['id']}", "--workspace", f"id:{_WS_OTHER}"])
 
     assert code != 0
     assert "probe project move" in capsys.readouterr().err
@@ -253,7 +253,9 @@ def test_cli_artifact_add_rejects_two_anchors(client, monkeypatch, tmp_path):
     blob = tmp_path / "f.bin"
     blob.write_bytes(b"x")
 
-    code = cli.main(["artifact", "add", str(blob), "--project", "p1", "--workspace", _WS_MINE])
+    code = cli.main(
+        ["artifact", "add", str(blob), "--project", "p1", "--workspace", f"id:{_WS_MINE}"]
+    )
 
     assert code != 0
 
