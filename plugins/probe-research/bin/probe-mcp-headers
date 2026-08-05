@@ -22,6 +22,18 @@
 # cannot skew, and skips a ~300ms interpreter start on every connect. The CLI is
 # the last resort, for a box with no python.
 #
+# Reading it means reading BOTH shapes. The file has been v2 — named contexts, the
+# credential nested under `contexts.<current_context>` — since the workspace surface
+# landed, and this read only ever knew v1's top-level key. So the fast path returned
+# nothing on every install the wizard has ever produced, and the whole surface silently
+# rode on the CLI fallback: fine on a machine with `probe` at one of the four paths
+# below, and a hard failure on any other. A failure here is not a degraded MCP, it is
+# an unauthenticated request, which the edge answers with a `WWW-Authenticate`
+# challenge — so Claude Code discovers an authorization server and offers OAuth, and
+# the user is sent to `/mcp` to re-authenticate a device the installer had already
+# authorized. Mirror sdk.config._migrate/load_context here: contexts first, v1 flat
+# second.
+#
 # Diagnostics go to stderr; stdout must be JSON and nothing else.
 set -eu
 
@@ -72,9 +84,19 @@ if [ -r "$CONFIG" ]; then
     token=$("$python" -c '
 import json, sys
 try:
-    print(json.load(open(sys.argv[1])).get("mcp_token") or "")
+    data = json.load(open(sys.argv[1]))
 except (OSError, ValueError):
-    print("")
+    data = {}
+if not isinstance(data, dict):
+    data = {}
+contexts = data.get("contexts")
+if isinstance(contexts, dict):
+    # v2. An absent/unknown current_context falls back to "default", exactly as
+    # config.current_context_name does — never to another context, which would hand
+    # the MCP a credential for an endpoint the user is not pointed at.
+    context = contexts.get(data.get("current_context") or "default")
+    data = context if isinstance(context, dict) else {}
+print(data.get("mcp_token") or "")
 ' "$CONFIG" 2>/dev/null) || token=""
     [ -n "$token" ] && emit "$token"
     break
