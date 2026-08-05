@@ -249,6 +249,24 @@
 
 ### Fixed
 
+- **A refused browser approval no longer installs the plugins anyway.** Closing the
+  approval tab left the run with no credential and it installed both plugins
+  regardless, then reported "Not finished". That is the same trap the ordering fix
+  closed, on the failure path: the tracking plugin publishes an MCP server whose
+  bearer comes from the credential the run just failed to mint, so the first
+  unauthenticated connect draws a `WWW-Authenticate` challenge and pins Claude Code
+  to OAuth — sending the user to `/mcp` to authenticate a device that was never
+  authorized at all.
+
+  Each install is now gated on the grants its capability actually needs, and the
+  gate reads the same `CAPABILITY_GRANTS` table that decides what to request, so the
+  request and the check cannot drift. A partial grant still installs what it can
+  authenticate: an `api`+`mcp` approval that succeeded while `capture` was declined
+  installs tracking and skips capture, naming the missing credential rather than
+  reporting a failed install that was never attempted. Turning a capability OFF is
+  deliberately ungated — refusing to uninstall because a token could not be minted
+  would trap someone on the plugin they just asked to remove.
+
 - **A fresh install no longer sends you to `/mcp` to authenticate a device it had
   just authorized.** Two causes, one symptom. The plugin's headers helper looked up
   a top-level `mcp_token` — the v1 config shape — while the wizard has written v2,

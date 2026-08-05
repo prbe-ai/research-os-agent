@@ -961,6 +961,7 @@ def _run_wizard_action(
     from probe.cli import doctor as doctor_impl
     from probe.cli import setup as wizard
     from probe.cli import tui
+    from probe.cli.capabilities import Capability
     from probe.cli.capture import OffMode
 
     if chosen_action is actions_mod.Action.DIAGNOSE:
@@ -1110,14 +1111,27 @@ def _run_wizard_action(
     # "already installed" and does NOT upgrade it, so that work was pure waste
     # -- and it was the step that failed, on the one path a new user is on.
     needs = wizard.needs_authorization(caps, selection)
-    work: list[tuple[str, object]] = []
+    # (label, action, gate). `gate` names the capability whose credential this step
+    # cannot work without, and is None for steps that need none -- removals,
+    # auto-update, the CLAUDE.md block. It is what stops a run whose browser
+    # approval failed from installing a plugin that then sits there unauthenticated:
+    # the tracking plugin publishes an MCP server, and an unauthenticated connect is
+    # answered with a `WWW-Authenticate` challenge that pins Claude Code to OAuth.
+    # Turning a capability OFF is deliberately ungated -- refusing to uninstall
+    # because a credential could not be minted would trap someone on a plugin they
+    # just asked to remove.
+    work: list[tuple[str, object, object]] = []
 
     if selection.tracking and not caps.tracking_plugin_installed:
         work.append(
-            ("install the CLI + MCP plugin", lambda: wizard.apply_tracking(True, on_retry=_may_retry))
+            (
+                "install the CLI + MCP plugin",
+                lambda: wizard.apply_tracking(True, on_retry=_may_retry),
+                Capability.TRACKING,
+            )
         )
     elif not selection.tracking and caps.tracking_plugin_installed:
-        work.append(("remove the CLI + MCP plugin", lambda: wizard.apply_tracking(False)))
+        work.append(("remove the CLI + MCP plugin", lambda: wizard.apply_tracking(False), None))
 
     if selection.capture and not caps.capture_on:
         # NOT gated on "plugin absent": the killswitch is cleared here too, and
@@ -1133,6 +1147,7 @@ def _run_wizard_action(
                 lambda: wizard.apply_capture(
                     caps, True, mode=OffMode.DISABLE, on_retry=_may_retry
                 ),
+                Capability.CAPTURE,
             )
         )
     elif not selection.capture and (caps.capture_plugin_installed or caps.capture_on):
@@ -1144,6 +1159,7 @@ def _run_wizard_action(
                     False,
                     mode=OffMode.UNINSTALL if uninstall else OffMode.DISABLE,
                 ),
+                None,
             )
         )
 
@@ -1152,6 +1168,7 @@ def _run_wizard_action(
             (
                 f"{'enable' if selection.auto_update else 'disable'} automatic updates",
                 lambda: wizard.apply_auto_update(selection.auto_update),
+                None,
             )
         )
     if selection.agent_rules != caps.agent_rules_installed or caps.agent_rules_stale:
@@ -1161,6 +1178,7 @@ def _run_wizard_action(
                 lambda: wizard.apply_agent_rules(
                     selection.agent_rules, stale=caps.agent_rules_stale
                 ),
+                None,
             )
         )
     # The refresh is hoisted out of install_plugin (it used to run per plugin,
@@ -1187,8 +1205,8 @@ def _run_wizard_action(
             return [f"! could not refresh the marketplace: {result.detail}"]
         return []
 
-    if any("install" in label for label, action in work if action is not None):
-        work.insert(0, ("refresh the plugin marketplace", _refresh))
+    if any("install" in label for label, action, _ in work if action is not None):
+        work.insert(0, ("refresh the plugin marketplace", _refresh, None))
 
     # The browser approval is REAL WORK and the longest wait in the run -- it
     # blocks on a human in a browser. Leaving it off the list is what made a
@@ -1205,10 +1223,10 @@ def _run_wizard_action(
     # had already authorized. Credential first, and the window does not exist.
     auth_index = 0 if needs else None
     if needs:
-        work.insert(0, (f"sign in ({', '.join(needs)})", None))
+        work.insert(0, (f"sign in ({', '.join(needs)})", None, None))
 
     tui.clear()
-    progress = tui.Progress("This run will:", [label for label, _ in work])
+    progress = tui.Progress("This run will:", [label for label, _, _ in work])
     progress.render()
 
     skipped: list[str] = []
@@ -1270,9 +1288,29 @@ def _run_wizard_action(
     # installed nothing.
     deadline = time.monotonic() + wizard.PHASE_BUDGET_S
 
-    for position, (label, action) in enumerate(work):
+    ungranted: list[str] = []
+
+    for position, (label, action, gate) in enumerate(work):
         if action is None:
             continue  # the authorization step, run above
+        # The gate. Installing a plugin whose credential this run tried and failed
+        # to mint is how a cancelled browser approval still leaves an `.mcp.json`
+        # on disk with nothing behind it -- and an unauthenticated connect is
+        # answered with a `WWW-Authenticate` challenge, which pins Claude Code to
+        # OAuth. The user is then sent to `/mcp` to authenticate a device that was
+        # never authorized at all. Refusing the install leaves the machine in the
+        # state it was already in, which is the honest outcome of a refused
+        # approval, and `probe wizard` re-run is the repair.
+        blocked = (
+            wizard.blocked_by_missing_grants(gate, needed=needs, granted=granted)
+            if gate is not None
+            else []
+        )
+        if blocked:
+            ungranted.append(label)
+            progress.finish(position, ok=False)
+            progress.note(f"! skipped {label} — no credential for {', '.join(blocked)}.")
+            continue
         _run_step(position, label, action)
 
     if skipped:
@@ -1306,7 +1344,13 @@ def _run_wizard_action(
         # the user restarts, finds the capability off, and has no idea why.
         reasons = []
         if absent:
-            reasons.append(f"these plugins did not install: {', '.join(absent)}")
+            # A gated skip is not a failed install, and saying so sends the user
+            # to debug `claude plugin install` when the actual fault was the
+            # approval they cancelled two steps earlier. The credential is named
+            # separately below; this clause only has to stop claiming an attempt
+            # that never happened.
+            verb = "were not installed" if ungranted else "did not install"
+            reasons.append(f"these plugins {verb}: {', '.join(absent)}")
         if missing:
             reasons.append(f"no credential for: {', '.join(missing)}")
         progress.note("", f"Not finished — {'; '.join(reasons)}.", "Re-run `probe wizard` to retry.")
