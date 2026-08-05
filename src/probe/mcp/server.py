@@ -432,7 +432,8 @@ def create_server(
             (list_runs / GET /v1/runs?tags=).
         limit: per level, not per response.
 
-        Every node carries a `ref` you can hand straight to `get_entity`.
+        Every node carries a `ref` you can hand straight to `get_entity`, and a
+        `url` to its dashboard page — quote that verbatim, never build one.
         """
         with svc() as s:
             return s.browse_research(
@@ -561,8 +562,8 @@ def create_server(
         a purpose-shaped view.
 
         Use it on a `ref` you got from `browse_research` or `search_knowledge`.
-        `card` (the default) returns `available_views` for that entity, so one
-        call tells you what else you can ask for:
+        `card` (the default) returns `available_views` for that entity plus its
+        dashboard `url`, so one call tells you what else you can ask for:
 
           run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events
           experiment  card | artifacts | lineage | groups | versions

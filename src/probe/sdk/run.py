@@ -422,6 +422,22 @@ class Run:
         return self._data.get("foreign_keys") or {}
 
     @property
+    def url(self) -> str | None:
+        """This run's dashboard page, or None when the origin cannot be known.
+
+        A property and not a print: a library that writes to stdout corrupts
+        whatever the training script's own output is being parsed by. Scripts
+        that want it visible say so themselves -- `print(run.url)` at the end of
+        a job puts a clickable link in the cluster log, which is the one place a
+        researcher is already looking when they want to know how it went.
+        """
+        from .links import entity_url
+
+        return entity_url(
+            "run", self.id, api_base_url=self._client.settings.base_url
+        )
+
+    @property
     def data(self) -> dict:
         return self._data
 

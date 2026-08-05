@@ -277,5 +277,11 @@ near-miss of an existing slug rather than warning.)
    the ones that scored 0.0 because the verifier was wrong — and a reader cannot
    tell them apart. That is what `invalid` is for.
 
+7. **Hand back the link.** Every project, experiment and run you create gets its
+   dashboard URL in your reply — nobody can open a uuid. `project create`,
+   `experiment create` and `run start` print it to stderr; MCP entities carry it
+   as `url`. Copy that string: one you assemble from a remembered host 404s in
+   their browser with no sign it was invented. No `url` back, no link in the reply.
+
 Recording what the run does, and closing it, is `track-research-work`. Command syntax
 for artifacts, assets, publishing and project admin is in that skill's `reference.md`.

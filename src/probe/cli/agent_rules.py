@@ -36,7 +36,7 @@ END_MARKER = "<!-- probe-research:end -->"
 
 #: Bumped when POINTER_BODY changes, so an older installed block is recognised
 #: as stale and rewritten instead of being left in place or duplicated.
-POINTER_VERSION = 2
+POINTER_VERSION = 3
 
 POINTER_BODY = """## Probe research tracking
 
@@ -52,6 +52,10 @@ this: registering is not the gated action.
 Use the `probe-research:start-research-work` and
 `probe-research:track-research-work` skills rather than improvising CLI calls --
 they carry the current commands, which change.
+
+Every project, experiment and run carries a dashboard `url`. When you report one
+as created or finished, end with that link -- the one you were given, never one
+you assemble.
 """
 
 

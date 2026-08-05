@@ -254,6 +254,12 @@ gets made. Record with the surface the run was opened with.
    nobody marked reads as a result, and it is the most expensive kind of wrong: it
    looks like a finding, so the next person reasons from it.
 
+7. **Close by handing back the link.** End with the run's dashboard URL — and one
+   for everything else you created or closed this turn, not just the last one.
+   `probe run end` prints it to stderr, MCP entities carry it as `url`, in-script
+   it is `run.url`. Echo what you were given; a URL you assemble from a remembered
+   host 404s as confidently as a real one. No `url` back, no link in the reply.
+
 Liveness follows the surface. An SDK handle beats for the life of its process and
 stops when you finish it, so there is nothing to do. A CLI-opened run is detached and
 does not beat at all — do not bolt a beat onto one you cannot keep beating for the

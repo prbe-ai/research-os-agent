@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from itertools import islice
 from typing import Any
 
-from ..sdk import errors
+from ..sdk import errors, links
 from .contract import (
     BackendCorpus,
     BackendSearchState,
@@ -653,19 +653,28 @@ def _supported_views(kind: str) -> list[str]:
     return sorted(str(view) for entity_kind, view in _VIEWS if entity_kind == kind)
 
 
-def _annotate(node: dict, kind: str) -> dict:
-    """Tag a browse node with its kind, ref, and the views it supports.
+def _annotate(node: dict, kind: str, *, api_base_url: str | None = None) -> dict:
+    """Tag a browse node with its kind, ref, dashboard URL, and supported views.
 
     `available_views` is DERIVED from `_VIEWS`, never hand-written: the matrix
     already lives there, and a second hand-maintained copy is how documentation
     ends up describing views that no longer exist. It rides on browse so an
     agent orienting through the tree learns what it can ask for WITHOUT
     discovering it by making a call that fails.
+
+    `url` rides along for the same reason and is the ONLY reason an agent can
+    hand a researcher something clickable: a uuid is unguessable, so a link that
+    is not in the payload is a link the model has to invent, and an invented one
+    404s with the same confidence as a real one. Omitted entirely when the
+    dashboard origin is unknown (see sdk.links) -- an absent key says "say
+    nothing", which is what a caller with no link must do.
     """
+    url = links.entity_url(kind, node.get("id"), api_base_url=api_base_url)
     return {
         **node,
         "entity_type": str(kind),
         "ref": f"{kind}:{node.get('id')}",
+        **({"url": url} if url else {}),
         "available_views": _supported_views(kind),
     }
 
@@ -698,6 +707,19 @@ class ResearchReadService:
 
     def __init__(self, source: ResearchOSSource):
         self.source = source
+
+    @property
+    def _api_base_url(self) -> str | None:
+        """API origin this service actually calls, for deriving dashboard links.
+
+        Read off the live client rather than re-resolving config: the server
+        builds one source per token with an explicit base URL, and a second
+        resolution could name a different host than the one being read from --
+        which would mint links into the wrong deployment.
+        """
+        client = getattr(self.source, "client", None)
+        settings = getattr(client, "settings", None)
+        return getattr(settings, "base_url", None)
 
     def _envelope(
         self,
@@ -861,7 +883,11 @@ class ResearchReadService:
             ("runs", EntityType.RUN),
         ):
             nodes = payload.get(level)
-            data[level] = None if nodes is None else [_annotate(n, kind) for n in nodes]
+            data[level] = (
+                None
+                if nodes is None
+                else [_annotate(n, kind, api_base_url=self._api_base_url) for n in nodes]
+            )
         missing: list[str] = []
         if payload.get("truncated"):
             # The tree was cut, so an absent child is not evidence of absence.
@@ -1161,6 +1187,17 @@ class ResearchReadService:
             # call is a fine contract with four views; with eleven across five
             # kinds it is a tax on every first look at an unfamiliar entity.
             data["available_views"] = _supported_views(kind)
+            # The card is what an agent reads before reporting on an entity, so
+            # it is where the shareable link has to be if the report is going to
+            # carry one. Omitted when unknown rather than guessed -- see
+            # sdk.links.dashboard_base_url.
+            url = links.entity_url(
+                kind,
+                entity.get("id") if isinstance(entity, dict) else None,
+                api_base_url=self._api_base_url,
+            )
+            if url:
+                data["url"] = url
         missing = list(result.missing)
         next_cursor: str | None = None
 

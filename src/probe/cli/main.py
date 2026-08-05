@@ -151,6 +151,25 @@ def _print_json(obj: Any) -> None:
     print(json.dumps(obj, indent=2, default=str))
 
 
+def _print_link(kind: str, entity_id: str | None) -> None:
+    """Echo an entity's dashboard URL to STDERR, if there is one to echo.
+
+    stderr, not stdout, and that is load-bearing: `run start` prints a bare id
+    that callers capture (`RUN=$(probe run start ...)`), and `project create`
+    prints JSON that gets piped into `jq`. A link on stdout would corrupt both.
+    stderr is read by exactly the audiences this is for -- a human at a terminal
+    and an agent reading combined command output -- and by no parser.
+
+    Silent when the dashboard origin is unknown (see sdk.links): a link into the
+    wrong deployment is worse than no link at all.
+    """
+    from ..sdk.links import entity_url
+
+    url = entity_url(kind, entity_id)
+    if url:
+        typer.echo(url, err=True)
+
+
 def _show_device_prompt(prompt: DevicePrompt) -> None:
     """Print the browser URL + user code for a device-flow approval. One definition,
     reused by every command that mints via the device flow (login, token, mcp)."""
@@ -2034,15 +2053,15 @@ def project_create(
     which forced an experiment and an invented hypothesis into existence alongside it.
     """
     with _client() as c:
-        _print_json(
-            c.create_project(
-                slug,
-                name,
-                workspace_id=_resolve_workspace(c, workspace),
-                description=description,
-                tags=tag or None,
-            )
+        created = c.create_project(
+            slug,
+            name,
+            workspace_id=_resolve_workspace(c, workspace),
+            description=description,
+            tags=tag or None,
         )
+    _print_json(created)
+    _print_link("project", created.get("id"))
 
 
 @project_app.command("list")
@@ -2316,6 +2335,7 @@ def run_start(
             heartbeat=False,
         )
     print(run.id)
+    _print_link("run", run.id)
 
 
 @run_app.command("child")
@@ -2485,6 +2505,9 @@ def run_end(
             _async_run(c, run).set_status(status.value, ended_at=now_iso())
         _kick_drainer()
         print(f"queued end for {run} -> {status.value} (async)")
+        # The run page is already live and shows the close landing, so the link
+        # is worth handing back even though the status is still in flight.
+        _print_link("run", run)
         return
     from ..sdk.journal import drain
 
@@ -2530,6 +2553,7 @@ def run_end(
             "retrying — `probe outbox watch` to follow",
             err=True,
         )
+        _print_link("run", run)
         # The local writer is done even though the close rides the queue; a
         # held lease would only delay an upgrade (the cheap failure mode).
         try:
@@ -2570,6 +2594,9 @@ def run_end(
     except Exception:  # noqa: BLE001 -- an expiring lease is the backstop
         pass
     print(f"{run} -> {status.value}")
+    # The run just became terminal: this is the moment its page is worth opening,
+    # and the last one at which anything is printed about it.
+    _print_link("run", run)
 
 
 @run_app.command("check")
@@ -4533,13 +4560,13 @@ def experiment_create(
         project_id = c.resolve_or_raise(
             "project", _project_slug(c, resolved_project)
         )["id"]
-        _print_json(
-            c.create_experiment(slug, name, hypothesis=hypothesis,
-                project_id=project_id,
-                description=description,
-                tags=tag or None,
-            )
+        created = c.create_experiment(slug, name, hypothesis=hypothesis,
+            project_id=project_id,
+            description=description,
+            tags=tag or None,
         )
+    _print_json(created)
+    _print_link("experiment", created.get("id"))
 
 
 @experiment_app.command("get")
