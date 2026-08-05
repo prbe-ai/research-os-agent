@@ -350,10 +350,23 @@ def test_pushed_base_root_never_pushed(tmp_path):
 
 # --- lockfiles ---------------------------------------------------------------
 
-def test_gitignored_lockfile_is_captured(repo):
+def test_gitignored_lockfile_is_captured(repo, tmp_path):
     """A gitignored uv.lock must still enter the manifest as an uploadable blob —
-    today it is silently lost (design doc: the dirty-lockfile case)."""
-    (repo / "uv.lock").write_text("[lock]\nversion = 1\n")
+    today it is silently lost (design doc: the dirty-lockfile case).
+
+    Being CLASSIFIED as a blob is necessary but not sufficient: the point of
+    the classification is that the actual bytes reach the pending archive
+    (the thing that gets uploaded), so this also builds it and checks the
+    tar member exists with the real lockfile content -- not just the
+    manifest's opinion about it.
+    """
+    import gzip
+    import tarfile
+
+    from probe.sdk.snapshot import build_pending_archive
+
+    lockfile_body = "[lock]\nversion = 1\n"
+    (repo / "uv.lock").write_text(lockfile_body)
     (repo / ".gitignore").write_text("uv.lock\n")
     _git(repo, "add", ".gitignore")
     _git(repo, "commit", "-qm", "ignore lockfile")
@@ -361,6 +374,13 @@ def test_gitignored_lockfile_is_captured(repo):
     by_path = _by_path(m)
     assert by_path["uv.lock"]["source"] == "blob"
     assert by_path["uv.lock"]["lockfile"] is True
+
+    dest = tmp_path / "code.tar.gz"
+    build_pending_archive(str(repo), m, str(dest))
+    with gzip.open(dest, "rb") as gz, tarfile.open(fileobj=gz, mode="r") as tar:
+        member = tar.getmember("uv.lock")
+        body = tar.extractfile(member).read().decode()
+    assert body == lockfile_body
 
 
 def test_tracked_lockfile_is_tagged(repo):

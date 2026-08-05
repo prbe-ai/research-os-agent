@@ -131,6 +131,15 @@ def test_determinism_declared_config_seeds():
     assert seeds["seeds.numpy"]["value"] == 2
 
 
+def test_determinism_scrubs_secret_shaped_argv_before_seed_extraction():
+    """A flag matching BOTH the seed pattern and a secret segment
+    (`--seed-key`) must not land its raw value in determinism.seeds --
+    capture_determinism has to scrub argv first, same as the launch block's
+    `process.argv` does, or a secret leaks through a second door."""
+    info, _ = capture_determinism(argv=["--seed-key", "supersecret"])
+    assert "supersecret" not in repr(info)
+
+
 def test_determinism_no_seeds_is_honest():
     info, _ = capture_determinism(argv=["train.py"], config={})
     assert info["seeds"] == [] or all(s["source"] != "argv" for s in info["seeds"])

@@ -2665,7 +2665,10 @@ def exec(
     strict: bool = typer.Option(
         False,
         "--strict",
-        help="fail fast if capture is incomplete (sets PROBE_REQUIRE_COMPLETE=1)",
+        help=(
+            "snapshot failures become fatal and PROBE_REQUIRE_COMPLETE=1 is "
+            "exported to the child (gating any completed-claim it makes)"
+        ),
     ),
 ) -> None:
     if strict:

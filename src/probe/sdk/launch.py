@@ -257,7 +257,10 @@ def capture_determinism(
             "name": "PYTHONHASHSEED", "value": hashseed,
             "provenance": "detected", "source": "env",
         })
-    args = list(argv) if argv is not None else list(sys.argv)
+    # Scrubbed first: a flag matching BOTH the seed pattern and a secret
+    # segment (`--seed-key`) must not land its raw value here -- `[redacted]`
+    # is the honest record, same as the launch block's `process.argv`.
+    args, _ = scrub_argv(list(argv) if argv is not None else list(sys.argv))
     for i, arg in enumerate(args):
         m = _ARGV_SEED.match(arg)
         if not m:
