@@ -45,18 +45,17 @@ near-miss of an existing slug rather than warning.)
    raise if the slug is taken, so re-running a setup script is a loud no-op rather
    than a silent second identity.
 
-   **Always pass `--description`.** It is the first thing anyone sees under the
-   title, and a container without one reads as "Add description" to every visitor.
-   The hypothesis says what you expect; the description says what the work IS —
-   the model, the data, the metric — which is what someone scanning a list needs
-   to tell your experiment apart from the four beside it.
+   **Always pass `--description` — one or two sentences, under 240 characters.**
+   It is the first thing anyone sees under the title, and a container without one
+   reads as "Add description" to every visitor. The hypothesis says what you
+   expect; the description says what the work IS — the model, the data, the metric.
+   That bound is the server's own: the overview clamps this field to two lines, so
+   a third sentence is not read, it is hidden.
 
    Nothing reliably fills it in later. The server generates a description only
    when a child RUN reaches a terminal status, so anything that ends without one
    — an abandoned run, a project used purely to hold artifacts, an import — stays
-   blank permanently. Today 7 of 17 projects and 22 of 28 experiments in this lab
-   have no description; every one of them was created by an agent that was never
-   asked for one.
+   blank permanently.
 
    Work with no hypothesis does not need an experiment at all: open a
    PROJECT-DIRECT run (`probe run start --project folding`, or
