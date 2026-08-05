@@ -25,6 +25,7 @@ import os
 import socket
 import subprocess
 import threading
+import time
 import tempfile
 import warnings
 import weakref
@@ -1487,39 +1488,160 @@ class Run:
             self._data = data
         return data
 
-    def finish(self, status: str = "completed", *, summary: dict | None = None):
-        """Close the run. Flushes any journaled writes first, and refuses to
-        mark the run terminal while any of its own outbox ops remain
-        undelivered or dead-lettered -- the CLI's run-end barrier exists in
-        the SDK too (red team: finish() used to discard the drain outcome and
-        close 'completed' over silently missing data)."""
-        self._client.flush()
-        journal = self._client.journal
-        blocked = [
-            op
-            for _, op in journal.pending() + journal.failed()
-            if op.get("run_ref") == self.id
-        ]
-        if blocked:
-            # Deliberately BEFORE the raise is not where the lock is released:
-            # a run that refuses to close is still open, and still has to keep
-            # the box claimed against an upgrade.
-            raise errors.RosError(
-                f"run {self.id} not closed: {len(blocked)} outbox op(s) are "
-                "undelivered or dead-lettered — see `probe outbox status`, "
-                "fix or `probe outbox retry`, then finish again"
+    def _queued_ops(self, rows) -> list[dict]:
+        return [op for _, op in rows if op.get("run_ref") == self.id]
+
+    @staticmethod
+    def _resolve_finish_timeout(flush_timeout: float | None) -> float | None:
+        if flush_timeout is not None:
+            return float(flush_timeout)
+        raw = os.environ.get("PROBE_FINISH_TIMEOUT_SEC")
+        if raw:
+            try:
+                return float(raw)
+            except ValueError:
+                warnings.warn(
+                    f"ignoring malformed PROBE_FINISH_TIMEOUT_SEC={raw!r}; "
+                    "expected seconds as a float",
+                    stacklevel=3,
+                )
+        return None
+
+    def _queue_deferred_finish(
+        self, status: str, summary: dict | None, pending_count: int
+    ) -> dict:
+        """Journal the terminal status BEHIND this run's queued ops (F3/F3a).
+
+        FIFO is the correctness guarantee: the run can never read terminal
+        ahead of the data queued before it. The op carries the accounting a
+        late drain needs -- the REAL local end time, the pending count at
+        exit, and the writing session -- so "final data arrived late via the
+        outbox" stays visible on the run after it lands, not just while
+        queued. A best-effort beacon tags the run "draining" so the dashboard
+        shows intent instead of a phantom "running"; the queued finish
+        restores the tags, so the tag lives exactly as long as the drain gap.
+        When the network is down (the very reason the flush timed out) the
+        beacon fails silently -- nothing informs a server without a network.
+        """
+        self.stop_heartbeat()
+        ended_at = _now()
+        beacon_tags: list | None = None
+        try:
+            row = self._client.get_run(self.id)
+            current = [t for t in (row.get("tags") or []) if t != "draining"]
+            self._client.transport.request(
+                "PATCH",
+                f"/v1/runs/{self.id}",
+                json_body={"tags": [*current, "draining"]},
             )
-        result = self.set_status(status, ended_at=_now(), summary=summary)
-        # ONLY on success, and deliberately not in a `finally`.
-        #
-        # If set_status raised, the run is not closed: the caller may catch the
-        # error and keep training, and releasing here would hand auto-update a
-        # green light over a live process. Holding costs nothing -- an flock is
-        # bound to this process and the kernel frees it at exit regardless, so
-        # the failure mode of keeping it is "protected slightly too long", while
-        # the failure mode of dropping it is an upgrade landing mid-run.
+            beacon_tags = current
+        except Exception:  # noqa: BLE001 -- the beacon is best-effort by definition
+            beacon_tags = None
+        body: dict[str, Any] = {
+            "status": status,
+            "ended_at": ended_at,
+            "summary": {
+                **(summary or {}),
+                "probe_finish": {
+                    "deferred": True,
+                    "ended_at": ended_at,
+                    "pending_at_exit": pending_count,
+                    "session_id": self.session_id,
+                },
+            },
+        }
+        if beacon_tags is not None:
+            body["tags"] = beacon_tags  # clears "draining" atomically with the flip
+        self._client.journal.append_http(
+            "PATCH", f"/v1/runs/{self.id}", body, run_ref=self.id
+        )
+        # The in-process exporter dies with this (exiting) process; hand the
+        # journal to the crash-surviving detached worker instead.
+        if self._client._exporter is not None:
+            self._client._exporter.close()
+        self._client._kick_drainer(force=True)
+        return {"finish_queued": True, "delivered": 0, "remaining": pending_count + 1}
+
+    def finish(
+        self,
+        status: str = "completed",
+        *,
+        summary: dict | None = None,
+        flush_timeout: float | None = None,
+    ):
+        """Close the run.
+
+        Default: a HARD barrier -- flush journaled writes and refuse to mark
+        the run terminal while any of its own outbox ops remain undelivered
+        or dead-lettered (red team: finish() used to discard the drain
+        outcome and close 'completed' over silently missing data).
+
+        ``flush_timeout`` (or ``PROBE_FINISH_TIMEOUT_SEC``, the knob Miles
+        jobs already set): a BOUNDED barrier for cluster jobs that must not
+        hold GPUs on a dead API. Drain up to the deadline; whatever remains
+        stays durable on disk and the terminal status itself is journaled
+        BEHIND it (``_queue_deferred_finish``), and a report
+        ``{finish_queued, delivered, remaining}`` is returned instead of the
+        run row. Dead letters raise even in bounded mode: waiting cannot heal
+        a permanent rejection, and exiting would strand them silently.
+        """
+        timeout = self._resolve_finish_timeout(flush_timeout)
+        journal = self._client.journal
+        if timeout is None:
+            self._client.flush()
+            blocked = self._queued_ops(journal.pending()) + self._queued_ops(
+                journal.failed()
+            )
+            if blocked:
+                # Deliberately BEFORE the raise is not where the lock is
+                # released: a run that refuses to close is still open, and
+                # still has to keep the box claimed against an upgrade.
+                raise errors.RosError(
+                    f"run {self.id} not closed: {len(blocked)} outbox op(s) are "
+                    "undelivered or dead-lettered — see `probe outbox status`, "
+                    "fix or `probe outbox retry`, then finish again"
+                )
+            result = self.set_status(status, ended_at=_now(), summary=summary)
+            # ONLY on success, and deliberately not in a `finally`.
+            #
+            # If set_status raised, the run is not closed: the caller may catch
+            # the error and keep training, and releasing here would hand
+            # auto-update a green light over a live process. Holding costs
+            # nothing -- an flock is bound to this process and the kernel frees
+            # it at exit regardless, so the failure mode of keeping it is
+            # "protected slightly too long", while the failure mode of dropping
+            # it is an upgrade landing mid-run.
+            self._release_run_lock()
+            return result
+
+        deadline = time.monotonic() + max(timeout, 0.0)
+        delivered = 0
+        while True:
+            try:
+                delivered += self._client.flush()
+            except Exception:  # noqa: BLE001 -- drain records last_error itself
+                pass
+            if not self._queued_ops(journal.pending()) or time.monotonic() >= deadline:
+                break
+            time.sleep(min(0.25, max(deadline - time.monotonic(), 0.0)))
+        dead = self._queued_ops(journal.failed())
+        if dead:
+            raise errors.RosError(
+                f"run {self.id} not closed: {len(dead)} outbox op(s) are "
+                "dead-lettered and a deferred finish cannot heal permanent "
+                "rejections — see `probe outbox status`, then `probe outbox retry`"
+            )
+        pending = self._queued_ops(journal.pending())
+        if not pending:
+            result = self.set_status(status, ended_at=_now(), summary=summary)
+            self._release_run_lock()
+            return result
+        report = self._queue_deferred_finish(status, summary, len(pending))
+        report["delivered"] = delivered
+        # The writer is exiting by definition of a bounded finish; the run's
+        # claim on the box goes with it.
         self._release_run_lock()
-        return result
+        return report
 
     def execute(
         self,

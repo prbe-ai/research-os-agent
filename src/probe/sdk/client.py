@@ -260,6 +260,9 @@ class Client:
         self._drain_interval = drain_interval if async_writes else None
         self._exporter = None
         self._exporter_lock = threading.Lock()
+        # A worker fork only makes sense for default-transport clients, but a
+        # FORCED kick (deferred finish, F3) must work from sync clients too.
+        self._default_transport = transport is None
         self._auto_drain = (
             async_writes
             and auto_drain
@@ -354,17 +357,24 @@ class Client:
             return
         self._kick_drainer()
 
-    def _kick_drainer(self) -> None:
+    def _kick_drainer(self, *, force: bool = False) -> None:
         """Wake the detached outbox worker (parity F1). Throttled: this runs
         on every async write and a training loop logs hundreds of points a
         second; ``maybe_spawn`` is O(1) but not free. Best-effort by design --
-        ``finish()``/`probe run end` is the delivery barrier, this is latency."""
-        if not self._auto_drain:
+        ``finish()``/`probe run end` is the delivery barrier, this is latency.
+
+        ``force`` (deferred finish, F3): skip the mode gate and the throttle
+        -- a queued terminal status must not have its one kick swallowed --
+        but never the transport gate; a worker cannot replay an injected one."""
+        if not self._default_transport:
             return
-        now = time.monotonic()
-        if now - self._drainer_kicked_at < self._drainer_kick_interval:
+        if not (self._auto_drain or force):
             return
-        self._drainer_kicked_at = now
+        if not force:
+            now = time.monotonic()
+            if now - self._drainer_kicked_at < self._drainer_kick_interval:
+                return
+            self._drainer_kicked_at = now
         from . import outbox_worker
 
         try:
