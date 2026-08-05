@@ -270,6 +270,29 @@ def test_run_end_async_is_ordered_behind_the_runs_data(
     assert wired_async.metric_points_posted[run_id]
 
 
+# -- run-scoped repair (parity F6) ---------------------------------------------
+
+
+def test_outbox_retry_and_status_scope_to_a_run(wired_async, outbox_dir, capsys):
+    journal = Journal(outbox_dir)
+    journal.append_http("POST", "/v1/runs/r-1/badroute", {})
+    journal.append_http("POST", "/v1/runs/r-2/badroute", {})
+    cli_drain(wired_async, outbox_dir)  # dead-letters both
+    capsys.readouterr()
+
+    rc = cli.main(["--spool-dir", str(outbox_dir), "outbox", "status", "--run", "r-1"])
+    assert rc == 2
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["run"] == "r-1"
+    assert summary["failed"] == 1, "the other run's dead letter must not count"
+
+    rc = cli.main(["--spool-dir", str(outbox_dir), "outbox", "retry", "--run", "r-1"])
+    assert rc == 0
+    assert "requeued 1 op(s)" in capsys.readouterr().out
+    assert [op["run_ref"] for _, op in Journal(outbox_dir).pending()] == ["r-1"]
+    assert [op["run_ref"] for _, op in Journal(outbox_dir).failed()] == ["r-2"]
+
+
 # -- producer accounting (parity F4) ------------------------------------------
 
 

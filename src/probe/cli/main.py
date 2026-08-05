@@ -4207,16 +4207,21 @@ def _drain_foreground(run_ref: str | None = None) -> None:
 @outbox_app.command("status")
 def outbox_status(
     verbose: bool = typer.Option(False, "--verbose", help="list every queued/failed op"),
+    run: Optional[str] = typer.Option(None, "--run", help="scope counts and ops to one run"),
 ) -> None:
     """Outbox summary. Exit 0 when everything is delivered, 2 otherwise."""
     journal = _journal()
     pending = journal.pending()
     failed = journal.failed()
+    if run is not None:
+        pending = [(p, op) for p, op in pending if op.get("run_ref") == run]
+        failed = [(p, op) for p, op in failed if op.get("run_ref") == run]
     from ..sdk.journal import Journal
 
     status = Journal.read_status(journal.dir) or {}
     summary = {
         "dir": str(journal.dir),
+        **({"run": run} if run is not None else {}),
         "pending": len(pending),
         "failed": len(failed),
         "paused": journal.paused,
@@ -4295,10 +4300,11 @@ def outbox_watch(
 @outbox_app.command("retry")
 def outbox_retry(
     op_id: Optional[str] = typer.Argument(None, help="a dead-lettered op id (omit for all)"),
+    run: Optional[str] = typer.Option(None, "--run", help="requeue only this run's dead letters"),
 ) -> None:
     """Requeue dead-lettered op(s) and kick the drainer."""
     journal = _journal()
-    moved = journal.retry_failed(op_id)
+    moved = journal.retry_failed(op_id, run_ref=run)
     # An explicit retry is a statement that the blocker (often credentials)
     # was dealt with -- forget the auth block so the drainer spawns again.
     journal.clear_auth_block()
