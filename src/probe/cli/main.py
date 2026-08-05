@@ -1957,11 +1957,46 @@ def _confirmed_delete(
     print(f"{target.label} deleted")
 
 
+# --- One vocabulary for the things every noun has ----------------------------
+#
+# These were written per-command, so the same concept had several spellings and
+# some of them were wrong: `run set` and `run tag` said "run id" after #173 made
+# a bare ref the PETNAME, and only one of the six `--description` flags carried
+# any help at all. A constant is not ceremony here -- it is the only way the
+# wording stays identical across four nouns and twenty-odd verbs, which is what
+# lets someone learn a habit from one verb and use it on the next.
+#
+# The ref phrasing per kind follows refs.py's "which handle is the name" table,
+# and must keep following it: project/experiment are slug-first, runs are
+# petname-first-but-either (a petname cannot be UUID-shaped, so it cannot
+# collide), artifacts are id-only.
+# Factories, not shared instances: a typer.Argument/Option value is bound as a
+# function default, and one object reused across signatures is shared mutable
+# state that click is free to annotate. A call per signature costs nothing.
+DESCRIPTION_HELP = "what this is, in a few words up to 3 sentences"
+
+#: Runs read either way on purpose -- see refs.resolve_run.
+RUN_REF_HELP = "run petname short_id or id (they cannot collide)"
+
+
+def slug_ref(kind: str) -> Any:
+    """The positional ref for a slug-addressed kind (project, experiment)."""
+    return typer.Argument(..., help=f"{kind} slug (or id:<uuid>)")
+
+
+def run_ref() -> Any:
+    return typer.Argument(..., help=RUN_REF_HELP)
+
+
+def description_opt() -> Any:
+    return typer.Option(None, "--description", help=DESCRIPTION_HELP)
+
+
 @project_app.command("create")
 def project_create(
     slug: str = typer.Argument(..., help="url-safe identifier, unique per tenant"),
     name: str = typer.Option(None, "--name", help="display name (defaults to the slug)"),
-    description: str = typer.Option(None, "--description"),
+    description: str = description_opt(),
     tag: list[str] = typer.Option(None, "--tag", help="tag at creation (repeatable)"),
     workspace: str = typer.Option(
         None, "--workspace", help="workspace slug (or id:<uuid>); defaults to the active one"
@@ -2010,7 +2045,7 @@ def project_list(
 
 @project_app.command("get")
 def project_get(
-    project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
+    project_id: str = slug_ref("project"),
 ) -> None:
     """Show one project."""
     with _client() as c:
@@ -2036,11 +2071,16 @@ def project_use(
     print(f"active project: {proj.get('slug')} ({proj['id']})")
 
 
-@project_app.command("patch")
-def project_patch(
-    project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
+@project_app.command("set")
+# `patch` was the original spelling and stays reachable so scripts do not break,
+# but it is hidden: experiments, runs and groups all amend with `set`, and an
+# agent that learned `experiment set` and guessed `project set` used to get
+# `No such command`. One verb is discoverable; the other is a compatibility door.
+@project_app.command("patch", hidden=True)
+def project_set(
+    project_id: str = slug_ref("project"),
     name: str = typer.Option(None, "--name"),
-    description: str = typer.Option(None, "--description"),
+    description: str = description_opt(),
     workspace: str = typer.Option(
         None, "--workspace", help="not here — use `probe project move`"
     ),
@@ -2089,7 +2129,7 @@ def project_tag(
 
 @project_app.command("move")
 def project_move(
-    project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
+    project_id: str = slug_ref("project"),
     workspace: str = typer.Option(
         ..., "--workspace", help="destination workspace slug (or id:<uuid>)"
     ),
@@ -2108,7 +2148,7 @@ def project_move(
 
 @project_app.command("delete")
 def project_delete(
-    project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
+    project_id: str = slug_ref("project"),
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
 ) -> None:
     """PERMANENTLY delete a project and everything in it. Irreversible."""
@@ -2200,7 +2240,7 @@ def run_start(
         "--slug",
         help="this run's slug; omit and the server mints a petname (a taken one is an error)",
     ),
-    description: str = typer.Option(None, "--description", help="human context for this run"),
+    description: str = description_opt(),
     project: str = typer.Option(
         None, "--project", help="project slug (or id:<uuid>); defaults to the active one (`probe project use`)"
     ),
@@ -2254,9 +2294,9 @@ def run_start(
 
 @run_app.command("child")
 def run_child(
-    run: str = typer.Argument(...),
+    run: str = run_ref(),
     name: str = typer.Option(..., "--name"),
-    description: str = typer.Option(None, "--description"),
+    description: str = description_opt(),
     relation: Relation = typer.Option(Relation.fork, "--relation"),
     source: str = typer.Option("api", "--source"),
     external_id: str = typer.Option(None, "--external-id"),
@@ -2267,9 +2307,12 @@ def run_child(
     else its project (a project-direct parent begets a project-direct child).
     """
     with _client() as c:
-        parent = c.get_run(run)
+        parent = _ref(c, "run", run).row
         common = dict(
-            parent_run_id=run,
+            # The parent's ID, not the ref the caller typed. `parent_run_id` is a
+            # UUID field, so a petname here reached the server as one and was
+            # rejected -- and the row was already in hand to answer it.
+            parent_run_id=parent["id"],
             parent_relation=relation.value,
             description=description,
             source=source,
@@ -2294,15 +2337,18 @@ def run_child(
 
 @run_app.command("set")
 def run_set(
-    run: str = typer.Argument(..., help="run id"),
+    run: str = run_ref(),
     name: str = typer.Option(None, "--name"),
-    description: str = typer.Option(None, "--description"),
+    description: str = description_opt(),
 ) -> None:
     """Update a run's human title or description."""
     if name is None and description is None:
         raise typer.BadParameter("pass at least one of --name/--description")
     with _client() as c:
-        _print_json(c.update_run(run, name=name, description=description))
+        # PATCH /v1/runs/{run_id} is UUID-typed, so a petname has to be resolved
+        # before it is sent -- unresolved it 422s with a raw pydantic uuid dump.
+        # Same reason `run delete` resolves; this verb was missed by that pass.
+        _print_json(c.update_run(_ref(c, "run", run).id, name=name, description=description))
 
 
 @run_app.command("list")
@@ -2334,7 +2380,7 @@ def run_list(
 
 @run_app.command("tag")
 def run_tag(
-    run: str = typer.Argument(..., help="run id"),
+    run: str = run_ref(),
     add: list[str] = typer.Argument(None, help="tags to add"),
     remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
     replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
@@ -2363,7 +2409,7 @@ def run_tag(
 
 @run_app.command("end")
 def run_end(
-    run: str = typer.Argument(...),
+    run: str = run_ref(),
     status: EndStatus = typer.Option(EndStatus.completed, "--status"),
 ) -> None:
     """Close a run.
@@ -2428,7 +2474,7 @@ def run_end(
 
 @run_app.command("check")
 def run_check(
-    run: str = typer.Argument(...),
+    run: str = run_ref(),
     verify: bool = typer.Option(False, "--verify"),
 ) -> None:
     """Assess capture completeness (exit 2 if incomplete).
@@ -2438,7 +2484,7 @@ def run_check(
     against its remote and is the only way to earn `complete`.
     """
     with _client() as c:
-        result = c.check_run(run, verify=verify)
+        result = c.check_run(_ref(c, "run", run).id, verify=verify)
     _print_json(result)
     if result.get("state") == "incomplete":
         raise typer.Exit(2)
@@ -2446,7 +2492,7 @@ def run_check(
 
 @run_app.command("delete")
 def run_delete(
-    run: str = typer.Argument(..., help="run petname short_id or id (they cannot collide)"),
+    run: str = run_ref(),
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
 ) -> None:
     """PERMANENTLY delete a run and its telemetry. Irreversible."""
@@ -2456,22 +2502,22 @@ def run_delete(
 
 
 @run_app.command("series")
-def run_series(run: str = typer.Argument(...)) -> None:
+def run_series(run: str = run_ref()) -> None:
     """Per-series summary for a run (key/kind/dimensions + first/last/min/max)."""
     with _client() as c:
-        _print_json(c.run_series(run))
+        _print_json(c.run_series(_ref(c, "run", run).id))
 
 
 @run_app.command("metrics")
 def run_metrics(
-    run: str = typer.Argument(...),
+    run: str = run_ref(),
     key: str = typer.Option(None, "--key"),
     kind: str = typer.Option(None, "--kind"),
     limit: int = typer.Option(None, "--limit"),
 ) -> None:
     """Raw metric points for a run."""
     with _client() as c:
-        _print_json(c.run_metrics(run, key=key, kind=kind, limit=limit))
+        _print_json(c.run_metrics(_ref(c, "run", run).id, key=key, kind=kind, limit=limit))
 
 
 # -- exec (process correlation) ---------------------------------------------
@@ -4235,8 +4281,19 @@ def flush() -> None:
 
 
 @app.command()
-def get(run: str = typer.Argument(...)) -> None:
+def get(run: str = run_ref()) -> None:
     """Print a run."""
+    with _client() as c:
+        _print_json(c.get_run(run))
+
+
+# `probe get` is a bare verb that silently means "a RUN", while every other noun
+# reads with `<noun> get`. Someone who learned `project get` looks for `run get`
+# and does not find it. Both spellings work now; the top-level one stays because
+# it is the older habit and is in scripts.
+@run_app.command("get")
+def run_get(run: str = run_ref()) -> None:
+    """Show one run."""
     with _client() as c:
         _print_json(c.get_run(run))
 
@@ -4327,13 +4384,13 @@ app.add_typer(experiment_app, name="experiment")
 
 @experiment_app.command("create")
 def experiment_create(
-    slug: str = typer.Argument(...),
+    slug: str = typer.Argument(..., help="url-safe identifier, unique per tenant"),
     hypothesis: str = typer.Option(..., "--hypothesis", help="what you expect this to show"),
     name: str = typer.Option(None, "--name", help="defaults to the slug"),
     project: str = typer.Option(
         None, "--project", help="project slug; defaults to the active one (`probe project use`)"
     ),
-    description: str = typer.Option(None, "--description"),
+    description: str = description_opt(),
     tag: list[str] = typer.Option(None, "--tag", help="tag at creation (repeatable)"),
 ) -> None:
     """Create an experiment.
@@ -4367,12 +4424,25 @@ def experiment_create(
         )
 
 
+@experiment_app.command("get")
+def experiment_get(experiment_id: str = slug_ref("experiment")) -> None:
+    """Show one experiment.
+
+    Experiments were the only addressable kind with NO read verb: projects,
+    workspaces, runs and groups all had one, and `experiment list` was the whole
+    surface. Reading one back after a `set` meant listing its siblings and
+    filtering by eye.
+    """
+    with _client() as c:
+        _print_json(c.get_experiment(_ref(c, "experiment", experiment_id).id))
+
+
 @experiment_app.command("set")
 def experiment_set(
-    experiment_id: str = typer.Argument(..., help="experiment slug (or id:<uuid>)"),
+    experiment_id: str = slug_ref("experiment"),
     hypothesis: str = typer.Option(None, "--hypothesis", help="replace the hypothesis"),
     name: str = typer.Option(None, "--name"),
-    description: str = typer.Option(None, "--description"),
+    description: str = description_opt(),
 ) -> None:
     """Amend an experiment's hypothesis, name, or description after creation."""
     if hypothesis is None and name is None and description is None:
@@ -4409,7 +4479,7 @@ def experiment_list(
 
 @experiment_app.command("tag")
 def experiment_tag(
-    experiment_id: str = typer.Argument(..., help="experiment slug (or id:<uuid>)"),
+    experiment_id: str = slug_ref("experiment"),
     add: list[str] = typer.Argument(None, help="tags to add"),
     remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
     replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
@@ -4431,7 +4501,7 @@ def experiment_tag(
 
 @experiment_app.command("delete")
 def experiment_delete(
-    experiment_id: str = typer.Argument(..., help="experiment slug (or id:<uuid>)"),
+    experiment_id: str = slug_ref("experiment"),
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
 ) -> None:
     """PERMANENTLY delete an experiment and its runs. Irreversible."""

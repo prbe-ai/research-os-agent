@@ -444,3 +444,45 @@ def test_delete_yes_skips_the_prompt(wired, capsys, monkeypatch, tmp_path):
 
     assert cli.main(["artifact", "delete", artifact_id, "--yes"]) == 0
     assert seen == []
+
+
+# --- one vocabulary across the nouns -----------------------------------------
+
+
+def test_every_addressable_kind_amends_with_set(wired, capsys):
+    """`project patch` was the odd verb out; experiments, runs and groups `set`.
+
+    An agent that learned `experiment set` and guessed `project set` got
+    `No such command`, so the amend path it had just been told to use did not
+    exist for one of the three kinds."""
+    cli.main(["project", "create", "vocab-p"])
+
+    assert cli.main(["project", "set", "vocab-p", "--description", "via set"]) == 0
+
+    # The original spelling still resolves -- hidden, not removed, because it is
+    # in scripts. Both must reach the same command.
+    assert cli.main(["project", "set", "vocab-p", "--name", "A"]) == 0
+    assert cli.main(["project", "patch", "vocab-p", "--name", "B"]) == 0
+
+
+def test_every_addressable_kind_has_a_read_verb(wired, capsys):
+    """Experiments had none at all, and a run's was only the top-level `probe get`.
+
+    `project get` / `workspace get` / `group get` all existed, so the two gaps
+    were exactly where someone would look first after writing something."""
+    cli.main(["project", "create", "vocab-r"])
+    cli.main(["experiment", "create", "vocab-e", "--project", "vocab-r",
+              "--hypothesis", "h"])
+    capsys.readouterr()
+
+    assert cli.main(["experiment", "get", "vocab-e"]) == 0
+    assert json.loads(capsys.readouterr().out)["slug"] == "vocab-e"
+
+    cli.main(["run", "start", "--experiment", "vocab-e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+
+    assert cli.main(["run", "get", run_id]) == 0
+    assert json.loads(capsys.readouterr().out)["id"] == run_id
+    # The older top-level spelling keeps working.
+    assert cli.main(["get", run_id]) == 0
+    assert json.loads(capsys.readouterr().out)["id"] == run_id

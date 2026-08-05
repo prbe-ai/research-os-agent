@@ -336,7 +336,7 @@ YOU DECIDE THE PROJECTS. This is the judgement you are here for.
     Nothing else fills it in — the server generates one only when a child RUN
     reaches a terminal status, and importing a folder creates no runs, so a
     project left undescribed here stays undescribed forever. Missed one? Add it
-    with `probe project patch <slug> --description "..."`.
+    with `probe project set <slug> --description "..."`.
 
     `--project` takes the SLUG -- the one you just chose -- in every command
     that follows. (An id needs the `id:` prefix: `--project id:<uuid>`.)

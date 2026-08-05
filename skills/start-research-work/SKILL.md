@@ -58,10 +58,10 @@ near-miss of an existing slug rather than warning.)
    blank permanently.
 
    Missed one, or inherited a blank container? Add it after the fact. The verb
-   differs per kind, and there is no `project set`:
+   is `set` for every kind:
 
    ```
-   probe project patch <project> --description "..."
+   probe project set <project> --description "..."
    probe experiment set <experiment> --description "..."
    probe run set <run> --description "..."
    ```
