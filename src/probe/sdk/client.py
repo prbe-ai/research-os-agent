@@ -2568,6 +2568,15 @@ class Client:
         ``verify`` costs one depth-1 fetch per DISTINCT (remote, commit) -- it is
         memoized, so auditing a project's runs is a few network calls rather than
         one per run. Never called during a run: it cannot slow training or upload.
+
+        ``advisories`` reports gaps that are surfaced but never flip the verdict:
+        judgment calls a human makes on purpose (no ``notes``, no recorded
+        ``inputs_decision``) and legacy gaps (a run captured before capture-core
+        has no ``launch`` block at all; a launch block that recorded its own
+        capture errors). ``missing`` remains the only input to ``state`` -- a
+        launch block that EXISTS but is missing a slot (process/runtime/
+        determinism) is a genuine capture failure and lands in ``missing``, not
+        ``advisories``.
         """
         bundle = self.run_bundle(run_id)
         run = bundle.get("run", bundle)
@@ -2611,6 +2620,27 @@ class Client:
         if isinstance(pending, int) and pending > 0:
             missing.append("pending_code_bytes")
 
+        advisories: list[str] = []
+        launch = metadata.get("launch") or {}
+        if not launch:
+            # Pre-capture-core run: honest advisory, not a verdict flip --
+            # otherwise every historical run reads incomplete and the exit-2
+            # gate becomes noise during migration.
+            advisories.append("launch_context")
+        else:
+            for slot in ("process", "runtime", "determinism"):
+                if not launch.get(slot):
+                    missing.append(f"launch_{slot}")
+            if launch.get("errors"):
+                advisories.append("launch_errors")
+        n_lockfiles = snapshot_meta.get("n_lockfiles")
+        if isinstance(n_lockfiles, int) and n_lockfiles == 0:
+            advisories.append("no_lockfiles")
+        if not any(a.get("kind") == "inputs_decision" for a in artifacts):
+            advisories.append("inputs_decision")
+        if not run.get("notes") and not any(a.get("kind") == "note" for a in artifacts):
+            advisories.append("notes")
+
         verified = None
         if verify and not missing:
             from . import snapshot as _snapshot
@@ -2639,6 +2669,7 @@ class Client:
             "missing": missing,
             "local_only_artifacts": failed_uploads,
             "verified_code_reference": verified,
+            "advisories": advisories,
         }
 
     # -- lineage edges (fold #2) -------------------------------------------

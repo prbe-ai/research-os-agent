@@ -2612,6 +2612,9 @@ def run_check(
     Default is `unverified`: nothing is obviously absent, which is NOT the same
     as "this run can be rebuilt". `--verify` resolves the recorded code commit
     against its remote and is the only way to earn `complete`.
+
+    `advisories` lists reported-but-not-blocking gaps (notes, inputs-decision,
+    legacy runs without launch context).
     """
     with _client() as c:
         result = c.check_run(_ref(c, "run", run).id, verify=verify)
