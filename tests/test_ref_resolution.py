@@ -491,3 +491,59 @@ def test_a_backend_that_drops_the_run_slug_is_not_a_success(app, client, monkeyp
     monkeypatch.setattr(client.transport, "post", drops_slug)
 
     assert cli.main(["run", "start", "--experiment", "nightly", "--slug", "nightly-eval"]) != 0
+
+
+# -- workspaces: the last kind that took ids only ------------------------------
+def test_a_workspace_resolves_by_slug(client, monkeypatch, capsys):
+    """`WorkspaceOut` has carried a slug all along, `UNIQUE (customer_id, slug)`;
+    the CLI just refused to accept it."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+
+    assert cli.main(["workspace", "get", "mine"]) == 0
+    assert json.loads(capsys.readouterr().out)["id"] == _WS_MINE
+
+
+def test_a_workspace_resolves_by_id_ref(client, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+
+    assert cli.main(["workspace", "get", f"id:{_WS_MINE}"]) == 0
+    assert json.loads(capsys.readouterr().out)["id"] == _WS_MINE
+
+
+def test_a_bare_workspace_uuid_is_refused(client, monkeypatch, capsys):
+    """Same rule as everywhere else: a bare ref is the slug."""
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+
+    assert cli.main(["workspace", "get", _WS_MINE]) != 0
+    err = capsys.readouterr().err
+    assert "no workspace with slug" in err and f"id:{_WS_MINE}" in err
+
+
+def test_workspace_use_takes_a_slug(client, monkeypatch):
+    from probe.sdk.config import load_context
+
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+
+    assert cli.main(["workspace", "use", "mine"]) == 0
+    assert load_context()["workspace"]["id"] == _WS_MINE
+
+
+def test_a_workspace_artifact_anchor_takes_a_slug(client, monkeypatch):
+    assert impl._anchor_id_for(client, impl.Anchor.WORKSPACE, "mine") == _WS_MINE
+
+
+def test_a_missing_workspace_slug_points_at_the_listing(client, monkeypatch, capsys):
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+
+    assert cli.main(["workspace", "get", "nope"]) != 0
+    assert "probe workspace list" in capsys.readouterr().err
+
+
+def test_the_ambient_workspace_is_still_read_as_an_id(client, monkeypatch):
+    """`workspace use` stores the id -- machine-written, so it keeps working."""
+    from probe.sdk.config import save_context
+
+    monkeypatch.setattr(cli, "Client", lambda **kw: client)
+    save_context({"workspace": {"id": _WS_MINE, "project": None}})
+
+    assert impl._resolve_workspace(None, None) == _WS_MINE

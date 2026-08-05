@@ -1760,26 +1760,30 @@ def workspace_list(
 
 
 @workspace_app.command("get")
-def workspace_get(workspace_id: str = typer.Argument(..., help="workspace id")) -> None:
+def workspace_get(
+    workspace_id: str = typer.Argument(..., help="workspace slug (or id:<uuid>)"),
+) -> None:
     """Show one workspace."""
     with _client() as c:
-        _print_json(c.get_workspace(workspace_id))
+        _print_json(c.get_workspace(_ref(c, "workspace", workspace_id).id))
 
 
 @workspace_app.command("rename")
 def workspace_rename(
-    workspace_id: str = typer.Argument(..., help="workspace id"),
+    workspace_id: str = typer.Argument(..., help="workspace slug (or id:<uuid>)"),
     name: str = typer.Option(..., "--name", help="new display name"),
 ) -> None:
     """Rename a workspace. Name is the only editable field — slug and ownership
     are server-managed identity."""
     with _client() as c:
-        _print_json(c.rename_workspace(workspace_id, name))
+        _print_json(c.rename_workspace(_ref(c, "workspace", workspace_id).id, name))
 
 
 @workspace_app.command("use")
 def workspace_use(
-    workspace_id: str = typer.Argument(..., help="workspace id to make active"),
+    workspace_id: str = typer.Argument(
+        ..., help="workspace slug to make active (or id:<uuid>)"
+    ),
 ) -> None:
     """Set the active workspace for this context.
 
@@ -1788,7 +1792,7 @@ def workspace_use(
     the workspace you just switched to.
     """
     with _client() as c:
-        ws = c.get_workspace(workspace_id)
+        ws = c.get_workspace(_ref(c, "workspace", workspace_id).id)
     save_context({"workspace": {"id": str(ws["id"]), "project": None}})
     print(f"active workspace: {ws.get('name')} ({ws['id']}) — project cleared")
 
@@ -1798,9 +1802,33 @@ project_app = typer.Typer(no_args_is_help=True, help="projects — the top of th
 app.add_typer(project_app, name="project")
 
 
-def _resolve_workspace(explicit: str | None) -> str | None:
-    """Explicit flag -> PROBE_WORKSPACE -> context. Never a hidden requirement."""
-    return resolve(workspace=explicit).workspace
+def _resolve_workspace(client: Client | None, explicit: str | None) -> str | None:
+    """Explicit flag -> PROBE_WORKSPACE -> context, resolved to an id.
+
+    Same provenance rule as :func:`_ambient_project`: an EXPLICIT ref is typed by
+    a person, so a bare one is a slug; the ambient value was written by
+    ``workspace use`` and is an id. Getting that backwards is how an explicit
+    ``--workspace <something>`` would silently address a different workspace.
+
+    ``client`` may be None where the caller has none open and only needs the
+    ambient value passed through untouched.
+    """
+    merged = resolve(workspace=explicit).workspace
+    if explicit is None:
+        # Machine-written: `workspace use` stores the id. Strip an `id:` prefix if
+        # one is there -- the API takes the uuid itself.
+        return _bare_id(merged)
+    if client is None:  # pragma: no cover - every caller with an explicit ref has one
+        return explicit
+    return _ref(client, "workspace", explicit).id
+
+
+def _bare_id(ref: str | None) -> str | None:
+    """Strip an `id:` prefix for the API, which takes the uuid itself."""
+    if ref is None:
+        return None
+    bare, _ = refs.split_selector(ref)
+    return bare
 
 
 def _ref(client: Client, kind: str, ref: str) -> refs.Ref:
@@ -1811,7 +1839,7 @@ def _ref(client: Client, kind: str, ref: str) -> refs.Ref:
     both surface as ``BadParameter``: each means "this ref does not identify one
     thing", and neither is something a retry of the same command fixes.
     """
-    if kind not in refs.SLUG_KINDS and kind != "run":
+    if kind not in refs.SLUG_KINDS and kind not in ("run", "workspace"):
         # Kinds with no second spelling (artifacts: no item GET, no by-name
         # index, and a name that is anchor-scoped rather than unique). The id is
         # passed through -- but the verb still routes through here so it gets the
@@ -1820,6 +1848,8 @@ def _ref(client: Client, kind: str, ref: str) -> refs.Ref:
     try:
         if kind == "run":
             return refs.resolve_run(client, ref)
+        if kind == "workspace":
+            return refs.resolve_workspace(client, ref)
         return refs.resolve(client, kind, ref)
     except (UnfilteredListing, refs.AmbiguousName, refs.NameFilterUnsupported, NotFoundError) as exc:
         raise typer.BadParameter(str(exc)) from None
@@ -1934,7 +1964,7 @@ def project_create(
     description: str = typer.Option(None, "--description"),
     tag: list[str] = typer.Option(None, "--tag", help="tag at creation (repeatable)"),
     workspace: str = typer.Option(
-        None, "--workspace", help="workspace id; defaults to the active one"
+        None, "--workspace", help="workspace slug (or id:<uuid>); defaults to the active one"
     ),
 ) -> None:
     """Create a project.
@@ -1947,7 +1977,7 @@ def project_create(
             c.create_project(
                 slug,
                 name,
-                workspace_id=_resolve_workspace(workspace),
+                workspace_id=_resolve_workspace(c, workspace),
                 description=description,
                 tags=tag or None,
             )
@@ -1957,7 +1987,7 @@ def project_create(
 @project_app.command("list")
 def project_list(
     workspace: str = typer.Option(
-        None, "--workspace", help="workspace id; defaults to the active one"
+        None, "--workspace", help="workspace slug (or id:<uuid>); defaults to the active one"
     ),
     all_workspaces: bool = typer.Option(
         False, "--all", help="every workspace you can see (ignores --workspace and context)"
@@ -1972,8 +2002,8 @@ def project_list(
         params["cursor"] = cursor
     # Omitting workspace_id IS "all workspaces" — the server has no all-sentinel, so
     # --all means "send no filter" rather than some magic value.
-    workspace_id = None if all_workspaces else _resolve_workspace(workspace)
     with _client() as c:
+        workspace_id = None if all_workspaces else _resolve_workspace(c, workspace)
         page = c.list_projects(workspace_id=workspace_id, tags=tag or None, **params)
     _print_json({"items": page.items, "next_cursor": page.next_cursor})
 
@@ -1997,7 +2027,7 @@ def project_use(
     # Pin the project under the workspace that actually owns it, not the ambient one:
     # selecting a project from another workspace should move the anchor, not create a
     # mismatched pair. workspace_id is nullable on legacy rows — fall back to ambient.
-    owner = proj.get("workspace_id") or _resolve_workspace(None)
+    owner = proj.get("workspace_id") or _resolve_workspace(None, None)
     # Stored in the explicit `id:` form: an id survives a rename where a slug does
     # not, but a BARE id would read as a slug when it flows back in as a default.
     save_context(
@@ -2060,7 +2090,9 @@ def project_tag(
 @project_app.command("move")
 def project_move(
     project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
-    workspace: str = typer.Option(..., "--workspace", help="destination workspace id"),
+    workspace: str = typer.Option(
+        ..., "--workspace", help="destination workspace slug (or id:<uuid>)"
+    ),
 ) -> None:
     """Re-file a project into another workspace.
 
@@ -2069,7 +2101,9 @@ def project_move(
     is a no-op and skips the fan-out.
     """
     with _client() as c:
-        _print_json(c.move_project(_project_id(c, project_id), workspace))
+        _print_json(
+            c.move_project(_project_id(c, project_id), _ref(c, "workspace", workspace).id)
+        )
 
 
 @project_app.command("delete")
@@ -2931,7 +2965,11 @@ app.add_typer(artifact_app, name="artifact")
 
 #: Anchors whose ref has a slug spelling. Runs anchor by id or petname and are
 #: resolved server-side; workspaces and the Shared folder have ids only.
-_SLUG_ANCHORS = {Anchor.PROJECT: "project", Anchor.EXPERIMENT: "experiment"}
+_SLUG_ANCHORS = {
+    Anchor.PROJECT: "project",
+    Anchor.EXPERIMENT: "experiment",
+    Anchor.WORKSPACE: "workspace",
+}
 
 
 def _anchor_id_for(client: Client, anchor: Anchor, anchor_id: str | None) -> str | None:
@@ -2968,6 +3006,10 @@ def _anchor_id_for(client: Client, anchor: Anchor, anchor_id: str | None) -> str
     # SERVER reads it as an id and files the upload against whichever project owns
     # it. That is the misresolution this whole grammar exists to end, so a failed
     # lookup is now an error instead of a silent redirect.
+    if kind == "workspace":
+        # Its own resolver: the listing is complete (unpaginated by contract), so
+        # there is no server-side ?slug= to ask for and none is needed.
+        return refs.resolve_workspace(client, anchor_id).id
     return refs.resolve(client, kind, anchor_id, verify=False).id
 
 
@@ -3200,7 +3242,9 @@ def artifact_add(
     project: str = typer.Option(None, "--project", help="anchor to a project slug (or id:<uuid>)"),
     experiment: str = typer.Option(None, "--experiment", help="anchor to an experiment slug (or id:<uuid>)"),
     workspace: str = typer.Option(
-        None, "--workspace", help="anchor to a workspace (a file, not an artifact)"
+        None,
+        "--workspace",
+        help="anchor to a workspace slug (or id:<uuid>) — a file, not an artifact",
     ),
     shared: bool = typer.Option(False, "--shared", help="put it in the team Shared folder"),
     reference: bool = typer.Option(

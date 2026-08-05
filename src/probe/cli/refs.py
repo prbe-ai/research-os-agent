@@ -48,6 +48,12 @@ Which handle is "the name", per kind
 * **run** -- the petname ``short_id`` (``tunneling-sambar-254``). Server-minted
   and structurally not a UUID, so ``GET /v1/runs/{run_ref}`` resolves either form
   server-side and no collision is constructible.
+* **workspace** -- the slug, ``UNIQUE (customer_id, slug)``. Resolved from the
+  full listing rather than a server filter, which is safe HERE and nowhere else:
+  ``GET /v1/workspaces`` is deliberately unpaginated (one per team member, no
+  cursor), so the list is COMPLETE and a miss is a real absence. The same scan
+  over projects is what capped resolution at 200 rows and reported live projects
+  as missing -- do not copy this to a paginated endpoint.
 * **artifact** -- id only. There is no by-name index and a name is anchor-scoped
   rather than unique, so there is no second spelling to accept.
 
@@ -306,6 +312,35 @@ def _looks_like_an_id(client, kind: str, ref: str) -> bool:
     except Exception:  # noqa: BLE001 -- this only picks an error message
         return False
     return True
+
+
+def resolve_workspace(client, ref: str) -> Ref:
+    """Resolve a workspace slug (or ``id:``/``name:``) to its id.
+
+    Reads the whole listing, which is correct only because that endpoint promises
+    to return everything: ``list_workspaces`` is unpaginated by contract, bounded
+    by team size, and offers no cursor. A miss is therefore a genuine absence
+    rather than "not on this page" -- the distinction the projects resolver had to
+    learn the hard way.
+    """
+    bare, how = split_selector(ref)
+    if how == "id":
+        return Ref(bare, f"workspace {bare}", {"id": bare})
+
+    rows = list(client.list_workspaces())
+    field = "name" if how == "name" else "slug"
+    matched = [w for w in rows if str(w.get(field, "")).lower() == bare.lower()]
+    if not matched:
+        raise NotFoundError(
+            f"no workspace with {field} {bare!r}. `probe workspace list` shows them; "
+            f"if you meant an id, write {ID_PREFIX}{bare}"
+        )
+    if len(matched) > 1:
+        # Only reachable via name:, which carries no uniqueness constraint --
+        # (customer_id, slug) does, so a slug can never land here.
+        raise AmbiguousName("workspace", bare, matched)
+    row = matched[0]
+    return Ref(str(row["id"]), describe("workspace", row), row)
 
 
 def resolve_run(client, ref: str) -> Ref:
