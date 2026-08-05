@@ -421,6 +421,19 @@ PENDING: dict[Op, str] = {
     ("GET", "/public/v1/runs/{}/views/{}/data"): "public share read; unauthenticated browser surface, no client story yet",
 }
 
+# The REVERSE debt ledger: client call sites that land AHEAD of the backend,
+# each pointing at the fold that will declare the route. Same discipline as
+# PENDING, opposite direction: an entry the schema now declares fails (delete
+# it — the debt is paid), and an entry with no call site fails (it is not debt,
+# it is litter). Every entry must ship with an old-backend guard at its call
+# site, because until the backend lands, EVERY deployment is an old backend.
+CLIENT_AHEAD: dict[Op, str] = {
+    ("POST", "/v1/runs/{}/reopen"): (
+        "run resume (research-os#364); reopen_run() translates the route-level "
+        "404 into the actionable upgrade message"
+    ),
+}
+
 _ALLOWED: dict[Op, str] = {**NOT_CLIENT_SURFACE, **PENDING}
 
 
@@ -479,14 +492,40 @@ def test_client_only_calls_operations_the_backend_declares():
     """
     ops = schema_operations()
     sites = client_call_sites()
-    phantom = {op: where for op, where in sites.items() if op not in ops}
+    phantom = {
+        op: where
+        for op, where in sites.items()
+        if op not in ops and op not in CLIENT_AHEAD
+    }
     assert not phantom, (
         "the client calls operations the backend does not declare:\n"
         + "\n".join(
             f"  {m:6} {p}\n      called from: {', '.join(where)}"
             for (m, p), where in sorted(phantom.items())
         )
-        + "\n\nRun `make regen` if the schema is stale; otherwise this call is dead code."
+        + "\n\nRun `make regen` if the schema is stale; otherwise this call is "
+        "dead code — or, for a deliberate SDK-ahead-of-backend fold, a "
+        "CLIENT_AHEAD entry with its old-backend guard."
+    )
+
+
+def test_client_ahead_entries_are_live_debt():
+    """A CLIENT_AHEAD entry is debt, and debt must be real and unpaid.
+
+    Declared by the schema -> paid, delete the entry. Never called by the
+    client -> not debt, litter. Either staleness hides real phantoms behind
+    the ledger."""
+    ops = schema_operations()
+    sites = client_call_sites()
+    paid = [op for op in CLIENT_AHEAD if op in ops]
+    assert not paid, (
+        "the backend now declares these CLIENT_AHEAD routes — the debt is "
+        f"paid, delete the entries:\n{_fmt(paid)}"
+    )
+    litter = [op for op in CLIENT_AHEAD if op not in sites]
+    assert not litter, (
+        "no client call site reaches these CLIENT_AHEAD routes — they are "
+        f"not debt, remove them:\n{_fmt(litter)}"
     )
 
 
