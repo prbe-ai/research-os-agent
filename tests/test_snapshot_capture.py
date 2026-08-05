@@ -309,3 +309,40 @@ def test_stale_remote_branch_does_not_drag_the_base_backwards(repo):
     m = capture_manifest(str(repo))
     assert _by_path(m)["b.py"]["source"] == "git", "b.py is pushed; must not re-upload"
     assert m["n_pending_upload"] == 1
+
+
+def test_pushed_base_merge_commit_frontier(repo):
+    """After merging a pushed branch into unpushed work, the base must be the
+    merge-frontier commit, not an older pairwise merge-base approximation."""
+    _git(repo, "checkout", "-qb", "side")
+    (repo / "side.py").write_text("s = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "side")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/side")
+    side_tip = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-")
+    (repo / "local.py").write_text("l = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "local-only")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    base, remote = pushed_base(str(repo))
+    # Both parents' pushed ancestors are on the frontier; the newest pushed
+    # ancestor must be the side tip (committed after main's pushed commit).
+    assert base == side_tip
+    assert remote
+
+
+def test_pushed_base_root_never_pushed(tmp_path):
+    """A repo with a remote configured but nothing ever pushed → (None, None)."""
+    remote = tmp_path / "r.git"
+    _git(tmp_path, "init", "--bare", "-q", str(remote))
+    work = tmp_path / "w"
+    work.mkdir()
+    _git(work, "init", "-q")
+    _git(work, "config", "user.email", "t@t")
+    _git(work, "config", "user.name", "t")
+    _git(work, "remote", "add", "origin", str(remote))
+    (work / "a.py").write_text("a\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "init")
+    assert pushed_base(str(work)) == (None, None)

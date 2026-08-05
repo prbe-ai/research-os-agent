@@ -205,32 +205,44 @@ def pushed_base(cwd: str) -> tuple[str | None, str | None]:
         if sha and _SHA_RE.fullmatch(sha):
             shas.append(sha)
 
-    def _is_ancestor(a: str, b: str) -> bool:
-        return subprocess.run(
-            ["git", "merge-base", "--is-ancestor", a, b],
-            cwd=cwd, capture_output=True, text=True,
-        ).returncode == 0
+    if not shas:
+        return None, None
 
-    best: str | None = None
-    for sha in shas:
-        if subprocess.run(
-            ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
-            cwd=cwd, capture_output=True, text=True,
-        ).returncode != 0:
-            continue
-        if _is_ancestor(head, sha):
-            return head, _remote_url(cwd, remote)
-        candidate = _git(cwd, "merge-base", head, sha, check=False) or None
-        if not candidate:
-            continue
-        # Keep the NEWEST candidate. Taking the first one found means an
-        # unrelated stale branch can win on ls-remote's refname ordering, which
-        # pushes the base far back in history and marks hundreds of unchanged
-        # files for upload. Measured on this repo: first-found gave 57 pending
-        # uploads for a 5-file change; newest gives 5.
-        if best is None or _is_ancestor(best, candidate):
-            best = candidate
-    return best, (_remote_url(cwd, remote) if best else None)
+    # One `cat-file --batch-check` for every advertised SHA instead of one
+    # `cat-file -e` process per branch. A remote head we do not have locally is
+    # treated as NOT pushed, same rule as before. (~6000 branches would hit
+    # ARG_MAX on the rev-list below; switch to `rev-list --stdin` if that
+    # ever becomes real.)
+    probe = subprocess.run(
+        ["git", "cat-file", "--batch-check"],
+        cwd=cwd, input="\n".join(shas) + "\n",
+        capture_output=True, text=True,
+    )
+    present = []
+    for line in probe.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "commit":
+            present.append(parts[0])
+    if not present:
+        return None, None
+
+    # `--boundary` computes the pushed frontier directly, which is merge-safe;
+    # the old max-over-pairwise-merge-bases only approximated it. Boundary
+    # lines are emitted newest-first, so the first is the newest pushed
+    # ancestor. Empty output means HEAD is reachable from an advertised head.
+    out = subprocess.run(
+        ["git", "rev-list", "--boundary", "HEAD", "--not", *present],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        return None, None
+    lines = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    if not lines:
+        return head, _remote_url(cwd, remote)
+    boundary = [ln[1:] for ln in lines if ln.startswith("-")]
+    if not boundary:
+        return None, None
+    return boundary[0], _remote_url(cwd, remote)
 
 
 @lru_cache(maxsize=256)
