@@ -236,7 +236,7 @@ def test_project_delete_cli_requires_confirmation(wired, monkeypatch):
 
     monkeypatch.setattr(typer, "confirm", refuse)
     pid = make_client(wired).create_project("keepme", "Keep")["id"]
-    assert cli.main(["project", "delete", pid]) == 1
+    assert cli.main(["project", "delete", f"id:{pid}"]) == 1
     assert "cannot be undone" in asked[0]
     assert pid in wired.projects
 
@@ -244,7 +244,7 @@ def test_project_delete_cli_requires_confirmation(wired, monkeypatch):
 def test_experiment_delete_cli_proceeds_with_yes(wired):
     """--yes is the scriptable path: no prompt, and the delete actually fires."""
     eid = next(iter(wired.experiments))
-    assert cli.main(["experiment", "delete", eid, "--yes"]) == 0
+    assert cli.main(["experiment", "delete", f"id:{eid}", "--yes"]) == 0
     assert eid not in wired.experiments
 
 

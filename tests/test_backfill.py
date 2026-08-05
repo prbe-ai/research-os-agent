@@ -158,7 +158,7 @@ def test_the_anchor_is_a_uuid_never_a_slug(tmp_path):
 
 def test_an_explicitly_named_project_wins_over_the_derived_slug(tmp_path):
     client = _FakeClient()
-    project_id, _ = backfill.resolve_anchor(client, tmp_path, requested=FAKE_ID)
+    project_id, _ = backfill.resolve_anchor(client, tmp_path, requested=f"id:{FAKE_ID}")
     assert project_id == FAKE_ID
     assert client.ensured == []
 
@@ -740,8 +740,9 @@ def test_count_landed_never_fails_the_import():
     assert backfill.count_landed(Broken(), "p") == (-1, False)
 
 
-#: A project with no experiments, addressed by id so no resolution is needed.
-_BARE = "33333333-3333-4333-8333-333333333333"
+#: A project with no experiments, addressed by ID -- written `id:` now that a
+#: bare ref is the slug, so it still needs no resolution and no client call.
+_BARE = "id:33333333-3333-4333-8333-333333333333"
 
 
 class _NoExperiments:

@@ -1803,7 +1803,7 @@ def _resolve_workspace(explicit: str | None) -> str | None:
     return resolve(workspace=explicit).workspace
 
 
-def _ref(client: Client, kind: str, ref: str, *, by: str | None = None) -> refs.Ref:
+def _ref(client: Client, kind: str, ref: str) -> refs.Ref:
     """Resolve a ref, reporting both failure modes as CLI errors.
 
     The one adapter between :mod:`probe.cli.refs` (which raises library errors so
@@ -1812,55 +1812,65 @@ def _ref(client: Client, kind: str, ref: str, *, by: str | None = None) -> refs.
     thing", and neither is something a retry of the same command fixes.
     """
     if kind not in refs.SLUG_KINDS and kind != "run":
-        # Kinds with no second spelling (artifacts: no item GET, no by-name index,
-        # and a name that is anchor-scoped rather than unique). Nothing to resolve
-        # and nothing to be ambiguous with, so the id is passed through -- but the
-        # verb still routes through here so it gets the same prompt and the same
-        # "deleted" line as everything else.
+        # Kinds with no second spelling (artifacts: no item GET, no by-name
+        # index, and a name that is anchor-scoped rather than unique). The id is
+        # passed through -- but the verb still routes through here so it gets the
+        # same prompt and the same "deleted" line as everything else.
         return refs.Ref(ref, f"{kind} {ref}")
     try:
         if kind == "run":
             return refs.resolve_run(client, ref)
-        return refs.resolve(client, kind, ref, by=by)
-    except (refs.AmbiguousRef, refs.ConflictingSelectors, UnfilteredListing, NotFoundError) as exc:
+        return refs.resolve(client, kind, ref)
+    except (UnfilteredListing, refs.AmbiguousName, refs.NameFilterUnsupported, NotFoundError) as exc:
         raise typer.BadParameter(str(exc)) from None
 
 
-def _project_id(client: Client, ref: str, *, by: str | None = None) -> str:
-    """Accept a project id OR a slug, and return the id.
+def _ambient_project(explicit: str | None, **kw) -> str | None:
+    """The project ref to use, canonicalising ONLY the ambient one.
+
+    ``from_ambient`` reads a bare UUID as an id, which is right for a value the
+    TOOL stored and catastrophically wrong for one a person typed: rewriting an
+    explicit ``--project <uuid-shaped-slug>`` to ``id:`` is the original bug, back.
+    ``resolve()`` merges flag/env/context into one string and forgets which won,
+    so the provenance has to be decided here, before it is lost.
+    """
+    merged = resolve(project=explicit, **kw).project
+    if explicit is not None:
+        return explicit  # typed by a person: a bare ref is a slug, full stop.
+    return refs.from_ambient(merged)
+
+
+def _project_id(client: Client, ref: str) -> str:
+    """A project SLUG (or ``id:<uuid>``) -> the id every route wants.
 
     Every ``/v1/projects/{project_id}`` route types the path param as a UUID, so a
-    slug reaches the server as a 422 about UUID parsing rather than a lookup. Slugs
-    are the handle people actually remember (they are what `--project` takes on
-    `run start`), so resolve them here instead of making the id the only way in.
-
-    A UUID-shaped ref used to short-circuit to "it is an id", which made a
-    UUID-shaped SLUG address a different project entirely -- see
-    :mod:`probe.cli.refs` for the incident this rule exists to prevent.
+    slug reaches the server as a 422 about UUID parsing rather than a lookup, and
+    the translation has to happen client-side. Slugs are the handle people
+    actually remember, so they are what a bare ref means -- see
+    :mod:`probe.cli.refs` for why that is a rule and not a preference.
     """
-    return _ref(client, "project", ref, by=by).id
+    return _ref(client, "project", ref).id
 
 
-def _project_slug(client: Client, ref: str | None, *, by: str | None = None) -> str | None:
+def _project_slug(client: Client, ref: str | None) -> str | None:
     """The inverse of :func:`_project_id`, for the slug-resolving paths.
 
     ``Client.run`` resolves a project by *slug* and raises when it is absent, so
-    handing it an id makes the lookup miss a project that genuinely exists rather than resolving the
-    one you meant. The ambient anchor stores an id (stable across renames), so it has
-    to be translated on the way in — as does an explicit ``--project <uuid>``.
+    handing it an id makes the lookup miss a project that genuinely exists. The
+    ambient anchor stores an id (stable across renames), so it has to be
+    translated on the way in -- as does an explicit ``--project id:<uuid>``.
 
-    A non-UUID still passes through untouched rather than being resolved here: it
-    is already a slug, and absence is ``run start``'s to report, whose near-miss
-    guard names the slugs a typo was close to. Resolving it here would replace that
-    with a bare "not found". A UUID-shaped ref, though, is exactly the case that
-    can mean two projects, so it goes through the ambiguity check.
+    A bare ref is returned untouched: it is already a slug by definition now, and
+    absence is ``run start``'s to report, whose near-miss guard names the slugs a
+    typo was close to. Resolving it here would replace that with a bare
+    "not found".
     """
     if ref is None:
         return None
-    bare, selector = refs.split_selector(ref)
-    if selector is None and not refs.is_uuid(bare):
+    bare, how = refs.split_selector(ref)
+    if how == "slug":
         return bare
-    return _ref(client, "project", ref, by=by).row.get("slug", bare)
+    return _ref(client, "project", ref).row.get("slug", bare)
 
 
 def _confirm_delete(yes: bool, subject: str, *, cascade: str | None = None) -> None:
@@ -1891,26 +1901,12 @@ def _confirm_delete(yes: bool, subject: str, *, cascade: str | None = None) -> N
     typer.confirm(question, abort=True)
 
 
-# Shared across every verb that takes a project/experiment ref, so the
-# disambiguator is spelled and documented once. Only load-bearing when a ref is
-# both an id and a slug; :mod:`probe.cli.refs` refuses to guess in that case.
-BY_ID = typer.Option(False, "--by-id", help="read the ref as an id (when it is also a slug)")
-BY_SLUG = typer.Option(False, "--by-slug", help="read the ref as a slug (when it is also an id)")
-
-
-def _by(by_id: bool = False, by_slug: bool = False) -> str | None:
-    if by_id and by_slug:
-        raise typer.BadParameter("--by-id and --by-slug are mutually exclusive")
-    return "id" if by_id else "slug" if by_slug else None
-
-
 def _confirmed_delete(
     kind: str,
     ref: str,
     *,
     yes: bool,
     cascade: str | None = None,
-    by: str | None = None,
 ) -> None:
     """The whole shape of an irreversible delete: resolve, show, confirm, delete by id.
 
@@ -1925,7 +1921,7 @@ def _confirmed_delete(
     is worth anything under.
     """
     with _client() as c:
-        target = _ref(c, kind, ref, by=by)
+        target = _ref(c, kind, ref)
         _confirm_delete(yes, target.label, cascade=cascade)
         getattr(c, f"delete_{kind}")(target.id)
     print(f"{target.label} deleted")
@@ -1984,42 +1980,40 @@ def project_list(
 
 @project_app.command("get")
 def project_get(
-    project_id: str = typer.Argument(..., help="project id or slug"),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
+    project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
 ) -> None:
     """Show one project."""
     with _client() as c:
-        _print_json(c.get_project(_project_id(c, project_id, by=_by(by_id, by_slug))))
+        _print_json(c.get_project(_project_id(c, project_id)))
 
 
 @project_app.command("use")
 def project_use(
-    project_id: str = typer.Argument(..., help="project id or slug to make active"),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
+    project_id: str = typer.Argument(..., help="project slug to make active (or id:<uuid>)"),
 ) -> None:
     """Set the active project for this context, so `run start` and friends default to it."""
     with _client() as c:
-        proj = c.get_project(_project_id(c, project_id, by=_by(by_id, by_slug)))
+        proj = c.get_project(_project_id(c, project_id))
     # Pin the project under the workspace that actually owns it, not the ambient one:
     # selecting a project from another workspace should move the anchor, not create a
     # mismatched pair. workspace_id is nullable on legacy rows — fall back to ambient.
     owner = proj.get("workspace_id") or _resolve_workspace(None)
-    save_context({"workspace": {"id": str(owner) if owner else None, "project": str(proj["id"])}})
+    # Stored in the explicit `id:` form: an id survives a rename where a slug does
+    # not, but a BARE id would read as a slug when it flows back in as a default.
+    save_context(
+        {"workspace": {"id": str(owner) if owner else None, "project": f"id:{proj['id']}"}}
+    )
     print(f"active project: {proj.get('slug')} ({proj['id']})")
 
 
 @project_app.command("patch")
 def project_patch(
-    project_id: str = typer.Argument(..., help="project id or slug"),
+    project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
     name: str = typer.Option(None, "--name"),
     description: str = typer.Option(None, "--description"),
     workspace: str = typer.Option(
         None, "--workspace", help="not here — use `probe project move`"
     ),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
 ) -> None:
     """Update a project's display fields."""
     if workspace is not None:
@@ -2034,7 +2028,7 @@ def project_patch(
     with _client() as c:
         _print_json(
             c.update_project(
-                _project_id(c, project_id, by=_by(by_id, by_slug)),
+                _project_id(c, project_id),
                 name=name,
                 description=description,
             )
@@ -2043,16 +2037,14 @@ def project_patch(
 
 @project_app.command("tag")
 def project_tag(
-    project: str = typer.Argument(..., help="project id or slug"),
+    project: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
     add: list[str] = typer.Argument(None, help="tags to add"),
     remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
     replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
 ) -> None:
     """Tag a project: positional args add, --remove drops, --set replaces; bare lists."""
     with _client() as c:
-        pid = _project_id(c, project, by=_by(by_id, by_slug))
+        pid = _project_id(c, project)
         _print_json(
             _tag_verb_flow(
                 pid,
@@ -2067,10 +2059,8 @@ def project_tag(
 
 @project_app.command("move")
 def project_move(
-    project_id: str = typer.Argument(..., help="project id or slug"),
+    project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
     workspace: str = typer.Option(..., "--workspace", help="destination workspace id"),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
 ) -> None:
     """Re-file a project into another workspace.
 
@@ -2079,22 +2069,19 @@ def project_move(
     is a no-op and skips the fan-out.
     """
     with _client() as c:
-        _print_json(c.move_project(_project_id(c, project_id, by=_by(by_id, by_slug)), workspace))
+        _print_json(c.move_project(_project_id(c, project_id), workspace))
 
 
 @project_app.command("delete")
 def project_delete(
-    project_id: str = typer.Argument(..., help="project id or slug"),
+    project_id: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
 ) -> None:
     """PERMANENTLY delete a project and everything in it. Irreversible."""
     _confirmed_delete(
         "project",
         project_id,
         yes=yes,
-        by=_by(by_id, by_slug),
         cascade="every experiment, run, metric and file inside it goes too",
     )
 
@@ -2174,9 +2161,14 @@ def run_start(
         help="slug of an EXISTING experiment; omit for a PROJECT-DIRECT run (W&B shape)",
     ),
     name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
+    slug: str = typer.Option(
+        None,
+        "--slug",
+        help="this run's slug; omit and the server mints a petname (a taken one is an error)",
+    ),
     description: str = typer.Option(None, "--description", help="human context for this run"),
     project: str = typer.Option(
-        None, "--project", help="project slug/id; defaults to the active one (`probe project use`)"
+        None, "--project", help="project slug (or id:<uuid>); defaults to the active one (`probe project use`)"
     ),
     group: str = typer.Option(None, "--group", help="run group id (see `probe group create`)"),
     source: str = typer.Option("api", "--source"),
@@ -2195,7 +2187,7 @@ def run_start(
     # This is what makes `probe project use` mean something: without it the ambient
     # project would be stored and displayed but never actually applied to a write.
     # Explicit flag still wins, so scripts never depend on a developer's context.
-    resolved_project = resolve(project=project).project
+    resolved_project = _ambient_project(project)
     if not experiment and not resolved_project:
         # Fail in CLI vocabulary before the SDK's run()-phrased error can leak.
         raise errors.ValidationError(
@@ -2206,6 +2198,9 @@ def run_start(
         run = c.run(
             experiment=experiment,
             name=name,
+            # Omitted = the server mints a petname, unchanged. Naming it is what
+            # lets a nightly job address the same run every time.
+            slug=slug,
             description=description,
             # run() resolves by SLUG, so an id has to be translated first or the
             # lookup misses and reports a real project as absent.
@@ -2278,8 +2273,8 @@ def run_set(
 
 @run_app.command("list")
 def run_list(
-    experiment: str = typer.Option(None, "--experiment", help="experiment id or slug"),
-    project: str = typer.Option(None, "--project", help="project id or slug"),
+    experiment: str = typer.Option(None, "--experiment", help="experiment slug (or id:<uuid>)"),
+    project: str = typer.Option(None, "--project", help="project slug (or id:<uuid>)"),
     direct: bool = typer.Option(False, "--direct", help="only project-direct runs"),
     tag: list[str] = typer.Option(None, "--tag", help="filter: run must carry ALL (repeatable)"),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
@@ -2417,7 +2412,7 @@ def run_check(
 
 @run_app.command("delete")
 def run_delete(
-    run: str = typer.Argument(..., help="run id or petname short_id"),
+    run: str = typer.Argument(..., help="run petname short_id or id (they cannot collide)"),
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
 ) -> None:
     """PERMANENTLY delete a run and its telemetry. Irreversible."""
@@ -2963,21 +2958,17 @@ def _anchor_id_for(client: Client, anchor: Anchor, anchor_id: str | None) -> str
     kind = _SLUG_ANCHORS.get(anchor)
     if kind is None or not anchor_id:
         return anchor_id
-    try:
-        # verify=False: this was never a gate, so it does not need to confirm the
-        # id exists -- only that it is not ALSO somebody's slug. One request on
-        # the common path, which matters here more than anywhere: this is the
-        # resolver an agent filing a few thousand artifacts pays for.
-        return refs.resolve(client, kind, anchor_id, verify=False).id
-    except refs.AmbiguousRef as exc:
-        # The ONE case that does become a hard error. "Never a gate" is about
-        # refs that fail to resolve; this one resolves to two different projects,
-        # and passing it through files the upload against whichever the server
-        # picks. A misattributed artifact is silent, and it is discovered by
-        # someone else reading a project that was never theirs.
-        raise typer.BadParameter(str(exc)) from None
-    except Exception:  # noqa: BLE001 - resolution is a convenience, never a gate
-        return anchor_id
+    # verify=False: an `id:` ref does not need a round trip to confirm it exists
+    # -- it IS the id, and returns without touching the network. That keeps the
+    # agent path (thousands of artifacts) at one request for a slug, none for an id.
+    #
+    # This used to swallow every error and pass the raw ref through, on a
+    # "never a gate" rationale that slug-default invalidates: the route types its
+    # path param as a UUID, so passing a bare UUID through is not a no-op -- the
+    # SERVER reads it as an id and files the upload against whichever project owns
+    # it. That is the misresolution this whole grammar exists to end, so a failed
+    # lookup is now an error instead of a silent redirect.
+    return refs.resolve(client, kind, anchor_id, verify=False).id
 
 
 def _pick_anchor(
@@ -3206,8 +3197,8 @@ def artifact_add(
         "--notes",
         help="what this file is, what produced it, what it shows — any anchor",
     ),
-    project: str = typer.Option(None, "--project", help="anchor to a project"),
-    experiment: str = typer.Option(None, "--experiment", help="anchor to an experiment"),
+    project: str = typer.Option(None, "--project", help="anchor to a project slug (or id:<uuid>)"),
+    experiment: str = typer.Option(None, "--experiment", help="anchor to an experiment slug (or id:<uuid>)"),
     workspace: str = typer.Option(
         None, "--workspace", help="anchor to a workspace (a file, not an artifact)"
     ),
@@ -4225,7 +4216,7 @@ app.add_typer(notes_app, name="notes")
 
 def _notes_project(client: Client, project: str | None) -> tuple[str, str]:
     """(project_id, label) for a notes read/write. Explicit beats the active one."""
-    resolved = resolve(project=project, base_url=_conn.base_url).project
+    resolved = _ambient_project(project, base_url=_conn.base_url)
     if not resolved:
         raise typer.BadParameter(
             "pass --project, or set an active project with `probe project use <slug>`"
@@ -4235,7 +4226,7 @@ def _notes_project(client: Client, project: str | None) -> tuple[str, str]:
 
 @notes_app.command("show")
 def notes_show(
-    project: str = typer.Option(None, "--project", help="project id or slug"),
+    project: str = typer.Option(None, "--project", help="project slug (or id:<uuid>)"),
 ) -> None:
     """Print the project's notes. Empty output means none were ever written."""
     with _client() as c:
@@ -4250,7 +4241,7 @@ def notes_show(
 @notes_app.command("write")
 def notes_write(
     file: str = typer.Argument(None, help="file to upload; omit or '-' to read stdin"),
-    project: str = typer.Option(None, "--project", help="project id or slug"),
+    project: str = typer.Option(None, "--project", help="project slug (or id:<uuid>)"),
     append: bool = typer.Option(
         False,
         "--append",
@@ -4311,7 +4302,7 @@ def experiment_create(
     `--hypothesis` is required here for that reason — this is the moment you know
     what you are testing, and nothing later goes back to fill it in.
     """
-    resolved_project = resolve(project=project).project
+    resolved_project = _ambient_project(project)
     if not resolved_project:
         raise errors.ValidationError(
             "pass --project, or set an active project with `probe project use`"
@@ -4334,19 +4325,17 @@ def experiment_create(
 
 @experiment_app.command("set")
 def experiment_set(
-    experiment_id: str = typer.Argument(..., help="experiment id or slug"),
+    experiment_id: str = typer.Argument(..., help="experiment slug (or id:<uuid>)"),
     hypothesis: str = typer.Option(None, "--hypothesis", help="replace the hypothesis"),
     name: str = typer.Option(None, "--name"),
     description: str = typer.Option(None, "--description"),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
 ) -> None:
     """Amend an experiment's hypothesis, name, or description after creation."""
     if hypothesis is None and name is None and description is None:
         raise typer.BadParameter("pass at least one of --hypothesis/--name/--description")
     with _client() as c:
         result = c.update_experiment(
-            _ref(c, "experiment", experiment_id, by=_by(by_id, by_slug)).id,
+            _ref(c, "experiment", experiment_id).id,
             hypothesis=hypothesis,
             name=name,
             description=description,
@@ -4356,7 +4345,7 @@ def experiment_set(
 
 @experiment_app.command("list")
 def experiment_list(
-    project: str = typer.Option(None, "--project", help="project id or slug"),
+    project: str = typer.Option(None, "--project", help="project slug (or id:<uuid>)"),
     tag: list[str] = typer.Option(None, "--tag", help="filter: experiment must carry ALL (repeatable)"),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
     cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
@@ -4376,16 +4365,14 @@ def experiment_list(
 
 @experiment_app.command("tag")
 def experiment_tag(
-    experiment_id: str = typer.Argument(..., help="experiment id or slug"),
+    experiment_id: str = typer.Argument(..., help="experiment slug (or id:<uuid>)"),
     add: list[str] = typer.Argument(None, help="tags to add"),
     remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
     replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
 ) -> None:
     """Tag an experiment: positional args add, --remove drops, --set replaces; bare lists."""
     with _client() as c:
-        eid = _ref(c, "experiment", experiment_id, by=_by(by_id, by_slug)).id
+        eid = _ref(c, "experiment", experiment_id).id
         _print_json(
             _tag_verb_flow(
                 eid,
@@ -4400,17 +4387,14 @@ def experiment_tag(
 
 @experiment_app.command("delete")
 def experiment_delete(
-    experiment_id: str = typer.Argument(..., help="experiment id or slug"),
+    experiment_id: str = typer.Argument(..., help="experiment slug (or id:<uuid>)"),
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation prompt"),
-    by_id: bool = BY_ID,
-    by_slug: bool = BY_SLUG,
 ) -> None:
     """PERMANENTLY delete an experiment and its runs. Irreversible."""
     _confirmed_delete(
         "experiment",
         experiment_id,
         yes=yes,
-        by=_by(by_id, by_slug),
         cascade="every run, metric and file inside it goes too",
     )
 

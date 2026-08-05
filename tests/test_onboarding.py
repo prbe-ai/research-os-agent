@@ -309,7 +309,7 @@ def test_cli_experiment_create_rejects_an_unknown_project(wired, capsys):
     assert cli.main(["project", "create", "gone-project"]) == 0
     created = capsys.readouterr().out
     project_id = json.loads(created)["id"]
-    assert cli.main(["project", "delete", project_id, "--yes"]) == 0
+    assert cli.main(["project", "delete", f"id:{project_id}", "--yes"]) == 0
     capsys.readouterr()
     deleted = cli.main(
         [
@@ -337,7 +337,7 @@ def test_cli_project_patch_updates_title_and_description(wired, capsys):
         [
             "project",
             "patch",
-            project_id,
+            f"id:{project_id}",
             "--name",
             "Protein folding",
             "--description",
@@ -360,7 +360,7 @@ def test_cli_experiment_set_updates_human_details(wired, capsys):
         [
             "experiment",
             "set",
-            exp_id,
+            f"id:{exp_id}",
             "--hypothesis",
             "real hypothesis",
             "--name",

@@ -220,8 +220,8 @@ def resolve_anchor(client, folder: Path, *, requested: str | None = None) -> tup
     whatever project happened to be active, which is a surprising place to have
     to go looking for them.
 
-    `requested` is an explicit `--project` on this invocation, in either form
-    (id or slug), and it still wins.
+    `requested` is an explicit `--project` on this invocation -- a slug, or an
+    id written `id:<uuid>` -- and it still wins.
 
     Creation goes through ``ensure_project``, whose near-miss guard refuses a
     slug that looks like a typo of one already there. A folder called
@@ -235,21 +235,19 @@ def resolve_anchor(client, folder: Path, *, requested: str | None = None) -> tup
 
 
 def _resolve_ref(client, ref: str) -> tuple[str, str]:
-    """An explicitly named project id OR slug -> ``(project_id, slug)``.
+    """An explicitly named project slug (or ``id:<uuid>``) -> ``(project_id, slug)``.
 
     Shares :mod:`probe.cli.refs` with the project verbs so an anchor cannot mean
-    one project here and another one there. A ref that is BOTH an id and a slug
-    raises rather than picking: this anchors every artifact the backfill uploads,
-    so guessing wrong files someone's whole import into a stranger's project.
+    one project here and another one there -- this names every artifact the
+    import uploads, and getting it wrong files someone's whole folder into a
+    stranger's project.
     """
     from . import refs
 
     try:
         found = refs.resolve(client, "project", ref)
-    except refs.AmbiguousRef as exc:
+    except NotFoundError as exc:
         raise ValueError(str(exc)) from None
-    except NotFoundError:
-        raise ValueError(f"no project with id or slug {ref!r}") from None
     return found.id, found.row.get("slug") or ref
 
 
@@ -342,8 +340,8 @@ YOU DECIDE THE PROJECTS. This is the judgement you are here for.
     every visitor. Say what the work is and what it produced, not that it was
     imported.
 
-    `--project` takes the slug or the id, so you can use the slug you just
-    chose in every command that follows.
+    `--project` takes the SLUG -- the one you just chose -- in every command
+    that follows. (An id needs the `id:` prefix: `--project id:<uuid>`.)
 """
     return f"""\
 You are backfilling existing research work into Probe.
@@ -700,7 +698,7 @@ def _rows(payload) -> list | None:
 
 
 def _project_id(client, project: str) -> str | None:
-    """`project` as a UUID. Slugs are RESOLVED, never passed through.
+    """`project` as a UUID. A bare ref is a SLUG; ids arrive as `id:<uuid>`.
 
     ``/v1/projects/{project_id}/artifacts`` types its path param as a UUID, so a
     slug arrives as a 422 about UUID parsing rather than a lookup -- the same
@@ -708,14 +706,14 @@ def _project_id(client, project: str) -> str | None:
     from :func:`summary_projects`, i.e. the read-back is fed the one form the
     route cannot take, and the 422 is swallowed as "could not read back".
     """
-    from uuid import UUID
+    from . import refs
 
     try:
-        UUID(project)
-    except (ValueError, AttributeError, TypeError):
-        found = client.resolve_project(project)
-        return str(found["id"]) if found else None
-    return project
+        # verify=False: this is a READ-BACK, so an `id:` ref needs no round trip
+        # to confirm what it already states, and one fewer request per project.
+        return refs.resolve(client, "project", project, verify=False).id
+    except Exception:  # noqa: BLE001 - a read-back miss degrades, never raises here
+        return None
 
 
 def count_landed(client, project: str) -> tuple[int, bool]:

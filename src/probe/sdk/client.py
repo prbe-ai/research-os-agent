@@ -42,6 +42,7 @@ from ..models import (
 )
 from . import config as config_module
 from . import errors
+from .errors import CapabilityUnavailable
 from .config import Settings, resolve
 from .tags import canonical_tags
 from .hashing import fingerprint
@@ -1181,8 +1182,14 @@ class Client:
         tags: list[str] | None,
         metadata: dict | None,
         labeled_point_budget: int | None,
+        slug: str | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"name": name, "source": source}
+        # The run's own slug (server 0.110.0.0), stored in the `short_id` column.
+        # Omitted = the server mints a petname, which stays the normal case. A
+        # TAKEN one is a 409, never a silent substitution.
+        if slug is not None:
+            body["slug"] = slug
         if description is not None:
             body["description"] = description
         # Separate from `description` on purpose (server 0096): a description says
@@ -1247,9 +1254,11 @@ class Client:
         metadata: dict | None = None,
         heartbeat: bool = True,
         labeled_point_budget: int | None = None,
+        slug: str | None = None,
     ) -> Run:
         body = self._run_create_body(
             name,
+            slug=slug,
             description=description,
             notes=notes,
             source=source,
@@ -1264,8 +1273,27 @@ class Client:
         )
         # Literal call site: the tests/test_parity.py AST scan must see the route.
         data = self.transport.post(f"/v1/experiments/{experiment_id}/runs", body)
+        self._verify_slug_written(slug, data)
         self._warn_if_notes_dropped(notes, data, "runs")
         return self._wrap_run(data, heartbeat=heartbeat)
+
+    @staticmethod
+    def _verify_slug_written(slug: str | None, row: dict) -> None:
+        """A backend predating run slugs DROPS the field and names the run itself.
+
+        Pydantic ignores an undeclared body field by default, so the create
+        succeeds, returns 201, and hands back a random petname -- and the caller
+        exits 0 believing it owns a handle it does not. Reading the stored value
+        back is the only thing that tells the two apart.
+        """
+        if slug is None:
+            return
+        written = row.get("short_id")
+        if written != slug:
+            raise CapabilityUnavailable(
+                f"this backend ignored the run slug {slug!r} (it stored "
+                f"{written!r}); run slugs need research-os >= 0.110.0.0"
+            )
 
     def create_project_run(
         self,
@@ -1283,6 +1311,7 @@ class Client:
         metadata: dict | None = None,
         heartbeat: bool = True,
         labeled_point_budget: int | None = None,
+        slug: str | None = None,
     ) -> Run:
         """POST /v1/projects/{id}/runs — open a PROJECT-DIRECT run (W&B shape).
 
@@ -1292,6 +1321,7 @@ class Client:
         """
         body = self._run_create_body(
             name,
+            slug=slug,
             description=description,
             notes=notes,
             source=source,
@@ -1322,6 +1352,7 @@ class Client:
                     detail=exc.detail,
                 ) from exc
             raise
+        self._verify_slug_written(slug, data)
         self._warn_if_notes_dropped(notes, data, "runs")
         return self._wrap_run(data, heartbeat=heartbeat)
 

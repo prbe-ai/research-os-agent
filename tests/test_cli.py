@@ -191,7 +191,7 @@ def test_artifact_notes_reach_the_wire_on_a_project_anchor(wired, capsys, tmp_pa
             "add",
             str(artifact),
             "--project",
-            "p1",
+            "p",
             "--name",
             "odyssey/experiments/tape_utils.py",
             "--notes",
@@ -213,7 +213,7 @@ def test_notes_are_not_rejected_as_a_run_only_field(wired, capsys, tmp_path):
     artifact = tmp_path / "f.csv"
     artifact.write_text("a,b\n")
     assert cli.main(
-        ["artifact", "add", str(artifact), "--project", "p1", "--notes", "a description"]
+        ["artifact", "add", str(artifact), "--project", "p", "--notes", "a description"]
     ) == 0
 
 

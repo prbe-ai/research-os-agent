@@ -452,6 +452,12 @@ class FakeApp:
             slug = request.url.params.get("slug")
             if slug:
                 rows = [r for r in rows if r.get("slug") == slug]
+            # Exact, case-insensitive -- mirrors the engine's ?name= filter. A fake
+            # that ignored it would make every `name:` assertion pass against an
+            # unfiltered page, which is the drop the client guards against.
+            name = request.url.params.get("name")
+            if name:
+                rows = [r for r in rows if str(r.get("name", "")).lower() == name.lower()]
             return httpx.Response(200, json=rows)
 
         m = _PROJ_ITEM.match(path)
@@ -588,10 +594,20 @@ class FakeApp:
             slug = request.url.params.get("slug")
             if slug:
                 rows = [row for row in rows if row.get("slug") == slug]
+            # Exact, case-insensitive -- mirrors the engine's ?name= filter. A fake
+            # that ignored it would make every `name:` assertion pass against an
+            # unfiltered page, which is the drop the client guards against.
+            name = request.url.params.get("name")
+            if name:
+                rows = [row for row in rows if str(row.get("name", "")).lower() == name.lower()]
             return httpx.Response(200, json=rows)
 
         if path == "/v1/runs" and method == "GET":
             rows = list(self.runs.values())
+            # Exact, case-insensitive -- mirrors the engine's ?name= filter.
+            name = request.url.params.get("name")
+            if name:
+                rows = [row for row in rows if str(row.get("name", "")).lower() == name.lower()]
             experiment_id = request.url.params.get("experiment_id")
             if experiment_id:
                 rows = [row for row in rows if row.get("experiment_id") == experiment_id]
@@ -1537,7 +1553,8 @@ class FakeApp:
             "parent_run_id": body.get("parent_run_id"),
             "parent_relation": body.get("parent_relation"),
             "group_id": body.get("group_id"),
-            "short_id": body.get("short_id", f"run-{rid[:8]}"),
+            # Mirrors the engine: a caller-chosen `slug` lands in short_id (0.110.0.0).
+            "short_id": body.get("slug") or body.get("short_id", f"run-{rid[:8]}"),
             "foreign_keys": body.get("foreign_keys", {}),
             "env_ref": body.get("env_ref"),
             "created_by": "ingest:test",
