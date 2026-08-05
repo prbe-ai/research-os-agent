@@ -2662,7 +2662,14 @@ def exec(
     ctx: typer.Context,
     run: str = typer.Argument(...),
     cwd: str = typer.Option(None, "--cwd"),
+    strict: bool = typer.Option(
+        False,
+        "--strict",
+        help="fail fast if capture is incomplete (sets PROBE_REQUIRE_COMPLETE=1)",
+    ),
 ) -> None:
+    if strict:
+        os.environ["PROBE_REQUIRE_COMPLETE"] = "1"
     argv = list(ctx.args)
     if argv and argv[0] == "--":
         argv = argv[1:]

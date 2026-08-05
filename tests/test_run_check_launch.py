@@ -1,6 +1,9 @@
 """check_run: launch-slot verdicts and advisories."""
 from __future__ import annotations
 
+import pytest
+
+from probe.sdk import errors as sdk_errors
 from tests.conftest import open_run
 
 
@@ -47,3 +50,33 @@ def test_notes_and_inputs_decision_are_advisories(client, tmp_path):
     assert "inputs_decision" in result["advisories"]
     assert "notes" in result["advisories"]
     assert "inputs_decision" not in result["missing"]
+
+
+# -- PROBE_REQUIRE_COMPLETE strict gate on finish() --------------------------
+
+
+def test_strict_finish_raises_on_incomplete(client, monkeypatch):
+    run = open_run(client, experiment="exp-strict")  # no snapshot at all
+    monkeypatch.setenv("PROBE_REQUIRE_COMPLETE", "1")
+    with pytest.raises(sdk_errors.CaptureIncomplete) as exc_info:
+        run.finish("completed")
+    assert "execution_record" in str(exc_info.value)
+
+
+def test_strict_finish_passes_on_captured_run(client, tmp_path, monkeypatch):
+    run = open_run(client, experiment="exp-strict-ok")
+    _snap(run, tmp_path)
+    monkeypatch.setenv("PROBE_REQUIRE_COMPLETE", "1")
+    run.finish("completed")  # must not raise: advisories never block
+
+
+def test_default_finish_never_checks(client, monkeypatch):
+    run = open_run(client, experiment="exp-lax")
+    monkeypatch.delenv("PROBE_REQUIRE_COMPLETE", raising=False)
+    run.finish("completed")  # no snapshot, no gate, no error
+
+
+def test_strict_gate_only_blocks_completed_claims(client, monkeypatch):
+    run = open_run(client, experiment="exp-strict-fail")
+    monkeypatch.setenv("PROBE_REQUIRE_COMPLETE", "1")
+    run.finish("failed")  # un-captured but honestly failed: no gate, no raise

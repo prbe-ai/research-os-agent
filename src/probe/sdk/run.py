@@ -1634,6 +1634,13 @@ class Run:
         ``{finish_queued, delivered, remaining}`` is returned instead of the
         run row. Dead letters raise even in bounded mode: waiting cannot heal
         a permanent rejection, and exiting would strand them silently.
+
+        Strict mode (``PROBE_REQUIRE_COMPLETE=1``) gates the CLAIM, not the run:
+        it only blocks ``status == "completed"``. A run finishing "failed" (the
+        body already raised, or the caller is being honest about a bad outcome)
+        is never gated -- there is no claim of completeness to dispute, and
+        ``Run.__exit__`` depends on this so a body's real exception is never
+        masked by a capture complaint on the way out.
         """
         # Stop the hardware collector first: its final windows emit (or drop —
         # best-effort) before the close; it must never block or fail the close.
@@ -1645,6 +1652,12 @@ class Run:
                 pass
             self._hw_monitor = None
 
+        if status == "completed" and os.environ.get("PROBE_REQUIRE_COMPLETE") == "1":
+            result = self._client.check_run(self.id)
+            if result.get("state") == "incomplete":
+                raise errors.CaptureIncomplete(
+                    "run capture incomplete: " + ", ".join(result.get("missing", []))
+                )
         timeout = self._resolve_finish_timeout(flush_timeout)
         journal = self._client.journal
         if timeout is None:
