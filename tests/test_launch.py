@@ -48,6 +48,15 @@ def test_scrub_argv_segmented_secret_flags_still_redact():
     assert scrubbed is True
 
 
+def test_scrub_argv_pathological_token_is_fast():
+    import time
+    evil = "--" + "_".join(["a"] * 200) + "x"
+    start = time.monotonic()
+    out, scrubbed = scrub_argv([evil, "value"])
+    assert time.monotonic() - start < 0.1
+    assert out == [evil, "value"] and scrubbed is False
+
+
 def test_capture_process_records_identity(tmp_path):
     info, errors = capture_process(argv=["python", "train.py"], cwd=str(tmp_path))
     assert info["argv"] == ["python", "train.py"]

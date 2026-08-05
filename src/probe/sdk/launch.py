@@ -29,14 +29,32 @@ from typing import Any
 
 LAUNCH_SCHEMA = "probe.launch/1"
 
-# Secret-shaped flags and bare values. Redaction is marked, so a reader knows
-# the command line is not verbatim. Secret words match as exact dash/underscore
-# segments, not substrings -- `--tokenizer` and `--max-tokens` are reproduction
-# data, not secrets.
-_SECRET_FLAG = re.compile(
-    r"^--?(?:\w+[-_])*?(key|token|secret|password|passwd|credential)(?:[-_]\w+)*?(=.*)?$",
-    re.IGNORECASE,
-)
+#: Secret-shaped flag NAMES, matched as exact dash/underscore segments -- not
+#: substrings, so `--tokenizer` and `--max-tokens` are reproduction data, not
+#: secrets.
+_SECRET_WORDS = frozenset({"key", "token", "secret", "password", "passwd", "credential"})
+
+
+def _is_secret_flag(arg: str) -> bool:
+    """Flag whose NAME contains a secret word as an exact -/_ segment.
+
+    Segments, not substrings: --tokenizer and --max-tokens are reproduction
+    data, not secrets. A linear scan, immune to the pathological-backtracking
+    hazard a joined regex has on long snake_case tokens -- the prior
+    implementation (`(?:\\w+[-_])*?(key|token|...)`) is ambiguous because
+    `\\w` includes `_`, so a long `--a_a_a_..._a` argv token could hang
+    auto-snapshot capture, which must never block a run.
+    """
+    if not arg.startswith("-"):
+        return False
+    name = arg.lstrip("-").split("=", 1)[0]
+    return any(seg.lower() in _SECRET_WORDS for seg in re.split(r"[-_]", name))
+
+
+# Secret-shaped bare values (not flag names -- see _is_secret_flag above).
+# Redaction is marked, so a reader knows the command line is not verbatim.
+# Fixed-prefix alternations with a single greedy class each are linear, no
+# ambiguity: this one is safe as a regex.
 _SECRET_VALUE = re.compile(
     r"^(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}"
     r"|AKIA[A-Z0-9]{12,}|eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]+)"
@@ -54,7 +72,7 @@ def scrub_argv(argv: list[str]) -> tuple[list[str], bool]:
             scrubbed = True
             redact_next = False
             continue
-        if _SECRET_FLAG.match(arg):
+        if _is_secret_flag(arg):
             if "=" in arg:
                 out.append(arg.split("=", 1)[0] + "=[redacted]")
                 scrubbed = True
