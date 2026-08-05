@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from importlib import metadata
 from pathlib import Path
@@ -93,7 +94,108 @@ def test_run_set_requires_a_field(wired, capsys):
     run_id = capsys.readouterr().out.strip()
 
     assert cli.main(["run", "set", run_id]) == 2
-    assert "pass at least one of --name/--description" in capsys.readouterr().err
+    assert "pass at least one of --name/--description/--notes" in capsys.readouterr().err
+
+
+def test_run_set_writes_notes_without_touching_the_description(wired, capsys):
+    """The gap-3 shape: a run whose number is real but whose harness was not.
+
+    `--notes` has to be able to land WITHOUT rewriting `--description`, because
+    the caveat is learned after the run and the description is the only record of
+    what the run was for. One field would force a trade.
+    """
+    cli.main(
+        [
+            "run",
+            "start",
+            "--experiment",
+            "e",
+            "--name",
+            "smoke-oracle",
+            "--description",
+            "Oracle-patch smoke over one SWE-smith instance",
+        ]
+    )
+    run_id = capsys.readouterr().out.strip()
+
+    rc = cli.main(
+        [
+            "run",
+            "set",
+            run_id,
+            "--notes",
+            "Scored 0.0 by a broken verifier (pytest exit code, not per-test).",
+        ]
+    )
+
+    assert rc == 0
+    assert wired.runs[run_id]["notes"].startswith("Scored 0.0 by a broken verifier")
+    assert wired.runs[run_id]["description"] == (
+        "Oracle-patch smoke over one SWE-smith instance"
+    )
+    assert wired.runs[run_id]["name"] == "smoke-oracle"
+
+
+def test_run_set_notes_reads_a_file_and_stdin(wired, capsys, tmp_path, monkeypatch):
+    """Prose arrives from a heredoc or a file, not only a quoted argument."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+
+    doc = tmp_path / "caveat.md"
+    doc.write_text("# Why this is suspect\n\n40 of 113 tests were uncollectable.\n")
+    assert cli.main(["run", "set", run_id, "--notes", f"@{doc}"]) == 0
+    assert "uncollectable" in wired.runs[run_id]["notes"]
+
+    monkeypatch.setattr("sys.stdin", io.StringIO("piped caveat\n"))
+    assert cli.main(["run", "set", run_id, "--notes", "-"]) == 0
+    assert wired.runs[run_id]["notes"] == "piped caveat\n"
+
+
+def test_run_set_notes_empty_string_clears_rather_than_reading_as_absent(wired, capsys):
+    """`--notes ''` is the documented clear, so it must not fall through to
+    "no field passed" — that would exit 2 and leave the stale note in place."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    run_id = capsys.readouterr().out.strip()
+    cli.main(["run", "set", run_id, "--notes", "temporary"])
+
+    assert cli.main(["run", "set", run_id, "--notes", ""]) == 0
+    assert wired.runs[run_id]["notes"] == ""
+
+
+def test_group_notes_at_create_and_set(wired, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    experiment_id = wired.runs[capsys.readouterr().out.strip()]["experiment_id"]
+
+    rc = cli.main(
+        [
+            "group",
+            "create",
+            experiment_id,
+            "--name",
+            "h100-hunt",
+            "--notes",
+            "Chasing 16xH100 across us-central1.",
+        ]
+    )
+    assert rc == 0
+    group_id = json.loads(capsys.readouterr().out)["id"]
+    assert wired.groups[group_id]["notes"] == "Chasing 16xH100 across us-central1."
+
+    assert (
+        cli.main(["group", "set", group_id, "--notes", "Abandoned: every zone exhausted."])
+        == 0
+    )
+    assert wired.groups[group_id]["notes"] == "Abandoned: every zone exhausted."
+
+
+def test_group_set_requires_a_field(wired, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    experiment_id = wired.runs[capsys.readouterr().out.strip()]["experiment_id"]
+    cli.main(["group", "create", experiment_id, "--name", "g"])
+    group_id = json.loads(capsys.readouterr().out)["id"]
+
+    assert cli.main(["group", "set", group_id]) == 2
+    assert "pass at least one of --name/--spec/--notes" in capsys.readouterr().err
 
 
 def test_log_command(wired, capsys):

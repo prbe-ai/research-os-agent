@@ -1,6 +1,6 @@
 ---
 name: track-research-work
-description: Record what research produces — per-step metrics, spans, artifacts, asset versions, a run's final status, and the project's notes, which are prose and need no run at all. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication. Trigger whenever a run is open, or whenever something worth recording happens without one — including when a tool, dataset or environment the research depends on behaved differently than documented, or you had to substitute infrastructure you could not get — rather than waiting to be asked.
+description: Record what research produces — per-step metrics, spans, artifacts, asset versions, a run's final status, and the notes that hang off a project, a run or a run group, which are prose and need no run at all. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication. Trigger whenever a run is open, or whenever something worth recording happens without one — including when a tool, dataset or environment the research depends on behaved differently than documented, when you had to substitute infrastructure you could not get, and when a run's number turns out to measure nothing because the harness was broken rather than because the thing under test failed — rather than waiting to be asked.
 ---
 
 # Track research work
@@ -57,6 +57,35 @@ gets made. Record with the surface the run was opened with.
    Budget it: series ≈ the product of your dimension cardinalities, and past ~50 you
    have designed a wall of tiles.
 
+   **A LABELED POINT IS NEVER PLOTTED. This is the one that gets people, because
+   moving an identifier out of dimensions and into labels looks like the fix and is
+   only half of one.** Charts read the unlabeled stream only — the server filters on
+   `labels_hash = <empty>` — so a point carrying ANY label is excluded from every
+   graph before drawing. Labels exist to make a point addressable in the per-sample
+   views, not to annotate a plottable one. Label every point and the chart says "No
+   unlabeled points to plot", which reads like the run logged nothing while the data
+   sits there intact.
+
+   So a curve and per-sample identity are two different writes, and you make both:
+
+   ```python
+   for i, trial in enumerate(trials):
+       run.log({"reward": trial.reward}, step=i)                    # THE CURVE: no labels
+       run.log({"reward_sample": trial.reward}, step=i,             # the per-sample record
+               labels={"instance_id": trial.id, "repo": trial.repo})
+   ```
+
+   Separate keys, deliberately: one key logged both ways gives you a series whose
+   points are half plottable and a chart that silently shows a subset. If you only
+   want one, keep the unlabeled curve — per-item detail belongs in an artifact
+   anyway, and that is what analysis code reads.
+
+   The rule generalises past this case. Anything that makes a point unique — a
+   sample id, a repo name, a filename, a trial uuid — is fatal to a chart in BOTH
+   fields: in `dimensions` it shatters one curve into hundreds of one-point series,
+   and in `labels` it removes the point from plotting entirely. Neither field is
+   where per-item identity earns its keep; an artifact is.
+
    Two that only bite later. The headline number must be exactly ONE series — a
    computed view resolves a key and refuses one carrying several dimension
    variants — so keep `accuracy` and `accuracy_per_example` as separate keys, and
@@ -65,20 +94,40 @@ gets made. Record with the surface the run was opened with.
    every later reader gets the right reduction without having to name one.
 
    A durable claim about the work — why this approach, what you found, what a next
-   session should not repeat — is prose, not a metric key. It goes in the project's
-   notes:
+   session should not repeat — is prose, not a metric key. Prose has three homes, and
+   picking the wrong one is why findings end up in commit messages instead:
+
+   | what you are writing | where it goes |
+   |---|---|
+   | anything a person arriving at this project must know | the PROJECT's notes |
+   | why THIS run's number should be distrusted | that RUN's notes |
+   | what a sweep or a campaign of runs concluded | that GROUP's notes |
 
    ```
    probe notes show                       # read it before you start
    probe notes write --append <<'EOF'     # add to it, do not clobber
    Harbor has no generic-Kubernetes backend, so DOKS is out. Using GKE.
    EOF
+
+   probe run set   RUN --notes "Scored 0.0 by a broken verifier; see project notes."
+   probe group set GRP --notes "Every us-central1 zone was out of H100s."
    ```
 
-   One free-text markdown document per project, no schema. An excerpt rides along on
-   the project's MCP `card`, so the next agent sees it while orienting rather than
-   having to know it exists. Use `--append` when others may be working the same
-   project: a plain write is last-one-wins.
+   The project's is one free-text markdown document, no schema, and an excerpt rides
+   along on the project's MCP `card` — so the next agent sees it while orienting
+   rather than having to know it exists. **That surfacing is why the project's notes
+   are the default.** Run and group notes are read only by someone already looking at
+   that row, so a claim that matters beyond one run belongs in the project's notes
+   even if it was learned inside one. Use `--append` when others may be working the
+   same project: a plain write is last-one-wins.
+
+   Notes are NOT a second description. A description says what the thing IS and is
+   written before it runs; notes say what a later reader should distrust, and are
+   nearly always learned afterwards. With one field the two compete, and the caveat
+   wins by destroying the description. All three take `@file` or `-` for stdin.
+
+   Experiments have no notes field — a claim about an experiment goes in the
+   project's notes, or in `probe experiment set --description`.
 
    **Never block on delivery: async mode.** Any CLI write above takes `--async`
    (or `PROBE_ASYNC=1` for a whole session): the write is queued in a durable
@@ -143,11 +192,22 @@ gets made. Record with the surface the run was opened with.
    ```python
    series = client.run_series(run.id)      # one row per (key, kind, dimensions)
    assert len(series) < 50, f"{len(series)} series — a wall of tiles, not graphs"
+
+   # ...and that ANYTHING is plottable. The check above passes happily when every
+   # point is labeled, which is exactly one blank chart instead of fifty.
+   plottable = [s for s in series if s["point_count"] > 1 and not s["has_labeled_points"]]
+   assert plottable, "every point is labeled or single — nothing will draw"
    ```
+
+   Both assertions, not either. They fail on opposite mistakes and each one passes
+   the other's: an identifier in `dimensions` trips the first, an identifier in
+   `labels` trips only the second, and the half-fix that moves it from one to the
+   other trips the second while making the first look repaired.
 
    If the series count is close to your point count, every series holds one point
    and you have logged tiles and no graphs. Fix the shape before spending compute
-   on more runs. When checking a breakdown pools the way you intended, pass an
+   on more runs. Do this on a 2-instance run, not after 300: the shape is identical
+   and the mistake costs two minutes instead of an afternoon. When checking a breakdown pools the way you intended, pass an
    explicitly large `step_bucket` to `get_metrics_grouped` and confirm the rows
    come back with `n > 1`: the reduction buckets by step first, so points written
    at auto-incremented steps return one group per point and the grouping appears
@@ -173,13 +233,37 @@ gets made. Record with the surface the run was opened with.
    Minting an immutable experiment version is a separate act the researcher asks for
    explicitly; see `reference.md`.
 
+   **Status cannot say "the harness was broken", and must not be made to.** Those
+   four values are LIFECYCLE — whether the process finished — and the reaper, the
+   dashboard and every "is this run alive" check branch on them. A run whose verifier
+   was wrong ran fine and is honestly `completed`; what is wrong is the NUMBER, not
+   the execution. So mark it where meaning lives, not where lifecycle lives:
+
+   ```
+   probe run tag RUN invalid
+   probe run set RUN --notes "Scored by pytest exit code, not per-test: 40 of 113
+   P2P tests were uncollectable (pre-existing circular import), so the whole run
+   reported 0.0. Re-scored per-test in smoke-oracle-pertest."
+   ```
+
+   The tag is what a reader scanning a list sees; the notes are why. Neither works
+   alone — a bare `invalid` says "do not believe this" without saying what to believe
+   instead, and notes with no tag are invisible until someone opens the row.
+
+   Do this the moment the harness bug is found, not at the end. A streak of 0.0s that
+   nobody marked reads as a result, and it is the most expensive kind of wrong: it
+   looks like a finding, so the next person reasons from it.
+
 Liveness follows the surface. An SDK handle beats for the life of its process and
 stops when you finish it, so there is nothing to do. A CLI-opened run is detached and
 does not beat at all — do not bolt a beat onto one you cannot keep beating for the
 whole run: a run that beats once and then goes quiet is reaped as `crashed`.
 
-Outcome changed the run's meaning (flaky, superseded, promoted)? Retro-tag it:
-`probe run tag RUN_ID <tag> [--remove <tag>]` (also `experiment tag` / `project tag`).
+Outcome changed the run's meaning (flaky, superseded, promoted, `invalid`)? Retro-tag
+it: `probe run tag RUN_ID <tag> [--remove <tag>]` (also `experiment tag` /
+`project tag`), and say why in `probe run set RUN_ID --notes`. A finished run is not
+sealed — tags, description and notes all stay editable, so "we only understood this
+afterwards" is never a reason to leave the record wrong.
 
 Do not invoke `probe hook ...`; those are reserved for deterministic coding-agent hooks.
 

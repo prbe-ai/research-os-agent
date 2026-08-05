@@ -130,6 +130,23 @@ def _json_value(raw: str | None) -> dict | None:
     return value
 
 
+def _text_value(raw: str | None) -> str | None:
+    """Free text for a `--notes` flag: literal, `@file`, or `-` for stdin.
+
+    A caveat is prose, and prose arrives from a heredoc or a file at least as
+    often as from a quoted argument -- `notes write` already reads both, and a
+    run's note is the same kind of text. Passing `""` is preserved, not treated
+    as absent: that is how the SDK clears a note.
+    """
+    if raw is None:
+        return None
+    if raw == "-":
+        return sys.stdin.read()
+    if raw.startswith("@"):
+        return Path(raw[1:]).read_text()
+    return raw
+
+
 def _print_json(obj: Any) -> None:
     print(json.dumps(obj, indent=2, default=str))
 
@@ -1976,6 +1993,10 @@ def _confirmed_delete(
 # state that click is free to annotate. A call per signature costs nothing.
 DESCRIPTION_HELP = "what this is, in a few words up to 3 sentences"
 
+#: Notes are the CAVEAT, not a second description -- what a later reader should
+#: distrust. Prose, so it reads a file or stdin as readily as an argument.
+NOTES_HELP = "caveat a later reader needs; literal, @file, or '-' for stdin ('' clears)"
+
 #: Runs read either way on purpose -- see refs.resolve_run.
 RUN_REF_HELP = "run petname short_id or id (they cannot collide)"
 
@@ -1991,6 +2012,10 @@ def run_ref() -> Any:
 
 def description_opt() -> Any:
     return typer.Option(None, "--description", help=DESCRIPTION_HELP)
+
+
+def notes_opt() -> Any:
+    return typer.Option(None, "--notes", help=NOTES_HELP)
 
 
 @project_app.command("create")
@@ -2341,15 +2366,36 @@ def run_set(
     run: str = run_ref(),
     name: str = typer.Option(None, "--name"),
     description: str = description_opt(),
+    notes: str = notes_opt(),
 ) -> None:
-    """Update a run's human title or description."""
-    if name is None and description is None:
-        raise typer.BadParameter("pass at least one of --name/--description")
+    """Update a run's human title, description or notes.
+
+    `--notes` is NOT a second description, and the difference decides which one a
+    caveat goes in. A description says what the run IS and is written before it
+    runs; notes say what a later reader should DISTRUST about it, and are nearly
+    always learned after it finished -- a broken verifier, an environment that
+    was not what it claimed, a number that means less than it looks like it does.
+    Writing the caveat into the description means destroying the description to
+    keep it.
+
+    A run scored 0.0 by a broken harness is the case this exists for: tag it
+    (`probe run tag RUN invalid`) so a reader is warned, and write the notes so
+    they know why.
+    """
+    if name is None and description is None and notes is None:
+        raise typer.BadParameter("pass at least one of --name/--description/--notes")
     with _client() as c:
         # PATCH /v1/runs/{run_id} is UUID-typed, so a petname has to be resolved
         # before it is sent -- unresolved it 422s with a raw pydantic uuid dump.
         # Same reason `run delete` resolves; this verb was missed by that pass.
-        _print_json(c.update_run(_ref(c, "run", run).id, name=name, description=description))
+        _print_json(
+            c.update_run(
+                _ref(c, "run", run).id,
+                name=name,
+                description=description,
+                notes=_text_value(notes),
+            )
+        )
 
 
 @run_app.command("list")
@@ -4603,10 +4649,18 @@ def group_create(
     name: str = typer.Option(..., "--name"),
     kind: str = typer.Option("group", "--kind", help="e.g. sweep, ensemble"),
     spec: str = typer.Option(None, "--spec", metavar="JSON|@file", help="e.g. a sweep search space"),
+    notes: str = notes_opt(),
 ) -> None:
-    """Create a run group. Pass the printed id to `probe run start --group`."""
+    """Create a run group. Pass the printed id to `probe run start --group`.
+
+    Put free text in `--notes`, never in `--name`: the name is part of the
+    group's uniqueness key within the experiment, so a description appended to it
+    mints a SECOND group rather than annotating the one it describes.
+    """
     with _client() as c:
-        result = c.create_group(experiment_id, name, kind=kind, spec=_json_value(spec))
+        result = c.create_group(
+            experiment_id, name, kind=kind, spec=_json_value(spec), notes=_text_value(notes)
+        )
     _print_json(result)
 
 
@@ -4629,12 +4683,20 @@ def group_set(
     group_id: str = typer.Argument(...),
     name: str = typer.Option(None, "--name"),
     spec: str = typer.Option(None, "--spec", metavar="JSON|@file"),
+    notes: str = notes_opt(),
 ) -> None:
-    """Update a run group's name and/or spec."""
-    if name is None and spec is None:
-        raise typer.BadParameter("pass at least one of --name/--spec")
+    """Update a run group's name, spec and/or notes.
+
+    Notes are usually written HERE rather than at create: what a sweep or a
+    campaign was actually testing, and what it concluded, is known once it has
+    run. The spec says what was varied; the notes say what came of it.
+    """
+    if name is None and spec is None and notes is None:
+        raise typer.BadParameter("pass at least one of --name/--spec/--notes")
     with _client() as c:
-        result = c.update_group(group_id, name=name, spec=_json_value(spec))
+        result = c.update_group(
+            group_id, name=name, spec=_json_value(spec), notes=_text_value(notes)
+        )
     _print_json(result)
 
 

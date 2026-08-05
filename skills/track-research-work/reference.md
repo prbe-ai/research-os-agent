@@ -88,11 +88,20 @@ curation — it fires when someone is tidying structure, not when work is happen
 
 `probe project create | list | get | use | patch | move | delete`
 `probe experiment create | set | delete | edges`
-`probe run set RUN [--name NAME] [--description DESCRIPTION]`
+`probe run set RUN [--name NAME] [--description DESCRIPTION] [--notes TEXT|@FILE|-]`
+`probe group create EXP --name NAME [--kind KIND] [--spec JSON|@FILE] [--notes ...]`
+`probe group set GROUP [--name NAME] [--spec JSON|@FILE] [--notes TEXT|@FILE|-]`
+`probe notes show | write [FILE] [--append]` — the PROJECT's notes
 
-`probe project use SLUG` sets the ambient project. `run start` applies it when
+`probe project use SLUG` sets the ambient project — MACHINE-globally, shared by every
+process on the box, so prefer `--project` or `PROBE_PROJECT` when another session
+might be running (`start-research-work` step 3). `run start` applies it when
 `--project` is omitted, and uses it to CHECK that the experiment belongs there —
 it no longer decides where anything gets filed, because `run start` no longer
 creates anything. `probe experiment set EXP --hypothesis "..."` amends a hypothesis.
-`probe run set` amends a run's human title or description without changing its
+`probe run set` amends a run's human title, description or notes without changing its
 lifecycle state, metrics, or lineage.
+
+Notes exist on projects, runs and run groups, and NOT on experiments. `--notes ""`
+clears; `--notes @file` and `--notes -` read a file and stdin, since a caveat is
+usually a paragraph. Which of the three to use is `track-research-work` step 1.

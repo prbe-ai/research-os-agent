@@ -18,6 +18,81 @@
   `parent_run_id` — a UUID field — with the fetched row's real `id` sitting in
   the same scope.
 
+### Added
+
+- **`--notes` on `run set`, `group set` and `group create`.** The column has existed
+  server-side since research-os 0096 and the SDK has written it since — `update_run`,
+  `update_group` and `create_group` all take `notes`, complete with the pre-0096
+  silent-drop warning. The CLI had no door to it, so from a shell the only place to
+  put a caveat was `--description`, which meant destroying the description to keep it.
+
+  That is the difference the two fields exist for: a description says what a run IS
+  and is written before it runs; notes say what a later reader should DISTRUST about
+  it, and are nearly always learned afterwards. The case that motivated this is a run
+  that scored 0.0 because its verifier was broken rather than because the thing under
+  test failed — `probe run tag RUN invalid` warns the reader, `--notes` tells them why.
+
+  Takes literal text, `@file`, or `-` for stdin, since a caveat is usually a
+  paragraph; `""` clears, matching the SDK. Notes exist on projects, runs and run
+  groups — **not** on experiments.
+
+  No schema change, no backend change, no new entity: two flags over methods that
+  were already there.
+
+### Changed
+
+- **The skills now say that a LABELED POINT IS NEVER PLOTTED.** They previously
+  pointed agents straight into this: per-sample ids "go in `labels=` instead", with
+  nothing anywhere saying that charts read the unlabeled stream only
+  (`labels_hash = <empty>`, `app/telemetry/store.py`). So an agent that correctly
+  moved a high-cardinality identifier out of `dimensions` and into `labels` went from
+  128 blank charts to one blank chart and read that as a fix.
+
+  Observed on `rollouts-300` in `swe-smith-shakedown`: 300 trials, 129 series, **zero**
+  plottable points. The data was complete and correct the whole time — every point
+  carried `instance_id`, so the dashboard drew nothing and said "No unlabeled points
+  to plot", which reads like the run logged nothing.
+
+  A curve and per-sample identity are now documented as two different writes, with
+  separate keys, and the rule is generalised: anything that makes a point unique is
+  fatal to a chart in BOTH fields — it shatters the series in `dimensions` and
+  removes the point from plotting in `labels`. Per-item identity belongs in an
+  artifact.
+
+  The suggested post-run self-check grew a second assertion, because the existing one
+  passes on exactly this bug: it counts series, so an all-labeled run with one series
+  sails through. Both are needed — they fail on opposite mistakes, and the half-fix
+  that moves an identifier from one field to the other trips only the new one.
+  Verified against production: the run that "fixed" the shape passes the old
+  assertion and fails the new one.
+
+- **The skills route to the whole capture surface, not just the parts that need a
+  run.** Findings during implementation, infrastructure that could not be
+  provisioned, and runs whose numbers measure nothing all had working doors and
+  nothing pointing at them, so they landed in commit messages and chat transcripts.
+
+  - `start-research-work` now names a project-direct run tagged `infra` as the home
+    for a provisioning attempt (a stockout, a quota denial, a node acquired and
+    released), with `probe link` carrying zone/machine-type onto `foreign_keys` and a
+    `provisioned_by` key pointing from the training run back at what shaped it. The
+    closed lineage vocabulary has no "provisioned by" relation, so it says not to
+    force one onto `probe edge`.
+  - A new trigger fires on **an assumption already written into code turning out to
+    be false** — a field that means the opposite of its name, a metric that cannot be
+    computed the way you assumed, a slice of the corpus that cannot be evaluated at
+    all. These arrive mid-implementation with no run open, which is exactly why they
+    were never logged.
+  - `track-research-work` step 1 now says which of the three notes fields a given
+    claim belongs in, and why the project's is the default: its excerpt rides the MCP
+    `card`, so it is the only one read by someone who did not already know to look.
+  - Step 6 documents `invalid` as the retro-tag for a broken harness, and says
+    plainly that run `status` must NOT grow a value for it — those four values are
+    lifecycle, and the reaper and every liveness check branch on them.
+  - The guidance to fall back on `probe project use` is gone. It writes a
+    MACHINE-global anchor that concurrent sessions share; it silently retargeted
+    three experiment creates into the wrong project, and there is no `experiment
+    move` to undo that. `--project` or `PROBE_PROJECT` (per-process) instead.
+
 ### Changed
 
 - **One vocabulary across the nouns.** Learning a verb from one kind and using it
