@@ -271,6 +271,7 @@ class Journal:
         content_type: str | None = None,
         kind: str | None = None,
         meta: dict | None = None,
+        notes: str | None = None,
         span_id: str | None = None,
         step_index: int | None = None,
         run_ref: str | None = None,
@@ -320,6 +321,7 @@ class Journal:
             "content_type": content_type,
             "kind": kind,
             "meta": meta,
+            "notes": notes,
             "span_id": span_id,
             "step_index": step_index,
             "blob": digest,
@@ -836,6 +838,9 @@ def _execute(journal: Journal, client, op_path: Path, op: dict) -> None:
         content_type=upload.get("content_type"),
         kind=upload.get("kind"),
         meta=upload.get("meta"),
+        # .get, not ["notes"]: a journal written by an older CLI has no such key,
+        # and the drainer must replay those ops rather than KeyError on them.
+        notes=upload.get("notes"),
         span_id=upload.get("span_id"),
         step_index=upload.get("step_index"),
     )

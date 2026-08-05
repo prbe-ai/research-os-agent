@@ -80,6 +80,10 @@ class AnchorType(StrEnum):
     run = 'run'
 
 
+class Notes(RootModel[str]):
+    root: str = Field(..., max_length=4000, title='Notes')
+
+
 class ArtifactCreate(BaseModel):
     content_hash: str | None = Field(None, title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
@@ -89,6 +93,7 @@ class ArtifactCreate(BaseModel):
     labels: dict[str, Any] | None = Field(None, title='Labels')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
+    notes: Notes | None = Field(None, title='Notes')
     size_bytes: int | None = Field(None, title='Size Bytes')
     span_id: UUID | None = Field(None, title='Span Id')
     step_index: int | None = Field(None, title='Step Index')
@@ -121,6 +126,7 @@ class ArtifactOut(BaseModel):
     kind: str = Field(..., title='Kind')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
+    notes: str | None = Field(None, title='Notes')
     path: str | None = Field('', title='Path')
     project_id: UUID | None = Field(None, title='Project Id')
     run_id: UUID | None = Field(None, title='Run Id')
@@ -497,6 +503,7 @@ class ExperimentArtifactCreate(BaseModel):
     kind: str | None = Field('file', title='Kind')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
+    notes: Notes | None = Field(None, title='Notes')
     size_bytes: int | None = Field(None, title='Size Bytes')
     uri: str | None = Field(None, title='Uri')
 
@@ -1073,6 +1080,7 @@ class ProjectArtifactCreate(BaseModel):
     kind: str | None = Field('file', title='Kind')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
+    notes: Notes | None = Field(None, title='Notes')
     size_bytes: int | None = Field(None, title='Size Bytes')
     uri: str | None = Field(None, title='Uri')
 
@@ -1129,7 +1137,7 @@ class Name2(RootModel[str]):
     root: str = Field(..., min_length=1, title='Name')
 
 
-class Notes(RootModel[str]):
+class Notes3(RootModel[str]):
     root: str = Field(..., max_length=100000, title='Notes')
 
 
@@ -1144,7 +1152,7 @@ class ProjectPatch(BaseModel):
     description: str | None = Field(None, title='Description')
     metadata: dict[str, Any] | None = Field(None, title='Metadata')
     name: Name2 | None = Field(None, title='Name')
-    notes: Notes | None = Field(None, title='Notes')
+    notes: Notes3 | None = Field(None, title='Notes')
     tags: list[str] | None = Field(None, title='Tags')
     workspace_id: UUID | None = Field(None, title='Workspace Id')
 
@@ -1455,6 +1463,10 @@ class Scope(StrEnum):
     admin = 'admin'
 
 
+class Notes4(RootModel[str]):
+    root: str = Field(..., max_length=4000, title='Notes')
+
+
 class ScopedUploadRequest(BaseModel):
     """
     Upload fields shared by project and experiment anchors.
@@ -1470,6 +1482,7 @@ class ScopedUploadRequest(BaseModel):
     content_hash: str = Field(..., title='Content Hash')
     content_type: str | None = Field(None, title='Content Type')
     name: str = Field(..., title='Name')
+    notes: Notes4 | None = Field(None, title='Notes')
     size_bytes: int | None = Field(None, title='Size Bytes')
 
 
@@ -1892,6 +1905,7 @@ class UploadRequest(BaseModel):
     kind: str | None = Field(None, title='Kind')
     meta: dict[str, Any] | None = Field(None, title='Meta')
     name: str = Field(..., title='Name')
+    notes: Notes4 | None = Field(None, title='Notes')
     size_bytes: int | None = Field(None, title='Size Bytes')
     span_id: UUID | None = Field(None, title='Span Id')
     step_index: int | None = Field(None, title='Step Index')

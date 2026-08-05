@@ -2865,6 +2865,7 @@ def _ping_presign(
     content_type: str | None,
     kind: str | None,
     meta: dict | None,
+    notes: str | None = None,
     span_id: str | None,
     step_index: int | None,
     context: dict | None = None,
@@ -2907,6 +2908,7 @@ def _ping_presign(
                 content_type=content_type,
                 kind=kind,
                 meta=meta,
+                notes=notes,
                 span_id=span_id,
                 step_index=step_index,
             )
@@ -2942,6 +2944,7 @@ def _artifact_add_async(
     span: str | None,
     content_type: str | None,
     meta: dict | None,
+    notes: str | None = None,
 ) -> None:
     """Queue an artifact operation and return immediately (--async).
 
@@ -2971,6 +2974,8 @@ def _artifact_add_async(
                     body = {"name": name, "uri": uri, "is_reference": True}
                 if content_type:
                     body["content_type"] = content_type
+                if notes:
+                    body["notes"] = notes
                 c.journal.append_http(
                     "POST", _REFERENCE_ROUTES[anchor].format(id=anchor_id), body
                 )
@@ -3000,6 +3005,8 @@ def _artifact_add_async(
             content_type=content_type,
             kind=kind if run_only else None,
             meta=meta if run_only else None,
+            # NOT gated on run_only: notes is accepted at every anchor (0095).
+            notes=notes,
             span_id=span,
             step_index=step,
             run_ref=run_ref,
@@ -3012,6 +3019,7 @@ def _artifact_add_async(
                 digest=queued["blob"], size=queued["size_bytes"],
                 content_type=content_type,
                 kind=kind if run_only else None, meta=meta if run_only else None,
+                notes=notes,
                 span_id=span, step_index=step,
                 context=c.journal.context,
             )
@@ -3033,6 +3041,11 @@ def artifact_add(
     span: str = typer.Option(None, "--span", help="associate with a run span UUID"),
     content_type: str = typer.Option(None, "--content-type"),
     meta: list[str] = typer.Option(None, "--meta", metavar="k=v", help="run anchor only"),
+    notes: str = typer.Option(
+        None,
+        "--notes",
+        help="what this file is, what produced it, what it shows — any anchor",
+    ),
     project: str = typer.Option(None, "--project", help="anchor to a project"),
     experiment: str = typer.Option(None, "--experiment", help="anchor to an experiment"),
     workspace: str = typer.Option(
@@ -3119,6 +3132,7 @@ def artifact_add(
             path=path, uri=uri, reference=reference, hash_content=hash_content,
             allow_missing=allow_missing, kind=kind, step=step, span=span,
             content_type=content_type, meta=_kv_pairs(meta) if meta else None,
+            notes=notes,
         )
         return
 
@@ -3128,7 +3142,7 @@ def artifact_add(
                 resolved, path=path, uri=uri, reference=reference,
                 hash_content=hash_content, allow_missing=allow_missing,
                 kind=kind, step_index=step, span_id=span, content_type=content_type,
-                meta=_kv_pairs(meta) if meta else None,
+                meta=_kv_pairs(meta) if meta else None, notes=notes,
             )
         print(f"artifact {resolved!r} recorded on {anchor_id}")
         return
@@ -3141,18 +3155,23 @@ def artifact_add(
             body = {"name": resolved, "is_reference": True, **fields}
             if content_type:
                 body["content_type"] = content_type
+            if notes:
+                body["notes"] = notes
             _print_json(c.create_anchored_reference(anchor, anchor_id, body))
         elif uri is not None:
             body = {"name": resolved, "uri": uri, "is_reference": True}
             if content_type:
                 body["content_type"] = content_type
+            if notes:
+                body["notes"] = notes
             _print_json(c.create_anchored_reference(anchor, anchor_id, body))
         else:
             if not path:
                 raise typer.BadParameter("needs a file path (--reference, or --uri)")
             _print_json(
                 c.upload_file(
-                    anchor, anchor_id, resolved, path, content_type=content_type
+                    anchor, anchor_id, resolved, path,
+                    content_type=content_type, notes=notes,
                 )
             )
 

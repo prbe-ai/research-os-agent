@@ -892,6 +892,7 @@ class Run:
         span_id: str | None = None,
         step_index: int | None = None,
         meta: dict | None = None,
+        notes: str | None = None,
         coords: dict[str, Any] | None = None,
         labels: dict[str, Any] | None = None,
         strict: bool | None = None,
@@ -949,6 +950,7 @@ class Run:
                 span_id=span_id,
                 step_index=step_index,
                 meta=meta,
+                notes=notes,
                 coords=coords,
                 labels=labels,
                 strict=strict,
@@ -970,6 +972,7 @@ class Run:
             span_id=span_id,
             step_index=step_index,
             meta=meta,
+            notes=notes,
             coords=coords or None,
             labels=labels or None,
         )
@@ -1035,6 +1038,7 @@ class Run:
         span_id: str | None,
         step_index: int | None,
         meta: dict,
+        notes: str | None = None,
         coords: dict[str, Any] | None = None,
         labels: dict[str, Any] | None = None,
         strict: bool | None = None,
@@ -1056,6 +1060,7 @@ class Run:
             step_index=step_index,
             kind=kind if kind != "file" else None,  # None preserves labels on restage
             meta=meta or None,
+            notes=notes,
         )
         try:
             presign = self._client.transport.post(
@@ -1098,6 +1103,10 @@ class Run:
                     "host": socket.gethostname(),
                     "upload": "failed",
                 },
+                # The description survives the fail-open downgrade: the row that
+                # lands is the only record of this file, so dropping it here would
+                # lose exactly what the caller took the trouble to write.
+                notes=notes,
                 coords=coords or None,
                 labels=labels or None,
             )
