@@ -53,6 +53,10 @@ def test_a_missing_mcp_token_never_falls_back_to_the_write_token(monkeypatch):
     use_context("staging")
     monkeypatch.delenv("PROBE_MCP_TOKEN", raising=False)
     monkeypatch.delenv("PROBE_TOKEN", raising=False)
+    # The legacy spelling still resolves in mcp/server._env (deprecation
+    # fallback): a developer shell exporting it leaks a real credential into
+    # this test and the "missing token" premise silently stops being true.
+    monkeypatch.delenv("ROS_MCP_TOKEN", raising=False)
 
     captured = {}
 

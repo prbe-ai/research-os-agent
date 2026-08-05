@@ -27,6 +27,9 @@ def wired(app, tmp_path, monkeypatch):
     """CLI against the fake API, with config in a scratch XDG dir (never the real one)."""
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
     monkeypatch.delenv("PROBE_MCP_TOKEN", raising=False)
+    # mcp/server._env also honors the legacy spelling; a developer shell
+    # exporting it would leak a real credential into these tests.
+    monkeypatch.delenv("ROS_MCP_TOKEN", raising=False)
 
     def factory(**_kw):
         return make_client(app, tmp_spool=tmp_path / "spool")
