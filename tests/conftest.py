@@ -1570,7 +1570,12 @@ class FakeApp:
 
 
 def make_client(
-    app: FakeApp, *, fail_open: bool = True, tmp_spool=None, async_writes: bool = False
+    app: FakeApp,
+    *,
+    fail_open: bool = True,
+    tmp_spool=None,
+    async_writes: bool = False,
+    **client_kwargs,
 ) -> Client:
     settings = Settings(
         base_url="http://test",
@@ -1595,6 +1600,7 @@ def make_client(
         fail_open=fail_open,
         journal=journal,
         async_writes=async_writes,
+        **client_kwargs,
     )
 
 

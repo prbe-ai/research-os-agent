@@ -202,6 +202,7 @@ class Client:
         spool_dir: str | Path | None = None,
         async_writes: bool = False,
         auto_drain: bool = True,
+        drain_interval: float | None = None,
         surface: str = Surface.SDK.value,
         client_headers: Mapping[str, str] | None = None,
     ):
@@ -238,16 +239,41 @@ class Client:
                 "name": config_module.current_context_name() or None,
                 "base_url": self.settings.base_url,
             }
-        # Parity F1 (docs/2026-08-04-outbox-miles-parity.md): async enqueue
-        # kicks the detached outbox worker, so a pure-SDK training loop gets
-        # live-ish delivery instead of a silent queue until finish(). Only for
-        # default-transport clients: the worker resolves credentials and
-        # transport from config, so it can never replay through an injected
-        # (test/custom) transport.
-        self._auto_drain = async_writes and auto_drain and transport is None
+        # Parity F1/F2 (docs/2026-08-04-outbox-miles-parity.md): async enqueue
+        # wakes a delivery loop. Default (F1): kick the detached outbox worker
+        # -- default-transport clients only, because the worker resolves its
+        # own transport from config and can never replay an injected one.
+        # With ``drain_interval`` (or PROBE_EXPORT_INTERVAL_SEC) set (F2): an
+        # in-process exporter thread delivers through THIS client instead --
+        # the fork-free path, and the one that works with any transport.
+        if drain_interval is None and async_writes:
+            raw = os.environ.get("PROBE_EXPORT_INTERVAL_SEC")
+            if raw:
+                try:
+                    drain_interval = float(raw)
+                except ValueError:
+                    warnings.warn(
+                        f"ignoring malformed PROBE_EXPORT_INTERVAL_SEC={raw!r}; "
+                        "expected seconds as a float",
+                        stacklevel=2,
+                    )
+        self._drain_interval = drain_interval if async_writes else None
+        self._exporter = None
+        self._exporter_lock = threading.Lock()
+        self._auto_drain = (
+            async_writes
+            and auto_drain
+            and transport is None
+            and self._drain_interval is None
+        )
         self._drainer_kick_interval = 1.0
         self._drainer_kicked_at = float("-inf")
-        if self._auto_drain and not (self.settings.token or self.settings.ingest_token):
+        if (
+            async_writes
+            and transport is None
+            and (auto_drain or self._drain_interval is not None)
+            and not (self.settings.token or self.settings.ingest_token)
+        ):
             # F7: queueing an op nothing can ever deliver fails hours later in
             # the drainer log, which is the worst place to learn it.
             raise errors.ValidationError(
@@ -266,6 +292,9 @@ class Client:
         self._run_heartbeat_stops.add(stop)
 
     def close(self) -> None:
+        # The exporter drains over this client's transport; join it first.
+        if self._exporter is not None:
+            self._exporter.close()
         # Beats ride this client's transport; leaving them running would spin a
         # thread per unfinished run against a closed httpx client every interval.
         for stop in list(self._run_heartbeat_stops):
@@ -294,7 +323,7 @@ class Client:
         _touch_run_lease(path)
         if self.async_writes:
             self.journal.append_http(method, path, body)
-            self._kick_drainer()
+            self._after_enqueue()
             return None
         strict = (not self.fail_open) if strict is None else strict
         try:
@@ -305,6 +334,25 @@ class Client:
                 raise
             self.journal.append_http(method, path, body)
             return None
+
+    def _after_enqueue(self) -> None:
+        """Wake delivery for a just-journaled op (F1/F2). A DEAD exporter is
+        not respawned: the only thing that kills one is an auth block, and
+        respawning per write would retry rejected credentials forever -- the
+        zombie-uploader pitfall. Re-login + `probe outbox retry` resumes."""
+        if self._drain_interval is not None:
+            exporter = self._exporter
+            if exporter is None:
+                with self._exporter_lock:
+                    exporter = self._exporter
+                    if exporter is None:
+                        from .exporter import OutboxExporter
+
+                        exporter = OutboxExporter(self, self._drain_interval)
+                        self._exporter = exporter
+            exporter.wake()
+            return
+        self._kick_drainer()
 
     def _kick_drainer(self) -> None:
         """Wake the detached outbox worker (parity F1). Throttled: this runs
@@ -324,8 +372,9 @@ class Client:
         except Exception:  # noqa: BLE001 -- best-effort; run end is the barrier
             pass
 
-    def flush(self) -> int:
-        """Foreground-drain the journal; returns the delivered count.
+    def _outbox_client_factory(self):
+        """client_factory for ``journal.drain`` -- shared by ``flush()`` and
+        the in-process exporter (F2).
 
         Ops pinned to THIS client's endpoint (or unpinned) replay over this
         client -- that keeps fake-transport tests and custom transports
@@ -333,7 +382,6 @@ class Client:
         context, tokens fresh (5A): a context switch between enqueue and flush
         must never deliver to the wrong tenant.
         """
-        from .journal import drain
 
         def factory(context: dict | None):
             base = (context or {}).get("base_url")
@@ -350,7 +398,13 @@ class Client:
                 return self
             return None  # journal.drain builds one from the pinned context
 
-        return drain(self.journal, client_factory=factory).delivered
+        return factory
+
+    def flush(self) -> int:
+        """Foreground-drain the journal; returns the delivered count."""
+        from .journal import drain
+
+        return drain(self.journal, client_factory=self._outbox_client_factory()).delivered
 
     # -- identity / auth ----------------------------------------------------
     def ensure_authenticated(self, *, interactive: bool | None = None) -> bool:
