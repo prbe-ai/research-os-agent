@@ -2,7 +2,43 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`probe run set <petname>` 422'd instead of amending the run.** `PATCH
+  /v1/runs/{run_id}` is UUID-typed, and this verb passed the ref through raw, so
+  the petname the CLI calls a run's name came back as a raw pydantic
+  `uuid_parsing` dump. `run delete` was fixed for exactly this and the resolver's
+  docstring says so; `run set`, `run metrics`, `run series` and `run check` were
+  missed by that pass and now resolve too. This is the verb the skill tells an
+  agent to use to add a description it forgot at create, so the recovery path for
+  runs did not work.
+
+- **`probe run child <petname>` filed the child under a parent that could not
+  resolve.** It fetched the parent correctly, then sent the caller's raw ref as
+  `parent_run_id` — a UUID field — with the fetched row's real `id` sitting in
+  the same scope.
+
 ### Changed
+
+- **One vocabulary across the nouns.** Learning a verb from one kind and using it
+  on the next now works, which was the whole complaint:
+
+  | | project | experiment | run | group |
+  |---|---|---|---|---|
+  | read | `get` | `get` **(new)** | `get` **(new)** | `get` |
+  | amend | `set` **(was `patch`)** | `set` | `set` | `set` |
+
+  `project patch` stays reachable as a hidden alias — it is in scripts — but the
+  discoverable spelling is `set` everywhere. Experiments had **no read verb at
+  all**, and a run's was only the top-level `probe get`, a bare verb that
+  silently meant "a run"; that spelling also still works.
+
+- **The ref and `--description` help text is generated from one place.** It was
+  written per-command, so the same concept had several spellings and some were
+  wrong: `run set` and `run tag` still said `"run id"` after #173 made a bare ref
+  the *petname*, and only one of the six `--description` flags carried any help
+  at all. `experiment create`'s slug argument had none while `project create`'s
+  did.
 
 - **Workspaces take a slug, like everything else.** `WorkspaceOut` has carried one
   all along — `UNIQUE (customer_id, slug)` — and the CLI simply refused to accept it,

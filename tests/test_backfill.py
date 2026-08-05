@@ -305,18 +305,19 @@ def test_the_prompt_bounds_how_long_a_description_may_be(tmp_path):
 
 
 def test_the_prompt_names_the_real_amend_verb_for_each_kind(tmp_path):
-    """`probe project set` does not exist — the verb is `patch`.
+    """Every kind amends with `set`, so the prompt says `set` for every kind.
 
-    Projects amend with `patch`, experiments and runs with `set`. An agent that
-    learns one and guesses the others gets `No such command`, which is how the
-    prompt shipped `probe note add` once before. A description missed at create
-    is recoverable, but only if the prompt names a door that opens."""
+    It used to be `project patch` against `experiment set` and `run set`, and an
+    agent that learned one and guessed the others got `No such command` — which
+    is how the prompt shipped `probe note add` once before. `patch` still works
+    as a hidden alias, but the prompt must teach the one verb that generalises,
+    or the inconsistency simply moves into the agent's habit."""
     prompt = backfill.build_prompt(
         folder=tmp_path, census=backfill.Census(files=3, bytes=99)
     )
-    assert "probe project patch" in prompt
+    assert "probe project set" in prompt
     assert "probe experiment set" in prompt
-    assert "probe project set" not in prompt
+    assert "probe project patch" not in prompt
 
 
 def test_prompt_carries_the_reference_threshold_for_large_files(tmp_path):
