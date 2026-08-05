@@ -346,3 +346,39 @@ def test_pushed_base_root_never_pushed(tmp_path):
     _git(work, "add", "-A")
     _git(work, "commit", "-qm", "init")
     assert pushed_base(str(work)) == (None, None)
+
+
+# --- lockfiles ---------------------------------------------------------------
+
+def test_gitignored_lockfile_is_captured(repo):
+    """A gitignored uv.lock must still enter the manifest as an uploadable blob —
+    today it is silently lost (design doc: the dirty-lockfile case)."""
+    (repo / "uv.lock").write_text("[lock]\nversion = 1\n")
+    (repo / ".gitignore").write_text("uv.lock\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore lockfile")
+    m = capture_manifest(str(repo))
+    by_path = _by_path(m)
+    assert by_path["uv.lock"]["source"] == "blob"
+    assert by_path["uv.lock"]["lockfile"] is True
+
+
+def test_tracked_lockfile_is_tagged(repo):
+    (repo / "requirements.txt").write_text("httpx==0.27.0\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "reqs")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+    m = capture_manifest(str(repo))
+    entry = _by_path(m)["requirements.txt"]
+    assert entry["source"] == "git"          # clean+pushed stays a reference
+    assert entry["lockfile"] is True          # but identity still names it
+
+
+def test_oversized_lockfile_reported_not_shipped(repo):
+    (repo / "package-lock.json").write_text("x" * (1024 * 1024 + 1))
+    (repo / ".gitignore").write_text("package-lock.json\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore")
+    m = capture_manifest(str(repo))
+    assert "package-lock.json" not in _by_path(m)
+    assert {"path": "package-lock.json", "reason": "lockfile_too_large"} in m["skipped"]

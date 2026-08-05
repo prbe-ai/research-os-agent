@@ -17,6 +17,7 @@ downstream from a correct capture. See ``capture_env``.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
@@ -364,6 +365,20 @@ def _include_entries(
     return found
 
 
+#: Root-level dependency descriptors captured as FILES, not just as the
+#: enumerated interpreter packages — the lockfile is what a rebuild consumes,
+#: and a dirty/gitignored one was previously lost with no record.
+LOCKFILE_NAMES = (
+    "uv.lock", "poetry.lock", "pyproject.toml", "environment.yml",
+    "package-lock.json", "Cargo.lock",
+)
+DEFAULT_MAX_LOCKFILE_BYTES = 1024 * 1024
+
+
+def _is_lockfile(name: str) -> bool:
+    return name in LOCKFILE_NAMES or fnmatch.fnmatch(name, "requirements*.txt")
+
+
 # Directories that are rebuilt from a lockfile or a cache, never authored. Left
 # in, the first snapshot of an ordinary Python project uploads a few hundred MB
 # of `.venv` and calls it the experiment's code.
@@ -477,6 +492,11 @@ def capture_directory_manifest(
                 reference_over_bytes=reference_over_bytes,
             )
         )
+    # The walk above already includes lockfiles -- they are not in any SKIP
+    # filter -- so only the identity tag is new here, matching capture_manifest.
+    for e in entries:
+        if "/" not in e["path"] and _is_lockfile(e["path"]):
+            e["lockfile"] = True
     entries.sort(key=lambda e: e["path"])
     digest = hashlib.sha256()
     for e in entries:
@@ -595,6 +615,34 @@ def capture_manifest(
         )
         entries.sort(key=lambda e: e["path"])
 
+    # Root-level lockfiles are FORCED into the manifest even when `.gitignore`
+    # would otherwise hide them from `ls-files` -- the exact gap that lost a
+    # dirty uv.lock with no record at all. Already-tracked/included lockfiles
+    # just get the identity tag below; only the gitignored/untracked case needs
+    # a new entry, and it is capped so an oversized one is reported, not shipped.
+    skipped: list[dict[str, str]] = []
+    have = {e["path"] for e in entries}
+    for name in sorted(os.listdir(cwd)):
+        if not _is_lockfile(name):
+            continue
+        full = os.path.join(cwd, name)
+        if not os.path.isfile(full) or os.path.islink(full):
+            continue
+        if name in have:
+            continue  # tracked or included already; tagged below
+        sha, size = _file_sha256(full)
+        if size > DEFAULT_MAX_LOCKFILE_BYTES:
+            skipped.append({"path": name, "reason": "lockfile_too_large"})
+            continue
+        entries.append({
+            "path": name, "mode": "100644", "sha256": sha, "size": size,
+            "source": "blob", "lockfile": True,
+        })
+    for e in entries:
+        if "/" not in e["path"] and _is_lockfile(e["path"]):
+            e["lockfile"] = True
+    entries.sort(key=lambda e: e["path"])
+
     digest = hashlib.sha256()
     for e in entries:
         digest.update(f"{e['path']}\0{e['mode']}\0{e['sha256']}\n".encode())
@@ -608,6 +656,7 @@ def capture_manifest(
         "n_git_referenced": sum(1 for e in entries if e["source"] == "git"),
         "n_pending_upload": sum(1 for e in entries if e["source"] == "blob"),
         "n_referenced_offsite": sum(1 for e in entries if e["source"] == "reference"),
+        "skipped": skipped,
     }
 
 

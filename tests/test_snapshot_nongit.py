@@ -140,6 +140,15 @@ def test_a_non_git_project_round_trips(project, tmp_path):
     assert os.access(dest / "run.sh", os.X_OK)
 
 
+def test_lockfile_is_tagged_in_directory_manifest(project):
+    """The walk already includes uv.lock (it is not in any SKIP filter) —
+    only the identity tag is new."""
+    (project / "uv.lock").write_text("[lock]\nversion = 1\n")
+    m = capture_directory_manifest(str(project))
+    by_path = {e["path"]: e for e in m["entries"]}
+    assert by_path["uv.lock"]["lockfile"] is True
+
+
 def test_snapshot_of_a_non_git_dir_records_no_commit(client, app, project):
     client.fail_open = False
     run = open_run(client, experiment="e", name="r")
