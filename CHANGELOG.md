@@ -38,6 +38,20 @@
 
 ### Fixed
 
+- **Backfill now writes a description for every project and experiment it
+  creates.** The prompt showed `project create` with only `--name`, so whether a
+  description appeared was luck — one import wrote one unprompted, the next left
+  it empty, and the project read "Add description" under its title. Nothing else
+  fills that in: the server generates a description only when a child RUN reaches
+  a terminal status, and importing a folder creates no runs, so an undescribed
+  backfill stays undescribed permanently. `--description` (plus `--tag`) is now
+  explicit on both `project create` and `experiment create`, with the reason
+  stated so a later trim of the prompt does not quietly drop it again.
+
+## Unreleased
+
+### Fixed
+
 - **A ref that is both a project id and a project slug no longer silently resolves to
   one of them.** `_project_id` parsed the ref as a UUID and, when that worked, returned
   it as an id without ever asking whether a *slug* matched too. A project whose slug was

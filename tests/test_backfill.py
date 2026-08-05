@@ -269,6 +269,23 @@ def test_the_prompt_never_names_a_door_that_does_not_open(tmp_path):
     assert "probe notes write" in prompt
 
 
+def test_the_prompt_demands_a_description_on_what_it_creates(tmp_path):
+    """A backfilled project read "Add description" under its title forever.
+
+    Nothing else fills it in: the server generates a description only when a
+    child RUN reaches a terminal status, and importing a folder creates no runs.
+    So an undescribed project stays undescribed permanently — and whether one
+    appeared at all was luck, because the prompt showed `project create` with
+    only --name. One import wrote a description unprompted; the next did not."""
+    prompt = backfill.build_prompt(
+        folder=tmp_path, census=backfill.Census(files=3, bytes=99)
+    )
+    assert "--description" in prompt
+    assert "ALWAYS pass --description" in prompt
+    # And it says WHY, so the rule survives a future edit that trims the prompt.
+    assert "creates no runs" in prompt
+
+
 def test_prompt_carries_the_reference_threshold_for_large_files(tmp_path):
     prompt = backfill.build_prompt(
         folder=tmp_path, project="p", census=backfill.Census(files=1, bytes=1)
