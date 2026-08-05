@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from . import errors
+from . import launch as _launch
 from . import snapshot as _snapshot
 from . import unit_context
 from .hashing import fingerprint, local_file_uri, reference_fields
@@ -1300,10 +1301,14 @@ class Run:
         include: list[str] | None = None,
         reference_over_bytes: int = _snapshot.DEFAULT_REFERENCE_OVER_BYTES,
         strict: bool | None = None,
+        argv: list[str] | None = None,
     ) -> dict:
         """Capture code (git shadow ref) + deps + GPUs as a content-addressed
         execution record (fold #7), and record the shadow commit as a reference
         artifact. Non-disruptive.
+
+        ``argv`` — the command this run executes, when a caller launches a
+        child process; defaults to this process's argv.
 
         ``venv`` / ``detect_venv`` choose WHICH environment is recorded. The
         default records this interpreter's, which is correct here and only here:
@@ -1355,13 +1360,24 @@ class Run:
             if include_env
             else {}
         )
+        lockfiles = sorted(
+            ({"path": e["path"], "sha256": e["sha256"]}
+             for e in manifest["entries"] if e.get("lockfile")),
+            key=lambda item: item["path"],
+        )
+        if lockfiles:
+            deps = {**deps, "lockfiles": lockfiles}
         record = ExecutionRecordCreate(
             # `git` is omitted rather than stored as null when there is no repo:
             # the execution record is content-addressed, and a null key would make
             # a non-git capture hash differently from the same one taken later.
             code={"manifest": manifest, **({"git": git} if git else {})},
             deps=deps,
-            hardware={"gpu": _snapshot.capture_gpu()} if include_gpu else {},
+            hardware=(
+                {"gpu": _snapshot.capture_gpu(), **_snapshot.capture_system()}
+                if include_gpu
+                else {}
+            ),
         )
         exec_rec = self._client.transport.post(
             "/v1/execution-records", record.model_dump(mode="json", exclude_none=True)
@@ -1376,21 +1392,29 @@ class Run:
             manifest, cwd, upload=upload, max_upload_bytes=max_upload_bytes, strict=strict
         )
 
-        # Pin the real runs.env_ref column (FK to the execution record just created).
+        # Pin the real runs.env_ref column (FK to the execution record just
+        # created). Launch ephemera ride the SAME patch as env_ref: one write, and
+        # the metadata merge is client-side (read-modify-write) because RunPatch
+        # REPLACES metadata. Single-writer per run is the operating assumption
+        # (probe exec holds the run lock; SDK runs are process-bound).
+        launch_block = _launch.build_launch_block(
+            argv=argv, cwd=cwd, config=(self._data or {}).get("config"),
+        )
+        current_meta = dict((self._data or {}).get("metadata") or {})
+        patch_body: dict = {"metadata": {**current_meta, "launch": launch_block}}
         if content_hash is not None:
-            data = self._client.write(
-                "PATCH", f"/v1/runs/{self.id}", {"env_ref": content_hash}, strict=strict
-            )
-            if data:
-                self._data = data
-                if data.get("env_ref") != content_hash:
-                    message = (
-                        "Probe Research API did not persist run.env_ref after snapshot "
-                        f"(expected {content_hash}, got {data.get('env_ref')!r})"
-                    )
-                    if strict is True or (strict is None and not self._client.fail_open):
-                        raise errors.CapabilityUnavailable("run.env_ref", message)
-                    warnings.warn(message, stacklevel=2)
+            patch_body["env_ref"] = content_hash
+        data = self._client.write("PATCH", f"/v1/runs/{self.id}", patch_body, strict=strict)
+        if data:
+            self._data = data
+            if content_hash is not None and data.get("env_ref") != content_hash:
+                message = (
+                    "Probe Research API did not persist run.env_ref after snapshot "
+                    f"(expected {content_hash}, got {data.get('env_ref')!r})"
+                )
+                if strict is True or (strict is None and not self._client.fail_open):
+                    raise errors.CapabilityUnavailable("run.env_ref", message)
+                warnings.warn(message, stacklevel=2)
         # Record the shadow commit as a reference artifact for lineage. The
         # manifest travels with it so a reader can tell, without fetching
         # anything, which files this reference can actually still supply.
@@ -1431,6 +1455,8 @@ class Run:
                 # WHICH environment the deps came from. Deliberately here and
                 # not in the hashed execution record (split_env_provenance).
                 **({"env": env_provenance} if env_provenance else {}),
+                "n_lockfiles": len(lockfiles),
+                **({"launch_errors": launch_block["errors"]} if launch_block.get("errors") else {}),
             },
             strict=strict,
         )
@@ -1442,6 +1468,7 @@ class Run:
             "env_provenance": env_provenance,
             "execution_record": exec_rec,
             "content_hash": content_hash,
+            "launch": launch_block,
         }
 
     # -- liveness -----------------------------------------------------------
