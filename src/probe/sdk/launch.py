@@ -30,9 +30,12 @@ from typing import Any
 LAUNCH_SCHEMA = "probe.launch/1"
 
 # Secret-shaped flags and bare values. Redaction is marked, so a reader knows
-# the command line is not verbatim.
+# the command line is not verbatim. Secret words match as exact dash/underscore
+# segments, not substrings -- `--tokenizer` and `--max-tokens` are reproduction
+# data, not secrets.
 _SECRET_FLAG = re.compile(
-    r"^--?[\w-]*(key|token|secret|password|passwd|credential)[\w-]*(=.*)?$", re.IGNORECASE
+    r"^--?(?:\w+[-_])*?(key|token|secret|password|passwd|credential)(?:[-_]\w+)*?(=.*)?$",
+    re.IGNORECASE,
 )
 _SECRET_VALUE = re.compile(
     r"^(sk-[A-Za-z0-9]{8,}|ghp_[A-Za-z0-9]{20,}|gho_[A-Za-z0-9]{20,}"

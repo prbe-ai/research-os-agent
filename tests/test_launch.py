@@ -27,6 +27,19 @@ def test_scrub_argv_clean_passthrough():
     assert scrubbed is False
 
 
+def test_scrub_argv_ml_flags_are_not_secrets():
+    argv = ["train.py", "--tokenizer", "gpt2", "--max-tokens", "512", "--monkey", "see"]
+    out, scrubbed = scrub_argv(argv)
+    assert out == argv
+    assert scrubbed is False
+
+
+def test_scrub_argv_segmented_secret_flags_still_redact():
+    out, scrubbed = scrub_argv(["run.py", "--hf-token", "abc", "--key-file=x.pem"])
+    assert out == ["run.py", "--hf-token", "[redacted]", "--key-file=[redacted]"]
+    assert scrubbed is True
+
+
 def test_capture_process_records_identity(tmp_path):
     info, errors = capture_process(argv=["python", "train.py"], cwd=str(tmp_path))
     assert info["argv"] == ["python", "train.py"]
