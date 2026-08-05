@@ -15,6 +15,7 @@ import os
 import shlex
 import sys
 import threading
+import time
 import uuid
 import warnings
 import weakref
@@ -200,6 +201,7 @@ class Client:
         journal: "Journal | None" = None,
         spool_dir: str | Path | None = None,
         async_writes: bool = False,
+        auto_drain: bool = True,
         surface: str = Surface.SDK.value,
         client_headers: Mapping[str, str] | None = None,
     ):
@@ -236,6 +238,23 @@ class Client:
                 "name": config_module.current_context_name() or None,
                 "base_url": self.settings.base_url,
             }
+        # Parity F1 (docs/2026-08-04-outbox-miles-parity.md): async enqueue
+        # kicks the detached outbox worker, so a pure-SDK training loop gets
+        # live-ish delivery instead of a silent queue until finish(). Only for
+        # default-transport clients: the worker resolves credentials and
+        # transport from config, so it can never replay through an injected
+        # (test/custom) transport.
+        self._auto_drain = async_writes and auto_drain and transport is None
+        self._drainer_kick_interval = 1.0
+        self._drainer_kicked_at = float("-inf")
+        if self._auto_drain and not (self.settings.token or self.settings.ingest_token):
+            # F7: queueing an op nothing can ever deliver fails hours later in
+            # the drainer log, which is the worst place to learn it.
+            raise errors.ValidationError(
+                "async_writes needs deliverable credentials: run `probe login` "
+                "or set PROBE_TOKEN -- or pass auto_drain=False to queue "
+                "offline and deliver later via flush()/`probe outbox drain`"
+            )
         self._events = None
         # Stop signals for every live run-heartbeat thread this client minted.
         # Weak so a finished beat (its Run collected, its thread exited) doesn't
@@ -275,6 +294,7 @@ class Client:
         _touch_run_lease(path)
         if self.async_writes:
             self.journal.append_http(method, path, body)
+            self._kick_drainer()
             return None
         strict = (not self.fail_open) if strict is None else strict
         try:
@@ -285,6 +305,24 @@ class Client:
                 raise
             self.journal.append_http(method, path, body)
             return None
+
+    def _kick_drainer(self) -> None:
+        """Wake the detached outbox worker (parity F1). Throttled: this runs
+        on every async write and a training loop logs hundreds of points a
+        second; ``maybe_spawn`` is O(1) but not free. Best-effort by design --
+        ``finish()``/`probe run end` is the delivery barrier, this is latency."""
+        if not self._auto_drain:
+            return
+        now = time.monotonic()
+        if now - self._drainer_kicked_at < self._drainer_kick_interval:
+            return
+        self._drainer_kicked_at = now
+        from . import outbox_worker
+
+        try:
+            outbox_worker.maybe_spawn(str(self.journal.dir))
+        except Exception:  # noqa: BLE001 -- best-effort; run end is the barrier
+            pass
 
     def flush(self) -> int:
         """Foreground-drain the journal; returns the delivered count.
