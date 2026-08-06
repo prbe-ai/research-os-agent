@@ -2829,6 +2829,43 @@ class Client:
             )
         return stored
 
+    def append_project_notes(self, project_id: str, text: str) -> str:
+        """Extend the project's notes WITHOUT reading them first.
+
+        The read-then-write this replaces was lossy by construction: two writers
+        both read the same document, both append their paragraph, and the second
+        PATCH overwrites the first. No error, no warning -- you find out by
+        noticing prose is missing. Concurrent backfill units made that the
+        normal case rather than a rare one.
+
+        The server derives the new value from the row's own column inside one
+        UPDATE, so a blocked writer re-reads the winner's committed value and
+        appends to that. The separator is the server's business too: whether one
+        is needed depends on what the other writer just left behind, which is
+        not observable from here without re-introducing the race.
+
+        Returns the stored document, and the read-back is load-bearing for the
+        same reason :meth:`set_project_notes`'s is: ``ProjectPatch`` does not
+        forbid extra fields, so a backend predating this route accepts
+        ``notes_append``, ignores it, and answers 200. Silently appending
+        nothing is exactly the failure this method exists to end, so it is
+        raised rather than returned.
+        """
+        queued = self.write("PATCH", f"/v1/projects/{project_id}", {"notes_append": text})
+        if queued is None:
+            # Journaled or spooled: nothing reached the server yet, so there is
+            # nothing to read back and no claim to verify.
+            return text
+        stored = self.get_project(project_id).get("notes") or ""
+        if text.strip() and text.strip() not in stored:
+            raise errors.RosError(
+                "the server did not append the notes: this backend predates "
+                "`notes_append` (research-os 0.117.0.0) and silently ignored the "
+                "field. Upgrade the backend, or use `notes write` without --append "
+                "if you are the only writer."
+            )
+        return stored
+
     def query_series(self, run_ids: list[str], **kw) -> dict:
         return self.transport.post(
             "/v1/series/query", {"run_ids": run_ids, **kw}, idempotent=True

@@ -4892,6 +4892,11 @@ def outbox_status(
         "auth_blocked_since": status.get("auth_blocked_since"),
         "oldest_pending": pending[0][1].get("enqueued_at") if pending else None,
         "last_error": status.get("last_error"),
+        # Ops the journal declined to stage because the disk was near full. They
+        # still deliver -- the drainer reads the source in place -- but they now
+        # depend on that source still existing at drain time, which is a fact an
+        # operator should be able to see rather than infer from a dead letter.
+        "unstaged_low_disk": status.get("unstaged_low_disk"),
     }
     producers = journal.producer_report()
     if producers:
@@ -4900,6 +4905,10 @@ def outbox_status(
                 "producer_id": p.get("producer_id"),
                 "role": p.get("role"),
                 "last_sequence": p.get("last_sequence"),
+                # A FLOOR, written after the op file is unlinked. Beside
+                # last_sequence it answers the only question worth asking of a
+                # writer that has gone away: did what it queued actually land.
+                "delivered": p.get("delivered"),
                 "state": p.get("state"),
                 "gaps": p.get("gaps") or [],
             }
@@ -5087,18 +5096,25 @@ def notes_write(
 ) -> None:
     """Write the project's notes.
 
-    Replaces by default. `--append` reads the current text first and adds to it,
-    which is what you want when two agents are working the same project -- a plain
-    write is last-one-wins and the other's paragraph is gone.
+    Replaces by default. `--append` extends the document instead, and the
+    extension happens SERVER-SIDE: the new value is derived from the row's own
+    column inside one UPDATE, so two writers appending at the same moment both
+    survive.
+
+    This used to be a read-then-write here in the client, which was lossy by
+    construction -- both writers read the same document, both appended, and the
+    second one to save erased the first's paragraph with no error. It was
+    documented as "what you want when two agents are working the same project",
+    which was true only when they took turns.
     """
     text = sys.stdin.read() if file in (None, "-") else Path(file).read_text()
     with _client() as c:
         project_id, label = _notes_project(c, project)
-        if append:
-            current = c.get_project_notes(project_id)
-            if current:
-                text = current.rstrip("\n") + "\n\n" + text.lstrip("\n")
-        stored = c.set_project_notes(project_id, text)
+        stored = (
+            c.append_project_notes(project_id, text)
+            if append
+            else c.set_project_notes(project_id, text)
+        )
     print(f"wrote notes on project {label}", file=sys.stderr)
     # The stored length, not the document. Echoing the whole thing back on stdout
     # made `notes write` unpipeable and buried the one fact a caller wants, which is
@@ -5344,6 +5360,13 @@ def edge_add(
 # -- experiment versions (fold #6) ------------------------------------------
 version_app = typer.Typer(no_args_is_help=True, help="immutable experiment version manifests")
 app.add_typer(version_app, name="version")
+
+# W&B import. Its own module because it owns a third-party dependency the rest of
+# the CLI does not have: `wandb` is optional, and its absence must degrade the
+# import rather than break `probe log`.
+from .wandb_import import app as wandb_app  # noqa: E402
+
+app.add_typer(wandb_app, name="wandb")
 
 
 @version_app.command("create")

@@ -133,6 +133,10 @@ class FakeApp:
     # Set False to model a backend PREDATING research-os 0094: it accepts the
     # unknown `notes` field on a project PATCH, drops it, and still answers 200.
     stores_project_notes = True
+    #: Whether this fake understands `notes_append` (research-os 0.117.0.0).
+    #: False plays a backend that takes the field, ignores it and answers 200,
+    #: which is the failure the client's read-back exists to catch.
+    stores_notes_append = True
     # Set False to model a backend PREDATING research-os 0096: it accepts the
     # unknown `notes` field on run and group create/PATCH, drops it, and still
     # answers 2xx -- so the row comes back with NO `notes` key at all, which is
@@ -580,6 +584,16 @@ class FakeApp:
             # `echoes_project_scope`).
             if self.stores_project_notes and body.get("notes") is not None:
                 row["notes"] = body["notes"]
+            # `notes_append` EXTENDS server-side, deriving from the stored value
+            # rather than one the client read earlier -- that derivation is the
+            # whole mechanism, so the fake has to do it here and not accept a
+            # pre-concatenated string. Gated alongside `notes` so the fake can
+            # still play a backend that predates the field, which is how the
+            # client's "the server ignored it" guard gets tested.
+            if self.stores_notes_append and body.get("notes_append") is not None:
+                current = row.get("notes") or ""
+                sep = "\n" if current and not current.endswith("\n") else ""
+                row["notes"] = current + sep + body["notes_append"]
             return httpx.Response(200, json=row)
 
         # -- workspaces --
