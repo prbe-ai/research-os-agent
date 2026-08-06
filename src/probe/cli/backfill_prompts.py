@@ -205,12 +205,20 @@ Read them, then WRITE A MANIFEST describing what to upload. Do not run
 afterwards, which is thousands of times faster than one call per file.
 
 Write JSONL to: {manifest_path}
-One object per line:
+One object per line, and ONLY these four keys -- an unrecognised key fails that
+row, and booleans must be bare `true`/`false`, never the strings "true"/"false":
 
     {{"path": "<path relative to the folder>",
       "notes": "<what it is, what produced it, what it shows>",
-      "reference": true|false}}
+      "reference": true|false,
+      "allow_missing": true|false}}
 
+    Set "allow_missing": true alongside "reference": true for anything on a
+    shared mount the uploading machine may not see at the same path. It is
+    ignored unless "reference" is true.
+
+    Put NOTHING else in this file. Your closing summary is your own output, not
+    a manifest row -- appended here it fails as one.
 {NAMING}
 
 {REFERENCES}

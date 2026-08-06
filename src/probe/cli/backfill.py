@@ -1185,14 +1185,22 @@ def run(
     project: str | None = None,
     interactive: bool = True,
     agent: Agent | None = None,
+    yes: bool = False,
+    concurrency: int | None = None,
 ) -> list[str]:
     """The `Import existing work` action. Returns the lines the wizard pages.
 
+    Delegates to :func:`probe.cli.backfill_run.execute`, which is the two-pass
+    flow: classify once over evidence, review, then import in resumable units.
+    This function is the door -- the picker, the agent choice, and the shape the
+    wizard expects back.
+
     `folder` skips the picker and `agent` skips the agent prompt, which is what
-    makes this reachable from `--action backfill` on a box with no TTY.
-    `project` names the destination explicitly; omitted, the FOLDER decides.
+    makes this reachable from `--action backfill` on a box with no TTY. `yes`
+    accepts the classification without review, which a headless run needs and a
+    human should not want.
     """
-    from probe.cli import tui
+    from probe.cli import backfill_run, tui
 
     target = folder
     if target is None:
@@ -1203,23 +1211,9 @@ def run(
             return []
         target = picked
 
-    # Order here is deliberate: cheapest and most certain first, and nothing
-    # that MUTATES anything until every local check has passed.
-    #
-    #   1. the path            local, free — and telling someone to install an
-    #                          agent when they mistyped a path is a wrong answer
-    #   2. the census          local, cheap
-    #   3. the agent           local, free — BEFORE the project, so a machine
-    #                          with no agent cannot leave an empty project behind
-    #   4. the project         network, CREATES a row
-    #   5. the agent run
     target = Path(target).resolve()
     if not target.is_dir():
         return [f"{target} is not a directory."]
-
-    census = scan(target)
-    if census.files == 0:
-        return [f"{target} has no files to import."]
 
     chosen, agent_error = resolve_agent(agent, interactive=interactive)
     if agent_error:
@@ -1227,48 +1221,12 @@ def run(
     if chosen is None or chosen is tui.BACK:
         return []
 
-    # A named --project is resolved HERE so a bad one fails before the agent
-    # spends twenty minutes reading a folder. Unnamed, nothing is resolved:
-    # the agent decides the projects, and the read-back finds out which.
-    pinned = None
-    if project:
-        try:
-            with client_factory() as client:
-                _, pinned = resolve_anchor(client, target, requested=project)
-        except Exception as exc:  # noqa: BLE001 - a credential problem is likely
-            return [
-                f"Could not resolve project {project!r}: {exc}",
-                "Run `probe login`, or drop --project and let the agent choose.",
-            ]
-
-    prompt = build_prompt(folder=target, census=census, project=pinned, agent=chosen)
-
-    tui.say()
-    where = f"into project `{pinned}`" if pinned else "— the agent will choose the projects"
-    tui.say(f"Importing {target} {where}.")
-    tui.say(f"{census.describe()} — {AGENT_COPY[chosen][0]} is reading them now.")
-    tui.say()
-
-    ok, tail = launch_agent(target, prompt, agent=chosen, total=census.files)
-
-    reported = summary_projects(tail) or ([pinned] if pinned else [])
-    try:
-        with client_factory() as client:
-            landed, at_least = count_landed_across(client, reported)
-    except Exception:  # noqa: BLE001 - never fail the import on the read-back
-        landed, at_least = -1, False
-
-    lines = [f"Imported {target}"]
-    if reported:
-        lines.append("Projects: " + ", ".join(reported))
-    lines.append("")
-    lines += reconcile(census, landed, at_least)
-    if not reported:
-        lines += [
-            "The agent named no projects, so nothing could be counted back. "
-            "Check `probe project list` before re-running."
-        ]
-    if not ok:
-        lines += ["", f"The agent did not finish cleanly: {tail.splitlines()[-1] if tail else ''}"]
-        lines += ["Re-running is safe — identical content is deduplicated server-side."]
-    return lines
+    return backfill_run.execute(
+        client_factory=client_factory,
+        folder=target,
+        agent=chosen,
+        project=project,
+        interactive=interactive,
+        yes=yes,
+        concurrency=concurrency,
+    )

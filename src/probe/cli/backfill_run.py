@@ -310,3 +310,171 @@ def ensure_projects(client, plan: plan_mod.Plan, assigned: dict[str, str]) -> tu
         except Exception as exc:  # noqa: BLE001 - surfaced, never swallowed
             problems.append(f"could not create project {slug!r}: {exc}")
     return made, problems
+
+
+def enqueue_manifests(
+    folder: Path, outcomes: list[UnitOutcome], *, project_of: dict[str, str]
+) -> tuple[int, list[str]]:
+    """Hand every unit's manifest to `artifact add --from-manifest`.
+
+    THE CWD IS LOAD-BEARING. A manifest row's `path` is relative to the imported
+    folder and the reader resolves it against the process working directory, so
+    this runs with `cwd=folder`. Anywhere else, every row fails "is not a regular
+    file" -- or worse, a same-named file under the wrong cwd uploads the wrong
+    bytes under the right name.
+
+    THE ANCHOR IS PASSED EXPLICITLY. Rows carry no anchor key, so without
+    `--project` every row is rejected for want of one and the command exits 1
+    having enqueued nothing -- a zero-import wearing a well-formed error.
+    """
+    import subprocess
+    import sys
+
+    enqueued = 0
+    problems: list[str] = []
+    for out in outcomes:
+        if not out.manifest or not out.rows:
+            continue
+        project = project_of.get(out.unit.unit_id, out.unit.project)
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            [
+                sys.executable, "-c",
+                "import sys; from probe.cli import main; sys.exit(main(sys.argv[1:]))",
+                "artifact", "add", "--from-manifest", str(out.manifest),
+                "--project", project, "--async",
+            ],
+            cwd=str(folder), capture_output=True, text=True,
+        )
+        try:
+            summary = json.loads(proc.stdout.strip().splitlines()[-1])
+            enqueued += int(summary.get("enqueued") or 0)
+            for failure in summary.get("failures") or []:
+                problems.append(f"{out.manifest.name} line {failure.get('line')}: "
+                                f"{failure.get('error')}")
+        except (ValueError, IndexError):
+            problems.append(
+                f"{out.manifest.name}: could not read the ingest summary "
+                f"({(proc.stderr or proc.stdout or '').strip().splitlines()[-1:] or ['no output']})"
+            )
+    return enqueued, problems
+
+
+def execute(
+    *,
+    client_factory,
+    folder: Path,
+    agent: bf.Agent,
+    project: str | None = None,
+    interactive: bool = True,
+    yes: bool = False,
+    concurrency: int | None = None,
+) -> list[str]:
+    """The whole import. Returns the lines the caller pages.
+
+    Order is deliberate and each step is cheap-and-certain before the one after:
+    census, evidence, classify, REVIEW, create projects, import, enqueue,
+    reconcile. Nothing mutates anything server-side until the review has passed.
+    """
+    from probe.cli import tui
+
+    report = Report()
+    ledger = ledger_mod.Ledger.for_folder(folder)
+    state = ledger.read()
+
+    census = bf.scan(folder, cap=10**9)  # UNCAPPED: this is the denominator
+    if census.files == 0:
+        return [f"{folder} has no files to import."]
+    ledger.open_import(folder, files=census.files, bytes_=census.bytes)
+
+    manifest_dir = ledger.path.parent / f"{ledger.path.stem}-manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    # RESUME: a plan already approved means the classification stands.
+    if state.planned and state.approved_at and state.outstanding():
+        units = [r.unit for r in state.outstanding()]
+        sessions = {r.unit.unit_id: r.session_id for r in state.outstanding() if r.session_id}
+        report.add(f"Resuming: {len(units)} of {len(state.units)} units left.")
+        assigned_project = {u.unit_id: u.project for u in units}
+    else:
+        tui.say(f"Reading {census.describe()} …")
+        ev = evidence_mod.gather(folder)
+        try:
+            with client_factory() as client:
+                # A backend that cannot list is not a reason to stop -- an empty
+                # list just means the agent names everything fresh. FAILING TO
+                # OPEN the client is different: that is the credential, and it
+                # will fail again for every unit.
+                try:
+                    existing = [
+                        p.get("slug")
+                        for p in (client.list_projects() or [])
+                        if isinstance(p, dict) and p.get("slug")
+                    ]
+                except Exception:  # noqa: BLE001
+                    existing = []
+        except Exception as exc:  # noqa: BLE001 - a credential problem is likely
+            # Guarding the `with` itself, not just the call inside it: opening the
+            # client is where an expired or absent credential actually fails, and
+            # that must name the fix rather than traceback before anything runs.
+            return [
+                f"Could not reach Probe: {exc}",
+                "Run `probe login`, then re-run — nothing was uploaded.",
+            ]
+        plan, tail = classify(folder, ev, agent=agent, existing=existing)
+        if plan is None:
+            return ["The classification did not produce a usable plan.",
+                    (tail.splitlines()[-1] if tail else ""),
+                    "Re-running is safe — nothing was uploaded."]
+
+        assigned, disc = plan_mod.resolve(ev, plan)
+        if not disc.trustworthy:
+            return ["The classification cannot be trusted:", *disc.describe(),
+                    "Re-run to try again — nothing was uploaded."]
+        if project:
+            assigned = dict.fromkeys(assigned, project)
+
+        body = describe_plan(ev, plan, assigned, disc)
+        if interactive and not yes:
+            tui.page(body, prompt="Enter to import, Ctrl-C to stop: ")
+        else:
+            report.add(*body, "")
+
+        with client_factory() as client:
+            made, problems = ensure_projects(client, plan, assigned)
+        if problems:
+            return ["Could not create every project, so nothing was imported:", *problems]
+        report.projects = made
+
+        units = plan_mod.pack(ev, assigned)
+        ledger.record_plan(units, made)
+        ledger.record_approval()
+        sessions = {}
+        assigned_project = {u.unit_id: u.project for u in units}
+
+    report.units_total = len(units)
+    outcomes = run_units(
+        folder, units, agent=agent, ledger=ledger, manifest_dir=manifest_dir,
+        concurrency=concurrency or DEFAULT_CONCURRENCY, sessions=sessions,
+    )
+    report.units_done = sum(1 for o in outcomes if o.ok)
+
+    enqueued, problems = enqueue_manifests(folder, outcomes, project_of=assigned_project)
+    report.enqueued = enqueued
+
+    report.add(f"Imported {folder}")
+    if report.projects:
+        report.add("Projects: " + ", ".join(report.projects))
+    report.add("", f"{census.files:,} files found on disk · {enqueued:,} queued for upload"
+                   f" · {report.units_done}/{report.units_total} units done.")
+    if enqueued < census.files:
+        report.add(f"{census.files - enqueued:,} not queued — build noise and caches are "
+                   "expected here; `probe backfill --resume` picks up the rest.")
+    report.add("", "The queue drains in the background. `probe outbox status` shows "
+                   "how much has actually landed.")
+    for problem in problems[:5]:
+        report.add(f"  {problem}")
+    failed = [o for o in outcomes if not o.ok]
+    if failed:
+        report.add("", f"{len(failed)} unit(s) did not finish. Re-running is safe — "
+                       "identical content is deduplicated server-side.")
+    return report.lines

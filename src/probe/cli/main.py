@@ -3743,14 +3743,29 @@ def _plan_manifest_row(
     step = _manifest_field(row, "step", int, "an integer")
     span = _manifest_field(row, "span", str, "a string")
     meta = _manifest_field(row, "meta", dict, "an object")
-    reference = bool(row.get("reference"))
-    hash_content = bool(row.get("hash"))
-    allow_missing = bool(row.get("allow_missing"))
+    # Through _manifest_field like every other key. `bool(row.get(k))` accepted
+    # the string "false" as True -- a realistic generator error, since the prompt
+    # shows the value as a bare `true|false` token -- and silently recorded a
+    # file as a pointer whose bytes are never uploaded.
+    reference = bool(_manifest_field(row, "reference", bool, "true or false"))
+    hash_content = bool(_manifest_field(row, "hash", bool, "true or false"))
+    allow_missing = bool(_manifest_field(row, "allow_missing", bool, "true or false"))
+    # A RELATIVE path in a manifest row defaults to being the name, because it
+    # IS the structure: `backfill.py` states the contract the dashboard depends
+    # on -- "the name is the file's relative path and nothing else", and the
+    # folder tree is built by splitting it on '/'. Defaulting to the basename
+    # would flatten a whole import into one directory and collide every
+    # `config.yaml` in it.
+    #
+    # An ABSOLUTE path falls back to the basename. It describes where a file
+    # sits on the machine that wrote the manifest, which is not a name anyone
+    # wants in a dashboard and leaks a local layout into shared data.
+    default_name = path if (path and not os.path.isabs(path)) else None
     name = _validate_artifact_row(
         anchor,
         path=path,
         uri=uri,
-        name=_manifest_field(row, "name", str, "a string"),
+        name=_manifest_field(row, "name", str, "a string") or default_name,
         reference=reference,
         hash_content=hash_content,
         allow_missing=allow_missing,
@@ -3875,9 +3890,18 @@ def _artifact_add_manifest(
             for lineno, row, error in _manifest_rows(manifest):
                 if error is not None or lineno in failures:
                     continue
-                plan = _plan_manifest_row(
-                    row, default_anchor=default_anchor, reference_over=reference_over
-                )
+                # Guarded, exactly as pass 1 is. The file list is re-planned
+                # here, and a shared research drive is LIVE -- a file deleted
+                # between the two passes is the normal case, not a race. Letting
+                # BadParameter escape aborted the command at exit 2, abandoning
+                # every remaining row and never printing the summary.
+                try:
+                    plan = _plan_manifest_row(
+                        row, default_anchor=default_anchor, reference_over=reference_over
+                    )
+                except (typer.BadParameter, OSError) as exc:
+                    failures.append({"line": lineno, "error": str(exc)})
+                    continue
                 anchor, ref = plan.pop("anchor"), plan.pop("anchor_ref")
                 anchor_id = ref
                 if anchor in _SLUG_ANCHORS and ref:
