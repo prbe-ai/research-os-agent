@@ -287,6 +287,17 @@ class Client:
             else:
                 producer_id = f"{surface}:{host}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
                 self._seal_producer_on_close = True
+            # The per-host CLI id is right for a training loop and wrong for
+            # concurrent CLI writers: several importers on one box collapse into
+            # a single producer line and cannot be told apart afterwards. This
+            # lets the caller name them (`PROBE_OUTBOX_PRODUCER_ID=import:shard-3`)
+            # without every `probe --async log` minting a registry file.
+            # Deliberately id-only: the seal-on-close decision stays with the
+            # SURFACE, so naming a shared id does not make the first process to
+            # exit mark the line closed under its still-live siblings.
+            override = (os.environ.get("PROBE_OUTBOX_PRODUCER_ID") or "").strip()
+            if override:
+                producer_id = override
             try:
                 self.journal.register_producer(producer_id, role=surface)
             except Exception:  # noqa: BLE001 -- accounting must never block writes
