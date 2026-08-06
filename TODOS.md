@@ -356,3 +356,36 @@ noticed.
 **Takes:** Delete them and their test, one release after 0.15.0.
 
 **Completed:** v0.25.0 (2026-07-30)
+
+## P2 — Retention/rollup policy for the hardware metric rail
+
+### Server-side lifecycle for `kind=hardware` points (research-os)
+
+**What:** A retention/downsample policy for hardware points: raw 60s-grid
+points kept ~90 days, then folded into 1h rollups (respecting each series'
+declared agg — a rollup of maxes is a max, of means a count-weighted mean),
+then optionally dropped. Mechanism candidates: rollup tables + partition
+drops on the existing run_id-hash partitioning, or age-scoped DELETEs.
+
+**Why:** hw collection (opt-in today, intended default-ON once proven)
+writes ~317k points/node/day when enabled (~220 series ×
+1440 60s windows). A 32-node month-long run is ~300M permanent rows in the
+Postgres store that is already the system's stated cardinality/volume
+ceiling — and Probe is system-of-record for this data (source Prometheus
+expires it in ~weeks; copy-in was a deliberate design decision). Best-effort
+telemetry should not grow unboundedly in the precious store.
+
+**Context:** flagged by the 2026-08-05 adversarial review of
+`docs/2026-08-05-hw-metrics-design.md` (finding #2), which also caught a 5x
+volume-math error in the draft. Deliberately NOT built with phase 1 — no
+observed volume data yet, and it would fatten the surgical server PR (resume
+receipt + hw series budget). Rollup agg semantics interact with migration
+0062 declared-agg and the honest-count catalog; whoever builds this should
+read the design doc's §Volume and §Wire model first.
+
+**Trigger:** hw rows exceed ~20% of metric_points, or the first fleet run
+lands ~100M hw rows — whichever first.
+
+**Effort:** M (schema-adjacent server work + agg-correct rollup + tests)
+**Priority:** P2
+**Depends on:** hw rail (phase 1a) shipped and producing real volume.

@@ -21,6 +21,18 @@ from probe.config import Settings
 from probe.transport import Transport
 
 @pytest.fixture(autouse=True)
+def _hw_collector_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the hardware collector OFF regardless of the developer's shell.
+
+    The collector is opt-in for users, but a developer with PROBE_HW=1
+    exported would otherwise get a collector + inventory thread per run() in
+    the legacy suite (real psutil/NVML probes, extra fake-API calls that
+    break exact-sequence assertions). The hw tests opt in explicitly via
+    their own autouse fixture, which runs after this one."""
+    monkeypatch.setenv("PROBE_HW", "0")
+
+
+@pytest.fixture(autouse=True)
 def _no_live_token_verification(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the hosted MCP's edge token check off by default.
 
