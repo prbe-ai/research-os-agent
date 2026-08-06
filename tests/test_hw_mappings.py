@@ -50,6 +50,27 @@ def test_cadvisor_working_set_and_throttling_map_to_proc_family():
     assert throttle.kind == "counter"
 
 
+def test_every_declared_agg_is_in_the_server_vocabulary():
+    """The server's MetricPointIn.agg is a closed enum; one illegal value
+    422s the WHOLE batch, every emit fails into the drop-oldest buffer, and
+    the rail goes silently dark — found live in prod (2026-08-06) because
+    the sim only exercised mean/max. Pin the entire default pack, and the
+    availability metrics specifically: 'min' is both legal AND the right
+    semantic (the pressure signal is the LOWEST headroom in the window)."""
+    from probe.hw.mappings import _DEFAULT
+    from probe.hw.types import SERVER_AGGS
+
+    pack = MappingPack.default()
+    for name, entry in _DEFAULT.items():
+        assert entry["agg"] in SERVER_AGGS, f"{name} declares illegal agg {entry['agg']}"
+        for comp in entry.get("companions", ()):
+            assert comp in SERVER_AGGS, f"{name} companion {comp} illegal"
+    assert pack.resolve("node_memory_MemAvailable_bytes", {}).agg == "min"
+    assert (
+        pack.resolve("node_filesystem_avail_bytes", {"mountpoint": "/"}).agg == "min"
+    )
+
+
 def test_unmapped_metrics_resolve_to_none():
     pack = MappingPack.default()
     assert pack.resolve("go_goroutines", {}) is None

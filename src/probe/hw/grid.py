@@ -38,11 +38,15 @@ class _Series:
     values: list = field(default_factory=list)  # in arrival (ts) order
 
 
+# Exactly the server's declared-agg vocabulary that makes sense as a window
+# reduce — no 'last': it is not in the server enum, and keeping a reducer no
+# source may declare would invite an illegal wire point back in.
 _REDUCERS = {
     "mean": lambda vs: sum(vs) / len(vs),
     "max": max,
     "min": min,
-    "last": lambda vs: vs[-1],
+    "sum": sum,
+    "count": len,
 }
 
 

@@ -27,8 +27,11 @@ def test_sample_emits_core_system_keys_with_finite_values():
     for key in ("hw/cpu/utilization", "hw/mem/used_percent"):
         assert key in samples, f"missing {key}"
         assert math.isfinite(samples[key].value)
-    # At least one disk usage reading (the root mount on any real machine).
-    assert any(k.startswith("hw/disk/") for k in samples)
+    # At least one disk usage reading (the root mount on any real machine),
+    # declared max (peak fill inside the window — and 'last' is not a legal
+    # server agg).
+    disk = [s for s in samples.values() if s.key.startswith("hw/disk/")]
+    assert disk and all(s.agg == "max" for s in disk)
 
 
 def test_network_counters_baseline_then_rate():
@@ -51,6 +54,9 @@ def test_cgroup_v2_quota_relative_memory_and_cpu(tmp_path):
 
     assert samples["hw/mem/quota_used_percent"].value == 50.0
     assert samples["hw/cpu/quota_cores"].value == 2.0
+    # 'last' is NOT in the server's declared-agg enum (learned in prod:
+    # 422 rejects the whole batch). A constant reduces exactly under mean.
+    assert samples["hw/cpu/quota_cores"].agg == "mean"
 
 
 def test_unlimited_or_absent_cgroup_emits_no_quota_keys(tmp_path):
