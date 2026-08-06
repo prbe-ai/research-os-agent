@@ -416,20 +416,26 @@ class Client:
 
         ``force`` (deferred finish, F3): skip the mode gate and the throttle
         -- a queued terminal status must not have its one kick swallowed --
-        but never the transport gate; a worker cannot replay an injected one."""
+        but never the transport gate; a worker cannot replay an injected one.
+
+        The throttle arms ONLY on an actual spawn (prod smoke 2026-08-06): a
+        probe that declined because a worker was alive must not suppress the
+        next write's probe, or a worker exiting inside the window strands the
+        writer's last op if the writer then dies. While a worker lives, every
+        write pays one O(1) probe -- a status read and a lock check."""
         if not self._default_transport:
             return
         if not (self._auto_drain or force):
             return
-        if not force:
-            now = time.monotonic()
-            if now - self._drainer_kicked_at < self._drainer_kick_interval:
-                return
-            self._drainer_kicked_at = now
+        if not force and (
+            time.monotonic() - self._drainer_kicked_at < self._drainer_kick_interval
+        ):
+            return
         from . import outbox_worker
 
         try:
-            outbox_worker.maybe_spawn(str(self.journal.dir))
+            if outbox_worker.maybe_spawn(str(self.journal.dir)) and not force:
+                self._drainer_kicked_at = time.monotonic()
         except Exception:  # noqa: BLE001 -- best-effort; run end is the barrier
             pass
 

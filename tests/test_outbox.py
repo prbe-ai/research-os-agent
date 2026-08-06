@@ -362,7 +362,9 @@ def test_worker_loop_backs_off_then_exits_when_empty(tmp_path, monkeypatch):
     monkeypatch.setattr("probe.sdk.journal.drain", lambda j, **k: reports.pop(0))
     monkeypatch.setattr(outbox_worker.time, "sleep", slept.append)
     assert outbox_worker.run(str(tmp_path / "outbox")) == 0
-    assert slept == [2.0]
+    # 2.0 = transient backoff; 1.5 = the exit-grace linger for a dying
+    # writer's last op (prod smoke 2026-08-06).
+    assert slept == [2.0, outbox_worker._EXIT_GRACE_SECONDS]
 
 
 def test_worker_loop_exits_hard_on_auth_block(tmp_path, monkeypatch):

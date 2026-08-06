@@ -30,6 +30,9 @@ import time
 
 _BACKOFF_START_SECONDS = 2.0
 _BACKOFF_CAP_SECONDS = 300.0
+#: Longer than Client._drainer_kick_interval, so an op whose kick the writer's
+#: throttle swallowed is seen by the lingering worker before it exits.
+_EXIT_GRACE_SECONDS = 1.5
 _LOG_NAME = "drainer.log"
 
 
@@ -134,6 +137,14 @@ def run(directory: str | None = None) -> int:
             # saw our lease held and skipped its spawn. Re-read status while
             # still holding the lease; anything new means another pass, not an
             # exit that strands the tail op until some future CLI command.
+            fresh = Journal.read_status(str(journal.dir)) or {}
+            if fresh.get("pending"):
+                continue
+            # Grace pass (prod smoke 2026-08-06): a writer's LAST op can land
+            # after that re-read, and if the writer dies a moment later there
+            # is no next command to re-kick anything. Linger one beat -- wider
+            # than the client's kick throttle -- and look once more.
+            time.sleep(_EXIT_GRACE_SECONDS)
             fresh = Journal.read_status(str(journal.dir)) or {}
             if fresh.get("pending"):
                 continue
