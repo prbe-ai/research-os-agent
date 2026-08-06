@@ -1550,52 +1550,375 @@ def test_every_tui_reference_resolves():
     assert not missing, f"tui has no: {missing}"
 
 
-def test_the_interactive_wizard_starts_without_crashing():
-    """Actually run it on a pty. Every previous test stubbed `interactive()`
-    to False, so the branch that renders the menu was never executed once."""
+# --- reading a REAL screen back off a REAL pty ------------------------------
+#
+# The layout tests below used to be `inspect.getsource` greps -- "is the string
+# `full_screen = True` in this function". A grep like that passes with the
+# margin set to zero, set negative, or applied to the wrong edge: it certifies
+# that a line of code EXISTS, not that a screen looks right. Everything from
+# here down renders onto an actual pty and reads the rows back, so "the top two
+# rows are blank" is a claim about what a user sees.
+
+
+class _Screen:
+    """The smallest VT100 that can read prompt_toolkit back.
+
+    Not a terminal emulator so much as a transcript of one. prompt_toolkit's
+    Vt100 output uses a narrow vocabulary -- SGR, erase-down, erase-line,
+    relative cursor moves, CR/LF/BS and text -- so a grid plus those handlers
+    reproduces exactly what would be on screen. Sequences outside the
+    vocabulary are SKIPPED rather than guessed at: a wrong guess would move the
+    cursor silently and every row after it would be fiction.
+
+    Autowrap is off (prompt_toolkit emits `\\x1b[?7l`), so a long line clips at
+    the right edge instead of consuming the row below it.
+    """
+
+    _CSI = __import__("re").compile(r"\x1b\[([0-9;?<>=!]*)([@-~])")
+
+    def __init__(self, rows: int, cols: int) -> None:
+        self.h, self.w = rows, cols
+        self.grid = [[" "] * cols for _ in range(rows)]
+        self.row = self.col = 0
+
+    def _linefeed(self) -> None:
+        if self.row + 1 < self.h:
+            self.row += 1
+        else:  # the bottom row scrolls, exactly as a terminal would
+            self.grid.pop(0)
+            self.grid.append([" "] * self.w)
+
+    def _csi(self, params: str, final: str) -> None:
+        if params[:1] in ("?", "<", ">", "=", "!"):
+            return  # private modes: cursor visibility, bracketed paste, autowrap
+        nums = [int(p) if p else 0 for p in params.split(";")] if params else []
+        first = nums[0] if nums else 0
+        step = first or 1
+        blank = [" "] * self.w
+        if final == "A":
+            self.row = max(0, self.row - step)
+        elif final == "B":
+            self.row = min(self.h - 1, self.row + step)
+        elif final == "C":
+            self.col = min(self.w - 1, self.col + step)
+        elif final == "D":
+            self.col = max(0, self.col - step)
+        elif final == "G":
+            self.col = max(0, min(self.w - 1, step - 1))
+        elif final in "Hf":
+            self.row = max(0, min(self.h - 1, (nums[0] if nums else 1) - 1))
+            self.col = max(0, min(self.w - 1, (nums[1] if len(nums) > 1 else 1) - 1))
+        elif final == "J":
+            if first == 0:
+                self.grid[self.row][self.col :] = [" "] * (self.w - self.col)
+                for r in range(self.row + 1, self.h):
+                    self.grid[r] = list(blank)
+            elif first == 1:
+                self.grid[self.row][: self.col + 1] = [" "] * (self.col + 1)
+                for r in range(self.row):
+                    self.grid[r] = list(blank)
+            else:
+                self.grid = [list(blank) for _ in range(self.h)]
+        elif final == "K":
+            if first == 0:
+                self.grid[self.row][self.col :] = [" "] * (self.w - self.col)
+            elif first == 1:
+                self.grid[self.row][: self.col + 1] = [" "] * (self.col + 1)
+            else:
+                self.grid[self.row] = list(blank)
+        elif final == "X":
+            end = min(self.w, self.col + step)
+            self.grid[self.row][self.col : end] = [" "] * (end - self.col)
+
+    def feed(self, data: bytes) -> _Screen:
+        text = data.decode("utf8", "replace")
+        i, size = 0, len(text)
+        while i < size:
+            ch = text[i]
+            if ch == "\x1b":
+                match = self._CSI.match(text, i)
+                if match:
+                    self._csi(match.group(1), match.group(2))
+                    i = match.end()
+                    continue
+                nxt = text[i + 1] if i + 1 < size else ""
+                if nxt == "]":  # OSC, terminated by BEL
+                    end = text.find("\x07", i)
+                    i = size if end < 0 else end + 1
+                    continue
+                i += 3 if nxt in "()#" else 2
+                continue
+            i += 1
+            if ch == "\r":
+                self.col = 0
+            elif ch == "\n":
+                self._linefeed()
+            elif ch == "\x08":
+                self.col = max(0, self.col - 1)
+            elif ch == "\t":
+                self.col = min(self.w - 1, (self.col // 8 + 1) * 8)
+            elif ch >= " " and self.col < self.w:
+                self.grid[self.row][self.col] = ch
+                self.col += 1
+        return self
+
+    def lines(self) -> list[str]:
+        return ["".join(row).rstrip() for row in self.grid]
+
+    def dump(self) -> str:
+        return "\n".join(f"{i:2d}|{line}|" for i, line in enumerate(self.lines()))
+
+
+def _leading_blanks(lines: list[str]) -> int:
+    return next((i for i, line in enumerate(lines) if line), len(lines))
+
+
+def _trailing_blanks(lines: list[str]) -> int:
+    return _leading_blanks(list(reversed(lines)))
+
+
+def _assert_framed(screen) -> list[str]:
+    """The margin claim, in the form a margin of ZERO cannot satisfy.
+
+    The literal edge assertions carry the weight. `>= tui.MARGIN` alone is
+    vacuous at MARGIN == 0 -- "at least zero blank rows" is true of content
+    welded to row 0 -- so the depth check is written second, after the two
+    claims that hold for any margin worth having. The bottom one also catches
+    the other half of the bug: a margin applied to the top edge only.
+    """
+    from probe.cli import tui
+
+    lines = screen.lines()
+    assert any(lines), f"nothing rendered at all\n{screen.dump()}"
+    assert lines[0] == "", f"content is welded to the top row\n{screen.dump()}"
+    assert lines[-1] == "", f"content is welded to the bottom row\n{screen.dump()}"
+    assert _leading_blanks(lines) >= tui.MARGIN, screen.dump()
+    assert _trailing_blanks(lines) >= tui.MARGIN, screen.dump()
+    return lines
+
+
+def _pty_screen(argv, *, rows, cols, keys=b"", boot=20.0, settle=6.0):
+    """Run `argv` on a pty of exactly rows x cols; return the final `_Screen`.
+
+    Sizing happens in the PARENT right after the fork. The pty starts at 0x0,
+    so the ioctl is a real change and the child gets a SIGWINCH -- it redraws at
+    the size we asked for even if it had already rendered once.
+    """
+    import fcntl
     import os
     import pty
-    import re
     import select
-    import shutil
-    import sys
+    import struct
+    import termios
     import time
 
-    # THIS interpreter's probe, not whatever is on PATH — a stale global
-    # install would make the test report on code that is not under test.
+    raw = bytearray()
+
+    def drain(fd, budget, quiet=0.5):
+        end, last = time.time() + budget, time.time()
+        while time.time() < end:
+            if select.select([fd], [], [], 0.1)[0]:
+                try:
+                    chunk = os.read(fd, 65536)
+                except OSError:
+                    return False
+                if not chunk:
+                    return False
+                raw.extend(chunk)
+                last = time.time()
+                if b"\x1b[6n" in chunk:
+                    # Answer the cursor-position request. Left unanswered,
+                    # prompt_toolkit prints a CPR warning INTO the screen we are
+                    # about to measure and every row below it is off by one.
+                    try:
+                        os.write(fd, b"\x1b[1;1R")
+                    except OSError:
+                        return False
+            elif raw and time.time() - last > quiet:
+                return True
+        return True
+
+    pid, fd = pty.fork()
+    if pid == 0:  # pragma: no cover - child process
+        os.execve(argv[0], argv, dict(os.environ, TERM="xterm-256color"))
+    try:
+        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        if drain(fd, boot) and keys:
+            os.write(fd, keys)
+            drain(fd, settle)
+    finally:
+        for closing in (lambda: os.write(fd, b"\x03"), lambda: os.close(fd)):
+            try:
+                closing()
+            except OSError:
+                pass
+        try:
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+    return _Screen(rows, cols).feed(bytes(raw))
+
+
+#: Renders ONE prompt through the real `tui.ask` and waits. Run as `python -c`,
+#: so it exercises the shipped module rather than a copy of its logic.
+_RENDER_ONE = """
+import sys
+import questionary
+from probe.cli import tui
+
+count = int(sys.argv[1])
+header = sys.argv[2] or None
+message = tui.framed("Import existing work.", ["  scanned  0 folders"], "Which folder?")
+choices = []
+for i in range(count):
+    choices.append(questionary.Separator(" "))
+    choices.append(questionary.Choice(title="Option %02d" % i, value=i))
+tui.ask(
+    questionary.select(
+        message, choices=choices, instruction="(arrows)",
+        style=tui.style(), qmark=tui.qmark(), pointer=tui.pointer(),
+    ),
+    height=tui.content_height(message, choices),
+    header=header,
+)
+"""
+
+_HEADER = "Folder: /Users/example/research"
+
+
+def _prompt_screen(*, rows, cols, choices, header="", downs=0):
+    import sys
+
+    return _pty_screen(
+        [sys.executable, "-c", _RENDER_ONE, str(choices), header],
+        rows=rows,
+        cols=cols,
+        keys=b"\x1b[B" * downs,
+    )
+
+
+def test_the_margin_is_not_zero():
+    """Every margin assertion in this file is written as ">= tui.MARGIN", which
+    a margin of zero would satisfy vacuously -- blank rows would be asserted
+    zero rows deep and every one of them would pass against content welded to
+    row 0. This is the one place that says the margin must EXIST. Delete it and
+    the whole section quietly stops being a test."""
+    from probe.cli import tui
+
+    assert tui.MARGIN >= 1, "a zero margin is the bug this whole section exists for"
+
+
+def _probe_binary():
+    """THIS interpreter's probe, not whatever is on PATH — a stale global
+    install would make the test report on code that is not under test."""
+    import os
+    import shutil
+    import sys
+
     probe = str(pathlib.Path(sys.executable).parent / "probe")
     if not os.path.exists(probe):
         probe = shutil.which("probe") or ""
     if not probe or not os.path.exists(probe):
-        import pytest
-
         pytest.skip("no probe binary on this machine")
+    return probe
 
-    pid, fd = pty.fork()
-    if pid == 0:  # pragma: no cover - child process
-        os.execve(probe, [probe, "wizard"], dict(os.environ, TERM="xterm-256color"))
 
-    out = b""
-    deadline = time.time() + 15
-    while time.time() < deadline:
-        if select.select([fd], [], [], 0.3)[0]:
-            try:
-                chunk = os.read(fd, 65536)
-            except OSError:
-                break
-            if not chunk:
-                break
-            out += chunk
-        if b"Exit" in out or b"Traceback" in out:
-            break
-    try:
-        os.write(fd, b"\x03")
-    except OSError:
-        pass
+def test_the_interactive_wizard_starts_without_crashing():
+    """Actually run it on a pty, and walk a step INTO it.
 
-    text = re.sub(rb"\x1b\[[0-9;?]*[a-zA-Z]", b"", out).decode("utf8", "replace")
-    assert "Traceback" not in text, text[-600:]
-    assert "AttributeError" not in text, text[-600:]
+    Every unit test stubs `interactive()` to False, so the branch that renders
+    a menu is otherwise never executed. This used to stop at the first frame
+    and only grep for "Traceback"; it now drives the pointer down and back up
+    (harmless on both the action menu and the capability picker -- neither
+    Enter nor Space is ever sent, so nothing installs) and measures the screen
+    that comes back.
+
+    Whichever screen this machine lands on -- a configured device gets the
+    action menu, a fresh one goes straight to the capability picker -- both go
+    through `tui.ask`, so the margin claim holds either way.
+    """
+    screen = _pty_screen(
+        [_probe_binary(), "wizard"], rows=24, cols=80, keys=b"\x1b[B\x1b[A"
+    )
+    text = "\n".join(screen.lines())
+
+    assert "Traceback" not in text, screen.dump()
+    assert "AttributeError" not in text, screen.dump()
+    # The margin, on the real binary rather than a rehearsal of it.
+    _assert_framed(screen)
+
+
+def test_a_prompt_keeps_its_margins_on_a_narrow_short_terminal():
+    """80x24 is the floor every terminal clears, and the size at which a
+    content block and the screen are closest to the same height -- which is
+    exactly where a missing margin shows up first."""
+    from probe.cli import tui
+
+    lines = _assert_framed(_prompt_screen(rows=24, cols=80, choices=4))
+
+    # Still CENTRED, not merely lifted off the top edge: a block this short
+    # leaves far more than the margin at both ends, and the two ends match.
+    assert _leading_blanks(lines) > tui.MARGIN
+    assert abs(_leading_blanks(lines) - _trailing_blanks(lines)) <= 1, "\n".join(lines)
+
+
+def test_content_taller_than_the_screen_scrolls_inside_the_frame():
+    """The case the old layout could not survive, and the one that gives every
+    margin assertion here its teeth.
+
+    30 choices is more than twice a 24-row screen. Before the frame existed the
+    block was drawn from row 0 and simply ran out of screen: the top row
+    carried content that looked like it had scrolled in from somewhere, the
+    bottom options were unreachable, and no amount of centring arithmetic
+    helped because the spacer was deliberately zero at this size.
+
+    Now it is a bounded band -- so the edges stay clear even here, and the
+    pointed row stays visible because the choice window scrolls to its own
+    cursor.
+    """
+    screen = _prompt_screen(rows=24, cols=80, choices=30, downs=12)
+    lines = _assert_framed(screen)
+
+    # Twelve rows down a 30-long list: the pointer is far below the fold and the
+    # list has scrolled to bring it back, rather than the fold winning.
+    assert any("» Option 12" in line for line in lines), screen.dump()
+    assert not any("Option 00" in line for line in lines), (
+        "the list never scrolled -- it was clipped instead\n" + screen.dump()
+    )
+
+
+def test_a_pinned_header_survives_scrolling_to_the_bottom_of_a_long_list():
+    """What the folder picker needs: the path you are browsing has to stay
+    readable when you are 12 rows down a list that does not fit. A header
+    printed as part of the message scrolls away with everything else; this one
+    is its own band above the body, so it cannot."""
+    from probe.cli import tui
+
+    screen = _prompt_screen(rows=24, cols=80, choices=30, header=_HEADER, downs=12)
+    lines = _assert_framed(screen)
+
+    assert any(_HEADER in line for line in lines), screen.dump()
+    header_row = next(i for i, line in enumerate(lines) if _HEADER in line)
+    question_row = next(i for i, line in enumerate(lines) if "Which folder?" in line)
+    # Pinned ABOVE the question, and sitting on the first row the margin allows
+    # rather than on row 0 -- which is where a header with no margin would land.
+    assert header_row < question_row, screen.dump()
+    assert header_row == tui.MARGIN, screen.dump()
+    # It survived the scroll: the list moved under it, the header did not.
+    assert any("» Option 12" in line for line in lines), screen.dump()
+
+
+def test_the_margin_holds_on_a_terminal_too_short_to_centre_anything():
+    """Twelve rows with a header and 30 choices: the content cannot fit however
+    it is arranged, so there is nothing to centre and the margin is the only
+    thing keeping the frame off the edges. It still holds -- twelve rows can
+    afford four of them -- and the pointer is still reachable."""
+    screen = _prompt_screen(rows=12, cols=80, choices=30, header=_HEADER, downs=8)
+    lines = _assert_framed(screen)
+
+    assert len(lines) == 12
+    assert any(_HEADER in line for line in lines), screen.dump()
+    assert any("» Option 08" in line for line in lines), screen.dump()
 
 
 import pathlib  # noqa: E402  (used by the pty test above)
@@ -1619,30 +1942,132 @@ def test_content_height_is_counted_not_asked():
     assert tui.content_height("a\nb\nc", choices) == 3 + 1 + 2 + 1 + 2 + 1
 
 
-def test_content_taller_than_the_screen_gets_no_spacer():
+def test_a_page_taller_than_the_screen_still_gets_no_spacer(monkeypatch):
     """Centring something that does not fit only chooses which end to
-    amputate — and the top is the end with the state block on it."""
+    amputate — and the top is the end with the verdict on it. The margin does
+    NOT override that: whitespace gives way before content does.
 
-    def spacer_for(rows, height):
-        return 0 if height >= rows else (rows - height) // 2
+    This used to define its own `spacer_for()` and assert against that, which
+    tested the test. It calls the shipped function now.
+    """
+    from probe.cli import tui
 
-    assert spacer_for(20, 23) == 0
-    assert spacer_for(23, 23) == 0
-    assert spacer_for(60, 23) == 18
-    # And it never pushes the bottom off.
-    for rows in (24, 30, 45, 60, 120):
-        assert spacer_for(rows, 23) + 23 <= rows
+    def at(screen):
+        monkeypatch.setattr(tui, "rows", lambda: screen)
+
+    for screen, height, expected in (
+        (20, 23, 0),  # taller than the screen: no spacer at all
+        (23, 23, 0),  # exactly the screen: likewise
+        (24, 23, 1),  # one row of slack, and the margin cannot have all of it
+    ):
+        at(screen)
+        assert tui.top_spacer(height) == expected, (screen, height)
+
+    # A block that fits keeps the margin AND the centring.
+    at(60)
+    assert tui.top_spacer(23) >= tui.MARGIN
+
+    # It never pushes the bottom off, at any size.
+    for screen in (10, 24, 30, 45, 60, 120):
+        at(screen)
+        for height in (1, 5, 23, 40, 200):
+            assert tui.top_spacer(height) + height <= max(screen, height)
+
+
+def test_a_page_that_fits_is_centred_inside_the_margin(monkeypatch):
+    """The margin is on BOTH edges, so the centring works against a frame two
+    margins shorter than the screen — not against the raw screen."""
+    from probe.cli import tui
+
+    monkeypatch.setattr(tui, "rows", lambda: 40)
+    top = tui.top_spacer(10)
+
+    assert top >= tui.MARGIN
+    assert 40 - top - 10 >= tui.MARGIN, "no room left at the bottom"
+    # Centred: the two ends differ by at most the odd row.
+    assert abs(top - (40 - top - 10)) <= 1
 
 
 def test_the_prompt_goes_full_screen():
     """Inline rendering grows down from the cursor, so anything taller than the
     room below it scrolls — which is what kept eating the state block, and is
-    worse in a block terminal like Warp."""
-    import inspect
+    worse in a block terminal like Warp.
+
+    Asserted on the OBJECT, not on the source text. The grep this replaces
+    ("full_screen = True" appears in the function) passed whether or not the
+    line ever ran — it sits inside a bare `except Exception: pass`.
+    """
+    import questionary
 
     from probe.cli import tui
 
-    assert "full_screen = True" in inspect.getsource(tui.center_vertically)
+    question = questionary.select("pick", choices=["a", "b"], style=tui.style())
+    assert question.application.full_screen is False, "questionary starts inline"
+
+    tui.center_vertically(question, height=4)
+
+    assert question.application.full_screen is True
+
+
+def test_the_layout_is_four_bands_and_a_header_only_when_asked():
+    """The frame is what makes a margin possible at all. Reached through the
+    live layout, so a questionary reshuffle that our guard swallows shows up
+    here as a missing band rather than as a silently uncentred prompt."""
+    import questionary
+
+    from probe.cli import tui
+
+    plain = questionary.select("pick", choices=["a", "b"], style=tui.style())
+    tui.center_vertically(plain, height=4)
+    assert len(plain.application.layout.container.children) == 3, "top, body, bottom"
+
+    pinned = questionary.select("pick", choices=["a", "b"], style=tui.style())
+    tui.center_vertically(pinned, height=4, header="Folder: /tmp")
+    assert len(pinned.application.layout.container.children) == 4, "+ the header band"
+
+
+def test_the_frame_never_returns_a_negative_or_overflowing_band():
+    """A negative Dimension is not a cosmetic bug — prompt_toolkit raises on
+    it, and this module's whole posture is that layout must never take the
+    prompt down with it. Swept rather than sampled: the interesting sizes are
+    the degenerate ones nobody renders at until a user has a 3-row pane open.
+    """
+    from probe.cli import tui
+
+    for available in range(1, 60):
+        for height in (None, 1, 2, 13, 40, 500):
+            for header in (0, 1, 3, 90):
+                frame = tui.frame_rows(available, height, header)
+                assert min(frame) >= 0, (available, height, header, frame)
+                assert sum(frame) == max(1, available), (available, height, header, frame)
+
+
+def test_the_frame_spends_its_last_rows_on_content_not_whitespace():
+    """Two claims that pull against each other, and the order between them:
+    the margin exists, but it is what shrinks when the terminal cannot afford
+    it. A screen too short for both keeps the content."""
+    from probe.cli import tui
+
+    roomy = tui.frame_rows(40, 12, 0)
+    assert roomy.top >= tui.MARGIN and roomy.bottom >= tui.MARGIN
+    assert roomy.body == 12, "content that fits is never squeezed"
+
+    # Taller than the frame: the body is capped so it SCROLLS rather than
+    # overflowing, and both margins survive.
+    tall = tui.frame_rows(24, 500, 0)
+    assert tall.body == 24 - 2 * tui.MARGIN
+    assert tall.top == tui.MARGIN and tall.bottom == tui.MARGIN
+
+    # A header costs body rows, never margin rows.
+    headed = tui.frame_rows(24, 500, 3)
+    assert headed.header == 3
+    assert headed.body == 24 - 2 * tui.MARGIN - 3
+    assert headed.top == tui.MARGIN and headed.bottom == tui.MARGIN
+
+    # Too short to afford the margin: it gives way, the content does not.
+    cramped = tui.frame_rows(3, 500, 0)
+    assert cramped.body >= 1
+    assert sum(cramped) == 3
 
 
 def test_every_prompt_in_the_wizard_is_a_centred_page():
@@ -1701,8 +2126,14 @@ def test_output_pages_are_centred_like_the_prompts(monkeypatch, capsys):
     tui.page(["one", "two"])
     lines = capsys.readouterr().out.split("\n")
     pad = " " * ((120 - tui.CONTENT_WIDTH) // 2)
-    assert lines.index(pad + "one") == (40 - 2) // 2, "vertical centring"
-    assert lines[lines.index(pad + "one") + 1] == pad + "two"
+    top = lines.index(pad + "one")
+    assert top == (40 - 2) // 2, "vertical centring"
+    assert lines[top + 1] == pad + "two"
+    # `page()` has no bottom band to draw -- `clear()` already blanked the
+    # screen, so the margin is the rows it declines to fill. It still has to
+    # LEAVE them: a block that ends on the last row reads as a truncated one.
+    assert top >= tui.MARGIN, "no top margin"
+    assert 40 - (top + 2) >= tui.MARGIN, "nothing left at the bottom"
 
 
 def test_a_page_wraps_inside_its_block(monkeypatch, capsys):
