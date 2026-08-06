@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import shutil
 import sys
+from collections.abc import Sequence
+from typing import NamedTuple
 
 #: Returned by a prompt when the user pressed Escape. Distinct from None, which
 #: questionary already uses for Ctrl-C -- "go back one step" and "abandon the
@@ -23,6 +25,15 @@ BACK = object()
 #: Wide enough for the longest description, narrow enough to stay readable on a
 #: full-screen terminal. Centering a block wider than this gains nothing.
 CONTENT_WIDTH = 76
+
+#: Rows kept clear at the top AND bottom of every wizard screen.
+#:
+#: Content welded to row 0 reads as output that has already scrolled past --
+#: you cannot tell, looking at it, whether something was cut off above. The
+#: same at the bottom, where a choice list ending on the last row looks like a
+#: list with more in it. Two rows of air says "this is the whole screen"
+#: without spending a terminal on whitespace.
+MARGIN = 2
 
 
 def interactive() -> bool:
@@ -102,6 +113,65 @@ def say(text: str = "") -> None:
         print(text)
 
 
+class Frame(NamedTuple):
+    """How one full screen's rows are spent, top to bottom."""
+
+    top: int
+    header: int
+    body: int
+    bottom: int
+
+
+def frame_rows(available: int, height: int | None, header: int = 0) -> Frame:
+    """Split `available` screen rows into top margin, header, body, bottom margin.
+
+    The one place the margin arithmetic lives, so `center_vertically` and the
+    tests cannot drift apart. Guarantees, in order of precedence:
+
+    1. Every field is >= 0 and the four sum to exactly `available`. A negative
+       Dimension is not a cosmetic bug -- prompt_toolkit raises on it, and the
+       whole point of this module's guards is that layout never takes the
+       prompt down with it.
+    2. `body` never exceeds `available - header - 2*MARGIN`. Content taller
+       than that SCROLLS inside the frame rather than overflowing past the
+       bottom edge, which is why the body gets a fixed height instead of its
+       preferred one.
+    3. `top` and `bottom` are each at least MARGIN -- until the terminal is too
+       short to afford it, at which point the MARGIN shrinks. Whitespace is
+       what gives way on a tiny screen; the content is not amputated for it.
+    """
+    available = max(1, available)
+    header = max(0, min(header, available - 1))
+    margin = max(0, min(MARGIN, (available - header - 1) // 2))
+    body_max = max(1, available - header - 2 * margin)
+    body = body_max if height is None else max(1, min(height, body_max))
+    extra = max(0, available - header - body)
+    top = min(extra, max(margin, extra // 2))
+    return Frame(top=top, header=header, body=body, bottom=extra - top)
+
+
+def top_spacer(height: int) -> int:
+    """Blank rows `page()` prints above a block of `height` rows.
+
+    `page()` cannot reserve rows the way a prompt_toolkit layout can -- it is
+    plain prints onto a screen `clear()` has already blanked, so the bottom
+    margin is simply the rows it declines to fill. That makes the top spacer
+    the only knob, and it carries both jobs: the MARGIN, and the centring.
+
+    Two rules survive from before the margin existed:
+
+    * A block taller than the SCREEN still gets no spacer at all. Centring it
+      would only choose which end to amputate, and the top is the end with the
+      verdict on it.
+    * Between those, the margin gives way before the content does: a block that
+      fits the screen but not the framed area keeps every line, with whatever
+      margin is left over.
+    """
+    screen = max(1, rows())
+    framed_height = max(1, screen - 2 * MARGIN)
+    return min(MARGIN + max(0, framed_height - height) // 2, max(0, screen - height))
+
+
 def page(lines: list[str], prompt: str | None = None) -> None:
     """Show a block of OUTPUT as a centred page, like every prompt in the wizard.
 
@@ -126,10 +196,15 @@ def page(lines: list[str], prompt: str | None = None) -> None:
         # page is built on.
         body += wrap(line) if len(line) > CONTENT_WIDTH else [line]
     clear()
-    # A block taller than the screen gets no spacer: centring it would only
-    # choose which end to amputate, and the top is the end with the verdict.
+    # Margin + centring in one number -- see top_spacer(). A block taller than
+    # the screen still gets no spacer: centring it would only choose which end
+    # to amputate, and the top is the end with the verdict.
+    #
+    # No trailing newlines for the bottom margin. `clear()` already blanked the
+    # screen, so the rows below the block ARE the margin; printing them would
+    # scroll the top away on any page that fills the frame.
     height = len(body) + (2 if prompt else 0)
-    print("\n" * max(0, (rows() - height) // 2), end="")
+    print("\n" * top_spacer(height), end="")
     for line in body:
         print(indent(line) if line.strip() else "")
     if prompt is not None:
@@ -252,8 +327,31 @@ def content_height(message: str, choices=()) -> int:
     return rows + (1 if choices else 0)
 
 
-def center_vertically(question, height: int | None = None):
-    """Render the prompt FULL SCREEN and vertically centred.
+def header_lines(header: str | Sequence[str] | None) -> list[str]:
+    """Normalise a `header=` argument into the rows that get pinned.
+
+    Public because the caller needs to know what its header will cost before it
+    counts the rest: the header sits OUTSIDE `content_height()`, which counts
+    only what questionary draws. Long lines are wrapped to CONTENT_WIDTH and
+    every line carries the same `left_pad()` as the block below it, so a pinned
+    path lines up with the question rather than floating at column 0.
+
+    Accepts a plain string (split on newlines) or any sequence of lines.
+    """
+    if header is None:
+        return []
+    raw = header.splitlines() if isinstance(header, str) else list(header)
+    out: list[str] = []
+    for line in raw:
+        for part in wrap(line) if len(line) > CONTENT_WIDTH else [line]:
+            out.append(indent(part) if part.strip() else "")
+    return out
+
+
+def center_vertically(
+    question, height: int | None = None, header: str | Sequence[str] | None = None
+):
+    """Render the prompt FULL SCREEN, vertically centred, inside a margin.
 
     questionary renders inline, growing downward from the cursor, so anything
     taller than the room below it scrolls -- which is what kept eating the first
@@ -264,27 +362,63 @@ def center_vertically(question, height: int | None = None):
     so there is no "above" to scroll into. It is also the only way centring
     becomes possible at all.
 
-    Content taller than the screen gets NO spacer. Centring something that does
-    not fit only chooses which end to amputate.
+    The layout is four bands -- top margin, pinned header, body, bottom margin
+    -- sized by `frame_rows()`. Three consequences worth stating:
+
+    * The top and bottom bands are EXACT, so the body is whatever is left. That
+      is what makes content taller than the frame scroll inside it instead of
+      running off the bottom edge: squeezed below its preferred height,
+      questionary's choice window scrolls itself to keep the pointed row
+      visible -- it emits a `[SetCursorPosition]` token, and that is what
+      prompt_toolkit scrolls to. The state block above it stays put.
+    * NOT a ScrollablePane, which is the obvious thing to reach for and is
+      wrong here. It follows the FOCUSED window's cursor, and the focused
+      window is questionary's input buffer up in the message block -- so the
+      pane sits at scroll 0 and the choices below the fold become unreachable.
+      Bounding the band lets each window scroll on its own cursor instead.
+    * `header` rows are pinned ABOVE the body, so a folder path stays readable
+      at the bottom of a long list. They are NOT part of `height`.
+
+    Every reach into questionary/prompt_toolkit internals is guarded, same
+    posture as `checkbox_control`: questionary is pinned `>=2.0,<3` and a
+    library reshuffle must degrade the prompt, never fail to render it.
     """
     try:
         from prompt_toolkit.layout import HSplit, Layout, Window
+        from prompt_toolkit.layout.controls import FormattedTextControl
         from prompt_toolkit.layout.dimension import Dimension
 
         app = question.application
         inner = app.layout.container
         focused = app.layout.current_window
+        pinned = header_lines(header)
 
-        def spacer() -> Dimension:
+        def frame() -> Frame:
             from prompt_toolkit.application import get_app
 
-            available = get_app().output.get_size().rows
-            if height is None or height >= available:
-                return Dimension.exact(0)
-            return Dimension.exact((available - height) // 2)
+            return frame_rows(get_app().output.get_size().rows, height, len(pinned))
+
+        def band(name: str):
+            return lambda: Dimension.exact(getattr(frame(), name))
+
+        bands = [Window(height=band("top"))]
+        if pinned:
+            bands.append(
+                Window(
+                    height=band("header"),
+                    content=FormattedTextControl(
+                        [("class:question", "\n".join(pinned))], focusable=False
+                    ),
+                    # Exact height is only exact if a long line cannot silently
+                    # become two rows and push the body down.
+                    wrap_lines=False,
+                    always_hide_cursor=True,
+                )
+            )
+        bands += [inner, Window(height=band("bottom"))]
 
         app.full_screen = True
-        app.layout = Layout(HSplit([Window(height=spacer), inner]), focused_element=focused)
+        app.layout = Layout(HSplit(bands), focused_element=focused)
     except Exception:  # noqa: BLE001 - layout is cosmetic, never break the prompt
         pass
     return question
@@ -309,14 +443,22 @@ def bind_escape(question):
     return question
 
 
-def ask(question, height: int | None = None):
+def ask(
+    question, height: int | None = None, header: str | Sequence[str] | None = None
+):
     """Run a prompt full-screen and centred, with Escape bound.
 
-    Returns BACK, None (Ctrl-C), or the chosen value. `height` is the counted
-    row total from content_height(); without it the prompt still renders
-    full-screen, just top-aligned.
+    Returns BACK, None (Ctrl-C), or the chosen value.
+
+    `height` is the counted row total from content_height(); without it the
+    prompt still fills the frame, just top-aligned inside it.
+
+    `header` is a string or list of lines pinned ABOVE the scrolling body, so
+    it stays on screen at the bottom of a long list -- what a folder picker
+    needs to keep the current path readable. Do NOT add its rows to `height`:
+    the frame reserves them separately (see `header_lines`).
     """
-    return bind_escape(center_vertically(question, height)).ask()
+    return bind_escape(center_vertically(question, height, header=header)).ask()
 
 
 def rows() -> int:
