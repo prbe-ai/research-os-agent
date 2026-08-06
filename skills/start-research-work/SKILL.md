@@ -172,6 +172,7 @@ near-miss of an existing slug rather than warning.)
    run.log({"accuracy": acc}, step=None, agg="mean")             # the headline: ONE series
    run.log_artifact("predictions", path="preds.jsonl")           # per-example detail
    run.finish()                     # or `with run:` — closes even on an exception
+   print(run.url)                   # the dashboard link, in the job's own log
    ```
 
    Those three lines are the three shapes, and the split between them is a
@@ -279,9 +280,9 @@ near-miss of an existing slug rather than warning.)
 
 7. **Hand back the link.** Every project, experiment and run you create gets its
    dashboard URL in your reply — nobody can open a uuid. `project create`,
-   `experiment create` and `run start` print it to stderr; MCP entities carry it
-   as `url`. Copy that string: one you assemble from a remembered host 404s in
-   their browser with no sign it was invented. No `url` back, no link in the reply.
+   `experiment create` and `run start` print it to stderr; MCP entities carry it as
+   `url`. Copy that string — an assembled one 404s with no sign it was invented.
+   No `url`, no link.
 
 Recording what the run does, and closing it, is `track-research-work`. Command syntax
 for artifacts, assets, publishing and project admin is in that skill's `reference.md`.
