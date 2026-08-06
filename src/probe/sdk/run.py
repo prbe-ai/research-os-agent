@@ -369,7 +369,11 @@ class Run:
 
     def _next_step(self, kind: str) -> int:
         with self._steps_lock:
-            step = self._steps.get(kind, self._auto_step_floor)
+            # The hardware rail never consults the resume floor: its steps
+            # are epoch-derived, not counted, and stay invisible to the
+            # training rails' resume machinery.
+            floor = 0 if kind == "hardware" else self._auto_step_floor
+            step = self._steps.get(kind, floor)
             self._steps[kind] = step + 1
             return step
 
@@ -555,9 +559,12 @@ class Run:
         # Resume guard (research-os#364): a resumed run continues its curve. A
         # step at or below the resume point means the process restarted from
         # scratch — that is a RETRY, and appending it here would splice two
-        # executions into one series.
+        # executions into one series. The HARDWARE rail is exempt in both
+        # directions: its steps are epoch-derived (a different clock), so
+        # they neither clear nor trip a training-step floor.
         if (
-            self._resume_from_step is not None
+            kind != "hardware"
+            and self._resume_from_step is not None
             and step is not _UNSET
             and step is not None
             and step <= self._resume_from_step
@@ -1601,6 +1608,16 @@ class Run:
         run row. Dead letters raise even in bounded mode: waiting cannot heal
         a permanent rejection, and exiting would strand them silently.
         """
+        # Stop the hardware collector first: its final windows emit (or drop —
+        # best-effort) before the close; it must never block or fail the close.
+        monitor = getattr(self, "_hw_monitor", None)
+        if monitor is not None:
+            try:
+                monitor.finish()
+            except Exception:  # noqa: BLE001
+                pass
+            self._hw_monitor = None
+
         timeout = self._resolve_finish_timeout(flush_timeout)
         journal = self._client.journal
         if timeout is None:

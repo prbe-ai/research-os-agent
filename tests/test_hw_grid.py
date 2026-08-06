@@ -55,6 +55,10 @@ def test_window_reduces_by_declared_agg():
     assert by_key[("hw/gpu/memory_used_bytes", (("gpu", 0),))].value == 9.0
     assert by_key[("hw/disk//used_percent", ())].value == 42.0
     assert all(p.step == 29_700_000 for p in points)
+    # Points carry their declared agg onto the wire (migration 0062): grouped
+    # reads reduce correctly only if the declaration rides with the point.
+    assert by_key[("hw/gpu/utilization", (("gpu", 0),))].agg == "mean"
+    assert by_key[("hw/gpu/memory_used_bytes", (("gpu", 0),))].agg == "max"
 
 
 def test_stall_sensitive_metrics_emit_min_companion():
@@ -72,6 +76,9 @@ def test_stall_sensitive_metrics_emit_min_companion():
 
     assert round(values["hw/gpu/utilization"], 2) == round(100.0 / 3, 2)
     assert values["hw/gpu/utilization_min"] == 0.0
+    # The companion series declares ITS reduce, not the parent's.
+    aggs = {p.key: p.agg for p in points}
+    assert aggs["hw/gpu/utilization_min"] == "min"
 
 
 def test_non_finite_samples_are_dropped_at_the_source():

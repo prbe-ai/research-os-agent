@@ -344,11 +344,24 @@ class Client:
         self.close()
 
     # -- fail-open write ----------------------------------------------------
-    def write(self, method: str, path: str, body: dict | None = None, *, strict: bool | None = None):
+    def write(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        *,
+        strict: bool | None = None,
+        durable: bool = True,
+    ):
         """A data write. In ``async_writes`` mode it is journaled without ever
         touching the network (the outbox drainer delivers it); otherwise it is
         attempted and journaled on failure unless ``strict`` (or ``fail_open``
-        is off). Returns the parsed response, or None if it was journaled."""
+        is off). Returns the parsed response, or None if it was journaled.
+
+        ``durable=False`` is the hardware rail's contract: attempt directly,
+        RAISE on failure, never touch the journal — spool space belongs to
+        training metrics, and the hw monitor's bounded in-memory buffer is
+        that rail's only retry (drop-oldest; backfill repairs the gap)."""
         # Renew a DETACHED run's auto-update lease off its own traffic. This is
         # the single funnel every SDK write passes through, which is what makes
         # the renewal complete rather than sprinkled: a detached run
@@ -359,6 +372,9 @@ class Client:
         _touch_run_lease(path)
         if self._redact is not None and body is not None:
             body = self._redact(body)
+        if not durable:
+            resp = self.transport.request(method, path, json_body=body)
+            return resp.json() if resp.content else None
         if self.async_writes:
             self.journal.append_http(method, path, body)
             self._after_enqueue()
@@ -1502,6 +1518,38 @@ class Client:
         project: str | None = None,
         experiment_name: str | None = None,
         on_conflict: str = "auto",
+        hw: bool | None = None,
+        **run_kw,
+    ) -> Run:
+        """Open a run — full resolution/creation/``on_conflict`` semantics in
+        :meth:`_run_impl` (unchanged). Additionally starts the default-on
+        hardware collector when this process is the node-local leader;
+        ``hw=False`` or ``PROBE_HW=0`` disables it. Best-effort by contract:
+        a broken collector never touches the run
+        (docs/2026-08-05-hw-metrics-design.md)."""
+        handle = self._run_impl(
+            experiment=experiment,
+            hypothesis=hypothesis,
+            name=name,
+            project=project,
+            experiment_name=experiment_name,
+            on_conflict=on_conflict,
+            **run_kw,
+        )
+        from probe.hw import integration as hw_integration
+
+        handle._hw_monitor = hw_integration.maybe_start(self, handle, hw)
+        return handle
+
+    def _run_impl(
+        self,
+        *,
+        experiment: str | None = None,
+        hypothesis: str | None = None,
+        name: str | None = None,
+        project: str | None = None,
+        experiment_name: str | None = None,
+        on_conflict: str = "auto",
         **run_kw,
     ) -> Run:
         """Open a run inside an experiment — or straight under a project.
@@ -1776,7 +1824,22 @@ class Client:
         if session_id is not None:
             handle.session_id = session_id
         if resume_from_step is not None:
-            handle.arm_resume_guard(resume_from_step)
+            from probe.hw.integration import SUSPECT_RESUME_FLOOR
+
+            if resume_from_step >= SUSPECT_RESUME_FLOOR:
+                # A last_step in hardware's epoch range means the server
+                # computed the receipt WITHOUT the #364 hardware exclusion.
+                # Arming would refuse every training step — fail open with a
+                # warning instead (warn-never-gate).
+                warnings.warn(
+                    f"resume receipt last_step={resume_from_step} is in the "
+                    "hardware rail's epoch range — this server predates the "
+                    "hardware exclusion (research-os#364); the resume step "
+                    "guard is disabled for this attach",
+                    stacklevel=2,
+                )
+            else:
+                handle.arm_resume_guard(resume_from_step)
         return handle
 
     def resolve_or_raise(self, kind: str, slug: str, *, project_id: str | None = None) -> dict:

@@ -28,6 +28,7 @@ class HwPoint:
     coords: dict
     step: int
     value: float
+    agg: str = "mean"  # declared reduce, rides onto the wire (0062)
 
 
 @dataclass
@@ -82,10 +83,14 @@ class WindowAggregator:
             for (key, ckey), series in self._windows.pop(step).items():
                 coords = self._coords[ckey]
                 points.append(
-                    HwPoint(key, coords, step, _REDUCERS[series.agg](series.values))
+                    HwPoint(
+                        key, coords, step, _REDUCERS[series.agg](series.values), series.agg
+                    )
                 )
                 for comp in series.companions:
                     points.append(
-                        HwPoint(f"{key}_{comp}", coords, step, _REDUCERS[comp](series.values))
+                        HwPoint(
+                            f"{key}_{comp}", coords, step, _REDUCERS[comp](series.values), comp
+                        )
                     )
         return points
