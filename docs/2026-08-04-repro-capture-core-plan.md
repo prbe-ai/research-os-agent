@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Every run automatically captures launch ephemera (argv, host, env, seeds), system identity (OS/CUDA/CPU), and lockfiles — with `probe run check` reporting the new slots honestly and an opt-in strict gate.
+**Goal:** Every run automatically captures launch ephemera (argv, host, env, seeds), system identity (OS/CUDA/CPU), and lockfiles — with `probe run check` reporting the new slots honestly. *(Task 10's opt-in strict gate was later reversed — see the Amendment at the end of this doc: warn, never gate.)*
 
-**Architecture:** Implements D1–D4 + D7 of `docs/2026-08-04-reproducibility-capture-enforcement-design.md`. Per-launch ephemera go in a new `src/probe/sdk/launch.py` and land in `runs.metadata["launch"]` via the existing RunPatch (verified: `RunPatch.metadata` exists in `schema/openapi.json` — zero backend changes). Machine-stable identity (OS/CUDA/CPU) joins `execution_records.hardware` (hashed). Lockfiles become force-included manifest entries whose hashes join `deps`. Capture NEVER fails a run; `PROBE_REQUIRE_COMPLETE=1` is the only hard gate.
+**Architecture:** Implements D1–D4 + D7 of `docs/2026-08-04-reproducibility-capture-enforcement-design.md`. Per-launch ephemera go in a new `src/probe/sdk/launch.py` and land in `runs.metadata["launch"]` via the existing RunPatch (verified: `RunPatch.metadata` exists in `schema/openapi.json` — zero backend changes). Machine-stable identity (OS/CUDA/CPU) joins `execution_records.hardware` (hashed). Lockfiles become force-included manifest entries whose hashes join `deps`. Capture NEVER fails a run — and per the 2026-08-06 amendment, nothing gates a run at all; completion merely warns.
 
 **Tech Stack:** Python 3.11+, stdlib only (no new deps — `torch`/`numpy` are read from `sys.modules`, never imported). pytest with the existing `FakeApp`/`client` fixtures from `tests/conftest.py`.
 
