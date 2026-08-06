@@ -178,13 +178,31 @@ def scan(root: Path, *, cap: int = COUNT_CAP) -> Census:
     return Census(files=files, bytes=total)
 
 
-def subdirectories(root: Path) -> list[tuple[Path, Census]]:
-    """The browsable children of `root`, each with its own census."""
+def subdirectories(root: Path) -> list[Path]:
+    """The browsable children of `root`. ALL of them, and no counting.
+
+    This used to return a census per child, and the picker showed it as a label.
+    Two problems fell out of that, and deleting the counting deletes both:
+
+    * Every child was walked RECURSIVELY before the screen could draw. On a
+      network mount with a dataset directory that is the slowest moment in the
+      whole flow, paid again on every keypress that changes directory.
+    * Because that was expensive, the picker capped the list at 40 children and
+      said nothing about the rest. A workspace with sixty researcher folders
+      showed forty, with no scrollbar, no count and no hint -- so a folder you
+      could not see read as a folder that was not there.
+
+    The counts were justified as "knowing `checkpoints/` is 2.9 TB before
+    pointing an importer at it". They do not earn their cost: this is a folder
+    picker, the import runs one uncapped census afterwards where precision
+    actually matters, and anything over the reference threshold uploads as a
+    path rather than bytes anyway.
+    """
     try:
         entries = sorted(p for p in root.iterdir() if p.is_dir())
     except OSError:
         return []
-    return [(p, scan(p)) for p in entries if p.name not in SKIP_DIRS and not p.name.startswith(".")]
+    return [p for p in entries if p.name not in SKIP_DIRS and not p.name.startswith(".")]
 
 
 def slug_for(folder: Path) -> str:
@@ -435,7 +453,34 @@ def available_agents() -> list[Agent]:
     return [a for a in Agent if which_agent(a) is not None]
 
 
-def agent_argv(agent: Agent, binary: str, prompt: str, folder: Path) -> list[str]:
+#: What a Claude invocation loads before it reads a single file. Measured on
+#: this machine, 2026-08-06, as cache_creation + cache_read on a trivial prompt:
+#:
+#:     baseline (allowlist only)                47,198
+#:     + --strict-mcp-config                    33,050
+#:     + --disable-slash-commands               35,631
+#:     + both                                   21,483   <- what we send
+#:
+#: A backfill launches one of these per unit and again per retry, so halving
+#: the floor is the difference between fitting a unit's evidence in context and
+#: compacting in the middle of describing it.
+#:
+#: NOT `--bare`, which removes more and is the obvious-looking answer: it takes
+#: auth down with it. "Anthropic auth is strictly ANTHROPIC_API_KEY or
+#: apiKeyHelper (OAuth and keychain are never read)", so on a normal
+#: subscription install every agent exits 1 with "Not logged in". Verified.
+CONTEXT_FLAGS = ("--strict-mcp-config", "--disable-slash-commands")
+
+
+def agent_argv(
+    agent: Agent,
+    binary: str,
+    prompt: str,
+    folder: Path,
+    *,
+    session_id: str | None = None,
+    resume: str | None = None,
+) -> list[str]:
     """The headless invocation for one agent.
 
     Both are asked for a JSONL EVENT STREAM, and that is not a preference. A
@@ -447,9 +492,20 @@ def agent_argv(agent: Agent, binary: str, prompt: str, folder: Path) -> list[str
     Claude takes its working directory from the process (`cwd=`); Codex needs it
     named explicitly with `-C`, because it resolves its workspace -- the thing
     its sandbox is scoped to -- from that flag rather than from cwd.
+
+    `session_id` names the session so the ledger can record it; `resume` picks
+    one back up. A unit killed mid-turn leaves a transcript whose last message
+    asks for a tool result that never arrived, and that DOES replay cleanly --
+    verified 2026-08-06 against a SIGKILL, exit 0 with context intact, and a
+    SIGTERM is safer still because Claude Code writes the missing tool_result
+    before dying. The journal still decides WHICH units rerun; resume only
+    decides whether a rerun keeps what it had already read.
+
+    Codex has no equivalent, so its units restart clean. That is why `resume` is
+    ignored for it rather than approximated with something that looks similar.
     """
     if agent is Agent.CLAUDE:
-        return [
+        argv = [
             binary,
             "-p",
             prompt,
@@ -458,7 +514,18 @@ def agent_argv(agent: Agent, binary: str, prompt: str, folder: Path) -> list[str
             "--verbose",  # required: stream-json emits only the result without it
             "--allowedTools",
             AGENT_TOOLS,
+            "--autocompact",
+            "auto",
+            *CONTEXT_FLAGS,
         ]
+        if resume:
+            argv += ["--resume", resume]
+        elif session_id:
+            # Mutually exclusive: --session-id MINTS one, --resume ADOPTS one,
+            # and passing both asks for a session that must be simultaneously
+            # new and pre-existing.
+            argv += ["--session-id", session_id]
+        return argv
     return [binary, "exec", "--json", *CODEX_ARGS, "-C", str(folder), prompt]
 
 
@@ -580,6 +647,8 @@ def launch_agent(
     stream=None,
     progress: bool = True,
     total: int = 0,
+    session_id: str | None = None,
+    resume: str | None = None,
 ) -> tuple[bool, str]:
     """Run one headless agent inside `folder`, showing what it is doing.
 
@@ -627,7 +696,9 @@ def launch_agent(
 
     try:
         proc = subprocess.Popen(  # noqa: S603 - fixed binary, no shell
-            agent_argv(agent, binary, prompt, folder),
+            agent_argv(
+                agent, binary, prompt, folder, session_id=session_id, resume=resume
+            ),
             cwd=str(folder),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -727,7 +798,17 @@ def count_landed(client, project: str) -> tuple[int, bool]:
     project to print one number would make the cheap half of this feature the
     slow half; hitting the page exactly reports "at least", which is honest,
     instead of a total that is quietly a page size.
+
+    The experiment reads run CONCURRENTLY. Serially this was an N+1 -- one
+    round trip per experiment, after the one for the project -- and a project
+    with fifty experiments spent fifty sequential round trips producing a
+    single number at the very end of an import someone is already waiting on.
+    They are independent reads of independent anchors, so nothing is ordered
+    between them and the only reason it was a loop is that it was written as
+    one.
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     from probe.sdk.client import Anchor
 
     try:
@@ -741,15 +822,29 @@ def count_landed(client, project: str) -> tuple[int, bool]:
         at_least = total >= RECONCILE_PAGE
 
         experiments = _rows(client.list_experiments(project_id=project_id))
+        exp_ids = []
         for exp in experiments or []:
             exp_id = exp.get("id") if isinstance(exp, dict) else getattr(exp, "id", None)
-            if not exp_id:
-                continue
-            rows = _rows(client.list_anchored(Anchor.EXPERIMENT, str(exp_id), limit=RECONCILE_PAGE))
-            if rows is None:
-                return -1, False
-            total += len(rows)
-            at_least = at_least or len(rows) >= RECONCILE_PAGE
+            if exp_id:
+                exp_ids.append(str(exp_id))
+        if not exp_ids:
+            return total, at_least
+
+        def page(exp_id: str):
+            return _rows(client.list_anchored(Anchor.EXPERIMENT, exp_id, limit=RECONCILE_PAGE))
+
+        # Bounded: a project with hundreds of experiments must not open
+        # hundreds of sockets to print one number.
+        with ThreadPoolExecutor(max_workers=min(8, len(exp_ids))) as pool:
+            for rows in pool.map(page, exp_ids):
+                if rows is None:
+                    # One unreadable anchor makes the WHOLE count unknown rather
+                    # than silently short: reporting a shortfall that is really a
+                    # failed lookup trains people to ignore the one number this
+                    # feature exists for.
+                    return -1, False
+                total += len(rows)
+                at_least = at_least or len(rows) >= RECONCILE_PAGE
         return total, at_least
     except Exception:  # noqa: BLE001 - reconcile must never fail the import
         return -1, False
@@ -891,6 +986,13 @@ def choose_directory(start: Path):
     here = start.resolve()
     while True:
         children = subdirectories(here)
+        # ONE census, for the folder you are standing in, and it stays CAPPED.
+        # The two uses of `scan` want opposite things and this is the browsing
+        # one: you want the cursor to move now, and "20,000+" answers the only
+        # question this screen asks. The import runs its own UNCAPPED census
+        # afterwards, because there precision is the entire job -- a capped
+        # denominator makes `reconcile` suppress the shortfall line and the
+        # safety net switches itself off at exactly the size that needs it.
         own = scan(here)
 
         # THE PATH BAR, first row and selectable. Where you are and where you
@@ -913,13 +1015,11 @@ def choose_directory(start: Path):
             )
         )
         choices.append(questionary.Separator(" "))
-        for path, census in children[:40]:
-            choices.append(
-                questionary.Choice(
-                    title=f"{path.name}/\n{tui.body_indent()}  {census.describe()}",
-                    value=("cd", path),
-                )
-            )
+        # EVERY child, uncapped. The old `[:40]` slice hid the rest silently,
+        # which on the shared drive this feature exists for meant a folder you
+        # could not see reading as a folder that was not there.
+        for path in children:
+            choices.append(questionary.Choice(title=f"{path.name}/", value=("cd", path)))
         if here.parent != here:
             choices.append(questionary.Separator(" "))
             choices.append(questionary.Choice(title="../", value=("cd", here.parent)))
