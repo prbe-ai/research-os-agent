@@ -592,7 +592,19 @@ class FakeApp:
             # client's "the server ignored it" guard gets tested.
             if self.stores_notes_append and body.get("notes_append") is not None:
                 current = row.get("notes") or ""
-                sep = "\n" if current and not current.endswith("\n") else ""
+                # Tops the document up to a BLANK LINE, matching research-os
+                # 0.117.0.0. Notes are one markdown document, and two paragraphs
+                # joined by a single newline render as one paragraph -- so a fake
+                # that used \n would let a test pass on prose the real server
+                # would render wrong.
+                if not current:
+                    sep = ""
+                elif current.endswith("\n\n"):
+                    sep = ""
+                elif current.endswith("\n"):
+                    sep = "\n"
+                else:
+                    sep = "\n\n"
                 row["notes"] = current + sep + body["notes_append"]
             return httpx.Response(200, json=row)
 
