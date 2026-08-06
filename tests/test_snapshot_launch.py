@@ -83,7 +83,12 @@ def test_execute_survives_snapshot_failure(client, tmp_path, monkeypatch):
     assert result.returncode == 0  # block claims, never runs
 
 
-def test_client_run_auto_snapshots(client, monkeypatch):
+def test_client_run_auto_snapshots(client, monkeypatch, tmp_path):
+    # chdir into a plain tmp dir: the open-time snapshot must not depend on the
+    # HOST checkout (CI runners have no git identity, so shadow-committing the
+    # repo itself fails there and the launch block silently never lands).
+    (tmp_path / "a.py").write_text("a\n")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
     run = client.run(
         project="proj-auto",
