@@ -435,7 +435,34 @@ def available_agents() -> list[Agent]:
     return [a for a in Agent if which_agent(a) is not None]
 
 
-def agent_argv(agent: Agent, binary: str, prompt: str, folder: Path) -> list[str]:
+#: What a Claude invocation loads before it reads a single file. Measured on
+#: this machine, 2026-08-06, as cache_creation + cache_read on a trivial prompt:
+#:
+#:     baseline (allowlist only)                47,198
+#:     + --strict-mcp-config                    33,050
+#:     + --disable-slash-commands               35,631
+#:     + both                                   21,483   <- what we send
+#:
+#: A backfill launches one of these per unit and again per retry, so halving
+#: the floor is the difference between fitting a unit's evidence in context and
+#: compacting in the middle of describing it.
+#:
+#: NOT `--bare`, which removes more and is the obvious-looking answer: it takes
+#: auth down with it. "Anthropic auth is strictly ANTHROPIC_API_KEY or
+#: apiKeyHelper (OAuth and keychain are never read)", so on a normal
+#: subscription install every agent exits 1 with "Not logged in". Verified.
+CONTEXT_FLAGS = ("--strict-mcp-config", "--disable-slash-commands")
+
+
+def agent_argv(
+    agent: Agent,
+    binary: str,
+    prompt: str,
+    folder: Path,
+    *,
+    session_id: str | None = None,
+    resume: str | None = None,
+) -> list[str]:
     """The headless invocation for one agent.
 
     Both are asked for a JSONL EVENT STREAM, and that is not a preference. A
@@ -447,9 +474,20 @@ def agent_argv(agent: Agent, binary: str, prompt: str, folder: Path) -> list[str
     Claude takes its working directory from the process (`cwd=`); Codex needs it
     named explicitly with `-C`, because it resolves its workspace -- the thing
     its sandbox is scoped to -- from that flag rather than from cwd.
+
+    `session_id` names the session so the ledger can record it; `resume` picks
+    one back up. A unit killed mid-turn leaves a transcript whose last message
+    asks for a tool result that never arrived, and that DOES replay cleanly --
+    verified 2026-08-06 against a SIGKILL, exit 0 with context intact, and a
+    SIGTERM is safer still because Claude Code writes the missing tool_result
+    before dying. The journal still decides WHICH units rerun; resume only
+    decides whether a rerun keeps what it had already read.
+
+    Codex has no equivalent, so its units restart clean. That is why `resume` is
+    ignored for it rather than approximated with something that looks similar.
     """
     if agent is Agent.CLAUDE:
-        return [
+        argv = [
             binary,
             "-p",
             prompt,
@@ -458,7 +496,18 @@ def agent_argv(agent: Agent, binary: str, prompt: str, folder: Path) -> list[str
             "--verbose",  # required: stream-json emits only the result without it
             "--allowedTools",
             AGENT_TOOLS,
+            "--autocompact",
+            "auto",
+            *CONTEXT_FLAGS,
         ]
+        if resume:
+            argv += ["--resume", resume]
+        elif session_id:
+            # Mutually exclusive: --session-id MINTS one, --resume ADOPTS one,
+            # and passing both asks for a session that must be simultaneously
+            # new and pre-existing.
+            argv += ["--session-id", session_id]
+        return argv
     return [binary, "exec", "--json", *CODEX_ARGS, "-C", str(folder), prompt]
 
 
