@@ -69,6 +69,53 @@ def test_async_write_kicks_the_worker_but_throttled(tmp_path, kicks):
     assert len(Journal(tmp_path / "outbox").pending()) == 2
 
 
+def test_declined_probe_does_not_arm_the_throttle(tmp_path, monkeypatch):
+    """Prod smoke 2026-08-06: the worker exited, the next write's kick was
+    throttle-swallowed, the writer died -- one op stranded until a manual
+    drain. A probe that did NOT spawn must not suppress the next probe."""
+    calls: list = []
+    monkeypatch.setattr(
+        "probe.sdk.outbox_worker.maybe_spawn",
+        lambda directory=None: calls.append(directory) or False,  # worker alive
+    )
+    with _async_client(tmp_path) as client:
+        client.write("POST", "/v1/runs/r1/metrics", {"points": []})
+        client.write("POST", "/v1/runs/r1/metrics", {"points": []})
+    assert len(calls) == 2, "every write must re-probe while nothing was spawned"
+
+
+def test_worker_grace_pass_catches_a_dying_writers_last_op(tmp_path, monkeypatch):
+    """The other half of the same fix: an op landing AFTER the worker's final
+    status re-read must be seen by the exit-grace linger, not stranded."""
+    from probe.sdk import outbox_worker
+    from probe.sdk.journal import DrainReport
+
+    journal = Journal(tmp_path / "outbox")
+    journal.append_http("POST", "/v1/runs/r-1/metrics", {"n": 1})
+    delivered: list[int] = []
+
+    def fake_drain(j, **kw):
+        count = len(j.pending())
+        for path, _ in j.pending():
+            path.unlink()
+        j.write_status()
+        delivered.append(count)
+        return DrainReport(delivered=count, remaining=0)
+
+    monkeypatch.setattr("probe.sdk.journal.drain", fake_drain)
+
+    def dying_writer_sleep(seconds):
+        if not dying_writer_sleep.done:  # the last op lands during the linger
+            dying_writer_sleep.done = True
+            journal.append_http("POST", "/v1/runs/r-1/metrics", {"n": 2})
+
+    dying_writer_sleep.done = False
+    monkeypatch.setattr(outbox_worker.time, "sleep", dying_writer_sleep)
+
+    assert outbox_worker.run(str(tmp_path / "outbox")) == 0
+    assert sum(delivered) == 2 and not journal.pending()
+
+
 def test_kick_repeats_once_the_throttle_window_passes(tmp_path, kicks):
     with _async_client(tmp_path) as client:
         client._drainer_kick_interval = 0.0
