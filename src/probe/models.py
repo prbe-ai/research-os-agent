@@ -22,6 +22,7 @@ generated and validated like every other write path.
 from __future__ import annotations
 
 from ._generated.models import (
+    AnchorLevel,
     ArtifactCreate,
     ArtifactPinImpact,
     ArtifactVersionCreate,
@@ -75,6 +76,10 @@ from ._generated.models import (
 )
 
 __all__ = [
+    # The vertically-movable artifact anchors, backing `probe artifact move --to`.
+    # Taken from the contract rather than spelled out in the CLI so a level the
+    # backend adds arrives with `make regen` instead of by hand.
+    "AnchorLevel",
     "ArtifactCreate",
     "ArtifactPinImpact",
     "ArtifactVersionCreate",
