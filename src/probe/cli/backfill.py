@@ -647,6 +647,8 @@ def launch_agent(
     stream=None,
     progress: bool = True,
     total: int = 0,
+    session_id: str | None = None,
+    resume: str | None = None,
 ) -> tuple[bool, str]:
     """Run one headless agent inside `folder`, showing what it is doing.
 
@@ -694,7 +696,9 @@ def launch_agent(
 
     try:
         proc = subprocess.Popen(  # noqa: S603 - fixed binary, no shell
-            agent_argv(agent, binary, prompt, folder),
+            agent_argv(
+                agent, binary, prompt, folder, session_id=session_id, resume=resume
+            ),
             cwd=str(folder),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
