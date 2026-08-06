@@ -1150,3 +1150,9 @@ In the CLI `exec` command, add `strict: bool = typer.Option(False, "--strict", h
 - D7 hygiene → Tasks 2 (scrub), 3 (allowlist), 6 (secret filters unchanged and still win over lockfile globs — `.env` is not in `LOCKFILE_NAMES`, no conflict).
 - D8 testing → per-task TDD + Task 11 full gate + live smoke.
 - D5 (pull surface) and D6 (skills) are Plans 2–3 by design; nothing here blocks them.
+
+> **Amendment (2026-08-06):** Task 10 as executed was REVERSED by maintainer
+> decision — the strict gate (`PROBE_REQUIRE_COMPLETE`, `--strict`,
+> `CaptureIncomplete`) was removed and replaced with a non-blocking completion
+> warning in `Run.finish()`. See design doc D4 (revised) for the surviving
+> behavior. Runs are never blocked on capture.

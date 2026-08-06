@@ -37,11 +37,15 @@ granularity: experiment → run → span/trial.
 
 ### Principles (locked with Mahit, 2026-08-04)
 
-- **Block claims, not runs.** Capture failure never fails or blocks a research run
-  (matches the sandbox-capture "agent+env unaffected" rule and harbor_capture's
-  off/shadow/required modes). What gets gated is the *claim*: an agent may not
-  report a run done/handoff-ready without stating its `probe run check` verdict.
-  Opt-in strict mode exists for CI and prod-candidate runs.
+- **Warn, never gate** *(revised 2026-08-06 — supersedes the original "block
+  claims" opt-in strict mode, which Mahit rejected after seeing it built)*.
+  Capture failure never fails or blocks a research run, and NOTHING — opt-in or
+  otherwise — may raise on an incomplete capture. When a run finishes as
+  `completed` with capture enabled but incomplete, the SDK emits a warning
+  naming what is missing and pointing at `probe run check`; when capture was
+  declined (`PROBE_AUTO_SNAPSHOT=0`), it is silent. Enforcement stays social +
+  scriptable: skills report the `run check` verdict at handoff, and the
+  command's exit code is the hook for anyone who wants their own CI gate.
 - **Honesty over completeness.** Every capture is best-effort with recorded
   provenance and an `errors` list (the `probe.sandbox-state/1` `meta.errors`
   pattern). Absence is reported, never guessed. Reproduce views are never silently
@@ -143,9 +147,15 @@ entry. Their sha256s join `execution_records.deps` (identity: same lockfile byte
   note/decision recorded). States stay `unverified`/`complete`/`incomplete`;
   exit 2 on incomplete. `--verify` additionally resolves lockfile blobs, as it
   already resolves the code commit.
-- **Strict mode (opt-in):** `PROBE_REQUIRE_COMPLETE=1` or `--strict` makes
-  `probe exec` fail fast when the snapshot fails and `run.finish()` raise when the
-  check is incomplete. Default off; intended for CI and prod-candidate runs.
+- **Completion warning (no strict mode — revised 2026-08-06):** when
+  `run.finish("completed")` runs with capture enabled (`PROBE_AUTO_SNAPSHOT`
+  not `0`) and `check_run` reports `incomplete`, the SDK warns with the
+  `missing` list and a pointer to `probe run check`. It fires after the journal
+  drain (so it never complains about writes the same finish delivers), never
+  raises, and a failure of the completeness probe itself never breaks the
+  close-out. There is no `PROBE_REQUIRE_COMPLETE`, no `--strict`: runs are
+  never blocked on capture, per Mahit. Scripted enforcement, where wanted,
+  belongs to the caller via `probe run check`'s exit code.
 - **`completeness.missing`** markers in reproduce views extend 1:1 with the new
   checks (`mcp/contract.py` MissingMarker).
 
