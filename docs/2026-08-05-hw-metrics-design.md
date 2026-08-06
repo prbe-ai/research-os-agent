@@ -463,8 +463,13 @@ epoch steps + reopen ⇒ receipt `last_step` reflects training rail only.
 
 ## Resolved decisions (eng review + outside voice, 2026-08-05)
 
-1. **Default ON**, first-run log line, `PROBE_HW=0` / `run(hw=False)` kill
-   switches.
+1. **Default OFF — REVISED at ship time (product owner, 2026-08-06,
+   overriding the review's default-ON recommendation):** opt-in via
+   `run(hw=True)` or `PROBE_HW=1`; explicit `run(hw=)` beats env in both
+   directions; announce log line when enabled. A bare `run()` behaves
+   exactly as before the rail existed. Default-ON remains the intended end
+   state once the rail is proven on the fleet — the review's incident-data
+   argument stands, deferred not rejected.
 2. **Epoch × fixed 60s protocol grid** for step_index; superseded
    run-relative derivation (shared-state drift risk).
 3. **Resume invisibility**: kind-scoped client guards + suspect-receipt

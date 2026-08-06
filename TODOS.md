@@ -367,7 +367,8 @@ declared agg — a rollup of maxes is a max, of means a count-weighted mean),
 then optionally dropped. Mechanism candidates: rollup tables + partition
 drops on the existing run_id-hash partitioning, or age-scoped DELETEs.
 
-**Why:** hw collection is default-ON at ~317k points/node/day (~220 series ×
+**Why:** hw collection (opt-in today, intended default-ON once proven)
+writes ~317k points/node/day when enabled (~220 series ×
 1440 60s windows). A 32-node month-long run is ~300M permanent rows in the
 Postgres store that is already the system's stated cardinality/volume
 ceiling — and Probe is system-of-record for this data (source Prometheus

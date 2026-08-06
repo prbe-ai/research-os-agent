@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Added
+
+- **Opt-in automatic hardware metrics (`probe.hw`).** `run(hw=True)` — or
+  `PROBE_HW=1` — starts one collector per node (rank-aware election) that
+  samples GPU/CPU/memory/disk/network and logs them as `kind=hardware`
+  points on an epoch-derived 60s step grid, so redelivery, restarts, and
+  future backfill dedup by construction. Sources are tiered: a
+  Prometheus-exposition scraper with non-blocking discovery of DCGM-exporter
+  and node_exporter (kubelet/cAdvisor is separately opt-in via
+  `PROBE_HW_KUBELET=1`), over a psutil + NVML floor with cgroup-v2 quota
+  awareness and CUDA_VISIBLE_DEVICES (int/UUID/MIG) → physical-index
+  attribution. Fail-open everywhere: circuit breakers per source, a per-node
+  series governor, and a bounded drop-oldest buffer — hardware never spools
+  and never competes with training metrics (`Client.write(durable=False)`).
+  GPU inventory lands on a minimal execution record when no snapshot has
+  pinned `env_ref`. With `hw` off (the default) `run()` behaves exactly as
+  before, except that `kind="hardware"` metrics are now exempt from the
+  resume-step guard (they live on a different clock) and an implausible
+  resume receipt (`last_step` in the hardware epoch range) warns and skips
+  arming instead of poisoning training resume. Design + review record:
+  `docs/2026-08-05-hw-metrics-design.md`. New deps: `psutil`,
+  `nvidia-ml-py` (both lazy-imported behind availability probes).
+
 ### Fixed
 
 - **`probe run set <petname>` 422'd instead of amending the run.** `PATCH
