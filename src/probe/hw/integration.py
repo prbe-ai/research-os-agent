@@ -30,10 +30,14 @@ _FAMILY_BY_ENDPOINT = {"dcgm": "gpu", "node": "system", "cadvisor": "container"}
 
 
 def hw_enabled(hw_flag: bool | None, env=None) -> bool:
-    if hw_flag is False:
-        return False
+    """OPT-IN (product decision 2026-08-06, revising the review's default-ON):
+    a bare run() must behave exactly as before the hw rail existed. Explicit
+    ``run(hw=...)`` is authoritative in both directions; otherwise
+    ``PROBE_HW=1`` enables."""
+    if hw_flag is not None:
+        return bool(hw_flag)
     env = os.environ if env is None else env
-    return str(env.get("PROBE_HW", "1")).strip().lower() not in ("0", "false", "off")
+    return str(env.get("PROBE_HW", "0")).strip().lower() in ("1", "true", "on")
 
 
 def _default_fetch(url: str) -> str:

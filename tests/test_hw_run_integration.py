@@ -54,8 +54,17 @@ def _hw_test_env(monkeypatch):
     yield
 
 
-def test_run_starts_hw_monitor_by_default_and_finish_stops(client, app):
+def test_hw_is_off_by_default(client, app):
+    """Product decision 2026-08-06 (revising the review's default-ON): the
+    collector is OPT-IN — a bare run() must behave exactly as before the hw
+    rail existed."""
     run = open_run(client, experiment="hw-e2e")
+    assert run._hw_monitor is None
+    run.finish()
+
+
+def test_run_hw_true_starts_monitor_and_finish_stops(client, app):
+    run = open_run(client, experiment="hw-e2e", hw=True)
     monitor = run._hw_monitor
     assert monitor is not None and monitor.started
 
@@ -64,22 +73,30 @@ def test_run_starts_hw_monitor_by_default_and_finish_stops(client, app):
     assert run._hw_monitor is None  # handle releases its collector on close
 
 
-def test_probe_hw_env_kill_switch(client, app, monkeypatch):
-    monkeypatch.setenv("PROBE_HW", "0")
+def test_probe_hw_env_enables(client, app, monkeypatch):
+    monkeypatch.setenv("PROBE_HW", "1")
     run = open_run(client, experiment="hw-e2e")
-    assert run._hw_monitor is None
+    assert run._hw_monitor is not None
     run.finish()
 
 
-def test_run_hw_false_disables(client, app):
-    run = open_run(client, experiment="hw-e2e", hw=False)
-    assert run._hw_monitor is None
-    run.finish()
+def test_explicit_flag_beats_env(client, app, monkeypatch):
+    """run(hw=...) is authoritative in both directions: code the author wrote
+    wins over ambient environment."""
+    monkeypatch.setenv("PROBE_HW", "1")
+    off = open_run(client, experiment="hw-e2e", hw=False)
+    assert off._hw_monitor is None
+    off.finish()
+
+    monkeypatch.setenv("PROBE_HW", "0")
+    on = open_run(client, experiment="hw-e2e", hw=True)
+    assert on._hw_monitor is not None
+    on.finish()
 
 
 def test_non_leader_rank_starts_nothing(client, app, monkeypatch):
     monkeypatch.setenv("LOCAL_RANK", "3")
-    run = open_run(client, experiment="hw-e2e")
+    run = open_run(client, experiment="hw-e2e", hw=True)
     assert run._hw_monitor is None
     run.finish()
 

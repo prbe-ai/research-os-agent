@@ -22,13 +22,13 @@ from probe.transport import Transport
 
 @pytest.fixture(autouse=True)
 def _hw_collector_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The hardware collector is default-ON for users, OFF for this suite.
+    """Pin the hardware collector OFF regardless of the developer's shell.
 
-    run() would otherwise start a collector + inventory thread per test run
-    (real psutil/NVML probes, extra fake-API calls that break exact-sequence
-    assertions). The hw tests opt back in explicitly by deleting PROBE_HW in
-    their own autouse fixture (tests/test_hw_run_integration.py), which runs
-    after this one."""
+    The collector is opt-in for users, but a developer with PROBE_HW=1
+    exported would otherwise get a collector + inventory thread per run() in
+    the legacy suite (real psutil/NVML probes, extra fake-API calls that
+    break exact-sequence assertions). The hw tests opt in explicitly via
+    their own autouse fixture, which runs after this one."""
     monkeypatch.setenv("PROBE_HW", "0")
 
 

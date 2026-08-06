@@ -1522,11 +1522,10 @@ class Client:
         **run_kw,
     ) -> Run:
         """Open a run — full resolution/creation/``on_conflict`` semantics in
-        :meth:`_run_impl` (unchanged). Additionally starts the default-on
-        hardware collector when this process is the node-local leader;
-        ``hw=False`` or ``PROBE_HW=0`` disables it. Best-effort by contract:
-        a broken collector never touches the run
-        (docs/2026-08-05-hw-metrics-design.md)."""
+        :meth:`_run_impl` (unchanged). ``hw=True`` (or ``PROBE_HW=1``) also
+        starts the opt-in hardware collector when this process is the
+        node-local leader. Best-effort by contract: a broken collector never
+        touches the run (docs/2026-08-05-hw-metrics-design.md)."""
         handle = self._run_impl(
             experiment=experiment,
             hypothesis=hypothesis,

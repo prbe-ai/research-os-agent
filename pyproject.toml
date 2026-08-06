@@ -44,7 +44,8 @@ dependencies = [
     # layer over prompt_toolkit, whose internals a major bump can reshape.
     # IMPORTED LAZILY inside the command body -- see cli/setup.py:run_menu.
     "questionary>=2.0,<3",
-    # Hardware-rail floor (default-on; docs/2026-08-05-hw-metrics-design.md).
+    # Hardware-rail floor (opt-in via run(hw=True)/PROBE_HW=1;
+    # docs/2026-08-05-hw-metrics-design.md).
     # Both IMPORTED LAZILY inside probe/hw/resources/* behind availability
     # probes -- an absent import is a disabled source, never an error.
     # psutil: CPU/mem/disk/net sampling, universal wheels. nvidia-ml-py: the
