@@ -1720,8 +1720,9 @@ class Client:
     def _maybe_auto_snapshot(handle: Run, snapshot: bool | None) -> None:
         """Auto-snapshot hook for ``run()`` (design D3). ``snapshot=None``
         follows ``PROBE_AUTO_SNAPSHOT`` (default on); best-effort like
-        ``execute()``'s hook -- failure warns rather than losing the run,
-        except under ``PROBE_REQUIRE_COMPLETE=1`` (Task 10's --strict)."""
+        ``execute()``'s hook -- failure warns rather than losing the run.
+        Capture is never a gate, opt-in or otherwise (maintainer decision
+        2026-08-06)."""
         auto = snapshot if snapshot is not None else (
             os.environ.get("PROBE_AUTO_SNAPSHOT", "1") != "0"
         )
@@ -1729,8 +1730,6 @@ class Client:
             try:
                 handle.snapshot()  # in-process: THIS interpreter is the env
             except Exception as exc:
-                if os.environ.get("PROBE_REQUIRE_COMPLETE") == "1":
-                    raise
                 warnings.warn(
                     f"auto-snapshot failed; run continues uncaptured: {exc}",
                     stacklevel=2,

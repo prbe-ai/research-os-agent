@@ -1617,16 +1617,24 @@ class Run:
         self._client._kick_drainer(force=True)
         return {"finish_queued": True, "delivered": 0, "remaining": pending_count + 1}
 
-    def _check_capture_complete(self) -> None:
-        """The ``PROBE_REQUIRE_COMPLETE=1`` gate body -- raises on an
-        ``incomplete`` verdict. Split out so ``finish()`` can call it at the
-        one point (after the drain, before the terminal write) where it
-        observes state the caller can actually trust; see the ordering note
-        in ``finish()``'s docstring."""
-        result = self._client.check_run(self.id)
+    def _warn_if_capture_incomplete(self) -> None:
+        """Completion warning, never a gate (maintainer decision 2026-08-06):
+        an incomplete capture makes the record honest about itself at the one
+        moment someone claims success -- but nothing, opt-in or otherwise, may
+        block a run. PROBE_AUTO_SNAPSHOT=0 means capture was declined; a
+        warning would be nagging about a choice, so it is silent too.
+        Placed after the journal drain so it never fires on writes this very
+        finish() is about to deliver (the async_writes false-positive)."""
+        try:
+            result = self._client.check_run(self.id)
+        except Exception:
+            return  # a completeness probe must never break a close-out
         if result.get("state") == "incomplete":
-            raise errors.CaptureIncomplete(
-                "run capture incomplete: " + ", ".join(result.get("missing", []))
+            warnings.warn(
+                "run may not be reproducible -- capture incomplete: "
+                + ", ".join(result.get("missing", []))
+                + f". See `probe run check {self.id}` for the full audit.",
+                stacklevel=3,
             )
 
     def finish(
@@ -1652,21 +1660,21 @@ class Run:
         run row. Dead letters raise even in bounded mode: waiting cannot heal
         a permanent rejection, and exiting would strand them silently.
 
-        Strict mode (``PROBE_REQUIRE_COMPLETE=1``) gates the CLAIM, not the run:
-        it only blocks ``status == "completed"``. A run finishing "failed" (the
-        body already raised, or the caller is being honest about a bad outcome)
-        is never gated -- there is no claim of completeness to dispute, and
-        ``Run.__exit__`` depends on this so a body's real exception is never
-        masked by a capture complaint on the way out.
+        A completion WARNING (never a gate) fires when ``status == "completed"``
+        and capture was not opted out (``PROBE_AUTO_SNAPSHOT`` != ``"0"``). A
+        run finishing "failed" (the body already raised, or the caller is
+        being honest about a bad outcome) never warns -- there is no claim of
+        completeness to caveat, and ``Run.__exit__`` depends on this so a
+        body's real exception is never masked by a capture warning on the way
+        out.
 
-        The strict gate's ``check_run`` reads the run BUNDLE -- a plain GET,
+        The warning's ``check_run`` reads the run BUNDLE -- a plain GET,
         never the journal -- so under ``async_writes`` the env_ref PATCH and
         code-snapshot artifact ``snapshot()`` just journaled are not yet
-        server-visible. The gate must observe the very capture this finish()
+        server-visible. The check must observe the very capture this finish()
         is about to claim, so it runs AFTER the drain (below), never before:
-        checking first would make a spurious ``CaptureIncomplete`` fire on
-        data that is durable on disk and about to be delivered, not actually
-        missing.
+        checking first would make a spurious warning fire on data that is
+        durable on disk and about to be delivered, not actually missing.
         """
         # Stop the hardware collector first: its final windows emit (or drop —
         # best-effort) before the close; it must never block or fail the close.
@@ -1680,7 +1688,9 @@ class Run:
 
         timeout = self._resolve_finish_timeout(flush_timeout)
         journal = self._client.journal
-        strict_gate = status == "completed" and os.environ.get("PROBE_REQUIRE_COMPLETE") == "1"
+        should_warn = (
+            status == "completed" and os.environ.get("PROBE_AUTO_SNAPSHOT", "1") != "0"
+        )
         if timeout is None:
             self._client.flush()
             blocked = self._queued_ops(journal.pending()) + self._queued_ops(
@@ -1697,10 +1707,10 @@ class Run:
                 )
             # AFTER the drain, BEFORE the terminal write: the flush above is
             # what makes the just-journaled env_ref PATCH + code-snapshot
-            # artifact server-visible, so the gate observes the real state
+            # artifact server-visible, so the check observes the real state
             # rather than a stale one that reads as incomplete.
-            if strict_gate:
-                self._check_capture_complete()
+            if should_warn:
+                self._warn_if_capture_incomplete()
             result = self.set_status(status, ended_at=_now(), summary=summary)
             # ONLY on success, and deliberately not in a `finally`.
             #
@@ -1734,19 +1744,19 @@ class Run:
         pending = self._queued_ops(journal.pending())
         if not pending:
             # Same ordering as the unbounded branch: the drain loop above has
-            # already run, so the gate observes what actually made it to the
+            # already run, so the check observes what actually made it to the
             # server within the deadline rather than firing before the flush
             # had a chance to deliver it.
-            if strict_gate:
-                self._check_capture_complete()
+            if should_warn:
+                self._warn_if_capture_incomplete()
             result = self.set_status(status, ended_at=_now(), summary=summary)
             self._release_run_lock()
             return result
         # Writes are still pending past the deadline: the terminal status is
         # itself being DEFERRED behind them (queued, not written now), so
-        # there is no "completed" claim being made yet for the gate to check
-        # against -- it will apply on whatever later drain actually finishes
-        # this run.
+        # there is no "completed" claim being made yet for the warning to
+        # check against -- it will apply on whatever later drain actually
+        # finishes this run.
         report = self._queue_deferred_finish(status, summary, len(pending))
         report["delivered"] = delivered
         # The writer is exiting by definition of a bounded finish; the run's
@@ -1778,13 +1788,12 @@ class Run:
         # Every executed run snapshots by default (design D3). detect_venv=True
         # because THIS interpreter is the launcher, not the environment being
         # recorded -- see Run.snapshot's docstring. Failure never blocks the
-        # child: strict mode is the only exception, and it is opt-in.
+        # child: capture is never a gate, opt-in or otherwise (maintainer
+        # decision 2026-08-06) -- it only ever warns.
         if os.environ.get("PROBE_AUTO_SNAPSHOT", "1") != "0":
             try:
                 self.snapshot(cwd=cwd, detect_venv=True, argv=argv)
             except Exception as exc:
-                if os.environ.get("PROBE_REQUIRE_COMPLETE") == "1":
-                    raise
                 warnings.warn(
                     f"auto-snapshot failed; run continues uncaptured: {exc}",
                     stacklevel=2,

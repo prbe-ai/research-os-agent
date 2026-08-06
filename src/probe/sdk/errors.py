@@ -67,13 +67,6 @@ class CapabilityUnavailable(RosError):
         super().__init__(message or f"Probe Research capability is unavailable: {capability}")
 
 
-class CaptureIncomplete(RosError):
-    """PROBE_REQUIRE_COMPLETE=1 and `check_run` found the capture incomplete.
-
-    Raised at finish()/exec-launch, never mid-run: strict mode gates the CLAIM
-    that a run is done, not the run itself."""
-
-
 _BY_STATUS: dict[int, type[RosError]] = {
     401: AuthError,
     403: ScopeError,

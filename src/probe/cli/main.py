@@ -2662,17 +2662,7 @@ def exec(
     ctx: typer.Context,
     run: str = typer.Argument(...),
     cwd: str = typer.Option(None, "--cwd"),
-    strict: bool = typer.Option(
-        False,
-        "--strict",
-        help=(
-            "snapshot failures become fatal and PROBE_REQUIRE_COMPLETE=1 is "
-            "exported to the child (gating any completed-claim it makes)"
-        ),
-    ),
 ) -> None:
-    if strict:
-        os.environ["PROBE_REQUIRE_COMPLETE"] = "1"
     argv = list(ctx.args)
     if argv and argv[0] == "--":
         argv = argv[1:]

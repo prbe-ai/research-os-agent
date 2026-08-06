@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from probe.sdk import errors as sdk_errors
 from tests.conftest import make_client, open_run
 
 
@@ -52,48 +51,54 @@ def test_notes_and_inputs_decision_are_advisories(client, tmp_path):
     assert "inputs_decision" not in result["missing"]
 
 
-# -- PROBE_REQUIRE_COMPLETE strict gate on finish() --------------------------
+# -- completion warning on finish() (never a gate) ---------------------------
 
 
-def test_strict_finish_raises_on_incomplete(client, monkeypatch):
-    run = open_run(client, experiment="exp-strict")  # no snapshot at all
-    monkeypatch.setenv("PROBE_REQUIRE_COMPLETE", "1")
-    with pytest.raises(sdk_errors.CaptureIncomplete) as exc_info:
+def test_completed_finish_warns_when_capture_incomplete(client, monkeypatch):
+    # snapshot=False on open: capture is on for finish()'s check, but this run
+    # itself was never snapshotted -- otherwise client.run()'s own auto-snapshot
+    # hook would capture it before finish() ever gets a say.
+    run = open_run(client, experiment="exp-warn", snapshot=False)
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    with pytest.warns(UserWarning, match="may not be reproducible"):
         run.finish("completed")
-    assert "execution_record" in str(exc_info.value)
 
 
-def test_strict_finish_passes_on_captured_run(client, tmp_path, monkeypatch):
-    run = open_run(client, experiment="exp-strict-ok")
+def test_completed_finish_silent_when_captured(client, tmp_path, monkeypatch, recwarn):
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    run = open_run(client, experiment="exp-warn-ok")
     _snap(run, tmp_path)
-    monkeypatch.setenv("PROBE_REQUIRE_COMPLETE", "1")
-    run.finish("completed")  # must not raise: advisories never block
+    run.finish("completed")
+    assert not [w for w in recwarn if "reproducible" in str(w.message)]
 
 
-def test_default_finish_never_checks(client, monkeypatch):
-    run = open_run(client, experiment="exp-lax")
-    monkeypatch.delenv("PROBE_REQUIRE_COMPLETE", raising=False)
-    run.finish("completed")  # no snapshot, no gate, no error
+def test_failed_finish_never_warns(client, monkeypatch, recwarn):
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    run = open_run(client, experiment="exp-warn-fail")
+    run.finish("failed")
+    assert not [w for w in recwarn if "reproducible" in str(w.message)]
 
 
-def test_strict_gate_only_blocks_completed_claims(client, monkeypatch):
-    run = open_run(client, experiment="exp-strict-fail")
-    monkeypatch.setenv("PROBE_REQUIRE_COMPLETE", "1")
-    run.finish("failed")  # un-captured but honestly failed: no gate, no raise
+def test_opted_out_capture_never_warns(client, recwarn):
+    # suite default PROBE_AUTO_SNAPSHOT=0: capture declined -> no nagging
+    run = open_run(client, experiment="exp-warn-optout")
+    run.finish("completed")
+    assert not [w for w in recwarn if "reproducible" in str(w.message)]
 
 
-def test_strict_gate_waits_for_async_drain_before_checking(app, tmp_path, monkeypatch):
+def test_warning_waits_for_async_drain(app, tmp_path, monkeypatch, recwarn):
     """I1: check_run reads the run BUNDLE (a plain GET), never the journal.
 
     Under async_writes, snapshot()'s env_ref PATCH and code-snapshot artifact
-    POST are journaled, not delivered -- so a gate that fired before finish()
-    flushes would read a run with neither and raise CaptureIncomplete on data
-    that is durable on disk and about to land. The fix moves the gate to
-    after the drain; this pins that a fully-captured run passes even though
-    every one of its writes went through the async path.
+    POST are journaled, not delivered -- so a warning probe that fired before
+    finish() flushes would read a run with neither and warn on data that is
+    durable on disk and about to land. The fix moves the check to after the
+    drain; this pins that a fully-captured run stays silent even though every
+    one of its writes went through the async path.
     """
     client = make_client(app, tmp_spool=tmp_path / "spool", async_writes=True)
-    run = open_run(client, experiment="exp-strict-async")
+    run = open_run(client, experiment="exp-warn-async")
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
     (tmp_path / "a.py").write_text("a\n")
     run.snapshot(cwd=str(tmp_path), include_env=False, include_gpu=False)
     # Prove the writes really are only journaled, not yet server-visible --
@@ -102,10 +107,10 @@ def test_strict_gate_waits_for_async_drain_before_checking(app, tmp_path, monkey
     bundle_before = client.run_bundle(run.id)
     assert not bundle_before["run"].get("env_ref")
     assert not any(a.get("kind") == "code_snapshot" for a in bundle_before["artifacts"])
-    monkeypatch.setenv("PROBE_REQUIRE_COMPLETE", "1")
-    run.finish("completed")  # must not raise: finish() drains before gating
+    run.finish("completed")  # must not warn: finish() drains before checking
+    assert not [w for w in recwarn if "reproducible" in str(w.message)]
     # The capture itself (env_ref + code-snapshot artifact) is now delivered --
-    # that is what the gate checked. The terminal status PATCH is a separate,
+    # that is what the check observed. The terminal status PATCH is a separate,
     # always-journaled write under async_writes (existing behavior, untouched
     # by this fix); a later drain delivers it.
     bundle_after = client.run_bundle(run.id)
@@ -114,3 +119,14 @@ def test_strict_gate_waits_for_async_drain_before_checking(app, tmp_path, monkey
     client.flush()
     bundle_final = client.run_bundle(run.id)
     assert bundle_final["run"]["status"] == "completed"
+
+
+def test_finish_survives_check_failure(client, monkeypatch):
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "1")
+    run = open_run(client, experiment="exp-warn-neterr")
+    monkeypatch.setattr(
+        type(client),
+        "check_run",
+        lambda self, rid, **kw: (_ for _ in ()).throw(RuntimeError("net down")),
+    )
+    run.finish("completed")  # warning probe failure must never break close-out

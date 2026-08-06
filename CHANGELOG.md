@@ -49,8 +49,11 @@
   Gaps in launch capture (missing process/runtime/determinism) flip verdict the way
   any other incomplete-claim gap does; judgment slots and historical runs that
   predate capture-core surface as advisories instead, so the exit-2 gate does not
-  turn into migration noise. `PROBE_REQUIRE_COMPLETE=1` (or `probe exec --strict`)
-  makes completed-claims fail fast on an incomplete capture instead of warning.
+  turn into migration noise. `probe run check` remains the scriptable audit
+  (exit 2 on incomplete). Separately, `finish("completed")` now emits a
+  non-blocking completion warning when its own capture is incomplete — nothing,
+  opt-in or otherwise, blocks a run; the warning is silent when
+  `PROBE_AUTO_SNAPSHOT=0` (capture was declined, not merely gappy).
 
 ### Changed
 

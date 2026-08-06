@@ -1846,14 +1846,12 @@ def _no_auto_snapshot(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _no_capture_enforcement_leakage(monkeypatch):
-    """Strip PROBE_REQUIRE_COMPLETE and PROBE_ENV_ALLOWLIST from every test's
-    environment. Both are real dev-shell exports (the former from local
-    `probe exec --strict` runs, the latter from per-site env capture tuning),
-    and neither is otherwise isolated the way config/outbox state is -- a
-    developer with either set in their shell would get spurious strict-gate
-    raises or extra captured env values with no test-visible cause. Tests
-    that exercise these paths set them explicitly, which wins over this."""
-    monkeypatch.delenv("PROBE_REQUIRE_COMPLETE", raising=False)
+    """Strip PROBE_ENV_ALLOWLIST from every test's environment. It is a real
+    dev-shell export (per-site env capture tuning) and is not otherwise
+    isolated the way config/outbox state is -- a developer with it set in
+    their shell would get extra captured env values with no test-visible
+    cause. Tests that exercise this path set it explicitly, which wins over
+    this."""
     monkeypatch.delenv("PROBE_ENV_ALLOWLIST", raising=False)
 
 
