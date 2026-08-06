@@ -15,7 +15,7 @@ from probe.hw.grid import HW_STEP_SECONDS
 from probe.hw.mappings import MappingPack
 from probe.hw.monitor import HwMonitor, elect_leader
 from probe.hw.resources.nvidia import NvidiaResource
-from probe.hw.resources.openmetrics import DEFAULT_CANDIDATES, OpenMetricsResource
+from probe.hw.resources.openmetrics import OpenMetricsResource
 from probe.hw.resources.system import SystemResource
 
 logger = logging.getLogger(__name__)
