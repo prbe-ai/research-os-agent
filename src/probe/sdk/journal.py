@@ -17,8 +17,8 @@ data and the journal may live on shared storage):
     <dir>/paused                         marker: drains are suspended
     <dir>/.append.lock / .drain.lock     flock sidecars
     <dir>/producers/<producer>.json      per-writer accounting (parity F4):
-                                         sequence high-water, capture gaps,
-                                         open/closed state
+                                         sequence high-water, delivered tally,
+                                         capture gaps, open/closed state
 
 Ops never carry credentials: they pin a context NAME + base_url (5A) and the
 drain resolves tokens fresh via ``config.resolve``. Import of this module must
@@ -43,8 +43,12 @@ Op schema (``probe.outbox/1``)::
       "upload": {"anchor", "anchor_id", "name", "content_type", "kind",
                  "meta", "span_id", "step_index", "blob": <sha256|null>,
                  "src_path", "staged": <bool>, "size_bytes": <int|null>,
-                 "artifact_id": <hint|null>}
+                 "unstaged_reason": <str|null>, "artifact_id": <hint|null>}
     }
+
+``staged`` false means the op REFERENCES ``src_path`` and the drainer reads the
+original bytes. ``unstaged_reason`` says why when the journal made that choice
+itself (disk headroom) rather than the caller asking for it.
 
 Failure policy (7A + T2-A, phase-aware per the codex pass):
   * permanent rejection (4xx except 408/429/auth) -> the op moves to failed/
@@ -62,6 +66,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -101,6 +106,41 @@ def _inline_hash_max() -> int:
 #: 11A -- files at or under this size hash (and presign-ping) inline at
 #: enqueue; larger ones snapshot instantly and hash in the drainer.
 INLINE_HASH_MAX_BYTES = _inline_hash_max()
+
+
+def _min_free_bytes() -> int:
+    raw = os.environ.get("PROBE_OUTBOX_MIN_FREE_BYTES")
+    if raw:
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            # Same contract as _inline_hash_max: a malformed override must not
+            # crash every import of this module -- fall back loudly.
+            import warnings
+
+            warnings.warn(
+                f"ignoring malformed PROBE_OUTBOX_MIN_FREE_BYTES={raw!r}; "
+                "expected an integer byte count",
+                stacklevel=2,
+            )
+    return 2 * 1024 * 1024 * 1024
+
+
+#: Headroom the blob store must LEAVE on its filesystem. Staging is a real byte
+#: copy whenever the source is on another filesystem -- `try_clone` is
+#: copy-on-write and cannot span mounts -- so importing a research folder off a
+#: network share copies every file under the reference threshold onto the local
+#: disk. Enqueue is fire-and-forget and the drainer is a single worker, so a
+#: producer that outruns delivery grows the queue without bound: filling the
+#: disk is the STEADY STATE of that shape, not an edge case.
+#:
+#: The check is deliberately blind to whether the copy would actually consume
+#: space: a same-filesystem clone costs nothing, but so does declining to make
+#: one (the source is on that same disk and the drainer reads it in place), so
+#: the conservative answer is never the worse one and costs one statvfs.
+#:
+#: Zero disables the guard, for a caller who has measured their own ceiling.
+MIN_FREE_BYTES = _min_free_bytes()
 
 _RUN_PATH = re.compile(r"^/v1/runs/([^/]+)(?:/|$)")
 
@@ -248,7 +288,9 @@ class Journal:
             "last_error": None,
         }
 
-    def _append(self, op: dict, *, before_write=None) -> str:
+    def _append(
+        self, op: dict, *, before_write=None, unstaged_low_disk: int = 0
+    ) -> str:
         self._ensure()
         with file_lock(self.append_lock):
             if self._producer_id is not None:
@@ -256,11 +298,16 @@ class Journal:
                 # an in-memory counter: a producer_id shared across processes
                 # (the CLI's per-host one) must never mint the same sequence
                 # twice (parity F4).
-                record = self._read_producer_locked()
+                record = self._read_producer_locked(self._producer_id)
                 sequence = int(record.get("last_sequence") or 0) + 1
                 op["producer_id"] = self._producer_id
                 op["producer_sequence"] = sequence
-                self._update_producer_locked(record, last_sequence=sequence)
+                self._update_producer_locked(
+                    self._producer_id,
+                    record,
+                    role=self._producer_role,
+                    last_sequence=sequence,
+                )
             if before_write is not None:
                 # Runs INSIDE the lock, before the op file exists -- used by
                 # append_upload to publish its staged blob atomically with the
@@ -269,7 +316,7 @@ class Journal:
                 before_write()
             path = self.ops_dir / self._op_filename(op["op_id"])
             write_text_atomic(path, json.dumps(op, indent=2) + "\n", mode=0o600)
-            self._write_status_locked()
+            self._write_status_locked(unstaged_low_disk=unstaged_low_disk)
         return op["op_id"]
 
     def append_http(
@@ -311,6 +358,11 @@ class Journal:
         (11A). Snapshot lands under a dot-prefixed staging name (gc ignores
         dotfiles); the publish rename + op-file write happen together under
         the append lock, so gc can never see an unreferenced blob to delete.
+
+        A requested ``stage`` can still come back false: staging is refused
+        when the snapshot would drive the blob store's filesystem under
+        :data:`MIN_FREE_BYTES`. The returned ``staged``/``unstaged_reason``
+        (also recorded on the op) say so.
         """
         self._ensure()
         op = self._base_op("upload", run_ref)
@@ -318,6 +370,17 @@ class Journal:
         publish = None
         digest: str | None = None
         size_bytes: int | None = None
+        unstaged_reason: str | None = None
+        if stage:
+            unstaged_reason = self._staging_headroom(src_path)
+            if unstaged_reason is not None:
+                # Degrade to referencing the source rather than refusing the
+                # write: enqueue is fail-open by contract (it runs beside a
+                # training loop), so the op still goes in and the drainer reads
+                # the original bytes. If the source is gone by then the drain
+                # raises a 422 -- a dead letter with a message, never a lost
+                # write nobody was told about, and never a full disk.
+                stage = False
         if stage:
             staging = self.blobs_dir / f".staging-{op['op_id']}"
             snapshot_file(src_path, staging)
@@ -353,37 +416,90 @@ class Journal:
             "src_path": os.path.abspath(src_path),
             "staged": staged,
             "size_bytes": size_bytes,
+            "unstaged_reason": unstaged_reason,
         }
-        self._append(op, before_write=publish)
-        return {"op_id": op["op_id"], "blob": digest, "size_bytes": size_bytes}
+        self._append(
+            op,
+            before_write=publish,
+            unstaged_low_disk=1 if unstaged_reason is not None else 0,
+        )
+        return {
+            "op_id": op["op_id"],
+            "blob": digest,
+            "size_bytes": size_bytes,
+            "staged": staged,
+            "unstaged_reason": unstaged_reason,
+        }
+
+    def _staging_headroom(self, src_path: str | Path) -> str | None:
+        """``None`` when there is room to stage ``src_path``, else WHY there is not.
+
+        Two stat-class syscalls, no read of the file -- this runs on every
+        upload enqueue, beside a training loop, so it must not scale with the
+        bytes being queued. Unmeasurable is NOT a breach: if the size or the
+        filesystem cannot be read we have no evidence to degrade on, and
+        enqueue is fail-open.
+        """
+        floor = MIN_FREE_BYTES
+        if floor <= 0:
+            return None
+        try:
+            size = os.path.getsize(src_path)
+            free = shutil.disk_usage(self.blobs_dir).free
+        except OSError:
+            return None
+        if free - size >= floor:
+            return None
+        return (
+            f"low disk: staging {size} bytes would leave {free - size} bytes "
+            f"free on {self.blobs_dir}, under the {floor}-byte floor "
+            "(PROBE_OUTBOX_MIN_FREE_BYTES); the op references the source "
+            "instead and the drainer reads its original bytes"
+        )
 
     # -- producer registry (parity F4) --------------------------------------
-    def _producer_file(self) -> Path:
-        return self.producers_dir / f"{_safe_component(self._producer_id)}.json"
+    def _producer_file(self, producer_id: str) -> Path:
+        return self.producers_dir / f"{_safe_component(producer_id)}.json"
 
-    def _read_producer_locked(self) -> dict:
+    def _ensure_producers_dir(self) -> None:
+        self.producers_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         try:
-            return json.loads(self._producer_file().read_text())
+            os.chmod(self.producers_dir, 0o700)
+        except OSError:
+            pass
+
+    def _read_producer_locked(self, producer_id: str) -> dict:
+        try:
+            return json.loads(self._producer_file(producer_id).read_text())
         except (OSError, json.JSONDecodeError, ValueError):
             return {}
 
     def _update_producer_locked(
         self,
+        producer_id: str,
         record: dict,
         *,
+        role: str | None = None,
         last_sequence: int | None = None,
+        delivered: int | None = None,
         gap: dict | None = None,
         state: str | None = None,
     ) -> None:
         record.setdefault("schema", SCHEMA)
-        record.setdefault("producer_id", self._producer_id)
-        record.setdefault("role", self._producer_role)
+        record.setdefault("producer_id", producer_id)
+        record.setdefault("role", role)
         record.setdefault("registered_at", now_iso())
         record.setdefault("last_sequence", 0)
+        record.setdefault("delivered", 0)
         record.setdefault("gaps", [])
         record.setdefault("closed_at", None)
         if last_sequence is not None:
             record["last_sequence"] = max(int(record["last_sequence"]), last_sequence)
+        if delivered is not None:
+            # Additive, and re-read from disk under the lock by every caller:
+            # the drainer and a live writer touch the same record from
+            # different processes, so an in-memory counter would clobber.
+            record["delivered"] = int(record.get("delivered") or 0) + int(delivered)
         if gap is not None:
             record["gaps"].append(gap)
         if state is not None:
@@ -392,7 +508,9 @@ class Journal:
         else:
             record.setdefault("state", "open")
         write_text_atomic(
-            self._producer_file(), json.dumps(record, indent=2) + "\n", mode=0o600
+            self._producer_file(producer_id),
+            json.dumps(record, indent=2) + "\n",
+            mode=0o600,
         )
 
     def register_producer(self, producer_id: str, *, role: str = "sdk") -> None:
@@ -408,16 +526,14 @@ class Journal:
         short-lived processes, both continue the same line).
         """
         self._ensure()
-        self.producers_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        try:
-            os.chmod(self.producers_dir, 0o700)
-        except OSError:
-            pass
+        self._ensure_producers_dir()
         self._producer_id = producer_id
         self._producer_role = role
         with file_lock(self.append_lock):
-            record = self._read_producer_locked()
-            self._update_producer_locked(record, state="open")
+            record = self._read_producer_locked(producer_id)
+            self._update_producer_locked(
+                producer_id, record, role=role, state="open"
+            )
 
     def note_capture_gap(self, reason: str) -> None:
         """Burn a sequence for a write that never reached the journal, so the
@@ -425,13 +541,44 @@ class Journal:
         if self._producer_id is None:
             return
         with file_lock(self.append_lock):
-            record = self._read_producer_locked()
+            record = self._read_producer_locked(self._producer_id)
             sequence = int(record.get("last_sequence") or 0) + 1
             self._update_producer_locked(
+                self._producer_id,
                 record,
+                role=self._producer_role,
                 last_sequence=sequence,
                 gap={"sequence": sequence, "reason": reason, "at": now_iso()},
             )
+
+    def note_delivered(self, producer_id: str, count: int = 1) -> None:
+        """Add ``count`` LANDED ops to one producer's tally.
+
+        ``last_sequence`` says what a producer handed the journal; this says
+        how much of it actually reached the server, so "of what I enqueued,
+        how much is really there" is answerable without correlating two
+        machines. ``DrainReport.delivered`` cannot answer it: it is per-pass
+        and machine-wide.
+
+        Called by :func:`drain` per delivered op, NOT batched at the end of a
+        pass -- a pass that dies mid-flight (SIGKILL, OOM, a dead laptop) is
+        exactly when the number matters, and a batched tally would lose the
+        whole pass. It takes a producer id rather than using this journal's
+        own because the drainer delivers for every producer, usually including
+        producers that no longer have a live process.
+
+        The tally is a FLOOR. It is written after the op file is unlinked, so
+        a crash in that window under-counts by at most one op per crash;
+        writing it first would over-count instead, and a producer reporting
+        more delivered than it ever enqueued reads as a bug rather than as the
+        at-least-once delivery it actually is.
+        """
+        if not producer_id or count <= 0:
+            return
+        self._ensure_producers_dir()
+        with file_lock(self.append_lock):
+            record = self._read_producer_locked(producer_id)
+            self._update_producer_locked(producer_id, record, delivered=count)
 
     def seal_producer(self) -> None:
         """Mark this producer cleanly closed. A producer left "open" whose
@@ -439,10 +586,15 @@ class Journal:
         if self._producer_id is None or not self.producers_dir.exists():
             return
         with file_lock(self.append_lock):
-            record = self._read_producer_locked()
-            self._update_producer_locked(record, state="closed")
+            record = self._read_producer_locked(self._producer_id)
+            self._update_producer_locked(
+                self._producer_id, record, role=self._producer_role, state="closed"
+            )
 
     def producer_report(self) -> list[dict]:
+        """Every producer this journal knows: sequence high-water, ``delivered``
+        tally, capture gaps, open/closed state. Unparseable records are skipped
+        rather than raising -- a report is diagnostics, never a blocker."""
         if not self.producers_dir.exists():
             return []
         out: list[dict] = []
@@ -582,7 +734,7 @@ class Journal:
         names = sorted(n for n in os.listdir(directory) if n.endswith(".json"))
         return len(names), names[0] if names else None
 
-    def _write_status_locked(self, **extra: Any) -> None:
+    def _write_status_locked(self, *, unstaged_low_disk: int = 0, **extra: Any) -> None:
         pending_count, first_pending = self._count_dir(self.ops_dir)
         failed_count, _ = self._count_dir(self.failed_dir)
         oldest = None
@@ -607,6 +759,14 @@ class Journal:
             "paused": self.paused,
             "auth_blocked_since": previous.get("auth_blocked_since"),
             "last_error": previous.get("last_error"),
+            # Monotonic tally of uploads that DEGRADED to unstaged for want of
+            # disk headroom -- carried forward like the two fields above.
+            # Counting them by scanning ops instead would make every append
+            # O(queue), which is exactly the regression the O(1) status
+            # rewrite fixed.
+            "unstaged_low_disk": (
+                int(previous.get("unstaged_low_disk") or 0) + int(unstaged_low_disk)
+            ),
         }
         status.update(extra)
         write_text_atomic(self.status_file, json.dumps(status, indent=2) + "\n", mode=0o600)
@@ -812,6 +972,18 @@ def drain(
                 clients[key] = client
         return clients[key]
 
+    def tally_delivered(op: dict) -> None:
+        """Credit one landed op to the producer that enqueued it. Runs AFTER
+        the op file is gone (see ``note_delivered``) and can never fail a
+        delivery: accounting is diagnostics, the write already happened."""
+        producer_id = op.get("producer_id")
+        if not producer_id:
+            return
+        try:
+            journal.note_delivered(producer_id)
+        except Exception:  # noqa: BLE001 -- accounting must never break the drain
+            pass
+
     lock_handle = journal.drain_lock.open("a+")
     import fcntl as _fcntl
 
@@ -844,6 +1016,7 @@ def drain(
                     # falls through to the permanent path below.
                     path.unlink(missing_ok=True)
                     fsync_directory(journal.ops_dir)
+                    tally_delivered(op)
                     report.delivered += 1
                     continue
                 op["attempts"] = int(op.get("attempts", 0)) + 1
@@ -876,6 +1049,7 @@ def drain(
                 # replay is at-least-once; keep the window as small as disk
                 # semantics allow).
                 fsync_directory(journal.ops_dir)
+                tally_delivered(op)
                 report.delivered += 1
     finally:
         for client in constructed:
@@ -933,8 +1107,23 @@ def _execute(journal: Journal, client, op_path: Path, op: dict) -> None:
             else:
                 source = incoming
     if not source.exists():
+        # The two absences are different failures and want different fixes: a
+        # missing STAGED blob is the outbox losing bytes it owned (gc, a wiped
+        # state dir); a missing SOURCE is a file the producer deleted, moved or
+        # unmounted before delivery, which the outbox never copied and could
+        # not have kept. Reporting both as "staged bytes are gone" sent people
+        # hunting the blob store for a file that was never in it.
+        if upload.get("staged"):
+            raise errors.ValidationError(
+                f"staged bytes for op {op['op_id']} are gone ({source})", status=422
+            )
+        reason = upload.get("unstaged_reason")
         raise errors.ValidationError(
-            f"staged bytes for op {op['op_id']} are gone ({source})", status=422
+            f"source file for op {op['op_id']} is gone ({source}) and it was "
+            "never staged into the outbox, so there are no bytes to fall back "
+            "on -- "
+            + (reason if reason else "the op was enqueued with stage=False"),
+            status=422,
         )
     digest = upload.get("blob")
     size = upload.get("size_bytes")

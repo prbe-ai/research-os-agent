@@ -133,6 +133,10 @@ class FakeApp:
     # Set False to model a backend PREDATING research-os 0094: it accepts the
     # unknown `notes` field on a project PATCH, drops it, and still answers 200.
     stores_project_notes = True
+    #: Whether this fake understands `notes_append` (research-os 0.117.0.0).
+    #: False plays a backend that takes the field, ignores it and answers 200,
+    #: which is the failure the client's read-back exists to catch.
+    stores_notes_append = True
     # Set False to model a backend PREDATING research-os 0096: it accepts the
     # unknown `notes` field on run and group create/PATCH, drops it, and still
     # answers 2xx -- so the row comes back with NO `notes` key at all, which is
@@ -198,6 +202,51 @@ class FakeApp:
                 if row.get("id") == artifact_id:
                     return row
         return None
+
+    def _move_artifact(self, artifact_id: str, body: dict) -> "httpx.Response":
+        """``POST /v1/artifacts/{id}/move`` — the anchor-move rail.
+
+        Performs a REAL re-anchor (200, the row, id unchanged) so a test can
+        assert the artifact actually landed somewhere else rather than that a
+        request was merely shaped correctly.
+
+        The refusals are injected through ``artifact_move_error`` instead of being
+        reimplemented. Which moves are legal is the engine's rule and it is
+        currently MOVING (lateral project->project is landing), so a fake that
+        encoded today's answer would fail the CLI for tomorrow's, and a fake that
+        guessed would certify the guess. What the CLI owes on that path is only to
+        relay the server's own words, and that is what these tests check.
+        """
+        if self.artifact_move_error is not None:
+            status, detail = self.artifact_move_error
+            return httpx.Response(status, json={"detail": detail})
+        row = self._find_artifact(artifact_id)
+        if row is None:
+            return httpx.Response(404, json={"detail": "artifact not found"})
+        level = (body or {}).get("level")
+        if level not in ("run", "experiment", "project"):
+            return httpx.Response(422, json={"detail": f"unknown level {level!r}"})
+        target_id = (body or {}).get("target_id")
+        if target_id is None:
+            # A promote derives its destination from the artifact's own chain.
+            target_id = row.get(f"{level}_id")
+            if target_id is None:
+                return httpx.Response(
+                    422,
+                    json={"detail": f"no {level} on this artifact's chain to promote to"},
+                )
+        for rows in self.artifacts.values():
+            if row in rows:
+                rows.remove(row)
+        for other in ("run", "experiment", "project"):
+            row.pop(f"{other}_id", None)
+        row[f"{level}_id"] = target_id
+        self.moves.append(
+            {"artifact_id": artifact_id, "level": level, "target_id": target_id}
+        )
+        key = target_id if level == "run" else f"{level}:{target_id}"
+        self.artifacts.setdefault(key, []).append(row)
+        return httpx.Response(200, json=row)
 
     def _presign(self, anchor: str, anchor_id: str, body: dict):
         """The shared presign leg for the non-run anchors.
@@ -287,6 +336,10 @@ class FakeApp:
         # one confirm handler can find a row whatever it hangs off, exactly like the
         # server's single confirm core.
         self.artifacts: dict[str, list[dict]] = {}
+        # Every accepted `POST /v1/artifacts/{id}/move`, and the refusal a test can
+        # make the next one answer with. See _move_artifact.
+        self.moves: list[dict] = []
+        self.artifact_move_error: tuple[int, object] | None = None
         # Artifact rows are STAMPED and the anchored listings come back newest
         # first, like the real routers (`order_by="created_at DESC"`). The fake
         # used to omit created_at entirely and answer in insertion order -- the
@@ -531,6 +584,28 @@ class FakeApp:
             # `echoes_project_scope`).
             if self.stores_project_notes and body.get("notes") is not None:
                 row["notes"] = body["notes"]
+            # `notes_append` EXTENDS server-side, deriving from the stored value
+            # rather than one the client read earlier -- that derivation is the
+            # whole mechanism, so the fake has to do it here and not accept a
+            # pre-concatenated string. Gated alongside `notes` so the fake can
+            # still play a backend that predates the field, which is how the
+            # client's "the server ignored it" guard gets tested.
+            if self.stores_notes_append and body.get("notes_append") is not None:
+                current = row.get("notes") or ""
+                # Tops the document up to a BLANK LINE, matching research-os
+                # 0.117.0.0. Notes are one markdown document, and two paragraphs
+                # joined by a single newline render as one paragraph -- so a fake
+                # that used \n would let a test pass on prose the real server
+                # would render wrong.
+                if not current:
+                    sep = ""
+                elif current.endswith("\n\n"):
+                    sep = ""
+                elif current.endswith("\n"):
+                    sep = "\n"
+                else:
+                    sep = "\n\n"
+                row["notes"] = current + sep + body["notes_append"]
             return httpx.Response(200, json=row)
 
         # -- workspaces --
@@ -1495,6 +1570,10 @@ class FakeApp:
             self.put_headers.append(dict(request.headers))
             self.blobs[path.rsplit("/", 1)[-1]] = request.content or b""
             return httpx.Response(200)
+        m = re.match(r"^/v1/artifacts/([^/]+)/move$", path)
+        if m and method == "POST":
+            return self._move_artifact(m.group(1), body or {})
+
         m = re.match(r"^/v1/artifacts/([^/]+)/confirm$", path)
         if m and method == "POST":
             aid = m.group(1)

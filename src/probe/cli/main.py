@@ -34,7 +34,7 @@ from pydantic import ValidationError
 
 from .. import __version__, errors
 from ..client_headers import client_version_headers
-from ..models import Scope
+from ..models import AnchorLevel, Scope
 from ..sdk.client import _FILE_ANCHORS, Anchor, Client
 from ..sdk.config import (
     DEFAULT_BASE_URL,
@@ -52,6 +52,9 @@ from ..sdk.tags import canonical_tags
 from ..sdk.device import DeviceLoginError, DevicePrompt, device_login, hostname
 from ..sdk.errors import NotFoundError, UnfilteredListing
 from ..sdk.hashing import reference_fields
+from ..sdk.snapshot import (
+    DEFAULT_REFERENCE_OVER_BYTES as _SNAPSHOT_REFERENCE_OVER_BYTES,
+)
 from ..sdk.surface import Surface
 from . import refs
 
@@ -2754,7 +2757,11 @@ def log(
                 step=step,
                 producer=producer,
                 note=note,
-                inputs=list(input_key) or None,
+                # `if input_key` and not `list(...) or None`: typer hands back
+                # None, not (), for a repeatable option nobody passed, so the
+                # bare list() raised TypeError on every --derived write without
+                # --input. The one test covering this path always passed --input.
+                inputs=list(input_key) if input_key else None,
                 code_ref=code_ref,
                 kind=kind,
                 dimensions=dims,
@@ -2863,6 +2870,137 @@ def metrics_export(
             run, key=key, kind=kind, step_from=step_from, step_to=step_to, limit=limit
         ):
             print(json.dumps(point, default=str))
+
+
+def _derived_series_points(source: str) -> list[tuple[int, float]]:
+    """Read a (step, value) series from a file or stdin.
+
+    Three spellings, because three things produce these and none of them should
+    have to reshape for the others:
+
+      JSONL   {"step": 0, "value": 1.2}          one object per line
+              [0, 1.2]                            or one pair per line
+      JSON    [{"step": 0, "value": 1.2}, ...]   a whole document
+              {"0": 1.2, "1": 0.9}                a step -> value map
+
+    Detected by trying the whole document as JSON first and falling back to
+    line-by-line, so a single-line JSON array is not mistaken for JSONL.
+    """
+    text = sys.stdin.read() if source == "-" else Path(source).read_text()
+
+    def pair(item: Any, where: str) -> tuple[int, float]:
+        if isinstance(item, dict):
+            if "step" not in item or "value" not in item:
+                raise typer.BadParameter(f'{where}: needs "step" and "value"')
+            step, value = item["step"], item["value"]
+        elif isinstance(item, (list, tuple)):
+            if len(item) != 2:
+                raise typer.BadParameter(f"{where}: a pair is [step, value]")
+            step, value = item
+        else:
+            raise typer.BadParameter(f"{where}: expected an object or a [step, value] pair")
+        try:
+            return int(step), float(value)
+        except (TypeError, ValueError) as exc:
+            raise typer.BadParameter(f"{where}: {exc}") from exc
+
+    try:
+        document = json.loads(text)
+    except json.JSONDecodeError:
+        document = None
+    if document is not None:
+        if isinstance(document, dict):
+            # A one-row JSONL file parses as a whole JSON document too, so the
+            # point spelling has to be recognised BEFORE the map spelling --
+            # otherwise a single {"step": 0, "value": 1.2} is read as a map with
+            # the steps "step" and "value" and dies converting them.
+            if "step" in document and "value" in document:
+                return [pair(document, "the point")]
+            # A step -> value map, sorted numerically rather than lexically: JSON
+            # object keys are strings, so insertion order puts step 10 before
+            # step 2 and the curve reads as written out of order.
+            return sorted(
+                pair([step, value], f"step {step!r}") for step, value in document.items()
+            )
+        if isinstance(document, list):
+            return [pair(item, f"item {i}") for i, item in enumerate(document)]
+        raise typer.BadParameter("expected a JSON array, a step->value object, or JSONL")
+
+    points: list[tuple[int, float]] = []
+    for lineno, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            item = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise typer.BadParameter(f"line {lineno}: not JSON: {exc}") from exc
+        points.append(pair(item, f"line {lineno}"))
+    return points
+
+
+@metrics_app.command("backfill")
+def metrics_backfill(
+    run: str = typer.Argument(...),
+    key: str = typer.Option(..., "--key", help="the series to write"),
+    producer: str = typer.Option(
+        ..., "--producer", help="what computed it, e.g. claude-code or score_auc.py"
+    ),
+    series: str = typer.Option(
+        "-",
+        "--from",
+        metavar="FILE",
+        help="JSONL or JSON step/value series; '-' (the default) reads stdin",
+    ),
+    kind: str = typer.Option("model", "--kind"),
+    dim: list[str] = typer.Option(None, "--dim", metavar="k=v"),
+    agg: Agg = typer.Option(None, "--agg"),
+    note: str = typer.Option(None, "--note", help="why/how, free text"),
+    input_key: list[str] = typer.Option(
+        None, "--input", metavar="KEY", help="repeatable; stored series the computation read"
+    ),
+    code_ref: str = typer.Option(None, "--code-ref", help="repo path / commit / script"),
+) -> None:
+    """Write a whole DERIVED curve in ONE request.
+
+    The batch door beside `probe log --derived`, which takes one step per
+    invocation on purpose — the async outbox carries `log` bodies and a derived
+    batch is a different shape, so it stayed synchronous and single-step. That is
+    fine for a correction and wrong for a backfill: a 20k-step curve through it is
+    20k round trips. This is the same provenance, the same series identity, one
+    request.
+
+    The series comes from --from FILE or stdin, as JSONL objects
+    ({"step": 0, "value": 1.2}), JSONL [step, value] pairs, a JSON array of
+    either, or a JSON {step: value} object:
+
+        probe metrics backfill RUN --key eval/auroc --producer score_auc.py \\
+            --from curve.jsonl
+
+    Provenance is not optional here for the same reason it is not on --derived:
+    a computed series without it is indistinguishable from a measured one.
+    """
+    points = _derived_series_points(series)
+    if not points:
+        raise typer.BadParameter(f"no points in {'stdin' if series == '-' else series}")
+    dims = _kv_pairs(dim) if dim else None
+    with _client() as c:
+        _run_handle(c, run).log_derived_series(
+            key,
+            points,
+            producer=producer,
+            note=note,
+            inputs=list(input_key) if input_key else None,
+            code_ref=code_ref,
+            kind=kind,
+            dimensions=dims,
+            agg=agg.value if agg else None,
+        )
+    steps = f"steps {points[0][0]}..{points[-1][0]}" if len(points) > 1 else f"step {points[0][0]}"
+    print(
+        f"backfilled {len(points)} derived point(s) of {kind}/{key} to {run} "
+        f"({steps}, producer={producer}, 1 request)"
+    )
 
 
 @metrics_app.command("delete")
@@ -3221,6 +3359,64 @@ def _pick_anchor(
     return given[0]
 
 
+def _validate_artifact_row(
+    anchor: Anchor,
+    *,
+    path: str | None,
+    uri: str | None,
+    name: str | None,
+    reference: bool,
+    hash_content: bool,
+    allow_missing: bool,
+    kind: str,
+    step: int | None,
+    span: str | None,
+    # Only its truthiness is read, so the caller may hand over either spelling:
+    # the CLI's raw `--meta k=v` list or a manifest row's already-parsed object.
+    meta: dict | list | None,
+) -> str:
+    """The usage checks for ONE artifact write, and the name it lands under.
+
+    Shared by the single-file `artifact add` and every `--from-manifest` row so
+    the two cannot disagree about what is legal. That matters more than the
+    duplication it saves: a manifest is the bulk path, so a rule enforced on the
+    command line and not on a row would be discovered a hundred thousand rows
+    later, server-side, with no operator watching.
+
+    Raises :class:`typer.BadParameter`. On the command line that aborts, which is
+    right for one file; the manifest catches it per row and keeps going.
+    """
+    resolved = name
+    if resolved is None and path:
+        resolved = os.path.basename(path)
+    if resolved is None:
+        raise typer.BadParameter("artifact needs --name (or a path to derive it from)")
+    if reference and uri is not None:
+        raise typer.BadParameter(
+            "--reference derives a file:// pointer from the path; pass --reference OR "
+            "--uri, not both"
+        )
+    if reference and not path:
+        raise typer.BadParameter("--reference needs a local file path")
+    if (hash_content or allow_missing) and not reference:
+        raise typer.BadParameter("--hash and --allow-missing only apply to --reference")
+    if anchor is not Anchor.RUN:
+        if step is not None or kind != "file" or span is not None or meta:
+            raise typer.BadParameter(
+                f"--kind/--step/--span/--meta are run-only; "
+                f"the {anchor.value} upload contract rejects them"
+            )
+        if (uri is not None or reference) and anchor in _FILE_ANCHORS:
+            # Caught here rather than in the SDK so it reads as a usage error instead
+            # of an unhandled ValueError traceback: a file IS its bytes, so there is
+            # no reference-without-bytes form and the backend declares no such route.
+            raise typer.BadParameter(
+                f"a {anchor.value} file cannot be a reference (it IS its bytes). "
+                "Pass a local path to upload the bytes instead."
+            )
+    return resolved
+
+
 def _ping_presign(
     anchor: Anchor,
     anchor_id: str | None,
@@ -3295,6 +3491,110 @@ _PING_TIMEOUT_SECONDS = 2.0
 _PING_MAX_RETRIES = 0
 
 
+def _artifact_enqueue(
+    client: Client,
+    anchor: Anchor,
+    anchor_id: str | None,
+    name: str,
+    *,
+    path: str | None,
+    uri: str | None,
+    reference: bool,
+    hash_content: bool,
+    allow_missing: bool,
+    kind: str,
+    step: int | None,
+    span: str | None,
+    content_type: str | None,
+    meta: dict | None,
+    notes: str | None = None,
+    ping: bool = True,
+) -> dict:
+    """Journal ONE artifact operation on an already-open async client.
+
+    Split out of :func:`_artifact_add_async` so `--from-manifest` can drive it per
+    row: the manifest's whole reason to exist is that opening a client, resolving
+    an anchor and starting a process per file is what makes a bulk import cost
+    CPU-hours. This function opens nothing, prints nothing, and kicks nothing --
+    the caller owns the client and decides when to wake the drainer.
+
+    ``ping=False`` skips the capped presign ping. Intent registration is
+    best-effort by contract (the drainer re-presigns on every attempt), and at
+    manifest scale a per-row round trip capped at 2s is the very cost the bulk
+    path exists to avoid.
+
+    Returns ``{"mode": "reference"|"upload", "op_id": str|None, "pinged": bool}``.
+    """
+    run_ref = anchor_id if anchor is Anchor.RUN else None
+    if reference or uri is not None:
+        if anchor is Anchor.RUN:
+            _async_run(client, anchor_id).log_artifact(
+                name, path=path, uri=uri, reference=reference,
+                hash_content=hash_content, allow_missing=allow_missing,
+                kind=kind, step_index=step, span_id=span,
+                content_type=content_type, meta=meta, notes=notes,
+            )
+        else:
+            if reference:
+                fields = reference_fields(
+                    path, hash_content=hash_content, allow_missing=allow_missing
+                )
+                body = {"name": name, "is_reference": True, **fields}
+            else:
+                body = {"name": name, "uri": uri, "is_reference": True}
+            if content_type:
+                body["content_type"] = content_type
+            if notes:
+                body["notes"] = notes
+            client.journal.append_http(
+                "POST", _REFERENCE_ROUTES[anchor].format(id=anchor_id), body
+            )
+        return {"mode": "reference", "op_id": None, "pinged": False}
+
+    if not path:
+        raise typer.BadParameter("needs a file path (--reference, or --uri)")
+    if not os.path.isfile(path):
+        # A FIFO, device, or procfs stream would block fingerprint/snapshot
+        # forever -- async promises bounded enqueue time (codex).
+        raise typer.BadParameter(f"{path} is not a regular file")
+    from ..sdk.journal import INLINE_HASH_MAX_BYTES
+
+    run_only = anchor is Anchor.RUN
+    # Snapshot first, hash the snapshot (inside append_upload): hashing
+    # the live file and copying it later would let a same-size rewrite
+    # in between poison the content address (codex TOCTOU).
+    queued = client.journal.append_upload(
+        anchor=anchor.value,
+        anchor_id=anchor_id,
+        name=name,
+        src_path=path,
+        inline_hash=os.path.getsize(path) <= INLINE_HASH_MAX_BYTES,
+        content_type=content_type,
+        kind=kind if run_only else None,
+        meta=meta if run_only else None,
+        # NOT gated on run_only: notes is accepted at every anchor (0095).
+        notes=notes,
+        span_id=span,
+        step_index=step,
+        run_ref=run_ref,
+    )
+    pinged = False
+    if ping and queued["blob"] is not None:
+        pinged = (
+            _ping_presign(
+                anchor, anchor_id, name,
+                digest=queued["blob"], size=queued["size_bytes"],
+                content_type=content_type,
+                kind=kind if run_only else None, meta=meta if run_only else None,
+                notes=notes,
+                span_id=span, step_index=step,
+                context=client.journal.context,
+            )
+            is not None
+        )
+    return {"mode": "upload", "op_id": queued["op_id"], "pinged": pinged}
+
+
 def _artifact_add_async(
     anchor: Anchor,
     anchor_id: str | None,
@@ -3320,80 +3620,325 @@ def _artifact_add_async(
     presign ping so the server registers intent, bigger files defer hashing to
     the drainer so return time stays flat.
     """
-    run_ref = anchor_id if anchor is Anchor.RUN else None
-    if reference or uri is not None:
-        with _async_client() as c:
-            if anchor is Anchor.RUN:
-                _async_run(c, anchor_id).log_artifact(
-                    name, path=path, uri=uri, reference=reference,
-                    hash_content=hash_content, allow_missing=allow_missing,
-                    kind=kind, step_index=step, span_id=span,
-                    content_type=content_type, meta=meta,
-                )
-            else:
-                if reference:
-                    fields = reference_fields(
-                        path, hash_content=hash_content, allow_missing=allow_missing
-                    )
-                    body = {"name": name, "is_reference": True, **fields}
-                else:
-                    body = {"name": name, "uri": uri, "is_reference": True}
-                if content_type:
-                    body["content_type"] = content_type
-                if notes:
-                    body["notes"] = notes
-                c.journal.append_http(
-                    "POST", _REFERENCE_ROUTES[anchor].format(id=anchor_id), body
-                )
-        _kick_drainer()
-        print(f"queued reference {name!r} (async)")
-        return
-
-    if not path:
-        raise typer.BadParameter("needs a file path (--reference, or --uri)")
-    if not os.path.isfile(path):
-        # A FIFO, device, or procfs stream would block fingerprint/snapshot
-        # forever -- async promises bounded enqueue time (codex).
-        raise typer.BadParameter(f"{path} is not a regular file")
-    from ..sdk.journal import INLINE_HASH_MAX_BYTES
-
-    run_only = anchor is Anchor.RUN
     with _async_client() as c:
-        # Snapshot first, hash the snapshot (inside append_upload): hashing
-        # the live file and copying it later would let a same-size rewrite
-        # in between poison the content address (codex TOCTOU).
-        queued = c.journal.append_upload(
-            anchor=anchor.value,
-            anchor_id=anchor_id,
-            name=name,
-            src_path=path,
-            inline_hash=os.path.getsize(path) <= INLINE_HASH_MAX_BYTES,
-            content_type=content_type,
-            kind=kind if run_only else None,
-            meta=meta if run_only else None,
-            # NOT gated on run_only: notes is accepted at every anchor (0095).
-            notes=notes,
-            span_id=span,
-            step_index=step,
-            run_ref=run_ref,
-        )
-    pinged = False
-    if queued["blob"] is not None:
-        pinged = (
-            _ping_presign(
-                anchor, anchor_id, name,
-                digest=queued["blob"], size=queued["size_bytes"],
-                content_type=content_type,
-                kind=kind if run_only else None, meta=meta if run_only else None,
-                notes=notes,
-                span_id=span, step_index=step,
-                context=c.journal.context,
-            )
-            is not None
+        result = _artifact_enqueue(
+            c, anchor, anchor_id, name,
+            path=path, uri=uri, reference=reference, hash_content=hash_content,
+            allow_missing=allow_missing, kind=kind, step=step, span=span,
+            content_type=content_type, meta=meta, notes=notes,
         )
     _kick_drainer()
-    registered = "intent registered" if pinged else "intent deferred to drain"
-    print(f"queued upload {name!r} op={queued['op_id']} ({registered})")
+    if result["mode"] == "reference":
+        print(f"queued reference {name!r} (async)")
+        return
+    registered = "intent registered" if result["pinged"] else "intent deferred to drain"
+    print(f"queued upload {name!r} op={result['op_id']} ({registered})")
+
+
+# -- bulk import (--from-manifest) ------------------------------------------
+#
+# WHY THIS EXISTS. One `probe artifact add` per file costs one Python process
+# start, one network slug->id resolution, and -- when an agent is driving -- one
+# model turn. At 200k files that is 20-45 CPU-hours before a single byte moves,
+# and the resolution traffic is 200k requests for what is one answer. A manifest
+# collapses all three: ONE process, ONE resolution per distinct anchor, N rows
+# journalled to the outbox for the drainer to deliver.
+
+#: Keys a manifest row may carry. Each is the flag of the same name on
+#: `artifact add`, so a row and a command line mean exactly the same thing.
+#:
+#: An unrecognised key FAILS the row rather than being ignored. A manifest is
+#: generated, not typed, so `"file"` where `"path"` was meant is the realistic
+#: mistake -- and silently ignoring it enqueues nothing while reporting success,
+#: which is the one outcome a bulk importer must never produce.
+_MANIFEST_KEYS = frozenset(
+    {
+        "path", "uri", "name", "notes", "kind", "step", "span", "content_type",
+        "meta", "reference", "hash", "allow_missing",
+        "run", "project", "experiment", "workspace", "shared",
+    }
+)
+
+#: Above this size a manifest row is RECORDED rather than uploaded, unless the
+#: row says otherwise. Same constant and same reasoning as the snapshot path: a
+#: checkpoint or a dataset shard already sits on a shared volume, and copying
+#: tens of GB per row to re-store what is already there is duplication, not
+#: reproducibility.
+_MANIFEST_REFERENCE_OVER_BYTES = _SNAPSHOT_REFERENCE_OVER_BYTES
+
+
+def _manifest_field(row: dict, key: str, want: type | tuple[type, ...], label: str):
+    """One row field, type-checked. A generated manifest gets types wrong (a
+    stringified step, a list where a map belongs) and the error is far more
+    useful here than as a 422 the drainer swallows hours later."""
+    value = row.get(key)
+    if value is None or isinstance(value, want):
+        return value
+    raise typer.BadParameter(f"{key!r} must be {label}, got {type(value).__name__}")
+
+
+def _manifest_rows(path: str):
+    """Yield ``(lineno, row, error)`` for every non-blank line of a JSONL file.
+
+    Blank lines are skipped and not counted -- a trailing newline is not a row.
+    """
+    with open(path, encoding="utf-8") as handle:
+        for lineno, raw in enumerate(handle, 1):
+            line = raw.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError as exc:
+                yield lineno, None, f"not JSON: {exc}"
+                continue
+            if not isinstance(row, dict):
+                yield lineno, None, "each line must be a JSON object"
+                continue
+            yield lineno, row, None
+
+
+def _plan_manifest_row(
+    row: dict,
+    *,
+    default_anchor: tuple[Anchor, str | None] | None,
+    reference_over: int,
+) -> dict:
+    """Turn one row into the arguments :func:`_artifact_enqueue` takes.
+
+    Deterministic and network-free, so the validation pass and the enqueue pass
+    agree without carrying every parsed row in memory. Raises
+    :class:`typer.BadParameter` for anything wrong with the row; the caller
+    records that against the line number and moves to the next one.
+    """
+    unknown = sorted(set(row) - _MANIFEST_KEYS)
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown key(s): {', '.join(unknown)}. A row takes "
+            f"{', '.join(sorted(_MANIFEST_KEYS))}"
+        )
+
+    row_anchor = any(
+        row.get(key) is not None for key in ("run", "project", "experiment", "workspace")
+    ) or bool(row.get("shared"))
+    if row_anchor:
+        anchor, anchor_ref = _pick_anchor(
+            run=_manifest_field(row, "run", str, "a string"),
+            project=_manifest_field(row, "project", str, "a string"),
+            experiment=_manifest_field(row, "experiment", str, "a string"),
+            workspace=_manifest_field(row, "workspace", str, "a string"),
+            shared=bool(row.get("shared")),
+        )
+    elif default_anchor is not None:
+        anchor, anchor_ref = default_anchor
+    else:
+        raise typer.BadParameter(
+            "needs an anchor: a run/project/experiment/workspace/shared key on the "
+            "row, or --project/--experiment/--workspace/--shared on the command"
+        )
+
+    path = _manifest_field(row, "path", str, "a string")
+    uri = _manifest_field(row, "uri", str, "a string")
+    kind = _manifest_field(row, "kind", str, "a string") or "file"
+    step = _manifest_field(row, "step", int, "an integer")
+    span = _manifest_field(row, "span", str, "a string")
+    meta = _manifest_field(row, "meta", dict, "an object")
+    # Through _manifest_field like every other key. `bool(row.get(k))` accepted
+    # the string "false" as True -- a realistic generator error, since the prompt
+    # shows the value as a bare `true|false` token -- and silently recorded a
+    # file as a pointer whose bytes are never uploaded.
+    reference = bool(_manifest_field(row, "reference", bool, "true or false"))
+    hash_content = bool(_manifest_field(row, "hash", bool, "true or false"))
+    allow_missing = bool(_manifest_field(row, "allow_missing", bool, "true or false"))
+    # A RELATIVE path in a manifest row defaults to being the name, because it
+    # IS the structure: `backfill.py` states the contract the dashboard depends
+    # on -- "the name is the file's relative path and nothing else", and the
+    # folder tree is built by splitting it on '/'. Defaulting to the basename
+    # would flatten a whole import into one directory and collide every
+    # `config.yaml` in it.
+    #
+    # An ABSOLUTE path falls back to the basename. It describes where a file
+    # sits on the machine that wrote the manifest, which is not a name anyone
+    # wants in a dashboard and leaks a local layout into shared data.
+    default_name = path if (path and not os.path.isabs(path)) else None
+    name = _validate_artifact_row(
+        anchor,
+        path=path,
+        uri=uri,
+        name=_manifest_field(row, "name", str, "a string") or default_name,
+        reference=reference,
+        hash_content=hash_content,
+        allow_missing=allow_missing,
+        kind=kind,
+        step=step,
+        span=span,
+        meta=meta,
+    )
+
+    if reference:
+        if not allow_missing and not os.path.exists(path):
+            raise typer.BadParameter(
+                f"cannot reference {path!r}: no such file. Set "
+                '"allow_missing": true on the row to record it anyway '
+                "(e.g. it lives on a mount this host does not see)"
+            )
+    elif uri is None:
+        if not path:
+            raise typer.BadParameter('needs "path" (or "reference", or "uri")')
+        if not os.path.isfile(path):
+            raise typer.BadParameter(f"{path} is not a regular file")
+        # Big files are RECORDED, not copied -- see _MANIFEST_REFERENCE_OVER_BYTES.
+        # Never for a workspace/Shared row: those anchors have no reference form
+        # at all (a file IS its bytes), so promoting one would turn a legal row
+        # into an illegal one behind the caller's back.
+        if anchor not in _FILE_ANCHORS and os.path.getsize(path) >= reference_over:
+            reference = True
+
+    return {
+        "anchor": anchor,
+        "anchor_ref": anchor_ref,
+        "name": name,
+        "path": path,
+        "uri": uri,
+        "reference": reference,
+        "hash_content": hash_content,
+        "allow_missing": allow_missing,
+        "kind": kind,
+        "step": step,
+        "span": span,
+        "content_type": _manifest_field(row, "content_type", str, "a string"),
+        "meta": meta,
+        "notes": _manifest_field(row, "notes", str, "a string"),
+    }
+
+
+class _AnchorFailure:
+    """A cached anchor-resolution failure.
+
+    Cached for the same reason a success is: a manifest naming one bad project
+    slug on every row would otherwise pay one failing round trip per row -- the
+    exact cost this command exists to remove, incurred on the error path where
+    nobody is measuring it.
+    """
+
+    def __init__(self, message: str) -> None:
+        self.message = message
+
+
+def _artifact_add_manifest(
+    manifest: str,
+    *,
+    default_anchor: tuple[Anchor, str | None] | None,
+    reference_over: int,
+) -> None:
+    """Enqueue every row of a JSONL manifest. See the block comment above.
+
+    Two passes over the FILE, not over a list of parsed rows: validation must
+    happen before any bytes are staged, and holding 200k parsed rows in memory to
+    achieve that trades one resource problem for another. Re-parsing JSON is
+    cheap next to the snapshot each row is about to cost. That is also why the
+    manifest is a path and not stdin -- a stream cannot be read twice.
+    """
+    failures: dict[int, dict] = {}
+    anchors: dict[tuple[Anchor, str], str | None | _AnchorFailure] = {}
+    total = 0
+
+    def fail(lineno: int, message: str) -> None:
+        failures[lineno] = {"line": lineno, "error": message}
+
+    # -- pass 1: parse, validate, resolve each distinct anchor exactly once ---
+    client: Client | None = None
+    try:
+        for lineno, row, error in _manifest_rows(manifest):
+            total += 1
+            if error is not None:
+                fail(lineno, error)
+                continue
+            try:
+                plan = _plan_manifest_row(
+                    row, default_anchor=default_anchor, reference_over=reference_over
+                )
+            except ClickException as exc:
+                fail(lineno, exc.format_message())
+                continue
+            except (OSError, ValueError) as exc:
+                fail(lineno, str(exc))
+                continue
+
+            anchor, ref = plan["anchor"], plan["anchor_ref"]
+            if anchor not in _SLUG_ANCHORS or not ref:
+                continue
+            key = (anchor, ref)
+            if key not in anchors:
+                if client is None:
+                    client = _client()
+                try:
+                    anchors[key] = _anchor_id_for(client, anchor, ref)
+                except Exception as exc:  # noqa: BLE001 -- recorded, not raised
+                    anchors[key] = _AnchorFailure(str(exc))
+            resolved = anchors[key]
+            if isinstance(resolved, _AnchorFailure):
+                fail(lineno, resolved.message)
+    finally:
+        if client is not None:
+            client.close()
+
+    # -- pass 2: journal the rows that survived -----------------------------
+    enqueued = {"upload": 0, "reference": 0}
+    if total > len(failures):
+        with _async_client() as c:
+            for lineno, row, error in _manifest_rows(manifest):
+                if error is not None or lineno in failures:
+                    continue
+                # Guarded, exactly as pass 1 is. The file list is re-planned
+                # here, and a shared research drive is LIVE -- a file deleted
+                # between the two passes is the normal case, not a race. Letting
+                # BadParameter escape aborted the command at exit 2, abandoning
+                # every remaining row and never printing the summary.
+                try:
+                    plan = _plan_manifest_row(
+                        row, default_anchor=default_anchor, reference_over=reference_over
+                    )
+                except (typer.BadParameter, OSError) as exc:
+                    failures.append({"line": lineno, "error": str(exc)})
+                    continue
+                anchor, ref = plan.pop("anchor"), plan.pop("anchor_ref")
+                anchor_id = ref
+                if anchor in _SLUG_ANCHORS and ref:
+                    anchor_id = anchors[(anchor, ref)]
+                name = plan.pop("name")
+                try:
+                    result = _artifact_enqueue(
+                        c, anchor, anchor_id, name, ping=False, **plan
+                    )
+                except ClickException as exc:
+                    fail(lineno, exc.format_message())
+                except (OSError, errors.RosError, ValueError) as exc:
+                    fail(lineno, str(exc))
+                else:
+                    enqueued[result["mode"]] += 1
+        _kick_drainer()
+
+    # Machine-readable and on stdout, because the caller is a script: counts,
+    # then every row that did NOT land, with its line number and why. Only the
+    # failures are enumerated -- a success list is one line per file, which at
+    # manifest scale is a second copy of the manifest nobody asked for.
+    _print_json(
+        {
+            "manifest": manifest,
+            "rows": total,
+            "enqueued": sum(enqueued.values()),
+            "uploads": enqueued["upload"],
+            "references": enqueued["reference"],
+            "failed": len(failures),
+            "anchors_resolved": len(anchors),
+            "failures": [failures[line] for line in sorted(failures)],
+        }
+    )
+    if failures:
+        # Non-zero so an automated caller notices, AFTER the summary is printed:
+        # the whole point is that the good rows landed and these ones did not.
+        raise typer.Exit(1)
 
 
 @artifact_app.command("add")
@@ -3436,6 +3981,20 @@ def artifact_add(
         "--allow-missing",
         help="record a --reference even if the path is not visible from this host",
     ),
+    from_manifest: str = typer.Option(
+        None,
+        "--from-manifest",
+        metavar="FILE",
+        help="bulk import: one JSON object per line, each the row form of these "
+        "flags. ONE process, one anchor resolution, N files queued",
+    ),
+    reference_over: int = typer.Option(
+        _MANIFEST_REFERENCE_OVER_BYTES,
+        "--reference-over",
+        metavar="BYTES",
+        help="--from-manifest only: at or over this size a row is RECORDED as a "
+        "reference instead of uploaded",
+    ),
 ) -> None:
     """Record an artifact against a run, project, experiment, workspace, or Shared.
 
@@ -3444,7 +4003,41 @@ def artifact_add(
     uploaded) — for a 16GB checkpoint or a shared-volume file an agent resolves locally.
     With --uri it records a reference to an object already in a bucket. References are
     run/project/experiment only — a workspace/Shared file *is* its bytes.
+
+    --from-manifest FILE imports many files in one go. Each line is a JSON object
+    whose keys are these flags: "path", "name", "uri", "notes", "kind", "step",
+    "span", "content_type", "meta", "reference", "hash", "allow_missing", and an
+    anchor ("run"/"project"/"experiment"/"workspace"/"shared"). A row without an
+    anchor uses the one on the command line. Every distinct anchor is resolved
+    ONCE. Rows are queued to the outbox and delivered by the drainer, whether or
+    not --async is set — that is the point of the verb. A bad row is reported
+    with its line number and does not stop the rest; the summary is JSON on
+    stdout and the exit code is non-zero if anything failed.
     """
+    if from_manifest is not None:
+        if run is not None or path is not None:
+            raise typer.BadParameter(
+                "--from-manifest takes its rows from the file; drop the positional "
+                "arguments"
+            )
+        if name is not None or uri is not None or reference:
+            raise typer.BadParameter(
+                "--name/--uri/--reference are per-ROW in a manifest, not flags. Set "
+                "them on the JSON objects instead"
+            )
+        default_anchor = None
+        if project or experiment or workspace or shared:
+            default_anchor = _pick_anchor(
+                run=None, project=project, experiment=experiment,
+                workspace=workspace, shared=shared,
+            )
+        _artifact_add_manifest(
+            from_manifest,
+            default_anchor=default_anchor,
+            reference_over=reference_over,
+        )
+        return
+
     anchored = project or experiment or workspace or shared
     if anchored:
         # With an anchor flag there is no RUN, so the single positional is the path.
@@ -3465,34 +4058,12 @@ def artifact_add(
         run=run, project=project, experiment=experiment, workspace=workspace, shared=shared
     )
 
-    resolved = name
-    if resolved is None and path:
-        resolved = os.path.basename(path)
-    if resolved is None:
-        raise typer.BadParameter("artifact needs --name (or a path to derive it from)")
-    if reference and uri is not None:
-        raise typer.BadParameter(
-            "--reference derives a file:// pointer from the path; pass --reference OR "
-            "--uri, not both"
-        )
-    if reference and not path:
-        raise typer.BadParameter("--reference needs a local file path")
-    if (hash_content or allow_missing) and not reference:
-        raise typer.BadParameter("--hash and --allow-missing only apply to --reference")
-    if anchor is not Anchor.RUN:
-        if step is not None or kind != "file" or span is not None or meta:
-            raise typer.BadParameter(
-                f"--kind/--step/--span/--meta are run-only; "
-                f"the {anchor.value} upload contract rejects them"
-            )
-        if (uri is not None or reference) and anchor in _FILE_ANCHORS:
-            # Caught here rather than in the SDK so it reads as a usage error instead
-            # of an unhandled ValueError traceback: a file IS its bytes, so there is
-            # no reference-without-bytes form and the backend declares no such route.
-            raise typer.BadParameter(
-                f"a {anchor.value} file cannot be a reference (it IS its bytes). "
-                "Pass a local path to upload the bytes instead."
-            )
+    resolved = _validate_artifact_row(
+        anchor,
+        path=path, uri=uri, name=name, reference=reference,
+        hash_content=hash_content, allow_missing=allow_missing,
+        kind=kind, step=step, span=span, meta=meta,
+    )
 
     if _conn.async_mode:
         if anchor in _SLUG_ANCHORS:
@@ -3556,6 +4127,50 @@ def artifact_add(
                     content_type=content_type, notes=notes,
                 )
             )
+
+
+@artifact_app.command("move")
+def artifact_move(
+    artifact_id: str = typer.Argument(
+        ..., help="artifact id — artifacts have no slug, so this is a UUID"
+    ),
+    to: AnchorLevel = typer.Option(
+        ...,
+        "--to",
+        help="the level to move it to: run | experiment | project",
+    ),
+    target: str = typer.Option(
+        None,
+        "--target",
+        metavar="REF",
+        help="the entity at --to to land on: a slug, id:<uuid>, or a run petname. "
+        "Omit to PROMOTE up this artifact's own chain, where the target follows "
+        "from where it already hangs",
+    ),
+) -> None:
+    """Move an artifact to another level, keeping its id.
+
+    Promote up (``--to`` above where it hangs now) needs no ``--target``: the
+    destination follows from the artifact's own run -> experiment -> project
+    chain. Demoting down needs ``--target``, because a project has many
+    experiments and only the caller knows which. A lateral move — one project to
+    another — is the same call with ``--to project --target OTHER``.
+
+    WHAT THIS COMMAND DOES NOT DO is decide which of those the server allows.
+    The rules live in one place, server-side, and they are moving: lateral is
+    landing on the backend now. A client-side copy of them would either reject a
+    move the server has just started accepting, or invent a reason of its own for
+    one it refuses. So the level and the target go straight through, and a 422 or
+    409 is printed exactly as the server worded it.
+    """
+    with _client() as c:
+        target_id = None
+        if target is not None:
+            if to is AnchorLevel.run:
+                target_id = refs.resolve_run(c, target).id
+            else:
+                target_id = refs.resolve(c, to.value, target).id
+        _print_json(c.move_artifact(artifact_id, level=to.value, target_id=target_id))
 
 
 @artifact_app.command("list")
@@ -4301,6 +4916,11 @@ def outbox_status(
         "auth_blocked_since": status.get("auth_blocked_since"),
         "oldest_pending": pending[0][1].get("enqueued_at") if pending else None,
         "last_error": status.get("last_error"),
+        # Ops the journal declined to stage because the disk was near full. They
+        # still deliver -- the drainer reads the source in place -- but they now
+        # depend on that source still existing at drain time, which is a fact an
+        # operator should be able to see rather than infer from a dead letter.
+        "unstaged_low_disk": status.get("unstaged_low_disk"),
     }
     producers = journal.producer_report()
     if producers:
@@ -4309,6 +4929,10 @@ def outbox_status(
                 "producer_id": p.get("producer_id"),
                 "role": p.get("role"),
                 "last_sequence": p.get("last_sequence"),
+                # A FLOOR, written after the op file is unlinked. Beside
+                # last_sequence it answers the only question worth asking of a
+                # writer that has gone away: did what it queued actually land.
+                "delivered": p.get("delivered"),
                 "state": p.get("state"),
                 "gaps": p.get("gaps") or [],
             }
@@ -4496,18 +5120,25 @@ def notes_write(
 ) -> None:
     """Write the project's notes.
 
-    Replaces by default. `--append` reads the current text first and adds to it,
-    which is what you want when two agents are working the same project -- a plain
-    write is last-one-wins and the other's paragraph is gone.
+    Replaces by default. `--append` extends the document instead, and the
+    extension happens SERVER-SIDE: the new value is derived from the row's own
+    column inside one UPDATE, so two writers appending at the same moment both
+    survive.
+
+    This used to be a read-then-write here in the client, which was lossy by
+    construction -- both writers read the same document, both appended, and the
+    second one to save erased the first's paragraph with no error. It was
+    documented as "what you want when two agents are working the same project",
+    which was true only when they took turns.
     """
     text = sys.stdin.read() if file in (None, "-") else Path(file).read_text()
     with _client() as c:
         project_id, label = _notes_project(c, project)
-        if append:
-            current = c.get_project_notes(project_id)
-            if current:
-                text = current.rstrip("\n") + "\n\n" + text.lstrip("\n")
-        stored = c.set_project_notes(project_id, text)
+        stored = (
+            c.append_project_notes(project_id, text)
+            if append
+            else c.set_project_notes(project_id, text)
+        )
     print(f"wrote notes on project {label}", file=sys.stderr)
     # The stored length, not the document. Echoing the whole thing back on stdout
     # made `notes write` unpipeable and buried the one fact a caller wants, which is
@@ -4753,6 +5384,13 @@ def edge_add(
 # -- experiment versions (fold #6) ------------------------------------------
 version_app = typer.Typer(no_args_is_help=True, help="immutable experiment version manifests")
 app.add_typer(version_app, name="version")
+
+# W&B import. Its own module because it owns a third-party dependency the rest of
+# the CLI does not have: `wandb` is optional, and its absence must degrade the
+# import rather than break `probe log`.
+from .wandb_import import app as wandb_app  # noqa: E402
+
+app.add_typer(wandb_app, name="wandb")
 
 
 @version_app.command("create")
