@@ -49,7 +49,7 @@ class SystemResource:
         try:
             usage = self._psutil.disk_usage("/")
             samples.append(
-                HwSample("hw/disk/used_percent", float(usage.percent), {"mount": "/"}, "last")
+                HwSample("hw/disk/used_percent", float(usage.percent), {"mount": "/"}, "max")
             )
         except OSError:
             pass
@@ -87,8 +87,10 @@ class SystemResource:
             if len(parts) == 2 and parts[0] != "max":
                 quota, period = float(parts[0]), float(parts[1])
                 if period > 0:
+                    # A constant reduces exactly under mean — and 'last' is
+                    # not in the server's agg enum (SERVER_AGGS).
                     samples.append(
-                        HwSample("hw/cpu/quota_cores", quota / period, {}, "last")
+                        HwSample("hw/cpu/quota_cores", quota / period, {}, "mean")
                     )
         return samples
 

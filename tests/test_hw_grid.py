@@ -44,8 +44,8 @@ def test_window_reduces_by_declared_agg():
     agg.add("hw/gpu/utilization", {"gpu": 0}, 30.0, t0 + 30, agg="mean")
     agg.add("hw/gpu/memory_used_bytes", {"gpu": 0}, 5.0, t0 + 2, agg="max")
     agg.add("hw/gpu/memory_used_bytes", {"gpu": 0}, 9.0, t0 + 3, agg="max")
-    agg.add("hw/disk//used_percent", {}, 41.0, t0 + 4, agg="last")
-    agg.add("hw/disk//used_percent", {}, 42.0, t0 + 50, agg="last")
+    agg.add("hw/disk//used_percent", {}, 41.0, t0 + 4, agg="max")
+    agg.add("hw/disk//used_percent", {}, 42.0, t0 + 50, agg="max")
 
     # Flushing after the window closed emits exactly one point per series.
     points = agg.flush_completed(now=t0 + 60.0)

@@ -60,7 +60,9 @@ _DEFAULT: dict[str, dict] = {
     "node_memory_MemAvailable_bytes": {
         "key": "hw/mem/available_bytes",
         "kind": "gauge",
-        "agg": "last",
+        # min: the pressure signal is the LOWEST headroom inside the window
+        # (and 'last' is not in the server's agg enum — SERVER_AGGS).
+        "agg": "min",
     },
     "node_network_transmit_bytes_total": {
         "key": "hw/net/sent_bytes_rate",
@@ -78,7 +80,7 @@ _DEFAULT: dict[str, dict] = {
         "key": "hw/disk/available_bytes",
         "coord_labels": {"mountpoint": "mount"},
         "kind": "gauge",
-        "agg": "last",
+        "agg": "min",  # lowest headroom in the window; 'last' is not server-legal
     },
     # --- cAdvisor / kubelet (container-quota truth psutil cannot see) ---
     "container_cpu_usage_seconds_total": {
