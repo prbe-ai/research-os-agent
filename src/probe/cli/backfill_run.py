@@ -432,7 +432,8 @@ def ensure_projects(client, plan: plan_mod.Plan, assigned: dict[str, str]) -> tu
     for slug in wanted:
         spec = specs.get(slug)
         try:
-            row = client.ensure_project(
+            row = _resolve_or_create(
+                client,
                 slug,
                 name=(spec.name if spec else slug) or slug,
                 description=(spec.description if spec else "") or None,
@@ -441,6 +442,49 @@ def ensure_projects(client, plan: plan_mod.Plan, assigned: dict[str, str]) -> tu
         except Exception as exc:  # noqa: BLE001 - surfaced, never swallowed
             problems.append(f"could not create project {slug!r}: {exc}")
     return made, problems
+
+
+def _resolve_or_create(client, slug: str, *, name: str, description: str | None) -> dict:
+    """Use the project called `slug`, creating it if it is not there.
+
+    EXPLICITLY, not through `ensure_project`. That method runs the near-miss
+    guard, which refuses a slug resembling one already in the namespace -- and
+    the namespace it reads includes the projects this very loop created moments
+    earlier. A folder splitting into `odyssey-cluster-deploy`,
+    `odyssey-protein-benchmarks` and `odyssey-protein-lm` therefore could not be
+    imported at all: the guard read the siblings as typos of each other, refused
+    the last, and left the rest behind as orphans.
+
+    The guard is right for what it was built for -- a training loop or a
+    detached `probe run start`, where a typo silently opens a second identity
+    and nobody is watching. A backfill is the opposite situation, and its slugs
+    have already been checked twice by the time they arrive here:
+
+        the classify prompt hands the agent the existing projects and tells it
+        to prefer them (REUSE), and a human then reads every project name at
+        the review gate with its file count beside it.
+
+    So the guard would be a third opinion holding strictly LESS information
+    than the person who just approved the list, and it is the one that cannot
+    tell a sibling from a typo. Its own error says the way out is to "create it
+    explicitly" -- this is that path, taken deliberately rather than after a
+    failure. Duplicates are still impossible: an existing slug resolves and is
+    reused, never re-created.
+    """
+    from probe.sdk import errors
+
+    row = client.resolve_project(slug)
+    if row is not None:
+        return row
+    try:
+        return client.create_project(slug, name, description=description)
+    except errors.ConflictError:
+        # Lost a create race with a concurrent process. What we promise is that
+        # the project EXISTS afterwards, not that we made it.
+        row = client.resolve_project(slug)
+        if row is None:
+            raise
+        return row
 
 
 def enqueue_manifests(
@@ -531,6 +575,15 @@ def execute(
         sessions = {r.unit.unit_id: r.session_id for r in state.outstanding() if r.session_id}
         report.add(f"Resuming: {len(units)} of {len(state.units)} units left.")
         assigned_project = {u.unit_id: u.project for u in units}
+        # A resumed plan still has to ENSURE its projects. They usually exist
+        # already, in which case this resolves them and does nothing -- but the
+        # case that matters is the one where the previous attempt recorded the
+        # plan and then FAILED to create them. That is now a recoverable state,
+        # and this is what recovers it. Names come back as slugs: the specs were
+        # the classifier's and are not in the ledger, and a project that already
+        # exists keeps the name it was made with either way.
+        plan = plan_mod.Plan(projects=[], assignments=[])
+        assigned = dict(assigned_project)
     else:
         # A PAGE, not a `say()`. The line version printed wherever the cursor
         # happened to be -- under the leftover folder picker -- and then the
@@ -627,17 +680,26 @@ def execute(
         else:
             report.add(*body, "")
 
-        with client_factory() as client:
-            made, problems = ensure_projects(client, plan, assigned)
-        if problems:
-            return ["Could not create every project, so nothing was imported:", *problems]
-        report.projects = made
-
+        # THE PLAN IS RECORDED BEFORE ANYTHING IS CREATED. It used to be written
+        # after `ensure_projects`, so a single refused project threw away the
+        # classification AND the review that approved it -- the expensive half of
+        # the run, discarded over something a retry fixes. Four consecutive real
+        # imports were lost that way. On disk first means a failure below costs a
+        # re-run of project creation, not of the folder.
         units = plan_mod.pack(ev, assigned)
-        ledger.record_plan(units, made)
+        ledger.record_plan(units, sorted(set(assigned.values())))
         ledger.record_approval()
         sessions = {}
         assigned_project = {u.unit_id: u.project for u in units}
+
+    # Common to both paths, and AFTER the ledger write on the fresh one.
+    with client_factory() as client:
+        made, problems = ensure_projects(client, plan, assigned)
+    if problems:
+        return ["Could not create every project, so nothing was imported:", *problems,
+                "", f"The plan is saved — `probe backfill {folder}` retries just this "
+                    "step, without re-reading the folder."]
+    report.projects = made
 
     report.units_total = len(units)
     outcomes = run_units(
