@@ -560,6 +560,7 @@ def run_unit(
         agent=agent,
         workdir=work_dir,
         heading=f"Importing into {unit.project}",
+        label=unit.project,
         total=unit.files,
         timeout=UNIT_TIMEOUT_S,
         stream=stream,

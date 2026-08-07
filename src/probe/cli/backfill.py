@@ -869,6 +869,7 @@ def launch_agent(
     agent: Agent = Agent.CLAUDE,
     workdir: Path | None = None,
     heading: str = "",
+    label: str = "",
     timeout: float | None = None,
     stream=None,
     progress: bool = True,
@@ -993,16 +994,36 @@ def launch_agent(
             tail.append(line.rstrip("\n"))
             del tail[:-40]
             changed = fold_event(line, state)
-            if live:
+            if not progress:
+                # RAW TRANSCRIPT, and this has to be tested FIRST. Underneath
+                # the `changed` branch it was unreachable for anything worth
+                # reading: `fold_event` returns True for every tool call,
+                # command and message, so `progress=False` handed back a
+                # mangled hybrid -- counter lines where the interesting events
+                # should have been, raw JSON only for the lines nobody wanted.
+                out.write(line)
+                out.flush()
+            elif live:
                 if changed:
                     paint()
             elif changed:
                 # No TTY (a pipe, a CI log): one plain line per step. Rewriting
                 # with \r into a log file produces an unreadable single line.
-                out.write(f"  {state.uploaded}/{state.total} · {state.doing}\n")
-                out.flush()
-            elif not progress:
-                out.write(line)
+                #
+                # `done`, not `uploaded`. The live line was moved onto files
+                # READ when the upload counter turned out to be permanently
+                # zero, and this branch -- the one a pipe, a CI log or `nohup`
+                # takes -- was left behind counting the dead field. So the fix
+                # was invisible to exactly the runs nobody is watching, which
+                # are the runs that get read later to find out what happened.
+                #
+                # LABELLED, because there is no board out here. `run_units`
+                # only builds one when interactive, so an unattended import
+                # writes up to `concurrency` units into ONE stream -- and
+                # without a name the only thing telling `3/704` from `5/704`
+                # is a denominator two units can easily share.
+                tag = f"{label} " if label else ""
+                out.write(f"  {tag}{state.done}/{state.total} · {state.doing}\n")
                 out.flush()
         code = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
