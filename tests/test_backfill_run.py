@@ -330,8 +330,10 @@ def test_classify_gets_its_own_larger_deadline(folder, monkeypatch):
 
 def test_a_failed_classify_returns_no_plan(folder, monkeypatch):
     monkeypatch.setattr(bf, "launch_agent", _FakeAgent(ok=False, writes=False, tail="died"))
-    plan, tail = br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[], work_dir=folder / ".work")
+    plan, tail, session = br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[], work_dir=folder / ".work")
     assert plan is None and tail == "died"
+    # The session comes back even on failure: a retry can still resume it.
+    assert session is not None
 
 
 def test_classify_parses_a_plan_out_of_the_stream(folder, monkeypatch):
@@ -340,7 +342,7 @@ def test_classify_parses_a_plan_out_of_the_stream(folder, monkeypatch):
     envelope = json.dumps({"type": "result", "result": f"ok\n{json.dumps(payload)}"})
     monkeypatch.setattr(bf, "launch_agent",
                         _FakeAgent(ok=True, writes=False, tail=envelope))
-    plan, _ = br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[], work_dir=folder / ".work")
+    plan, _, _ = br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[], work_dir=folder / ".work")
     assert plan is not None and plan.assignments[0].project == "odyssey"
 
 

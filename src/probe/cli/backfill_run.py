@@ -108,8 +108,14 @@ def classify(
     existing: list[str],
     work_dir: Path,
     stream=None,
-) -> tuple[plan_mod.Plan | None, str]:
-    """Run the classification agent. Returns ``(plan, tail)``.
+) -> tuple[plan_mod.Plan | None, str, str | None]:
+    """Run the classification agent. Returns ``(plan, tail, session_id)``.
+
+    The session comes back so the review gate can RESUME it to apply a
+    correction. That is the difference between a revision costing one turn and
+    costing the whole folder again: the evidence is already in that session's
+    context. `None` for Codex, which has no resume here, and the caller falls
+    back to a cold re-classify that carries the correction in its prompt.
 
     Batched by construction rather than by chunking the evidence: the prompt
     carries the whole evidence set and `--autocompact auto` handles the rest.
@@ -125,6 +131,7 @@ def classify(
         truncated=ev.sample_budget_hit,
         work_dir=str(work_dir),
     )
+    session = new_session_id() if agent is bf.Agent.CLAUDE else None
     ok, tail = bf.launch_agent(
         folder,
         prompt,
@@ -134,11 +141,89 @@ def classify(
         total=ev.total_files,
         timeout=CLASSIFY_TIMEOUT_S,
         stream=stream,
-        session_id=new_session_id() if agent is bf.Agent.CLAUDE else None,
+        session_id=session,
     )
     if not ok:
-        return None, tail
-    return plan_mod.parse(tail), tail
+        return None, tail, session
+    return plan_mod.parse(tail), tail, session
+
+
+def revise(
+    folder: Path,
+    ev: evidence_mod.Evidence,
+    feedback: str,
+    *,
+    agent: bf.Agent,
+    session_id: str | None,
+    work_dir: Path,
+    stream=None,
+) -> tuple[plan_mod.Plan | None, str, str | None]:
+    """Re-run the classifier with a correction. Returns ``(plan, tail, session)``.
+
+    Resumes the classify session when there is one, so the agent still has the
+    evidence and the correction costs a single turn. Without one it starts cold
+    and the prompt says so -- an agent told to "revise your plan" with no plan
+    in context will otherwise invent a fresh one that quietly drops everything
+    the reviewer did not mention.
+
+    A failed revision returns no plan and the CALLER KEEPS THE OLD ONE. Losing
+    a good-enough plan because the correction round-tripped badly would make
+    typing anything at the gate a gamble, which is the opposite of the point.
+
+    The session is returned for the SAME reason it is taken: corrections come
+    in rounds. A cold rerun mints one of its own and hands it back, so the
+    second correction resumes the first one's work instead of starting over
+    again -- which is what "revise, look, revise again" costs otherwise.
+    """
+    prompt = prompts.revise(
+        feedback=feedback,
+        root=folder,
+        work_dir=str(work_dir),
+        resumed=session_id is not None,
+    )
+    # Mutually exclusive: --resume ADOPTS a session, --session-id MINTS one.
+    # Resuming keeps the same id, so `session` is what the next round uses
+    # either way.
+    fresh = None if session_id else (
+        new_session_id() if agent is bf.Agent.CLAUDE else None
+    )
+    ok, tail = bf.launch_agent(
+        folder,
+        prompt,
+        agent=agent,
+        workdir=work_dir,
+        heading=f"Revising the plan for {folder.name}",
+        total=ev.total_files,
+        timeout=CLASSIFY_TIMEOUT_S,
+        stream=stream,
+        resume=session_id,
+        session_id=fresh,
+    )
+    session = session_id or fresh
+    if not ok:
+        return None, tail, session
+    return plan_mod.parse(tail), tail, session
+
+
+def _destination(path: str, assigned: dict[str, str]) -> str:
+    """Where `path` is going, whether it names a FILE or a rollup DIRECTORY.
+
+    `assigned` is keyed by the expanded per-file paths, so a bare lookup misses
+    every rollup row and printed `(unplaced)` beside a directory the plan had in
+    fact placed -- next to a header saying all 204 files were placed. The label
+    was the only thing wrong, which is worse than a real gap: it sends a
+    reviewer hunting for a problem that does not exist.
+    """
+    direct = assigned.get(path)
+    if direct:
+        return direct
+    prefix = path.rstrip("/") + "/"
+    under = {project for p, project in assigned.items() if p.startswith(prefix)}
+    if len(under) == 1:
+        return f"{under.pop()}  (all {sum(1 for p in assigned if p.startswith(prefix)):,} files under it)"
+    if under:
+        return "split across " + ", ".join(sorted(under))
+    return "(unplaced)"
 
 
 def describe_plan(
@@ -168,7 +253,7 @@ def describe_plan(
     if unsure:
         lines += ["", "Least certain — check these first:"]
         for path in unsure[:12]:
-            lines.append(f"  {path}  ->  {assigned.get(path, '(unplaced)')}")
+            lines.append(f"  {path}  ->  {_destination(path, assigned)}")
         if len(unsure) > 12:
             lines.append(f"  ... and {len(unsure) - 12:,} more")
 
@@ -481,7 +566,7 @@ def execute(
                 f"Could not reach Probe: {exc}",
                 "Run `probe login`, then re-run — nothing was uploaded.",
             ]
-        plan, tail = classify(
+        plan, tail, session = classify(
             folder, ev, agent=agent, existing=existing, work_dir=work_dir
         )
         if plan is None:
@@ -489,16 +574,56 @@ def execute(
                     (tail.splitlines()[-1] if tail else ""),
                     "Re-running is safe — nothing was uploaded."]
 
-        assigned, disc = plan_mod.resolve(ev, plan)
+        def settle(p: plan_mod.Plan):
+            """A plan as the three things the gate shows: map, discrepancy, page."""
+            a, d = plan_mod.resolve(ev, p)
+            if project:
+                a = dict.fromkeys(a, project)
+            return a, d, describe_plan(ev, p, a, d)
+
+        assigned, disc, body = settle(plan)
         if not disc.trustworthy:
             return ["The classification cannot be trusted:", *disc.describe(),
                     "Re-run to try again — nothing was uploaded."]
-        if project:
-            assigned = dict.fromkeys(assigned, project)
 
-        body = describe_plan(ev, plan, assigned, disc)
         if interactive and not yes:
-            tui.page(body, prompt="Enter to import, Ctrl-C to stop: ")
+            # THE GATE IS A CONVERSATION, not a yes/no. Accept-or-abandon meant
+            # a plan that was 90% right had the same two options as one that was
+            # wrong, and abandoning re-paid for the whole classify pass without
+            # ever telling the agent WHAT was wrong -- so the rerun tended to
+            # produce the same plan. Typing a correction resumes the classify
+            # session, which still holds the evidence, and costs one turn.
+            note = ""
+            while True:
+                # `page()` wraps anything over the block width, so the note
+                # goes in as one line rather than being pre-broken here.
+                feedback = tui.page(
+                    body + (["", note] if note else []),
+                    prompt="Enter to import, or say what to change: ",
+                )
+                if not feedback:
+                    break
+                revised, rtail, session = revise(
+                    folder, ev, feedback, agent=agent,
+                    session_id=session, work_dir=work_dir,
+                )
+                if revised is None:
+                    # KEEP THE PLAN WE HAD. A correction that round-trips badly
+                    # must not cost the reviewer the plan they were reading, or
+                    # typing anything here becomes a gamble.
+                    note = ("Could not revise: "
+                            f"{rtail.splitlines()[-1] if rtail else 'the agent failed'}. "
+                            "The plan above is unchanged — try rewording, or "
+                            "press Enter to import it as it stands.")
+                    continue
+                new_assigned, new_disc, new_body = settle(revised)
+                if not new_disc.trustworthy:
+                    note = ("The revised plan did not account for every file, so "
+                            "it was discarded: " + "; ".join(new_disc.describe()) +
+                            " The plan above is unchanged.")
+                    continue
+                plan, assigned, disc, body = revised, new_assigned, new_disc, new_body
+                note = ""
         else:
             report.add(*body, "")
 
@@ -530,8 +655,11 @@ def execute(
     report.add("", f"{census.files:,} files found on disk · {enqueued:,} queued for upload"
                    f" · {report.units_done}/{report.units_total} units done.")
     if enqueued < census.files:
+        # `probe backfill --resume` was what this said, and there is no such
+        # flag -- it exits 2, at the exact moment someone needs the command to
+        # work. Resuming is what re-running IS: the ledger decides what is left.
         report.add(f"{census.files - enqueued:,} not queued — build noise and caches are "
-                   "expected here; `probe backfill --resume` picks up the rest.")
+                   f"expected here; `probe backfill {folder}` picks up the rest.")
     report.add("", "The queue drains in the background. `probe outbox status` shows "
                    "how much has actually landed.")
     for problem in problems[:5]:

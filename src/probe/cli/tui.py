@@ -175,8 +175,13 @@ def top_spacer(height: int) -> int:
     return min(MARGIN + max(0, framed_height - height) // 2, max(0, screen - height))
 
 
-def page(lines: list[str], prompt: str | None = None) -> None:
+def page(lines: list[str], prompt: str | None = None) -> str:
     """Show a block of OUTPUT as a centred page, like every prompt in the wizard.
+
+    Returns what the reader typed at `prompt`, or "" -- for a bare Enter, for a
+    page with no prompt, and for non-interactive output. Callers that only need
+    the pause ignore it; the review gate reads it, because "Enter to accept"
+    and "say what is wrong" are the same keystroke until someone types.
 
     Results used to print from column 0 at the top of the screen while every
     prompt sat centred, so finishing an action visibly threw you out of the
@@ -191,7 +196,7 @@ def page(lines: list[str], prompt: str | None = None) -> None:
     if not interactive():
         # Verbatim: hard-wrapping piped output only breaks a grep.
         print("\n".join(raw))
-        return
+        return ""
     body: list[str] = []
     for line in raw:
         # Wrapped HERE, not by the terminal: a line that overflows the block
@@ -212,7 +217,8 @@ def page(lines: list[str], prompt: str | None = None) -> None:
         print(indent(line) if line.strip() else "")
     if prompt is not None:
         print()
-        input(indent(prompt))
+        return input(indent(prompt)).strip()
+    return ""
 
 
 def style():
