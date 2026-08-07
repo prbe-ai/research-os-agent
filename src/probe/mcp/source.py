@@ -419,11 +419,28 @@ class ResearchOSSource:
         ``group`` is here rather than behind a research_list_groups tool: a sweep is
         an experiment-shaped noun, so it belongs on the same ref seam as the rest.
         ``artifact`` is reached by name OR id (see :meth:`artifact_ref`).
+        ``wiki`` is a SINGLETON and takes no value at all -- see below.
         """
+        # Checked BEFORE the partition, because `ref="wiki"` has no colon and the
+        # bare-ref branch at the bottom would take it for an id and answer "a bare
+        # ref must be a UUID". That error is true and useless: the caller followed
+        # the tool description exactly.
+        if ref == EntityType.WIKI.value or ref == f"{EntityType.WIKI.value}:":
+            return EntityType.WIKI.value, self.client.get_wiki()
         kind, _, value = ref.partition(":")
         if not value:
             value = kind
             kind = ""
+        if kind == EntityType.WIKI.value:
+            # `wiki:<anything>` is refused rather than ignored. One document per
+            # tenant means the value can only ever be a misconception about the
+            # shape of the resource, and silently dropping it would confirm the
+            # misconception by answering successfully.
+            raise errors.ValidationError(
+                f"the team wiki takes no id: use ref=\"wiki\", not {ref!r}. There is "
+                "one wiki per team and your credential already names the team.",
+                status=422,
+            )
         getters = {
             EntityType.RUN.value: self.client.get_run,
             EntityType.EXPERIMENT.value: self.client.get_experiment,
@@ -441,10 +458,11 @@ class ResearchOSSource:
             # followed the retired instruction to the letter got a Postgres-shaped
             # parse error naming `experiment_id`, and nothing that said "assets are
             # gone". Any ref kind retired later would leak the same way.
-            known = sorted([*getters, EntityType.ARTIFACT.value])
+            known = sorted([*getters, EntityType.ARTIFACT.value, EntityType.WIKI.value])
             raise errors.ValidationError(
                 f"unknown ref kind {kind!r} in {ref!r}; supported kinds are {known} "
-                f"(assets were folded into artifacts: use artifact:<name>)",
+                f"(assets were folded into artifacts: use artifact:<name>; the team "
+                f"wiki is the bare ref \"wiki\")",
                 status=422,
             )
         # A bare ref is only ever an id, and every id route validates it as a UUID.
@@ -535,6 +553,17 @@ class ResearchOSSource:
 
     def experiment_versions(self, experiment_id: str) -> list[dict]:
         return self.client.list_experiment_versions(experiment_id)
+
+    def wiki_versions(self, *, limit: int | None = None) -> dict:
+        """The team wiki's history page, newest first, WITHOUT bodies.
+
+        `limit` only -- the backend's `before_version` cursor is deliberately not
+        plumbed through. `get_entity`'s pagination is an OFFSET into the rows a
+        view returned, so a keyset cursor here would be a second, incompatible
+        position that the envelope has no way to hand back. The view fetches a
+        window plus a lookahead through `_bounded`, exactly like spans and metric
+        points do against their own limit-only routes."""
+        return self.client.wiki_versions(limit=limit)
 
     def execution_record(self, content_hash: str) -> dict:
         """The pinned environment behind ``run.env_ref`` — code, deps, hardware,

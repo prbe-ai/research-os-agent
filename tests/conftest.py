@@ -150,6 +150,12 @@ class FakeApp:
     # Set False to model a backend PREDATING run reopen (research-os#364): the
     # /v1/runs/{id}/reopen route 404s FastAPI-style.
     supports_reopen = True
+    # Set False to model a backend PREDATING the team wiki (research-os 0098):
+    # every /v1/wiki route 404s FastAPI-style. The browse half of that backend is
+    # modelled by `browse_response` simply carrying no `wiki` key, which is what a
+    # server that has never heard of the field sends -- and which a client
+    # generated AFTER the field exists must still read without raising.
+    supports_wiki = True
 
     def _echo_scope(self, response: dict, body: dict | None) -> dict:
         if not self.echoes_project_scope or not body or not body.get("project_id"):
@@ -193,6 +199,94 @@ class FakeApp:
         if params.get("step_to") is not None:
             rows = [r for r in rows if r["step_index"] <= int(params["step_to"])]
         return rows
+
+    def _wiki(self, method: str, path: str, body: dict, request) -> httpx.Response | None:
+        """The four /v1/wiki routes, including the three status codes that ARE the
+        feature (app/wiki/router.py).
+
+        Modelled rather than stubbed, because every interesting client behaviour is
+        a reaction to one of them and a fake that always answered 200 would test
+        nothing: 428 is what `probe wiki write`'s hidden read-then-write exists to
+        avoid, 409 carrying `current_body` is what its conflict report renders, and
+        the 200-on-an-empty-team is what stops `wiki read` reporting an empty lab
+        as a failure.
+
+        Returns None for a path this does not handle, so an unmatched /v1/wiki/*
+        falls through to the handler's catch-all instead of being absorbed here.
+        """
+        if not self.supports_wiki:
+            return httpx.Response(404, json={"detail": "Not Found"})
+
+        if path == "/v1/wiki" and method == "GET":
+            return httpx.Response(200, json=dict(self.wiki))
+
+        if path == "/v1/wiki" and method == "PUT":
+            if body.get("version") is None:
+                # 428, not 422. The request is well-formed; it carries no
+                # precondition. Getting this wrong in the fake would let a client
+                # that omits the version pass as a validation error.
+                return httpx.Response(428, json={"detail": "a wiki write must carry a version"})
+            if body["version"] != self.wiki["version"]:
+                return httpx.Response(409, json={"detail": {
+                    "message": (
+                        f"the wiki has moved to version {self.wiki['version']} since "
+                        f"you read version {body['version']}."
+                    ),
+                    "expected_version": body["version"],
+                    "current_version": self.wiki["version"],
+                    "current_body": self.wiki["body"],
+                }})
+            return httpx.Response(200, json=self._wiki_commit(body["body"], body.get("summary")))
+
+        if path == "/v1/wiki/versions" and method == "GET":
+            params = request.url.params
+            limit = int(params.get("limit") or 50)
+            if self.wiki_versions_page is not None:
+                limit = min(limit, self.wiki_versions_page)
+            before = params.get("before_version")
+            rows = self.wiki_history
+            if before is not None:
+                rows = [r for r in rows if r["version"] < int(before)]
+            page = rows[:limit]
+            last = page[-1]["version"] if page else None
+            more = last is not None and last > 1 and len(page) == limit
+            return httpx.Response(200, json={
+                "versions": page,
+                "next_before_version": last if more else None,
+            })
+
+        if path == "/v1/wiki/revert" and method == "POST":
+            wanted = body.get("version")
+            if wanted not in self.wiki_bodies:
+                return httpx.Response(404, json={"detail": f"no wiki version {wanted}"})
+            # FORWARD, never in place: the older body becomes a NEW version and the
+            # ones in between survive. A fake that rewound `version` would let a
+            # client that assumed destructive revert pass.
+            return httpx.Response(200, json=self._wiki_commit(
+                self.wiki_bodies[wanted], f"revert to version {wanted}"
+            ))
+        return None
+
+    def _wiki_commit(self, body: str, summary: str | None) -> dict:
+        """Append a revision and return the new document.
+
+        The BODY is stored beside the history, not on it. `WikiVersionOut` carries
+        `size_chars` and no body on purpose -- a 50-row page of 20k documents is a
+        megabyte -- so a fake that hung the body off the history row would serve a
+        shape the real backend never serves, and a client reading it would pass
+        here and find nothing in production.
+        """
+        version = self.wiki["version"] + 1
+        self.wiki = {"body": body, "version": version, "updated_at": self._stamp()}
+        self.wiki_bodies[version] = body
+        self.wiki_history.insert(0, {
+            "version": version,
+            "author": "user:00000000-0000-0000-0000-000000000001",
+            "summary": summary,
+            "created_at": self.wiki["updated_at"],
+            "size_chars": len(body),
+        })
+        return dict(self.wiki)
 
     def _find_artifact(self, artifact_id: str) -> dict | None:
         """One artifact by id, whatever it hangs off — the fake's echo of the server's
@@ -404,6 +498,22 @@ class FakeApp:
         # the route, so the source's capability probe has something to discover.
         self.browse_requests: list[dict] = []
         self.browse_response: dict | None = None
+        # The team wiki (research-os 0098). ONE document per tenant, so one dict --
+        # no id anywhere, exactly like the real routes. `version: 0` with an empty
+        # body is the REAL initial state, not a stand-in for "unset": the server
+        # answers exactly this for a team that has never generated one, and a fake
+        # that 404'd instead would let a client with the missing-means-empty bug
+        # pass every test here.
+        self.wiki: dict = {"body": "", "version": 0, "updated_at": None}
+        #: Newest-first history rows (version/author/summary/created_at/size_chars).
+        self.wiki_history: list[dict] = []
+        #: version -> body, kept OFF the history rows -- see `_wiki_commit`. This is
+        #: what `revert` copies forward, and it is deliberately unreachable through
+        #: any route: the wire has no way to fetch an old body except by reverting.
+        self.wiki_bodies: dict[int, str] = {}
+        #: Server-side page ceiling for GET /v1/wiki/versions, so the client's
+        #: "there is older history" signal has something real to key on.
+        self.wiki_versions_page: int | None = None
         self.search_404_workspace_ids: set[str] = set()
         self.search_404_once = False
         self.fail_next_uploads = False
@@ -451,6 +561,11 @@ class FakeApp:
             if self.browse_response is None:
                 return httpx.Response(404, json={"detail": "Not Found"})
             return httpx.Response(200, json=self.browse_response)
+
+        if path.startswith("/v1/wiki"):
+            response = self._wiki(method, path, body, request)
+            if response is not None:
+                return response
 
         if path == "/v1/search" and method == "POST":
             self.search_requests.append(body)

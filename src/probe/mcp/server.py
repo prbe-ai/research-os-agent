@@ -354,6 +354,8 @@ REACH FOR THESE TOOLS WHEN:
 - You need to figure out what another researcher is doing.
 - You just arrived in an unfamiliar project and do not know what is in it.
 
+START WITH THE TEAM WIKI. An unscoped browse_research carries an excerpt of it, and get_entity(ref="wiki") has the whole document: one markdown page per team saying what this lab works on, what it has already learned, and what not to repeat. Read it before you plan, not after you are stuck -- structure alone (project names, run counts) tells you what exists and nothing about what any of it means. It is regenerated nightly and edited by hand, so it is the team's current best account rather than a permanent record; when you learn something that contradicts it, `probe wiki write` is how you correct it.
+
 REUSE BEFORE YOU CREATE. Duplicate identities are the most expensive avoidable error in this system: two scorers with the same intent and different behaviour make every result that used either one unreproducible. Before writing any reusable artifact, call get_entity(ref="artifact:<name>", view="versions"). Artifacts resolve by NAME at the shared (lab-wide) level, which is where an official one lives.
 
 DO NOT SKIP THESE. A missed lookup is the default failure mode here, and it is invisible: you get a plausible answer built from nothing. If you are about to write a script, launch a run, or say "here is how I would approach this" without having looked, stop and look.
@@ -434,6 +436,18 @@ def create_server(
 
         Every node carries a `ref` you can hand straight to `get_entity`, and a
         `url` to its dashboard page — quote that verbatim, never build one.
+
+        AN UNSCOPED CALL ALSO CARRIES `wiki`: an excerpt of the team's one living
+        markdown document — what this lab is working on, what it has already
+        learned, what not to repeat. READ IT before you plan anything here; the
+        tree tells you what exists and only this tells you what it means.
+        `get_entity(ref="wiki")` has the whole document (and it is quoted in
+        `wiki.read_all` so you do not have to remember it). It is absent on a
+        scoped call and on cursor pages by design — the wiki belongs to the TEAM,
+        not to the project you scoped into — so its absence there is not evidence
+        that the team has no briefing. `wiki.state="unavailable"` is different
+        again: a document may well exist and THIS request could not read it, so
+        try `get_entity(ref="wiki")` before concluding anything.
         """
         with svc() as s:
             return s.browse_research(
@@ -570,6 +584,7 @@ def create_server(
           artifact    card | versions
           project     card | artifacts | notes
           group       card
+          wiki        card | versions
 
         `ref="artifact:<name>"` with `view="versions"` is the reuse check before you
         create a script, scorer, dataset, config or image. The NAME axis is the reuse
@@ -595,6 +610,17 @@ def create_server(
         already tried, what not to repeat). An excerpt rides along on the project
         `card`, so you have usually already seen it by the time you would ask; this
         view returns the whole file. Write it with `probe notes write`.
+
+        `ref="wiki"` is the TEAM's wiki -- the lab-wide sibling of those notes, and
+        the ref takes no id because there is exactly one per team. Its `card` is the
+        WHOLE document (an excerpt already rode along on `browse_research`, so if
+        you are asking here you want the rest); `view="versions"` is its history,
+        newest first, carrying `author` and `size_chars` but no bodies. A team that
+        has never had one reads back `{body: "", version: 0}` — that is a real
+        answer, not a failed read. It is REGENERATED nightly and hand-edited between
+        passes, so treat it as the team's current best account rather than a
+        permanent record; `probe wiki write` is how you correct it, and the version
+        check there is what stops two writers overwriting each other.
 
         `trajectory` = the run's actual spans, `reproduce` = hypothesis + resolved
         env_ref, `handoff` = what a new session needs; the other views are what

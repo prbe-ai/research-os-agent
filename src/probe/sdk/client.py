@@ -41,6 +41,7 @@ from ..models import (
     ScopedUploadRequest,
     UploadGcRequest,
     UploadRequest,
+    WikiWrite,
 )
 from . import config as config_module
 from . import errors
@@ -2829,6 +2830,139 @@ class Client:
             )
         return stored
 
+    # -- the team wiki (research-os 0098) ----------------------------------
+    # ONE markdown document per TENANT, version-checked. The team-level sibling of
+    # the project's notes above, and deliberately a different mechanism rather than
+    # "notes with a wider anchor":
+    #
+    #   * it has TWO writers -- a nightly generator sweep and coding agents through
+    #     `probe wiki write` -- so a write can legitimately lose, and every write
+    #     carries the version it was based on. The notes column is last-one-wins,
+    #     which is tolerable for one project and one agent and not for a document
+    #     the whole lab reads;
+    #   * losing is INFORMATIVE: the 409 carries the current body, so the loser can
+    #     merge immediately instead of re-fetching and racing again;
+    #   * it has real history (`wiki_versions`) and a revert, which a column cannot
+    #     have.
+    #
+    # There is no id in any of these paths and that is the contract: the tenant on
+    # the credential identifies the document completely.
+    #
+    # OLD-BACKEND BEHAVIOUR is the opposite shape from `set_project_notes` above, and
+    # that is why these do not need its read-back. `notes` was a new FIELD on an
+    # existing route, and `ProjectPatch` does not forbid extras -- so a pre-0094
+    # server took the write, dropped it, and answered 200, which is why that call has
+    # to verify. These are new ROUTES: a server that predates them 404s, loudly and
+    # at the transport. The only thing left to do is say what the 404 MEANS, because
+    # "Not Found" on a document the caller was told always exists reads as data loss.
+
+    @staticmethod
+    def _wiki_absent() -> errors.NotFoundError:
+        """The route-level 404, translated into the upgrade message.
+
+        No wiki route can 404 for a data reason: `GET /v1/wiki` answers an empty
+        document at version 0 for a team that has never had one, and none of the
+        paths carry an id to be wrong about. (`POST /v1/wiki/revert` is the one
+        exception -- a version that names no row -- and it is handled at its own
+        call site rather than here, so a real "no such version" is never rewritten
+        into "upgrade your server".)"""
+        return errors.NotFoundError(
+            "this Probe Research backend predates the team wiki (research-os "
+            "0098): upgrade the server. Until then the project's notes "
+            "(`probe notes`) are the per-project equivalent."
+        )
+
+    def get_wiki(self) -> dict:
+        """``GET /v1/wiki`` — the team's current document.
+
+        Always answers: a team that has never generated one gets
+        ``{"body": "", "version": 0, "updated_at": None}``. Version 0 is not a
+        placeholder -- it is the version a FIRST write must send, which is what
+        makes seeding the document the same call as amending it."""
+        try:
+            return self.transport.get("/v1/wiki")
+        except errors.NotFoundError as exc:
+            raise self._wiki_absent() from exc
+
+    def set_wiki(self, body: str, version: int, summary: str | None = None) -> dict:
+        """``PUT /v1/wiki`` — replace the document, if it is still at ``version``.
+
+        ``version`` is REQUIRED here while the wire schema makes it optional, and
+        that asymmetry is deliberate on both sides: the route answers 428
+        Precondition Required for a write that carries none, and a client that let
+        you omit it would only ever turn that into a round trip. Read
+        :meth:`get_wiki` and pass its ``version`` back.
+
+        Raises :class:`errors.ConflictError` when the document has moved. Its
+        ``detail`` carries ``{message, expected_version, current_version,
+        current_body}`` -- the body is there so a loser can merge without a second
+        request, and losing is ORDINARY here rather than exceptional: the other
+        writer is usually the nightly sweep, which no caller can see coming.
+
+        NOT routed through :meth:`write`, unlike every other data write in this
+        client, and this is the one call where that would be wrong. In
+        ``async_writes`` mode `write` journals the request and returns None; the
+        outbox would then deliver a version-checked write minutes later, against a
+        version that has almost certainly moved, and hand the 409 to a drainer with
+        nobody to merge it. A precondition that is checked after the fact is not a
+        precondition. So this one is synchronous, and it RAISES rather than
+        fail-open spooling.
+
+        Built through the generated ``WikiWrite`` so the 20,000-character document
+        cap and the 200-character summary cap fail client-side instead of as a
+        server 422."""
+        model = WikiWrite(body=body, version=version, summary=summary)
+        try:
+            return self.transport.put(
+                "/v1/wiki", model.model_dump(mode="json", exclude_none=True)
+            )
+        except errors.NotFoundError as exc:
+            raise self._wiki_absent() from exc
+
+    def wiki_versions(
+        self, *, limit: int | None = None, before_version: int | None = None
+    ) -> dict:
+        """``GET /v1/wiki/versions`` — the history, newest first, WITHOUT bodies.
+
+        Returns ``{versions: [...], next_before_version: int|None}``. Each row is
+        ``{version, author, summary, created_at, size_chars}``; ``author`` is
+        'agent:wiki' for the nightly sweep and the writing credential otherwise,
+        which is the first thing a reader wants when a revision surprises them.
+
+        Paged by ``before_version``, not an offset: history is append-only and
+        grows at the HEAD, so a revision landing between two requests shifts every
+        offset by one and silently re-serves a row the caller already saw. Pass
+        ``next_before_version`` back to continue; None means this was the last
+        page."""
+        params: dict[str, Any] = {}
+        if limit is not None:
+            params["limit"] = limit
+        if before_version is not None:
+            params["before_version"] = before_version
+        try:
+            return self.transport.get("/v1/wiki/versions", params=params or None)
+        except errors.NotFoundError as exc:
+            raise self._wiki_absent() from exc
+
+    def revert_wiki(self, version: int) -> dict:
+        """``POST /v1/wiki/revert`` — copy a prior revision FORWARD as a new one.
+
+        History is never rewritten: reverting to version 3 does not delete 4 and 5,
+        it appends 3's body as version 6. So a revert is itself revertible, and the
+        history list never lies about what the document said when.
+
+        The 404 here is AMBIGUOUS in a way the other three are not -- it is either
+        "no such version" or "this backend has no wiki" -- so it is resolved rather
+        than assumed. One extra read, only on the error path, and only to avoid
+        telling someone to upgrade a server that is already current."""
+        try:
+            return self.transport.post("/v1/wiki/revert", {"version": version})
+        except errors.NotFoundError as exc:
+            try:
+                self.transport.get("/v1/wiki")
+            except errors.NotFoundError:
+                raise self._wiki_absent() from exc
+            raise
     def append_project_notes(self, project_id: str, text: str) -> str:
         """Extend the project's notes WITHOUT reading them first.
 

@@ -5146,6 +5146,151 @@ def notes_write(
     _print_json({"project": label, "chars": len(stored)})
 
 
+# -- the team wiki -------------------------------------------------------------
+# ONE markdown document per TEAM, version-checked. `notes` above is per PROJECT and
+# last-one-wins; this is the lab-wide briefing, and it has two writers -- a nightly
+# generator sweep and whoever runs `probe wiki write` -- so every write carries the
+# version it was based on and a losing write is TOLD what it lost to.
+#
+# It is a separate command group rather than `notes --team` because the two behave
+# differently in the one way that matters at the terminal: `notes write` cannot
+# fail on a race and this can, so the group needs verbs (`versions`, `revert`) that
+# the notes group has no meaning for.
+wiki_app = typer.Typer(
+    no_args_is_help=True, help="the team's wiki (one versioned markdown document)"
+)
+app.add_typer(wiki_app, name="wiki")
+
+#: How much of the current document a conflict message shows. The 409 carries the
+#: WHOLE body, and printing 20,000 characters into an error message would bury the
+#: two facts that decide what to do next (it moved; it is now at version N). The
+#: excerpt is the same bounded-glance-plus-pointer shape the wiki uses everywhere
+#: else -- browse carries 1,200 characters and names the full read.
+_WIKI_CONFLICT_EXCERPT = 1200
+
+
+@wiki_app.command("read")
+def wiki_read() -> None:
+    """Print the team's wiki. Empty output means nobody has written one yet."""
+    with _client() as c:
+        page = c.get_wiki()
+    body = page.get("body") or ""
+    if not body:
+        # NOT an error and not silence: version 0 is a real, well-formed answer
+        # ("this team has no document"), and a caller deciding whether to seed one
+        # needs to be able to tell that from a failed read.
+        print("the team wiki is empty (version 0) — `probe wiki write` seeds it", file=sys.stderr)
+        return
+    sys.stdout.write(body if body.endswith("\n") else body + "\n")
+
+
+@wiki_app.command("write")
+def wiki_write(
+    body: str = typer.Argument(
+        None, help="the document: literal text, @file, or '-' for stdin (the default)"
+    ),
+    summary: str = typer.Option(
+        None, "--summary", help="one line for the history list (optional)"
+    ),
+    if_version: int = typer.Option(
+        None,
+        "--if-version",
+        help="only write if the document is still at this version; defaults to reading it now",
+    ),
+) -> None:
+    """Replace the team's wiki.
+
+    HIDES THE READ-THEN-WRITE. `PUT /v1/wiki` answers 428 for a write that carries
+    no version, so this reads the current version and writes with it in one
+    command. Two round trips, one verb — the alternative is teaching every caller
+    (and every agent) to make the read call first, which is a precondition they
+    would eventually skip.
+
+    That default narrows the race to milliseconds; it does not remove it, and it
+    must not pretend to. `--if-version` is for the caller that already read the
+    document — merged a conflict, edited by hand — and has a REAL precondition to
+    assert rather than a freshly-read one.
+
+    A losing write PRINTS what it lost to and changes nothing. It is never retried
+    with the newer version: that would be the same last-one-wins overwrite the
+    version check exists to prevent, done automatically and silently, which is
+    worse than doing it by hand.
+    """
+    text = _text_value(body if body is not None else "-")
+    with _client() as c:
+        # The read is skipped entirely when the caller supplied a version: making it
+        # anyway would spend a request to fetch a number we are about to ignore, and
+        # would read as though the flag were advisory.
+        version = if_version if if_version is not None else c.get_wiki().get("version", 0)
+        try:
+            page = c.set_wiki(text, version, summary=summary)
+        except errors.ConflictError as exc:
+            raise _wiki_conflict(exc, attempted=version) from exc
+    print(f"wrote the team wiki (version {page.get('version')})", file=sys.stderr)
+    # The version and the size, not the document. Same reasoning as `notes write`:
+    # echoing the whole thing back makes the command unpipeable and buries the one
+    # fact a caller wants, which is that the server holds what was sent.
+    _print_json({"version": page.get("version"), "chars": len(page.get("body") or "")})
+
+
+def _wiki_conflict(exc: errors.ConflictError, *, attempted: int) -> typer.Exit:
+    """Report a lost write on stderr and exit non-zero. Nothing was written.
+
+    Everything goes to STDERR, including the excerpt, and stdout stays empty. A
+    successful write prints a JSON receipt on stdout, so putting the other writer's
+    markdown there would hand `jq` a document where it expected `{"version": ...}`
+    — and, worse, would let `probe wiki write ... > out.json` produce a plausible
+    file for a write that never happened.
+    """
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    current = detail.get("current_version")
+    body = detail.get("current_body") or ""
+    lines = [
+        f"error: the team wiki moved to version {current} while you were writing "
+        f"version {attempted}. NOTHING WAS WRITTEN.",
+        "",
+        "The other writer is often the nightly generator sweep. Merge your change "
+        "into the current document below and write again with "
+        f"`--if-version {current}`; `probe wiki read` has the whole thing.",
+        "",
+        f"--- current wiki (version {current}) ---",
+        body[:_WIKI_CONFLICT_EXCERPT]
+        + ("\n[...truncated]" if len(body) > _WIKI_CONFLICT_EXCERPT else ""),
+    ]
+    print("\n".join(lines), file=sys.stderr)
+    return typer.Exit(1)
+
+
+@wiki_app.command("versions")
+def wiki_versions(
+    limit: int = typer.Option(None, "--limit", help="rows per page (1-200; server default 50)"),
+    before_version: int = typer.Option(
+        None, "--before-version", help="continue from a previous page's next_before_version"
+    ),
+) -> None:
+    """The wiki's history, newest first. Carries no bodies — `wiki read` is the
+    current document, `wiki revert` brings an older one back."""
+    with _client() as c:
+        _print_json(c.wiki_versions(limit=limit, before_version=before_version))
+
+
+@wiki_app.command("revert")
+def wiki_revert(version: int = typer.Argument(..., help="the version to bring back")) -> None:
+    """Copy a prior revision FORWARD as a new one.
+
+    History is never rewritten: reverting to 3 does not delete 4 and 5, it appends
+    3's body as version 6 — so a revert is itself revertible, and the history list
+    never lies about what the document said when."""
+    with _client() as c:
+        page = c.revert_wiki(version)
+    print(
+        f"reverted the team wiki to version {version}, stored as version "
+        f"{page.get('version')}",
+        file=sys.stderr,
+    )
+    _print_json({"version": page.get("version"), "reverted_to": version})
+
+
 @app.command()
 def events(run: str = typer.Argument(...)) -> None:
     """Read the backend lifecycle events for a run (fold #10, read-only)."""

@@ -17,6 +17,12 @@ surface and the derived-metric write; ``probe.expr`` builds specs against them.
 The ``/ingest/v1/runs`` body (``IngestRunRequest`` and its nested ``IngestRun`` /
 ``IngestArtifact``) is now declared in the backend schema, so the passive push is
 generated and validated like every other write path.
+
+``WikiWrite`` is the team wiki's version-checked write body (research-os 0098).
+Only the WRITE model is re-exported: the read shapes (``WikiPageOut``,
+``WikiVersionsOut``, ``TeamWikiExcerpt``) are generated too, but the client hands
+reads back as plain dicts like every other read, and importing a response model
+nothing validates against would imply a parsing step that does not exist.
 """
 
 from __future__ import annotations
@@ -73,6 +79,7 @@ from ._generated.models import (
     ScopedUploadRequest,
     UploadRequest,
     UploadResponse,
+    WikiWrite,
 )
 
 __all__ = [
@@ -130,4 +137,5 @@ __all__ = [
     "ScopedUploadRequest",
     "UploadRequest",
     "UploadResponse",
+    "WikiWrite",
 ]

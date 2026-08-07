@@ -107,6 +107,10 @@ def _populated(client, app, *, spans: int = 3):
          "customer_id": "lab-42", "created_at": "2026-07-16T00:00:00Z"},
     ]
     client.create_artifact_version(shared_id, uri="r2://bucket/v1")
+    # The TEAM WIKI (research-os 0098) — a document AND a history, because the
+    # honest-envelope guard below walks every (kind, view) pair and an empty wiki
+    # would let `versions` pass by having nothing to report.
+    client.set_wiki("# lab\n\nHarbor has no generic-k8s backend.\n", 0, summary="seed")
     return rid, experiment_id, group["id"], record["content_hash"]
 
 
@@ -168,7 +172,11 @@ def test_no_view_reports_missing_unconditionally(client, app):
     project_id = app.runs[rid].get("project_id") or client.list_projects().items[0]["id"]
     refs = {"run": f"run:{rid}", "experiment": f"experiment:{experiment_id}",
             "project": f"project:{project_id}", "group": f"group:{group_id}",
-            "artifact": f"artifact:{_SHARED_ARTIFACT}"}
+            "artifact": f"artifact:{_SHARED_ARTIFACT}",
+            # The one ref with no value: one wiki per tenant, named by the
+            # credential. A KeyError here means a new kind was added to _VIEWS
+            # without teaching this guard to reach it.
+            "wiki": "wiki"}
     service = _service(client)
 
     for kind, view in sorted(_VIEWS):

@@ -36,7 +36,7 @@ END_MARKER = "<!-- probe-research:end -->"
 
 #: Bumped when POINTER_BODY changes, so an older installed block is recognised
 #: as stale and rewritten instead of being left in place or duplicated.
-POINTER_VERSION = 3
+POINTER_VERSION = 4
 
 POINTER_BODY = """## Probe research tracking
 
@@ -48,6 +48,12 @@ when there is a hypothesis to test.
 Append decisions, findings and reversals to the project's notes as they happen,
 and read them on arrival. A plan-first or approval-gated brief does not defer
 this: registering is not the gated action.
+
+Read the team wiki on arrival, alongside the project's notes: one markdown page
+per team saying what this lab works on and what it has already learned. It rides
+along on Probe's structured browse read, and `probe wiki` is its command group.
+Correct it when you learn something that contradicts it -- it is the team's
+current account, not a permanent record.
 
 Use the `probe-research:start-research-work` and
 `probe-research:track-research-work` skills rather than improvising CLI calls --
