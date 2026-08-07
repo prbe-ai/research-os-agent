@@ -81,7 +81,7 @@ def test_a_unit_is_recorded_before_it_starts_and_after_it_stops(folder, state_di
     led.record_plan([unit], ["odyssey"])
 
     out = br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led,
-                      manifest_dir=state_dir)
+                      work_dir=state_dir)
     assert out.ok and out.rows == 2
     st = led.read()
     assert st.units["u1"].state is bl.UnitState.DONE
@@ -99,7 +99,7 @@ def test_a_unit_that_writes_no_manifest_is_a_failure_whatever_it_claims(
     led.record_plan([unit], ["odyssey"])
 
     out = br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led,
-                      manifest_dir=state_dir)
+                      work_dir=state_dir)
     assert out.ok is False
     assert "no manifest" in out.detail
     assert led.read().units["u1"].state is bl.UnitState.FAILED
@@ -110,7 +110,7 @@ def test_a_failed_unit_is_left_outstanding_for_the_resume(folder, state_dir, mon
     led = bl.Ledger.for_folder(folder)
     unit = _unit()
     led.record_plan([unit], ["odyssey"])
-    br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led, manifest_dir=state_dir)
+    br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led, work_dir=state_dir)
     assert [r.unit.unit_id for r in led.read().outstanding()] == ["u1"]
 
 
@@ -122,7 +122,7 @@ def test_a_unit_gets_a_session_and_a_finite_timeout(folder, state_dir, monkeypat
     led = bl.Ledger.for_folder(folder)
     unit = _unit()
     led.record_plan([unit], ["odyssey"])
-    br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led, manifest_dir=state_dir)
+    br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led, work_dir=state_dir)
     call = fake.calls[0]
     assert call["session_id"]
     assert call["timeout"] == br.UNIT_TIMEOUT_S
@@ -134,7 +134,7 @@ def test_the_recorded_session_is_the_one_that_ran(folder, state_dir, monkeypatch
     led = bl.Ledger.for_folder(folder)
     unit = _unit()
     led.record_plan([unit], ["odyssey"])
-    br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led, manifest_dir=state_dir)
+    br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led, work_dir=state_dir)
     assert led.read().units["u1"].session_id == fake.calls[0]["session_id"]
 
 
@@ -145,7 +145,7 @@ def test_a_resumed_unit_adopts_its_previous_session(folder, state_dir, monkeypat
     unit = _unit()
     led.record_plan([unit], ["odyssey"])
     br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led,
-                manifest_dir=state_dir, resume="sess-earlier")
+                work_dir=state_dir, resume="sess-earlier")
     assert fake.calls[0]["resume"] == "sess-earlier"
 
 
@@ -155,7 +155,7 @@ def test_the_unit_prompt_names_only_that_unit_s_files(folder, state_dir, monkeyp
     led = bl.Ledger.for_folder(folder)
     unit = _unit(paths=("michael/train.py",))
     led.record_plan([unit], ["odyssey"])
-    br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led, manifest_dir=state_dir)
+    br.run_unit(folder, unit, agent=bf.Agent.CLAUDE, ledger=led, work_dir=state_dir)
     prompt = fake.calls[0]["prompt"]
     assert "michael/train.py" in prompt
     assert "xian/eval.py" not in prompt
@@ -183,7 +183,7 @@ def test_units_run_bounded_and_every_one_reports(folder, state_dir, monkeypatch)
     units = [_unit(f"u{i}") for i in range(5)]
     led.record_plan(units, ["odyssey"])
     out = br.run_units(folder, units, agent=bf.Agent.CLAUDE, ledger=led,
-                       manifest_dir=state_dir, concurrency=2)
+                       work_dir=state_dir, concurrency=2)
     assert len(out) == 5 and all(o.ok for o in out)
     assert led.read().progress() == (5, 5)
 
@@ -191,7 +191,7 @@ def test_units_run_bounded_and_every_one_reports(folder, state_dir, monkeypatch)
 def test_no_units_is_not_an_error(folder, state_dir, monkeypatch):
     led = bl.Ledger.for_folder(folder)
     assert br.run_units(folder, [], agent=bf.Agent.CLAUDE, ledger=led,
-                        manifest_dir=state_dir) == []
+                        work_dir=state_dir) == []
 
 
 def test_each_unit_writes_its_own_manifest(folder, state_dir, monkeypatch):
@@ -200,7 +200,7 @@ def test_each_unit_writes_its_own_manifest(folder, state_dir, monkeypatch):
     units = [_unit("ua"), _unit("ub")]
     led.record_plan(units, ["odyssey"])
     out = br.run_units(folder, units, agent=bf.Agent.CLAUDE, ledger=led,
-                       manifest_dir=state_dir)
+                       work_dir=state_dir)
     assert {o.manifest.name for o in out} == {"ua.jsonl", "ub.jsonl"}
 
 
@@ -316,21 +316,21 @@ def test_classify_is_told_when_its_evidence_was_truncated(folder, monkeypatch):
     monkeypatch.setattr(bf, "launch_agent", fake)
     evidence = ev.gather(folder)
     evidence.sample_budget_hit = True
-    br.classify(folder, evidence, agent=bf.Agent.CLAUDE, existing=[])
+    br.classify(folder, evidence, agent=bf.Agent.CLAUDE, existing=[], work_dir=folder / ".work")
     assert "sample budget was reached" in fake.calls[0]["prompt"]
 
 
 def test_classify_gets_its_own_larger_deadline(folder, monkeypatch):
     fake = _FakeAgent(ok=True, writes=False)
     monkeypatch.setattr(bf, "launch_agent", fake)
-    br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[])
+    br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[], work_dir=folder / ".work")
     assert fake.calls[0]["timeout"] == br.CLASSIFY_TIMEOUT_S
     assert br.CLASSIFY_TIMEOUT_S > br.UNIT_TIMEOUT_S
 
 
 def test_a_failed_classify_returns_no_plan(folder, monkeypatch):
     monkeypatch.setattr(bf, "launch_agent", _FakeAgent(ok=False, writes=False, tail="died"))
-    plan, tail = br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[])
+    plan, tail = br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[], work_dir=folder / ".work")
     assert plan is None and tail == "died"
 
 
@@ -340,7 +340,7 @@ def test_classify_parses_a_plan_out_of_the_stream(folder, monkeypatch):
     envelope = json.dumps({"type": "result", "result": f"ok\n{json.dumps(payload)}"})
     monkeypatch.setattr(bf, "launch_agent",
                         _FakeAgent(ok=True, writes=False, tail=envelope))
-    plan, _ = br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[])
+    plan, _ = br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE, existing=[], work_dir=folder / ".work")
     assert plan is not None and plan.assignments[0].project == "odyssey"
 
 
@@ -348,5 +348,5 @@ def test_classify_shows_the_agent_what_already_exists(folder, monkeypatch):
     fake = _FakeAgent(ok=True, writes=False)
     monkeypatch.setattr(bf, "launch_agent", fake)
     br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE,
-                existing=["odyssey-infill-v3"])
+                existing=["odyssey-infill-v3"], work_dir=folder / ".work")
     assert "odyssey-infill-v3" in fake.calls[0]["prompt"]

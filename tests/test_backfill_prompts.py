@@ -12,18 +12,19 @@ import pytest
 from probe.cli import backfill_prompts as bp
 
 ROOT = "/workspace/research"
+WORK = "/state/probe/backfill-manifests"
 
 
 def _classify(**kw):
     base = dict(root=ROOT, evidence_jsonl='{"path":"a.py","tier":"evidence"}',
-                existing=[], truncated=False)
+                existing=[], truncated=False, work_dir=WORK)
     base.update(kw)
     return bp.classify(**base)
 
 
 def _import(**kw):
     base = dict(root=ROOT, project="odyssey", paths=["a.py", "b/c.csv"],
-                manifest_path="/tmp/m.jsonl")
+                manifest_path=f"{WORK}/m.jsonl")
     base.update(kw)
     return bp.import_unit(**base)
 

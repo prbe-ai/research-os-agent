@@ -80,44 +80,71 @@ RECONCILE_PAGE = 1_000
 class Agent(StrEnum):
     """Which coding agent reads the folder.
 
-    Both are driven headlessly and both do the work the same way -- read files,
-    shell out to `probe artifact add` -- but they are CONFINED differently, and
-    the difference is not cosmetic. See CONFINEMENT below.
+    Both are driven headlessly, both do the work the same way, and both are held
+    to the SAME rule -- see CONFINEMENT below. Only the mechanism differs.
     """
 
     CLAUDE = "claude"
     CODEX = "codex"
 
 
-#: Display name and the one-line honest description of what each agent may do.
-#: Shown at the picker, because "an agent is about to read this folder
-#: unattended" is a decision someone should make with the isolation in view.
-AGENT_COPY: dict[Agent, tuple[str, str]] = {
-    Agent.CLAUDE: (
-        "Claude Code",
-        "Limited to the probe CLI and reading — it cannot write, delete or fetch.",
-    ),
-    Agent.CODEX: (
-        "Codex",
-        "Sandboxed to this folder, but any command is allowed inside it.",
-    ),
-}
-
-#: CONFINEMENT, Claude Code: a TOOL ALLOWLIST. It may call the probe CLI and
-#: read; it may not write, delete, or reach the network by any other route.
-#: Backfill is a read-and-upload job, so anything broader is blast radius with
-#: no upside -- and this runs unattended over folders nobody has audited.
-AGENT_TOOLS = "Bash(probe:*),Read,Glob,Grep,Task"
-
-#: CONFINEMENT, Codex: a FILESYSTEM+NETWORK SANDBOX, which is a coarser
-#: instrument. Codex confines where commands may act, not WHICH commands run,
-#: so there is no equivalent of `Bash(probe:*)` -- inside the sandbox the agent
-#: may run anything. That is why AGENT_COPY says so out loud.
+#: CONFINEMENT, and it is one property for both agents:
+#:
+#:     the imported folder is READ-ONLY; the agent writes only its own
+#:     scratch directory, which is somewhere else entirely.
+#:
+#: This is the whole safety story, and stating it that way is what fixed it. The
+#: earlier version confused "must not modify the folder" with "must not write at
+#: all", so Claude ran with no Write tool while the import prompt instructed it
+#: to write a manifest -- an impossible job, and every unit failed. Meanwhile
+#: Codex ran `workspace-write` over the imported folder itself, which is the
+#: property inverted: the customer's data was the one writable thing on disk.
+#:
+#: A scratch directory resolves both. The agent needs somewhere to put the
+#: manifest; it does not need that somewhere to be the folder it is reading.
+#:
+#: The two mechanisms, and why each is the right instrument for its agent:
+#:
+#:   Claude   a PERMISSION RULE. `Edit(<folder>/**)` in a generated settings
+#:            file, with the folder handed over read-only via `--add-dir` and
+#:            the process cwd set to the scratch dir.
+#:
+#:            The rule MUST be spelled `Edit(...)`. A `Write(...)` deny rule is
+#:            a silent no-op -- Claude Code prints "is not matched by file
+#:            permission checks ... only Edit(path) rules are" and carries on.
+#:            `Edit` covers every file-editing tool, Write included. Verified
+#:            2026-08-06 against the real binary, both ways: with the rule the
+#:            write is refused, without it the identical prompt succeeds.
+#:
+#:   Codex    the OS SANDBOX. `workspace-write` scoped by `-C <scratch>`.
+#:            Codex confines where commands may WRITE, not which commands run,
+#:            and reads are unrestricted -- so pointing the workspace at the
+#:            scratch dir leaves the folder readable and unwritable in one move,
+#:            with no pattern to get wrong. Verified the same day: read outside
+#:            the workspace succeeded, write outside it was blocked.
 #:
 #: `workspace-write` rather than `read-only` because the upload has to reach the
 #: network, and read-only mode has none. `--skip-git-repo-check` is REQUIRED,
-#: not tidiness: Codex refuses to run outside a git repo, and a research folder
-#: on a shared mount is virtually never one.
+#: not tidiness: Codex refuses to run outside a git repo, and neither a research
+#: folder on a shared mount nor a scratch dir under XDG state is one.
+AGENT_COPY: dict[Agent, tuple[str, str]] = {
+    Agent.CLAUDE: (
+        "Claude Code",
+        "Reads this folder without modifying it — enforced by a permission rule.",
+    ),
+    Agent.CODEX: (
+        "Codex",
+        "Reads this folder without modifying it — enforced by the OS sandbox.",
+    ),
+}
+
+#: Claude's tool allowlist. `Write`/`Edit` are here because the agent's whole
+#: output IS a file it writes; the deny rule above is what keeps that file out
+#: of the imported folder. Bash stays scoped to `probe` so the CLI is reachable
+#: and nothing else is -- an unscoped Bash would route around the deny rule with
+#: one `echo >`.
+AGENT_TOOLS = "Bash(probe:*),Read,Glob,Grep,Task,Write,Edit"
+
 CODEX_ARGS = (
     "-s",
     "workspace-write",
@@ -125,6 +152,29 @@ CODEX_ARGS = (
     "sandbox_workspace_write.network_access=true",
     "--skip-git-repo-check",
 )
+
+#: A permission rule's argument is delimited by parentheses, so a folder whose
+#: own name contains one cannot be expressed as a rule -- and a rule that fails
+#: to parse does not fail loudly, it just stops denying. `Research (old)` is an
+#: ordinary macOS folder name, so this is a real path, not a theoretical one.
+_UNRULEABLE = ("(", ")")
+
+
+def readonly_settings(folder: Path) -> str:
+    """Claude settings JSON that makes `folder` unwritable.
+
+    Returned as a JSON string for `--settings`, which takes either that or a
+    path. A string keeps the rule in the argv the test can read, rather than in
+    a temp file whose lifetime is one more thing to get wrong.
+    """
+    import json
+
+    return json.dumps({"permissions": {"deny": [f"Edit({folder}/**)"]}})
+
+
+def unruleable(folder: Path) -> bool:
+    """Whether `folder` cannot be confined by a Claude permission rule."""
+    return any(ch in str(folder) for ch in _UNRULEABLE)
 
 
 @dataclass(frozen=True)
@@ -478,6 +528,7 @@ def agent_argv(
     prompt: str,
     folder: Path,
     *,
+    workdir: Path | None = None,
     session_id: str | None = None,
     resume: str | None = None,
 ) -> list[str]:
@@ -489,9 +540,15 @@ def agent_argv(
     is exactly what it looked like. The event stream is the only way to know the
     agent is alive, and the only way to count what it has done so far.
 
-    Claude takes its working directory from the process (`cwd=`); Codex needs it
-    named explicitly with `-C`, because it resolves its workspace -- the thing
-    its sandbox is scoped to -- from that flag rather than from cwd.
+    `workdir` is the agent's SCRATCH directory -- the one place it may write.
+    Both agents are pointed at it as their working root and given `folder` as
+    something to read, by the two different mechanisms CONFINEMENT describes.
+    Claude takes cwd from the process, so its half is `--add-dir` plus the deny
+    rule; Codex resolves its writable workspace from `-C` rather than from cwd,
+    so pointing that at the scratch dir is the whole of its half.
+
+    Without a `workdir` both fall back to running IN `folder`, which is what the
+    non-import callers (and the tests that predate the scratch dir) expect.
 
     `session_id` names the session so the ledger can record it; `resume` picks
     one back up. A unit killed mid-turn leaves a transcript whose last message
@@ -518,6 +575,16 @@ def agent_argv(
             "auto",
             *CONTEXT_FLAGS,
         ]
+        if workdir is not None:
+            # Read the folder, write only the scratch dir. Both halves, or
+            # neither: --add-dir alone makes the folder WRITABLE, which is the
+            # opposite of what it is here for.
+            argv += [
+                "--add-dir",
+                str(folder),
+                "--settings",
+                readonly_settings(folder),
+            ]
         if resume:
             argv += ["--resume", resume]
         elif session_id:
@@ -526,7 +593,11 @@ def agent_argv(
             # new and pre-existing.
             argv += ["--session-id", session_id]
         return argv
-    return [binary, "exec", "--json", *CODEX_ARGS, "-C", str(folder), prompt]
+    return [
+        binary, "exec", "--json", *CODEX_ARGS,
+        "-C", str(workdir if workdir is not None else folder),
+        prompt,
+    ]
 
 
 #: Spinner frames. Something has to MOVE while the agent is thinking, or a long
@@ -643,20 +714,32 @@ def launch_agent(
     prompt: str,
     *,
     agent: Agent = Agent.CLAUDE,
+    workdir: Path | None = None,
+    heading: str = "",
     timeout: float | None = None,
     stream=None,
     progress: bool = True,
     total: int = 0,
     session_id: str | None = None,
     resume: str | None = None,
+    paint_to=None,
 ) -> tuple[bool, str]:
-    """Run one headless agent inside `folder`, showing what it is doing.
+    """Run one headless agent over `folder`, showing what it is doing.
 
     ONE self-updating line, not the transcript. A raw agent transcript is
     thousands of lines nobody reads, and the previous version showed neither --
     a bare `claude -p` emits nothing until it exits, so a long import was
     indistinguishable from a hang. What a watcher actually needs is that it is
     alive, roughly how far along it is, and what it is touching right now.
+
+    `workdir` is the agent's scratch directory and the only place it may write;
+    `folder` stays read-only. See CONFINEMENT.
+
+    `heading` and `paint_to` decide where that line goes. Alone, the agent draws
+    its OWN centred page -- title, blank row, live line -- because appended
+    under whatever the picker left on screen it reads as a different program's
+    output leaking into the wizard. `paint_to` hands the row to a caller running
+    several agents at once, which owns the screen instead (see `tui.Board`).
 
     `total` is the census, so the counter reads against the denominator the
     reconcile will check. The tail is returned so the caller can pull the
@@ -666,6 +749,15 @@ def launch_agent(
     if not binary:
         name = AGENT_COPY[agent][0]
         return False, f"`{agent.value}` is not on PATH — install {name}, or pick the other agent"
+    if workdir is not None and agent is Agent.CLAUDE and unruleable(folder):
+        # Refusing beats running unconfined. The rule is the only thing keeping
+        # the agent out of the folder, and an unparseable one denies nothing
+        # while looking exactly like a working configuration.
+        return False, (
+            f"{folder} has a parenthesis in its path, which cannot be written as a "
+            "Claude permission rule — the folder could not be protected from writes. "
+            "Re-run with Codex, whose sandbox needs no path pattern."
+        )
 
     out = stream if stream is not None else sys.stdout
     live = progress and hasattr(out, "isatty") and out.isatty()
@@ -682,7 +774,26 @@ def launch_agent(
         from probe.cli import tui
 
         text = state.line(time.monotonic() - started)
+        if paint_to is not None:
+            paint_to(text)
+            return
         out.write("\r\033[2K" + " " * tui.left_pad() + text)
+        out.flush()
+
+    def open_page() -> None:
+        """Give the run its own centred screen before the first repaint.
+
+        Only when this agent owns the screen. Under a Board the caller has
+        already drawn the page and this would wipe the other rows.
+        """
+        if not live or paint_to is not None:
+            return
+        from probe.cli import tui
+
+        block = [*(tui.wrap(heading) if heading else []), ""]
+        out.write("\033[3J\033[2J\033[H" + "\n" * tui.top_spacer(len(block) + 1))
+        for line in block:
+            out.write((" " * tui.left_pad() + line if line.strip() else "") + "\n")
         out.flush()
 
     stop = threading.Event()
@@ -694,12 +805,14 @@ def launch_agent(
             state.ticks += 1
             paint()
 
+    open_page()
     try:
         proc = subprocess.Popen(  # noqa: S603 - fixed binary, no shell
             agent_argv(
-                agent, binary, prompt, folder, session_id=session_id, resume=resume
+                agent, binary, prompt, folder,
+                workdir=workdir, session_id=session_id, resume=resume,
             ),
-            cwd=str(folder),
+            cwd=str(workdir if workdir is not None else folder),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -743,8 +856,9 @@ def launch_agent(
         stop.set()
         if live:
             ticker.join(timeout=1.0)
-            out.write("\r\033[2K")
-            out.flush()
+            if paint_to is None:
+                out.write("\r\033[2K")
+                out.flush()
 
     return code == 0, "\n".join(tail)
 

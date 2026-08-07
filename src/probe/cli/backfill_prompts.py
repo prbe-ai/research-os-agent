@@ -18,6 +18,8 @@ prompt that needs it, instead of one prompt being checked and three drifting.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from .backfill import REFERENCE_ABOVE_BYTES, human_bytes
 
 # -- shared invariants -------------------------------------------------------
@@ -88,6 +90,30 @@ SAY WHAT THINGS ARE.
     This is the part nobody did at the time, and the part that makes a file
     findable in six months. It matters more than the upload."""
 
+#: The confinement, said out loud. The agent is not merely asked to leave the
+#: folder alone -- it cannot write there, by a permission rule or an OS sandbox
+#: depending on which agent is running (see CONFINEMENT in `backfill`). Saying
+#: so saves it discovering the wall by walking into it and retrying.
+#:
+#: The path halves matter more than they look. Your working directory is NOT the
+#: imported folder, so a relative `data/train.csv` resolves into the scratch dir
+#: and every read fails "no such file". Reads must be absolute. Manifest rows
+#: must be the opposite -- relative -- because the process that enqueues them
+#: runs with the folder as its cwd, and an absolute path there uploads under a
+#: name carrying somebody's home directory in it.
+def readonly(*, root, work_dir: str) -> str:
+    return f"""\
+THE FOLDER IS READ-ONLY. You cannot write, move or delete anything under
+{root}, and attempting it is not a permissions hiccup to work around -- it is
+the point. Someone's research directory must look untouched afterwards.
+
+    Your working directory is {work_dir}. Write there, and only there.
+
+    READ with ABSOLUTE paths: {root}/<the path as listed>. The listings below
+    are relative to the folder, and your working directory is not the folder,
+    so a relative path resolves to the wrong place and reads as missing."""
+
+
 #: Step 3 of the original prompt, kept verbatim in spirit: an invented
 #: experiment is a wrong answer that looks like a right one.
 GROUPING = """\
@@ -108,7 +134,9 @@ def _block(*fragments: str) -> str:
 # -- pass 1: classify --------------------------------------------------------
 
 
-def classify(*, root, evidence_jsonl: str, existing: list[str], truncated: bool) -> str:
+def classify(
+    *, root, evidence_jsonl: str, existing: list[str], truncated: bool, work_dir: str
+) -> str:
     """Decide which project each FILE belongs to. Uploads nothing.
 
     The agent is handed EVIDENCE, not a directory listing, because the question
@@ -136,6 +164,8 @@ FOLDER: {root}
 
 You are NOT uploading anything in this step. You are deciding, for each file,
 which project it belongs to. Someone will review your answer before anything moves.
+
+{readonly(root=root, work_dir=work_dir)}
 
 WHY THIS IS PER-FILE. A directory is not a project. One researcher's directory
 routinely holds pieces of several lines of work, and one line of work routinely
@@ -209,7 +239,9 @@ You are importing part of a research folder into Probe.
 FOLDER: {root}
 PROJECT: {project}     (already created -- do not create any project)
 
-These {len(paths):,} files, and only these, are yours:
+{readonly(root=root, work_dir=str(Path(manifest_path).parent))}
+
+These {len(paths):,} files, and only these, are yours (relative to the folder):
 
 {listing}
 
@@ -221,7 +253,7 @@ Write JSONL to: {manifest_path}
 One object per line, and ONLY these four keys -- an unrecognised key fails that
 row, and booleans must be bare `true`/`false`, never the strings "true"/"false":
 
-    {{"path": "<path relative to the folder>",
+    {{"path": "<path relative to the folder, exactly as listed above>",
       "notes": "<what it is, what produced it, what it shows>",
       "reference": true|false,
       "allow_missing": true|false}}
@@ -229,6 +261,11 @@ row, and booleans must be bare `true`/`false`, never the strings "true"/"false":
     Set "allow_missing": true alongside "reference": true for anything on a
     shared mount the uploading machine may not see at the same path. It is
     ignored unless "reference" is true.
+
+    "path" is RELATIVE even though you read the file by its absolute path. The
+    process that enqueues this manifest runs with the folder as its working
+    directory; an absolute path there uploads the file under a name with
+    somebody's home directory baked into it.
 
     Put NOTHING else in this file. Your closing summary is your own output, not
     a manifest row -- appended here it fails as one.

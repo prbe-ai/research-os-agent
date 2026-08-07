@@ -533,6 +533,78 @@ _MARKS = {_PENDING: "·", _ACTIVE: "»", _OK: "✔", _FAILED: "✗"}
 _BAR_WIDTH = 28
 
 
+class Board:
+    """N live rows on ONE centred screen, for agents running concurrently.
+
+    Three import units each repainting `\\r` on "the" status line is not a
+    display, it is three programs fighting over one row: whichever ticked last
+    wins, the other two are invisible, and the count on screen belongs to
+    whichever unit happened to interrupt. What it looked like was a backfill
+    that kept restarting its progress.
+
+    Each row is addressed ABSOLUTELY (`\\033[<row>;1H`), so a row only ever
+    moves when its own agent has something to say and the others are untouched.
+    That needs the screen to hold still underneath, which is why `open()` clears
+    it and nothing else may print until `close()`.
+
+    Non-interactive output gets no board at all -- see `rows_for`, which hands
+    back None so the caller keeps its plain one-line-per-event logging. Absolute
+    cursor addressing into a pipe is escape codes in a CI log.
+    """
+
+    def __init__(self, title: str, labels: Sequence[str], out=None) -> None:
+        import threading
+
+        self._title = title
+        self._labels = list(labels)
+        self._out = out if out is not None else sys.stdout
+        self._lock = threading.Lock()
+        # Title, blank, one row per label. `top_spacer` centres the block and
+        # carries the MARGIN, exactly as `page()` does -- a board that sat at a
+        # different height from every other screen would read as a new program.
+        self._first = top_spacer(len(self._labels) + 2) + 1
+        self._width = max((len(x) for x in self._labels), default=0)
+
+    def open(self) -> None:
+        clear()
+        pad = " " * left_pad()
+        self._out.write(f"\033[{self._first};1H{pad}{self._title}")
+        self._out.flush()
+
+    def update(self, index: int, text: str) -> None:
+        """Repaint one row. Safe from any thread.
+
+        The lock is NOT what makes that true today, and the docstring says so
+        rather than implying a guarantee nothing verifies: each call is a single
+        `write()` of one fully-formed string, which the GIL already serialises.
+        Removing the lock passes every test here -- checked, not assumed.
+
+        It stays because the atomicity is a property of this method being ONE
+        write, which is not a property anyone editing it would think to
+        preserve. The moment a row is painted in two writes -- a colour, a
+        second line -- the interleaving is real and the lock is what stops it.
+        """
+        if not 0 <= index < len(self._labels):
+            return
+        row = self._first + 2 + index
+        line = f"{self._labels[index]:<{self._width}}{text}"
+        if len(line) > CONTENT_WIDTH:
+            line = line[: CONTENT_WIDTH - 1] + "…"
+        with self._lock:
+            self._out.write(f"\033[{row};1H\033[2K" + " " * left_pad() + line)
+            self._out.flush()
+
+    def row(self, index: int):
+        """A one-argument painter for row `index`, for `launch_agent(paint_to=)`."""
+        return lambda text: self.update(index, text)
+
+    def close(self) -> None:
+        """Park the cursor below the board so the next page starts clean."""
+        with self._lock:
+            self._out.write(f"\033[{self._first + 2 + len(self._labels)};1H\n")
+            self._out.flush()
+
+
 class Progress:
     """The install phase as ONE live screen, not a stream of lines.
 
