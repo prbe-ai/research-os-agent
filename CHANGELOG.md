@@ -83,6 +83,10 @@
 
 ### Fixed
 
+- **The setup wizard now names the agents it is actually configuring.** Claude-only,
+  Codex-only and dual-agent runs use matching session-capture, update, uninstall,
+  troubleshooting and manual-install language. Codex guidance is written to its
+  global `AGENTS.md`; Claude Code guidance remains in global `CLAUDE.md`.
 - **Codex setup now verifies the two credentials it actually uses.** A rejected
   capture token triggers re-pairing instead of reading as live, and the wizard
   completes Codex's native OAuth flow for the production `probe-research` MCP

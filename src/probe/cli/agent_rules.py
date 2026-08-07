@@ -1,8 +1,8 @@
-"""The always-loaded pointer into Probe, written to the user's Claude Code memory.
+"""The always-loaded pointer into Probe, written to the selected agent's memory.
 
-A skill has to be SELECTED before its body is read; `CLAUDE.md` is in context on
-every turn of every session. That difference decides whether tracking happens.
-Observed directly: a session whose `CLAUDE.md` mandated searching Probe before
+A skill has to be SELECTED before its body is read; global agent instructions
+(`CLAUDE.md` or `AGENTS.md`) are in context on every turn of every session. That
+difference decides whether tracking happens. Observed directly: a session whose instructions mandated searching Probe before
 design work used the read surfaces perfectly all session, and never once
 registered a project, an experiment, or a note -- because the write side had no
 equivalent standing rule. Same agent, same session, same tools. The only
@@ -65,14 +65,25 @@ you assemble.
 """
 
 
-def memory_path() -> Path:
-    """The user-global Claude Code memory file.
+def memory_path(source: str | None = None) -> Path:
+    """The selected agent's user-global instruction file.
+
+    Codex reads ``$CODEX_HOME/AGENTS.md`` (``~/.codex/AGENTS.md`` by
+    default), while Claude Code reads ``$CLAUDE_CONFIG_DIR/CLAUDE.md``. The
+    wizard configures either agent, so writing one hard-coded filename makes a
+    successful Codex run install guidance that Codex never sees.
 
     `CLAUDE_CONFIG_DIR` moves the whole config directory, and a researcher who
     sets it gets a different `CLAUDE.md`. Writing to a hardcoded `~/.claude`
     there would create a second memory file that Claude Code never reads, and
     the wizard would report success over a file with no effect.
     """
+    selected = (source or os.environ.get("PROBE_AGENT") or "claude_code").strip().lower()
+    if selected == "codex":
+        configured = os.environ.get("CODEX_HOME")
+        root = Path(configured).expanduser() if configured else Path.home() / ".codex"
+        return root / "AGENTS.md"
+
     configured = os.environ.get("CLAUDE_CONFIG_DIR")
     root = Path(configured).expanduser() if configured else Path.home() / ".claude"
     return root / "CLAUDE.md"
@@ -112,9 +123,7 @@ def _find_block(text: str) -> tuple[int, int] | None:
     if opens == 0 and closes == 0:
         return None
     if opens != 1 or closes != 1:
-        raise DamagedBlock(
-            f"expected one {BEGIN_MARKER}/{END_MARKER} pair, found {opens}/{closes}"
-        )
+        raise DamagedBlock(f"expected one {BEGIN_MARKER}/{END_MARKER} pair, found {opens}/{closes}")
     start = text.find(BEGIN_MARKER)
     end = text.find(END_MARKER, start)
     if end == -1:
@@ -183,8 +192,10 @@ def install(path: Path | None = None) -> bool:
 
     span = _find_block(original)
     if span is None:
-        separator = "" if original.endswith("\n\n") or not original.strip() else (
-            "\n" if original.endswith("\n") else "\n\n"
+        separator = (
+            ""
+            if original.endswith("\n\n") or not original.strip()
+            else ("\n" if original.endswith("\n") else "\n\n")
         )
         updated = f"{original}{separator}{block}"
     else:
@@ -215,7 +226,9 @@ def remove(path: Path | None = None) -> bool:
     span = _find_block(original)
     if span is None:
         return False
-    updated = (original[: span[0]].rstrip("\n") + "\n" + original[span[1] :].lstrip("\n")).lstrip("\n")
+    updated = (original[: span[0]].rstrip("\n") + "\n" + original[span[1] :].lstrip("\n")).lstrip(
+        "\n"
+    )
     if updated.strip() == "":
         updated = ""
     write_text_atomic(path, updated)

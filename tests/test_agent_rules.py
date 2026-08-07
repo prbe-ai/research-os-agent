@@ -28,7 +28,9 @@ def memory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path / "CLAUDE.md"
 
 
-def test_claude_config_dir_moves_the_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_claude_config_dir_moves_the_target(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A researcher who moved their config dir must not get a second, dead file.
 
     Writing to a hardcoded ~/.claude there produces a CLAUDE.md Claude Code
@@ -39,6 +41,33 @@ def test_claude_config_dir_moves_the_target(tmp_path: Path, monkeypatch: pytest.
 
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     assert agent_rules.memory_path() == Path.home() / ".claude" / "CLAUDE.md"
+
+
+def test_codex_home_uses_the_global_agents_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Codex does not read Claude's global CLAUDE.md."""
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    assert agent_rules.memory_path("codex") == tmp_path / "codex-home" / "AGENTS.md"
+
+    monkeypatch.delenv("CODEX_HOME")
+    assert agent_rules.memory_path("codex") == Path.home() / ".codex" / "AGENTS.md"
+
+
+def test_codex_wizard_writes_agents_md_not_claude_md(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from probe.cli import setup as wizard
+
+    monkeypatch.setenv("PROBE_AGENT", "codex")
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-home"))
+
+    messages = wizard.apply_agent_rules(True)
+
+    assert messages
+    assert (tmp_path / "codex-home" / "AGENTS.md").exists()
+    assert not (tmp_path / "claude-home" / "CLAUDE.md").exists()
 
 
 def test_install_creates_the_file_and_its_parent(memory: Path) -> None:

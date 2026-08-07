@@ -78,6 +78,28 @@ AGENT_LABELS = {
 }
 
 
+def agent_label(sources: tuple[str, ...] | list[str] | str) -> str:
+    """User-facing name for the exact agents selected in this wizard run."""
+    normalized = (sources,) if isinstance(sources, str) else tuple(sources)
+    labels = [AGENT_LABELS[source] for source in AGENT_LABELS if source in normalized]
+    if not labels:
+        return "coding agent"
+    if len(labels) == 1:
+        return labels[0]
+    return " and ".join(labels)
+
+
+def instruction_files(sources: tuple[str, ...] | list[str] | str) -> str:
+    """Name the real global instruction files for the selected agents."""
+    normalized = (sources,) if isinstance(sources, str) else tuple(sources)
+    names = []
+    if "claude_code" in normalized:
+        names.append("CLAUDE.md")
+    if "codex" in normalized:
+        names.append("AGENTS.md")
+    return " + ".join(names) or "agent instructions"
+
+
 def run_agent_menu(defaults: tuple[str, ...]):
     """Choose every coding agent this one onboarding run should configure."""
     import questionary
@@ -173,34 +195,56 @@ def resolve_selection(
     )
 
 
-MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
-    Capability.TRACKING: (
-        "CLI + MCP  (recommended)",
-        ("Skills for tracking runs, and read-only search over your lab's history.",),
-    ),
-    Capability.CAPTURE: (
-        "Session capture -> knowledgebase",
-        ("Sends this device's Claude/Codex sessions to your team's search.",),
-    ),
-    Capability.AGENT_RULES: (
-        "Rules in your global CLAUDE.md  (recommended)",
-        ("Actively encourage agents to use Probe Research tools when doing research.",),
-    ),
-}
+def menu_copy(
+    sources: tuple[str, ...] | list[str] | str,
+) -> dict[Capability, tuple[str, tuple[str, ...]]]:
+    """Capability copy scoped to the agents this run will actually configure."""
+    agents = agent_label(sources)
+    rules = instruction_files(sources)
+    return {
+        Capability.TRACKING: (
+            "CLI + MCP  (recommended)",
+            (f"Track runs in {agents}; search lab history read-only.",),
+        ),
+        Capability.CAPTURE: (
+            "Session capture -> knowledgebase",
+            (f"Sends this device's {agents} sessions to your team's search.",),
+        ),
+        Capability.AGENT_RULES: (
+            f"Rules in your global {rules}  (recommended)",
+            (f"Prompts {agents} to use Probe during research.",),
+        ),
+    }
+
+
+# Backwards-compatible default for non-interactive consumers that only need
+# capability titles. Interactive callers always request copy for their targets.
+MENU_COPY = menu_copy(("claude_code", "codex"))
 # The picker is a picker. The full disclosure of what leaves the machine --
 # prompts, file contents, tool output, server-side secret stripping -- lives on
 # the BROWSER APPROVAL screen, which is where the grant is actually made and
 # where research-os asserts the wording verbatim. Repeating three lines of it
 # here made the shortest menu in the product the densest thing to read.
 
+
 #: Asked as its OWN step, after the capabilities. It is not a capability -- it
 #: is a policy about the ones you just chose -- and mixing it into the same
 #: checkbox list made a three-item menu where two items were about what Probe
 #: does and one was about how it maintains itself.
-AUTO_UPDATE_COPY = (
-    "Keep it up to date automatically?  (recommended)",
-    "Upgrades the CLI and plugins in the background at Claude Code session start.",
-)
+def auto_update_copy(sources: tuple[str, ...] | list[str] | str) -> tuple[str, str]:
+    agents = agent_label(sources)
+    timing = (
+        "when either Claude Code or Codex starts a session"
+        if agents == "Claude Code and Codex"
+        else f"when {agents} starts a session"
+    )
+    return (
+        "Keep it up to date automatically?  (recommended)",
+        f"Upgrades the CLI and plugins in the background {timing}.",
+    )
+
+
+AUTO_UPDATE_COPY = auto_update_copy(("claude_code", "codex"))
 
 #: How `plan()` names each capability in "This run will: - enable X".
 #:
@@ -215,9 +259,9 @@ PLAN_LABELS: dict[Capability, str] = {
     Capability.TRACKING: MENU_COPY[Capability.TRACKING][0],
     Capability.CAPTURE: MENU_COPY[Capability.CAPTURE][0],
     Capability.AUTO_UPDATE: "automatic updates",
-    # Its own noun, not the menu title: "enable Rules in your global CLAUDE.md
-    # (recommended)" reads as a checkbox that wandered into the plan.
-    Capability.AGENT_RULES: "the rules in your global CLAUDE.md",
+    # Its own noun, not the menu title: the concrete filename is selected later
+    # because Claude Code and Codex load different global instruction files.
+    Capability.AGENT_RULES: "the global agent guidance rules",
 }
 
 #: What the step reads when the PLUGIN is already installed and only the
@@ -637,7 +681,7 @@ def apply_auto_update(want: bool) -> list[str]:
 
 
 def apply_agent_rules(want: bool, *, stale: bool = False) -> list[str]:
-    """Write or drop the CLAUDE.md pointer block.
+    """Write or drop the selected agent's global instruction pointer.
 
     `stale` re-writes an already-installed block whose version moved, which is
     the only way a wording fix reaches a machine that ticked this once and never
@@ -662,7 +706,7 @@ def apply_agent_rules(want: bool, *, stale: bool = False) -> list[str]:
         return [f"Could not update {path}: {exc}. Nothing else was affected."]
 
     if not want:
-        return ["Removed the Probe block from your global CLAUDE.md."] if changed else []
+        return [f"Removed the Probe block from your global {path.name}."] if changed else []
     if stale and changed:
         return [f"Refreshed the Probe block in {path}."]
     if changed:
@@ -698,7 +742,10 @@ def _menu_row(title: str, detail: tuple[str, ...], *, checked: bool, indent: str
     return f"\n{indent}  ".join((f"{box} {title}", *detail))
 
 
-def run_menu(defaults: dict[Capability, bool]):
+def run_menu(
+    defaults: dict[Capability, bool],
+    agent_sources: tuple[str, ...] | list[str] | str = ("claude_code",),
+):
     """The capability checkbox. Returns None (quit), tui.BACK, or a Selection.
 
     ENTER ACTIVATES THE ROW UNDER THE CURSOR. On a capability that means toggle;
@@ -720,9 +767,10 @@ def run_menu(defaults: dict[Capability, bool]):
     tui.use_checkmarks()  # the fallback path, if we cannot take the box over
 
     indent = tui.body_indent()
+    copy = menu_copy(agent_sources)
     rows: dict[Capability, questionary.Choice] = {}
     choices: list = [questionary.Separator(" ")]
-    for index, (capability, (title, detail)) in enumerate(MENU_COPY.items()):
+    for index, (capability, (title, detail)) in enumerate(copy.items()):
         if index:
             choices.append(questionary.Separator(" "))
         row = questionary.Choice(
@@ -746,7 +794,7 @@ def run_menu(defaults: dict[Capability, bool]):
         qmark=tui.qmark(),
         pointer=tui.pointer(),
     )
-    _bind_menu_keys(question, rows, indent=indent)
+    _bind_menu_keys(question, rows, copy=copy, indent=indent)
 
     picked = tui.ask(question, height=tui.content_height(message, choices))
     if picked is None or picked is tui.BACK:
@@ -761,7 +809,13 @@ def run_menu(defaults: dict[Capability, bool]):
     )
 
 
-def _bind_menu_keys(question, rows: dict[Capability, object], *, indent: str) -> None:
+def _bind_menu_keys(
+    question,
+    rows: dict[Capability, object],
+    *,
+    copy: dict[Capability, tuple[str, tuple[str, ...]]],
+    indent: str,
+) -> None:
     """Make enter activate the pointed row, and keep our boxes in sync.
 
     Every reach into questionary is guarded. If any of it stops working the
@@ -783,7 +837,7 @@ def _bind_menu_keys(question, rows: dict[Capability, object], *, indent: str) ->
         row = rows.get(capability)
         if row is None:
             return
-        title, detail = MENU_COPY[capability]
+        title, detail = copy[capability]
         row.title = _menu_row(
             title, detail, checked=capability in control.selected_options, indent=indent
         )
@@ -825,7 +879,10 @@ def _bind_menu_keys(question, rows: dict[Capability, object], *, indent: str) ->
         pass
 
 
-def ask_auto_update(default: bool):
+def ask_auto_update(
+    default: bool,
+    agent_sources: tuple[str, ...] | list[str] | str = ("claude_code",),
+):
     """The follow-up step. Returns None, tui.BACK, or a bool.
 
     Built exactly like the capability picker, and for the same reason. The
@@ -837,7 +894,7 @@ def ask_auto_update(default: bool):
 
     from probe.cli import tui
 
-    title, detail = AUTO_UPDATE_COPY
+    title, detail = auto_update_copy(agent_sources)
     message = tui.framed("Now, how Probe keeps itself current.", tui.wrap(detail), title)
     return tui.ask(
         questionary.confirm(
@@ -850,7 +907,7 @@ def ask_auto_update(default: bool):
     )
 
 
-def confirm_removal():
+def confirm_removal(agent_sources: tuple[str, ...] | list[str] | str = ("claude_code",)):
     """The uninstall gate. Returns None, tui.BACK, or a bool.
 
     A bare `typer.confirm` here was the one prompt in the wizard that printed
@@ -864,7 +921,7 @@ def confirm_removal():
     message = tui.framed(
         "Remove Probe Research from this device.",
         tui.wrap(
-            "Uninstalls both Claude Code plugins, stops session capture and "
+            f"Uninstalls the {agent_label(agent_sources)} plugins, stops session capture and "
             "clears the credentials stored on this machine. Nothing already "
             "sent to your team's knowledgebase is touched."
         ),

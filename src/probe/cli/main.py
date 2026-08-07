@@ -824,7 +824,7 @@ def wizard(
     capture: Optional[bool] = typer.Option(  # noqa: UP007
         None,
         "--capture/--no-capture",
-        help="stream this device's Claude Code sessions to the knowledgebase",
+        help="stream the selected coding agents' sessions to the knowledgebase",
     ),
     auto_update: Optional[bool] = typer.Option(  # noqa: UP007
         None, "--auto-update/--no-auto-update", help="keep the CLI and plugins current"
@@ -832,7 +832,7 @@ def wizard(
     agent_rules: Optional[bool] = typer.Option(  # noqa: UP007
         None,
         "--agent-rules/--no-agent-rules",
-        help="managed Probe block in your global CLAUDE.md",
+        help="managed Probe block in each selected agent's global instructions",
     ),
     channel: str = typer.Option(  # noqa: ARG001 - compat, see below
         None,
@@ -1000,6 +1000,10 @@ def wizard(
                 capture_killswitched=any(
                     item.capture_killswitched for item in caps_by_source.values()
                 ),
+                agent_rules_installed=all(
+                    item.agent_rules_installed for item in caps_by_source.values()
+                ),
+                agent_rules_stale=any(item.agent_rules_stale for item in caps_by_source.values()),
                 mcp_authenticated=all(
                     item.agent_source != "codex" or item.mcp_authenticated is True
                     for item in caps_by_source.values()
@@ -1016,11 +1020,11 @@ def wizard(
             )
             if not yes and not explicit_flags and wizard.interactive():
                 tui.clear()
-                chosen = wizard.run_menu(shared_selection.as_map())
+                chosen = wizard.run_menu(shared_selection.as_map(), agent_sources)
                 if chosen is None or chosen is tui.BACK:
                     return
                 tui.clear()
-                wants_updates = wizard.ask_auto_update(chosen.auto_update)
+                wants_updates = wizard.ask_auto_update(chosen.auto_update, agent_sources)
                 if wants_updates is None or wants_updates is tui.BACK:
                     return
                 shared_selection = dataclasses.replace(chosen, auto_update=bool(wants_updates))
@@ -1067,6 +1071,12 @@ def wizard(
                 }
                 else agent_sources[:1]
             )
+            action_yes = yes
+            if chosen_action is actions_mod.Action.UNINSTALL and not yes and wizard.interactive():
+                tui.clear()
+                if wizard.confirm_removal(agent_sources) is not True:
+                    return
+                action_yes = True
             lines = []
             for source in targets:
                 current = _collect_agent(source)
@@ -1074,7 +1084,7 @@ def wizard(
                     chosen_action,
                     caps=current,
                     base_now=base_now,
-                    yes=yes,
+                    yes=action_yes,
                     tracking=tracking,
                     capture=capture,
                     auto_update=auto_update,
@@ -1082,6 +1092,7 @@ def wizard(
                     uninstall=uninstall,
                     configured=configured,
                     folder=folder,
+                    selected_agents=agent_sources,
                 )
                 if result:
                     label = "Codex" if source == "codex" else "Claude Code"
@@ -1130,6 +1141,7 @@ def _run_wizard_action(
     selection_override=None,
     authorization_needs: list[str] | None = None,
     capture_sources: list[str] | None = None,
+    selected_agents: tuple[str, ...] | list[str] | None = None,
 ) -> list[str]:
     """Perform ONE action and RETURN its output.
 
@@ -1178,7 +1190,7 @@ def _run_wizard_action(
         # A process cannot write wording it does not have, so the refresh lands
         # on the first invocation AFTER the upgrade, not this one. It converges;
         # it is not instant.
-        if caps.agent_source != "codex" and caps.agent_rules_stale:
+        if caps.agent_rules_stale:
             lines += wizard.apply_agent_rules(True, stale=True)
         lines += _register_local_capabilities(
             doctor_impl.collect(),
@@ -1188,7 +1200,10 @@ def _run_wizard_action(
 
     if chosen_action is actions_mod.Action.MANUAL:
         return [
-            *actions_mod.manual_steps(base_url=base_now).splitlines(),
+            *actions_mod.manual_steps(
+                base_url=base_now,
+                agent_source=selected_agents or caps.agent_source,
+            ).splitlines(),
             "",
             *actions_mod.self_host_notes(
                 base_url=base_now, mcp_endpoint="https://mcp.research.prbe.ai/mcp"
@@ -1198,7 +1213,7 @@ def _run_wizard_action(
     if chosen_action is actions_mod.Action.UNINSTALL:
         if not yes and wizard.interactive():
             tui.clear()
-            if wizard.confirm_removal() is not True:
+            if wizard.confirm_removal(caps.agent_source) is not True:
                 return []
         # Preserve the credential in memory long enough to report the actual
         # post-removal state; remove_everything clears it from disk.
@@ -1234,7 +1249,7 @@ def _run_wizard_action(
     explicit_flags = any(f is not None for f in (tracking, capture, auto_update, agent_rules))
     if selection_override is None and not yes and not explicit_flags and wizard.interactive():
         tui.clear()
-        chosen = wizard.run_menu(selection.as_map())
+        chosen = wizard.run_menu(selection.as_map(), caps.agent_source)
         if chosen is None or chosen is tui.BACK:
             return []  # Escape / Ctrl-C: back to the action menu, nothing applied.
         selection = chosen
@@ -1242,7 +1257,7 @@ def _run_wizard_action(
         # Auto-update is asked SEPARATELY, after the capabilities: it is a
         # policy about them, not one of them.
         tui.clear()
-        wants_updates = wizard.ask_auto_update(selection.auto_update)
+        wants_updates = wizard.ask_auto_update(selection.auto_update, caps.agent_source)
         if wants_updates is None or wants_updates is tui.BACK:
             return []
         # `replace`, never a hand-rolled `Selection(...)`. Re-listing the fields
@@ -1374,7 +1389,7 @@ def _run_wizard_action(
     if selection.agent_rules != caps.agent_rules_installed or caps.agent_rules_stale:
         work.append(
             (
-                "write the rules into your global CLAUDE.md",
+                f"write the rules into your global {wizard.instruction_files(caps.agent_source)}",
                 lambda: wizard.apply_agent_rules(
                     selection.agent_rules, stale=caps.agent_rules_stale
                 ),
@@ -1576,7 +1591,7 @@ def _run_wizard_action(
         # Could not ask. Say so rather than claiming either outcome.
         progress.note(
             "",
-            "Could not confirm the plugins are installed (Claude Code did not answer). "
+            f"Could not confirm the plugins are installed ({wizard.agent_label(caps.agent_source)} did not answer). "
             "Run `probe doctor` to check.",
         )
     notice = wizard.restart_notice(caps, selection)

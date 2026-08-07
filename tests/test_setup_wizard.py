@@ -72,10 +72,23 @@ def test_the_capture_row_still_says_what_it_sends_and_where():
     """Load-bearing now that capture ships ticked. The row IS the disclosure --
     if it stops naming what leaves the machine, a pre-ticked box becomes a
     grant made in silence, which is the thing the default-off used to prevent."""
-    _, detail = setup.MENU_COPY[Capability.CAPTURE]
+    _, detail = setup.menu_copy("codex")[Capability.CAPTURE]
     blob = " ".join(detail)
     assert "this device's" in blob
-    assert "Claude/Codex sessions" in blob
+    assert "Codex sessions" in blob
+    assert "Claude" not in blob
+
+
+def test_wizard_copy_names_exactly_the_selected_agents():
+    claude = " ".join(setup.menu_copy("claude_code")[Capability.CAPTURE][1])
+    codex = " ".join(setup.menu_copy("codex")[Capability.CAPTURE][1])
+    both = " ".join(setup.menu_copy(("claude_code", "codex"))[Capability.CAPTURE][1])
+
+    assert "Claude Code sessions" in claude and "Codex" not in claude
+    assert "Codex sessions" in codex and "Claude" not in codex
+    assert "Claude Code and Codex sessions" in both
+    assert "CLAUDE.md" in setup.menu_copy("claude_code")[Capability.AGENT_RULES][0]
+    assert "AGENTS.md" in setup.menu_copy("codex")[Capability.AGENT_RULES][0]
 
 
 def test_a_scripted_yes_can_still_decline_capture():
@@ -361,6 +374,11 @@ def test_doctor_names_every_credential_source_not_just_the_winning_one():
     assert ENV_INGEST_TOKEN in report
 
 
+def test_doctor_names_the_selected_agents_global_instructions():
+    assert "Global CLAUDE.md" in doctor.render(_caps(agent_source="claude_code"))
+    assert "Global AGENTS.md" in doctor.render(_caps(agent_source="codex"))
+
+
 def test_doctor_reports_a_never_run_updater_distinctly_from_a_working_one():
     assert "never run on this device" in doctor.render(_caps())
     assert "FAILED" in doctor.render(_caps(last_update_attempt="FAILED (2026-07-24 10:00): boom"))
@@ -395,10 +413,10 @@ def test_capture_menu_copy_is_scoped_to_this_device():
     Repeating three lines of it here made the shortest menu in the product the
     densest thing to read.
     """
-    _, detail = setup.MENU_COPY[Capability.CAPTURE]
+    _, detail = setup.menu_copy(("claude_code", "codex"))[Capability.CAPTURE]
     blob = " ".join(detail)
     assert "this device's" in blob, "scope must be explicit"
-    assert "Claude/Codex sessions" in blob
+    assert "Claude Code and Codex sessions" in blob
     # One line, not a wall.
     assert len(detail) == 1
 
@@ -783,6 +801,30 @@ def test_manual_steps_are_generated_from_the_same_constants_the_wizard_uses():
     assert "--token" not in steps
 
 
+def test_manual_steps_use_codex_verbs_when_codex_is_selected():
+    from probe.cli.actions import manual_steps
+
+    steps = manual_steps(base_url="https://api.research.prbe.ai", agent_source="codex")
+    assert "codex plugin marketplace upgrade research-os-agent" in steps
+    assert "codex plugin add probe-research@research-os-agent" in steps
+    assert "codex mcp login probe-research" in steps
+    assert "claude plugin" not in steps
+
+
+def test_manual_steps_include_each_selected_agent():
+    from probe.cli.actions import manual_steps
+
+    steps = manual_steps(
+        base_url="https://api.research.prbe.ai",
+        agent_source=("claude_code", "codex"),
+    )
+    assert "claude plugin marketplace update research-os-agent" in steps
+    assert "codex plugin marketplace upgrade research-os-agent" in steps
+    assert "claude plugin install probe-research@research-os-agent" in steps
+    assert "codex plugin add probe-research@research-os-agent" in steps
+    assert "codex mcp login probe-research" in steps
+
+
 def test_troubleshooting_is_state_aware_not_a_static_list():
     """A static list makes the reader work out which item applies. The wizard
     already knows, so it should only say the relevant things."""
@@ -800,6 +842,15 @@ def test_troubleshooting_is_state_aware_not_a_static_list():
     # product can unset a variable in the user's shell.
     for notes in (no_claude, healthy):
         assert any("PROBE_MCP_TOKEN" in note and "SHADOWS" in note for note in notes)
+
+
+def test_codex_troubleshooting_uses_native_oauth_language():
+    from probe.cli.actions import troubleshooting
+
+    notes = troubleshooting(_caps(agent_source="codex", codex_available=True))
+    blob = " ".join(notes)
+    assert "codex mcp login probe-research" in blob
+    assert "PROBE_MCP_TOKEN" not in blob
 
 
 def test_installed_but_not_logged_in_is_called_out():
@@ -1564,8 +1615,8 @@ def test_answering_the_auto_update_question_keeps_every_other_choice(monkeypatch
     monkeypatch.setattr(tui, "clear", lambda: None)
     monkeypatch.setattr(tui, "say", lambda *a, **k: None)
     monkeypatch.setattr(wizard, "interactive", lambda: True)
-    monkeypatch.setattr(wizard, "run_menu", lambda defaults: picked)
-    monkeypatch.setattr(wizard, "ask_auto_update", lambda default: True)
+    monkeypatch.setattr(wizard, "run_menu", lambda defaults, *args: picked)
+    monkeypatch.setattr(wizard, "ask_auto_update", lambda default, *args: True)
 
     # Record EVERY apply, not just agent_rules: the bug was a field-by-field
     # copy, so a future one that scrambles two fields must fail here too.
@@ -1699,6 +1750,52 @@ def test_agent_both_runs_one_shared_authorization_then_configures_each_agent(mon
     assert calls[0]["authorization_needs"] == ["api", "mcp", "capture"]
     assert calls[0]["capture_sources"] == ["claude_code", "codex"]
     assert calls[1]["authorization_needs"] is None
+
+
+def test_agent_both_uses_one_dual_agent_uninstall_confirmation(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from probe.cli import bootstrap
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    import probe.cli.main  # noqa: F401
+
+    cli_main = sys.modules["probe.cli.main"]
+    monkeypatch.setattr(bootstrap, "ensure_persistent_install", lambda: SimpleNamespace(message=""))
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda: _caps(
+            agent_source=os.environ.get("PROBE_AGENT", "claude_code"),
+            tracking_plugin_installed=True,
+        ),
+    )
+    monkeypatch.setattr(wizard, "interactive", lambda: True)
+    confirmations: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        wizard,
+        "confirm_removal",
+        lambda sources: confirmations.append(tuple(sources)) or True,
+    )
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        cli_main,
+        "_run_wizard_action",
+        lambda action, **kwargs: calls.append(kwargs) or [],
+    )
+
+    result = CliRunner().invoke(
+        cli_main.app,
+        ["wizard", "--agent", "both", "--action", "uninstall"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert confirmations == [("claude_code", "codex")]
+    assert len(calls) == 2
+    assert all(call["yes"] is True for call in calls)
 
 
 def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_path):
@@ -3300,7 +3397,8 @@ def _built_menu(defaults=None):
     tui.use_checkmarks()
     indent = tui.body_indent()
     rows, choices = {}, [questionary.Separator(" ")]
-    for index, (capability, (title, detail)) in enumerate(wizard.MENU_COPY.items()):
+    copy = wizard.menu_copy("claude_code")
+    for index, (capability, (title, detail)) in enumerate(copy.items()):
         if index:
             choices.append(questionary.Separator(" "))
         row = questionary.Choice(
@@ -3313,7 +3411,7 @@ def _built_menu(defaults=None):
     choices.append(questionary.Separator(" "))
     choices.append(questionary.Choice(title=wizard.NEXT_TITLE, value=wizard.NEXT))
     question = questionary.checkbox("m", choices=choices, style=tui.style(), pointer="»")
-    wizard._bind_menu_keys(question, rows, indent=indent)
+    wizard._bind_menu_keys(question, rows, copy=copy, indent=indent)
     return question, tui.checkbox_control(question), rows
 
 

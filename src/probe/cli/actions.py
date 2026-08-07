@@ -75,7 +75,11 @@ ACTION_COPY: dict[Action, tuple[str, str]] = {
 """Menu order IS this dict's order. MANUAL is absent on purpose."""
 
 
-def manual_steps(*, base_url: str) -> str:
+def manual_steps(
+    *,
+    base_url: str,
+    agent_source: str | tuple[str, ...] | list[str] = "claude_code",
+) -> str:
     """Every command the wizard runs, printed.
 
     This replaces the page's "Set it up manually" section. Generating it from
@@ -83,6 +87,46 @@ def manual_steps(*, base_url: str) -> str:
     drifted from the commands beside it, and a printed script cannot drift from
     the code that prints it.
     """
+    requested = (agent_source,) if isinstance(agent_source, str) else tuple(agent_source)
+    sources = tuple(source for source in ("claude_code", "codex") if source in requested)
+    if not sources:
+        sources = ("claude_code",)
+
+    marketplace_commands: list[str] = []
+    install_commands: list[str] = []
+    for source in sources:
+        codex_source = source == "codex"
+        binary = "codex" if codex_source else "claude"
+        label = "Codex" if codex_source else "Claude Code"
+        refresh = "upgrade" if codex_source else "update"
+        install = "add" if codex_source else "install"
+        if len(sources) > 1:
+            marketplace_commands.append(f"# {label}")
+            install_commands.append(f"# {label}")
+        marketplace_commands.extend(
+            (
+                f"{binary} plugin marketplace add {MARKETPLACE_REPO}",
+                f"{binary} plugin marketplace {refresh} research-os-agent",
+            )
+        )
+        install_commands.extend(
+            (
+                f"{binary} plugin {install} {PLUGIN_ID}          # experiment tracking + MCP",
+                f"{binary} plugin {install} {TAP_PLUGIN_ID}      # session capture",
+            )
+        )
+
+    codex = "codex" in sources
+    mcp_login = (
+        (
+            "",
+            "# 5. Complete Codex's host-owned OAuth for the read-only MCP.",
+            "codex mcp login probe-research",
+        )
+        if codex
+        else ()
+    )
+    confirm_step = 6 if codex else 5
     return "\n".join(
         (
             "# Everything the Probe Research setup wizard does, as individual commands.",
@@ -94,27 +138,26 @@ def manual_steps(*, base_url: str) -> str:
             "# 2. Add the plugin marketplace and refresh it.",
             "#    `add` alone does NOT refresh an already-added marketplace, which is",
             "#    how a freshly published plugin appears to be missing.",
-            f"claude plugin marketplace add {MARKETPLACE_REPO}",
-            "claude plugin marketplace update research-os-agent",
+            *marketplace_commands,
             "",
             "# 3. Install only what you want.",
-            f"claude plugin install {PLUGIN_ID}          # experiment tracking + MCP",
-            f"claude plugin install {TAP_PLUGIN_ID}      # session capture",
+            *install_commands,
             "",
             "# 4. Approve this device in your browser. One approval, all credentials.",
             f"probe login --base-url {base_url}",
+            *mcp_login,
             "",
-            "# 5. Confirm.",
+            f"# {confirm_step}. Confirm.",
             "probe doctor",
         )
     )
 
 
 def self_host_notes(*, base_url: str, mcp_endpoint: str) -> str:
-    """Replaces the page's "Without Claude Code or self-hosting" section."""
+    """Explain the agent-independent CLI and self-hosted MCP paths."""
     return "\n".join(
         (
-            "# Running the MCP yourself, or without Claude Code.",
+            "# Running the MCP yourself, or without a coding-agent plugin.",
             "",
             "# A local, read-only MCP server pointed at your own API:",
             f"PROBE_MCP_TOKEN=YOUR_READ_TOKEN PROBE_BASE_URL={base_url} \\",
@@ -122,7 +165,7 @@ def self_host_notes(*, base_url: str, mcp_endpoint: str) -> str:
             "",
             f"# Hosted MCP endpoint: {mcp_endpoint}",
             "",
-            "# The CLI works on its own -- no Claude Code required:",
+            "# The CLI works on its own -- no coding agent required:",
             f"uv tool install --force {AGENT_INSTALL}",
             f"probe login --base-url {base_url}",
         )
@@ -138,10 +181,14 @@ def troubleshooting(caps: Capabilities) -> list[str]:
     """
     notes: list[str] = []
 
-    if not caps.claude_available:
+    agent_source = caps.agent_source
+    agent_binary = "codex" if agent_source == "codex" else "claude"
+    agent_name = "Codex" if agent_source == "codex" else "Claude Code"
+    agent_available = caps.codex_available if agent_source == "codex" else caps.claude_available
+    if not agent_available:
         notes.append(
-            "`claude` is not on PATH, so plugin install/update cannot run. The CLI "
-            "and login still work; install Claude Code to enable the plugins."
+            f"`{agent_binary}` is not on PATH, so plugin install/update cannot run. The CLI "
+            f"and login still work; install {agent_name} to enable the plugins."
         )
     if caps.cli_version is None:
         notes.append(
@@ -153,13 +200,20 @@ def troubleshooting(caps: Capabilities) -> list[str]:
             "The tracking plugin is installed but this device is not logged in, so "
             "the MCP has no credential. Run `probe wizard` and pick experiment tracking."
         )
-    # The footgun that cannot heal itself: an exported token beats the stored one
-    # forever, and nothing in the product can clear a variable in the user's shell.
-    notes.append(
-        "If MCP tools are missing after a restart: a stale PROBE_MCP_TOKEN exported "
-        "in your shell profile SHADOWS the stored token and can never heal. Delete "
-        "that line, then run `probe mcp status` to see where the token came from."
-    )
+    if agent_source == "codex":
+        notes.append(
+            "If MCP tools are missing after a restart, run `codex mcp list --json`. "
+            "If `probe-research` is not authenticated, run "
+            "`codex mcp login probe-research`."
+        )
+    else:
+        # The footgun that cannot heal itself: an exported token beats the stored one
+        # forever, and nothing in the product can clear a variable in the user's shell.
+        notes.append(
+            "If MCP tools are missing after a restart: a stale PROBE_MCP_TOKEN exported "
+            "in your shell profile SHADOWS the stored token and can never heal. Delete "
+            "that line, then run `probe mcp status` to see where the token came from."
+        )
     notes.append(
         "Do not register the MCP by hand while the plugin is installed -- the plugin "
         "already wires the `probe-research` server, and a second server with the same "
@@ -167,8 +221,8 @@ def troubleshooting(caps: Capabilities) -> list[str]:
     )
     if caps.auto_update_enabled and caps.last_update_attempt is None:
         notes.append(
-            "Auto-update is on but has never run on this device. It fires at Claude "
-            "Code session start, so it will not have run yet if you have not opened "
+            f"Auto-update is on but has never run on this device. It fires at {agent_name} "
+            "session start, so it will not have run yet if you have not opened "
             "a session since enabling it."
         )
     return notes

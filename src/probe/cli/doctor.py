@@ -105,7 +105,10 @@ def render(caps: Capabilities) -> str:
 
     lines.append("Agent rules")
     lines.append(
-        _row("Global CLAUDE.md", "installed" if caps.agent_rules_installed else "not added")
+        _row(
+            f"Global {agent_rules.memory_path(caps.agent_source).name}",
+            "installed" if caps.agent_rules_installed else "not added",
+        )
     )
     # Reported separately from installed/absent. A block from an older release
     # still LOADS, so it reads as working while teaching superseded wording --
