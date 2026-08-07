@@ -54,6 +54,13 @@ class EntityType(StrEnum):
     GROUP = "group"  # a sweep/ensemble: an experiment-shaped noun, reached by ref
     FILE = "file"
     DOCUMENT = "document"  # a semantic hit whose ref is null
+    # The team wiki (research-os 0098). A SINGLETON, and the only member here
+    # whose ref carries no value: `ref="wiki"`, never `wiki:<id>`. There is one
+    # document per tenant and the credential names the tenant, so an id would
+    # imply a second one exists and would need a 404 for an id nobody can
+    # construct -- the same reasoning that keeps `/v1/wiki` free of a path
+    # parameter on the HTTP side.
+    WIKI = "wiki"
 
 
 class CollapseMode(StrEnum):
@@ -118,6 +125,22 @@ class BackendSearchState(StrEnum):
 
     OK = "ok"
     PARTIAL = "partial"
+
+
+class BackendWikiState(StrEnum):
+    """`wiki.state` in the GET /v1/browse response (research-os 0098).
+
+    Its own type rather than a reuse of BackendSearchState above, whose members
+    are `ok|partial`: the wiki excerpt is never PARTIAL -- it is a bounded glance
+    by construction, so "some of it arrived" is its normal, complete state. What
+    it can be instead is UNAVAILABLE, meaning the read failed and this response
+    is in no position to say whether a document exists. Sharing one enum would
+    advertise `partial` here and `unavailable` there, neither of which the
+    respective producer ever emits.
+    """
+
+    OK = "ok"
+    UNAVAILABLE = "unavailable"
 
 
 class EnvelopeState(StrEnum):
@@ -185,6 +208,15 @@ class MissingMarker(StrEnum):
     # tool's own row budget: one is the server shrinking the payload, the other
     # is us. Either way an absent document is not evidence of absence.
     TRUNCATED_BY_RESPONSE_BUDGET = "truncated_by_response_budget"
+    # browse_research — the backend could not read the team wiki, so the
+    # orientation excerpt is absent from a response that otherwise carries the
+    # whole tree. Emitted ONLY for the backend's state="unavailable", never for
+    # an absent `wiki` field: a tenant with no document, a scoped browse, and a
+    # server that predates the wiki all legitimately carry nothing, and marking
+    # those partial would put a permanent "degraded" flag on the most-used read
+    # in the product. The distinction is the entire reason the wire shape spells
+    # this as a state rather than a nullable field (app/browse/schemas.py).
+    TEAM_WIKI = "team_wiki"
     # research_get
     TRUNCATED_BY_TOKEN_BUDGET = "truncated_by_token_budget"
     TOKEN_BUDGET_EXCEEDED = "token_budget_exceeded"
@@ -201,6 +233,14 @@ class MissingMarker(StrEnum):
     # So handoff cannot show the rest: it says so, and view="artifacts" (which reads
     # the uncapped route) is where the full list lives.
     ARTIFACTS_BEYOND_BUNDLE_LIMIT = "artifacts_beyond_bundle_limit"
+    # Same shape as the marker above, one layer out. GET /v1/wiki/versions pages by
+    # `before_version` -- a KEYSET cursor -- while get_entity's cursor is an offset
+    # into the rows a view returned. The two cannot be the same number, so the view
+    # serves the newest page and says plainly that older revisions exist. They are
+    # reachable, just not from here: `probe wiki versions --before-version <n>`.
+    # Emitted only when the backend actually reported more (`next_before_version`),
+    # never inferred from a full page.
+    WIKI_VERSIONS_BEYOND_PAGE = "wiki_versions_beyond_page"
     # get_metrics_grouped / export_metric_points — the read was cut at the tool's
     # own row bound. Unlike the *_beyond_backend_limit markers the rest IS
     # reachable: `next_cursor` carries the resume position (pass it back as

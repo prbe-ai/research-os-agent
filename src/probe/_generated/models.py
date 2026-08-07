@@ -39,6 +39,7 @@ class AgentSessionOut(BaseModel):
     agent: str = Field(..., title='Agent')
     direct: bool | None = Field(True, title='Direct')
     first_seen_at: AwareDatetime = Field(..., title='First Seen At')
+    last_seen_at: AwareDatetime = Field(..., title='Last Seen At')
     session_id: str = Field(..., title='Session Id')
     src_id: UUID | None = Field(None, title='Src Id')
     src_type: str | None = Field(None, title='Src Type')
@@ -1010,6 +1011,19 @@ class MaxPoints(RootModel[int]):
     root: int = Field(2000, ge=2, le=100000, title='Max Points')
 
 
+class OwnershipTransfer(BaseModel):
+    """
+    Owner-selected existing member who will become the new owner.
+    """
+
+    new_owner_user_id: UUID = Field(..., title='New Owner User Id')
+
+
+class OwnershipTransferOut(BaseModel):
+    new_owner_user_id: UUID = Field(..., title='New Owner User Id')
+    previous_owner_user_id: UUID = Field(..., title='Previous Owner User Id')
+
+
 class Hostname(RootModel[str]):
     root: str = Field(..., max_length=256, title='Hostname')
 
@@ -1334,6 +1348,7 @@ class RunCreate(BaseModel):
     notes: Notes4 | None = Field(None, title='Notes')
     parent_relation: ParentRelation | None = None
     parent_run_id: UUID | None = Field(None, title='Parent Run Id')
+    slug: str | None = Field(None, title='Slug')
     source: str | None = Field('api', title='Source')
     tags: list[str] | None = Field(None, title='Tags')
 
@@ -1647,6 +1662,7 @@ class SessionWorkOut(BaseModel):
     artifacts: list[SessionEntityOut] | None = Field(None, title='Artifacts')
     experiments: list[SessionEntityOut] | None = Field(None, title='Experiments')
     first_seen_at: AwareDatetime | None = Field(None, title='First Seen At')
+    last_seen_at: AwareDatetime | None = Field(None, title='Last Seen At')
     projects: list[SessionEntityOut] | None = Field(None, title='Projects')
     runs: list[SessionEntityOut] | None = Field(None, title='Runs')
     session_id: str = Field(..., title='Session Id')
@@ -1804,8 +1820,8 @@ class TeamMemberRoleUpdate(BaseModel):
     """
     Owner-controlled role change for an existing non-owner member.
 
-    Ownership transfer is intentionally not part of the v1 management surface;
-    a team always retains the owner created during provisioning.
+    Ownership transfer uses its own explicit request so a generic role change
+    can never accidentally replace the team's owner.
     """
 
     role: Role7 = Field(..., title='Role')
@@ -1821,6 +1837,27 @@ class TeamOut(BaseModel):
     customer_id: str = Field(..., title='Customer Id')
     display_name: str | None = Field(None, title='Display Name')
     role: Role8 = Field(..., title='Role')
+
+
+class TeamWikiState(StrEnum):
+    """
+    Whether `text` below IS the wiki, or a marker that it could not be read.
+
+    Spelled as a state rather than left to a null field because the two
+    absences mean opposite things and a caller has to be able to tell them
+    apart: `wiki: null` means this tenant has no document (or this is a
+    scoped/paged browse that never carries one), while `state="unavailable"`
+    means a document may well exist and THIS request could not read it. An
+    agent that got the first should stop asking; one that got the second should
+    try `GET /v1/wiki` before concluding the lab has no briefing.
+
+    Mirrors /v1/search's `state: ok|partial` (app/search/schemas.py) on purpose:
+    both are reads that would rather degrade with a marker than fail, and one
+    vocabulary for that across the surface beats two.
+    """
+
+    ok = 'ok'
+    unavailable = 'unavailable'
 
 
 class TokenCreate(BaseModel):
@@ -1965,6 +2002,97 @@ class WideSeriesResult(BaseModel):
     truncated: bool | None = Field(False, title='Truncated')
 
 
+class WikiPageOut(BaseModel):
+    """
+    The current document. Returned for a team that has never generated one too
+    -- see `app/wiki/service.read_page`: an empty team gets a well-formed empty
+    document at version 0, never a 404.
+    """
+
+    body: str = Field(..., title='Body')
+    updated_at: AwareDatetime | None = Field(None, title='Updated At')
+    version: int = Field(..., title='Version')
+
+
+class WikiRegenerateOut(BaseModel):
+    """
+    The 202 body for `POST /v1/wiki/regenerate`: a generation was QUEUED.
+
+    DELIBERATELY NOT A DOCUMENT. The wiki worker is asynchronous, so the document
+    is unchanged when this response arrives -- returning `WikiPageOut` here would
+    be a correct-looking shape carrying the OLD body, and every caller that
+    rendered it would show "regenerated" text that is the text it already had.
+    The fields below cannot be mistaken for the result of the generation.
+    """
+
+    queued: bool = Field(..., title='Queued')
+    version: int = Field(..., title='Version')
+
+
+class WikiRevert(BaseModel):
+    """
+    Copy a prior version FORWARD as a new one. History is never rewritten.
+    """
+
+    version: int = Field(..., ge=1, title='Version')
+
+
+class WikiVersionOut(BaseModel):
+    """
+    One row of the history list. Deliberately CARRIES NO BODY.
+
+    `wiki_page_versions.body` is a whole document, capped at MAX_TEAM_WIKI (20k).
+    A 50-row page carrying bodies would be a megabyte, and the caller that wants
+    one body already has a route for it -- reverting, or reading the current
+    document. The history list answers a different question ("what happened, and
+    which version do I want?"), and the fields below are exactly what it takes to
+    answer it.
+
+    `size_chars` is here so the list can show a revision that collapsed the
+    document without anyone fetching two bodies to diff them. It is the cheap
+    signal the arithmetic guard (locked decision 9) works from, surfaced to a
+    human for the same reason the guard uses it.
+    """
+
+    author: str = Field(..., title='Author')
+    created_at: AwareDatetime = Field(..., title='Created At')
+    size_chars: int = Field(..., title='Size Chars')
+    summary: str | None = Field(None, title='Summary')
+    version: int = Field(..., title='Version')
+
+
+class WikiVersionsOut(BaseModel):
+    """
+    A bounded page of history, newest first.
+
+    Paged by `before_version` rather than an offset because history is append-only
+    and grows at the head: a new revision landing between two requests shifts every
+    offset by one and silently re-serves a row the caller already saw. A version
+    number names a fixed point in an immutable sequence, so it cannot drift.
+    """
+
+    next_before_version: int | None = Field(None, title='Next Before Version')
+    versions: list[WikiVersionOut] = Field(..., title='Versions')
+
+
+class Summary(RootModel[str]):
+    root: str = Field(..., max_length=200, title='Summary')
+
+
+class Version(RootModel[int]):
+    root: int = Field(..., ge=0, title='Version')
+
+
+class WikiWrite(BaseModel):
+    """
+    A version-checked whole-document write (locked decision 3).
+    """
+
+    body: str = Field(..., max_length=20000, title='Body')
+    summary: Summary | None = Field(None, title='Summary')
+    version: Version | None = Field(None, title='Version')
+
+
 class Fn6(StrEnum):
     mean = 'mean'
     std = 'std'
@@ -2066,6 +2194,7 @@ class ClientVersionOut(BaseModel):
     advisory: str | None = Field(None, title='Advisory')
     cli: VersionPair | None = Field({}, validate_default=True)
     plugin: VersionPair | None = Field({}, validate_default=True)
+    tap: VersionPair | None = Field({}, validate_default=True)
 
 
 class Inputs(RootModel[list[SeriesSelector]]):
@@ -2496,6 +2625,23 @@ class SpanBatch(BaseModel):
     spans: list[SpanCreate] = Field(..., max_length=10000, title='Spans')
 
 
+class TeamWikiExcerpt(BaseModel):
+    """
+    A bounded glance at the team wiki (0098), plus how to get the rest.
+
+    Deliberately the same three-part shape as the MCP project card's `notes`
+    ({text, truncated, read_all}) so the two feel like one product rather than
+    two independently invented excerpt formats. The one addition is `state`,
+    which the card does not need because its notes come off an already-fetched
+    row while this one costs a query that is allowed to fail.
+    """
+
+    read_all: str | None = Field('GET /v1/wiki', title='Read All')
+    state: TeamWikiState | None = 'ok'
+    text: str | None = Field(None, title='Text')
+    truncated: bool | None = Field(False, title='Truncated')
+
+
 class BrowseResponse(BaseModel):
     cursor: str | None = Field(None, title='Cursor')
     depth: int | None = Field(1, title='Depth')
@@ -2504,6 +2650,7 @@ class BrowseResponse(BaseModel):
     projects: list[ProjectNode] | None = Field(None, title='Projects')
     runs: list[RunNode] | None = Field(None, title='Runs')
     truncated: bool | None = Field(False, title='Truncated')
+    wiki: TeamWikiExcerpt | None = None
 
 
 class PublicPageInfo(BaseModel):

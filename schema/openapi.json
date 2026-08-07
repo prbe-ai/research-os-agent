@@ -41,6 +41,11 @@
             "title": "First Seen At",
             "type": "string"
           },
+          "last_seen_at": {
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": "string"
+          },
           "session_id": {
             "title": "Session Id",
             "type": "string"
@@ -72,7 +77,8 @@
         "required": [
           "session_id",
           "agent",
-          "first_seen_at"
+          "first_seen_at",
+          "last_seen_at"
         ],
         "title": "AgentSessionOut",
         "type": "object"
@@ -1054,6 +1060,16 @@
             "default": false,
             "title": "Truncated",
             "type": "boolean"
+          },
+          "wiki": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TeamWikiExcerpt"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "title": "BrowseResponse",
@@ -1783,6 +1799,10 @@
             "default": {}
           },
           "plugin": {
+            "$ref": "#/components/schemas/VersionPair",
+            "default": {}
+          },
+          "tap": {
             "$ref": "#/components/schemas/VersionPair",
             "default": {}
           }
@@ -5669,6 +5689,41 @@
         "title": "MetricViewSpec",
         "type": "object"
       },
+      "OwnershipTransfer": {
+        "description": "Owner-selected existing member who will become the new owner.",
+        "properties": {
+          "new_owner_user_id": {
+            "format": "uuid",
+            "title": "New Owner User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "new_owner_user_id"
+        ],
+        "title": "OwnershipTransfer",
+        "type": "object"
+      },
+      "OwnershipTransferOut": {
+        "properties": {
+          "new_owner_user_id": {
+            "format": "uuid",
+            "title": "New Owner User Id",
+            "type": "string"
+          },
+          "previous_owner_user_id": {
+            "format": "uuid",
+            "title": "Previous Owner User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "previous_owner_user_id",
+          "new_owner_user_id"
+        ],
+        "title": "OwnershipTransferOut",
+        "type": "object"
+      },
       "PairRequest": {
         "properties": {
           "hostname": {
@@ -8034,6 +8089,17 @@
             ],
             "title": "Parent Run Id"
           },
+          "slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Slug"
+          },
           "source": {
             "default": "api",
             "title": "Source",
@@ -10210,6 +10276,18 @@
             ],
             "title": "First Seen At"
           },
+          "last_seen_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Seen At"
+          },
           "projects": {
             "items": {
               "$ref": "#/components/schemas/SessionEntityOut"
@@ -11055,7 +11133,7 @@
         "type": "object"
       },
       "TeamMemberRoleUpdate": {
-        "description": "Owner-controlled role change for an existing non-owner member.\n\nOwnership transfer is intentionally not part of the v1 management surface;\na team always retains the owner created during provisioning.",
+        "description": "Owner-controlled role change for an existing non-owner member.\n\nOwnership transfer uses its own explicit request so a generic role change\ncan never accidentally replace the team's owner.",
         "properties": {
           "role": {
             "enum": [
@@ -11105,6 +11183,47 @@
         ],
         "title": "TeamOut",
         "type": "object"
+      },
+      "TeamWikiExcerpt": {
+        "description": "A bounded glance at the team wiki (0098), plus how to get the rest.\n\nDeliberately the same three-part shape as the MCP project card's `notes`\n({text, truncated, read_all}) so the two feel like one product rather than\ntwo independently invented excerpt formats. The one addition is `state`,\nwhich the card does not need because its notes come off an already-fetched\nrow while this one costs a query that is allowed to fail.",
+        "properties": {
+          "read_all": {
+            "default": "GET /v1/wiki",
+            "title": "Read All",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TeamWikiState",
+            "default": "ok"
+          },
+          "text": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Text"
+          },
+          "truncated": {
+            "default": false,
+            "title": "Truncated",
+            "type": "boolean"
+          }
+        },
+        "title": "TeamWikiExcerpt",
+        "type": "object"
+      },
+      "TeamWikiState": {
+        "description": "Whether `text` below IS the wiki, or a marker that it could not be read.\n\nSpelled as a state rather than left to a null field because the two\nabsences mean opposite things and a caller has to be able to tell them\napart: `wiki: null` means this tenant has no document (or this is a\nscoped/paged browse that never carries one), while `state=\"unavailable\"`\nmeans a document may well exist and THIS request could not read it. An\nagent that got the first should stop asking; one that got the second should\ntry `GET /v1/wiki` before concluding the lab has no briefing.\n\nMirrors /v1/search's `state: ok|partial` (app/search/schemas.py) on purpose:\nboth are reads that would rather degrade with a marker than fail, and one\nvocabulary for that across the surface beats two.",
+        "enum": [
+          "ok",
+          "unavailable"
+        ],
+        "title": "TeamWikiState",
+        "type": "string"
       },
       "TokenCreate": {
         "description": "POST /v1/tokens (session-only mint). `scopes=None` inherits the caller's\nrole; e.g. `['read']` mints a read-only 'notebook' token. `expires_at=None`\nmeans non-expiring (house precedent).",
@@ -11737,6 +11856,179 @@
         "title": "WideSeriesResult",
         "type": "object"
       },
+      "WikiPageOut": {
+        "description": "The current document. Returned for a team that has never generated one too\n-- see `app/wiki/service.read_page`: an empty team gets a well-formed empty\ndocument at version 0, never a 404.",
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "body",
+          "version"
+        ],
+        "title": "WikiPageOut",
+        "type": "object"
+      },
+      "WikiRegenerateOut": {
+        "description": "The 202 body for `POST /v1/wiki/regenerate`: a generation was QUEUED.\n\nDELIBERATELY NOT A DOCUMENT. The wiki worker is asynchronous, so the document\nis unchanged when this response arrives -- returning `WikiPageOut` here would\nbe a correct-looking shape carrying the OLD body, and every caller that\nrendered it would show \"regenerated\" text that is the text it already had.\nThe fields below cannot be mistaken for the result of the generation.",
+        "properties": {
+          "queued": {
+            "title": "Queued",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "queued",
+          "version"
+        ],
+        "title": "WikiRegenerateOut",
+        "type": "object"
+      },
+      "WikiRevert": {
+        "description": "Copy a prior version FORWARD as a new one. History is never rewritten.",
+        "properties": {
+          "version": {
+            "minimum": 1.0,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "WikiRevert",
+        "type": "object"
+      },
+      "WikiVersionOut": {
+        "description": "One row of the history list. Deliberately CARRIES NO BODY.\n\n`wiki_page_versions.body` is a whole document, capped at MAX_TEAM_WIKI (20k).\nA 50-row page carrying bodies would be a megabyte, and the caller that wants\none body already has a route for it -- reverting, or reading the current\ndocument. The history list answers a different question (\"what happened, and\nwhich version do I want?\"), and the fields below are exactly what it takes to\nanswer it.\n\n`size_chars` is here so the list can show a revision that collapsed the\ndocument without anyone fetching two bodies to diff them. It is the cheap\nsignal the arithmetic guard (locked decision 9) works from, surfaced to a\nhuman for the same reason the guard uses it.",
+        "properties": {
+          "author": {
+            "title": "Author",
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "size_chars": {
+            "title": "Size Chars",
+            "type": "integer"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "author",
+          "created_at",
+          "size_chars"
+        ],
+        "title": "WikiVersionOut",
+        "type": "object"
+      },
+      "WikiVersionsOut": {
+        "description": "A bounded page of history, newest first.\n\nPaged by `before_version` rather than an offset because history is append-only\nand grows at the head: a new revision landing between two requests shifts every\noffset by one and silently re-serves a row the caller already saw. A version\nnumber names a fixed point in an immutable sequence, so it cannot drift.",
+        "properties": {
+          "next_before_version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Before Version"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/WikiVersionOut"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "versions"
+        ],
+        "title": "WikiVersionsOut",
+        "type": "object"
+      },
+      "WikiWrite": {
+        "description": "A version-checked whole-document write (locked decision 3).",
+        "properties": {
+          "body": {
+            "maxLength": 20000,
+            "title": "Body",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "title": "WikiWrite",
+        "type": "object"
+      },
       "WindowNode": {
         "description": "A trailing-window reduction. `mean` duplicates SmoothNode's sma on\npurpose: this node is where the rest of the window statistics live, and\nsplitting mean off from std would be a trap.\n\nPartial windows at the start use what is available, and non-finite values\nare excluded from every window they touch (the store's `_sma` convention).",
         "properties": {
@@ -12006,6 +12298,21 @@
         "summary": "Revoke",
         "tags": [
           "pairing"
+        ]
+      }
+    },
+    "/auth/account": {
+      "delete": {
+        "description": "Permanently delete the signed-in identity and leave its active team.",
+        "operationId": "delete_account_auth_account_delete",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Delete Account",
+        "tags": [
+          "auth"
         ]
       }
     },
@@ -12653,7 +12960,7 @@
         ]
       },
       "patch": {
-        "description": "Promote/demote a non-owner member. Ownership transfer is not a v1 flow.",
+        "description": "Promote/demote a non-owner member without changing team ownership.",
         "operationId": "update_member_role_auth_teams_members__member_user_id__patch",
         "parameters": [
           {
@@ -12700,6 +13007,48 @@
           }
         },
         "summary": "Update Member Role",
+        "tags": [
+          "teams"
+        ]
+      }
+    },
+    "/auth/teams/transfer-ownership": {
+      "post": {
+        "description": "Make an existing member owner and demote the caller to member.",
+        "operationId": "transfer_ownership_auth_teams_transfer_ownership_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnershipTransfer"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnershipTransferOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Transfer Ownership",
         "tags": [
           "teams"
         ]
@@ -16398,6 +16747,24 @@
             }
           },
           {
+            "description": "exact name (case-insensitive). Names are NOT unique, so this can return several rows -- it is a lookup, not an identity. Clients resolving a `name:` ref refuse to act on more than one match rather than pick.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "exact name (case-insensitive). Names are NOT unique, so this can return several rows -- it is a lookup, not an identity. Clients resolving a `name:` ref refuse to act on more than one match rather than pick.",
+              "title": "Name"
+            }
+          },
+          {
             "description": "repeatable; AND semantics (experiment must carry ALL), GIN @> containment (0066)",
             "in": "query",
             "name": "tags",
@@ -17957,6 +18324,24 @@
             }
           },
           {
+            "description": "exact name (case-insensitive). Names are NOT unique, so this can return several rows -- it is a lookup, not an identity. Clients resolving a `name:` ref refuse to act on more than one match rather than pick.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "exact name (case-insensitive). Names are NOT unique, so this can return several rows -- it is a lookup, not an identity. Clients resolving a `name:` ref refuse to act on more than one match rather than pick.",
+              "title": "Name"
+            }
+          },
+          {
             "description": "repeatable; AND semantics (project must carry ALL), GIN @> containment (0066)",
             "in": "query",
             "name": "tags",
@@ -18821,6 +19206,24 @@
               ],
               "description": "incumbent-id lookup as 'key:value' (fold #8), GIN @> containment",
               "title": "Foreign Key"
+            }
+          },
+          {
+            "description": "exact name (case-insensitive). Names are NOT unique, so this can return several rows -- it is a lookup, not an identity. Clients resolving a `name:` ref refuse to act on more than one match rather than pick.",
+            "in": "query",
+            "name": "name",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "exact name (case-insensitive). Names are NOT unique, so this can return several rows -- it is a lookup, not an identity. Clients resolving a `name:` ref refuse to act on more than one match rather than pick.",
+              "title": "Name"
             }
           },
           {
@@ -21481,7 +21884,7 @@
     },
     "/v1/sessions/{session_id}/work": {
       "get": {
-        "description": "Everything one coding-agent session touched, grouped by entity type.\n\nThe reverse of the `sessions` field on the project/experiment/run reads: it\nwalks from a transcript back to the work, which is what the session page\nneeds to link out to it.\n\nNOT 404 for an unknown session, deliberately. This database holds no row for\na session id -- it belongs to another product -- so \"touched nothing\" and\n\"never existed\" are the same state here and an empty result is the honest\nanswer. It also stops the route being an oracle for which ids exist.\n\n422 only for an id that could never have been stored, using the same shape\ncheck the write path applies, so a malformed id fails at the door instead of\nrunning four queries guaranteed to match nothing.",
+        "description": "Everything one coding-agent session touched, grouped by entity type.\n\nThe reverse of the `sessions` field on the project/experiment/run reads: it\nwalks from a transcript back to the work, which is what the session page\nneeds to link out to it.\n\nNOT 404 for an unknown session, deliberately. Activity observations and\nentity links are not an authoritative session registry -- the id belongs to\nanother product -- so \"not observed here\" remains an empty result. It also\nstops the route being an oracle for every id that product knows.\n\n422 only for an id that could never have been stored, using the same shape\ncheck the write path applies, so a malformed id fails at the door instead of\nrunning four queries guaranteed to match nothing.",
         "operationId": "get_session_work_v1_sessions__session_id__work_get",
         "parameters": [
           {
@@ -22071,6 +22474,195 @@
         "summary": "Patch View Route",
         "tags": [
           "metric-views"
+        ]
+      }
+    },
+    "/v1/wiki": {
+      "get": {
+        "description": "The team's current wiki. A team with none gets an empty document at\nversion 0, which is also the version a first write must send.",
+        "operationId": "get_wiki_v1_wiki_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Wiki",
+        "tags": [
+          "wiki"
+        ]
+      },
+      "put": {
+        "description": "Replace the document, if it is still at the version the caller read.",
+        "operationId": "put_wiki_v1_wiki_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WikiWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Wiki",
+        "tags": [
+          "wiki"
+        ]
+      }
+    },
+    "/v1/wiki/regenerate": {
+      "post": {
+        "description": "Queue a wiki generation for this team NOW, ahead of the 04:00 sweep.\n\nWHY THIS EXISTS. Locked decision 2 refreshes the wiki on one nightly sweep, and\nthat is the right cadence for a document nobody is watching. It is the wrong\ncadence for the person who just corrected the thing the wiki was wrong about:\nthey have no way to see the document catch up, and \"wait until tomorrow\" reads\nas \"the feature is broken\". prbe-knowledge shipped exactly this affordance\n(\"Generate wiki now\") beside its own nightly synthesis for the same reason.\n\n202, NOT 200, AND NO DOCUMENT IN THE BODY. The wiki worker drains the queue in\nits own Deployment; when this response is written the generation has not been\nclaimed, let alone run. `WikiRegenerateOut` carries `version` -- the version the\ndocument is STILL at -- precisely so a caller can poll `GET /v1/wiki` for the\nversion passing it instead of assuming this call did the work.\n\n`immediate=True` zeroes the debounce. The debounce exists to let an automatic\nwrite settle before paying for a generation; a human pressing a button has\nalready settled, and making them wait out a window they cannot see is the same\nfailure as making them wait for 04:00.\n\nTHE ENQUEUE IS READ BACK, and that is not belt-and-braces. `enqueue_generation`\nwraps its INSERT in a SAVEPOINT and swallows every exception BY DESIGN, so that\na generation request can never fail the domain write it normally rides along\nwith. This route has no domain write to protect: the enqueue is the entire\nrequest. Left swallowed, a `kind` or `anchor_type` that `generation_refresh`'s\nCHECK constraints reject would make this a button that answers 202 and does\nnothing, forever, with one WARN line as the only evidence. So the pending row is\nSELECTed back on the same transaction -- where the worker cannot yet see it, so\nthere is no claim to race -- and a missing row is a 503, exactly as the sweep\ncounts it a failure and exits non-zero.",
+        "operationId": "regenerate_wiki_v1_wiki_regenerate_post",
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiRegenerateOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Regenerate Wiki",
+        "tags": [
+          "wiki"
+        ]
+      }
+    },
+    "/v1/wiki/revert": {
+      "post": {
+        "description": "Copy a prior revision FORWARD as a new revision.\n\nNot version-checked, and it does not need to be: `revert` takes the row lock\nbefore it reads the current version, so the forward copy is computed and\nswapped under one lock and cannot lose a race. A precondition would only let a\ncaller assert which version they were reverting FROM, which is not what a\nrevert is about -- the version they name is the one they want back.",
+        "operationId": "revert_wiki_v1_wiki_revert_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WikiRevert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiPageOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revert Wiki",
+        "tags": [
+          "wiki"
+        ]
+      }
+    },
+    "/v1/wiki/versions": {
+      "get": {
+        "description": "The history, newest first, WITHOUT bodies.\n\nDeclared before `POST /wiki/revert` in this file for reading order -- you\ndiscover a version here, then revert to it. FastAPI matches on the literal\npath, so `/wiki/versions` cannot be shadowed by `/wiki`.\n\nA team with no document returns an empty list, not a 404, for the same reason\n`GET /v1/wiki` returns an empty document: \"no history\" and \"no such team\" are\ndifferent claims, and only one of them is true for a caller holding a valid\ncredential.",
+        "operationId": "list_wiki_versions_v1_wiki_versions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "before_version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Before Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiVersionsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Wiki Versions",
+        "tags": [
+          "wiki"
         ]
       }
     },

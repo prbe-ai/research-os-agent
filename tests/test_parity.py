@@ -263,6 +263,15 @@ NOT_CLIENT_SURFACE: dict[Op, str] = {
     ("POST", "/auth/teams/invites"): "session-only team admin; dashboard surface",
     ("DELETE", "/auth/teams/invites/{}"): "session-only team admin; dashboard surface",
     ("POST", "/auth/teams/invites/{}/resend"): "session-only team admin; dashboard surface",
+    # Same family as the rows above and the same dependency (`_OWNER` ->
+    # require_team_role -> require_session), so a PAT gets a 403 here, not a
+    # result. Surfaced 2026-08-06 by the `make dump-openapi` in the team-wiki
+    # pass: it shipped on the backend while the checked-in schema sat stale.
+    ("POST", "/auth/teams/transfer-ownership"): "session-only team admin; dashboard surface",
+    # Deletes the signed-in IDENTITY, not team data, and is gated on
+    # `require_session`. Structurally not a token surface: a PAT is bound to one
+    # team at the row level and names no browser identity to delete.
+    ("DELETE", "/auth/account"): "session-only account deletion; dashboard surface",
     ("GET", "/auth/invites/pending"): "session-only; dashboard surface",
     ("POST", "/auth/invites/{}/accept"): "session-only; dashboard surface",
     # The device-flow approval leg is the human's half of the handshake: the CLI
@@ -419,6 +428,18 @@ PENDING: dict[Op, str] = {
     # sdk/client.py now.
     ("GET", "/public/v1/runs/{}/views"): "public share read; unauthenticated browser surface, no client story yet",
     ("GET", "/public/v1/runs/{}/views/{}/data"): "public share read; unauthenticated browser surface, no client story yet",
+    #
+    # Surfaced 2026-08-06 by the `make regen` in the team-wiki client pass. The
+    # other four wiki routes are wired (`probe wiki read|write|versions|revert`);
+    # this one is not, and the omission is deliberate rather than forgotten.
+    # It ASKS THE GENERATOR for an out-of-band pass and answers 202 — the document
+    # is unchanged when the response arrives (WikiRegenerateOut says so), so a
+    # `probe wiki regenerate` that printed a receipt would be indistinguishable at
+    # the terminal from one that did nothing, and the CLI has no status verb to
+    # follow it with. The nightly sweep is the intended trigger. Closed by either
+    # designing that verb WITH its completion signal, or by deciding the sweep is
+    # the only trigger and moving this to NOT_CLIENT_SURFACE.
+    ("POST", "/v1/wiki/regenerate"): "async generation trigger (202); no CLI verb designed yet",
 }
 
 # The REVERSE debt ledger: client call sites that land AHEAD of the backend,

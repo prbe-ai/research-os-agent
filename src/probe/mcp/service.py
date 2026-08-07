@@ -14,6 +14,7 @@ from ..sdk import errors, links
 from .contract import (
     BackendCorpus,
     BackendSearchState,
+    BackendWikiState,
     Capability,
     Channel,
     ChannelError,
@@ -362,6 +363,12 @@ _PAGE_FETCH = 200
 _SPAN_BACKEND_MAX = 10_000  # GET /v1/runs/{id}/spans
 _METRIC_BACKEND_MAX = 100_000  # GET /v1/runs/{id}/metrics
 
+# GET /v1/wiki/versions, at the backend's ceiling. Fetched in full and then
+# trimmed by the token budget, which is what gives the offset cursor something to
+# walk: a version row is small, so a 2,000-token budget emits a few dozen of these
+# and the rest are pages the caller already paid for.
+_WIKI_VERSIONS_PAGE = 200
+
 # Row bounds for the coordinate reads. Grouped cells are aggregates (one per step
 # bucket x group), so a few hundred already draws a chart; export points are raw
 # and unbounded, so the tool serves ONE keyset page and hands the cursor back.
@@ -527,6 +534,17 @@ _VIEWS: dict[tuple[str, str], str] = {
     # exists, not before.
     (EntityType.ARTIFACT, View.CARD): "_view_card",
     (EntityType.ARTIFACT, View.VERSIONS): "_view_artifact_versions",
+    # The team wiki (research-os 0098). `card` is the WHOLE document, not a
+    # glance, which makes it the one card in this table that is not cheap -- and
+    # deliberately so. Every other kind has an identity (a name, a status, an id)
+    # worth showing before its contents; a wiki's identity IS its contents, and a
+    # card that excerpted it would send an agent that just asked for the briefing
+    # to a second call to actually read it. The excerpt lives where excerpts
+    # belong: on `browse_research`, which nobody asked for the document from.
+    # `versions` reuses the vocabulary artifacts and experiments already use, so
+    # "show me the history of X" is one word across every kind that has one.
+    (EntityType.WIKI, View.CARD): "_view_wiki_card",
+    (EntityType.WIKI, View.VERSIONS): "_view_wiki_versions",
 }
 
 # Filters each (kind, view) accepts, mapped onto the backend's REAL server-side
@@ -677,6 +695,42 @@ def _annotate(node: dict, kind: str, *, api_base_url: str | None = None) -> dict
         **({"url": url} if url else {}),
         "available_views": _supported_views(kind),
     }
+
+
+#: What the browse excerpt names as the door to the whole document. The BACKEND
+#: sends "GET /v1/wiki" — its own surface, correctly — and this rewrites it into
+#: tool vocabulary on the way out, because an agent holding this envelope has no
+#: HTTP client and would either ignore the pointer or invent a tool that could
+#: follow it. Same reason the project card says `view="notes"` rather than naming
+#: the projects route.
+_WIKI_READ_ALL = 'get_entity(ref="wiki")'
+
+
+def _wiki_excerpt(wiki: Any) -> dict | None:
+    """The team wiki excerpt from a browse response, in tool vocabulary.
+
+    THE WHOLE POINT OF THE FEATURE IS THAT IT RIDES HERE. `browse_research` is the
+    call an agent makes when it arrives somewhere unfamiliar, and a briefing an
+    agent has to know to ask for is one it does not read. The tree says what
+    EXISTS; only this says what the team has learned.
+
+    Costs no request: the backend puts it on the browse response it was already
+    building, and only on an unscoped first page. So there is nothing to fetch and
+    nothing to degrade past -- if it is absent, it is absent.
+
+    RETURNS None FOR EVERY ABSENCE, and refuses to invent one. `wiki` is missing
+    on a scoped browse, on a cursor page, on a tenant with no document, and on a
+    backend that predates the wiki entirely — four different reasons that all mean
+    "this response carries no excerpt", none of which means the lab has no
+    briefing. An empty `{"text": ""}` here would say the opposite of all four.
+
+    A non-dict value is treated as absence rather than raised on, deliberately: an
+    excerpt is a nice-to-have riding along with the most-used read in the product,
+    and there is no shape of malformed excerpt worth losing the whole tree over.
+    """
+    if not isinstance(wiki, dict):
+        return None
+    return {**wiki, "read_all": _WIKI_READ_ALL}
 
 
 def _summarize_manifest(record: dict | None) -> dict | None:
@@ -892,6 +946,11 @@ class ResearchReadService:
         if payload.get("truncated"):
             # The tree was cut, so an absent child is not evidence of absence.
             missing.append(MissingMarker.TRUNCATED_BY_TOKEN_BUDGET)
+        wiki = _wiki_excerpt(payload.get("wiki"))
+        if wiki is not None:
+            data["wiki"] = wiki
+            if wiki.get("state") == BackendWikiState.UNAVAILABLE:
+                missing.append(MissingMarker.TEAM_WIKI)
         return self._envelope(
             data,
             state=EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE,
@@ -1568,6 +1627,74 @@ class ResearchReadService:
         report missing:["versioned_assets"] and had never been implemented."""
         return _ViewData(
             rows=self.source.experiment_versions(str(entity["id"])), rows_key="versions"
+        )
+
+    def _view_wiki_card(self, entity: dict, request: _Req) -> _ViewData:
+        """The team wiki, WHOLE. Not a glance — see the `_VIEWS` entry.
+
+        A dedicated builder rather than a reuse of `_view_card` (which would
+        return the identical empty payload) for one reason: the empty document.
+        `GET /v1/wiki` answers `{body: "", version: 0}` for a team that has never
+        generated one, never a 404 — and an agent that reads a blank `body` off a
+        card has no way to tell "this lab wrote nothing down" from "the read gave
+        me nothing". Version 0 says which, but only to a reader who knows that 0
+        is the sentinel. So say it in words, once, in the payload.
+
+        Nothing is excerpted here and nothing is truncated by this view: overflow
+        is REPORTED by `get_entity` (`token_budget_exceeded`) rather than silently
+        cutting a document. A briefing with the middle removed and no marker is
+        worse than one that says it did not fit — raise `token_budget`, or read
+        the excerpt on `browse_research`.
+        """
+        if entity.get("body"):
+            return _ViewData()
+        return _ViewData(
+            payload={
+                "note": (
+                    "this team has no wiki yet (version 0). It is generated by a "
+                    "nightly sweep and edited with `probe wiki write`; an empty "
+                    "document is not a failed read."
+                )
+            }
+        )
+
+    def _view_wiki_versions(self, entity: dict, request: _Req) -> _ViewData:
+        """The wiki's history, newest first, WITHOUT bodies.
+
+        `entity` IS OVERRIDDEN, and that is the load-bearing line. `get_entity`
+        puts the resolved entity in `data["entity"]` for every kind, and for a
+        wiki that entity is the whole 20,000-character document. The history list
+        exists precisely so that reading "what happened" does not cost a body
+        (`WikiVersionOut` carries `size_chars` instead of one) — letting the
+        current body ride along on it would undo that at the last step, on the one
+        view that was designed to avoid it. The identity survives; the text does
+        not.
+
+        Serves the NEWEST page only. The backend pages by `before_version`, a
+        keyset, while this tool's cursor is an offset into the rows a view
+        returned; the two are different numbers and cannot be reconciled inside
+        one envelope. Older revisions are not lost, and the marker says where they
+        are rather than letting a full page read as the whole history.
+        """
+        page = self.source.wiki_versions(limit=_WIKI_VERSIONS_PAGE)
+        rows = page.get("versions") or []
+        older = page.get("next_before_version")
+        return _ViewData(
+            payload={
+                "entity": {
+                    "version": entity.get("version"),
+                    "updated_at": entity.get("updated_at"),
+                },
+                # Named rather than left to be inferred from rows[0]: the token
+                # budget trims ROWS, so on a tight budget rows[0] may not be the
+                # newest revision the caller sees, and "which version is live" is
+                # the question a revert is decided on.
+                "current_version": entity.get("version"),
+                "oldest_version_shown": rows[-1].get("version") if rows else None,
+            },
+            rows=rows,
+            rows_key="versions",
+            missing=[MissingMarker.WIKI_VERSIONS_BEYOND_PAGE] if older else [],
         )
 
     # -- coordinate reads (below-run coordinates, 0059-0062) -----------------
