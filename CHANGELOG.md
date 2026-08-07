@@ -83,6 +83,18 @@
 
 ### Fixed
 
+- **Codex setup now verifies the two credentials it actually uses.** A rejected
+  capture token triggers re-pairing instead of reading as live, and the wizard
+  completes Codex's native OAuth flow for the production `probe-research` MCP
+  instead of assuming Claude's headers-helper token authenticated Codex.
+- **Short Codex sessions no longer lose their final response.** SessionEnd tails
+  and durably enqueues the last rollout bytes before shutdown; the live canary
+  now searches only captured source content, so a relevance explanation that
+  echoes the marker cannot produce a false pass.
+- **Upgrades retire the standalone Codex tap.** The wizard removes
+  `prbe-codex-tap-plugin@prbe-ai` before enabling the unified capture plugin,
+  preventing two lifecycle hooks from racing over the same session.
+
 - **`probe run set <petname>` 422'd instead of amending the run.** `PATCH
   /v1/runs/{run_id}` is UUID-typed, and this verb passed the ref through raw, so
   the petname the CLI calls a run's name came back as a raw pydantic
