@@ -60,6 +60,20 @@ UNIT_TIMEOUT_S = 45 * 60
 CLASSIFY_TIMEOUT_S = 90 * 60
 
 
+def new_session_id() -> str:
+    """A session id Claude Code will accept.
+
+    `str(uuid4())`, NOT `uuid4().hex`. `--session-id` validates the DASHED
+    canonical form and rejects the 32-char hex with "Invalid session ID. Must be
+    a valid UUID" -- which kills the agent before it reads a single file, so the
+    classify pass returns no plan and the import stops having done nothing.
+
+    Caught by the first real end-to-end run and by nothing before it: every test
+    fakes `launch_agent`, so the id never reached the binary that validates it.
+    """
+    return str(uuid.uuid4())
+
+
 @dataclass
 class UnitOutcome:
     unit: ledger_mod.Unit
@@ -116,7 +130,7 @@ def classify(
         total=ev.total_files,
         timeout=CLASSIFY_TIMEOUT_S,
         stream=stream,
-        session_id=uuid.uuid4().hex if agent is bf.Agent.CLAUDE else None,
+        session_id=new_session_id() if agent is bf.Agent.CLAUDE else None,
     )
     if not ok:
         return None, tail
@@ -183,7 +197,7 @@ def run_unit(
     "died halfway".
     """
     manifest = manifest_dir / f"{unit.unit_id}.jsonl"
-    session = uuid.uuid4().hex if agent is bf.Agent.CLAUDE else None
+    session = new_session_id() if agent is bf.Agent.CLAUDE else None
     ledger.start_unit(unit.unit_id, session_id=session)
 
     prompt = prompts.import_unit(
