@@ -12,6 +12,18 @@
 
 ### Added
 
+- **One `npx probe-research` onboarding flow configures Claude Code, Codex, or
+  both.** The interactive wizard presents both agents as explicit choices;
+  headless installs use `--agent claude`, `--agent codex`, or `--agent both`.
+  A dual-agent setup uses one browser approval but persists two independently
+  source-bound capture credentials, so neither agent can write through the
+  other's transcript route.
+- **The Probe Research and Session Capture plugins are native Codex packages.**
+  They install from the same marketplace and source trees as their Claude Code
+  counterparts. Tracking skills, MCP wiring, pairing, lifecycle hooks, durable
+  delivery, and storage stay shared; only the agent command adapter and Codex
+  rollout normalization are source-specific.
+
 - **Opt-in automatic hardware metrics (`probe.hw`).** `run(hw=True)` — or
   `PROBE_HW=1` — starts one collector per node (rank-aware election) that
   samples GPU/CPU/memory/disk/network and logs them as `kind=hardware`
