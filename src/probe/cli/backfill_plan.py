@@ -228,6 +228,34 @@ def resolve(evidence: Evidence, plan: Plan) -> tuple[dict[str, str], Discrepancy
     what it had to fill in. Silently completing the map would hide exactly the
     thing worth showing a human before anything uploads.
     """
+    # A rollup row names a DIRECTORY, so an assignment against one stands for
+    # every tail file under it. Expanded BEFORE the reconcile, or the walk would
+    # report thousands of "missing" files the agent did in fact place -- turning
+    # the honest-denominator check into noise nobody reads.
+    walked = set(relative_paths(evidence))
+    expanded: list[Assignment] = []
+    for a in plan.assignments:
+        if a.path in walked:
+            expanded.append(a)
+            continue
+        prefix = "" if a.path in ("", ".") else a.path.rstrip("/") + "/"
+        members = [
+            w for w in walked
+            if w.startswith(prefix) and "/" not in w[len(prefix):]
+        ]
+        if members:
+            expanded += [
+                Assignment(path=m, project=a.project, confidence=a.confidence,
+                           why=a.why or f"directory {a.path}")
+                for m in members
+            ]
+        else:
+            # Neither a file nor a directory we walked. Genuinely unknown, and
+            # the reconcile must still say so.
+            expanded.append(a)
+    plan = Plan(projects=plan.projects, assignments=expanded,
+                unsure=plan.unsure, summary=plan.summary)
+
     disc = reconcile_assignments(evidence, plan)
     assigned = {a.path: a.project for a in plan.assignments if a.path not in disc.unknown}
     for path in disc.missing:

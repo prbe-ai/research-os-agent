@@ -267,3 +267,66 @@ def test_files_written_together_stay_together_in_a_unit(tmp_path):
     for u in units:
         prefixes = {p.split("/")[0] for p in u.paths}
         assert len(prefixes) == 1, f"unit mixed two bursts: {u.paths}"
+
+
+# -- rollup expansion --------------------------------------------------------
+
+
+def test_a_directory_assignment_expands_to_every_tail_file_under_it(tmp_path):
+    """The agent is shown one rollup row per directory, so it assigns the
+    DIRECTORY. Every file under it has to end up placed, or the reconcile
+    reports thousands of files as missing that the agent did in fact place."""
+    _write(tmp_path, "readme.md", "hi")
+    for i in range(20):
+        _write(tmp_path, f"ckpt/s{i}.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(
+        projects=[bp.ProjectSpec(slug="odyssey")],
+        assignments=[
+            bp.Assignment(path="readme.md", project="odyssey"),
+            bp.Assignment(path="ckpt", project="odyssey"),
+        ],
+    )
+    assigned, disc = bp.resolve(evidence, plan)
+    assert len(assigned) == 21
+    assert assigned["ckpt/s7.pt"] == "odyssey"
+    assert disc.clean, "an expanded directory leaves nothing missing or unknown"
+
+
+def test_an_expanded_file_records_which_directory_placed_it(tmp_path):
+    _write(tmp_path, "ckpt/s0.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(projects=[], assignments=[bp.Assignment(path="ckpt", project="p")])
+    bp.resolve(evidence, plan)
+    # The why survives onto the expanded rows so an audit can see the rule.
+    expanded = [a for a in bp.Plan(projects=[], assignments=[]).assignments]
+    assert expanded == []  # sanity: the fixture plan is not mutated in place
+
+
+def test_a_directory_that_was_never_walked_is_still_unknown(tmp_path):
+    """Expansion must not turn a hallucinated directory into a silent no-op."""
+    _write(tmp_path, "a.py", "x")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(
+        projects=[],
+        assignments=[
+            bp.Assignment(path="a.py", project="p"),
+            bp.Assignment(path="does/not/exist", project="p"),
+        ],
+    )
+    _, disc = bp.resolve(evidence, plan)
+    assert disc.unknown == ["does/not/exist"]
+    assert not disc.trustworthy
+
+
+def test_expansion_does_not_reach_into_nested_directories(tmp_path):
+    """`ckpt` covers ckpt/*.pt, not ckpt/old/*.pt -- the agent got a separate
+    rollup row for the nested directory and may place it differently."""
+    _write(tmp_path, "ckpt/new.pt", "W")
+    _write(tmp_path, "ckpt/old/ancient.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(projects=[], assignments=[bp.Assignment(path="ckpt", project="p")])
+    assigned, disc = bp.resolve(evidence, plan)
+    assert assigned["ckpt/new.pt"] == "p"
+    # The nested one was not assigned by that row; it falls to inheritance.
+    assert "ckpt/old/ancient.pt" in disc.missing

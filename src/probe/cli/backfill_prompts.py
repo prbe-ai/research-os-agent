@@ -144,10 +144,21 @@ wrong answer that looks tidy.
 
 {known}
 
-EVIDENCE. One JSON object per line. `tier` is "evidence" when the file's head
-was sampled (the `sample` field) and "tail" when it carries no identifying text
--- checkpoints, shards, images, weights. Files written within minutes of each
-other are usually one run, so `mtime` groups work that the paths do not.{caveat}
+EVIDENCE. One JSON object per line, in TWO shapes.
+
+    A row with "path" is ONE FILE whose head was sampled. The `sample` field is
+    what it actually says. These are the rows that can name a project.
+
+    A row with "dir" is EVERY remaining file in that directory, rolled up:
+    checkpoints, shards, images, weights. They carry no text identifying
+    anything, so they are counted rather than listed. `files`, `bytes`, `ext`
+    and `mtime_span` describe the group.
+
+    ASSIGN A ROLLUP ROW BY ITS "dir" VALUE, exactly as written, and every file
+    under it goes with it. Do not invent per-file paths for them.
+
+Files written within minutes of each other are usually one run, so `mtime` and
+`mtime_span` group work that the directory tree does not.{caveat}
 
 {evidence_jsonl}
 

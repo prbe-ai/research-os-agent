@@ -101,7 +101,7 @@ TAIL_SUFFIXES = frozenset(
 #: Head bytes sampled from ONE evidence file. Enough for a header, a docstring,
 #: a config block or a table's columns; short enough that a few hundred of them
 #: still fit a classification prompt.
-SAMPLE_BYTES = 2048
+SAMPLE_BYTES = 700
 
 #: Total bytes Tier 2 may read across the whole folder. At SAMPLE_BYTES each
 #: that is ~1500 files, comfortably above the few hundred a real research folder
@@ -110,7 +110,7 @@ SAMPLE_BUDGET_BYTES = 3 * 1024 * 1024
 
 #: Ceiling on sampled FILES, independent of bytes. A folder of ten thousand
 #: tiny configs would satisfy the byte budget and still blow the prompt.
-SAMPLE_BUDGET_FILES = 1500
+SAMPLE_BUDGET_FILES = 600
 
 #: An evidence file at or above this size is sampled but flagged: its head is
 #: unlikely to represent it, and a reader should know the sample is a corner of
@@ -346,20 +346,51 @@ def gather(root: Path) -> Evidence:
     )
 
 
-def to_jsonl(evidence: Evidence) -> str:
-    """Evidence as JSONL, one file per line, for the classification prompt.
+def _rel(root: Path, path: str) -> str:
+    try:
+        return str(Path(path).relative_to(root))
+    except ValueError:  # pragma: no cover - the walk never leaves the root
+        return path
 
-    Paths are RELATIVE to the root. The agent's whole job is deciding what
-    belongs together; absolute paths add a constant prefix to every line, which
-    costs prompt budget and tells it nothing.
+
+def to_jsonl(evidence: Evidence) -> str:
+    """Evidence as JSONL for the classification prompt. TWO row shapes.
+
+    Evidence files get a row each, because their contents are the whole point.
+    TAIL files are ROLLED UP per directory, one row for the lot.
+
+    That is not a size hack, it is the tier's own definition applied honestly: a
+    tail file carries no text identifying anything, so a per-file row for
+    `step_04000.pt` tells the agent exactly what a per-directory row does and
+    costs 4,000 times more. Emitting them individually put a 200,000-file drive
+    at ~5.8 MILLION tokens -- past any context window, and `--autocompact`
+    cannot help because it compacts across TURNS and cannot shrink one
+    oversized message. The pass was not slow at that size; it was rejected.
+
+    Rolled up it is ~290k tokens for the same drive, and it reads better:
+    "4,000 checkpoints written across two hours" is more use to a classifier
+    than four thousand near-identical lines.
+
+    The agent assigns a DIRECTORY in a rollup row, and
+    :func:`probe.cli.backfill_plan.resolve` expands that back to its files. The
+    assumption -- that tail files in one directory belong together -- is the
+    same one inheritance already makes, and it fails in the same case: a
+    directory holding two projects' checkpoints. Evidence files in that
+    directory are still listed individually, so the split stays visible.
+
+    Paths are RELATIVE to the root. The agent's job is deciding what belongs
+    together; a constant absolute prefix on every line costs budget and says
+    nothing.
     """
     root = Path(evidence.root)
     lines: list[str] = []
+    tail: dict[str, list[FileEvidence]] = {}
+
     for f in evidence.files:
-        try:
-            rel = str(Path(f.path).relative_to(root))
-        except ValueError:  # pragma: no cover - walk never leaves the root
-            rel = f.path
+        rel = _rel(root, f.path)
+        if f.tier is Tier.TAIL:
+            tail.setdefault(str(Path(rel).parent), []).append(f)
+            continue
         row: dict[str, object] = {"path": rel, "size": f.size, "tier": f.tier.value}
         if f.mtime:
             row["mtime"] = int(f.mtime)
@@ -367,5 +398,22 @@ def to_jsonl(evidence: Evidence) -> str:
             row["sample"] = f.sample
             if f.truncated:
                 row["sample_truncated"] = True
+        lines.append(json.dumps(row, ensure_ascii=False))
+
+    for directory in sorted(tail):
+        group = tail[directory]
+        stamps = [f.mtime for f in group if f.mtime > 0]
+        exts = sorted({Path(f.path).suffix.lower() for f in group if Path(f.path).suffix})
+        row = {
+            "dir": directory if directory != "." else "",
+            "tier": "tail",
+            "files": len(group),
+            "bytes": sum(f.size for f in group),
+            # The extensions are what a reader uses to tell a checkpoint
+            # directory from an image directory without opening anything.
+            "ext": exts[:8],
+        }
+        if stamps:
+            row["mtime_span"] = [int(min(stamps)), int(max(stamps))]
         lines.append(json.dumps(row, ensure_ascii=False))
     return "\n".join(lines)
