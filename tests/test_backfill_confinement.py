@@ -49,6 +49,17 @@ def state_dir(tmp_path, monkeypatch):
     return d
 
 
+@pytest.fixture(autouse=True)
+def agents_installed(monkeypatch):
+    """Both agents on PATH, because on CI neither is.
+
+    Not a convenience. `launch_agent` returns "not on PATH" before writing a
+    byte, so every assertion below about what it PAINTS passes vacuously
+    against an empty string on a runner -- which is exactly how the two display
+    tests here went green on CI while asserting nothing at all."""
+    monkeypatch.setattr(bf, "which_agent", lambda agent: f"/bin/{agent.value}")
+
+
 class _Recorder:
     """Stands in for `launch_agent`, keeping every kwarg it was handed."""
 
@@ -231,7 +242,10 @@ def test_a_solo_agent_draws_its_own_page(folder, monkeypatch):
 
 def test_a_unit_on_a_board_does_not_clear_the_shared_line(folder, monkeypatch):
     """`\\r\\033[2K` on exit wipes whatever row the cursor sits on -- which under
-    a board belongs to a unit that is still running."""
+    a board belongs to a unit that is still running.
+
+    Two NEGATIVE assertions, so the run has to be proven to have happened at
+    all: an agent that never launched writes nothing and satisfies both."""
     monkeypatch.setattr(tui, "interactive", lambda: True)
     out = io.StringIO()
     out.isatty = lambda: True  # type: ignore[method-assign]
@@ -242,8 +256,15 @@ def test_a_unit_on_a_board_does_not_clear_the_shared_line(folder, monkeypatch):
         def wait(self, timeout=None):
             return 0
 
-    monkeypatch.setattr(bf.subprocess, "Popen", lambda *a, **k: _Proc())
-    bf.launch_agent(folder, "prompt", stream=out, paint_to=lambda text: None,
-                    workdir=folder.parent / "work")
+    launched: list = []
+
+    def popen(*a, **k):
+        launched.append(a)
+        return _Proc()
+
+    monkeypatch.setattr(bf.subprocess, "Popen", popen)
+    ok, _ = bf.launch_agent(folder, "prompt", stream=out, paint_to=lambda text: None,
+                            workdir=folder.parent / "work")
+    assert ok and launched, "the agent must actually have run for this to mean anything"
     assert "\r\033[2K" not in out.getvalue()
     assert "\033[2J" not in out.getvalue(), "a board owns the screen, not the agent"
