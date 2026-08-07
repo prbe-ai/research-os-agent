@@ -208,11 +208,22 @@ def test_each_unit_writes_its_own_manifest(folder, state_dir, monkeypatch):
 
 
 class _FakeClient:
-    def __init__(self, fail: set[str] | None = None):
+    """Resolve-or-create, the two calls backfill actually makes.
+
+    Deliberately has NO `ensure_project`: that is the guarded path, and a fake
+    offering it would let the code drift back onto the method whose near-miss
+    guard cannot tell a sibling from a typo.
+    """
+
+    def __init__(self, fail: set[str] | None = None, existing: set[str] | None = None):
         self.made: list[str] = []
         self.fail = fail or set()
+        self.existing = existing or set()
 
-    def ensure_project(self, slug, name=None, description=None):
+    def resolve_project(self, slug):
+        return {"id": "u-" + slug, "slug": slug} if slug in self.existing else None
+
+    def create_project(self, slug, name=None, description=None):
         if slug in self.fail:
             raise RuntimeError("nope")
         self.made.append(slug)
@@ -244,6 +255,76 @@ def test_a_project_with_no_spec_still_gets_created_under_its_slug():
     made, problems = br.ensure_projects(client, bp.Plan(projects=[], assignments=[]),
                                         {"a": "orphan"})
     assert made == ["orphan"] and not problems
+
+
+def test_sibling_projects_do_not_block_each_other():
+    """The bug that killed four real imports.
+
+    `ensure_project` runs the near-miss guard against the namespace as it is
+    NOW -- which by the third call includes the two this loop created moments
+    earlier. It read the siblings as typos of each other, refused the last, and
+    left the rest behind as orphans."""
+    client = _FakeClient()
+    siblings = {"a": "odyssey-cluster-deploy", "b": "odyssey-protein-benchmarks",
+                "c": "odyssey-protein-lm"}
+    made, problems = br.ensure_projects(client, bp.Plan(projects=[], assignments=[]),
+                                        siblings)
+    assert not problems
+    assert sorted(made) == sorted(set(siblings.values()))
+
+
+def test_an_existing_project_is_reused_never_recreated():
+    """Dropping the guard must not start duplicating what is already there.
+
+    This is the property the guard was a proxy for, and it is enforced by the
+    resolve, not by string distance -- so it holds exactly, for the real case."""
+    client = _FakeClient(existing={"odyssey"})
+    made, problems = br.ensure_projects(client, bp.Plan(projects=[], assignments=[]),
+                                        {"a": "odyssey", "b": "esm3"})
+    assert not problems
+    assert client.made == ["esm3"], "an existing project must not be re-created"
+    assert sorted(made) == ["esm3", "odyssey"]
+
+
+def test_losing_a_create_race_resolves_instead_of_failing():
+    """Get-or-create promises the project EXISTS afterwards, not that we made
+    it. A concurrent process winning the create is not the caller's problem."""
+    from probe.sdk import errors
+
+    class _Racy(_FakeClient):
+        def __init__(self):
+            super().__init__()
+            self.attempts = 0
+
+        def resolve_project(self, slug):
+            # Absent on the first look, present once the race is lost.
+            return {"slug": slug} if self.attempts else None
+
+        def create_project(self, slug, name=None, description=None):
+            self.attempts += 1
+            raise errors.ConflictError("already exists")
+
+    client = _Racy()
+    made, problems = br.ensure_projects(client, bp.Plan(projects=[], assignments=[]),
+                                        {"a": "odyssey"})
+    assert made == ["odyssey"] and not problems
+
+
+def test_a_conflict_that_still_leaves_nothing_is_a_real_error():
+    """The swallow has to stay narrow: a 409 on a project that then still is
+    not there meant something other than a race."""
+    from probe.sdk import errors
+
+    class _Broken(_FakeClient):
+        def resolve_project(self, slug):
+            return None
+
+        def create_project(self, slug, name=None, description=None):
+            raise errors.ConflictError("something else")
+
+    made, problems = br.ensure_projects(_Broken(), bp.Plan(projects=[], assignments=[]),
+                                        {"a": "odyssey"})
+    assert made == [] and problems and "odyssey" in problems[0]
 
 
 # -- the approval screen -----------------------------------------------------

@@ -111,6 +111,7 @@ class _FakeClient:
     def __init__(self, existing=None):
         self.existing = existing
         self.ensured: list[tuple] = []
+        self.created: list[tuple] = []
 
     def resolve_project(self, slug):
         return self.existing
@@ -119,8 +120,18 @@ class _FakeClient:
         return {"id": project_id, "slug": "by-id"}
 
     def ensure_project(self, slug, name=None, **kw):
+        # The GUARDED path, still used by `resolve_anchor` -- one slug derived
+        # from a folder name that no human reviewed, which is what the near-miss
+        # guard is for.
         self.ensured.append((slug, name))
         return self.existing or {"id": FAKE_ID, "slug": slug}
+
+    def create_project(self, slug, name=None, description=None):
+        # The EXPLICIT path, used by a plan's projects: those slugs were shown
+        # to a human at the review gate, so the guard would be a third opinion
+        # with less information -- and the one that reads siblings as typos.
+        self.created.append((slug, name))
+        return {"id": FAKE_ID, "slug": slug}
 
     def list_anchored(self, anchor, anchor_id, **kw):
         return []
