@@ -32,7 +32,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
@@ -604,25 +604,107 @@ def agent_argv(
 #: quiet turn is indistinguishable from a hang -- the bug this replaced.
 _SPIN = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
-#: How an upload is recognised in either agent's event stream. Counting these
-#: is what turns "still going" into "14 of 37".
+#: How an upload is recognised in either agent's event stream.
+#:
+#: It no longer happens, and that is the point of the comment. Agents stopped
+#: running `artifact add` when the two-pass split landed -- the classify pass
+#: uploads nothing by design, and an import unit writes a manifest that ONE
+#: process enqueues afterwards. So the counter this drove sat at `0/204` for
+#: entire runs, in both passes, and looked like a hang on a working import.
+#: Kept because a stray `artifact add` is still worth counting if one appears.
 _UPLOAD_MARKER = "artifact add"
+
+#: Reads before an ETA is offered. An estimate from two files is noise wearing
+#: a number's clothes -- file sizes vary by orders of magnitude and the first
+#: reads include the agent's start-up.
+_ETA_FLOOR = 5
 
 
 @dataclass
 class Activity:
-    """Live state of one agent run, folded from its event stream."""
+    """Live state of one agent run, folded from its event stream.
+
+    PROGRESS IS FILES READ, not files uploaded. The denominator is the unit's
+    own file list -- exactly what the agent was told to read -- so the fraction
+    is real and the ETA derived from it means something. Counting uploads gave
+    a permanent zero (see `_UPLOAD_MARKER`).
+
+    `seen` is a set, not a counter: an agent re-reading a file it already read
+    must not advance the bar past what it has actually covered.
+    """
 
     total: int
     uploaded: int = 0
     doing: str = "starting up"
     ticks: int = 0
+    seen: set = field(default_factory=set)
+    queued: bool = False
 
-    def line(self, elapsed: float) -> str:
+    @property
+    def done(self) -> int:
+        """Files covered so far, never more than the denominator.
+
+        Clamped because an agent may legitimately read something outside its
+        unit -- a shared config, a README one directory up -- and `14/8` reads
+        as a bug in the tool rather than curiosity in the agent.
+        """
+        return min(len(self.seen) or self.uploaded, self.total) if self.total else 0
+
+    def eta(self, elapsed: float) -> str:
+        """`~2:05 left`, or "" when there is not enough to say.
+
+        Deliberately blank rather than optimistic: no reads yet, nothing left
+        to do, or too few samples all produce a number that would be invented.
+        """
+        done = self.done
+        if done < _ETA_FLOOR or done >= self.total or elapsed <= 0:
+            return ""
+        remaining = elapsed * (self.total - done) / done
+        mins, secs = divmod(int(remaining), 60)
+        return f"~{mins}:{secs:02d} left" if mins < 60 else "~over an hour left"
+
+    def line(self, elapsed: float, width: int = 46) -> str:
+        if self.queued:
+            return f"  ·  queued · 0/{self.total}"
         mins, secs = divmod(int(elapsed), 60)
-        done = f"{self.uploaded}/{self.total}" if self.uploaded else f"0/{self.total}"
-        doing = self.doing if len(self.doing) <= 46 else self.doing[:45] + "…"
-        return f"  {_SPIN[self.ticks % len(_SPIN)]} {mins}:{secs:02d} · {done} · {doing}"
+        parts = [
+            _SPIN[self.ticks % len(_SPIN)],
+            f"{mins}:{secs:02d}",
+            f"· {self.done}/{self.total}",
+        ]
+        eta = self.eta(elapsed)
+        if eta:
+            parts.append(f"· {eta}")
+        head = "  " + " ".join(parts) + " · "
+        room = max(12, width - (len(head) - len(f"  {_SPIN[0]} 0:00 · 0/0 · ")))
+        doing = self.doing if len(self.doing) <= room else self.doing[: room - 1] + "…"
+        return head + doing
+
+
+#: Commands that mean "the agent looked at this file". Codex has no Read tool
+#: event, so its progress has to be read out of the shell it runs.
+_READ_COMMANDS = ("cat", "head", "tail", "less", "more", "bat", "sed", "nl")
+
+
+def _read_target(command: str) -> str | None:
+    """The file a read-shaped shell command names, or None.
+
+    Conservative on purpose. Over-counting inflates the bar and the ETA with
+    it, so anything ambiguous -- a pipeline, a glob, a flag where the path
+    should be -- returns None and simply does not count. An under-reported bar
+    catches up; an over-reported one strands at "almost done".
+    """
+    text = " ".join(command.split())
+    for wrapper in ("/bin/zsh -lc ", "/bin/bash -lc ", "/bin/sh -c "):
+        if text.startswith(wrapper):
+            text = text[len(wrapper) :].strip("'\"")
+    if any(ch in text for ch in "|><*?"):
+        return None
+    parts = text.split()
+    if len(parts) < 2 or Path(parts[0]).name not in _READ_COMMANDS:
+        return None
+    targets = [p for p in parts[1:] if not p.startswith("-")]
+    return targets[-1] if len(targets) == 1 else None
 
 
 def _shorten(command: str) -> str:
@@ -678,7 +760,12 @@ def fold_event(raw: str, state: Activity) -> bool:
                     state.uploaded += 1
                 state.doing = str(args.get("description") or _shorten(command))
             elif args.get("file_path"):
-                state.doing = f"reading {Path(str(args['file_path'])).name}"
+                # THE PROGRESS SIGNAL. A unit is told to read a known list of
+                # files, so distinct reads against that list is a real fraction
+                # -- and the only one available, since agents no longer upload.
+                path = str(args["file_path"])
+                state.seen.add(path)
+                state.doing = f"reading {Path(path).name}"
             elif args.get("pattern"):
                 state.doing = f"searching {args['pattern']}"
             else:
@@ -694,6 +781,12 @@ def fold_event(raw: str, state: Activity) -> bool:
             if kind == "item.started":
                 if _UPLOAD_MARKER in command:
                     state.uploaded += 1
+                # Codex reads by shelling out, so its progress signal is the
+                # file a read-shaped command names -- there is no Read tool
+                # event to count. Same denominator, same fraction.
+                read = _read_target(command)
+                if read:
+                    state.seen.add(read)
                 state.doing = _shorten(command)
                 return True
         elif item.get("type") == "agent_message" and kind == "item.completed":
