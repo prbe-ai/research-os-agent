@@ -392,6 +392,13 @@ def run_units(
             [f"{u.project[:24]:<26}" for u in units],
         )
         board.open()
+        # EVERY ROW PAINTED UP FRONT. Only `concurrency` units start at once, so
+        # a board headed "Importing 6 unit(s)" showed three lines and three
+        # blanks -- and a blank row is indistinguishable from a row that is not
+        # there, which reads as three units having vanished. Saying "queued" is
+        # the difference between a queue and a bug.
+        for index, unit in enumerate(units):
+            board.update(index, bf.Activity(total=unit.files, queued=True).line(0.0))
 
     def one(pair: tuple[int, ledger_mod.Unit]) -> UnitOutcome:
         index, unit = pair
@@ -515,8 +522,17 @@ def enqueue_manifests(
             [
                 sys.executable, "-c",
                 "import sys; from probe.cli import main; sys.exit(main(sys.argv[1:]))",
+                # NO `--async`. It is a ROOT option, so after the subcommand
+                # Typer rejects it -- "Error: No such option: --async" -- and
+                # every manifest failed to enqueue while all six units reported
+                # success. 204 files read, described and manifested; 0 uploaded.
+                #
+                # Moving it before `artifact` would parse, but it is not wanted
+                # either: `--from-manifest` queues to the outbox and lets the
+                # drainer deliver "whether or not --async is set -- that is the
+                # point of the verb". So the flag is dropped, not relocated.
                 "artifact", "add", "--from-manifest", str(out.manifest),
-                "--project", project, "--async",
+                "--project", project,
             ],
             cwd=str(folder), capture_output=True, text=True,
         )
