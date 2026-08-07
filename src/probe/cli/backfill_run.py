@@ -33,6 +33,7 @@ move at the sizes this feature is for.
 from __future__ import annotations
 
 import json
+import sys
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -747,6 +748,46 @@ def _resolve_or_create(client, slug: str, *, name: str, description: str | None)
         return row
 
 
+def _ingest_summary(stdout: str) -> dict | None:
+    """The `{"enqueued": N, ...}` object out of `artifact add`'s output.
+
+    NOT `splitlines()[-1]`. That is what shipped, and the command prints
+    PRETTY-PRINTED JSON, so the last line is `}` -- which parses as nothing.
+    Every manifest then reported "could not read the ingest summary (['}'])"
+    and the run said "0 queued for upload" while all 204 rows sat in the outbox
+    delivering perfectly well. A reporting bug that reads exactly like total
+    data loss, on the step where bytes finally move.
+
+    Scanning for a balanced brace run instead also survives what else lands on
+    stdout: the version-update nudge prints there, and so does anything a
+    future release decides to say first.
+    """
+    best: dict | None = None
+    for data in bf._embedded_summaries(stdout, key="failures"):
+        best = data
+    if best is not None:
+        return best
+    # `failures` is absent when nothing failed, so fall back to the count --
+    # which is the field this is really after.
+    depth = 0
+    start = -1
+    for i, ch in enumerate(stdout):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                try:
+                    data = json.loads(stdout[start : i + 1])
+                except ValueError:
+                    continue
+                if isinstance(data, dict) and "enqueued" in data:
+                    best = data
+    return best
+
+
 def enqueue_manifests(
     folder: Path, outcomes: list[UnitOutcome], *, project_of: dict[str, str]
 ) -> tuple[int, list[str]]:
@@ -789,18 +830,96 @@ def enqueue_manifests(
             ],
             cwd=str(folder), capture_output=True, text=True,
         )
-        try:
-            summary = json.loads(proc.stdout.strip().splitlines()[-1])
+        summary = _ingest_summary(proc.stdout)
+        if summary is not None:
             enqueued += int(summary.get("enqueued") or 0)
             for failure in summary.get("failures") or []:
                 problems.append(f"{out.manifest.name} line {failure.get('line')}: "
                                 f"{failure.get('error')}")
-        except (ValueError, IndexError):
+        else:
             problems.append(
                 f"{out.manifest.name}: could not read the ingest summary "
                 f"({(proc.stderr or proc.stdout or '').strip().splitlines()[-1:] or ['no output']})"
             )
     return enqueued, problems
+
+
+#: How often the drain watcher re-counts the outbox. The queue is a directory
+#: of files, so this is a cheap listdir -- but not free, and nobody reads a
+#: number that changes faster than they can look at it.
+WATCH_POLL_S = 1.0
+
+
+def watch_outbox(total: int, *, stream=None, poll: float = WATCH_POLL_S) -> list[str]:
+    """Sit and watch the queue drain. Returns the closing lines.
+
+    OPTIONAL, and it has to be: the outbox is a background drainer precisely so
+    an import does not hold anyone's terminal, and on a big folder this runs for
+    a long time. Ctrl-C leaves the queue exactly where it was -- nothing here
+    touches it, it only counts -- so stopping the watch is not stopping the
+    upload, and the closing line says so rather than leaving that to be
+    guessed.
+
+    Reuses `bf.Activity` deliberately: this is the same question the import
+    screen answers ("how far along, how much longer") and a second progress
+    idiom for it would be a second thing to learn.
+    """
+    import time
+
+    from probe.cli import tui
+
+    from ..sdk.journal import Journal
+    from .main import _conn
+
+    journal = Journal(_conn.spool_dir)
+    out = stream if stream is not None else sys.stdout
+    live = hasattr(out, "isatty") and out.isatty()
+    state = bf.Activity(total=max(1, total), doing="draining")
+    started = time.monotonic()
+
+    def counts() -> tuple[int, int]:
+        return len(journal.pending()), len(journal.failed())
+
+    if live:
+        block = [*tui.wrap(f"Uploading {total:,} file(s)"), ""]
+        out.write("\033[3J\033[2J\033[H" + "\n" * tui.top_spacer(len(block) + 1))
+        for line in block:
+            out.write((" " * tui.left_pad() + line if line.strip() else "") + "\n")
+        out.flush()
+
+    pending, failed = counts()
+    try:
+        while pending:
+            # `done` reads from `seen`, and the outbox counts DOWN -- so the
+            # delivered set is synthesised from the difference rather than
+            # tracked per item. Nothing else needs the paths.
+            delivered = max(0, total - pending)
+            state.seen = set(range(delivered))
+            state.doing = f"{pending:,} left" + (f" · {failed:,} failed" if failed else "")
+            if live:
+                state.ticks += 1
+                out.write("\r\033[2K" + " " * tui.left_pad()
+                          + state.line(time.monotonic() - started))
+                out.flush()
+            time.sleep(poll)
+            pending, failed = counts()
+    except KeyboardInterrupt:
+        if live:
+            out.write("\r\033[2K")
+            out.flush()
+        return [f"Stopped watching. {pending:,} file(s) still queued — the drainer "
+                "keeps going in the background.",
+                "`probe outbox status` shows where it got to."]
+    finally:
+        if live:
+            out.write("\r\033[2K")
+            out.flush()
+
+    if failed:
+        return [f"{total - failed:,} of {total:,} delivered · {failed:,} failed.",
+                "`probe outbox status --verbose` lists them; re-running the "
+                "import retries."]
+    return [f"All {total:,} file(s) delivered."]
 
 
 def execute(
@@ -1017,4 +1136,18 @@ def execute(
     if failed:
         report.add("", f"{len(failed)} unit(s) did not finish. Re-running is safe — "
                        "identical content is deduplicated server-side.")
+
+    # THE OFFER, not the default. Queueing is where the import's job ends --
+    # the drainer is a background process for the good reason that nobody
+    # should have to hold a terminal open for it. But "0 queued for upload"
+    # read as total failure for two whole runs while 204 files delivered
+    # perfectly well behind it, and the thing that would have settled it in
+    # one glance is watching the number go down.
+    if interactive and not yes and enqueued:
+        answer = tui.page(
+            report.lines + ["", f"{enqueued:,} file(s) are queued."],
+            prompt="Enter to watch them upload, or q to leave it running: ",
+        )
+        if answer.strip().lower() not in {"q", "quit", "n", "no"}:
+            return [*report.lines, "", *watch_outbox(enqueued)]
     return report.lines
