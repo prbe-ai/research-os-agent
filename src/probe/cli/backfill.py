@@ -1026,11 +1026,13 @@ def choose_directory(start: Path):
 
         # The path is the first row now, so repeating it in the block above the
         # question would print it twice on every screen.
-        message = tui.framed(
-            "Import existing work into Probe.",
-            [],
-            "Which folder?",
-        )
+        # PINNED, so it cannot scroll away. questionary renders its message
+        # INSIDE the scrolling choice region, so on a directory with a hundred
+        # children the "Which folder?" line and the path went off the top edge
+        # the moment you moved the cursor -- the screen then showed a list with
+        # no indication of where it was a list OF. The header band sits outside
+        # that region and always shows the folder you are standing in.
+        message = tui.framed("Import existing work into Probe.", [], "Which folder?")
         picked = tui.ask(
             questionary.select(
                 message,
@@ -1040,6 +1042,7 @@ def choose_directory(start: Path):
                 qmark=tui.qmark(),
                 pointer=tui.pointer(),
             ),
+            header=[f"Folder: {here}", f"  {own.describe()}"],
             height=tui.content_height(message, choices),
         )
         if picked is None or picked is tui.BACK:
