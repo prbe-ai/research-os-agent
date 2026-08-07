@@ -447,3 +447,69 @@ def to_jsonl(evidence: Evidence) -> str:
             row["mtime_span"] = [int(min(stamps)), int(max(stamps))]
         lines.append(json.dumps(row, ensure_ascii=False))
     return "\n".join(lines)
+
+
+# -- fitting the evidence into a context window ------------------------------
+
+#: Rough tokens per character. English prose is ~4; this evidence is JSON --
+#: punctuation, quoted keys, paths -- which tokenises WORSE, so 3.2 is used and
+#: the estimate deliberately runs high. Guessing low is the expensive direction:
+#: it sends a prompt the model rejects after the walk has already been paid for.
+_CHARS_PER_TOKEN = 3.2
+
+#: Evidence that fits this goes to ONE agent, whole folder in view. That is the
+#: better classification when it is possible -- every file is judged against
+#: every other -- so chunking is a fallback, not the default.
+#:
+#: 90k leaves room in a 200k window for the instructions, the agent's reasoning
+#: and an assignment per row on the way out.
+SINGLE_SHOT_TOKEN_BUDGET = 90_000
+
+#: Evidence tokens per chunk once chunking is on.
+CHUNK_TOKEN_BUDGET = 55_000
+
+#: Rows per chunk, which is a SEPARATE limit and not a redundant one. The assign
+#: pass emits one object per row, so a chunk that fits the input budget on tiny
+#: rollup rows can still ask for more output than the model will produce -- and
+#: a truncated final message loses assignments silently.
+CHUNK_MAX_ROWS = 500
+
+
+def estimate_tokens(text: str) -> int:
+    """Roughly how many tokens `text` costs. Deliberately pessimistic."""
+    return int(len(text) / _CHARS_PER_TOKEN) + 1
+
+
+def chunk_lines(
+    jsonl: str,
+    *,
+    token_budget: int = CHUNK_TOKEN_BUDGET,
+    max_rows: int = CHUNK_MAX_ROWS,
+) -> list[list[str]]:
+    """Split evidence rows into chunks that each fit a prompt.
+
+    Rows are kept in their emitted order, which is not cosmetic: `to_jsonl`
+    lists sampled files then rollups sorted by directory, so neighbours in the
+    list are usually neighbours on disk. Shuffling them would scatter each
+    project's evidence across every chunk and leave no chunk able to say
+    anything specific.
+
+    A single row larger than the budget still gets its own chunk rather than
+    being dropped or split -- half a JSON object is not evidence, and a
+    classification silently missing files is the one outcome worth failing over.
+    """
+    chunks: list[list[str]] = []
+    current: list[str] = []
+    size = 0
+    for line in jsonl.splitlines():
+        if not line.strip():
+            continue
+        cost = estimate_tokens(line)
+        if current and (size + cost > token_budget or len(current) >= max_rows):
+            chunks.append(current)
+            current, size = [], 0
+        current.append(line)
+        size += cost
+    if current:
+        chunks.append(current)
+    return chunks

@@ -1057,8 +1057,13 @@ def count_landed(client, project: str) -> tuple[int, bool]:
         return -1, False
 
 
-def _embedded_summaries(text: str):
-    """Every ``{...}`` in `text` that parses and carries a ``projects`` list.
+def _embedded_summaries(text: str, key: str = "projects"):
+    """Every ``{...}`` in `text` that parses and carries a list under `key`.
+
+    `key` exists because the chunked classification asks for three different
+    shapes -- a survey, a project list, a slice of assignments -- and each has
+    to be told apart from the others in the same stream. Defaulting to
+    ``projects`` keeps every existing caller reading the same thing.
 
     The summary does not arrive on a line of its own. Both agents are run with
     an EVENT STREAM (`agent_argv`), so the closing JSON is a STRING INSIDE an
@@ -1084,7 +1089,7 @@ def _embedded_summaries(text: str):
                         data = json.loads(blob[start : i + 1])
                     except ValueError:
                         continue
-                    if isinstance(data, dict) and isinstance(data.get("projects"), list):
+                    if isinstance(data, dict) and isinstance(data.get(key), list):
                         yield data
 
     def strings(node):
@@ -1108,7 +1113,7 @@ def _embedded_summaries(text: str):
     except ValueError:
         return
     for blob in strings(envelope):
-        if "projects" in blob:
+        if key in blob:
             yield from scan(blob)
 
 
