@@ -7,6 +7,7 @@ off.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 
@@ -335,6 +336,7 @@ def test_the_plan_lists_only_what_actually_changes():
 def test_no_change_means_no_plan():
     caps = _caps(
         tracking_plugin_installed=True,
+        capture_plugin_installed=True,
         logged_in_as="richard@prbe.ai",
         capture_token_sources=(TokenSource.PAIRED_FILE,),
         auto_update_enabled=True,
@@ -3045,6 +3047,60 @@ def test_ticking_capture_clears_the_killswitch_even_when_the_plugin_is_present(m
 
     assert cleared, "the killswitch must be cleared when capture is ticked on"
     assert installed == [], "a present plugin must still not be reinstalled"
+
+
+def test_a_valid_pairing_does_not_hide_a_manually_removed_capture_plugin(monkeypatch):
+    """A direct plugin removal intentionally leaves durable pairing state.
+
+    The manager must inspect both halves of capture: a valid token is not a
+    substitute for the hook plugin that starts the uploader.
+    """
+    import sys
+
+    import probe.cli.main  # noqa: F401
+    from probe.cli import claude_cli
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+
+    cli_main = sys.modules["probe.cli.main"]
+    installed: list[str] = []
+    before = _caps(
+        agent_source="codex",
+        capture_plugin_installed=False,
+        capture_token_sources=(TokenSource.PAIRED_FILE,),
+        capture_credential_valid=True,
+        plugins_verified=True,
+    )
+    after = dataclasses.replace(before, capture_plugin_installed=True)
+
+    monkeypatch.setenv("PROBE_AGENT", "codex")
+    monkeypatch.setattr(tui, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "interactive", lambda: False)
+    monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
+    monkeypatch.setattr(
+        wizard,
+        "install_plugin",
+        lambda name, **kw: installed.append(name) or claude_cli.Result(ok=True),
+    )
+    monkeypatch.setattr(doctor_impl, "collect", lambda *a, **k: after)
+    monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
+
+    cli_main._run_wizard_action(
+        Action.CONFIGURE,
+        caps=before,
+        base_now="https://api.test",
+        yes=True,
+        tracking=False,
+        capture=True,
+        auto_update=None,
+        agent_rules=False,
+        uninstall=False,
+        configured=True,
+    )
+
+    assert installed == ["probe-research-tap"]
 
 
 def test_every_failure_message_the_wizard_emits_is_classified_as_one():

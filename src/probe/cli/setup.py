@@ -504,6 +504,14 @@ def plan(caps: Capabilities, selection: Selection) -> list[str]:
     for capability, want in wanted.items():
         have = current[capability]
         if want == have:
+            # Capture's runtime switch intentionally describes credential +
+            # killswitch state, independently of plugin installation. A direct
+            # `codex plugin remove` therefore leaves capture_on=True while the
+            # hook that starts the uploader is absent. Keep that independence,
+            # but make the manager plan the missing install explicitly.
+            if capability is Capability.CAPTURE and want and not caps.capture_plugin_installed:
+                steps.append(f"enable {PLAN_LABELS[capability]}")
+                continue
             # A STALE block is installed-and-wrong, so want == have and this
             # loop skipped it -- plan() came back empty, the caller returned
             # "Nothing to change", and the refresh branch below it never ran.

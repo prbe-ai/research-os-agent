@@ -1329,7 +1329,11 @@ def _run_wizard_action(
             )
         )
 
-    if selection.capture and (not caps.capture_on or caps.legacy_capture_plugin_installed):
+    if selection.capture and (
+        not caps.capture_plugin_installed
+        or not caps.capture_on
+        or caps.legacy_capture_plugin_installed
+    ):
         # NOT gated on "plugin absent": the killswitch is cleared here too, and
         # a killswitched machine with the plugin already installed needs that
         # clear or capture stays off while the run reports success.

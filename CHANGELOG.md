@@ -94,6 +94,10 @@
 - **Upgrades retire the standalone Codex tap.** The wizard removes
   `prbe-codex-tap-plugin@prbe-ai` before enabling the unified capture plugin,
   preventing two lifecycle hooks from racing over the same session.
+- **Re-running the wizard reinstalls a manually removed capture plugin even
+  when its pairing token remains valid.** Plugin presence and credential health
+  are checked independently, so an uninstall/reinstall test cannot leave
+  capture reported on with no lifecycle hook installed.
 
 - **`probe run set <petname>` 422'd instead of amending the run.** `PATCH
   /v1/runs/{run_id}` is UUID-typed, and this verb passed the ref through raw, so
