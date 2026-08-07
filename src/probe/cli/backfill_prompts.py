@@ -463,8 +463,22 @@ Finish with JSON on its own line:
 #           so it parallelises and a failed chunk retries alone.
 
 
-def survey(*, root, evidence_jsonl: str, index: int, total: int, work_dir: str) -> str:
+#: Said to every chunked pass when the sample budget stopped short. The chunked
+#: route fires on exactly the folders that blow that cap, so this is true in
+#: essentially every chunked run -- and an agent that believes it saw the
+#: contents reports confidence it has not earned.
+TRUNCATED_CAVEAT = """
+NOTE: the sample budget was reached, so some files are listed with no contents.
+Where you are going on a path and its neighbours rather than on what a file
+says, mark it low confidence."""
+
+
+def survey(
+    *, root, evidence_jsonl: str, index: int, total: int, work_dir: str,
+    truncated: bool = False,
+) -> str:
     """Describe one slice of a folder. Names nothing globally."""
+    caveat = TRUNCATED_CAVEAT if truncated else ""
     return f"""\
 You are reading part of a research folder to work out what is in it.
 
@@ -482,6 +496,7 @@ sampled file and `sample` is what it says; a row with "dir" is every remaining
 file in that directory rolled up, counted rather than listed.
 
 {evidence_jsonl}
+{caveat}
 
 For each distinct line of work you can see, say what it is, what in this slice
 shows it, and roughly how much of the slice belongs to it. Be specific -- "an
@@ -498,7 +513,9 @@ Answer with JSON on its own line and nothing after it:
 """
 
 
-def name_projects(*, root, findings_json: str, existing: list[str]) -> str:
+def name_projects(
+    *, root, findings_json: str, existing: list[str], feedback: str = "",
+) -> str:
     """Turn every slice's findings into ONE project list. The only global step."""
     known = (
         "Projects that already exist. Prefer these over inventing new ones:\n    "
@@ -506,11 +523,23 @@ def name_projects(*, root, findings_json: str, existing: list[str]) -> str:
         if existing
         else "No projects exist yet. You are naming them for the first time."
     )
+    correction = (
+        f"""
+THE REVIEWER HAS SEEN A PREVIOUS ANSWER AND SAYS:
+
+    {feedback}
+
+Apply it, and apply what it IMPLIES -- a correction is usually a rule, not a
+one-off. It outranks your own reading of the slices where the two disagree.
+"""
+        if feedback
+        else ""
+    )
     return f"""\
 You are deciding how one research folder should be organised in Probe.
 
 FOLDER: {root}
-
+{correction}
 The folder was read in slices. Below is what each slice reported. You are NOT
 seeing the files -- you are seeing every slice's account of them, which is the
 whole folder, and deciding the project list from it.
@@ -546,9 +575,11 @@ Answer with JSON on its own line and nothing after it:
 
 
 def assign_chunk(
-    *, root, evidence_jsonl: str, projects: str, index: int, total: int, work_dir: str
+    *, root, evidence_jsonl: str, projects: str, index: int, total: int,
+    work_dir: str, truncated: bool = False,
 ) -> str:
     """Map one slice's rows onto an already-decided project list."""
+    caveat = TRUNCATED_CAVEAT if truncated else ""
     return f"""\
 You are filing part of a research folder into projects that are already decided.
 
@@ -567,6 +598,7 @@ EVIDENCE. One JSON object per line. A row with "path" is one file. A row with
 "dir" value, exactly as written, and every file under it goes with it.
 
 {evidence_jsonl}
+{caveat}
 
 Files written within minutes of each other are usually one run, so `mtime` and
 `mtime_span` group work the directory tree does not.
