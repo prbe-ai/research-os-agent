@@ -33,7 +33,10 @@ CONTENT_WIDTH = 76
 #: same at the bottom, where a choice list ending on the last row looks like a
 #: list with more in it. Two rows of air says "this is the whole screen"
 #: without spending a terminal on whitespace.
-MARGIN = 2
+#: Blank rows kept above and below every framed screen. Three, not one: at one
+#: the content reads as welded to the terminal chrome, and at two a prompt whose
+#: message block scrolls still ends up with its first line against the edge.
+MARGIN = 3
 
 
 def interactive() -> bool:
