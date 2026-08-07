@@ -33,8 +33,12 @@ def main() -> int:
     if not (backend / "app").is_dir():
         parser.error(f"not a research-os checkout: {backend}")
 
-    agent_venv_python = ROOT / ".venv/bin/python"
-    agent_python = str(agent_venv_python if agent_venv_python.is_file() else Path(sys.executable))
+    # Use the interpreter that launched the gate. A repository `.venv` can be
+    # an editable environment (or even a symlink) owned by another worktree;
+    # preferring it can run current tests against stale imported source and
+    # manufacture a red pre-release result. CI already launches this script in
+    # its prepared environment, and local callers can do the same explicitly.
+    agent_python = str(Path(sys.executable))
 
     run(
         [
