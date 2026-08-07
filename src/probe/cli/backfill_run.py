@@ -823,7 +823,8 @@ def _ingest_summary(stdout: str) -> dict | None:
 
 
 def enqueue_manifests(
-    folder: Path, outcomes: list[UnitOutcome], *, project_of: dict[str, str]
+    folder: Path, outcomes: list[UnitOutcome], *, project_of: dict[str, str],
+    ledger: ledger_mod.Ledger | None = None,
 ) -> tuple[int, list[str]]:
     """Hand every unit's manifest to `artifact add --from-manifest`.
 
@@ -866,7 +867,14 @@ def enqueue_manifests(
         )
         summary = _ingest_summary(proc.stdout)
         if summary is not None:
-            enqueued += int(summary.get("enqueued") or 0)
+            landed = int(summary.get("enqueued") or 0)
+            enqueued += landed
+            # RECORDED SEPARATELY from the unit's DONE. A unit is done when its
+            # manifest exists; this is the only record that its rows reached
+            # the queue, and the gap between the two is where a dropped
+            # connection lands.
+            if ledger is not None:
+                ledger.record_enqueued(out.unit.unit_id, landed)
             for failure in summary.get("failures") or []:
                 problems.append(f"{out.manifest.name} line {failure.get('line')}: "
                                 f"{failure.get('error')}")
@@ -1028,6 +1036,98 @@ def _execute(
     work_dir = ledger.path.parent / f"{ledger.path.stem}-manifests"
     work_dir.mkdir(parents=True, exist_ok=True)
 
+    # RECOVER A LOST ENQUEUE FIRST, and without an agent. Units are marked
+    # DONE when their manifest exists, but enqueueing resolves the project slug
+    # over the network -- so a connection lost at that moment left every unit
+    # DONE, the outbox empty, and nothing outstanding. The next run then
+    # re-classified the entire folder while complete manifests sat on disk.
+    #
+    # Ahead of the resume check because it is the cheapest possible recovery:
+    # one `artifact add` per manifest, no re-reading and no model.
+    stranded = state.unenqueued() if state.planned else []
+    recovered_count = 0
+    if stranded:
+        present = [r for r in stranded
+                   if (work_dir / f"{r.unit.unit_id}.jsonl").exists()]
+        # LOST MANIFESTS ARE NOT RECOVERED, AND SAYING SO IS THE POINT. The
+        # scratch dir can be reaped while the ledger survives, and a unit whose
+        # manifest is gone cannot be re-queued from anything. Dropping it
+        # silently made the folder permanently un-importable: every later run
+        # reported "nothing else was left to do" having done nothing at all.
+        lost = [r for r in stranded if r not in present]
+        report.add(f"Re-queueing {len(present)} manifest(s) that never reached "
+                   "the upload queue.")
+        problems: list[str] = []
+        if present:
+            recovered = [
+                UnitOutcome(unit=r.unit, ok=True,
+                            manifest=work_dir / f"{r.unit.unit_id}.jsonl",
+                            rows=r.enqueued)
+                for r in present
+            ]
+            recovered_count, problems = enqueue_manifests(
+                folder, recovered,
+                project_of={o.unit.unit_id: o.unit.project for o in recovered},
+                ledger=ledger,
+            )
+            report.add(f"{recovered_count:,} file(s) re-queued.")
+            for problem in problems[:3]:
+                report.add(f"  {problem}")
+            state = ledger.read()
+        if lost:
+            report.add(f"{len(lost)} manifest(s) are gone from the scratch "
+                       "directory and cannot be re-queued — those files will be "
+                       "read again below.")
+        # ONLY WHEN THE RECOVERY ACTUALLY WORKED. Returning here on a failed
+        # re-queue reports the exact failure this path exists to fix as a
+        # finished job, and points at an outbox that is empty. A failure falls
+        # through instead, so the run reaches the credential guard and the
+        # classify path like any other.
+        if not state.outstanding() and not lost and recovered_count and not problems:
+            report.add("", "Nothing else was left to do. The queue drains in the "
+                           "background; `probe outbox status` shows how much has "
+                           "landed.")
+            if interactive and not yes:
+                answer = tui.page(
+                    report.lines,
+                    prompt="Enter to watch them upload, or q to leave it running: ",
+                )
+                if answer.strip().lower() not in {"q", "quit", "n", "no"}:
+                    return [*report.lines, "", *watch_outbox(recovered_count)]
+            return report.lines
+        if not state.outstanding() and not lost:
+            report.add("", "The re-queue did not succeed. Re-running is safe — "
+                           "the manifests are still on disk.")
+            return report.lines
+
+    # ALREADY IMPORTED. A finished import used to be indistinguishable from no
+    # import at all: nothing outstanding meant the run fell straight through to
+    # a fresh classification, paying for the whole expensive pass again and
+    # filing the same folder a second time. Content dedup keeps that from
+    # creating duplicate artifacts, so it was invisible -- just slow, and quietly
+    # able to invent DIFFERENT project names the second time.
+    #
+    # The census is what says whether it is still the same folder. Fewer or more
+    # files than were imported means the folder moved on and deserves another
+    # look; an identical count means there is genuinely nothing to do.
+    if (
+        state.planned
+        and state.approved_at
+        and not state.outstanding()
+        and not state.unenqueued()
+        and state.census_files == census.files
+    ):
+        done = len(state.units)
+        report.add(
+            f"{folder} was already imported: {state.census_files:,} files into "
+            f"{len(state.projects)} project(s) across {done} unit(s).",
+            "",
+            "Nothing has changed on disk since, so there is nothing to do.",
+            "Add or change files and re-run to import the difference, or use "
+            "`probe artifact list --project <slug>` to see what landed.",
+        )
+        return report.lines
+
     # RESUME: a plan already approved means the classification stands.
     if state.planned and state.approved_at and state.outstanding():
         units = [r.unit for r in state.outstanding()]
@@ -1185,7 +1285,11 @@ def _execute(
     )
     report.units_done = sum(1 for o in outcomes if o.ok)
 
-    enqueued, problems = enqueue_manifests(folder, outcomes, project_of=assigned_project)
+    enqueued, problems = enqueue_manifests(folder, outcomes,
+                                          project_of=assigned_project, ledger=ledger)
+    # Both passes. Reporting only the second undercounts by whatever the
+    # recovery re-queued, and then overstates how much was left behind.
+    enqueued += recovered_count
     report.enqueued = enqueued
 
     report.add(f"Imported {folder}")

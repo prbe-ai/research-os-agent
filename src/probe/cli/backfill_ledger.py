@@ -84,8 +84,38 @@ class UnitRecord:
     state: UnitState = UnitState.PENDING
     session_id: str | None = None
     attempts: int = 0
+    #: Rows the AGENT wrote into the manifest. Not proof of anything reaching
+    #: storage -- see `delivered`.
     enqueued: int = 0
+    #: Rows this unit's manifest handed to the outbox. NONE means the enqueue
+    #: was never ATTEMPTED; 0 means it ran and nothing landed.
+    #:
+    #: The distinction is load-bearing twice over. A unit is marked DONE the
+    #: moment its manifest exists -- before the enqueue runs at all -- so a
+    #: connection lost at that moment leaves DONE units, an empty outbox and
+    #: nothing outstanding, and the next run re-classified the whole folder
+    #: while complete manifests sat unused on disk. That is what None detects.
+    #:
+    #: And 0 must NOT read the same way, or a manifest whose rows are all
+    #: rejected (the files were deleted after classification, say) is re-queued
+    #: on every run forever, each one appending another ledger line and
+    #: returning early so nothing else can ever happen.
+    delivered: int | None = None
     error: str | None = None
+
+    @property
+    def needs_enqueue(self) -> bool:
+        """Finished its agent, wrote rows, and the enqueue never RAN.
+
+        Not "delivered nothing" -- see `delivered`. An enqueue that ran and
+        rejected every row has been tried; retrying it forever is a loop, not
+        a recovery.
+        """
+        return (
+            self.state is UnitState.DONE
+            and self.enqueued > 0
+            and self.delivered is None
+        )
 
 
 @dataclass
@@ -99,6 +129,8 @@ class State:
     projects: list[str] = field(default_factory=list)
     units: dict[str, UnitRecord] = field(default_factory=dict)
     approved_at: str | None = None
+    #: Whether this ledger's plan was written by a build that records delivery.
+    tracks_delivery: bool = False
 
     @property
     def planned(self) -> bool:
@@ -120,6 +152,22 @@ class State:
             for r in self.units.values()
             if r.state in (UnitState.PENDING, UnitState.RUNNING, UnitState.FAILED)
         ]
+
+    def unenqueued(self) -> list[UnitRecord]:
+        """Units whose manifest is written but whose enqueue never ran.
+
+        Recoverable WITHOUT an agent: the manifest is on disk and complete, so
+        this costs one `artifact add` rather than re-reading the folder. Kept
+        apart from `outstanding()` for that reason -- they need a different,
+        much cheaper thing done to them.
+
+        EMPTY for a plan that predates delivery tracking. Those ledgers record
+        no deliveries at all, so every unit in them looks stranded and the
+        first run after an upgrade would re-queue an entire drive.
+        """
+        if not self.tracks_delivery:
+            return []
+        return [r for r in self.units.values() if r.needs_enqueue]
 
     def progress(self) -> tuple[int, int]:
         done = sum(1 for r in self.units.values() if r.state is UnitState.DONE)
@@ -217,6 +265,12 @@ class Ledger:
         self._append(
             {
                 "t": "plan",
+                # SCHEMA MARKER. Ledgers written before delivery was tracked
+                # carry no `enqueued` records, so every DONE unit in them would
+                # read as never-enqueued and the whole folder would be re-queued
+                # on the first run after upgrading. Absent means "cannot tell",
+                # and cannot-tell must mean leave it alone.
+                "tracks_delivery": True,
                 "projects": list(projects),
                 "units": [
                     {"unit_id": u.unit_id, "project": u.project, "paths": list(u.paths)}
@@ -245,6 +299,14 @@ class Ledger:
                 "error": error,
             }
         )
+
+    def record_enqueued(self, unit_id: str, delivered: int) -> None:
+        """What this unit's manifest actually handed to the outbox.
+
+        Appended AFTER the enqueue, so the difference between "the agent wrote
+        rows" and "the rows are queued" survives a crash between the two.
+        """
+        self._append({"t": "enqueued", "unit_id": unit_id, "delivered": delivered})
 
     # -- reading -------------------------------------------------------------
 
@@ -280,6 +342,7 @@ class Ledger:
                 state.census_files = int(rec.get("files") or 0)
                 state.census_bytes = int(rec.get("bytes") or 0)
             elif kind == "plan":
+                state.tracks_delivery = bool(rec.get("tracks_delivery"))
                 state.projects = [p for p in (rec.get("projects") or []) if isinstance(p, str)]
                 state.units = {}
                 for u in rec.get("units") or []:
@@ -307,6 +370,10 @@ class Ledger:
                     found.session_id = rec.get("session_id") or found.session_id
                 found.enqueued = int(rec.get("enqueued") or found.enqueued)
                 found.error = rec.get("error")
+            elif kind == "enqueued":
+                found = state.units.get(str(rec.get("unit_id") or ""))
+                if found is not None:
+                    found.delivered = int(rec.get("delivered") or 0)
         return state
 
 
