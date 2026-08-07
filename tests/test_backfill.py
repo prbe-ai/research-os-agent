@@ -735,13 +735,19 @@ def test_every_agent_has_menu_copy():
         assert len(detail) + 5 <= 80
 
 
-def test_the_copy_does_not_claim_codex_is_tool_restricted():
-    """Codex confines WHERE commands act, not WHICH run. Claiming otherwise
-    would be a security promise the sandbox does not make."""
+def test_both_agents_promise_the_same_thing_about_the_folder():
+    """Parity is the point: one property, stated the same way for both.
+
+    The old copy described two different confinements, and the difference was
+    not a nuance -- it advertised Codex as free to run "any command" inside the
+    folder, which was true and was the bug. Whichever agent someone picks, the
+    promise about their research directory must be the same one."""
     claude_detail = backfill.AGENT_COPY[backfill.Agent.CLAUDE][1]
     codex_detail = backfill.AGENT_COPY[backfill.Agent.CODEX][1]
-    assert "cannot write" in claude_detail
-    assert "any command" in codex_detail
+    for detail in (claude_detail, codex_detail):
+        assert "without modifying it" in detail
+    # The MECHANISM differs and saying so is honest; the PROMISE does not.
+    assert claude_detail != codex_detail
 
 
 def test_the_agent_binary_is_resolved_off_path_not_a_shell(monkeypatch):
@@ -754,13 +760,54 @@ def test_the_agent_binary_is_resolved_off_path_not_a_shell(monkeypatch):
     assert "shell=True" not in source
 
 
-def test_agent_toolset_is_probe_and_reads_only():
-    # This runs unattended over folders nobody audited: no write, no delete, no
-    # network beyond the probe CLI itself.
-    assert backfill.AGENT_TOOLS == "Bash(probe:*),Read,Glob,Grep,Task"
-    assert "Write" not in backfill.AGENT_TOOLS
-    assert "Edit" not in backfill.AGENT_TOOLS
+def test_the_agent_can_write_its_manifest_but_bash_stays_scoped():
+    """The agent's whole output is a file, so Write is not optional.
+
+    It shipped without one for a release: the import prompt said "Write JSONL
+    to ..." and the allowlist had no Write tool, so every unit failed having
+    read the entire folder first. The confinement that replaced it is the deny
+    rule on the folder -- which only holds while Bash stays scoped to `probe`.
+    An unscoped Bash walks around it with one `echo >`."""
+    assert "Write" in backfill.AGENT_TOOLS
+    assert "Bash(probe:*)" in backfill.AGENT_TOOLS
+    assert "Bash," not in backfill.AGENT_TOOLS + ","
     assert "WebFetch" not in backfill.AGENT_TOOLS
+
+
+def test_the_deny_rule_is_spelled_edit_because_write_rules_are_ignored():
+    """`Write(...)` deny rules are a SILENT no-op in Claude Code.
+
+    The binary says so itself -- "is not matched by file permission checks ...
+    only Edit(path) rules are" -- and then carries on with the folder writable.
+    Verified against the real binary both ways on 2026-08-06. This is the one
+    line standing between an unattended agent and someone's research directory,
+    so it is asserted rather than assumed."""
+    rule = backfill.readonly_settings(Path("/drive/research"))
+    assert '"deny"' in rule
+    assert "Edit(/drive/research/**)" in rule
+    assert "Write(" not in rule
+
+
+def test_a_folder_that_cannot_be_expressed_as_a_rule_is_refused(tmp_path, monkeypatch):
+    """A rule that fails to parse does not fail loudly -- it stops denying.
+
+    `Research (old)` is an ordinary macOS folder name, and a permission rule
+    delimits its argument with the very parentheses in it. Refusing beats
+    running unconfined and calling it protected."""
+    folder = tmp_path / "Research (old)"
+    folder.mkdir()
+    assert backfill.unruleable(folder)
+
+    launched: list = []
+    monkeypatch.setattr(backfill.subprocess, "Popen", lambda *a, **k: launched.append(a))
+    ok, msg = backfill.launch_agent(
+        folder, "prompt", agent=backfill.Agent.CLAUDE, workdir=tmp_path / "work"
+    )
+    assert ok is False
+    assert "could not be protected" in msg
+    assert launched == [], "the agent must not run at all"
+    # Codex needs no pattern, so the same folder is fine for it.
+    assert not backfill.unruleable(tmp_path / "plain")
 
 
 def test_missing_claude_is_a_message_not_a_traceback(tmp_path, monkeypatch):

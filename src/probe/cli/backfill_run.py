@@ -106,6 +106,7 @@ def classify(
     *,
     agent: bf.Agent,
     existing: list[str],
+    work_dir: Path,
     stream=None,
 ) -> tuple[plan_mod.Plan | None, str]:
     """Run the classification agent. Returns ``(plan, tail)``.
@@ -122,11 +123,14 @@ def classify(
         evidence_jsonl=evidence_mod.to_jsonl(ev),
         existing=existing,
         truncated=ev.sample_budget_hit,
+        work_dir=str(work_dir),
     )
     ok, tail = bf.launch_agent(
         folder,
         prompt,
         agent=agent,
+        workdir=work_dir,
+        heading=f"Reading {folder.name} — {ev.total_files:,} files",
         total=ev.total_files,
         timeout=CLASSIFY_TIMEOUT_S,
         stream=stream,
@@ -185,9 +189,10 @@ def run_unit(
     *,
     agent: bf.Agent,
     ledger: ledger_mod.Ledger,
-    manifest_dir: Path,
+    work_dir: Path,
     resume: str | None = None,
     stream=None,
+    paint_to=None,
 ) -> UnitOutcome:
     """One agent, one project, one bounded set of files.
 
@@ -195,8 +200,12 @@ def run_unit(
     unit recorded as started with no terminal record is the crash signal, and it
     is the only reason a resume knows the difference between "not begun" and
     "died halfway".
+
+    `work_dir` is where the manifest goes, and it is deliberately NOT under the
+    folder being imported: the agent may write here and nowhere else, so the
+    import cannot leave a trace in the customer's directory.
     """
-    manifest = manifest_dir / f"{unit.unit_id}.jsonl"
+    manifest = work_dir / f"{unit.unit_id}.jsonl"
     session = new_session_id() if agent is bf.Agent.CLAUDE else None
     ledger.start_unit(unit.unit_id, session_id=session)
 
@@ -210,11 +219,14 @@ def run_unit(
         folder,
         prompt,
         agent=agent,
+        workdir=work_dir,
+        heading=f"Importing into {unit.project}",
         total=unit.files,
         timeout=UNIT_TIMEOUT_S,
         stream=stream,
         session_id=session,
         resume=resume,
+        paint_to=paint_to,
     )
     rows = _manifest_rows(manifest)
     # The agent's own account is never the authority. A unit that reports
@@ -266,7 +278,7 @@ def run_units(
     *,
     agent: bf.Agent,
     ledger: ledger_mod.Ledger,
-    manifest_dir: Path,
+    work_dir: Path,
     concurrency: int = DEFAULT_CONCURRENCY,
     sessions: dict[str, str] | None = None,
     stream=None,
@@ -276,20 +288,40 @@ def run_units(
     `sessions` maps a unit id to a session to resume, so a unit interrupted
     mid-turn keeps what it had already read. The ledger decides WHICH units run;
     this only decides whether a rerun starts cold.
+
+    Concurrent units share ONE screen through a `tui.Board` -- a row each,
+    addressed absolutely. Left to themselves they all repaint the same line and
+    two of the three are invisible.
     """
     if not units:
         return []
+    from probe.cli import tui
+
     sessions = sessions or {}
     workers = max(1, min(concurrency, len(units)))
 
-    def one(unit: ledger_mod.Unit) -> UnitOutcome:
+    board = None
+    if stream is None and tui.interactive():
+        board = tui.Board(
+            f"Importing {len(units)} unit(s)",
+            [f"{u.project[:24]:<26}" for u in units],
+        )
+        board.open()
+
+    def one(pair: tuple[int, ledger_mod.Unit]) -> UnitOutcome:
+        index, unit = pair
         return run_unit(
-            folder, unit, agent=agent, ledger=ledger, manifest_dir=manifest_dir,
+            folder, unit, agent=agent, ledger=ledger, work_dir=work_dir,
             resume=sessions.get(unit.unit_id), stream=stream,
+            paint_to=board.row(index) if board else None,
         )
 
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        return list(pool.map(one, units))
+    try:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            return list(pool.map(one, enumerate(units)))
+    finally:
+        if board:
+            board.close()
 
 
 # -- projects ----------------------------------------------------------------
@@ -400,8 +432,13 @@ def execute(
         return [f"{folder} has no files to import."]
     ledger.open_import(folder, files=census.files, bytes_=census.bytes)
 
-    manifest_dir = ledger.path.parent / f"{ledger.path.stem}-manifests"
-    manifest_dir.mkdir(parents=True, exist_ok=True)
+    # The agents' scratch directory, and the ONLY place either may write. It
+    # sits beside the ledger under XDG state rather than inside `folder`,
+    # because the folder is the thing being protected: an import must not leave
+    # a manifest, a stray note or a half-written file in someone's research
+    # directory. See CONFINEMENT in `backfill`.
+    work_dir = ledger.path.parent / f"{ledger.path.stem}-manifests"
+    work_dir.mkdir(parents=True, exist_ok=True)
 
     # RESUME: a plan already approved means the classification stands.
     if state.planned and state.approved_at and state.outstanding():
@@ -410,7 +447,17 @@ def execute(
         report.add(f"Resuming: {len(units)} of {len(state.units)} units left.")
         assigned_project = {u.unit_id: u.project for u in units}
     else:
-        tui.say(f"Reading {census.describe()} …")
+        # A PAGE, not a `say()`. The line version printed wherever the cursor
+        # happened to be -- under the leftover folder picker -- and then the
+        # agent's status line appended below it, so the whole import read as
+        # another program's output leaking into the wizard.
+        #
+        # It has to be here and not merely in `classify`: sampling a large tree
+        # is the slowest step in the run and it emits nothing, so without this
+        # the screen holds still on the picker for minutes before the agent's
+        # own page replaces this one.
+        tui.page([f"Reading {census.describe()} …", "",
+                  "Sampling what each file says. Nothing is uploaded yet."])
         ev = evidence_mod.gather(folder)
         try:
             with client_factory() as client:
@@ -434,7 +481,9 @@ def execute(
                 f"Could not reach Probe: {exc}",
                 "Run `probe login`, then re-run — nothing was uploaded.",
             ]
-        plan, tail = classify(folder, ev, agent=agent, existing=existing)
+        plan, tail = classify(
+            folder, ev, agent=agent, existing=existing, work_dir=work_dir
+        )
         if plan is None:
             return ["The classification did not produce a usable plan.",
                     (tail.splitlines()[-1] if tail else ""),
@@ -467,7 +516,7 @@ def execute(
 
     report.units_total = len(units)
     outcomes = run_units(
-        folder, units, agent=agent, ledger=ledger, manifest_dir=manifest_dir,
+        folder, units, agent=agent, ledger=ledger, work_dir=work_dir,
         concurrency=concurrency or DEFAULT_CONCURRENCY, sessions=sessions,
     )
     report.units_done = sum(1 for o in outcomes if o.ok)

@@ -26,12 +26,44 @@ def test_the_event_stream_is_still_requested():
     assert "--verbose" in argv, "stream-json emits only the result without it"
 
 
-def test_the_tool_allowlist_is_unchanged():
-    """The promise in AGENT_COPY is that it cannot write, delete or fetch."""
+def test_the_tool_allowlist_is_sent():
     argv = _claude()
     assert argv[argv.index("--allowedTools") + 1] == backfill.AGENT_TOOLS
-    assert "Bash(probe:*)" in backfill.AGENT_TOOLS
-    assert "Write" not in backfill.AGENT_TOOLS and "Edit" not in backfill.AGENT_TOOLS
+
+
+def test_a_workdir_makes_the_folder_readable_and_unwritable():
+    """Both halves, or the confinement is not a confinement.
+
+    `--add-dir` ALONE makes the folder writable, which is the opposite of what
+    it is here for; the deny rule alone leaves it unreadable. They only mean
+    "read this, write elsewhere" together, so both are asserted together."""
+    argv = _claude(workdir=Path("/state/work"))
+    assert argv[argv.index("--add-dir") + 1] == "/tmp/x"
+    settings = argv[argv.index("--settings") + 1]
+    assert "Edit(/tmp/x/**)" in settings
+
+
+def test_no_workdir_means_no_confinement_flags():
+    """The non-import callers run IN the folder and are not confined by this."""
+    argv = _claude()
+    assert "--add-dir" not in argv and "--settings" not in argv
+
+
+def test_codex_writes_to_the_workdir_not_the_imported_folder():
+    """`-C` is what Codex scopes its WRITABLE workspace to.
+
+    Pointed at the imported folder -- which is what shipped -- the customer's
+    research directory was the one writable thing on disk. Reads are
+    unrestricted in workspace-write mode, so pointing it at the scratch dir
+    leaves the folder readable and unwritable in one move. Verified against the
+    real binary on 2026-08-06: read outside succeeded, write outside blocked."""
+    argv = backfill.agent_argv(
+        backfill.Agent.CODEX, "/bin/codex", "PROMPT", Path("/drive/research"),
+        workdir=Path("/state/work"),
+    )
+    assert argv[argv.index("-C") + 1] == "/state/work"
+    assert "/drive/research" not in argv
+    assert "workspace-write" in argv
 
 
 def test_autocompact_is_on_so_a_long_unit_survives_its_own_context():
