@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -802,6 +803,65 @@ def fold_event(raw: str, state: Activity) -> bool:
     return False
 
 
+#: Every agent process this run has started and not yet reaped.
+#:
+#: A registry, not a local, because leaving the wizard has to stop EVERYTHING
+#: and the thing being left is spread across threads: the import pass runs
+#: several agents at once, and whichever thread takes the Ctrl-C can only see
+#: its own. A 106,007-file import kept reading after "Cancelled by user" for
+#: exactly this reason.
+#:
+#: The outbox is deliberately NOT in here. It is a background drainer with its
+#: own `probe outbox pause`, and killing it on the way out would abandon files
+#: that are already queued and already the user's -- the one thing leaving a
+#: wizard must not do.
+_LIVE: set = set()
+_LIVE_LOCK = threading.Lock()
+
+
+def _kill_tree(proc) -> None:
+    """Kill an agent and everything it started.
+
+    The PROCESS GROUP, not the process. An agent starts MCP servers, subagents
+    and shells; `proc.kill()` reaps the direct child and orphans the rest,
+    which keep running with no parent to stop them.
+
+    SIGTERM first, because Claude Code writes the missing tool_result on the
+    way down and that transcript is what `--resume` replays -- a SIGKILL here
+    costs the unit its resumability. SIGKILL only for what ignores it.
+    """
+    if proc.poll() is not None:
+        return
+    for sig, grace in ((signal.SIGTERM, 3.0), (signal.SIGKILL, 2.0)):
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            # No group (Windows, or already reaped) -- fall back to the child.
+            try:
+                proc.kill()
+            except OSError:
+                return
+        try:
+            proc.wait(timeout=grace)
+            return
+        except subprocess.TimeoutExpired:
+            continue
+
+
+def stop_all() -> None:
+    """Stop every agent this process started. Safe to call more than once.
+
+    What "leaving the wizard" means. Called from the interrupt path and from a
+    `finally` at the top of the import, so no exit route leaves an agent
+    reading someone's folder.
+    """
+    with _LIVE_LOCK:
+        procs = list(_LIVE)
+        _LIVE.clear()
+    for proc in procs:
+        _kill_tree(proc)
+
+
 def launch_agent(
     folder: Path,
     prompt: str,
@@ -910,9 +970,18 @@ def launch_agent(
             stderr=subprocess.STDOUT,
             text=True,
             bufsize=1,
+            # ITS OWN PROCESS GROUP, so the whole tree can be killed at once.
+            # An agent is not one process: it starts MCP servers, subagents and
+            # shells of its own, and `proc.kill()` reaps only the direct child
+            # -- leaving the grandchildren running, reading the folder, with no
+            # parent left to stop them. That is what survived a Ctrl-C and kept
+            # a 106,007-file import going after the wizard had said "Cancelled".
+            start_new_session=True,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)
+    with _LIVE_LOCK:
+        _LIVE.add(proc)
 
     ticker = threading.Thread(target=tick, daemon=True)
     if live:
@@ -937,13 +1006,18 @@ def launch_agent(
                 out.flush()
         code = proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
-        proc.kill()
+        _kill_tree(proc)
         return False, "the agent did not finish in time; re-run to resume"
     except KeyboardInterrupt:
         # Ctrl-C should stop the agent, not orphan it holding the folder.
-        proc.kill()
-        return False, "interrupted"
+        # EVERY agent, not just this one: under `run_units` there are several,
+        # and one thread taking the interrupt must not leave its siblings
+        # running -- see `stop_all`.
+        stop_all()
+        raise
     finally:
+        with _LIVE_LOCK:
+            _LIVE.discard(proc)
         # Always: an abandoned ticker keeps repainting over whatever the wizard
         # prints next, and the status line must not outlive the run either way.
         stop.set()
