@@ -117,6 +117,16 @@ SAMPLE_BUDGET_FILES = 600
 #: something much larger rather than the whole thing.
 LARGE_EVIDENCE_BYTES = 4 * 1024 * 1024
 
+#: How deep a rollup key goes. Below this, a directory folds into its
+#: depth-limited ancestor.
+#:
+#: A classifier assigns near the TOP of a tree -- a project boundary is one or
+#: two levels down, not seven -- so `a/b/c/d/e/f/g` as its own row buys nothing
+#: and a real checkout has thousands of them. Measured on a 109,706-file tree:
+#: unbounded depth gave 15,842 rollup rows and ~800k tokens; depth 3 gives a few
+#: hundred. The files are still all counted; only the grouping is coarser.
+ROLLUP_MAX_DEPTH = 3
+
 #: Files written within this many seconds of each other are treated as one
 #: burst. Research runs write their outputs together; the gaps between runs are
 #: minutes to days, so this separates cleanly without tuning per folder.
@@ -388,8 +398,15 @@ def to_jsonl(evidence: Evidence) -> str:
 
     for f in evidence.files:
         rel = _rel(root, f.path)
-        if f.tier is Tier.TAIL:
-            tail.setdefault(str(Path(rel).parent), []).append(f)
+        # KEYED ON HAVING A SAMPLE, not on the tier. An evidence-tier file whose
+        # sample the budget never reached carries exactly what a tail file
+        # carries -- a path -- so listing it individually buys nothing and costs
+        # the same. Measured on a real 109,706-file tree: tier-keyed rollup left
+        # 50,295 sampleless evidence rows and 2.3M tokens; sample-keyed leaves
+        # 600 and fits.
+        if not f.sample:
+            parts = Path(rel).parent.parts[:ROLLUP_MAX_DEPTH]
+            tail.setdefault("/".join(parts), []).append(f)
             continue
         row: dict[str, object] = {"path": rel, "size": f.size, "tier": f.tier.value}
         if f.mtime:
@@ -405,7 +422,7 @@ def to_jsonl(evidence: Evidence) -> str:
         stamps = [f.mtime for f in group if f.mtime > 0]
         exts = sorted({Path(f.path).suffix.lower() for f in group if Path(f.path).suffix})
         row = {
-            "dir": directory if directory != "." else "",
+            "dir": directory,
             "tier": "tail",
             "files": len(group),
             "bytes": sum(f.size for f in group),
@@ -413,6 +430,11 @@ def to_jsonl(evidence: Evidence) -> str:
             # directory from an image directory without opening anything.
             "ext": exts[:8],
         }
+        unsampled = sum(1 for f in group if f.tier is Tier.EVIDENCE)
+        if unsampled:
+            # Text files the sample budget never reached. Named so the agent can
+            # tell "4,000 checkpoints" from "4,000 scripts I did not get to read".
+            row["unread_text_files"] = unsampled
         if stamps:
             row["mtime_span"] = [int(min(stamps)), int(max(stamps))]
         lines.append(json.dumps(row, ensure_ascii=False))

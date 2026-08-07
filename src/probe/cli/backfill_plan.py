@@ -234,16 +234,32 @@ def resolve(evidence: Evidence, plan: Plan) -> tuple[dict[str, str], Discrepancy
     # the honest-denominator check into noise nobody reads.
     walked = set(relative_paths(evidence))
     expanded: list[Assignment] = []
-    for a in plan.assignments:
+    claimed: set[str] = set()
+    # LONGEST PREFIX FIRST. Rollup keys are capped at ROLLUP_MAX_DEPTH but not
+    # padded to it, so `a/b` and `a/b/c` can both be rows -- and recursive
+    # expansion of the shorter one would claim the longer one's files as well,
+    # assigning them twice. Twice is not a cosmetic problem: `duplicated` makes
+    # the whole plan untrustworthy, which is correct, so the specific row has to
+    # win before the general one is applied.
+    ordered = sorted(plan.assignments, key=lambda a: (a.path not in walked, -len(a.path)))
+    for a in ordered:
         if a.path in walked:
-            expanded.append(a)
+            if a.path not in claimed:
+                claimed.add(a.path)
+                expanded.append(a)
             continue
         prefix = "" if a.path in ("", ".") else a.path.rstrip("/") + "/"
-        members = [
-            w for w in walked
-            if w.startswith(prefix) and "/" not in w[len(prefix):]
-        ]
+        # RECURSIVE, because the rollup that produced this row is. Keys are
+        # capped at ROLLUP_MAX_DEPTH, so a `dir` of "michael/odyssey/ckpt"
+        # stands for everything beneath it too -- non-recursive expansion would
+        # leave every deeper file unassigned and the reconcile would report
+        # thousands of files as missing that the agent did place.
+        #
+        # A more specific row still wins: `direct` is applied after this loop,
+        # so an evidence file inside the subtree keeps its own assignment.
+        members = [w for w in walked if w.startswith(prefix) and w not in claimed]
         if members:
+            claimed.update(members)
             expanded += [
                 Assignment(path=m, project=a.project, confidence=a.confidence,
                            why=a.why or f"directory {a.path}")

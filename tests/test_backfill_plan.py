@@ -319,14 +319,35 @@ def test_a_directory_that_was_never_walked_is_still_unknown(tmp_path):
     assert not disc.trustworthy
 
 
-def test_expansion_does_not_reach_into_nested_directories(tmp_path):
-    """`ckpt` covers ckpt/*.pt, not ckpt/old/*.pt -- the agent got a separate
-    rollup row for the nested directory and may place it differently."""
+def test_expansion_reaches_nested_directories_because_the_rollup_did(tmp_path):
+    """Rollup keys are capped at ROLLUP_MAX_DEPTH, so one `dir` row stands for
+    everything beneath it. Non-recursive expansion would leave every deeper file
+    unassigned and the reconcile would call them missing."""
     _write(tmp_path, "ckpt/new.pt", "W")
     _write(tmp_path, "ckpt/old/ancient.pt", "W")
+    _write(tmp_path, "ckpt/old/deeper/older.pt", "W")
     evidence = ev.gather(tmp_path)
     plan = bp.Plan(projects=[], assignments=[bp.Assignment(path="ckpt", project="p")])
     assigned, disc = bp.resolve(evidence, plan)
     assert assigned["ckpt/new.pt"] == "p"
-    # The nested one was not assigned by that row; it falls to inheritance.
-    assert "ckpt/old/ancient.pt" in disc.missing
+    assert assigned["ckpt/old/ancient.pt"] == "p"
+    assert assigned["ckpt/old/deeper/older.pt"] == "p"
+    assert disc.clean
+
+
+def test_a_file_named_outright_beats_the_rollup_covering_its_directory(tmp_path):
+    """An evidence file inside a rolled-up subtree keeps its own assignment --
+    that per-file decision is the whole reason it was sampled."""
+    _write(tmp_path, "shared/readme.md", "belongs to odyssey")
+    _write(tmp_path, "shared/data/rows.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(
+        projects=[],
+        assignments=[
+            bp.Assignment(path="shared", project="bulk"),
+            bp.Assignment(path="shared/readme.md", project="odyssey"),
+        ],
+    )
+    assigned, _ = bp.resolve(evidence, plan)
+    assert assigned["shared/readme.md"] == "odyssey"
+    assert assigned["shared/data/rows.pt"] == "bulk"
