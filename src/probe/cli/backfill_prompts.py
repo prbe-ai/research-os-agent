@@ -221,6 +221,67 @@ the human reviews first, and a short honest one is worth more than none.
 """
 
 
+# -- pass 1b: revise the plan a human just read ------------------------------
+
+
+def revise(*, feedback: str, root, work_dir: str, resumed: bool) -> str:
+    """Fold a reviewer's correction back into the classification.
+
+    Sent into the SAME agent session where possible, which is the whole point:
+    the evidence is already in its context, so a correction costs one turn
+    instead of re-reading the folder. `resumed` says whether that worked --
+    when it did not, the agent is starting cold and has to be told so, because
+    a cold agent asked to "revise your plan" has no plan to revise and will
+    invent one that ignores everything the reviewer did not mention.
+
+    The correction is quoted rather than paraphrased into instructions. A
+    reviewer who writes "lockfiles aren't part of the research" is stating a
+    rule with reach beyond the files they happened to see, and rewriting that
+    into "move package-lock.json to X" throws away the general half.
+    """
+    context = (
+        "You proposed a classification for this folder a moment ago and the "
+        "reviewer has read it."
+        if resumed
+        else (
+            "A classification for this folder was proposed and the reviewer has "
+            "read it. YOU DO NOT HAVE IT -- your previous session could not be "
+            "resumed, so re-read the evidence and produce a fresh plan that "
+            "honours the correction below."
+        )
+    )
+    return f"""\
+{context}
+
+FOLDER: {root}
+{readonly(root=root, work_dir=work_dir)}
+
+THE REVIEWER SAYS:
+
+    {feedback}
+
+Apply it, and apply what it IMPLIES. A correction is usually a rule, not a
+one-off: "lockfiles are not research" means every lockfile, not the two that
+happened to be on screen. Where the rule is genuinely ambiguous, do the narrow
+thing and say so in `summary`.
+
+Do not take the correction as licence to redo placements it says nothing
+about. A reviewer who fixes one directory has implicitly accepted the rest,
+and a plan that shuffles everything makes their next read start over.
+
+Answer with the SAME JSON shape as before, complete and on its own line --
+every row of the evidence appears exactly once in `assignments`, not just the
+ones you changed:
+
+{{"projects": [{{"slug": "...", "name": "...", "description": "...",
+                "tags": ["..."]}}],
+  "assignments": [{{"path": "...", "project": "...",
+                   "confidence": "high"|"low", "why": "<short>"}}],
+  "unsure": ["..."],
+  "summary": "<one sentence, saying what you changed and why>"}}
+"""
+
+
 # -- pass 2: import one unit -------------------------------------------------
 
 
