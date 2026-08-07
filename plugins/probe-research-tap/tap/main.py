@@ -333,6 +333,7 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     empty_ticks = 0
     in_idle_mode = False
     in_killswitch_mode = False
+    ingestion_globally_enabled = True
 
     # Track whether we ever saw a process holding the transcript fd. Without
     # this gate, an early lsof miss (e.g. before CC has fully opened the file)
@@ -352,6 +353,7 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
         # is_ingestion_enabled itself; here we just consume the (enabled, reason)
         # tuple.
         ks_enabled, ks_reason = killswitch.is_ingestion_enabled(token=c.token, base_url=base_url)
+        ingestion_globally_enabled = ks_enabled
         if not ks_enabled:
             if not in_killswitch_mode:
                 log.info(
@@ -378,58 +380,11 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
             missing_ticks = 0
 
         if read is not None:
-            new_lines, line_no_base, commit_offset = read
-            committed = False
-            if new_lines:
-                now = int(time.time())
-                body = outbox.build_batch_body(
-                    device_id=device_id,
-                    session_id=c.session_id,
-                    batch_seq=batch_seq,
-                    cwd=str(c.cwd),
-                    base_line_no=line_no_base,
-                    lines=new_lines,
-                )
-                if body is None:
-                    # Sanitizer dropped every event in this tick (e.g. a tick
-                    # that only saw stop_hook_summary + turn_duration). No
-                    # webhook to ship, but the lines were "processed" — commit
-                    # the offset so we don't re-read them next tick.
-                    commit_offset()
-                    committed = True
-                else:
-                    try:
-                        outbox.enqueue(
-                            storage=storage,
-                            session_id=c.session_id,
-                            batch_seq=batch_seq,
-                            cwd=str(c.cwd),
-                            body=body,
-                            now=now,
-                        )
-                        # Persist the high-water mark BEFORE incrementing so a
-                        # crash here doesn't reset the counter on restart.
-                        storage.set_meta(seq_meta_key, str(batch_seq))
-                        batch_seq += 1
-                        commit_offset()
-                        committed = True
-                    except Exception:
-                        # Offset NOT advanced; same lines are re-read next tick.
-                        log.exception("enqueue failed; lines will be re-read next tick")
-            if not committed and not new_lines:
-                # No lines this tick — still refresh last_seen_at + inode/size.
-                commit_offset()
+            batch_seq = _enqueue_read(c, storage, device_id, seq_meta_key, batch_seq, read)
 
         # Drain a bounded number of rows.
         try:
-            drained = 0
-            while drained < MAX_DRAIN_PER_TICK and outbox.drain_once(
-                storage=storage,
-                token=c.token,
-                base_url=base_url,
-                session_id=c.session_id,
-            ):
-                drained += 1
+            _drain_pending(c, storage, base_url)
         except HaltError as e:
             log.error("halt: %s", e)
             return 1
@@ -482,7 +437,98 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
             time.sleep(1)
             slept += 1
 
+    # SessionEnd/SIGTERM commonly lands during the cadence sleep. Codex writes
+    # the final response before firing the hook, so stopping here without one
+    # last tail loses everything written since the previous tick (up to five
+    # minutes in idle mode). Enqueue first so a transient network failure is
+    # durable in SQLite; then make one bounded best-effort drain.
+    #
+    # A local killswitch is different from an ordinary shutdown: its contract
+    # is "ship nothing", so do not read or drain after it becomes active.
+    if not cfg.killswitch_active() and ingestion_globally_enabled:
+        log.info("shutdown observed; capturing final transcript tail")
+        try:
+            final_read = _tick_read(c, storage)
+        except FileNotFoundError:
+            final_read = None
+            log.info("transcript disappeared before final capture: %s", c.transcript_path)
+        except Exception:
+            final_read = None
+            log.exception("final transcript read failed")
+        if final_read is not None:
+            batch_seq = _enqueue_read(c, storage, device_id, seq_meta_key, batch_seq, final_read)
+        try:
+            _drain_pending(c, storage, base_url)
+        except HaltError as exc:
+            log.error("halt during final drain: %s", exc)
+            return 1
+        except Exception:
+            # The batch is already durable in the outbox and a future daemon
+            # will retry it; shutdown must not turn a network blip into loss.
+            log.exception("final drain raised; batch remains queued")
+
     return 0
+
+
+def _enqueue_read(
+    c: cfg.WatchConfig,
+    storage: Storage,
+    device_id: str,
+    seq_meta_key: str,
+    batch_seq: int,
+    read: tuple[list[bytes], int, Callable[[], None]],
+) -> int:
+    """Durably enqueue one transcript read and return the next batch sequence."""
+    new_lines, line_no_base, commit_offset = read
+    if not new_lines:
+        # No lines this tick — still refresh last_seen_at + inode/size.
+        commit_offset()
+        return batch_seq
+
+    body = outbox.build_batch_body(
+        device_id=device_id,
+        session_id=c.session_id,
+        batch_seq=batch_seq,
+        cwd=str(c.cwd),
+        base_line_no=line_no_base,
+        lines=new_lines,
+    )
+    if body is None:
+        # Sanitizer dropped every event in this tick. The lines were still
+        # processed, so advance the cursor rather than reading them forever.
+        commit_offset()
+        return batch_seq
+
+    try:
+        outbox.enqueue(
+            storage=storage,
+            session_id=c.session_id,
+            batch_seq=batch_seq,
+            cwd=str(c.cwd),
+            body=body,
+            now=int(time.time()),
+        )
+        # Persist the high-water mark BEFORE incrementing so a crash here does
+        # not reset the counter on restart.
+        storage.set_meta(seq_meta_key, str(batch_seq))
+        commit_offset()
+        return batch_seq + 1
+    except Exception:
+        # Offset NOT advanced; the same lines are re-read by the next daemon.
+        log.exception("enqueue failed; lines will be re-read next tick")
+        return batch_seq
+
+
+def _drain_pending(c: cfg.WatchConfig, storage: Storage, base_url: str) -> None:
+    """Drain a bounded number of rows for this session."""
+    drained = 0
+    while drained < MAX_DRAIN_PER_TICK and outbox.drain_once(
+        storage=storage,
+        token=c.token,
+        base_url=base_url,
+        session_id=c.session_id,
+    ):
+        drained += 1
 
 
 def _tick_read(c: cfg.WatchConfig, storage: Storage) -> tuple[list[bytes], int, Callable[[], None]]:

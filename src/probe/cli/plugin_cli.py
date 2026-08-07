@@ -9,6 +9,7 @@ each growing their own subprocess wrapper and verb table.
 
 from __future__ import annotations
 
+import json
 import shutil
 import subprocess
 
@@ -32,9 +33,7 @@ def run(source: str, args: list[str], *, timeout: float) -> claude_cli.Result:
         return claude_cli.run(args, timeout=timeout)
     binary = shutil.which("codex")
     if not binary:
-        return claude_cli.Result(
-            ok=False, detail="`codex` not found on PATH", reachable=False
-        )
+        return claude_cli.Result(ok=False, detail="`codex` not found on PATH", reachable=False)
     try:
         completed = subprocess.run(  # noqa: S603 - fixed binary, no shell
             [binary, *args],
@@ -95,3 +94,26 @@ def uninstall(source: str, plugin_id: str) -> claude_cli.Result:
         ["plugin", verb, plugin_id],
         timeout=claude_cli.INSTALL_TIMEOUT_S,
     )
+
+
+def codex_mcp_auth_status(name: str) -> str | None:
+    """Return Codex's auth status for one installed MCP, if observable."""
+    result = run(CODEX, ["mcp", "list", "--json"], timeout=claude_cli.LIST_TIMEOUT_S)
+    if not result.ok:
+        return None
+    try:
+        servers = json.loads(result.detail)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(servers, list):
+        return None
+    for server in servers:
+        if isinstance(server, dict) and server.get("name") == name:
+            status = server.get("auth_status")
+            return str(status) if status is not None else None
+    return None
+
+
+def login_codex_mcp(name: str) -> claude_cli.Result:
+    """Run Codex's supported OAuth flow for a plugin-provided MCP server."""
+    return run(CODEX, ["mcp", "login", name], timeout=180.0)

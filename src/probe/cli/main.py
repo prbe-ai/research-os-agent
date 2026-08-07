@@ -1000,6 +1000,10 @@ def wizard(
                 capture_killswitched=any(
                     item.capture_killswitched for item in caps_by_source.values()
                 ),
+                mcp_authenticated=all(
+                    item.agent_source != "codex" or item.mcp_authenticated is True
+                    for item in caps_by_source.values()
+                ),
                 plugins_verified=all(item.plugins_verified for item in caps_by_source.values()),
             )
             shared_selection = wizard.resolve_selection(
@@ -1316,7 +1320,16 @@ def _run_wizard_action(
     elif not selection.tracking and caps.tracking_plugin_installed:
         work.append(("remove the CLI + MCP plugin", lambda: wizard.apply_tracking(False), None))
 
-    if selection.capture and not caps.capture_on:
+    if selection.tracking and caps.agent_source == "codex" and caps.mcp_authenticated is not True:
+        work.append(
+            (
+                "authenticate the Codex MCP",
+                wizard.apply_codex_mcp_auth,
+                Capability.TRACKING,
+            )
+        )
+
+    if selection.capture and (not caps.capture_on or caps.legacy_capture_plugin_installed):
         # NOT gated on "plugin absent": the killswitch is cleared here too, and
         # a killswitched machine with the plugin already installed needs that
         # clear or capture stays off while the run reports success.
@@ -1326,6 +1339,8 @@ def _run_wizard_action(
             (
                 "install the Session capture plugin"
                 if not caps.capture_plugin_installed
+                else "retire the legacy Session capture plugin"
+                if caps.legacy_capture_plugin_installed
                 else "re-enable Session capture",
                 lambda: wizard.apply_capture(caps, True, mode=OffMode.DISABLE, on_retry=_may_retry),
                 Capability.CAPTURE,
@@ -1522,7 +1537,15 @@ def _run_wizard_action(
     absent = wanted_plugins if after.plugins_verified else []
 
     missing = [grant for grant in needs if grant not in granted]
-    if missing or absent:
+    runtime_failures: list[str] = []
+    if selection.capture and after.capture_credential_valid is False:
+        runtime_failures.append("the capture credential is rejected")
+    if selection.capture and after.legacy_capture_plugin_installed:
+        runtime_failures.append("the legacy Codex capture plugin is still installed")
+    if selection.tracking and after.agent_source == "codex" and after.mcp_authenticated is False:
+        runtime_failures.append("the Codex MCP is not logged in")
+
+    if missing or absent or runtime_failures:
         # "Restart Claude Code to finish" after a FAILED run reads as success:
         # the user restarts, finds the capability off, and has no idea why.
         reasons = []
@@ -1536,6 +1559,7 @@ def _run_wizard_action(
             reasons.append(f"these plugins {verb}: {', '.join(absent)}")
         if missing:
             reasons.append(f"no credential for: {', '.join(missing)}")
+        reasons.extend(runtime_failures)
         progress.note(
             "", f"Not finished — {'; '.join(reasons)}.", "Re-run `probe wizard` to retry."
         )

@@ -19,6 +19,9 @@ The Codex integration is split across two repositories:
 6. The canonical `npx probe-research` onboarding asks which installed agents to
    connect. Selecting Claude Code and Codex installs both plugin targets and one
    browser approval returns two independent, source-bound capture credentials.
+   For Codex, the wizard then runs Codex's native MCP OAuth flow and verifies
+   that `probe-research` reports `o_auth`; the token minted for Claude's headers
+   helper is not treated as proof that Codex is logged in.
    Headless automation can express the same choice with
    `probe wizard --agent both --yes`.
 
@@ -61,13 +64,15 @@ codex plugin marketplace add /absolute/path/to/research-os-agent
 codex plugin add probe-research@research-os-agent
 codex plugin add probe-research-tap@research-os-agent
 codex plugin list --json
-codex mcp login probe-research
 ```
 
 Run `npx probe-research`, select Codex (and Claude Code if both should be
-connected), then authorize the combined API, MCP, and capture request. Start a
-new Codex thread and use `/hooks` to review and trust both Probe hooks. Hook
-trust is mandatory; Codex skips untrusted hooks.
+connected), then authorize the combined API, MCP, and capture request. The
+wizard completes `codex mcp login probe-research` and verifies the resulting
+host-owned OAuth state. Start a new Codex thread and use `/hooks` to review and
+trust the Probe capture hook. Hook trust is mandatory for capture execution,
+but is intentionally separate from plugin installation and MCP authentication;
+Codex skips untrusted hooks rather than refusing the install.
 
 Check `python3 -m tap status` and the per-session log under
 `~/.codex/state/probe-research-tap/logs/`. Upgrades from the retired standalone
@@ -90,6 +95,9 @@ The command passes only when `/v1/search` returns the marker from a document
 whose `source_system` is exactly `codex`. This proves the real hook, rollout
 parser, durable sender, source-bound gateway, engine connector, and searchable
 index—not merely that an endpoint returned 202.
+
+The verifier scans only captured source content. A generated relevance
+explanation that repeats the query cannot make the canary pass.
 
 If the canary fails, inspect in order: `/hooks` trust, local tap status/log,
 `GET /v1/devices`, gateway 401/403/5xx logs, engine queue/DLQ, then search state.

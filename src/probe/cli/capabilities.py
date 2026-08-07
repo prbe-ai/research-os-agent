@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
@@ -34,6 +36,8 @@ MARKETPLACE_REPO = "prbe-ai/research-os-agent"
 AGENT_INSTALL = "probe-research"
 PLUGIN_ID = f"{TRACKING_PLUGIN_NAME}@{MARKETPLACE}"
 TAP_PLUGIN_ID = f"{TAP_PLUGIN_NAME}@{MARKETPLACE}"
+LEGACY_CODEX_TAP_PLUGIN_ID = "prbe-codex-tap-plugin@prbe-ai"
+CODEX_MCP_NAME = "probe-research"
 
 ENV_INGEST_TOKEN = "PROBE_INGEST_TOKEN"
 ENV_TAP_PLUGIN_DIR = "PROBE_RESEARCH_TAP_PLUGIN_DIR"
@@ -91,6 +95,7 @@ class Capabilities:
 
     tracking_plugin_installed: bool = False
     capture_plugin_installed: bool = False
+    legacy_capture_plugin_installed: bool = False
 
     #: Whether the two flags above were actually ASKED, or merely defaulted.
     #: False when `claude` is absent or `plugin list` could not complete -- in
@@ -99,8 +104,15 @@ class Capabilities:
     plugins_verified: bool = True
 
     capture_token_sources: tuple[TokenSource, ...] = ()
+    #: True/False when the backend accepted/rejected the resolved credential;
+    #: None when no credential exists or the endpoint could not be reached.
+    capture_credential_valid: bool | None = None
     capture_killswitched: bool = False
     capture_device_id: str | None = None
+
+    #: Codex owns OAuth for plugin MCPs. Claude's headers helper does not need
+    #: a host login, so this remains None there.
+    mcp_authenticated: bool | None = None
 
     agent_rules_installed: bool = False
     agent_rules_stale: bool = False
@@ -134,11 +146,16 @@ class Capabilities:
         nothing, and a machine with no credential sends nothing regardless of
         which plugins are installed.
         """
-        return bool(self.capture_token_sources) and not self.capture_killswitched
+        return (
+            bool(self.capture_token_sources)
+            and self.capture_credential_valid is not False
+            and not self.capture_killswitched
+        )
 
     @property
     def tracking_on(self) -> bool:
-        return self.tracking_plugin_installed and self.logged_in_as is not None
+        mcp_ready = self.agent_source != "codex" or self.mcp_authenticated is not False
+        return self.tracking_plugin_installed and self.logged_in_as is not None and mcp_ready
 
     @property
     def configured(self) -> bool:
@@ -154,6 +171,7 @@ class Capabilities:
             (
                 self.tracking_plugin_installed,
                 self.capture_plugin_installed,
+                self.legacy_capture_plugin_installed,
                 self.logged_in_as is not None,
                 bool(self.capture_token_sources),
                 self.capture_killswitched,
@@ -268,6 +286,54 @@ def capture_token_sources(source: str | None = None) -> tuple[TokenSource, ...]:
     return tuple(found)
 
 
+def resolved_capture_credential(source: str | None = None) -> tuple[str, str] | None:
+    """The uploader's winning (token, base URL), or None when incomplete."""
+    selected = source or agent_source()
+    token = ""
+    token_file = tap_plugin_dir(selected) / ".token"
+    try:
+        token = token_file.read_text(encoding="utf-8").strip()
+    except OSError:
+        pass
+    if not token:
+        token_env = ENV_CODEX_INGEST_TOKEN if selected == "codex" else ENV_INGEST_TOKEN
+        token = (os.environ.get(token_env) or "").strip()
+    if not token and selected == "claude_code":
+        token = str(probe_config_credentials().get("ingest_token") or "").strip()
+
+    base_url = (os.environ.get("PROBE_BASE_URL") or "").strip().rstrip("/")
+    if not base_url:
+        plugin_config = _read_json(tap_plugin_dir(selected) / ".config")
+        base_url = str(plugin_config.get("api_base_url") or "").strip().rstrip("/")
+    if not base_url:
+        base_url = str(probe_config_credentials().get("base_url") or "").strip().rstrip("/")
+    return (token, base_url) if token and base_url else None
+
+
+def verify_capture_credential(source: str | None = None, *, timeout: float = 5.0) -> bool | None:
+    """Ask the ingest status endpoint whether the resolved token is accepted.
+
+    False is reserved for an authoritative 401/403. Offline, timeouts, and
+    server errors stay unknown so `probe doctor` remains fail-soft and does not
+    turn capture off merely because a laptop has no network.
+    """
+    resolved = resolved_capture_credential(source)
+    if resolved is None:
+        return None
+    token, base_url = resolved
+    request = urllib.request.Request(
+        f"{base_url}/ingest/v1/sessions/status",
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "probe-doctor/1"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return True if response.status == 200 else None
+    except urllib.error.HTTPError as exc:
+        return False if exc.code in {401, 403} else None
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+
+
 @dataclass(frozen=True)
 class PluginState:
     """What Claude Code reports installed, AND whether it managed to answer.
@@ -316,7 +382,9 @@ def installed_plugins(*, source: str | None = None) -> PluginState:
         # the tap contains both. Longest match wins per line, otherwise having
         # only the tap installed would read as tracking being on too.
         tap_name = capture_plugin_name(selected)
-        if tap_name in line:
+        if selected == "codex" and LEGACY_CODEX_TAP_PLUGIN_ID in line:
+            names.add(LEGACY_CODEX_TAP_PLUGIN_ID)
+        elif tap_name in line:
             names.add(tap_name)
         elif TRACKING_PLUGIN_NAME in line:
             names.add(TRACKING_PLUGIN_NAME)

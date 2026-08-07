@@ -234,7 +234,7 @@ def _drive_run_loop(monkeypatch, tmp_path, tick_results, *, active=60, idle=300)
 
     def fake_tick_with_sleep_capture(c, s):
         # Snapshot the previous tick's sleep count before producing this tick.
-        if iteration["i"] > 0:
+        if iteration["i"] > 0 and sleep_counter["n"] > 0:
             sleeps.append(sleep_counter["n"])
             sleep_counter["n"] = 0
         return fake_tick_read(c, s)
@@ -334,6 +334,47 @@ def test_run_loop_flat_cadence_when_active_equals_idle(
         active=42, idle=42,
     )
     assert sleeps == [42, 42, 42, 42, 42]
+
+
+def test_shutdown_captures_lines_written_after_the_last_cadence_tick(
+    _isolated_plugin_dir: Path, monkeypatch, tmp_path: Path
+) -> None:
+    """SessionEnd must flush the tail written while the daemon was sleeping."""
+    from tap import config as cfg
+    from tap import main as tapmain
+    from tap.storage import Storage
+
+    config = _make_watch_config(tmp_path, active=60, idle=300)
+    storage = Storage(cfg.state_db_path())
+    marker = b'{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"final-canary-marker"}]}}'
+    reads = iter(
+        [
+            ([], 0, _no_op_commit),
+            ([marker], 0, _no_op_commit),
+        ]
+    )
+    captured: list[list[bytes]] = []
+
+    def stop_during_sleep(_seconds):
+        config.shutdown_sentinel.touch()
+
+    def build(**kwargs):
+        captured.append(kwargs["lines"])
+        return b"{}"
+
+    try:
+        with (
+            mock.patch("tap.main._tick_read", side_effect=lambda *_: next(reads)),
+            mock.patch("tap.main.outbox.drain_once", return_value=False),
+            mock.patch("tap.main.outbox.enqueue", return_value=None),
+            mock.patch("tap.main.outbox.build_batch_body", side_effect=build),
+            mock.patch("tap.main.time.sleep", side_effect=stop_during_sleep),
+        ):
+            assert tapmain._run_loop(config, storage) == 0
+        assert captured == [[marker]]
+    finally:
+        storage.close()
+        config.shutdown_sentinel.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

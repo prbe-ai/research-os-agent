@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import shutil
 
-from probe.cli import agent_rules, autoupdate
+from probe.cli import agent_rules, autoupdate, plugin_cli
 from probe.cli.capabilities import (
     ENV_CODEX_INGEST_TOKEN,
     ENV_INGEST_TOKEN,
@@ -68,6 +68,15 @@ def render(caps: Capabilities) -> str:
             TRACKING_PLUGIN_NAME if caps.tracking_plugin_installed else _MISSING,
         )
     )
+    if caps.agent_source == "codex":
+        mcp_status = (
+            "logged in"
+            if caps.mcp_authenticated is True
+            else "not logged in"
+            if caps.mcp_authenticated is False
+            else "unknown"
+        )
+        lines.append(_row("MCP OAuth", mcp_status))
     lines.append(_row("Status", _OK if caps.tracking_on else _OFF))
     lines.append("")
 
@@ -86,6 +95,10 @@ def render(caps: Capabilities) -> str:
         if source is TokenSource.ENVIRONMENT and caps.agent_source == "codex":
             label = f"{ENV_CODEX_INGEST_TOKEN} environment variable"
         lines.append(_row("Credential from", label))
+    if caps.capture_credential_valid is False:
+        lines.append(_row("Credential check", "rejected — re-run `probe wizard`"))
+    elif caps.capture_token_sources and caps.capture_credential_valid is None:
+        lines.append(_row("Credential check", "unknown (offline or endpoint unavailable)"))
     if not caps.capture_token_sources:
         lines.append(_row("Credential", "none — this device is not paired"))
     lines.append("")
@@ -152,9 +165,12 @@ def collect() -> Capabilities:
         capture_device_id,
         capture_plugin_name,
         capture_token_sources,
+        verify_capture_credential,
         agent_source,
         installed_plugins,
         tap_plugin_dir,
+        CODEX_MCP_NAME,
+        LEGACY_CODEX_TAP_PLUGIN_ID,
     )
 
     warnings: list[str] = []
@@ -184,7 +200,32 @@ def collect() -> Capabilities:
     selected_tap = capture_plugin_name(selected_agent)
     plugins = installed_plugins(source=selected_agent)
     sources = capture_token_sources(selected_agent)
+    credential_valid = verify_capture_credential(selected_agent) if sources else None
     settings_autoupdate = autoupdate.load()
+
+    if credential_valid is False:
+        warnings.append(
+            "the capture credential was rejected by the ingest service; "
+            "re-run `probe wizard` to pair this device again"
+        )
+    elif sources and credential_valid is None:
+        warnings.append("could not verify the capture credential (offline or endpoint unavailable)")
+    if LEGACY_CODEX_TAP_PLUGIN_ID in plugins:
+        warnings.append(
+            f"legacy {LEGACY_CODEX_TAP_PLUGIN_ID} is still installed and can race the unified tap; "
+            "re-run `probe wizard` to remove it"
+        )
+
+    mcp_authenticated: bool | None = None
+    if selected_agent == "codex" and TRACK in plugins:
+        status = plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME)
+        if status is not None:
+            mcp_authenticated = status in {"o_auth", "bearer_token"}
+        if mcp_authenticated is False:
+            warnings.append(
+                "the probe-research MCP is installed but not logged in; "
+                "re-run `probe wizard` to complete Codex OAuth"
+            )
 
     if TokenSource.ENVIRONMENT in sources:
         token_env = ENV_CODEX_INGEST_TOKEN if selected_agent == "codex" else ENV_INGEST_TOKEN
@@ -203,10 +244,13 @@ def collect() -> Capabilities:
         base_url=base_url,
         tracking_plugin_installed=TRACK in plugins,
         capture_plugin_installed=selected_tap in plugins,
+        legacy_capture_plugin_installed=LEGACY_CODEX_TAP_PLUGIN_ID in plugins,
         plugins_verified=plugins.verified,
         capture_token_sources=sources,
+        capture_credential_valid=credential_valid,
         capture_killswitched=(tap_plugin_dir(selected_agent) / ".disabled").exists(),
         capture_device_id=capture_device_id(selected_agent),
+        mcp_authenticated=mcp_authenticated,
         agent_rules_installed=agent_rules.is_installed(),
         agent_rules_stale=(agent_rules.is_installed() and not agent_rules.is_current()),
         auto_update_enabled=settings_autoupdate.enabled,

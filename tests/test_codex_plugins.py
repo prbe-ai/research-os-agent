@@ -111,3 +111,18 @@ def test_codex_plugin_cli_closes_stdin(monkeypatch) -> None:
 
     assert result.ok is True
     assert observed["stdin"] is subprocess.DEVNULL
+
+
+def test_codex_mcp_auth_status_selects_the_named_server(monkeypatch) -> None:
+    payload = json.dumps(
+        [
+            {"name": "PRBE", "auth_status": "o_auth"},
+            {"name": "probe-research", "auth_status": "not_logged_in"},
+        ]
+    )
+    monkeypatch.setattr(
+        plugin_cli,
+        "run",
+        lambda *_args, **_kwargs: plugin_cli.claude_cli.Result(ok=True, detail=payload),
+    )
+    assert plugin_cli.codex_mcp_auth_status("probe-research") == "not_logged_in"

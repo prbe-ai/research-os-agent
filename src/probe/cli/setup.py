@@ -25,7 +25,9 @@ from dataclasses import dataclass
 
 from probe.cli import agent_rules, autoupdate, claude_cli, plugin_cli
 from probe.cli.capabilities import (
+    CODEX_MCP_NAME,
     CODEX_TAP_PLUGIN_NAME,
+    LEGACY_CODEX_TAP_PLUGIN_ID,
     MARKETPLACE,
     MARKETPLACE_REPO,
     TAP_PLUGIN_NAME,
@@ -356,7 +358,7 @@ def needs_authorization(caps: Capabilities, selection: Selection) -> list[str]:
     have: set[str] = set()
     if caps.logged_in_as:
         have.add("api")
-    if caps.capture_token_sources:
+    if caps.capture_token_sources and caps.capture_credential_valid is not False:
         have.add("capture")
     # `mcp` has no cheap local signal, so it rides along with `api`: they are
     # always requested together and always minted together.
@@ -548,6 +550,17 @@ def apply_capture(caps: Capabilities, want: bool, *, mode: OffMode, on_retry=Non
         # Gating it on "capture off" instead reinstalls a plugin that is already
         # there. So: always clear, install only when missing.
         clear_killswitch()
+        if caps.agent_source == "codex" and caps.legacy_capture_plugin_installed:
+            retired = plugin_cli.uninstall("codex", LEGACY_CODEX_TAP_PLUGIN_ID)
+            if not retired.ok:
+                messages.append(
+                    "could not remove the legacy Codex capture plugin "
+                    f"{LEGACY_CODEX_TAP_PLUGIN_ID}: {retired.detail}"
+                )
+                return messages
+            messages.append(
+                f"Removed legacy {LEGACY_CODEX_TAP_PLUGIN_ID}; the unified tap owns capture now."
+            )
         if caps.capture_plugin_installed:
             return messages
         tap_name = CODEX_TAP_PLUGIN_NAME if caps.agent_source == "codex" else TAP_PLUGIN_NAME
@@ -586,6 +599,26 @@ def apply_tracking(want: bool, *, on_retry=None) -> list[str]:
             "run `probe logout` if you also want to revoke this device's token."
         )
     return messages
+
+
+def apply_codex_mcp_auth() -> list[str]:
+    """Make the Codex-hosted MCP usable through Codex's supported OAuth flow."""
+    status = plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME)
+    if status in {"o_auth", "bearer_token"}:
+        return []
+    result = plugin_cli.login_codex_mcp(CODEX_MCP_NAME)
+    if not result.ok:
+        return [
+            f"could not log in to the {CODEX_MCP_NAME} MCP: {result.detail}. "
+            f"Run `codex mcp login {CODEX_MCP_NAME}` and then re-run `probe doctor`."
+        ]
+    verified = plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME)
+    if verified not in {"o_auth", "bearer_token"}:
+        return [
+            f"! Codex completed the login command but {CODEX_MCP_NAME} still reports "
+            f"{verified or 'unknown'}; run `codex mcp login {CODEX_MCP_NAME}` again."
+        ]
+    return [f"Codex MCP logged in ({CODEX_MCP_NAME})."]
 
 
 def apply_auto_update(want: bool) -> list[str]:
@@ -926,7 +959,7 @@ def remove_everything(caps: Capabilities) -> list[str]:
 
 
 def restart_notice(caps: Capabilities, selection: Selection) -> str | None:
-    """Tell the user to restart Claude Code, when it actually matters.
+    """Tell the user to restart their coding agent, when it actually matters.
 
     Plugin installs and the MCP wiring only take effect on restart -- Claude
     Code reads them at session start and `probe` cannot restart it. Without this
@@ -941,11 +974,19 @@ def restart_notice(caps: Capabilities, selection: Selection) -> str | None:
     plugin_changed = (
         selection.tracking != current[Capability.TRACKING]
         or selection.capture != current[Capability.CAPTURE]
+        or caps.legacy_capture_plugin_installed
     )
     if not plugin_changed:
         return None
-    return (
-        f"Restart {'Codex' if caps.agent_source == 'codex' else 'Claude Code'} to finish. "
-        "Plugins and the MCP are read at session "
+    agent = "Codex" if caps.agent_source == "codex" else "Claude Code"
+    notice = (
+        f"Restart {agent} to finish. Plugins and the MCP are read at session "
         "start, so this session will not see them until you do."
     )
+    if caps.agent_source == "codex" and selection.capture:
+        notice += (
+            " In the new Codex session, open `/hooks`, review Probe Session "
+            "Capture, and approve it once. Installation succeeds without this "
+            "approval, but Codex will not run an untrusted hook."
+        )
+    return notice

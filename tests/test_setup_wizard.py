@@ -195,6 +195,47 @@ def test_killswitch_alone_means_capture_is_not_on(isolate):
     assert caps.capture_on is False
 
 
+def test_rejected_capture_credential_is_not_treated_as_live():
+    caps = _caps(
+        capture_token_sources=(TokenSource.PAIRED_FILE,),
+        capture_credential_valid=False,
+    )
+    assert caps.capture_on is False
+    selection = setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False)
+    assert setup.needs_authorization(caps, selection) == ["capture"]
+
+
+def test_doctor_explains_a_rejected_capture_credential():
+    report = doctor.render(
+        _caps(
+            capture_token_sources=(TokenSource.PAIRED_FILE,),
+            capture_credential_valid=False,
+        )
+    )
+    assert "rejected" in report
+    assert "probe wizard" in report
+
+
+def test_capture_credential_probe_distinguishes_rejection_from_offline(isolate, monkeypatch):
+    import urllib.error
+
+    (isolate / "tap" / ".token").write_text("ros_ing_test")
+    (isolate / "tap" / ".config").write_text(json.dumps({"api_base_url": "https://api.test"}))
+
+    def rejected(*_args, **_kwargs):
+        raise urllib.error.HTTPError("https://api.test", 401, "no", {}, None)
+
+    monkeypatch.setattr(capabilities_mod.urllib.request, "urlopen", rejected)
+    assert capabilities_mod.verify_capture_credential() is False
+
+    monkeypatch.setattr(
+        capabilities_mod.urllib.request,
+        "urlopen",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(urllib.error.URLError("offline")),
+    )
+    assert capabilities_mod.verify_capture_credential() is None
+
+
 # --- auto-update -----------------------------------------------------------
 
 
@@ -451,6 +492,10 @@ def test_a_genuinely_fresh_machine_still_gets_defaults():
     assert selection.auto_update is True
 
 
+def test_legacy_codex_tap_counts_as_an_existing_configuration():
+    assert _caps(legacy_capture_plugin_installed=True).configured is True
+
+
 # --- the pieces that make it actually work --------------------------------
 
 
@@ -471,6 +516,56 @@ def test_setup_requests_only_the_grants_it_still_needs():
 
     # Nothing yet: ask for all three in one approval.
     assert setup.needs_authorization(_caps(), everything) == ["api", "mcp", "capture"]
+
+
+def test_codex_mcp_login_is_verified_after_the_supported_oauth_flow(monkeypatch):
+    from probe.cli import claude_cli, plugin_cli
+
+    statuses = iter(["not_logged_in", "o_auth"])
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
+    monkeypatch.setattr(
+        plugin_cli,
+        "login_codex_mcp",
+        lambda _name: claude_cli.Result(ok=True, detail="Login successful"),
+    )
+    assert setup.apply_codex_mcp_auth() == ["Codex MCP logged in (probe-research)."]
+
+
+def test_codex_mcp_login_failure_is_actionable(monkeypatch):
+    from probe.cli import claude_cli, plugin_cli
+
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: "not_logged_in")
+    monkeypatch.setattr(
+        plugin_cli,
+        "login_codex_mcp",
+        lambda _name: claude_cli.Result(ok=False, detail="browser cancelled"),
+    )
+    messages = setup.apply_codex_mcp_auth()
+    assert "codex mcp login probe-research" in messages[0]
+
+
+def test_codex_capture_retires_the_legacy_plugin_before_using_unified_tap(monkeypatch):
+    from probe.cli import claude_cli, plugin_cli
+
+    removed: list[str] = []
+    monkeypatch.setattr(
+        plugin_cli,
+        "uninstall",
+        lambda source, plugin_id: (
+            removed.append(f"{source}:{plugin_id}") or claude_cli.Result(ok=True, detail="removed")
+        ),
+    )
+    messages = setup.apply_capture(
+        _caps(
+            agent_source="codex",
+            capture_plugin_installed=True,
+            legacy_capture_plugin_installed=True,
+        ),
+        True,
+        mode=capture.OffMode.DISABLE,
+    )
+    assert removed == ["codex:prbe-codex-tap-plugin@prbe-ai"]
+    assert any("Removed legacy" in message for message in messages)
 
 
 def test_authorize_persists_every_minted_credential(isolate, monkeypatch):
@@ -871,6 +966,29 @@ def test_capture_alone_also_needs_a_restart():
         _caps(), setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False)
     )
     assert notice is not None
+
+
+def test_codex_capture_restart_notice_explains_hook_trust_boundary():
+    notice = setup.restart_notice(
+        _caps(agent_source="codex"),
+        setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False),
+    )
+    assert notice is not None
+    assert "/hooks" in notice
+    assert "Installation succeeds" in notice
+    assert "untrusted hook" in notice
+
+
+def test_retiring_legacy_codex_tap_requires_a_restart_even_when_capture_stays_on():
+    caps = _caps(
+        agent_source="codex",
+        capture_plugin_installed=True,
+        legacy_capture_plugin_installed=True,
+        capture_token_sources=(TokenSource.PAIRED_FILE,),
+        capture_credential_valid=True,
+    )
+    selection = setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False)
+    assert setup.restart_notice(caps, selection) is not None
 
 
 def test_an_auto_update_only_change_does_not_send_you_off_to_restart():

@@ -33,7 +33,14 @@ def _codex_hit(body: dict, marker: str) -> dict | None:
     for hit in semantic.get("results") or []:
         if hit.get("source_system") != "codex":
             continue
-        if needle in json.dumps(hit, ensure_ascii=False).casefold():
+        # Search only indexed source content. Search services often include a
+        # generated `why_relevant` explanation which can repeat the query
+        # verbatim even when the marker never reached the captured transcript.
+        # Matching the whole hit therefore makes a failed canary look live.
+        chunks = hit.get("chunks") or []
+        content = [hit.get("content")]
+        content.extend(chunk.get("content") for chunk in chunks if isinstance(chunk, dict))
+        if any(needle in str(value or "").casefold() for value in content):
             return hit
     return None
 

@@ -261,8 +261,16 @@ def test_enqueue_path_persists_high_water_mark(
         # exits cleanly on its NEXT iteration.
         config.shutdown_sentinel.touch()
 
+    reads = iter(
+        [
+            ([b'{}'], 0, lambda: None),
+            # The final shutdown read starts from the committed cursor.
+            ([], 1, lambda: None),
+        ]
+    )
+
     def fake_tick_read(_c, _s):
-        return [b'{}'], 0, lambda: None
+        return next(reads)
 
     try:
         with (

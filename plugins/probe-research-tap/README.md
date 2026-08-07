@@ -38,7 +38,9 @@ codex plugin add probe-research-tap@research-os-agent
 
 Codex requires a new session after installation. Open `/hooks`, review the
 Probe hook definition, and trust it; Codex deliberately skips untrusted plugin
-hooks.
+hooks. This approval does not block installation or MCP login: it gates hook
+execution. Codex persists trust for the reviewed hook definition; a future
+definition change may require review again.
 
 The dashboard authorization creates a source-bound device: a Codex credential
 cannot post to the Claude Code route, and a Claude Code credential cannot post
@@ -60,6 +62,7 @@ agent SessionStart hook
        retryable failure   exponential-backoff retry
 agent SessionEnd hook
   -> signal the daemon and leave a shutdown sentinel
+  -> daemon tails and durably enqueues the final transcript bytes before exit
 ```
 
 Codex can supply a null `transcript_path` at session start, so the adapter can
