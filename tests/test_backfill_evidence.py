@@ -193,17 +193,69 @@ def test_jsonl_paths_are_relative_to_the_root(tmp_path):
     assert not rows[0]["path"].startswith("/")
 
 
-def test_jsonl_carries_the_sample_for_evidence_and_omits_it_for_tail(tmp_path):
+def test_tail_files_are_rolled_up_per_directory_not_listed_one_by_one(tmp_path):
+    """A tail file carries no text identifying anything -- that is the tier's
+    definition -- so a row each says exactly what one row per directory says and
+    costs thousands of times more. Listing them individually put a 200k-file
+    drive past any context window."""
     _write(tmp_path, "readme.md", "the odyssey ablation")
-    _write(tmp_path, "step.pt", "weights")
-    rows = {
-        json.loads(x)["path"]: json.loads(x)
+    for i in range(40):
+        _write(tmp_path, f"ckpt/step_{i}.pt", "W" * 10)
+    rows = [json.loads(x) for x in ev.to_jsonl(ev.gather(tmp_path)).splitlines()]
+    assert len(rows) == 2, "one evidence row, one rollup row"
+
+    evidence_row = next(r for r in rows if r.get("tier") == "evidence")
+    assert evidence_row["path"] == "readme.md"
+    assert evidence_row["sample"] == "the odyssey ablation"
+
+    rollup = next(r for r in rows if "dir" in r)
+    assert rollup["dir"] == "ckpt"
+    assert rollup["files"] == 40
+    assert rollup["bytes"] == 400
+    assert rollup["ext"] == [".pt"]
+    assert "sample" not in rollup
+
+
+def test_a_rollup_carries_the_time_span_so_bursts_stay_visible(tmp_path):
+    import os
+    import time
+
+    base = time.time() - 90_000
+    for i in range(3):
+        p = _write(tmp_path, f"ckpt/s{i}.pt", "W")
+        os.utime(p, (base + i * 600, base + i * 600))
+    rollup = next(
+        json.loads(x)
         for x in ev.to_jsonl(ev.gather(tmp_path)).splitlines()
-    }
-    assert rows["readme.md"]["sample"] == "the odyssey ablation"
-    assert rows["readme.md"]["tier"] == "evidence"
-    assert "sample" not in rows["step.pt"]
-    assert rows["step.pt"]["tier"] == "tail"
+        if "dir" in json.loads(x)
+    )
+    lo, hi = rollup["mtime_span"]
+    assert hi - lo == 1200
+
+
+def test_tail_files_at_the_root_roll_up_under_a_dot(tmp_path):
+    _write(tmp_path, "model.pt", "W")
+    rollup = next(
+        json.loads(x)
+        for x in ev.to_jsonl(ev.gather(tmp_path)).splitlines()
+        if "dir" in json.loads(x)
+    )
+    # "." and not "": an empty string is falsy, and every consumer that checks
+    # truthiness drops it -- which made root-level checkpoints, the most common
+    # place a researcher leaves them, silently unassignable.
+    assert rollup["dir"] == "."
+    assert rollup["files"] == 1
+
+
+def test_the_rollup_keeps_the_prompt_inside_a_context_window(tmp_path):
+    """The regression guard. 3,000 tail files in one directory must not produce
+    3,000 rows -- that shape is what made the classify pass unrunnable."""
+    _write(tmp_path, "readme.md", "hi")
+    for i in range(3000):
+        _write(tmp_path, f"ckpt/s{i:05d}.pt", "W")
+    text = ev.to_jsonl(ev.gather(tmp_path))
+    assert len(text.splitlines()) == 2
+    assert len(text) < 4000, "a 3,001-file folder must not cost more than a few KB"
 
 
 def test_gather_describes_what_it_actually_did(tmp_path):

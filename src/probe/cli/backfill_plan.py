@@ -148,11 +148,19 @@ def _plan_from(data: dict) -> Plan | None:
             )
     assignments: list[Assignment] = []
     for a in data.get("assignments") or []:
-        if not isinstance(a, dict) or not a.get("path") or not a.get("project"):
+        if not isinstance(a, dict) or not a.get("project"):
+            continue
+        # A rollup row is addressed by `dir`, and the agent may echo either key.
+        # Accepting only `path` dropped every directory assignment silently, so
+        # thousands of files fell to inheritance with nothing reported.
+        raw = a.get("path")
+        if raw is None:
+            raw = a.get("dir")
+        if raw is None:
             continue
         assignments.append(
             Assignment(
-                path=str(a["path"]),
+                path=str(raw),
                 project=str(a["project"]),
                 confidence=str(a.get("confidence") or "high"),
                 why=str(a.get("why") or ""),
@@ -228,6 +236,61 @@ def resolve(evidence: Evidence, plan: Plan) -> tuple[dict[str, str], Discrepancy
     what it had to fill in. Silently completing the map would hide exactly the
     thing worth showing a human before anything uploads.
     """
+    # A rollup row names a DIRECTORY, so an assignment against one stands for
+    # every tail file under it. Expanded BEFORE the reconcile, or the walk would
+    # report thousands of "missing" files the agent did in fact place -- turning
+    # the honest-denominator check into noise nobody reads.
+    walked = set(relative_paths(evidence))
+    expanded: list[Assignment] = []
+    # ONLY expansion claims. A directly-named path is appended every time it
+    # appears, so two rows naming the same file still reach the reconcile as a
+    # DUPLICATE -- deduping those here silently discarded the second assignment
+    # and made `duplicated` unfireable, which is the one signal that says the
+    # plan cannot be trusted.
+    claimed: set[str] = set()
+    # LONGEST PREFIX FIRST. Rollup keys are capped at ROLLUP_MAX_DEPTH but not
+    # padded to it, so `a/b` and `a/b/c` can both be rows -- and recursive
+    # expansion of the shorter one would claim the longer one's files as well,
+    # assigning them twice. Twice is not a cosmetic problem: `duplicated` makes
+    # the whole plan untrustworthy, which is correct, so the specific row has to
+    # win before the general one is applied.
+    ordered = sorted(plan.assignments, key=lambda a: (a.path not in walked, -len(a.path)))
+    for a in ordered:
+        if a.path in walked:
+            claimed.add(a.path)
+            expanded.append(a)
+            continue
+        prefix = "" if a.path in ("", ".") else a.path.rstrip("/") + "/"
+        # RECURSIVE, because the rollup that produced this row is. Keys are
+        # capped at ROLLUP_MAX_DEPTH, so a `dir` of "michael/odyssey/ckpt"
+        # stands for everything beneath it too -- non-recursive expansion would
+        # leave every deeper file unassigned and the reconcile would report
+        # thousands of files as missing that the agent did place.
+        #
+        # A more specific row still wins: `direct` is applied after this loop,
+        # so an evidence file inside the subtree keeps its own assignment.
+        covers = any(w.startswith(prefix) for w in walked)
+        members = [w for w in walked if w.startswith(prefix) and w not in claimed]
+        if members:
+            claimed.update(members)
+            expanded += [
+                Assignment(path=m, project=a.project, confidence=a.confidence,
+                           why=a.why or f"directory {a.path}")
+                for m in members
+            ]
+        elif covers:
+            # Every file under it was already claimed by a longer, more specific
+            # row. The agent naming a parent as well is normal and harmless --
+            # REDUNDANT, not hallucinated. Reporting it as unknown killed the
+            # whole import over a correct answer.
+            continue
+        else:
+            # Neither a file nor a directory we walked. Genuinely unknown, and
+            # the reconcile must still say so.
+            expanded.append(a)
+    plan = Plan(projects=plan.projects, assignments=expanded,
+                unsure=plan.unsure, summary=plan.summary)
+
     disc = reconcile_assignments(evidence, plan)
     assigned = {a.path: a.project for a in plan.assignments if a.path not in disc.unknown}
     for path in disc.missing:

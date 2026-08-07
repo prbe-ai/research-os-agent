@@ -267,3 +267,136 @@ def test_files_written_together_stay_together_in_a_unit(tmp_path):
     for u in units:
         prefixes = {p.split("/")[0] for p in u.paths}
         assert len(prefixes) == 1, f"unit mixed two bursts: {u.paths}"
+
+
+# -- rollup expansion --------------------------------------------------------
+
+
+def test_a_directory_assignment_expands_to_every_tail_file_under_it(tmp_path):
+    """The agent is shown one rollup row per directory, so it assigns the
+    DIRECTORY. Every file under it has to end up placed, or the reconcile
+    reports thousands of files as missing that the agent did in fact place."""
+    _write(tmp_path, "readme.md", "hi")
+    for i in range(20):
+        _write(tmp_path, f"ckpt/s{i}.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(
+        projects=[bp.ProjectSpec(slug="odyssey")],
+        assignments=[
+            bp.Assignment(path="readme.md", project="odyssey"),
+            bp.Assignment(path="ckpt", project="odyssey"),
+        ],
+    )
+    assigned, disc = bp.resolve(evidence, plan)
+    assert len(assigned) == 21
+    assert assigned["ckpt/s7.pt"] == "odyssey"
+    assert disc.clean, "an expanded directory leaves nothing missing or unknown"
+
+
+def test_a_directory_that_was_never_walked_is_still_unknown(tmp_path):
+    """Expansion must not turn a hallucinated directory into a silent no-op."""
+    _write(tmp_path, "a.py", "x")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(
+        projects=[],
+        assignments=[
+            bp.Assignment(path="a.py", project="p"),
+            bp.Assignment(path="does/not/exist", project="p"),
+        ],
+    )
+    _, disc = bp.resolve(evidence, plan)
+    assert disc.unknown == ["does/not/exist"]
+    assert not disc.trustworthy
+
+
+def test_expansion_reaches_nested_directories_because_the_rollup_did(tmp_path):
+    """Rollup keys are capped at ROLLUP_MAX_DEPTH, so one `dir` row stands for
+    everything beneath it. Non-recursive expansion would leave every deeper file
+    unassigned and the reconcile would call them missing."""
+    _write(tmp_path, "ckpt/new.pt", "W")
+    _write(tmp_path, "ckpt/old/ancient.pt", "W")
+    _write(tmp_path, "ckpt/old/deeper/older.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(projects=[], assignments=[bp.Assignment(path="ckpt", project="p")])
+    assigned, disc = bp.resolve(evidence, plan)
+    assert assigned["ckpt/new.pt"] == "p"
+    assert assigned["ckpt/old/ancient.pt"] == "p"
+    assert assigned["ckpt/old/deeper/older.pt"] == "p"
+    assert disc.clean
+
+
+def test_a_file_named_outright_beats_the_rollup_covering_its_directory(tmp_path):
+    """An evidence file inside a rolled-up subtree keeps its own assignment --
+    that per-file decision is the whole reason it was sampled."""
+    _write(tmp_path, "shared/readme.md", "belongs to odyssey")
+    _write(tmp_path, "shared/data/rows.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(
+        projects=[],
+        assignments=[
+            bp.Assignment(path="shared", project="bulk"),
+            bp.Assignment(path="shared/readme.md", project="odyssey"),
+        ],
+    )
+    assigned, _ = bp.resolve(evidence, plan)
+    assert assigned["shared/readme.md"] == "odyssey"
+    assert assigned["shared/data/rows.pt"] == "bulk"
+
+
+def test_two_rows_naming_the_same_file_still_report_a_duplicate(tmp_path):
+    """The dedupe that keeps directory expansion from double-claiming must not
+    also swallow a genuine double assignment -- `duplicated` is the signal that
+    says the plan cannot be trusted at all."""
+    _write(tmp_path, "a.py", "x")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(projects=[], assignments=[
+        bp.Assignment(path="a.py", project="ALPHA"),
+        bp.Assignment(path="a.py", project="BETA"),
+    ])
+    _, disc = bp.resolve(evidence, plan)
+    assert disc.duplicated == ["a.py"]
+    assert not disc.trustworthy
+
+
+def test_naming_a_parent_as_well_as_its_children_is_redundant_not_hallucinated(tmp_path):
+    """An agent naming a container for good measure is normal. Reporting it as
+    an invented path killed the entire import over a correct answer."""
+    _write(tmp_path, "a/b/c/x.pt", "W")
+    _write(tmp_path, "a/b/d/y.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.Plan(projects=[], assignments=[
+        bp.Assignment(path="a/b/c", project="P"),
+        bp.Assignment(path="a/b/d", project="P"),
+        bp.Assignment(path="a/b", project="P"),
+    ])
+    assigned, disc = bp.resolve(evidence, plan)
+    assert disc.unknown == []
+    assert disc.trustworthy and disc.clean
+    assert assigned["a/b/c/x.pt"] == "P" and assigned["a/b/d/y.pt"] == "P"
+
+
+def test_a_rollup_row_can_be_assigned_by_its_dir_key(tmp_path):
+    """The prompt tells the agent to assign a rollup by its `dir`. Accepting
+    only `path` dropped every such assignment silently."""
+    _write(tmp_path, "ckpt/s0.pt", "W")
+    evidence = ev.gather(tmp_path)
+    plan = bp.parse(json.dumps({
+        "projects": ["p"],
+        "assignments": [{"dir": "ckpt", "project": "p"}],
+    }))
+    assert plan is not None
+    assigned, disc = bp.resolve(evidence, plan)
+    assert assigned["ckpt/s0.pt"] == "p" and disc.clean
+
+
+def test_root_level_tail_files_round_trip_from_to_jsonl_to_resolve(tmp_path):
+    """The full path the agent actually walks: emit -> assign -> expand."""
+    _write(tmp_path, "final.pt", "W")
+    _write(tmp_path, "model.safetensors", "W")
+    evidence = ev.gather(tmp_path)
+    rows = [json.loads(x) for x in ev.to_jsonl(evidence).splitlines()]
+    assigns = [{"path": r.get("path") or r["dir"], "project": "p"} for r in rows]
+    plan = bp.parse(json.dumps({"projects": ["p"], "assignments": assigns}))
+    assigned, disc = bp.resolve(evidence, plan)
+    assert set(assigned) == {"final.pt", "model.safetensors"}
+    assert disc.clean, "root files must not fall to inheritance unreported"
