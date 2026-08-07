@@ -662,10 +662,23 @@ def run_units(
             paint_to=board.row(index) if board else None,
         )
 
+    pool = ThreadPoolExecutor(max_workers=workers)
     try:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            return list(pool.map(one, enumerate(units)))
+        futures = [pool.submit(one, pair) for pair in enumerate(units)]
+        return [f.result() for f in futures]
+    except KeyboardInterrupt:
+        # LEAVING MEANS LEAVING. `with ThreadPoolExecutor(...)` calls
+        # shutdown(wait=True) on the way out, so a Ctrl-C here used to block
+        # until every running agent finished on its own -- up to three of them,
+        # each with a 45-minute deadline. Killing the agents is what actually
+        # ends the wait: their threads then return instead of being waited on.
+        bf.stop_all()
+        for f in futures:
+            f.cancel()
+        pool.shutdown(wait=False)
+        raise
     finally:
+        pool.shutdown(wait=False)
         if board:
             board.close()
 
@@ -937,7 +950,44 @@ def execute(
     Order is deliberate and each step is cheap-and-certain before the one after:
     census, evidence, classify, REVIEW, create projects, import, enqueue,
     reconcile. Nothing mutates anything server-side until the review has passed.
+
+    LEAVING KILLS EVERY AGENT. `_execute` does the work; this wrapper only
+    guarantees the cleanup, on every exit -- Ctrl-C, an exception, or a clean
+    return. Belt and braces on purpose: the interrupt paths already call
+    `stop_all`, and this is what catches the route nobody thought of. An agent
+    that outlives the wizard is invisible, holds the folder, and keeps spending
+    tokens with nothing left to report to.
+
+    The OUTBOX is untouched. It is a background drainer with its own
+    `probe outbox pause`, and files already queued are already the user's --
+    abandoning those on the way out is the one thing leaving must not do.
     """
+    try:
+        return _execute(
+            client_factory=client_factory, folder=folder, agent=agent,
+            project=project, interactive=interactive, yes=yes,
+            concurrency=concurrency,
+        )
+    except KeyboardInterrupt:
+        bf.stop_all()
+        return ["Stopped. Nothing further was read or uploaded.",
+                "Anything already queued keeps uploading — `probe outbox status` "
+                "shows it, `probe outbox pause` stops it."]
+    finally:
+        bf.stop_all()
+
+
+def _execute(
+    *,
+    client_factory,
+    folder: Path,
+    agent: bf.Agent,
+    project: str | None = None,
+    interactive: bool = True,
+    yes: bool = False,
+    concurrency: int | None = None,
+) -> list[str]:
+    """The import itself. See `execute`, which owns the cleanup."""
     from probe.cli import tui
 
     report = Report()
