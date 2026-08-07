@@ -87,9 +87,14 @@ After the backend and both plugins are deployed, generate a marker such as
 containing that exact marker, wait for a response, and end the session. Then run:
 
 ```bash
-PROBE_TOKEN=probe_pat_... python scripts/verify_codex_live.py \
-  probe-codex-canary-20260806-<random>
+python scripts/verify_codex_live.py probe-codex-canary-20260806-<random>
 ```
+
+The verifier uses `PROBE_MCP_TOKEN`, then `PROBE_TOKEN`, then the configured
+MCP/read token. Pass `--token` to check a different team explicitly. The read
+credential must resolve to the same team where the Codex capture device was
+paired; otherwise the tenant-safe transcript/search APIs correctly return no
+match.
 
 The command passes only when `/v1/search` returns the marker from a document
 whose `source_system` is exactly `codex`. This proves the real hook, rollout

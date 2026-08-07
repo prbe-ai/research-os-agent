@@ -938,7 +938,7 @@ def confirm_removal(agent_sources: tuple[str, ...] | list[str] | str = ("claude_
     )
 
 
-def run_action_menu(caps: Capabilities):
+def run_action_menu(caps: Capabilities | dict[str, Capabilities]):
     """The top-level menu. Returns None (quit), tui.BACK, or an Action."""
     import questionary
 
@@ -969,12 +969,33 @@ def run_action_menu(caps: Capabilities):
     )
 
 
-def describe_state(caps: Capabilities) -> list[str]:
+def describe_state(caps: Capabilities | dict[str, Capabilities]) -> list[str]:
     """A one-glance summary printed above the menu on a re-run.
 
     The wizard already knows all of this, so showing it means the user picks an
     action against real state rather than guessing which one they need.
     """
+    if isinstance(caps, dict):
+        lines: list[str] = []
+        for source, snapshot in caps.items():
+            label = agent_label(source)
+            capture = "on" if snapshot.capture_on else "off"
+            if snapshot.capture_killswitched:
+                capture = "off (killswitch set)"
+            lines.append(
+                f"  {label:<28} MCP {'on' if snapshot.tracking_on else 'off'} · capture {capture}"
+            )
+        first = next(iter(caps.values()), None)
+        if first is not None:
+            lines.append(
+                f"  {'Automatic updates':<28} {'on' if first.auto_update_enabled else 'off'}"
+            )
+            if first.logged_in_as:
+                lines.append(f"  {'Account':<28} {first.logged_in_as}")
+            if first.last_update_attempt:
+                lines.append(f"  Last update attempt         {first.last_update_attempt}")
+        return lines
+
     lines = []
     lines.append(
         f"  CLI + MCP                   {'on' if caps.tracking_on else 'off'}"

@@ -87,6 +87,14 @@
   Codex-only and dual-agent runs use matching session-capture, update, uninstall,
   troubleshooting and manual-install language. Codex guidance is written to its
   global `AGENTS.md`; Claude Code guidance remains in global `CLAUDE.md`.
+- **Interactive onboarding now starts with intent, then asks for the target.** The
+  action menu is first on fresh and configured devices; after choosing an action,
+  the wizard asks for Claude Code, Codex or both, then presents that action's
+  feature choices. Returning to the main menu prompts for agents again, so update,
+  diagnose and uninstall never inherit a stale target from an earlier action.
+- **The live Codex canary now defaults to the configured read credential.** It
+  prefers the MCP/read token over a write token, preventing a correctly captured
+  session from looking absent when the two credentials belong to different teams.
 - **Codex setup now verifies the two credentials it actually uses.** A rejected
   capture token triggers re-pairing instead of reading as live, and the wizard
   completes Codex's native OAuth flow for the production `probe-research` MCP

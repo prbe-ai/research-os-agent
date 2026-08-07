@@ -1798,6 +1798,68 @@ def test_agent_both_uses_one_dual_agent_uninstall_confirmation(monkeypatch):
     assert all(call["yes"] is True for call in calls)
 
 
+def test_interactive_wizard_asks_action_then_agent_then_runs_features(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from probe.cli import bootstrap
+    from probe.cli import doctor as doctor_impl
+    from probe.cli import plugin_cli
+    from probe.cli import setup as wizard
+    from probe.cli import tui
+    from probe.cli.actions import Action
+    import probe.cli.main  # noqa: F401
+
+    cli_main = sys.modules["probe.cli.main"]
+    monkeypatch.setattr(bootstrap, "ensure_persistent_install", lambda: SimpleNamespace(message=""))
+    monkeypatch.setattr(plugin_cli, "available", lambda _source: True)
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda: _caps(agent_source=os.environ.get("PROBE_AGENT", "claude_code")),
+    )
+    monkeypatch.setattr(wizard, "interactive", lambda: True)
+    monkeypatch.setattr(tui, "clear", lambda: None)
+    monkeypatch.setattr(tui, "page", lambda *args, **kwargs: None)
+
+    events: list[str] = []
+    actions = iter((Action.CONFIGURE, Action.EXIT))
+
+    def choose_action(_caps):
+        events.append("action")
+        return next(actions)
+
+    def choose_agent(_defaults):
+        events.append("agent")
+        return ("codex",)
+
+    def run_features(_action, **_kwargs):
+        events.append("features")
+        return ["done"]
+
+    monkeypatch.setattr(wizard, "run_action_menu", choose_action)
+    monkeypatch.setattr(wizard, "run_agent_menu", choose_agent)
+    monkeypatch.setattr(cli_main, "_run_wizard_action", run_features)
+
+    result = CliRunner().invoke(cli_main.app, ["wizard"])
+
+    assert result.exit_code == 0, result.output
+    assert events[:3] == ["action", "agent", "features"]
+
+
+def test_action_menu_state_names_each_detected_agent():
+    lines = setup.describe_state(
+        {
+            "claude_code": _caps(agent_source="claude_code"),
+            "codex": _caps(agent_source="codex"),
+        }
+    )
+    assert any("Claude Code" in line for line in lines)
+    assert any("Codex" in line for line in lines)
+
+
 def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_path):
     """ "Removed." used to be false outside the repo: the plugin went, the
     credential went, and the global CLAUDE.md kept telling every agent in every
@@ -2162,9 +2224,9 @@ def test_the_interactive_wizard_starts_without_crashing():
     Enter nor Space is ever sent, so nothing installs) and measures the screen
     that comes back.
 
-    Whichever screen this machine lands on -- a configured device gets the
-    action menu, a fresh one goes straight to the capability picker -- both go
-    through `tui.ask`, so the margin claim holds either way.
+    The action menu is now always the first interactive screen, on both fresh
+    and configured devices. It goes through `tui.ask`, so the margin claim
+    holds against the real entry point rather than a rehearsal.
     """
     screen = _pty_screen([_probe_binary(), "wizard"], rows=24, cols=80, keys=b"\x1b[B\x1b[A")
     text = "\n".join(screen.lines())

@@ -884,55 +884,68 @@ def wizard(
     if boot.message:
         print(boot.message)
 
+    explicit_agent_sources: tuple[str, ...] | None = None
     if agent is not None:
         normalized_agent = agent.strip().lower()
         if normalized_agent in {"both", "all", "claude,codex", "codex,claude"}:
-            agent_sources = ("claude_code", "codex")
+            explicit_agent_sources = ("claude_code", "codex")
         elif normalized_agent in {"claude", "claude_code"}:
-            agent_sources = ("claude_code",)
+            explicit_agent_sources = ("claude_code",)
         elif normalized_agent == "codex":
-            agent_sources = ("codex",)
+            explicit_agent_sources = ("codex",)
         else:
             raise typer.BadParameter("--agent must be claude, codex, or both")
-    else:
-        from probe.cli import plugin_cli
 
-        codex_session = bool(os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX_SANDBOX"))
-        if codex_session:
-            defaults = ("codex",)
-        elif wizard.interactive():
-            installed = tuple(
-                source for source in ("claude_code", "codex") if plugin_cli.available(source)
-            )
-            defaults = installed or ("claude_code",)
-        else:
-            # Preserve the historical headless default. Scripts opt into both
-            # explicitly with `--agent both`; only the human-facing bare npx
-            # flow grows the agent chooser.
-            defaults = ("claude_code",)
-        if wizard.interactive():
-            tui.clear()
-            picked_agents = wizard.run_agent_menu(defaults)
-            if picked_agents is None or picked_agents is tui.BACK:
-                raise typer.Exit(0)
-            agent_sources = picked_agents
-        else:
-            agent_sources = defaults
+    from probe.cli import plugin_cli
+
+    codex_session = bool(os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX_SANDBOX"))
+    available_sources = tuple(
+        source for source in ("claude_code", "codex") if plugin_cli.available(source)
+    )
+    if explicit_agent_sources is not None:
+        agent_defaults = explicit_agent_sources
+    elif not wizard.interactive():
+        # Preserve the historical headless default. Scripts opt into both
+        # explicitly with `--agent both`; only the human-facing bare npx flow
+        # presents an agent chooser.
+        agent_defaults = ("claude_code",)
+    elif codex_session:
+        agent_defaults = ("codex",)
+    else:
+        agent_defaults = available_sources or ("claude_code",)
+
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _agent_target(source: str):
+        """Scope PROBE_AGENT to one operation without leaking it to callers."""
+        previous = os.environ.get("PROBE_AGENT")
+        os.environ["PROBE_AGENT"] = source
+        try:
+            yield
+        finally:
+            if previous is None:
+                os.environ.pop("PROBE_AGENT", None)
+            else:
+                os.environ["PROBE_AGENT"] = previous
 
     def _collect_agent(source: str):
-        os.environ["PROBE_AGENT"] = source
-        return doctor_impl.collect()
+        with _agent_target(source):
+            return doctor_impl.collect()
 
-    caps_by_source = {source: _collect_agent(source) for source in agent_sources}
-    caps = caps_by_source[agent_sources[0]]
-    configured = any(snapshot.configured for snapshot in caps_by_source.values())
+    # The action is selected BEFORE an agent. Discover state read-only for the
+    # main menu, then collect only the chosen agents after the user picks what
+    # they want to do. This keeps the first screen about intent, not plumbing.
+    state_sources = explicit_agent_sources or available_sources or agent_defaults
+    state_caps_by_source = {source: _collect_agent(source) for source in state_sources}
     explicit_flags = any(f is not None for f in (tracking, capture, auto_update, agent_rules))
 
     from probe.cli import actions as actions_mod
 
     # Everything the dashboard used to hide in collapsed sections lives here,
-    # next to the state it acts on. The action menu only appears on a RE-RUN: a
-    # fresh machine has nothing to diagnose, update or remove.
+    # next to the state it acts on. The main menu is always the first
+    # interactive decision, including on a fresh machine; agent and capability
+    # selection follow only after the user chooses an action.
     chosen_action = actions_mod.Action.CONFIGURE
     if action is not None:
         try:
@@ -944,9 +957,9 @@ def wizard(
                 file=sys.stderr,
             )
             raise typer.Exit(2) from None
-    elif configured and not yes and not explicit_flags and wizard.interactive():
+    elif not yes and not explicit_flags and wizard.interactive():
         tui.clear()
-        picked = wizard.run_action_menu(caps)
+        picked = wizard.run_action_menu(state_caps_by_source)
         if picked is None or picked is tui.BACK:
             raise typer.Exit(0)
         chosen_action = picked
@@ -957,29 +970,60 @@ def wizard(
     # one task finishes is the same "go do it yourself" failure as printing a
     # command: after an update you want doctor, after a removal you often want
     # to turn something else on.
-    looping = (
-        action is None and configured and not yes and not explicit_flags and wizard.interactive()
-    )
+    looping = action is None and not yes and not explicit_flags and wizard.interactive()
 
     while True:
         if chosen_action is actions_mod.Action.EXIT:
             raise typer.Exit(0)
 
-        if len(agent_sources) == 1:
-            os.environ["PROBE_AGENT"] = agent_sources[0]
-            lines = _run_wizard_action(
-                chosen_action,
-                caps=caps,
-                base_now=base_now,
-                yes=yes,
-                tracking=tracking,
-                capture=capture,
-                auto_update=auto_update,
-                agent_rules=agent_rules,
-                uninstall=uninstall,
-                configured=configured,
-                folder=folder,
+        agent_sources = explicit_agent_sources
+        if (
+            agent_sources is None
+            and chosen_action is not actions_mod.Action.BACKFILL
+            and wizard.interactive()
+        ):
+            tui.clear()
+            picked_agents = wizard.run_agent_menu(agent_defaults)
+            if picked_agents is None or picked_agents is tui.BACK:
+                if not looping:
+                    raise typer.Exit(0)
+                tui.clear()
+                picked = wizard.run_action_menu(state_caps_by_source)
+                if picked is None or picked is tui.BACK:
+                    raise typer.Exit(0)
+                chosen_action = picked
+                continue
+            agent_sources = picked_agents
+            agent_defaults = picked_agents
+        elif agent_sources is None:
+            # Headless calls preserve the historical default. Backfill is
+            # agent-independent but _run_wizard_action still needs one
+            # capability snapshot for shared account/base-url state.
+            agent_sources = (
+                agent_defaults[:1]
+                if chosen_action is actions_mod.Action.BACKFILL
+                else agent_defaults
             )
+
+        caps_by_source = {source: _collect_agent(source) for source in agent_sources}
+        caps = caps_by_source[agent_sources[0]]
+        configured = any(snapshot.configured for snapshot in caps_by_source.values())
+
+        if len(agent_sources) == 1:
+            with _agent_target(agent_sources[0]):
+                lines = _run_wizard_action(
+                    chosen_action,
+                    caps=caps,
+                    base_now=base_now,
+                    yes=yes,
+                    tracking=tracking,
+                    capture=capture,
+                    auto_update=auto_update,
+                    agent_rules=agent_rules,
+                    uninstall=uninstall,
+                    configured=configured,
+                    folder=folder,
+                )
         elif chosen_action is actions_mod.Action.CONFIGURE:
             # One common capability decision applies to both agents. A feature
             # reads as enabled only when every selected agent has it, so a
@@ -1038,22 +1082,23 @@ def wizard(
             lines = []
             for index, source in enumerate(agent_sources):
                 current = _collect_agent(source)
-                result = _run_wizard_action(
-                    chosen_action,
-                    caps=current,
-                    base_now=base_now,
-                    yes=True,
-                    tracking=tracking,
-                    capture=capture,
-                    auto_update=auto_update,
-                    agent_rules=agent_rules,
-                    uninstall=uninstall,
-                    configured=configured,
-                    folder=folder,
-                    selection_override=shared_selection,
-                    authorization_needs=shared_needs if index == 0 else None,
-                    capture_sources=missing_capture_sources,
-                )
+                with _agent_target(source):
+                    result = _run_wizard_action(
+                        chosen_action,
+                        caps=current,
+                        base_now=base_now,
+                        yes=True,
+                        tracking=tracking,
+                        capture=capture,
+                        auto_update=auto_update,
+                        agent_rules=agent_rules,
+                        uninstall=uninstall,
+                        configured=configured,
+                        folder=folder,
+                        selection_override=shared_selection,
+                        authorization_needs=shared_needs if index == 0 else None,
+                        capture_sources=missing_capture_sources,
+                    )
                 if result:
                     label = "Codex" if source == "codex" else "Claude Code"
                     lines.extend([f"{label}:", *result, ""])
@@ -1080,20 +1125,21 @@ def wizard(
             lines = []
             for source in targets:
                 current = _collect_agent(source)
-                result = _run_wizard_action(
-                    chosen_action,
-                    caps=current,
-                    base_now=base_now,
-                    yes=action_yes,
-                    tracking=tracking,
-                    capture=capture,
-                    auto_update=auto_update,
-                    agent_rules=agent_rules,
-                    uninstall=uninstall,
-                    configured=configured,
-                    folder=folder,
-                    selected_agents=agent_sources,
-                )
+                with _agent_target(source):
+                    result = _run_wizard_action(
+                        chosen_action,
+                        caps=current,
+                        base_now=base_now,
+                        yes=action_yes,
+                        tracking=tracking,
+                        capture=capture,
+                        auto_update=auto_update,
+                        agent_rules=agent_rules,
+                        uninstall=uninstall,
+                        configured=configured,
+                        folder=folder,
+                        selected_agents=agent_sources,
+                    )
                 if result:
                     label = "Codex" if source == "codex" else "Claude Code"
                     lines.extend([f"{label}:", *result, ""])
@@ -1116,10 +1162,10 @@ def wizard(
         if not paged and wizard.interactive():
             tui.say()
             input(tui.indent("Press enter to return to the menu…"))
-        caps_by_source = {source: _collect_agent(source) for source in agent_sources}
-        caps = caps_by_source[agent_sources[0]]
+        state_sources = tuple(dict.fromkeys((*state_sources, *agent_sources)))
+        state_caps_by_source = {source: _collect_agent(source) for source in state_sources}
         tui.clear()
-        picked = wizard.run_action_menu(caps)
+        picked = wizard.run_action_menu(state_caps_by_source)
         if picked is None or picked is tui.BACK:
             raise typer.Exit(0)
         chosen_action = picked

@@ -12,6 +12,21 @@ import urllib.error
 import urllib.request
 
 
+def _resolve_read_token(explicit: str | None = None) -> str | None:
+    """Resolve a credential that can read the capture device's tenant."""
+    if explicit:
+        return explicit
+    env_token = os.environ.get("PROBE_MCP_TOKEN") or os.environ.get("PROBE_TOKEN")
+    if env_token:
+        return env_token
+    try:
+        from probe.config import resolve
+    except ImportError:
+        return None
+    settings = resolve()
+    return settings.mcp_token or settings.token
+
+
 def _search(base_url: str, token: str, marker: str) -> dict:
     request = urllib.request.Request(
         f"{base_url.rstrip('/')}/v1/search",
@@ -54,18 +69,25 @@ def main() -> int:
         "--api-base-url",
         default=os.environ.get("PROBE_BASE_URL", "https://api.research.prbe.ai"),
     )
-    parser.add_argument("--token", default=os.environ.get("PROBE_TOKEN"))
+    parser.add_argument(
+        "--token",
+        help=(
+            "read-scoped user token; defaults to PROBE_MCP_TOKEN, PROBE_TOKEN, "
+            "then the configured MCP/read token"
+        ),
+    )
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument("--interval", type=int, default=10)
     args = parser.parse_args()
-    if not args.token:
-        parser.error("set PROBE_TOKEN or pass --token (a read-scoped user token)")
+    token = _resolve_read_token(args.token)
+    if not token:
+        parser.error("configure a read token, set PROBE_MCP_TOKEN/PROBE_TOKEN, or pass --token")
 
     deadline = time.monotonic() + args.timeout
     last_error = "no matching Codex document yet"
     while time.monotonic() < deadline:
         try:
-            body = _search(args.api_base_url, args.token, args.marker)
+            body = _search(args.api_base_url, token, args.marker)
             hit = _codex_hit(body, args.marker)
             if hit is not None:
                 print(

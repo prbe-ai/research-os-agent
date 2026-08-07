@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from scripts.verify_codex_live import _codex_hit
+from types import SimpleNamespace
+
+from scripts.verify_codex_live import _codex_hit, _resolve_read_token
 
 
 def test_canary_requires_codex_source_and_marker() -> None:
@@ -30,3 +32,20 @@ def test_canary_does_not_accept_query_echoed_by_relevance_explanation() -> None:
         }
     }
     assert _codex_hit(body, "probe-cx-fake") is None
+
+
+def test_canary_prefers_explicit_then_environment_read_token(monkeypatch) -> None:
+    monkeypatch.setenv("PROBE_MCP_TOKEN", "probe_pat_mcp")
+    monkeypatch.setenv("PROBE_TOKEN", "probe_pat_write")
+    assert _resolve_read_token("probe_pat_explicit") == "probe_pat_explicit"
+    assert _resolve_read_token() == "probe_pat_mcp"
+
+
+def test_canary_prefers_configured_mcp_token_over_write_token(monkeypatch) -> None:
+    monkeypatch.delenv("PROBE_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("PROBE_TOKEN", raising=False)
+    monkeypatch.setattr(
+        "probe.config.resolve",
+        lambda: SimpleNamespace(mcp_token="probe_pat_read", token="probe_pat_write"),
+    )
+    assert _resolve_read_token() == "probe_pat_read"
