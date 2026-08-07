@@ -1836,6 +1836,25 @@ def _no_background_heartbeat(monkeypatch):
     monkeypatch.setenv("PROBE_HEARTBEAT_SECONDS", "0")
 
 
+@pytest.fixture(autouse=True)
+def _no_auto_snapshot(monkeypatch):
+    """Auto-snapshot (Task 8) would make every client.run() in this suite
+    snapshot the working tree. Tests that exercise the auto path re-enable it
+    explicitly."""
+    monkeypatch.setenv("PROBE_AUTO_SNAPSHOT", "0")
+
+
+@pytest.fixture(autouse=True)
+def _no_capture_enforcement_leakage(monkeypatch):
+    """Strip PROBE_ENV_ALLOWLIST from every test's environment. It is a real
+    dev-shell export (per-site env capture tuning) and is not otherwise
+    isolated the way config/outbox state is -- a developer with it set in
+    their shell would get extra captured env values with no test-visible
+    cause. Tests that exercise this path set it explicitly, which wins over
+    this."""
+    monkeypatch.delenv("PROBE_ENV_ALLOWLIST", raising=False)
+
+
 @pytest.fixture
 def app() -> FakeApp:
     return FakeApp()

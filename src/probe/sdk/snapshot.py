@@ -17,9 +17,11 @@ downstream from a correct capture. See ``capture_env``.
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import json
 import os
+import platform
 import re
 import subprocess
 import sys
@@ -205,32 +207,44 @@ def pushed_base(cwd: str) -> tuple[str | None, str | None]:
         if sha and _SHA_RE.fullmatch(sha):
             shas.append(sha)
 
-    def _is_ancestor(a: str, b: str) -> bool:
-        return subprocess.run(
-            ["git", "merge-base", "--is-ancestor", a, b],
-            cwd=cwd, capture_output=True, text=True,
-        ).returncode == 0
+    if not shas:
+        return None, None
 
-    best: str | None = None
-    for sha in shas:
-        if subprocess.run(
-            ["git", "cat-file", "-e", f"{sha}^{{commit}}"],
-            cwd=cwd, capture_output=True, text=True,
-        ).returncode != 0:
-            continue
-        if _is_ancestor(head, sha):
-            return head, _remote_url(cwd, remote)
-        candidate = _git(cwd, "merge-base", head, sha, check=False) or None
-        if not candidate:
-            continue
-        # Keep the NEWEST candidate. Taking the first one found means an
-        # unrelated stale branch can win on ls-remote's refname ordering, which
-        # pushes the base far back in history and marks hundreds of unchanged
-        # files for upload. Measured on this repo: first-found gave 57 pending
-        # uploads for a 5-file change; newest gives 5.
-        if best is None or _is_ancestor(best, candidate):
-            best = candidate
-    return best, (_remote_url(cwd, remote) if best else None)
+    # One `cat-file --batch-check` for every advertised SHA instead of one
+    # `cat-file -e` process per branch. A remote head we do not have locally is
+    # treated as NOT pushed, same rule as before. (~6000 branches would hit
+    # ARG_MAX on the rev-list below; switch to `rev-list --stdin` if that
+    # ever becomes real.)
+    probe = subprocess.run(
+        ["git", "cat-file", "--batch-check"],
+        cwd=cwd, input="\n".join(shas) + "\n",
+        capture_output=True, text=True,
+    )
+    present = []
+    for line in probe.stdout.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "commit":
+            present.append(parts[0])
+    if not present:
+        return None, None
+
+    # `--boundary` computes the pushed frontier directly, which is merge-safe;
+    # the old max-over-pairwise-merge-bases only approximated it. Boundary
+    # lines are emitted newest-first, so the first is the newest pushed
+    # ancestor. Empty output means HEAD is reachable from an advertised head.
+    out = subprocess.run(
+        ["git", "rev-list", "--boundary", "HEAD", "--not", *present],
+        cwd=cwd, capture_output=True, text=True,
+    )
+    if out.returncode != 0:
+        return None, None
+    lines = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+    if not lines:
+        return head, _remote_url(cwd, remote)
+    boundary = [ln[1:] for ln in lines if ln.startswith("-")]
+    if not boundary:
+        return None, None
+    return boundary[0], _remote_url(cwd, remote)
 
 
 @lru_cache(maxsize=256)
@@ -351,6 +365,20 @@ def _include_entries(
     return found
 
 
+#: Root-level dependency descriptors captured as FILES, not just as the
+#: enumerated interpreter packages — the lockfile is what a rebuild consumes,
+#: and a dirty/gitignored one was previously lost with no record.
+LOCKFILE_NAMES = (
+    "uv.lock", "poetry.lock", "pyproject.toml", "environment.yml",
+    "package-lock.json", "Cargo.lock",
+)
+DEFAULT_MAX_LOCKFILE_BYTES = 1024 * 1024
+
+
+def _is_lockfile(name: str) -> bool:
+    return name in LOCKFILE_NAMES or fnmatch.fnmatch(name, "requirements*.txt")
+
+
 # Directories that are rebuilt from a lockfile or a cache, never authored. Left
 # in, the first snapshot of an ordinary Python project uploads a few hundred MB
 # of `.venv` and calls it the experiment's code.
@@ -464,6 +492,11 @@ def capture_directory_manifest(
                 reference_over_bytes=reference_over_bytes,
             )
         )
+    # The walk above already includes lockfiles -- they are not in any SKIP
+    # filter -- so only the identity tag is new here, matching capture_manifest.
+    for e in entries:
+        if "/" not in e["path"] and _is_lockfile(e["path"]):
+            e["lockfile"] = True
     entries.sort(key=lambda e: e["path"])
     digest = hashlib.sha256()
     for e in entries:
@@ -582,6 +615,34 @@ def capture_manifest(
         )
         entries.sort(key=lambda e: e["path"])
 
+    # Root-level lockfiles are FORCED into the manifest even when `.gitignore`
+    # would otherwise hide them from `ls-files` -- the exact gap that lost a
+    # dirty uv.lock with no record at all. Already-tracked/included lockfiles
+    # just get the identity tag below; only the gitignored/untracked case needs
+    # a new entry, and it is capped so an oversized one is reported, not shipped.
+    skipped: list[dict[str, str]] = []
+    have = {e["path"] for e in entries}
+    for name in sorted(os.listdir(cwd)):
+        if not _is_lockfile(name):
+            continue
+        full = os.path.join(cwd, name)
+        if not os.path.isfile(full) or os.path.islink(full):
+            continue
+        if name in have:
+            continue  # tracked or included already; tagged below
+        sha, size = _file_sha256(full)
+        if size > DEFAULT_MAX_LOCKFILE_BYTES:
+            skipped.append({"path": name, "reason": "lockfile_too_large"})
+            continue
+        entries.append({
+            "path": name, "mode": "100644", "sha256": sha, "size": size,
+            "source": "blob", "lockfile": True,
+        })
+    for e in entries:
+        if "/" not in e["path"] and _is_lockfile(e["path"]):
+            e["lockfile"] = True
+    entries.sort(key=lambda e: e["path"])
+
     digest = hashlib.sha256()
     for e in entries:
         digest.update(f"{e['path']}\0{e['mode']}\0{e['sha256']}\n".encode())
@@ -595,6 +656,7 @@ def capture_manifest(
         "n_git_referenced": sum(1 for e in entries if e["source"] == "git"),
         "n_pending_upload": sum(1 for e in entries if e["source"] == "blob"),
         "n_referenced_offsite": sum(1 for e in entries if e["source"] == "reference"),
+        "skipped": skipped,
     }
 
 
@@ -1022,3 +1084,60 @@ def capture_gpu() -> list[dict[str, Any]]:
                 }
             )
     return gpus
+
+
+def capture_system() -> dict[str, Any]:
+    """Machine-stable identity: OS, CPU/RAM, CUDA stack. Joins the GPU inventory
+    under ``execution_records.hardware`` — hashed into env identity, which is
+    correct because two runs on identical nodes must still share one record.
+    Per-launch facts (hostname, env values) belong in the launch block instead."""
+    info: dict[str, Any] = {
+        "os": {
+            "platform": platform.platform(),
+            "machine": platform.machine(),
+            "python_implementation": platform.python_implementation(),
+        },
+        "cpu": {"count": os.cpu_count() or 0},
+    }
+    try:
+        with open("/etc/os-release") as fh:
+            for line in fh:
+                if line.startswith("PRETTY_NAME="):
+                    info["os"]["distro"] = line.split("=", 1)[1].strip().strip('"')
+                    break
+    except OSError:
+        pass
+    libc = platform.libc_ver()
+    if libc[0]:
+        info["os"]["libc"] = f"{libc[0]} {libc[1]}"
+    try:
+        names = os.sysconf_names
+        if "SC_PAGE_SIZE" in names and "SC_PHYS_PAGES" in names:
+            info["cpu"]["mem_total_bytes"] = (
+                os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+            )
+    except (OSError, ValueError, AttributeError):
+        pass
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        try:
+            runtime = getattr(getattr(torch, "version", None), "cuda", None)
+            if runtime:
+                cuda: dict[str, Any] = {"runtime": runtime}
+                cudnn = torch.backends.cudnn.version()
+                if cudnn:
+                    cuda["cudnn"] = cudnn
+                info["cuda"] = cuda
+        except Exception:
+            pass
+    else:
+        try:
+            out = subprocess.run(
+                ["nvcc", "--version"], capture_output=True, text=True, timeout=5
+            )
+            m = re.search(r"release ([\d.]+)", out.stdout)
+            if m:
+                info["cuda"] = {"runtime": m.group(1)}
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    return info

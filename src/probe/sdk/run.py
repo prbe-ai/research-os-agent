@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import UUID, uuid4
 
 from . import errors
+from . import launch as _launch
 from . import snapshot as _snapshot
 from . import unit_context
 from .hashing import fingerprint, local_file_uri, reference_fields
@@ -1300,10 +1301,14 @@ class Run:
         include: list[str] | None = None,
         reference_over_bytes: int = _snapshot.DEFAULT_REFERENCE_OVER_BYTES,
         strict: bool | None = None,
+        argv: list[str] | None = None,
     ) -> dict:
         """Capture code (git shadow ref) + deps + GPUs as a content-addressed
         execution record (fold #7), and record the shadow commit as a reference
         artifact. Non-disruptive.
+
+        ``argv`` — the command this run executes, when a caller launches a
+        child process; defaults to this process's argv.
 
         ``venv`` / ``detect_venv`` choose WHICH environment is recorded. The
         default records this interpreter's, which is correct here and only here:
@@ -1355,13 +1360,29 @@ class Run:
             if include_env
             else {}
         )
+        lockfiles = sorted(
+            ({"path": e["path"], "sha256": e["sha256"]}
+             for e in manifest["entries"] if e.get("lockfile")),
+            key=lambda item: item["path"],
+        )
+        if lockfiles:
+            deps = {**deps, "lockfiles": lockfiles}
         record = ExecutionRecordCreate(
-            # `git` is omitted rather than stored as null when there is no repo:
-            # the execution record is content-addressed, and a null key would make
-            # a non-git capture hash differently from the same one taken later.
-            code={"manifest": manifest, **({"git": git} if git else {})},
+            # `git` is deliberately NOT hashed into the execution record (design
+            # doc D1): the identity table names the code MANIFEST as identity,
+            # and `git` here carries a per-snapshot commit sha + this run's id
+            # (see capture_git_snapshot, whose shadow commit message embeds
+            # run_id) -- hashing it would mint a unique execution record on
+            # every snapshot and destroy dedup. The shadow ref is provenance,
+            # not identity, and already rides the code-snapshot artifact below
+            # (uri `git:ref#commit`, branch/dirty in its meta).
+            code={"manifest": manifest},
             deps=deps,
-            hardware={"gpu": _snapshot.capture_gpu()} if include_gpu else {},
+            hardware=(
+                {"gpu": _snapshot.capture_gpu(), **_snapshot.capture_system()}
+                if include_gpu
+                else {}
+            ),
         )
         exec_rec = self._client.transport.post(
             "/v1/execution-records", record.model_dump(mode="json", exclude_none=True)
@@ -1376,21 +1397,29 @@ class Run:
             manifest, cwd, upload=upload, max_upload_bytes=max_upload_bytes, strict=strict
         )
 
-        # Pin the real runs.env_ref column (FK to the execution record just created).
+        # Pin the real runs.env_ref column (FK to the execution record just
+        # created). Launch ephemera ride the SAME patch as env_ref: one write, and
+        # the metadata merge is client-side (read-modify-write) because RunPatch
+        # REPLACES metadata. Single-writer per run is the operating assumption
+        # (probe exec holds the run lock; SDK runs are process-bound).
+        launch_block = _launch.build_launch_block(
+            argv=argv, cwd=cwd, config=(self._data or {}).get("config"),
+        )
+        current_meta = dict((self._data or {}).get("metadata") or {})
+        patch_body: dict = {"metadata": {**current_meta, "launch": launch_block}}
         if content_hash is not None:
-            data = self._client.write(
-                "PATCH", f"/v1/runs/{self.id}", {"env_ref": content_hash}, strict=strict
-            )
-            if data:
-                self._data = data
-                if data.get("env_ref") != content_hash:
-                    message = (
-                        "Probe Research API did not persist run.env_ref after snapshot "
-                        f"(expected {content_hash}, got {data.get('env_ref')!r})"
-                    )
-                    if strict is True or (strict is None and not self._client.fail_open):
-                        raise errors.CapabilityUnavailable("run.env_ref", message)
-                    warnings.warn(message, stacklevel=2)
+            patch_body["env_ref"] = content_hash
+        data = self._client.write("PATCH", f"/v1/runs/{self.id}", patch_body, strict=strict)
+        if data:
+            self._data = data
+            if content_hash is not None and data.get("env_ref") != content_hash:
+                message = (
+                    "Probe Research API did not persist run.env_ref after snapshot "
+                    f"(expected {content_hash}, got {data.get('env_ref')!r})"
+                )
+                if strict is True or (strict is None and not self._client.fail_open):
+                    raise errors.CapabilityUnavailable("run.env_ref", message)
+                warnings.warn(message, stacklevel=2)
         # Record the shadow commit as a reference artifact for lineage. The
         # manifest travels with it so a reader can tell, without fetching
         # anything, which files this reference can actually still supply.
@@ -1431,6 +1460,8 @@ class Run:
                 # WHICH environment the deps came from. Deliberately here and
                 # not in the hashed execution record (split_env_provenance).
                 **({"env": env_provenance} if env_provenance else {}),
+                "n_lockfiles": len(lockfiles),
+                **({"launch_errors": launch_block["errors"]} if launch_block.get("errors") else {}),
             },
             strict=strict,
         )
@@ -1442,6 +1473,7 @@ class Run:
             "env_provenance": env_provenance,
             "execution_record": exec_rec,
             "content_hash": content_hash,
+            "launch": launch_block,
         }
 
     # -- liveness -----------------------------------------------------------
@@ -1585,6 +1617,26 @@ class Run:
         self._client._kick_drainer(force=True)
         return {"finish_queued": True, "delivered": 0, "remaining": pending_count + 1}
 
+    def _warn_if_capture_incomplete(self) -> None:
+        """Completion warning, never a gate (maintainer decision 2026-08-06):
+        an incomplete capture makes the record honest about itself at the one
+        moment someone claims success -- but nothing, opt-in or otherwise, may
+        block a run. PROBE_AUTO_SNAPSHOT=0 means capture was declined; a
+        warning would be nagging about a choice, so it is silent too.
+        Placed after the journal drain so it never fires on writes this very
+        finish() is about to deliver (the async_writes false-positive)."""
+        try:
+            result = self._client.check_run(self.id)
+        except Exception:
+            return  # a completeness probe must never break a close-out
+        if result.get("state") == "incomplete":
+            warnings.warn(
+                "run may not be reproducible -- capture incomplete: "
+                + ", ".join(result.get("missing", []))
+                + f". See `probe run check {self.id}` for the full audit.",
+                stacklevel=3,
+            )
+
     def finish(
         self,
         status: str = "completed",
@@ -1607,6 +1659,22 @@ class Run:
         ``{finish_queued, delivered, remaining}`` is returned instead of the
         run row. Dead letters raise even in bounded mode: waiting cannot heal
         a permanent rejection, and exiting would strand them silently.
+
+        A completion WARNING (never a gate) fires when ``status == "completed"``
+        and capture was not opted out (``PROBE_AUTO_SNAPSHOT`` != ``"0"``). A
+        run finishing "failed" (the body already raised, or the caller is
+        being honest about a bad outcome) never warns -- there is no claim of
+        completeness to caveat, and ``Run.__exit__`` depends on this so a
+        body's real exception is never masked by a capture warning on the way
+        out.
+
+        The warning's ``check_run`` reads the run BUNDLE -- a plain GET,
+        never the journal -- so under ``async_writes`` the env_ref PATCH and
+        code-snapshot artifact ``snapshot()`` just journaled are not yet
+        server-visible. The check must observe the very capture this finish()
+        is about to claim, so it runs AFTER the drain (below), never before:
+        checking first would make a spurious warning fire on data that is
+        durable on disk and about to be delivered, not actually missing.
         """
         # Stop the hardware collector first: its final windows emit (or drop —
         # best-effort) before the close; it must never block or fail the close.
@@ -1620,6 +1688,9 @@ class Run:
 
         timeout = self._resolve_finish_timeout(flush_timeout)
         journal = self._client.journal
+        should_warn = (
+            status == "completed" and os.environ.get("PROBE_AUTO_SNAPSHOT", "1") != "0"
+        )
         if timeout is None:
             self._client.flush()
             blocked = self._queued_ops(journal.pending()) + self._queued_ops(
@@ -1634,6 +1705,12 @@ class Run:
                     "undelivered or dead-lettered — see `probe outbox status`, "
                     "fix or `probe outbox retry`, then finish again"
                 )
+            # AFTER the drain, BEFORE the terminal write: the flush above is
+            # what makes the just-journaled env_ref PATCH + code-snapshot
+            # artifact server-visible, so the check observes the real state
+            # rather than a stale one that reads as incomplete.
+            if should_warn:
+                self._warn_if_capture_incomplete()
             result = self.set_status(status, ended_at=_now(), summary=summary)
             # ONLY on success, and deliberately not in a `finally`.
             #
@@ -1666,9 +1743,20 @@ class Run:
             )
         pending = self._queued_ops(journal.pending())
         if not pending:
+            # Same ordering as the unbounded branch: the drain loop above has
+            # already run, so the check observes what actually made it to the
+            # server within the deadline rather than firing before the flush
+            # had a chance to deliver it.
+            if should_warn:
+                self._warn_if_capture_incomplete()
             result = self.set_status(status, ended_at=_now(), summary=summary)
             self._release_run_lock()
             return result
+        # Writes are still pending past the deadline: the terminal status is
+        # itself being DEFERRED behind them (queued, not written now), so
+        # there is no "completed" claim being made yet for the warning to
+        # check against -- it will apply on whatever later drain actually
+        # finishes this run.
         report = self._queue_deferred_finish(status, summary, len(pending))
         report["delivered"] = delivered
         # The writer is exiting by definition of a bounded finish; the run's
@@ -1691,13 +1779,32 @@ class Run:
         """
         if not argv:
             raise ValueError("argv must not be empty")
+        # Span attributes are persisted telemetry, not the launch mechanism --
+        # they must carry the SAME scrubbed argv the launch block ships, never
+        # the raw one. The raw argv is kept only for the actual subprocess
+        # invocation and for `snapshot(argv=argv)` below, which scrubs
+        # internally and needs the raw form for entrypoint detection.
+        scrubbed_argv, _ = _launch.scrub_argv(list(argv))
+        # Every executed run snapshots by default (design D3). detect_venv=True
+        # because THIS interpreter is the launcher, not the environment being
+        # recorded -- see Run.snapshot's docstring. Failure never blocks the
+        # child: capture is never a gate, opt-in or otherwise (maintainer
+        # decision 2026-08-06) -- it only ever warns.
+        if os.environ.get("PROBE_AUTO_SNAPSHOT", "1") != "0":
+            try:
+                self.snapshot(cwd=cwd, detect_venv=True, argv=argv)
+            except Exception as exc:
+                warnings.warn(
+                    f"auto-snapshot failed; run continues uncaptured: {exc}",
+                    stacklevel=2,
+                )
         started_at = _now()
         span_id = self.span(
             "process",
             name=os.path.basename(argv[0]),
             status="running",
             started_at=started_at,
-            attributes={"argv": argv, "cwd": os.path.abspath(cwd or os.getcwd())},
+            attributes={"argv": scrubbed_argv, "cwd": os.path.abspath(cwd or os.getcwd())},
         )
         process_env = {**os.environ, **(env or {}), "PROBE_RUN_ID": self.id}
         try:
@@ -1710,7 +1817,7 @@ class Run:
                 status="failed",
                 started_at=started_at,
                 ended_at=_now(),
-                attributes={"argv": argv, "cwd": os.path.abspath(cwd or os.getcwd())},
+                attributes={"argv": scrubbed_argv, "cwd": os.path.abspath(cwd or os.getcwd())},
             )
             raise
         self.span(
@@ -1721,7 +1828,7 @@ class Run:
             started_at=started_at,
             ended_at=_now(),
             attributes={
-                "argv": argv,
+                "argv": scrubbed_argv,
                 "cwd": os.path.abspath(cwd or os.getcwd()),
                 "exit_code": result.returncode,
             },

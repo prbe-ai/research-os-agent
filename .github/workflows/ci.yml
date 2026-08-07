@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual door for when pull_request event delivery is degraded (2026-08-06:
+  # runs silently never materialized for pushed commits during an Actions
+  # backlog; this let the matrix be forced per-branch).
+  workflow_dispatch:
 
 jobs:
   test:

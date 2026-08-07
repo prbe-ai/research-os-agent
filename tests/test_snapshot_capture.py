@@ -309,3 +309,96 @@ def test_stale_remote_branch_does_not_drag_the_base_backwards(repo):
     m = capture_manifest(str(repo))
     assert _by_path(m)["b.py"]["source"] == "git", "b.py is pushed; must not re-upload"
     assert m["n_pending_upload"] == 1
+
+
+def test_pushed_base_merge_commit_frontier(repo):
+    """After merging a pushed branch into unpushed work, the base must be the
+    merge-frontier commit, not an older pairwise merge-base approximation."""
+    _git(repo, "checkout", "-qb", "side")
+    (repo / "side.py").write_text("s = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "side")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/side")
+    side_tip = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-")
+    (repo / "local.py").write_text("l = 1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "local-only")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+    base, remote = pushed_base(str(repo))
+    # Both parents' pushed ancestors are on the frontier; the newest pushed
+    # ancestor must be the side tip (committed after main's pushed commit).
+    assert base == side_tip
+    assert remote
+
+
+def test_pushed_base_root_never_pushed(tmp_path):
+    """A repo with a remote configured but nothing ever pushed → (None, None)."""
+    remote = tmp_path / "r.git"
+    _git(tmp_path, "init", "--bare", "-q", str(remote))
+    work = tmp_path / "w"
+    work.mkdir()
+    _git(work, "init", "-q")
+    _git(work, "config", "user.email", "t@t")
+    _git(work, "config", "user.name", "t")
+    _git(work, "remote", "add", "origin", str(remote))
+    (work / "a.py").write_text("a\n")
+    _git(work, "add", "-A")
+    _git(work, "commit", "-qm", "init")
+    assert pushed_base(str(work)) == (None, None)
+
+
+# --- lockfiles ---------------------------------------------------------------
+
+def test_gitignored_lockfile_is_captured(repo, tmp_path):
+    """A gitignored uv.lock must still enter the manifest as an uploadable blob —
+    today it is silently lost (design doc: the dirty-lockfile case).
+
+    Being CLASSIFIED as a blob is necessary but not sufficient: the point of
+    the classification is that the actual bytes reach the pending archive
+    (the thing that gets uploaded), so this also builds it and checks the
+    tar member exists with the real lockfile content -- not just the
+    manifest's opinion about it.
+    """
+    import gzip
+    import tarfile
+
+    from probe.sdk.snapshot import build_pending_archive
+
+    lockfile_body = "[lock]\nversion = 1\n"
+    (repo / "uv.lock").write_text(lockfile_body)
+    (repo / ".gitignore").write_text("uv.lock\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore lockfile")
+    m = capture_manifest(str(repo))
+    by_path = _by_path(m)
+    assert by_path["uv.lock"]["source"] == "blob"
+    assert by_path["uv.lock"]["lockfile"] is True
+
+    dest = tmp_path / "code.tar.gz"
+    build_pending_archive(str(repo), m, str(dest))
+    with gzip.open(dest, "rb") as gz, tarfile.open(fileobj=gz, mode="r") as tar:
+        member = tar.getmember("uv.lock")
+        body = tar.extractfile(member).read().decode()
+    assert body == lockfile_body
+
+
+def test_tracked_lockfile_is_tagged(repo):
+    (repo / "requirements.txt").write_text("httpx==0.27.0\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "reqs")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/main")
+    m = capture_manifest(str(repo))
+    entry = _by_path(m)["requirements.txt"]
+    assert entry["source"] == "git"          # clean+pushed stays a reference
+    assert entry["lockfile"] is True          # but identity still names it
+
+
+def test_oversized_lockfile_reported_not_shipped(repo):
+    (repo / "package-lock.json").write_text("x" * (1024 * 1024 + 1))
+    (repo / ".gitignore").write_text("package-lock.json\n")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore")
+    m = capture_manifest(str(repo))
+    assert "package-lock.json" not in _by_path(m)
+    assert {"path": "package-lock.json", "reason": "lockfile_too_large"} in m["skipped"]

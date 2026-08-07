@@ -25,6 +25,42 @@
   `docs/2026-08-05-hw-metrics-design.md`. New deps: `psutil`,
   `nvidia-ml-py` (both lazy-imported behind availability probes).
 
+- **Every `probe exec` and `client.run()` call snapshots by default.** Capture used
+  to be a step someone remembered to run afterward, which meant the runs that most
+  needed reproducing — the ones that broke — were the ones most likely to be missing
+  it. `PROBE_AUTO_SNAPSHOT=0` opts out for the rare case where a call site wants to
+  snapshot explicitly on its own schedule.
+
+- **A launch block (`metadata.launch`, schema `probe.launch/1`) records how a run
+  was actually invoked.** Scrubbed argv, host, the launcher chain (shell → python →
+  entry point), env-var NAMES with allowlisted values (never arbitrary values),
+  container context, and seed evidence with its provenance (explicit flag vs.
+  library default vs. unset) all land on the run at snapshot time. This is the
+  difference between knowing a run happened and knowing what would need to be typed
+  to make it happen again.
+
+- **OS, CPU and CUDA identity join `execution_records.hardware`, and root lockfiles
+  are captured as files with their hashes joined to `deps.lockfiles`.** A
+  reproduction attempt on the wrong hardware or the wrong dependency graph fails
+  silently otherwise — the run "worked" and the rebuild just produces different
+  numbers.
+
+- **`probe run check` learns launch slots and a non-blocking `advisories` list.**
+  Gaps in launch capture (missing process/runtime/determinism) flip verdict the way
+  any other incomplete-claim gap does; judgment slots and historical runs that
+  predate capture-core surface as advisories instead, so the exit-2 gate does not
+  turn into migration noise. `probe run check` remains the scriptable audit
+  (exit 2 on incomplete). Separately, `finish("completed")` now emits a
+  non-blocking completion warning when its own capture is incomplete — nothing,
+  opt-in or otherwise, blocks a run; the warning is silent when
+  `PROBE_AUTO_SNAPSHOT=0` (capture was declined, not merely gappy).
+
+### Changed
+
+- **`pushed_base` batches to two git invocations total instead of roughly three
+  per remote branch.** Same result, computed with a fraction of the process
+  spawns on repos with more than a couple of remote branches.
+
 ### Fixed
 
 - **`probe run set <petname>` 422'd instead of amending the run.** `PATCH
