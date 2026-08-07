@@ -63,14 +63,35 @@ const MANIFEST_TIMEOUT_MS = 1500;
  * to repair the thing it installed. A healthy 0.26.x install pays one refetch,
  * which is the right trade against a broken one staying broken forever.
  *
- * (1) is why it is now 0.36.0. The dashboard's last onboarding step hands out
+ * (1) was why it was 0.36.0. The dashboard's last onboarding step hands out
  * `npx probe-research backfill`, and `probe backfill` does not exist before
  * 0.36.0. Arguments are forwarded to whatever `probe` this launcher resolves,
  * so under the old floor a user with 0.35.0 on PATH gets `No such command
  * 'backfill'` from a command the product just told them to run. A floor is the
  * only thing that can catch it: the copied command is identical either way.
+ *
+ * (1) is also why it is now 0.56.0, and the failure is quieter. 0.56.0 adds the
+ * BULK verbs an automated caller reaches for rather than a human:
+ *
+ *   probe artifact add --from-manifest FILE   import many files in one process
+ *   probe artifact move ID --to LEVEL         promote/demote/lateral
+ *   probe metrics backfill RUN --key K        a whole derived curve, one request
+ *
+ * The first of those is the one that makes a floor load-bearing. It exists
+ * because per-file `artifact add` costs a process start and a slug resolution
+ * each, so 200k files is tens of CPU-hours -- which means whatever issues it is
+ * importing at that scale, unattended. Against a pre-0.56.0 `probe` on PATH,
+ * `--from-manifest` is an unknown OPTION: the CLI exits 2 having queued
+ * nothing, and there is no operator watching to read it. The old floor is
+ * satisfied by every one of those installs.
+ *
+ * PUBLISHING ORDER MATTERS. `${DIST}>=${target}` must resolve, so this package
+ * may only be `npm publish`ed once a CLI at or above the floor is live on PyPI.
+ * That ordering is not enforced anywhere: the PyPI release is automated and
+ * `npm publish` is manual, so it is a human who has to get it right. Raising
+ * the floor ahead of the release strands the from-zero entry point.
  */
-const MIN_CLI = "0.36.0";
+const MIN_CLI = "0.56.0";
 const UV_INSTALL = "curl -LsSf https://astral.sh/uv/install.sh | sh";
 
 /** Compare dotted numeric versions. Returns true when `a` >= `b`. */

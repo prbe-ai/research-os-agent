@@ -288,6 +288,17 @@ class Client:
             else:
                 producer_id = f"{surface}:{host}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
                 self._seal_producer_on_close = True
+            # The per-host CLI id is right for a training loop and wrong for
+            # concurrent CLI writers: several importers on one box collapse into
+            # a single producer line and cannot be told apart afterwards. This
+            # lets the caller name them (`PROBE_OUTBOX_PRODUCER_ID=import:shard-3`)
+            # without every `probe --async log` minting a registry file.
+            # Deliberately id-only: the seal-on-close decision stays with the
+            # SURFACE, so naming a shared id does not make the first process to
+            # exit mark the line closed under its still-live siblings.
+            override = (os.environ.get("PROBE_OUTBOX_PRODUCER_ID") or "").strip()
+            if override:
+                producer_id = override
             try:
                 self.journal.register_producer(producer_id, role=surface)
             except Exception:  # noqa: BLE001 -- accounting must never block writes
@@ -2952,6 +2963,42 @@ class Client:
             except errors.NotFoundError:
                 raise self._wiki_absent() from exc
             raise
+    def append_project_notes(self, project_id: str, text: str) -> str:
+        """Extend the project's notes WITHOUT reading them first.
+
+        The read-then-write this replaces was lossy by construction: two writers
+        both read the same document, both append their paragraph, and the second
+        PATCH overwrites the first. No error, no warning -- you find out by
+        noticing prose is missing. Concurrent backfill units made that the
+        normal case rather than a rare one.
+
+        The server derives the new value from the row's own column inside one
+        UPDATE, so a blocked writer re-reads the winner's committed value and
+        appends to that. The separator is the server's business too: whether one
+        is needed depends on what the other writer just left behind, which is
+        not observable from here without re-introducing the race.
+
+        Returns the stored document, and the read-back is load-bearing for the
+        same reason :meth:`set_project_notes`'s is: ``ProjectPatch`` does not
+        forbid extra fields, so a backend predating this route accepts
+        ``notes_append``, ignores it, and answers 200. Silently appending
+        nothing is exactly the failure this method exists to end, so it is
+        raised rather than returned.
+        """
+        queued = self.write("PATCH", f"/v1/projects/{project_id}", {"notes_append": text})
+        if queued is None:
+            # Journaled or spooled: nothing reached the server yet, so there is
+            # nothing to read back and no claim to verify.
+            return text
+        stored = self.get_project(project_id).get("notes") or ""
+        if text.strip() and text.strip() not in stored:
+            raise errors.RosError(
+                "the server did not append the notes: this backend predates "
+                "`notes_append` (research-os 0.117.0.0) and silently ignored the "
+                "field. Upgrade the backend, or use `notes write` without --append "
+                "if you are the only writer."
+            )
+        return stored
 
     def query_series(self, run_ids: list[str], **kw) -> dict:
         return self.transport.post(

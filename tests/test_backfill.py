@@ -458,12 +458,15 @@ def test_an_unknown_slug_is_unknown_not_zero():
     assert backfill.count_landed_across(server, ["nope"]) == (-1, False)
 
 
-def test_a_summary_with_no_projects_is_not_a_silent_zero(tmp_path, monkeypatch):
+def test_a_classification_that_does_not_parse_uploads_nothing(tmp_path, monkeypatch):
+    """Pass A produces a plan or it produces nothing. There is no half-import:
+    the projects do not exist yet, so a failed classify has nothing to clean up.
+    """
     _tree(tmp_path)
     monkeypatch.setattr(backfill, "launch_agent", lambda *a, **kw: (True, "no json at all"))
     lines = backfill.run(client_factory=_FakeClient, folder=tmp_path, interactive=False)
-    assert any("named no projects" in ln for ln in lines)
-    assert any("could not read back" in ln for ln in lines)
+    assert any("did not produce a usable plan" in ln for ln in lines)
+    assert any("nothing was uploaded" in ln for ln in lines)
 
 
 def test_one_unreadable_project_makes_the_whole_count_unknown():
@@ -482,15 +485,38 @@ def test_duplicate_slugs_in_the_summary_are_counted_once():
     assert backfill.summary_projects(tail) == ["a", "b"]
 
 
-def test_a_pinned_project_is_counted_even_if_the_agent_says_nothing(tmp_path, monkeypatch):
+def test_a_pinned_project_overrides_every_assignment(tmp_path, monkeypatch):
+    """`--project` is a promise that everything lands in one place. It has to
+    beat the classifier, not merely seed it -- otherwise the flag means "a
+    suggestion" and the one destination someone explicitly asked for is the one
+    thing they do not get."""
     _tree(tmp_path)
-    monkeypatch.setattr(backfill, "launch_agent", lambda *a, **kw: (True, ""))
-    monkeypatch.setattr(backfill, "count_landed", lambda *a, **kw: (3, False))
+    import json as _json
+
+    def fake_launch(folder, prompt, **kw):
+        if "deciding how one research folder" in prompt:
+            from probe.cli import backfill_evidence as _ev
+            from probe.cli import backfill_plan as _bp
+
+            names = _bp.relative_paths(_ev.gather(tmp_path))
+            # The classifier says two projects; neither is the pinned one.
+            return True, _json.dumps({
+                "projects": [{"slug": "guessed-a"}, {"slug": "guessed-b"}],
+                "assignments": [
+                    {"path": n, "project": "guessed-a" if i % 2 else "guessed-b"}
+                    for i, n in enumerate(names)
+                ],
+            })
+        return True, '{"rows": 0}'
+
+    monkeypatch.setattr(backfill, "launch_agent", fake_launch)
     client = _FakeClient(existing={"id": FAKE_ID, "slug": "pinned"})
     lines = backfill.run(
         client_factory=lambda: client, folder=tmp_path, interactive=False, project="pinned"
     )
-    assert any("3 artifacts" in ln for ln in lines)
+    joined = "\n".join(lines)
+    assert "pinned" in joined
+    assert "guessed-a" not in joined and "guessed-b" not in joined
 
 
 # -- showing what the agent is doing ----------------------------------------
@@ -866,21 +892,35 @@ def test_a_credential_problem_names_the_fix(tmp_path, monkeypatch):
 
 
 def test_the_happy_path_reports_the_denominator(tmp_path, monkeypatch):
+    """The denominator comes from the WALK. It is the number the whole feature
+    exists to be honest about, so it survives the two-pass rewrite."""
     _tree(tmp_path)
     seen = {}
 
     def fake_launch(folder, prompt, **kw):
-        seen["folder"] = folder
-        seen["prompt"] = prompt
-        return True, '{"files_seen": 3, "files_landed": 3, "projects": ["odyssey"]}'
+        seen.setdefault("folders", []).append(folder)
+        seen.setdefault("prompts", []).append(prompt)
+        if "deciding how one research folder" in prompt:
+            import json as _json
+
+            from probe.cli import backfill_evidence as _ev
+            from probe.cli import backfill_plan as _bp
+
+            names = _bp.relative_paths(_ev.gather(tmp_path))
+            return True, _json.dumps({
+                "projects": [{"slug": "odyssey", "name": "Odyssey"}],
+                "assignments": [
+                    {"path": n, "project": "odyssey", "confidence": "high"} for n in names
+                ],
+                "summary": "one folder",
+            })
+        return True, '{"manifest": "m", "rows": 0}'
 
     monkeypatch.setattr(backfill, "launch_agent", fake_launch)
-    monkeypatch.setattr(backfill, "count_landed", lambda *a, **kw: (3, False))
     lines = backfill.run(client_factory=_FakeClient, folder=tmp_path, interactive=False)
-    assert seen["folder"] == tmp_path.resolve()
-    assert "--project" in seen["prompt"]
-    assert any("Projects: odyssey" in ln for ln in lines)
-    assert any("3 files found on disk · 3 artifacts" in ln for ln in lines)
+    assert seen["folders"][0] == tmp_path.resolve(), "the agent runs INSIDE the folder"
+    assert any("files found on disk" in ln for ln in lines)
+    assert any(str(tmp_path.resolve()) in ln for ln in lines)
 
 
 # -- pasting a path instead of browsing --------------------------------------
@@ -1013,11 +1053,27 @@ def test_the_command_with_no_folder_leaves_the_picker_to_decide(monkeypatch):
     assert seen["folder"] is None
 
 
-def test_a_failed_agent_says_rerunning_is_safe(tmp_path, monkeypatch):
+def test_a_failed_unit_says_rerunning_is_safe(tmp_path, monkeypatch):
+    """Identical content deduplicates server-side, so the honest instruction
+    after a partial import is simply to run it again."""
     _tree(tmp_path)
-    monkeypatch.setattr(
-        backfill, "launch_agent", lambda *a, **kw: (False, '{"projects": ["p"]}\nboom')
-    )
-    monkeypatch.setattr(backfill, "count_landed", lambda *a, **kw: (1, False))
+    import json as _json
+
+    def fake_launch(folder, prompt, **kw):
+        if "deciding how one research folder" in prompt:
+            from probe.cli import backfill_evidence as _ev
+            from probe.cli import backfill_plan as _bp
+
+            names = _bp.relative_paths(_ev.gather(tmp_path))
+            return True, _json.dumps({
+                "projects": [{"slug": "p"}],
+                "assignments": [{"path": n, "project": "p"} for n in names],
+            })
+        return False, "boom"
+
+    monkeypatch.setattr(backfill, "launch_agent", fake_launch)
     lines = backfill.run(client_factory=_FakeClient, folder=tmp_path, interactive=False)
     assert any("deduplicated server-side" in ln for ln in lines)
+    assert any("did not finish" in ln for ln in lines)
+
+

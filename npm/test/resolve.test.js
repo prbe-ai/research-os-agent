@@ -89,10 +89,35 @@ test("the spec is a floor, never an exact pin", () => {
   );
 });
 
-test("MIN_CLI actually exists on PyPI", () => {
-  // The floor has to name a real release or every fallback fails to resolve.
+test("MIN_CLI names the release the launcher may not ship ahead of", () => {
+  // The floor has to name a release that is live on PyPI by the time this
+  // package is published, or `${DIST}>=${floor}` resolves to nothing and every
+  // fallback fails. PyPI releases automatically on merge; `npm publish` is
+  // MANUAL, so the ordering is a human's to get right — see the constant's
+  // comment. Pinned here so raising the floor is a deliberate edit in two
+  // places, never a drive-by.
   const floor = source.match(/const MIN_CLI = "([^"]+)"/)[1];
-  assert.equal(floor, "0.36.0", "0.36.0 is the first release carrying `probe backfill`");
+  assert.equal(
+    floor,
+    "0.56.0",
+    "0.56.0 is the first release carrying the bulk artifact/move/backfill verbs",
+  );
+});
+
+test("the floor rejects every CLI without the bulk verbs", () => {
+  // `probe artifact add --from-manifest` is what makes this floor load-bearing:
+  // an automated importer runs it unattended over a manifest of many thousands
+  // of files, and a pre-0.56.0 CLI answers with `No such option` and queues
+  // nothing. `artifact move` and `metrics backfill` land in the same release.
+  const floor = source.match(/const MIN_CLI = "([^"]+)"/)[1];
+  for (const noBulk of ["0.36.0", "0.44.0", "0.50.0", "0.55.0"]) {
+    assert.equal(
+      atLeast(noBulk, floor),
+      false,
+      `${noBulk} cannot run --from-manifest and must not be handed off to`,
+    );
+  }
+  assert.equal(atLeast(floor, floor), true, "the floor itself must be accepted");
 });
 
 test("the floor rejects every CLI whose wizard crashes", () => {

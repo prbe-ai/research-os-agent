@@ -588,3 +588,288 @@ def test_every_addressable_kind_has_a_read_verb(wired, capsys):
     # The older top-level spelling keeps working.
     assert cli.main(["get", run_id]) == 0
     assert json.loads(capsys.readouterr().out)["id"] == run_id
+
+
+# -- artifact move ------------------------------------------------------------
+#
+# The CLI's job here is small and exact: resolve the refs, pass the level and the
+# target through, and relay whatever the server says. The rules about WHICH moves
+# are legal live server-side and are moving right now (lateral project->project
+# is landing), so every test below is about the relay, not the rules.
+
+
+def seed_project_artifact(app, name="scorer.py"):
+    """A project-anchored artifact, and its id."""
+    project_id = next(p["id"] for p in app.projects.values() if p["slug"] == "p")
+    cli.main([
+        "artifact", "add", "--project", "p", "--uri", "s3://bucket/scorer.py",
+        "--name", name,
+    ])
+    row = app.artifacts[f"project:{project_id}"][-1]
+    return row["id"], project_id
+
+
+def test_artifact_move_resolves_the_target_slug_and_relays_the_move(wired, capsys):
+    artifact_id, _ = seed_project_artifact(wired)
+    cli.main(["experiment", "create", "target-exp", "--project", "p", "--hypothesis", "h"])
+    experiment_id = next(
+        e["id"] for e in wired.experiments.values() if e["slug"] == "target-exp"
+    )
+    capsys.readouterr()
+
+    rc = cli.main(["artifact", "move", artifact_id, "--to", "experiment",
+                   "--target", "target-exp"])
+
+    assert rc == 0
+    moved = json.loads(capsys.readouterr().out)
+    assert moved["id"] == artifact_id, "a move keeps the artifact's id"
+    assert wired.moves == [{
+        "artifact_id": artifact_id,
+        "level": "experiment",
+        # The slug was resolved to an id before it left: `--target target-exp`
+        # must not reach a route whose path param is UUID-typed.
+        "target_id": experiment_id,
+    }]
+    assert artifact_id in {a["id"] for a in wired.artifacts[f"experiment:{experiment_id}"]}
+
+
+def test_artifact_move_accepts_an_id_prefixed_target(wired, capsys):
+    artifact_id, _ = seed_project_artifact(wired)
+    cli.main(["experiment", "create", "by-id", "--project", "p", "--hypothesis", "h"])
+    experiment_id = next(
+        e["id"] for e in wired.experiments.values() if e["slug"] == "by-id"
+    )
+    capsys.readouterr()
+
+    rc = cli.main(["artifact", "move", artifact_id, "--to", "experiment",
+                   "--target", f"id:{experiment_id}"])
+
+    assert rc == 0
+    assert wired.moves[-1]["target_id"] == experiment_id
+
+
+def test_artifact_move_promote_sends_no_target_the_caller_did_not_give(wired, capsys):
+    """A promote's destination follows from the artifact's own chain, server-side.
+    The CLI must not fill one in -- inventing a target is how a promote silently
+    becomes a move to somewhere else."""
+    artifact_id, project_id = seed_project_artifact(wired)
+    capsys.readouterr()
+
+    assert cli.main(["artifact", "move", artifact_id, "--to", "project"]) == 0
+
+    body = json.loads(wired.requests[-1].content)
+    assert body == {"level": "project"}, "no target_id may be synthesized"
+    assert wired.moves == [{
+        "artifact_id": artifact_id, "level": "project", "target_id": project_id,
+    }]
+
+
+def test_artifact_move_relays_a_lateral_refusal_verbatim(wired, capsys):
+    """Lateral (project -> project) is landing on the backend right now. Until it
+    does, the server refuses -- and the CLI must say what the SERVER said, not
+    gate on a rule of its own that would then have to be found and removed."""
+    artifact_id, _ = seed_project_artifact(wired)
+    cli.main(["project", "create", "elsewhere"])
+    elsewhere = next(p["id"] for p in wired.projects.values() if p["slug"] == "elsewhere")
+    wired.artifact_move_error = (
+        422, "a lateral move needs target_id to sit inside the current subtree"
+    )
+    capsys.readouterr()
+
+    rc = cli.main(["artifact", "move", artifact_id, "--to", "project",
+                   "--target", "elsewhere"])
+
+    assert rc != 0
+    err = capsys.readouterr().err
+    assert "a lateral move needs target_id to sit inside the current subtree" in err
+    # The request was still SHAPED as a lateral move: the moment the backend
+    # accepts it, this command works with no client change.
+    body = json.loads(wired.requests[-1].content)
+    assert body == {"level": "project", "target_id": elsewhere}
+
+
+def test_artifact_move_relays_a_409_verbatim(wired, capsys):
+    artifact_id, _ = seed_project_artifact(wired)
+    wired.artifact_move_error = (
+        409, {"message": "an identical artifact is already at that scope"}
+    )
+    capsys.readouterr()
+
+    assert cli.main(["artifact", "move", artifact_id, "--to", "project"]) != 0
+    assert "an identical artifact is already at that scope" in capsys.readouterr().err
+
+
+def test_artifact_move_rejects_a_level_the_contract_does_not_declare(wired, capsys):
+    artifact_id, _ = seed_project_artifact(wired)
+    capsys.readouterr()
+    # `workspace`/`shared` files move on the share/unshare rails, not here, so
+    # AnchorLevel does not carry them and typer refuses before any request.
+    assert cli.main(["artifact", "move", artifact_id, "--to", "workspace"]) != 0
+    assert wired.moves == []
+
+
+# -- metrics backfill (one batch, one request) --------------------------------
+
+
+def derived_posts(app, run_id):
+    return [b for b in app.metric_batches_posted if b.get("origin") == "derived"]
+
+
+def test_metrics_backfill_sends_a_whole_curve_as_one_request(wired, tmp_path, capsys):
+    """`probe log --derived` takes ONE step per invocation by design, so a
+    20k-step backfill through it is 20k round trips. This is the batch door."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+    series = tmp_path / "curve.jsonl"
+    series.write_text(
+        "".join(json.dumps({"step": i, "value": i / 10}) + "\n" for i in range(200))
+    )
+    before = len([r for r in wired.requests if r.url.path == f"/v1/runs/{run_id}/metrics"])
+
+    rc = cli.main([
+        "metrics", "backfill", run_id, "--key", "eval/auroc",
+        "--producer", "score_auc.py", "--from", str(series),
+        "--note", "recomputed from logits", "--input", "eval/logits",
+        "--code-ref", "scripts/score_auc.py@abc123",
+    ])
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "backfilled 200 derived point(s)" in out and "1 request" in out
+    posts = [
+        r for r in wired.requests
+        if r.url.path == f"/v1/runs/{run_id}/metrics" and r.method == "POST"
+    ]
+    assert len(posts) - before == 1, f"a curve is ONE batch, got {len(posts) - before}"
+    assert len(wired.metric_points_posted[run_id]) == 200
+
+    (batch,) = derived_posts(wired, run_id)
+    assert batch["origin"] == "derived"
+    assert batch["provenance"]["producer"] == "score_auc.py"
+    assert batch["provenance"]["note"] == "recomputed from logits"
+    assert batch["provenance"]["code_ref"] == "scripts/score_auc.py@abc123"
+    assert [p["step_index"] for p in batch["points"][:3]] == [0, 1, 2]
+
+
+def test_metrics_backfill_reads_stdin_by_default(wired, monkeypatch, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+    monkeypatch.setattr(
+        "sys.stdin", io.StringIO('{"step": 1, "value": 0.5}\n{"step": 2, "value": 0.7}\n')
+    )
+
+    rc = cli.main(["metrics", "backfill", run_id, "--key", "k", "--producer", "agent"])
+
+    assert rc == 0
+    assert "backfilled 2 derived point(s)" in capsys.readouterr().out
+    (batch,) = derived_posts(wired, run_id)
+    assert [p["value"] for p in batch["points"]] == [0.5, 0.7]
+
+
+def test_metrics_backfill_accepts_a_step_to_value_map_in_step_order(wired, tmp_path, capsys):
+    """JSON object keys are strings, so insertion order puts step 10 before step
+    2 and the backfilled curve reads as written out of order."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+    series = tmp_path / "curve.json"
+    series.write_text(json.dumps({"10": 1.0, "2": 0.5, "1": 0.25}))
+
+    assert cli.main([
+        "metrics", "backfill", run_id, "--key", "k", "--producer", "agent",
+        "--from", str(series),
+    ]) == 0
+
+    (batch,) = derived_posts(wired, run_id)
+    assert [p["step_index"] for p in batch["points"]] == [1, 2, 10]
+
+
+def test_metrics_backfill_accepts_a_json_array_of_pairs(wired, tmp_path, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+    series = tmp_path / "curve.json"
+    series.write_text(json.dumps([[0, 1.5], [1, 2.5]]))
+
+    assert cli.main([
+        "metrics", "backfill", run_id, "--key", "k", "--producer", "agent",
+        "--from", str(series), "--dim", "rank=0", "--kind", "system",
+    ]) == 0
+
+    (batch,) = derived_posts(wired, run_id)
+    assert [(p["step_index"], p["value"]) for p in batch["points"]] == [(0, 1.5), (1, 2.5)]
+    assert all(p["dimensions"] == {"rank": 0} and p["kind"] == "system"
+               for p in batch["points"])
+
+
+def test_metrics_backfill_needs_provenance_and_points(wired, tmp_path, capsys):
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+    # A computed series without provenance is indistinguishable from a measured
+    # one, so --producer is required by the parser, not by the server.
+    assert cli.main(["metrics", "backfill", run_id, "--key", "k"]) != 0
+    empty = tmp_path / "empty.jsonl"
+    empty.write_text("\n\n")
+    capsys.readouterr()
+    assert cli.main([
+        "metrics", "backfill", run_id, "--key", "k", "--producer", "a",
+        "--from", str(empty),
+    ]) != 0
+    assert "no points" in capsys.readouterr().err
+    assert wired.metric_batches_posted == []
+
+
+def test_log_derived_single_step_is_unchanged(wired, capsys):
+    """REGRESSION guard: the batch door is an ADDITION. `log --derived` keeps its
+    one-step contract, its --step requirement and its synchronous path."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+
+    assert cli.main([
+        "log", run_id, "acc=0.9", "--step", "7", "--derived", "--producer", "claude-code",
+    ]) == 0
+    assert "logged 1 derived metric(s)" in capsys.readouterr().out
+    (batch,) = derived_posts(wired, run_id)
+    assert batch["provenance"]["producer"] == "claude-code"
+    assert [p["step_index"] for p in batch["points"]] == [7]
+
+    # Still refuses a derived write with no step to land on.
+    assert cli.main([
+        "log", run_id, "acc=0.9", "--derived", "--producer", "claude-code",
+    ]) != 0
+
+
+def test_metrics_backfill_reads_a_one_row_jsonl_file(wired, tmp_path, capsys):
+    """A single-line JSONL file is ALSO a valid whole JSON document, so the point
+    spelling has to win over the step->value map spelling — otherwise one row
+    parses as a map whose steps are the strings "step" and "value"."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+    series = tmp_path / "one.jsonl"
+    series.write_text('{"step": 4, "value": 1.5}\n')
+
+    assert cli.main([
+        "metrics", "backfill", run_id, "--key", "k", "--producer", "agent",
+        "--from", str(series),
+    ]) == 0
+
+    (batch,) = derived_posts(wired, run_id)
+    assert [(p["step_index"], p["value"]) for p in batch["points"]] == [(4, 1.5)]
+
+
+def test_metrics_backfill_rejects_a_non_numeric_step_as_a_usage_error(
+    wired, tmp_path, capsys
+):
+    """Not a traceback: `main()` catches usage errors, and a hand-edited series
+    with a bad key is a usage error."""
+    cli.main(["run", "start", "--experiment", "e", "--name", "r"])
+    run_id = capsys.readouterr().out.strip()
+    series = tmp_path / "bad.json"
+    series.write_text(json.dumps({"epoch-3": 1.0}))
+
+    rc = cli.main([
+        "metrics", "backfill", run_id, "--key", "k", "--producer", "agent",
+        "--from", str(series),
+    ])
+
+    assert rc == 2
+    assert "epoch-3" in capsys.readouterr().err
+    assert wired.metric_batches_posted == []

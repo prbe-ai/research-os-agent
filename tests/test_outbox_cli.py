@@ -477,3 +477,251 @@ def test_run_end_refuses_while_paused(wired_async, outbox_dir, capsys):
     assert "NOT closed" in capsys.readouterr().err
     assert wired_async.runs[run_id]["status"] != "completed"
     cli.main(["--spool-dir", str(outbox_dir), "outbox", "resume"])
+
+
+# -- bulk import (`artifact add --from-manifest`) -----------------------------
+#
+# The whole verb is a cost argument: one process, one anchor resolution, N rows
+# journalled. So these tests assert the COSTS, not only that rows land -- a
+# manifest that enqueued everything correctly while still resolving per row
+# would be the feature failing at the only thing it exists to do.
+
+
+def manifest(tmp_path, *rows, name="manifest.jsonl"):
+    path = tmp_path / name
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    return str(path)
+
+
+def seed_project(app, slug):
+    cli.main(["project", "create", slug])
+    return next(p["id"] for p in app.projects.values() if p["slug"] == slug)
+
+
+def anchored(app, project_id):
+    return app.artifacts.get(f"project:{project_id}", [])
+
+
+def test_manifest_enqueues_every_row_in_one_process(wired_async, outbox_dir, tmp_path, capsys):
+    project_id = seed_project(wired_async, "p")
+    files = []
+    for i in range(3):
+        f = tmp_path / f"shard-{i}.bin"
+        f.write_bytes(b"rows " * 64)
+        files.append(f)
+    path = manifest(
+        tmp_path,
+        {"path": str(files[0]), "notes": "first shard"},
+        {"path": str(files[1]), "name": "renamed.bin"},
+        {"path": str(files[2])},
+    )
+    capsys.readouterr()
+
+    rc = cli.main(["artifact", "add", "--from-manifest", path, "--project", "p"])
+
+    assert rc == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["rows"] == 3
+    assert summary["enqueued"] == 3
+    assert summary["failed"] == 0
+    assert summary["failures"] == []
+    assert len(Journal(outbox_dir).pending()) == 3
+    assert wired_async.spawned, "a manifest must kick the drainer once it has queued"
+
+    assert cli_drain(wired_async, outbox_dir).clean
+    landed = {a["name"] for a in anchored(wired_async, project_id)}
+    assert landed == {"shard-0.bin", "renamed.bin", "shard-2.bin"}
+
+
+def test_manifest_reports_a_bad_row_and_still_enqueues_the_rest(
+    wired_async, outbox_dir, tmp_path, capsys
+):
+    seed_project(wired_async, "p")
+    good = tmp_path / "good.bin"
+    good.write_bytes(b"ok")
+    path = manifest(
+        tmp_path,
+        {"path": str(good)},
+        {"notes": "no path at all"},
+        {"path": str(tmp_path / "missing.bin")},
+        {"path": str(good), "file": "typo'd key"},
+        {"path": str(good), "name": "second.bin"},
+    )
+    capsys.readouterr()
+
+    rc = cli.main(["artifact", "add", "--from-manifest", path, "--project", "p"])
+
+    # Non-zero so an unattended caller notices -- but only AFTER the good rows
+    # landed and the summary named the bad ones by line.
+    assert rc == 1
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["rows"] == 5
+    assert summary["enqueued"] == 2
+    assert summary["failed"] == 3
+    assert [f["line"] for f in summary["failures"]] == [2, 3, 4]
+    assert "needs" in summary["failures"][0]["error"]
+    assert "not a regular file" in summary["failures"][1]["error"]
+    assert "unknown key" in summary["failures"][2]["error"]
+    assert len(Journal(outbox_dir).pending()) == 2
+
+
+def test_manifest_resolves_each_anchor_once_not_once_per_row(
+    wired_async, outbox_dir, tmp_path, capsys
+):
+    """The cost the verb exists to remove.
+
+    200k rows under one project must not be 200k slug lookups. Counted against
+    the fake's request log, so a regression that reintroduced per-row resolution
+    shows up here as 6 instead of 2, rather than as a slow import nobody
+    profiles."""
+    seed_project(wired_async, "p")
+    seed_project(wired_async, "second")
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"bytes")
+    rows = []
+    for i in range(3):
+        rows.append({"path": str(src), "name": f"a-{i}", "project": "p"})
+        rows.append({"path": str(src), "name": f"b-{i}", "project": "second"})
+    path = manifest(tmp_path, *rows)
+    capsys.readouterr()
+
+    before = len(wired_async.requests)
+    assert cli.main(["artifact", "add", "--from-manifest", path]) == 0
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["enqueued"] == 6
+    assert summary["anchors_resolved"] == 2, "two distinct slugs, two cache entries"
+    lookups = [
+        r for r in wired_async.requests[before:]
+        if r.url.path == "/v1/projects" and r.url.params.get("slug")
+    ]
+    assert len(lookups) == 2, (
+        f"6 rows over 2 projects must cost 2 lookups, got {len(lookups)}"
+    )
+
+
+def test_manifest_bad_anchor_costs_one_lookup_and_fails_every_row_using_it(
+    wired_async, outbox_dir, tmp_path, capsys
+):
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"bytes")
+    path = manifest(
+        tmp_path,
+        *[{"path": str(src), "name": f"a-{i}", "project": "nope"} for i in range(4)],
+    )
+    capsys.readouterr()
+
+    before = len(wired_async.requests)
+    assert cli.main(["artifact", "add", "--from-manifest", path]) == 1
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["enqueued"] == 0 and summary["failed"] == 4
+    assert all("nope" in f["error"] for f in summary["failures"])
+    lookups = [
+        r for r in wired_async.requests[before:]
+        if r.url.path == "/v1/projects" and r.url.params.get("slug") == "nope"
+    ]
+    assert len(lookups) == 1, (
+        "a failing ref must be cached too -- otherwise the error path pays the "
+        f"per-row cost the feature removes, got {len(lookups)}"
+    )
+    assert Journal(outbox_dir).pending() == []
+
+
+def test_manifest_reference_rows_stage_zero_bytes(wired_async, outbox_dir, tmp_path, capsys):
+    project_id = seed_project(wired_async, "p")
+    small = tmp_path / "explicit.ckpt"
+    small.write_bytes(b"x" * 64)
+    big = tmp_path / "over-threshold.ckpt"
+    big.write_bytes(b"y" * 4096)
+    path = manifest(
+        tmp_path,
+        {"path": str(small), "reference": True, "notes": "named a reference"},
+        # No `reference` key: the SIZE promotes it, which is the shape a
+        # generated manifest of checkpoints has.
+        {"path": str(big)},
+    )
+    capsys.readouterr()
+
+    rc = cli.main([
+        "artifact", "add", "--from-manifest", path, "--project", "p",
+        "--reference-over", "1024",
+    ])
+
+    assert rc == 0
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["references"] == 2 and summary["uploads"] == 0
+    journal = Journal(outbox_dir)
+    assert all(op["kind"] == "http" for _, op in journal.pending())
+    assert not journal.blobs_dir.exists() or list(journal.blobs_dir.iterdir()) == [], (
+        "a reference row records a path; it must never snapshot the bytes"
+    )
+    assert cli_drain(wired_async, outbox_dir).clean
+    rows = anchored(wired_async, project_id)
+    assert len(rows) == 2 and all(r["is_reference"] for r in rows)
+
+
+def test_manifest_row_anchor_beats_the_command_line_default(
+    wired_async, outbox_dir, tmp_path, capsys
+):
+    project_id = seed_project(wired_async, "p")
+    run_id = start_run(wired_async)
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"bytes")
+    path = manifest(
+        tmp_path,
+        {"path": str(src), "name": "on-the-run", "run": run_id, "kind": "checkpoint"},
+        {"path": str(src), "name": "on-the-project"},
+    )
+    capsys.readouterr()
+
+    assert cli.main(["artifact", "add", "--from-manifest", path, "--project", "p"]) == 0
+    assert json.loads(capsys.readouterr().out)["enqueued"] == 2
+    assert cli_drain(wired_async, outbox_dir).clean
+
+    assert [a["name"] for a in wired_async.artifacts[run_id]] == ["on-the-run"]
+    assert [a["name"] for a in anchored(wired_async, project_id)] == ["on-the-project"]
+
+
+def test_manifest_queues_without_the_async_flag(wired_async, outbox_dir, tmp_path, capsys):
+    """--from-manifest is the bulk path, so it journals whether or not --async is
+    set: the alternative is N synchronous uploads inside one process, which is
+    the cost the verb exists to remove wearing a different hat."""
+    seed_project(wired_async, "p")
+    src = tmp_path / "f.bin"
+    src.write_bytes(b"bytes")
+    path = manifest(tmp_path, {"path": str(src)})
+    capsys.readouterr()
+
+    before = len(wired_async.requests)
+    assert cli.main(["artifact", "add", "--from-manifest", path, "--project", "p"]) == 0
+
+    assert len(Journal(outbox_dir).pending()) == 1
+    posts = [r for r in wired_async.requests[before:] if r.method == "POST"]
+    assert posts == [], "enqueue must not upload; the drainer delivers"
+
+
+def test_manifest_rejects_per_row_flags_on_the_command_line(wired_async, tmp_path, capsys):
+    path = manifest(tmp_path, {"path": str(tmp_path / "x")})
+    assert cli.main(["artifact", "add", "--from-manifest", path, "--name", "x"]) != 0
+    assert "per-ROW" in capsys.readouterr().err
+
+
+def test_single_file_artifact_add_is_unchanged_by_the_manifest_path(
+    wired_async, outbox_dir, tmp_path, capsys
+):
+    """REGRESSION guard for the refactor: `_artifact_add_async` was split so a
+    manifest row could reuse its body, and the single-file path must behave
+    identically -- same message, same intent ping, same staged blob."""
+    run_id = start_run(wired_async)
+    source = tmp_path / "model.bin"
+    source.write_bytes(b"weights " * 512)
+
+    assert cli.main(["--async", "artifact", "add", run_id, str(source)]) == 0
+
+    out = capsys.readouterr().out
+    assert "queued upload" in out and "intent registered" in out
+    (pending_row,) = wired_async.artifacts[run_id]
+    assert pending_row["status"] == "pending", "the capped intent ping still fires"
+    (_, op), = Journal(outbox_dir).pending()
+    assert op["upload"]["blob"] is not None
