@@ -160,3 +160,138 @@ def test_a_long_filename_cannot_overflow_the_block():
         state.seen.add(f"f{i}")
     state.doing = "reading " + "x" * 300
     assert len(state.line(60.0)) <= 46 + 30, state.line(60.0)
+
+
+# -- the piped/CI path counts the same thing the screen does ----------------
+
+
+def test_piped_output_counts_files_read_not_uploads(tmp_path, monkeypatch):
+    """The live line was moved onto files READ when the upload counter turned
+    out to be permanently zero -- and this branch, the one a pipe, a CI log or
+    `nohup` takes, was left counting the dead field. A real backfill run to a
+    log file showed `0/704 · reading README.md` for the whole classify pass.
+
+    Which is the worst place to leave it: an unwatched run is exactly the one
+    someone reads afterwards to find out what happened."""
+    import io
+
+    events = [
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": f"/d/f{i}.py"}}]}})
+        for i in range(3)
+    ]
+
+    class _Proc:
+        # In __init__, NOT on the class: a one-shot iterator shared by every
+        # instance is exhausted after the first, so a rerun (pytest-repeat, a
+        # parametrize, or a retry inside launch_agent) fails with "printed
+        # nothing" instead of the real reason.
+        def __init__(self):
+            self.stdout = iter([e + "\n" for e in events])
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    out = io.StringIO()  # NOT a tty -> the plain, appending branch
+    monkeypatch.setattr(bf, "which_agent", lambda a: "/bin/claude")
+    monkeypatch.setattr(bf.subprocess, "Popen", lambda *a, **k: _Proc())
+    bf.launch_agent(tmp_path, "prompt", stream=out, total=704,
+                    workdir=tmp_path / "w")
+
+    lines = [ln for ln in out.getvalue().splitlines() if "/704" in ln]
+    assert lines, "the plain branch printed nothing"
+    assert lines[-1].strip().startswith("3/704"), (
+        f"the counter never moved: {lines}"
+    )
+
+
+def test_progress_false_gives_the_raw_transcript(tmp_path, monkeypatch):
+    """`progress=False` asks for the stream verbatim, and it did not get it.
+
+    The branch sat under `elif changed`, and `fold_event` returns True for
+    every tool call, command and message -- so the caller got a hybrid: counter
+    lines exactly where the interesting events should have been, and raw JSON
+    only for the lines nobody wanted.
+    """
+    import io
+
+    events = [
+        json.dumps({"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "name": "Read", "input": {"file_path": "/d/a.py"}}]}}),
+        json.dumps({"type": "turn.started"}),
+    ]
+
+    class _Proc:
+        def __init__(self):
+            self.stdout = iter([e + "\n" for e in events])
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    out = io.StringIO()
+    monkeypatch.setattr(bf, "which_agent", lambda a: "/bin/claude")
+    monkeypatch.setattr(bf.subprocess, "Popen", lambda *a, **k: _Proc())
+    bf.launch_agent(tmp_path, "prompt", stream=out, total=9, progress=False,
+                    workdir=tmp_path / "w")
+
+    text = out.getvalue()
+    assert "tool_use" in text, "the raw transcript was replaced by counter lines"
+    assert "·" not in text, f"a progress line leaked into a raw transcript: {text!r}"
+
+
+def test_a_piped_unit_line_says_which_unit_it_is(tmp_path, monkeypatch):
+    """There is no board out here. `run_units` only builds one when
+    interactive, so an unattended import writes up to `concurrency` units into
+    ONE stream -- and without a name the only thing telling `3/704` from
+    `5/704` is a denominator two units can easily share."""
+    import io
+
+    event = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Read", "input": {"file_path": "/d/a.py"}}]}})
+
+    class _Proc:
+        def __init__(self):
+            self.stdout = iter([event + "\n"])
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    out = io.StringIO()
+    monkeypatch.setattr(bf, "which_agent", lambda a: "/bin/claude")
+    monkeypatch.setattr(bf.subprocess, "Popen", lambda *a, **k: _Proc())
+    bf.launch_agent(tmp_path, "prompt", stream=out, total=40,
+                    label="odyssey-plm", workdir=tmp_path / "w")
+    assert "odyssey-plm 1/40" in out.getvalue()
+
+
+def test_an_unlabelled_run_does_not_grow_a_stray_space(tmp_path, monkeypatch):
+    """The classify pass has no unit to name."""
+    import io
+
+    event = json.dumps({"type": "assistant", "message": {"content": [
+        {"type": "tool_use", "name": "Read", "input": {"file_path": "/d/a.py"}}]}})
+
+    class _Proc:
+        def __init__(self):
+            self.stdout = iter([event + "\n"])
+
+        def wait(self, timeout=None):
+            return 0
+
+        def poll(self):
+            return 0
+
+    out = io.StringIO()
+    monkeypatch.setattr(bf, "which_agent", lambda a: "/bin/claude")
+    monkeypatch.setattr(bf.subprocess, "Popen", lambda *a, **k: _Proc())
+    bf.launch_agent(tmp_path, "prompt", stream=out, total=40, workdir=tmp_path / "w")
+    assert out.getvalue().startswith("  1/40 ·")
