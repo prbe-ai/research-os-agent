@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import httpx
 import pytest
 
@@ -58,17 +60,38 @@ def test_child_shell_flag_does_not_change_the_session() -> None:
     [
         pytest.param({}, id="no-agent"),
         pytest.param({"CURSOR_TRACE_ID": "abc12345"}, id="cursor-uncaptured"),
-        pytest.param({"CODEX_THREAD_ID": "th_9911223344"}, id="codex-uncaptured"),
-        pytest.param({k: v for k, v in LIVE.items() if k != "CLAUDE_CODE_SESSION_ID"},
-                     id="claude-code-without-session"),
+        pytest.param({"CODEX_THREAD_ID": "th_9911223344"}, id="codex-unpaired"),
+        pytest.param(
+            {k: v for k, v in LIVE.items() if k != "CLAUDE_CODE_SESSION_ID"},
+            id="claude-code-without-session",
+        ),
     ],
 )
 def test_no_attribution_without_a_capturable_session(env: dict[str, str]) -> None:
-    """Cursor and Codex expose a session id but nothing captures their
-    transcripts for Research OS, so attributing them would store a key that can
-    never resolve."""
+    """Detectable agents without an active capture path emit no attribution."""
     assert resolve_agent_session(env) is None
     assert agent_session_headers(env) == {}
+
+
+def test_paired_codex_session_is_attributed(tmp_path: Path) -> None:
+    (tmp_path / ".token").write_text("device-secret\n")
+    env = {
+        "CODEX_THREAD_ID": "019c2a53-b5a0-7ba1-8ac7-b27280b9f9cd",
+        "PRBE_CODEX_TAP_PLUGIN_DIR": str(tmp_path),
+    }
+    assert resolve_agent_session(env) == ("codex", env["CODEX_THREAD_ID"])
+    assert agent_session_headers(env) == {
+        AGENT_HEADER: "codex",
+        AGENT_SESSION_HEADER: env["CODEX_THREAD_ID"],
+    }
+
+
+def test_codex_environment_pairing_is_attributed() -> None:
+    env = {
+        "CODEX_THREAD_ID": "019c2a53-b5a0-7ba1-8ac7-b27280b9f9cd",
+        "PRBE_CODEX_TAP_TOKEN": "device-secret",
+    }
+    assert resolve_agent_session(env) == ("codex", env["CODEX_THREAD_ID"])
 
 
 @pytest.mark.parametrize(
@@ -117,8 +140,10 @@ def test_old_client_gets_a_nudge_not_silence() -> None:
         pytest.param(LIVE, id="already-attributing"),
         pytest.param({}, id="not-an-agent"),
         pytest.param({"CURSOR_TRACE_ID": "abc12345"}, id="uncaptured-agent"),
-        pytest.param({k: v for k, v in LIVE.items() if k != "CLAUDE_CODE_SESSION_ID"},
-                     id="new-enough-but-session-missing"),
+        pytest.param(
+            {k: v for k, v in LIVE.items() if k != "CLAUDE_CODE_SESSION_ID"},
+            id="new-enough-but-session-missing",
+        ),
     ],
 )
 def test_no_nudge_when_upgrading_would_not_help(env: dict[str, str]) -> None:

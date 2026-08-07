@@ -19,6 +19,7 @@ import shutil
 
 from probe.cli import agent_rules, autoupdate
 from probe.cli.capabilities import (
+    ENV_CODEX_INGEST_TOKEN,
     ENV_INGEST_TOKEN,
     TAP_PLUGIN_NAME,
     TRACKING_PLUGIN_NAME,
@@ -48,7 +49,11 @@ def render(caps: Capabilities) -> str:
     lines.append("Install")
     lines.append(_row("CLI version", caps.cli_version or "unknown"))
     lines.append(_row("Install method", caps.install_method or "unknown"))
-    lines.append(_row("Claude Code CLI", _OK if caps.claude_available else _MISSING))
+    agent_label = "Codex CLI" if caps.agent_source == "codex" else "Claude Code CLI"
+    agent_available = (
+        caps.codex_available if caps.agent_source == "codex" else caps.claude_available
+    )
+    lines.append(_row(agent_label, _OK if agent_available else _MISSING))
     lines.append("")
 
     lines.append("Account")
@@ -67,9 +72,8 @@ def render(caps: Capabilities) -> str:
     lines.append("")
 
     lines.append("Session capture")
-    lines.append(
-        _row("Plugin", TAP_PLUGIN_NAME if caps.capture_plugin_installed else _MISSING)
-    )
+    tap_name = TAP_PLUGIN_NAME
+    lines.append(_row("Plugin", tap_name if caps.capture_plugin_installed else _MISSING))
     lines.append(_row("Status", "capturing" if caps.capture_on else _OFF))
     if caps.capture_device_id:
         lines.append(_row("Paired device", caps.capture_device_id))
@@ -78,7 +82,10 @@ def render(caps: Capabilities) -> str:
     # Every source is listed, not just the winning one. A user who thinks capture
     # is off deserves to see the credential that is keeping it alive.
     for source in caps.capture_token_sources:
-        lines.append(_row("Credential from", _SOURCE_LABEL[source]))
+        label = _SOURCE_LABEL[source]
+        if source is TokenSource.ENVIRONMENT and caps.agent_source == "codex":
+            label = f"{ENV_CODEX_INGEST_TOKEN} environment variable"
+        lines.append(_row("Credential from", label))
     if not caps.capture_token_sources:
         lines.append(_row("Credential", "none — this device is not paired"))
     lines.append("")
@@ -97,9 +104,7 @@ def render(caps: Capabilities) -> str:
 
     lines.append("Auto-update")
     lines.append(_row("Enabled", "yes" if caps.auto_update_enabled else "no"))
-    lines.append(
-        _row("Last attempt", caps.last_update_attempt or "never run on this device")
-    )
+    lines.append(_row("Last attempt", caps.last_update_attempt or "never run on this device"))
     # A SEPARATE line, never folded into the one above. Once the run lock exists,
     # a box that has been training all week is deliberately not updating -- and
     # with only a last-attempt timestamp that is byte-identical to an auto-updater
@@ -121,9 +126,7 @@ def render(caps: Capabilities) -> str:
         lines.append(_row("Pending", str(status.get("pending") or 0)))
         lines.append(_row("Dead-lettered", str(status.get("failed") or 0)))
         if status.get("auth_blocked_since"):
-            lines.append(
-                _row("Auth-blocked since", str(status["auth_blocked_since"]))
-            )
+            lines.append(_row("Auth-blocked since", str(status["auth_blocked_since"])))
         if status.get("paused"):
             lines.append(_row("Paused", "yes (`probe outbox resume`)"))
         if status.get("last_error"):
@@ -143,14 +146,13 @@ def collect() -> Capabilities:
     from probe import __version__
     from probe.cli import updater
     from probe.cli.capabilities import (
-        TAP_PLUGIN_NAME as TAP,
-    )
-    from probe.cli.capabilities import (
         TRACKING_PLUGIN_NAME as TRACK,
     )
     from probe.cli.capabilities import (
         capture_device_id,
+        capture_plugin_name,
         capture_token_sources,
+        agent_source,
         installed_plugins,
         tap_plugin_dir,
     )
@@ -178,13 +180,16 @@ def collect() -> Capabilities:
         if base_url:
             warnings.append(f"could not verify login against {base_url}: {exc}")
 
-    plugins = installed_plugins()
-    sources = capture_token_sources()
+    selected_agent = agent_source()
+    selected_tap = capture_plugin_name(selected_agent)
+    plugins = installed_plugins(source=selected_agent)
+    sources = capture_token_sources(selected_agent)
     settings_autoupdate = autoupdate.load()
 
     if TokenSource.ENVIRONMENT in sources:
+        token_env = ENV_CODEX_INGEST_TOKEN if selected_agent == "codex" else ENV_INGEST_TOKEN
         warnings.append(
-            f"{ENV_INGEST_TOKEN} is set in this shell. It overrides local pairing "
+            f"{token_env} is set in this shell. It overrides local pairing "
             "state, so capture can appear off in the menu yet still be on."
         )
 
@@ -192,18 +197,18 @@ def collect() -> Capabilities:
         cli_version=__version__,
         install_method=install_method,
         claude_available=shutil.which("claude") is not None,
+        codex_available=shutil.which("codex") is not None,
+        agent_source=selected_agent,
         logged_in_as=logged_in_as or None,
         base_url=base_url,
         tracking_plugin_installed=TRACK in plugins,
-        capture_plugin_installed=TAP in plugins,
+        capture_plugin_installed=selected_tap in plugins,
         plugins_verified=plugins.verified,
         capture_token_sources=sources,
-        capture_killswitched=(tap_plugin_dir() / ".disabled").exists(),
-        capture_device_id=capture_device_id(),
+        capture_killswitched=(tap_plugin_dir(selected_agent) / ".disabled").exists(),
+        capture_device_id=capture_device_id(selected_agent),
         agent_rules_installed=agent_rules.is_installed(),
-        agent_rules_stale=(
-            agent_rules.is_installed() and not agent_rules.is_current()
-        ),
+        agent_rules_stale=(agent_rules.is_installed() and not agent_rules.is_current()),
         auto_update_enabled=settings_autoupdate.enabled,
         last_update_attempt=(
             settings_autoupdate.last_attempt.describe()
@@ -211,9 +216,7 @@ def collect() -> Capabilities:
             else None
         ),
         last_update_skip=(
-            settings_autoupdate.last_skip.describe()
-            if settings_autoupdate.last_skip
-            else None
+            settings_autoupdate.last_skip.describe() if settings_autoupdate.last_skip else None
         ),
         live_runs=_live_runs(),
         outbox_status=_outbox_status(),

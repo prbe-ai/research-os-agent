@@ -14,7 +14,7 @@
     {
       "name": "probe-research-tap",
       "source": "./plugins/probe-research-tap",
-      "description": "Ships sanitized per-session Claude Code transcripts to your Research OS knowledgebase (server-side secret gate + quarantine)."
+      "description": "Ships client-sanitized per-session Claude Code or Codex transcripts to Research OS with source-bound device authentication."
     }
   ]
 }

@@ -30,17 +30,18 @@ import subprocess
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from probe.cli import claude_cli
+from probe.cli import plugin_cli
 from probe.cli.capabilities import (
+    ENV_CODEX_INGEST_TOKEN,
     ENV_INGEST_TOKEN,
     MARKETPLACE,
-    TAP_PLUGIN_NAME,
     TokenSource,
+    agent_source,
+    capture_plugin_name,
     capture_token_sources,
     probe_config_path,
     tap_plugin_dir,
 )
-
 
 
 class OffMode(StrEnum):
@@ -162,7 +163,7 @@ def _looks_like_the_uploader(pid: int) -> bool:
         )
     except (OSError, subprocess.SubprocessError):
         return False
-    return TAP_PLUGIN_NAME in completed.stdout or "tap" in completed.stdout.split()
+    return capture_plugin_name() in completed.stdout or "tap" in completed.stdout.split()
 
 
 def _stop_daemon() -> tuple[bool, list[str]]:
@@ -179,7 +180,8 @@ def _stop_daemon() -> tuple[bool, list[str]]:
     import time
 
     survivors: list[int] = []
-    for pid_file in glob.glob("/tmp/probe-research-tap-watcher-*.pid"):
+    prefix = "prbe-codex-tap" if agent_source() == "codex" else "probe-research-tap"
+    for pid_file in glob.glob(f"/tmp/{prefix}-watcher-*.pid"):
         try:
             stat = os.stat(pid_file)
             if stat.st_uid != os.getuid():
@@ -221,12 +223,12 @@ def _stop_daemon() -> tuple[bool, list[str]]:
 
 
 def _uninstall_plugin() -> tuple[bool, list[str]]:
-    if not claude_cli.available():
-        return False, ["`claude` not found, so the plugin was left installed"]
-    result = claude_cli.run(
-        ["plugin", "uninstall", f"{TAP_PLUGIN_NAME}@{MARKETPLACE}"],
-        timeout=claude_cli.CAPTURE_TIMEOUT_S,
-    )
+    selected = agent_source()
+    result = plugin_cli.uninstall(selected, f"{capture_plugin_name(selected)}@{MARKETPLACE}")
+    if not result.reachable:
+        return False, [
+            f"`{plugin_cli.binary_name(selected)}` not found, so the plugin was left installed"
+        ]
     if not result.ok:
         return False, [f"plugin uninstall failed: {result.detail}"]
     return True, []
@@ -268,9 +270,12 @@ def turn_off(mode: OffMode = OffMode.DISABLE) -> TurnOffResult:
         # variable in the parent shell. Saying so is the only honest option --
         # reporting "off" here would be the exact lie this module exists to
         # prevent.
+        token_env = ENV_CODEX_INGEST_TOKEN if agent_source() == "codex" else ENV_INGEST_TOKEN
         result.warnings.append(
-            f"{ENV_INGEST_TOKEN} is set in your shell environment. This process "
-            f"cannot unset it for you. Run `unset {ENV_INGEST_TOKEN}` and remove "
+            f"{token_env} is set in your shell environment. This process "
+            f"cannot unset it for you. Run `unset {token_env}` and remove "
             "it from your shell profile, or capture will resume in new sessions."
         )
     return result
+    (agent_source,)
+    (capture_plugin_name,)

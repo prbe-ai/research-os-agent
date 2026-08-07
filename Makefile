@@ -1,9 +1,9 @@
-.PHONY: install test test-tap parity dump-openapi gen-models regen regen-mcp-schema sync-plugin-skills sync-plugin-policy sync-plugin
+.PHONY: install test test-tap test-codex-tap verify-codex-pre-release parity dump-openapi gen-models regen regen-mcp-schema sync-plugin-skills sync-plugin-policy sync-plugin
 
 install:
 	pip install -e ".[dev]"
 
-test: test-tap
+test: test-tap test-codex-tap
 	# Bare `pytest` works: `pythonpath = ["."]` in pyproject puts the repo root on
 	# sys.path, so `tests.conftest` imports without the `python -m` trick (which CI,
 	# editors, and a plain `pytest` invocation do not use).
@@ -14,6 +14,17 @@ test: test-tap
 # don't collect under the root `pytest` run and need their own invocation.
 test-tap:
 	pytest -q plugins/probe-research-tap/tests
+
+# Codex rollout adapter + hook contract. Kept isolated because the package is
+# also named `tap`, like the Claude adapter above.
+test-codex-tap:
+	PROBE_TAP_SOURCE=codex pytest -q plugins/probe-research-tap/tests/test_codex_sanitize.py plugins/probe-research-tap/tests/test_codex_research_os_contract.py
+
+# Non-deploying Codex release gate: validates both plugin packages, installs
+# them with the real Codex CLI in an isolated home, and runs the cross-repo
+# contract suites. Point RESEARCH_OS at the backend checkout.
+verify-codex-pre-release:
+	python scripts/verify_codex_pre_release.py --backend "$${RESEARCH_OS:?set RESEARCH_OS to the research-os checkout}"
 
 # Contract guard: every route in schema/openapi.json must be reachable from a client
 # method, or be explicitly allowlisted. Run by `regen` so a schema refresh that adds a

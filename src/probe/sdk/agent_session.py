@@ -10,12 +10,11 @@ backend treats what does arrive as untrusted — it is recorded against the run
 and never consulted for authorization. A spoofed id yields a dead link, never
 access to someone else's transcript.
 
-ONLY agents whose transcripts are actually captured are reported. Cursor and
-Codex both expose a session id and are detected here, but nothing ships their
-transcripts for Research OS tenants, so reporting them would fill the run's id
-map with keys that can never resolve to anything. Flip ``captured`` when a
-capture plugin exists (see TODOS.md); the header and backend paths are already
-agent-agnostic.
+ONLY agents whose transcripts are actually captured are reported. Claude Code
+ships with capture support. Codex is reported only when its tap has a local
+credential, which is the durable evidence that this device completed pairing;
+merely running under Codex must not create a transcript link that can never
+resolve. Cursor remains detectable but uncaptured.
 """
 
 from __future__ import annotations
@@ -24,6 +23,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
+from pathlib import Path
 
 #: Request headers naming the coding agent and its session.
 AGENT_HEADER = "X-Probe-Agent"
@@ -100,10 +100,34 @@ AGENTS: tuple[AgentSpec, ...] = (
         label="codex",
         detect_env=("CODEX_SANDBOX", "CODEX_THREAD_ID"),
         session_env="CODEX_THREAD_ID",
-        captured=False,
+        captured=True,
         display="Codex session",
     ),
 )
+
+
+def _codex_capture_paired(env: Mapping[str, str]) -> bool:
+    """Whether the Codex tap has a credential without ever reading the secret.
+
+    The tap accepts an explicit environment token or its mode-0600 token file.
+    Attribution mirrors those two sources but checks only presence/non-emptiness.
+    ``PRBE_CODEX_TAP_PLUGIN_DIR`` is also the tap's test/development override,
+    so this stays deterministic without touching a user's real Codex state.
+    """
+    if (env.get("PRBE_CODEX_TAP_TOKEN") or "").strip():
+        return True
+    configured = env.get("PRBE_CODEX_TAP_PLUGIN_DIR")
+    if configured:
+        root = Path(configured)
+    else:
+        state = Path.home() / ".codex" / "state"
+        current = state / "probe-research-tap"
+        legacy = state / "prbe-codex-tap-plugin"
+        root = legacy if legacy.exists() and not current.exists() else current
+    try:
+        return bool((root / ".token").read_text(encoding="utf-8").strip())
+    except OSError:
+        return False
 
 
 def _env(env: Mapping[str, str] | None) -> Mapping[str, str]:
@@ -131,11 +155,7 @@ def parse_version(raw: object) -> tuple[int, int, int] | None:
 
 def valid_session_id(raw: object) -> bool:
     """Whether a value is safe and plausible enough to send as a header."""
-    return (
-        isinstance(raw, str)
-        and len(raw) <= _MAX_SESSION_LENGTH
-        and bool(_SESSION_RE.match(raw))
-    )
+    return isinstance(raw, str) and len(raw) <= _MAX_SESSION_LENGTH and bool(_SESSION_RE.match(raw))
 
 
 def resolve_agent_session(
@@ -151,7 +171,10 @@ def resolve_agent_session(
     spec = detect_agent(env)
     if spec is None or not spec.captured or spec.session_env is None:
         return None
-    session_id = _env(env).get(spec.session_env)
+    values = _env(env)
+    if spec.label == "codex" and not _codex_capture_paired(values):
+        return None
+    session_id = values.get(spec.session_env)
     if not valid_session_id(session_id):
         return None
     assert isinstance(session_id, str)  # narrowed by valid_session_id
@@ -166,12 +189,7 @@ def outdated_client(env: Mapping[str, str] | None = None) -> tuple[str, str] | N
     it can actually help. None when there is nothing to say.
     """
     spec = detect_agent(env)
-    if (
-        spec is None
-        or not spec.captured
-        or spec.min_version is None
-        or spec.version_env is None
-    ):
+    if spec is None or not spec.captured or spec.min_version is None or spec.version_env is None:
         return None
     # Already attributing: nothing to nudge about.
     if resolve_agent_session(env) is not None:

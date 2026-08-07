@@ -1,0 +1,27 @@
+{
+  "name": "probe-research-tap",
+  "version": "0.1.3",
+  "description": "Ships sanitized per-session Codex rollouts to Probe Research OS.",
+  "author": {
+    "name": "Probe",
+    "email": "team@prbe.ai",
+    "url": "https://github.com/prbe-ai"
+  },
+  "homepage": "https://github.com/prbe-ai/research-os-agent",
+  "repository": "https://github.com/prbe-ai/research-os-agent",
+  "license": "MIT",
+  "keywords": ["codex", "research", "transcript", "capture"],
+  "interface": {
+    "displayName": "Probe Session Capture",
+    "shortDescription": "Capture sanitized Codex research sessions",
+    "longDescription": "Tails Codex rollouts, sanitizes their event shape, and delivers durable batches to Research OS.",
+    "developerName": "Probe",
+    "category": "Developer Tools",
+    "capabilities": ["Lifecycle hooks", "Transcript capture"],
+    "websiteURL": "https://research.prbe.ai",
+    "defaultPrompt": [
+      "Check whether session capture is paired.",
+      "Show the local capture status."
+    ]
+  }
+}

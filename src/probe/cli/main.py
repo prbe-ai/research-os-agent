@@ -254,9 +254,7 @@ def _kick_drainer() -> None:
 #
 # Group name, not full path: Typer dispatches `probe run start` through the `run`
 # group, and every subcommand under these groups is run-scoped.
-_UPDATE_HOT_PATH_COMMANDS = frozenset(
-    {"log", "span", "artifact", "run", "exec", "outbox"}
-)
+_UPDATE_HOT_PATH_COMMANDS = frozenset({"log", "span", "artifact", "run", "exec", "outbox"})
 
 
 #: Root options that consume the NEXT argv token as their value. Skipping the
@@ -434,9 +432,7 @@ def _spawn_autoupdate() -> None:
     env = dict(os.environ)
     env[autoupdate.WAIT_FOR_PID_ENV] = str(os.getpid())
     try:
-        _spawn_detached(
-            [sys.executable, "-m", "probe.cli.version_refresh", "--apply"], env
-        )
+        _spawn_detached([sys.executable, "-m", "probe.cli.version_refresh", "--apply"], env)
     except Exception:  # noqa: BLE001 -- fail-open: never block the command
         pass
 
@@ -466,9 +462,7 @@ def _outbox_notice() -> None:
                 parts.append(f"{pending} pending")
             if status.get("paused"):
                 parts.append("paused")
-            typer.echo(
-                f"outbox: {'; '.join(parts)} — see `probe outbox status`", err=True
-            )
+            typer.echo(f"outbox: {'; '.join(parts)} — see `probe outbox status`", err=True)
         if pending and not status.get("paused") and not blocked:
             _kick_drainer()
     except Exception:  # noqa: BLE001 -- a broken banner must never break a command
@@ -817,6 +811,11 @@ def doctor() -> None:
 
 @app.command(name="wizard")
 def wizard(
+    agent: Optional[str] = typer.Option(  # noqa: UP007
+        None,
+        "--agent",
+        help="configure claude, codex, or both (default: choose interactively)",
+    ),
     tracking: Optional[bool] = typer.Option(  # noqa: UP007 - typer needs Optional
         None,
         "--tracking/--no-tracking",
@@ -885,11 +884,49 @@ def wizard(
     if boot.message:
         print(boot.message)
 
-    caps = doctor_impl.collect()
-    configured = caps.configured
-    explicit_flags = any(
-        f is not None for f in (tracking, capture, auto_update, agent_rules)
-    )
+    if agent is not None:
+        normalized_agent = agent.strip().lower()
+        if normalized_agent in {"both", "all", "claude,codex", "codex,claude"}:
+            agent_sources = ("claude_code", "codex")
+        elif normalized_agent in {"claude", "claude_code"}:
+            agent_sources = ("claude_code",)
+        elif normalized_agent == "codex":
+            agent_sources = ("codex",)
+        else:
+            raise typer.BadParameter("--agent must be claude, codex, or both")
+    else:
+        from probe.cli import plugin_cli
+
+        codex_session = bool(os.environ.get("CODEX_THREAD_ID") or os.environ.get("CODEX_SANDBOX"))
+        if codex_session:
+            defaults = ("codex",)
+        elif wizard.interactive():
+            installed = tuple(
+                source for source in ("claude_code", "codex") if plugin_cli.available(source)
+            )
+            defaults = installed or ("claude_code",)
+        else:
+            # Preserve the historical headless default. Scripts opt into both
+            # explicitly with `--agent both`; only the human-facing bare npx
+            # flow grows the agent chooser.
+            defaults = ("claude_code",)
+        if wizard.interactive():
+            tui.clear()
+            picked_agents = wizard.run_agent_menu(defaults)
+            if picked_agents is None or picked_agents is tui.BACK:
+                raise typer.Exit(0)
+            agent_sources = picked_agents
+        else:
+            agent_sources = defaults
+
+    def _collect_agent(source: str):
+        os.environ["PROBE_AGENT"] = source
+        return doctor_impl.collect()
+
+    caps_by_source = {source: _collect_agent(source) for source in agent_sources}
+    caps = caps_by_source[agent_sources[0]]
+    configured = any(snapshot.configured for snapshot in caps_by_source.values())
+    explicit_flags = any(f is not None for f in (tracking, capture, auto_update, agent_rules))
 
     from probe.cli import actions as actions_mod
 
@@ -921,30 +958,130 @@ def wizard(
     # command: after an update you want doctor, after a removal you often want
     # to turn something else on.
     looping = (
-        action is None
-        and configured
-        and not yes
-        and not explicit_flags
-        and wizard.interactive()
+        action is None and configured and not yes and not explicit_flags and wizard.interactive()
     )
 
     while True:
         if chosen_action is actions_mod.Action.EXIT:
             raise typer.Exit(0)
 
-        lines = _run_wizard_action(
-            chosen_action,
-            caps=caps,
-            base_now=base_now,
-            yes=yes,
-            tracking=tracking,
-            capture=capture,
-            auto_update=auto_update,
-            agent_rules=agent_rules,
-            uninstall=uninstall,
-            configured=configured,
-            folder=folder,
-        )
+        if len(agent_sources) == 1:
+            os.environ["PROBE_AGENT"] = agent_sources[0]
+            lines = _run_wizard_action(
+                chosen_action,
+                caps=caps,
+                base_now=base_now,
+                yes=yes,
+                tracking=tracking,
+                capture=capture,
+                auto_update=auto_update,
+                agent_rules=agent_rules,
+                uninstall=uninstall,
+                configured=configured,
+                folder=folder,
+            )
+        elif chosen_action is actions_mod.Action.CONFIGURE:
+            # One common capability decision applies to both agents. A feature
+            # reads as enabled only when every selected agent has it, so a
+            # partially configured machine visibly offers to finish the gap.
+            aggregate = dataclasses.replace(
+                caps,
+                tracking_plugin_installed=all(
+                    item.tracking_plugin_installed for item in caps_by_source.values()
+                ),
+                capture_plugin_installed=all(
+                    item.capture_plugin_installed for item in caps_by_source.values()
+                ),
+                capture_token_sources=(
+                    caps.capture_token_sources
+                    if all(item.capture_on for item in caps_by_source.values())
+                    else ()
+                ),
+                capture_killswitched=any(
+                    item.capture_killswitched for item in caps_by_source.values()
+                ),
+                plugins_verified=all(item.plugins_verified for item in caps_by_source.values()),
+            )
+            shared_selection = wizard.resolve_selection(
+                aggregate,
+                tracking=tracking,
+                capture=capture,
+                auto_update=auto_update,
+                agent_rules=agent_rules,
+                configured=configured,
+            )
+            if not yes and not explicit_flags and wizard.interactive():
+                tui.clear()
+                chosen = wizard.run_menu(shared_selection.as_map())
+                if chosen is None or chosen is tui.BACK:
+                    return
+                tui.clear()
+                wants_updates = wizard.ask_auto_update(chosen.auto_update)
+                if wants_updates is None or wants_updates is tui.BACK:
+                    return
+                shared_selection = dataclasses.replace(chosen, auto_update=bool(wants_updates))
+
+            shared_needs = wizard.needs_authorization(aggregate, shared_selection)
+            missing_capture_sources = [
+                source
+                for source, snapshot in caps_by_source.items()
+                if shared_selection.capture and not snapshot.capture_token_sources
+            ]
+            lines = []
+            for index, source in enumerate(agent_sources):
+                current = _collect_agent(source)
+                result = _run_wizard_action(
+                    chosen_action,
+                    caps=current,
+                    base_now=base_now,
+                    yes=True,
+                    tracking=tracking,
+                    capture=capture,
+                    auto_update=auto_update,
+                    agent_rules=agent_rules,
+                    uninstall=uninstall,
+                    configured=configured,
+                    folder=folder,
+                    selection_override=shared_selection,
+                    authorization_needs=shared_needs if index == 0 else None,
+                    capture_sources=missing_capture_sources,
+                )
+                if result:
+                    label = "Codex" if source == "codex" else "Claude Code"
+                    lines.extend([f"{label}:", *result, ""])
+            # Configure streams its own progress; successful calls return no lines.
+        else:
+            # Diagnostics/removal are source-local. Manual instructions and
+            # backfill are agent-independent, so do not duplicate them.
+            targets = (
+                agent_sources
+                if chosen_action
+                in {
+                    actions_mod.Action.DIAGNOSE,
+                    actions_mod.Action.UPDATE,
+                    actions_mod.Action.UNINSTALL,
+                }
+                else agent_sources[:1]
+            )
+            lines = []
+            for source in targets:
+                current = _collect_agent(source)
+                result = _run_wizard_action(
+                    chosen_action,
+                    caps=current,
+                    base_now=base_now,
+                    yes=yes,
+                    tracking=tracking,
+                    capture=capture,
+                    auto_update=auto_update,
+                    agent_rules=agent_rules,
+                    uninstall=uninstall,
+                    configured=configured,
+                    folder=folder,
+                )
+                if result:
+                    label = "Codex" if source == "codex" else "Claude Code"
+                    lines.extend([f"{label}:", *result, ""])
 
         # Inside the menu loop this is a PAGE of the wizard, so it gets the
         # same centred treatment as every prompt. A one-shot `--action` run is
@@ -964,7 +1101,8 @@ def wizard(
         if not paged and wizard.interactive():
             tui.say()
             input(tui.indent("Press enter to return to the menu…"))
-        caps = doctor_impl.collect()
+        caps_by_source = {source: _collect_agent(source) for source in agent_sources}
+        caps = caps_by_source[agent_sources[0]]
         tui.clear()
         picked = wizard.run_action_menu(caps)
         if picked is None or picked is tui.BACK:
@@ -985,6 +1123,9 @@ def _run_wizard_action(
     uninstall: bool,
     configured: bool,
     folder: str | None = None,
+    selection_override=None,
+    authorization_needs: list[str] | None = None,
+    capture_sources: list[str] | None = None,
 ) -> list[str]:
     """Perform ONE action and RETURN its output.
 
@@ -1020,7 +1161,8 @@ def _run_wizard_action(
         outcome = perform_update(base_url=base_now, include_plugin=True)
         lines = list(outcome.lines)
         if outcome.restart_needed:
-            lines += ["", "Restart Claude Code to apply the plugin update."]
+            agent_name = "Codex" if caps.agent_source == "codex" else "Claude Code"
+            lines += ["", f"Restart {agent_name} to apply the plugin update."]
         # The pointer block lives in the researcher's home directory, so no
         # release can reach it: updating the CLI ships new POINTER_BODY wording
         # that the installed block never picks up, and this action -- the one an
@@ -1032,7 +1174,7 @@ def _run_wizard_action(
         # A process cannot write wording it does not have, so the refresh lands
         # on the first invocation AFTER the upgrade, not this one. It converges;
         # it is not instant.
-        if caps.agent_rules_stale:
+        if caps.agent_source != "codex" and caps.agent_rules_stale:
             lines += wizard.apply_agent_rules(True, stale=True)
         lines += _register_local_capabilities(
             doctor_impl.collect(),
@@ -1077,7 +1219,7 @@ def _run_wizard_action(
         )
 
     # CONFIGURE
-    selection = wizard.resolve_selection(
+    selection = selection_override or wizard.resolve_selection(
         caps,
         tracking=tracking,
         capture=capture,
@@ -1085,10 +1227,8 @@ def _run_wizard_action(
         agent_rules=agent_rules,
         configured=configured,
     )
-    explicit_flags = any(
-        f is not None for f in (tracking, capture, auto_update, agent_rules)
-    )
-    if not yes and not explicit_flags and wizard.interactive():
+    explicit_flags = any(f is not None for f in (tracking, capture, auto_update, agent_rules))
+    if selection_override is None and not yes and not explicit_flags and wizard.interactive():
         tui.clear()
         chosen = wizard.run_menu(selection.as_map())
         if chosen is None or chosen is tui.BACK:
@@ -1109,7 +1249,7 @@ def _run_wizard_action(
         selection = dataclasses.replace(selection, auto_update=bool(wants_updates))
 
     steps = wizard.plan(caps, selection)
-    if not steps:
+    if not steps and not authorization_needs:
         return [
             "Already set up the way you asked. Nothing to change.",
             *_register_local_capabilities(
@@ -1149,7 +1289,11 @@ def _run_wizard_action(
     # Measured: `claude plugin install` on an already-installed plugin returns
     # "already installed" and does NOT upgrade it, so that work was pure waste
     # -- and it was the step that failed, on the one path a new user is on.
-    needs = wizard.needs_authorization(caps, selection)
+    needs = (
+        authorization_needs
+        if authorization_needs is not None
+        else wizard.needs_authorization(caps, selection)
+    )
     # (label, action, gate). `gate` names the capability whose credential this step
     # cannot work without, and is None for steps that need none -- removals,
     # auto-update, the CLAUDE.md block. It is what stops a run whose browser
@@ -1183,9 +1327,7 @@ def _run_wizard_action(
                 "install the Session capture plugin"
                 if not caps.capture_plugin_installed
                 else "re-enable Session capture",
-                lambda: wizard.apply_capture(
-                    caps, True, mode=OffMode.DISABLE, on_retry=_may_retry
-                ),
+                lambda: wizard.apply_capture(caps, True, mode=OffMode.DISABLE, on_retry=_may_retry),
                 Capability.CAPTURE,
             )
         )
@@ -1220,6 +1362,7 @@ def _run_wizard_action(
                 None,
             )
         )
+
     # The refresh is hoisted out of install_plugin (it used to run per plugin,
     # discarding both results), so the CALLER owns it now -- and owning it means
     # actually doing it. Without this the first attempt installs from whatever
@@ -1306,6 +1449,7 @@ def _run_wizard_action(
         granted, auth_messages = wizard.authorize(
             needs,
             base_url=base_now,
+            capture_sources=capture_sources,
             # The approval URL is the one line the user has to act on, so it
             # goes onto the same centred screen as everything else -- left at
             # column 0 while its surroundings are centred it reads as a
@@ -1392,11 +1536,11 @@ def _run_wizard_action(
             reasons.append(f"these plugins {verb}: {', '.join(absent)}")
         if missing:
             reasons.append(f"no credential for: {', '.join(missing)}")
-        progress.note("", f"Not finished — {'; '.join(reasons)}.", "Re-run `probe wizard` to retry.")
+        progress.note(
+            "", f"Not finished — {'; '.join(reasons)}.", "Re-run `probe wizard` to retry."
+        )
         progress.close()
-        for message in _register_local_capabilities(
-            after, settings=resolve(base_url=base_now)
-        ):
+        for message in _register_local_capabilities(after, settings=resolve(base_url=base_now)):
             tui.say(message)
         raise typer.Exit(1)
 
@@ -1492,7 +1636,9 @@ def _verify(token: str, base_url: str) -> tuple[str, dict | None]:
 def mcp_token_set(
     token: str = typer.Option(None, "--token", help="paste a read-only token (air-gap path)"),
     allow_write: bool = typer.Option(False, "--allow-write", help="persist even if it can write"),
-    verify: bool = typer.Option(True, "--verify/--no-verify", help="check the token against /v1/me"),
+    verify: bool = typer.Option(
+        True, "--verify/--no-verify", help="check the token against /v1/me"
+    ),
 ) -> None:
     """Store the read-only token the MCP uses. Re-run to rotate — it replaces, never appends.
 
@@ -1634,7 +1780,9 @@ def mcp_status() -> None:
     if env_token and file_token and env_token != file_token:
         # The env wins, so a freshly-rotated config token is not what the MCP sends.
         print("          ! the environment and config hold DIFFERENT tokens; the environment wins")
-        print(f"          config holds {_fingerprint(file_token)} — open a new shell, or unset PROBE_MCP_TOKEN")
+        print(
+            f"          config holds {_fingerprint(file_token)} — open a new shell, or unset PROBE_MCP_TOKEN"
+        )
 
     state, identity = _verify(token, settings.base_url)
     if state == "ok":
@@ -1652,6 +1800,7 @@ def mcp_status() -> None:
 
     if state == "rejected":
         raise typer.Exit(1)
+
 
 # -- context ----------------------------------------------------------------
 context_app = typer.Typer(
@@ -1696,9 +1845,7 @@ def context_list() -> None:
         print("no contexts yet — run `probe login`")
         return
     active = current_context_name(data)
-    _print_json(
-        [_context_row(n, c or {}, active=n == active) for n, c in sorted(contexts.items())]
-    )
+    _print_json([_context_row(n, c or {}, active=n == active) for n, c in sorted(contexts.items())])
 
 
 @context_app.command("show")
@@ -1741,9 +1888,7 @@ def context_delete(name: str = typer.Argument(..., help="context to remove")) ->
 
 
 # -- workspaces -------------------------------------------------------------
-workspace_app = typer.Typer(
-    no_args_is_help=True, help="workspaces — the folders that own projects"
-)
+workspace_app = typer.Typer(no_args_is_help=True, help="workspaces — the folders that own projects")
 app.add_typer(workspace_app, name="workspace")
 
 
@@ -1820,9 +1965,7 @@ def workspace_rename(
 
 @workspace_app.command("use")
 def workspace_use(
-    workspace_id: str = typer.Argument(
-        ..., help="workspace slug to make active (or id:<uuid>)"
-    ),
+    workspace_id: str = typer.Argument(..., help="workspace slug to make active (or id:<uuid>)"),
 ) -> None:
     """Set the active workspace for this context.
 
@@ -1890,7 +2033,12 @@ def _ref(client: Client, kind: str, ref: str) -> refs.Ref:
         if kind == "workspace":
             return refs.resolve_workspace(client, ref)
         return refs.resolve(client, kind, ref)
-    except (UnfilteredListing, refs.AmbiguousName, refs.NameFilterUnsupported, NotFoundError) as exc:
+    except (
+        UnfilteredListing,
+        refs.AmbiguousName,
+        refs.NameFilterUnsupported,
+        NotFoundError,
+    ) as exc:
         raise typer.BadParameter(str(exc)) from None
 
 
@@ -2074,7 +2222,9 @@ def project_list(
     all_workspaces: bool = typer.Option(
         False, "--all", help="every workspace you can see (ignores --workspace and context)"
     ),
-    tag: list[str] = typer.Option(None, "--tag", help="filter: project must carry ALL (repeatable)"),
+    tag: list[str] = typer.Option(
+        None, "--tag", help="filter: project must carry ALL (repeatable)"
+    ),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
     cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
 ) -> None:
@@ -2128,9 +2278,7 @@ def project_set(
     project_id: str = slug_ref("project"),
     name: str = typer.Option(None, "--name"),
     description: str = description_opt(),
-    workspace: str = typer.Option(
-        None, "--workspace", help="not here — use `probe project move`"
-    ),
+    workspace: str = typer.Option(None, "--workspace", help="not here — use `probe project move`"),
 ) -> None:
     """Update a project's display fields."""
     if workspace is not None:
@@ -2156,8 +2304,14 @@ def project_set(
 def project_tag(
     project: str = typer.Argument(..., help="project slug (or id:<uuid>)"),
     add: list[str] = typer.Argument(None, help="tags to add"),
-    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
-    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
+    remove: list[str] = typer.Option(
+        None,
+        "--remove",
+        help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)",
+    ),
+    replace: list[str] = typer.Option(
+        None, "--set", help="replace the whole list (repeatable; --set '' clears all)"
+    ),
 ) -> None:
     """Tag a project: positional args add, --remove drops, --set replaces; bare lists."""
     with _client() as c:
@@ -2188,9 +2342,7 @@ def project_move(
     is a no-op and skips the fan-out.
     """
     with _client() as c:
-        _print_json(
-            c.move_project(_project_id(c, project_id), _ref(c, "workspace", workspace).id)
-        )
+        _print_json(c.move_project(_project_id(c, project_id), _ref(c, "workspace", workspace).id))
 
 
 @project_app.command("delete")
@@ -2223,11 +2375,14 @@ def token_list() -> None:
 def token_create(
     name: str = typer.Option(..., "--name", help="what this token is for, e.g. 'ci-bot'"),
     scope: list[Scope] = typer.Option(
-        None, "--scope",
+        None,
+        "--scope",
         help="repeatable; omit to request read+write+delete (never admin). A token can "
-             "never exceed the scopes your role confers.",
+        "never exceed the scopes your role confers.",
     ),
-    no_browser: bool = typer.Option(False, "--no-browser", help="print the URL instead of opening it"),
+    no_browser: bool = typer.Option(
+        False, "--no-browser", help="print the URL instead of opening it"
+    ),
 ) -> None:
     """Mint a token via the browser device flow — approve in the dashboard.
 
@@ -2262,7 +2417,9 @@ def token_create(
 
 
 @token_app.command("revoke")
-def token_revoke(token_id: str = typer.Argument(..., help="token id (from `probe token list`)")) -> None:
+def token_revoke(
+    token_id: str = typer.Argument(..., help="token id (from `probe token list`)"),
+) -> None:
     """Revoke one of my tokens. Revoking a teammate's needs the dashboard."""
     with _client() as c:
         c.revoke_token(token_id)
@@ -2281,7 +2438,9 @@ def run_start(
         "--experiment",
         help="slug of an EXISTING experiment; omit for a PROJECT-DIRECT run (W&B shape)",
     ),
-    name: str = typer.Option(None, "--name", help="defaults to a timestamped name (+ server petname short_id)"),
+    name: str = typer.Option(
+        None, "--name", help="defaults to a timestamped name (+ server petname short_id)"
+    ),
     slug: str = typer.Option(
         None,
         "--slug",
@@ -2289,7 +2448,9 @@ def run_start(
     ),
     description: str = description_opt(),
     project: str = typer.Option(
-        None, "--project", help="project slug (or id:<uuid>); defaults to the active one (`probe project use`)"
+        None,
+        "--project",
+        help="project slug (or id:<uuid>); defaults to the active one (`probe project use`)",
     ),
     group: str = typer.Option(None, "--group", help="run group id (see `probe group create`)"),
     source: str = typer.Option("api", "--source"),
@@ -2451,8 +2612,14 @@ def run_list(
 def run_tag(
     run: str = run_ref(),
     add: list[str] = typer.Argument(None, help="tags to add"),
-    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
-    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
+    remove: list[str] = typer.Option(
+        None,
+        "--remove",
+        help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)",
+    ),
+    replace: list[str] = typer.Option(
+        None, "--set", help="replace the whole list (repeatable; --set '' clears all)"
+    ),
 ) -> None:
     """Tag a run: positional args add, --remove drops, --set replaces; bare lists.
 
@@ -2522,12 +2689,7 @@ def run_end(
             report = drain(journal, run_ref=run)
             left = [op for _, op in journal.pending() if op.get("run_ref") == run]
             newly_dead = [op for _, op in journal.failed() if op.get("run_ref") == run]
-            if (
-                not left
-                or newly_dead
-                or report.auth_blocked
-                or time.monotonic() >= deadline
-            ):
+            if not left or newly_dead or report.auth_blocked or time.monotonic() >= deadline:
                 break
             time.sleep(min(0.25, max(deadline - time.monotonic(), 0.0)))
     dead = [op for _, op in journal.failed() if op.get("run_ref") == run]
@@ -2535,20 +2697,13 @@ def run_end(
     # skipped pass, any future skip condition) also blocks the close -- the
     # barrier promise is about the RESULT, not about which flag tripped.
     still_queued = [op for _, op in journal.pending() if op.get("run_ref") == run]
-    if (
-        flush_timeout is not None
-        and still_queued
-        and not dead
-        and not report.auth_blocked
-    ):
+    if flush_timeout is not None and still_queued and not dead and not report.auth_blocked:
         # Bounded barrier expired on retryable ops only: queue the close
         # BEHIND them (F3) and let the detached worker land everything. Dead
         # letters and auth blocks fall through to exit 2 -- deferring cannot
         # heal a permanent rejection, and a worker never runs auth-blocked.
         with _client() as c:
-            _async_run(c, run)._queue_deferred_finish(
-                status.value, None, len(still_queued)
-            )
+            _async_run(c, run)._queue_deferred_finish(status.value, None, len(still_queued))
         typer.echo(
             f"end queued for {run} -> {status.value} behind "
             f"{len(still_queued)} pending op(s); the background worker keeps "
@@ -2566,9 +2721,7 @@ def run_end(
             pass
         return
     if report.auth_blocked or report.stopped_transient or dead or still_queued:
-        detail = "; ".join(
-            report.errors[-3:] or [op.get("last_error") or "?" for op in dead[:3]]
-        )
+        detail = "; ".join(report.errors[-3:] or [op.get("last_error") or "?" for op in dead[:3]])
         typer.echo(
             f"run {run} NOT closed: its outbox items could not all be delivered "
             f"({detail}). Fix (see `probe outbox status`), retry dead letters "
@@ -2775,7 +2928,10 @@ def log(
     if _conn.async_mode:
         with _async_client() as c:
             _async_run(c, run).log(
-                metrics, step=step, kind=kind, dimensions=dims,
+                metrics,
+                step=step,
+                kind=kind,
+                dimensions=dims,
                 agg=agg.value if agg else None,
             )
         _kick_drainer()
@@ -2921,9 +3077,7 @@ def _derived_series_points(source: str) -> list[tuple[int, float]]:
             # A step -> value map, sorted numerically rather than lexically: JSON
             # object keys are strings, so insertion order puts step 10 before
             # step 2 and the curve reads as written out of order.
-            return sorted(
-                pair([step, value], f"step {step!r}") for step, value in document.items()
-            )
+            return sorted(pair([step, value], f"step {step!r}") for step, value in document.items())
         if isinstance(document, list):
             return [pair(item, f"item {i}") for i, item in enumerate(document)]
         raise typer.BadParameter("expected a JSON array, a step->value object, or JSONL")
@@ -3010,9 +3164,7 @@ def metrics_delete(
     run: str = typer.Argument(...),
     key: str = typer.Option(..., "--key"),
     kind: str = typer.Option("model", "--kind"),
-    dim: list[str] = typer.Option(
-        None, "--dim", metavar="k=v", help="pin ONE dimension variant"
-    ),
+    dim: list[str] = typer.Option(None, "--dim", metavar="k=v", help="pin ONE dimension variant"),
     yes: bool = typer.Option(False, "--yes", help="skip the confirmation"),
 ) -> None:
     """Delete a DERIVED series and its points.
@@ -3132,9 +3284,7 @@ def views_preview(
     body = _read_spec(spec, spec_file)
     with _client() as c:
         _print_json(
-            c.preview_view(
-                run, body, step_from=step_from, step_to=step_to, max_points=max_points
-            )
+            c.preview_view(run, body, step_from=step_from, step_to=step_to, max_points=max_points)
         )
 
 
@@ -3154,9 +3304,7 @@ def views_data(
     """
     with _client() as c:
         _print_json(
-            c.view_data(
-                run, view_id, step_from=step_from, step_to=step_to, max_points=max_points
-            )
+            c.view_data(run, view_id, step_from=step_from, step_to=step_to, max_points=max_points)
         )
 
 
@@ -3351,9 +3499,7 @@ def _pick_anchor(
         given.append((Anchor.RUN, run))
     if len(given) > 1:
         names = ", ".join(f"--{a.value}" if a is not Anchor.RUN else "RUN" for a, _ in given)
-        raise typer.BadParameter(
-            f"an artifact anchors to exactly one thing; got {names}"
-        )
+        raise typer.BadParameter(f"an artifact anchors to exactly one thing; got {names}")
     if not given:
         raise typer.BadParameter(
             "needs an anchor: a RUN argument, or --project/--experiment/--workspace/--shared"
@@ -3531,10 +3677,18 @@ def _artifact_enqueue(
     if reference or uri is not None:
         if anchor is Anchor.RUN:
             _async_run(client, anchor_id).log_artifact(
-                name, path=path, uri=uri, reference=reference,
-                hash_content=hash_content, allow_missing=allow_missing,
-                kind=kind, step_index=step, span_id=span,
-                content_type=content_type, meta=meta, notes=notes,
+                name,
+                path=path,
+                uri=uri,
+                reference=reference,
+                hash_content=hash_content,
+                allow_missing=allow_missing,
+                kind=kind,
+                step_index=step,
+                span_id=span,
+                content_type=content_type,
+                meta=meta,
+                notes=notes,
             )
         else:
             if reference:
@@ -3548,9 +3702,7 @@ def _artifact_enqueue(
                 body["content_type"] = content_type
             if notes:
                 body["notes"] = notes
-            client.journal.append_http(
-                "POST", _REFERENCE_ROUTES[anchor].format(id=anchor_id), body
-            )
+            client.journal.append_http("POST", _REFERENCE_ROUTES[anchor].format(id=anchor_id), body)
         return {"mode": "reference", "op_id": None, "pinged": False}
 
     if not path:
@@ -3584,12 +3736,17 @@ def _artifact_enqueue(
     if ping and queued["blob"] is not None:
         pinged = (
             _ping_presign(
-                anchor, anchor_id, name,
-                digest=queued["blob"], size=queued["size_bytes"],
+                anchor,
+                anchor_id,
+                name,
+                digest=queued["blob"],
+                size=queued["size_bytes"],
                 content_type=content_type,
-                kind=kind if run_only else None, meta=meta if run_only else None,
+                kind=kind if run_only else None,
+                meta=meta if run_only else None,
                 notes=notes,
-                span_id=span, step_index=step,
+                span_id=span,
+                step_index=step,
                 context=client.journal.context,
             )
             is not None
@@ -3624,10 +3781,21 @@ def _artifact_add_async(
     """
     with _async_client() as c:
         result = _artifact_enqueue(
-            c, anchor, anchor_id, name,
-            path=path, uri=uri, reference=reference, hash_content=hash_content,
-            allow_missing=allow_missing, kind=kind, step=step, span=span,
-            content_type=content_type, meta=meta, notes=notes,
+            c,
+            anchor,
+            anchor_id,
+            name,
+            path=path,
+            uri=uri,
+            reference=reference,
+            hash_content=hash_content,
+            allow_missing=allow_missing,
+            kind=kind,
+            step=step,
+            span=span,
+            content_type=content_type,
+            meta=meta,
+            notes=notes,
         )
     _kick_drainer()
     if result["mode"] == "reference":
@@ -3655,9 +3823,23 @@ def _artifact_add_async(
 #: which is the one outcome a bulk importer must never produce.
 _MANIFEST_KEYS = frozenset(
     {
-        "path", "uri", "name", "notes", "kind", "step", "span", "content_type",
-        "meta", "reference", "hash", "allow_missing",
-        "run", "project", "experiment", "workspace", "shared",
+        "path",
+        "uri",
+        "name",
+        "notes",
+        "kind",
+        "step",
+        "span",
+        "content_type",
+        "meta",
+        "reference",
+        "hash",
+        "allow_missing",
+        "run",
+        "project",
+        "experiment",
+        "workspace",
+        "shared",
     }
 )
 
@@ -3716,8 +3898,7 @@ def _plan_manifest_row(
     unknown = sorted(set(row) - _MANIFEST_KEYS)
     if unknown:
         raise typer.BadParameter(
-            f"unknown key(s): {', '.join(unknown)}. A row takes "
-            f"{', '.join(sorted(_MANIFEST_KEYS))}"
+            f"unknown key(s): {', '.join(unknown)}. A row takes {', '.join(sorted(_MANIFEST_KEYS))}"
         )
 
     row_anchor = any(
@@ -3910,9 +4091,7 @@ def _artifact_add_manifest(
                     anchor_id = anchors[(anchor, ref)]
                 name = plan.pop("name")
                 try:
-                    result = _artifact_enqueue(
-                        c, anchor, anchor_id, name, ping=False, **plan
-                    )
+                    result = _artifact_enqueue(c, anchor, anchor_id, name, ping=False, **plan)
                 except ClickException as exc:
                     fail(lineno, exc.format_message())
                 except (OSError, errors.RosError, ValueError) as exc:
@@ -3960,7 +4139,9 @@ def artifact_add(
         help="what this file is, what produced it, what it shows — any anchor",
     ),
     project: str = typer.Option(None, "--project", help="anchor to a project slug (or id:<uuid>)"),
-    experiment: str = typer.Option(None, "--experiment", help="anchor to an experiment slug (or id:<uuid>)"),
+    experiment: str = typer.Option(
+        None, "--experiment", help="anchor to an experiment slug (or id:<uuid>)"
+    ),
     workspace: str = typer.Option(
         None,
         "--workspace",
@@ -4019,8 +4200,7 @@ def artifact_add(
     if from_manifest is not None:
         if run is not None or path is not None:
             raise typer.BadParameter(
-                "--from-manifest takes its rows from the file; drop the positional "
-                "arguments"
+                "--from-manifest takes its rows from the file; drop the positional arguments"
             )
         if name is not None or uri is not None or reference:
             raise typer.BadParameter(
@@ -4030,8 +4210,11 @@ def artifact_add(
         default_anchor = None
         if project or experiment or workspace or shared:
             default_anchor = _pick_anchor(
-                run=None, project=project, experiment=experiment,
-                workspace=workspace, shared=shared,
+                run=None,
+                project=project,
+                experiment=experiment,
+                workspace=workspace,
+                shared=shared,
             )
         _artifact_add_manifest(
             from_manifest,
@@ -4062,9 +4245,16 @@ def artifact_add(
 
     resolved = _validate_artifact_row(
         anchor,
-        path=path, uri=uri, name=name, reference=reference,
-        hash_content=hash_content, allow_missing=allow_missing,
-        kind=kind, step=step, span=span, meta=meta,
+        path=path,
+        uri=uri,
+        name=name,
+        reference=reference,
+        hash_content=hash_content,
+        allow_missing=allow_missing,
+        kind=kind,
+        step=step,
+        span=span,
+        meta=meta,
     )
 
     if _conn.async_mode:
@@ -4083,10 +4273,19 @@ def artifact_add(
             with _client() as c:
                 anchor_id = _anchor_id_for(c, anchor, anchor_id)
         _artifact_add_async(
-            anchor, anchor_id, resolved,
-            path=path, uri=uri, reference=reference, hash_content=hash_content,
-            allow_missing=allow_missing, kind=kind, step=step, span=span,
-            content_type=content_type, meta=_kv_pairs(meta) if meta else None,
+            anchor,
+            anchor_id,
+            resolved,
+            path=path,
+            uri=uri,
+            reference=reference,
+            hash_content=hash_content,
+            allow_missing=allow_missing,
+            kind=kind,
+            step=step,
+            span=span,
+            content_type=content_type,
+            meta=_kv_pairs(meta) if meta else None,
             notes=notes,
         )
         return
@@ -4094,19 +4293,25 @@ def artifact_add(
     if anchor is Anchor.RUN:
         with _client() as c:
             _run_handle(c, anchor_id).log_artifact(
-                resolved, path=path, uri=uri, reference=reference,
-                hash_content=hash_content, allow_missing=allow_missing,
-                kind=kind, step_index=step, span_id=span, content_type=content_type,
-                meta=_kv_pairs(meta) if meta else None, notes=notes,
+                resolved,
+                path=path,
+                uri=uri,
+                reference=reference,
+                hash_content=hash_content,
+                allow_missing=allow_missing,
+                kind=kind,
+                step_index=step,
+                span_id=span,
+                content_type=content_type,
+                meta=_kv_pairs(meta) if meta else None,
+                notes=notes,
             )
         print(f"artifact {resolved!r} recorded on {anchor_id}")
         return
     with _client() as c:
         anchor_id = _anchor_id_for(c, anchor, anchor_id)
         if reference:
-            fields = reference_fields(
-                path, hash_content=hash_content, allow_missing=allow_missing
-            )
+            fields = reference_fields(path, hash_content=hash_content, allow_missing=allow_missing)
             body = {"name": resolved, "is_reference": True, **fields}
             if content_type:
                 body["content_type"] = content_type
@@ -4125,8 +4330,12 @@ def artifact_add(
                 raise typer.BadParameter("needs a file path (--reference, or --uri)")
             _print_json(
                 c.upload_file(
-                    anchor, anchor_id, resolved, path,
-                    content_type=content_type, notes=notes,
+                    anchor,
+                    anchor_id,
+                    resolved,
+                    path,
+                    content_type=content_type,
+                    notes=notes,
                 )
             )
 
@@ -4193,9 +4402,7 @@ def artifact_list(
     with _client() as c:
         if anchor is Anchor.RUN:
             _print_json(
-                c.list_run_artifacts(
-                    anchor_id, kind=kind, step_from=step_from, step_to=step_to
-                )
+                c.list_run_artifacts(anchor_id, kind=kind, step_from=step_from, step_to=step_to)
             )
             return
         if kind or step_from is not None or step_to is not None:
@@ -4210,18 +4417,26 @@ def artifact_list(
 def artifact_download(
     artifact_id: str = typer.Argument(..., help="artifact id (from `probe artifact list`)"),
     output: str = typer.Option(
-        None, "--output", "-o", "--to", metavar="PATH",
+        None,
+        "--output",
+        "-o",
+        "--to",
+        metavar="PATH",
         help="write the bytes here; '-' forces stdout. Omit to write to stdout "
-             "(refused at a terminal).",
+        "(refused at a terminal).",
     ),
     sha256: str = typer.Option(
-        None, "--sha256", metavar="HEX",
+        None,
+        "--sha256",
+        metavar="HEX",
         help="expected content_hash; fail (deleting a written file) if the bytes differ",
     ),
     version: int = typer.Option(
-        None, "--version", metavar="N",
+        None,
+        "--version",
+        metavar="N",
         help="fetch this version's bytes instead of the artifact's live content "
-             "(from `probe artifact versions`)",
+        "(from `probe artifact versions`)",
     ),
 ) -> None:
     """Download an artifact's bytes through a presigned GET.
@@ -4295,7 +4510,9 @@ def artifact_download(
                 raise
             where = detail.get("local_path") or detail.get("uri") or "(unknown location)"
             host = detail.get("host")
-            what = f"artifact {artifact_id}" + (f" version {version}" if version is not None else "")
+            what = f"artifact {artifact_id}" + (
+                f" version {version}" if version is not None else ""
+            )
             typer.echo(
                 f"{what} is a reference -> {where}"
                 + (f" on {host}" if host else "")
@@ -4336,16 +4553,16 @@ def artifact_pin_impact(
 def artifact_version_add(
     artifact_id: str = typer.Argument(..., help="the artifact to append a version to"),
     from_artifact: str = typer.Option(
-        None, "--from-artifact", metavar="ID",
+        None,
+        "--from-artifact",
+        metavar="ID",
         help="promote another artifact's content ZERO-COPY: pins its hash, uri and "
-             "size; the stored object is shared, never re-uploaded",
+        "size; the stored object is shared, never re-uploaded",
     ),
     uri: str = typer.Option(
         None, "--uri", help="name the pointer directly instead of promoting an artifact"
     ),
-    sha256: str = typer.Option(
-        None, "--sha256", metavar="HEX", help="content_hash for --uri"
-    ),
+    sha256: str = typer.Option(None, "--sha256", metavar="HEX", help="content_hash for --uri"),
     size_bytes: int = typer.Option(None, "--size-bytes"),
     content_type: str = typer.Option(None, "--content-type"),
     label: str = typer.Option(
@@ -4390,7 +4607,9 @@ def artifact_delete(
 @artifact_app.command("gc-uploads")
 def artifact_gc_uploads(
     older_than: str = typer.Option(
-        ..., "--older-than", metavar="TIMESTAMP",
+        ...,
+        "--older-than",
+        metavar="TIMESTAMP",
         help="sweep uploads started before this; must carry a timezone, e.g. 2026-07-01T00:00:00Z",
     ),
 ) -> None:
@@ -4420,9 +4639,7 @@ def shared_add(
     """Upload a file straight into the team's Shared folder."""
     resolved = name or os.path.basename(path)
     with _client() as c:
-        _print_json(
-            c.upload_file(Anchor.SHARED, None, resolved, path, content_type=content_type)
-        )
+        _print_json(c.upload_file(Anchor.SHARED, None, resolved, path, content_type=content_type))
 
 
 @shared_app.command("share")
@@ -4524,10 +4741,18 @@ def trial_stage(
 def trial_add(
     run: str = typer.Argument(...),
     trial_dir: str = typer.Argument(..., help="a Harbor trial output directory"),
-    step: int = typer.Option(None, "--step", help="training step / Miles rollout_id — the join key"),
-    env_type: str = typer.Option(None, "--env-type", help="opaque environment label (e.g. skypilot-fork)"),
-    expand: bool = typer.Option(True, "--expand/--no-expand", help="expand a recognized trajectory format into spans"),
-    max_spans: int = typer.Option(None, "--max-spans", help="eager expansion window (0 = unlimited)"),
+    step: int = typer.Option(
+        None, "--step", help="training step / Miles rollout_id — the join key"
+    ),
+    env_type: str = typer.Option(
+        None, "--env-type", help="opaque environment label (e.g. skypilot-fork)"
+    ),
+    expand: bool = typer.Option(
+        True, "--expand/--no-expand", help="expand a recognized trajectory format into spans"
+    ),
+    max_spans: int = typer.Option(
+        None, "--max-spans", help="eager expansion window (0 = unlimited)"
+    ),
 ) -> None:
     """Capture one Harbor trial: rollout span + reward metric + labeled file
     uploads + a kind=harbor_trial manifest, all keyed by --step."""
@@ -4623,7 +4848,9 @@ def trial_watch(
 def trial_expand(
     run: str = typer.Argument(...),
     manifest_id: str = typer.Argument(..., help="a kind=harbor_trial manifest artifact id"),
-    max_spans: int = typer.Option(0, "--max-spans", help="eager expansion window (default 0 = full)"),
+    max_spans: int = typer.Option(
+        0, "--max-spans", help="eager expansion window (default 0 = full)"
+    ),
 ) -> None:
     """Retroactively expand a captured trial's stored trajectory into spans —
     e.g. after a parser for its format shipped. Idempotent (deterministic span
@@ -4631,16 +4858,18 @@ def trial_expand(
     from ..connectors.atif import expand_trajectory
 
     with _client() as c:
-        manifests = {
-            a["id"]: a for a in c.list_run_artifacts(run, kind="harbor_trial")
-        }
+        manifests = {a["id"]: a for a in c.list_run_artifacts(run, kind="harbor_trial")}
         manifest = manifests.get(manifest_id)
         if manifest is None:
             typer.echo(f"no kind=harbor_trial artifact {manifest_id} on run {run}", err=True)
             raise typer.Exit(1)
         meta = manifest.get("meta") or {}
         traj_entry = next(
-            (f for f in meta.get("files") or [] if f.get("role") == "trajectory" and f.get("artifact_id")),
+            (
+                f
+                for f in meta.get("files") or []
+                if f.get("role") == "trajectory" and f.get("artifact_id")
+            ),
             None,
         )
         if traj_entry is None:
@@ -4751,7 +4980,7 @@ def snapshot(
             f"      {cb['pending_upload']} NOT stored ({cb.get('reason')}) — "
             "this run is not reproducible from the record alone"
         )
-    for e in (m.get("entries") or []):
+    for e in m.get("entries") or []:
         if e.get("source") == "reference":
             print(
                 f"      referenced (too large to copy): {e['path']}  "
@@ -4855,7 +5084,9 @@ def snapshot_restore(
     for r in result.get("referenced") or []:
         print(f"  OFF-PLATFORM {r['path']}  -> {r['uri']} on {r['host']}")
     verb = "verified" if verify_only else "restored"
-    ref = f", {result['n_referenced']} referenced off-platform" if result.get("n_referenced") else ""
+    ref = (
+        f", {result['n_referenced']} referenced off-platform" if result.get("n_referenced") else ""
+    )
     print(f"{result['n_restored']} {verb}, {result['n_unavailable']} unavailable{ref}")
     print(f"tree_sha256 {result['tree_sha256']} matches={result['tree_matches']}")
     if result["n_unavailable"]:
@@ -4941,6 +5172,7 @@ def outbox_status(
             for p in producers
         ]
     if verbose:
+
         def row(op: dict, state: str) -> dict:
             return {
                 "op_id": op.get("op_id"),
@@ -5191,9 +5423,7 @@ def wiki_write(
     body: str = typer.Argument(
         None, help="the document: literal text, @file, or '-' for stdin (the default)"
     ),
-    summary: str = typer.Option(
-        None, "--summary", help="one line for the history list (optional)"
-    ),
+    summary: str = typer.Option(None, "--summary", help="one line for the history list (optional)"),
     if_version: int = typer.Option(
         None,
         "--if-version",
@@ -5286,8 +5516,7 @@ def wiki_revert(version: int = typer.Argument(..., help="the version to bring ba
     with _client() as c:
         page = c.revert_wiki(version)
     print(
-        f"reverted the team wiki to version {version}, stored as version "
-        f"{page.get('version')}",
+        f"reverted the team wiki to version {version}, stored as version {page.get('version')}",
         file=sys.stderr,
     )
     _print_json({"version": page.get("version"), "reverted_to": version})
@@ -5335,10 +5564,11 @@ def experiment_create(
         # Same resolver as `run start`, so "no such project" is one error with
         # one exit code, and the message names the SLUG that was looked up rather
         # than the raw ambient value (which is an id).
-        project_id = c.resolve_or_raise(
-            "project", _project_slug(c, resolved_project)
-        )["id"]
-        created = c.create_experiment(slug, name, hypothesis=hypothesis,
+        project_id = c.resolve_or_raise("project", _project_slug(c, resolved_project))["id"]
+        created = c.create_experiment(
+            slug,
+            name,
+            hypothesis=hypothesis,
             project_id=project_id,
             description=description,
             tags=tag or None,
@@ -5383,7 +5613,9 @@ def experiment_set(
 @experiment_app.command("list")
 def experiment_list(
     project: str = typer.Option(None, "--project", help="project slug (or id:<uuid>)"),
-    tag: list[str] = typer.Option(None, "--tag", help="filter: experiment must carry ALL (repeatable)"),
+    tag: list[str] = typer.Option(
+        None, "--tag", help="filter: experiment must carry ALL (repeatable)"
+    ),
     limit: int = typer.Option(50, "--limit", min=1, max=200),
     cursor: str = typer.Option(None, "--cursor", help="keyset cursor from a previous page"),
 ) -> None:
@@ -5404,8 +5636,14 @@ def experiment_list(
 def experiment_tag(
     experiment_id: str = slug_ref("experiment"),
     add: list[str] = typer.Argument(None, help="tags to add"),
-    remove: list[str] = typer.Option(None, "--remove", help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)"),
-    replace: list[str] = typer.Option(None, "--set", help="replace the whole list (repeatable; --set '' clears all)"),
+    remove: list[str] = typer.Option(
+        None,
+        "--remove",
+        help="tag to remove; repeatable, ONE tag per flag (a bare word after options is an ADD)",
+    ),
+    replace: list[str] = typer.Option(
+        None, "--set", help="replace the whole list (repeatable; --set '' clears all)"
+    ),
 ) -> None:
     """Tag an experiment: positional args add, --remove drops, --set replaces; bare lists."""
     with _client() as c:
@@ -5444,7 +5682,9 @@ def experiment_edges(experiment_id: str = typer.Argument(...)) -> None:
 
 
 # -- run groups (sweeps / ensembles) ----------------------------------------
-group_app = typer.Typer(no_args_is_help=True, help="run groups: sweeps, ensembles, distributed runs")
+group_app = typer.Typer(
+    no_args_is_help=True, help="run groups: sweeps, ensembles, distributed runs"
+)
 app.add_typer(group_app, name="group")
 
 
@@ -5453,7 +5693,9 @@ def group_create(
     experiment_id: str = typer.Argument(...),
     name: str = typer.Option(..., "--name"),
     kind: str = typer.Option("group", "--kind", help="e.g. sweep, ensemble"),
-    spec: str = typer.Option(None, "--spec", metavar="JSON|@file", help="e.g. a sweep search space"),
+    spec: str = typer.Option(
+        None, "--spec", metavar="JSON|@file", help="e.g. a sweep search space"
+    ),
     notes: str = notes_opt(),
 ) -> None:
     """Create a run group. Pass the printed id to `probe run start --group`.

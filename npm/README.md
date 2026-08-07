@@ -6,9 +6,10 @@ The Probe Research setup wizard.
 npx probe-research
 ```
 
-Installs and configures [Probe Research](https://research.prbe.ai) for Claude Code.
-It asks which capabilities you want, installs only those plugins, and finishes
-with a single browser approval.
+Installs and configures [Probe Research](https://research.prbe.ai) for Claude Code,
+Codex, or both. It asks which agents and capabilities you want, installs only
+those plugin targets, and finishes with a single browser approval. When both
+agents are selected, each receives its own source-bound capture credential.
 
 This package is a thin launcher. Probe Research is a Python CLI; this exists so
 the entry point matches the `npx <tool>` shape people already expect. It resolves

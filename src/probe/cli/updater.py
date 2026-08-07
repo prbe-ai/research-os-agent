@@ -23,7 +23,7 @@ from pathlib import Path
 
 import httpx
 
-from probe.cli import claude_cli
+from probe.cli import claude_cli, plugin_cli
 from probe.cli.capabilities import TAP_PLUGIN_ID
 
 # Resolved once, at import (H8): `is_newer` runs AFTER the tree is replaced, and a
@@ -71,7 +71,7 @@ class Method:
     PIP = "pip"
     EPHEMERAL = "ephemeral"  # uvx / pipx run cache -- nothing to upgrade, no pip
     EDITABLE = "editable"  # -e / source checkout (H5)
-    MANAGED = "managed"    # pip dep in a project with a lockfile (H6)
+    MANAGED = "managed"  # pip dep in a project with a lockfile (H6)
     UNKNOWN = "unknown"
 
 
@@ -167,7 +167,9 @@ def detect_install() -> Install:
             detail="running from a temporary uvx/pipx environment",
         )
     pipx_home = os.environ.get("PIPX_HOME")
-    if "/pipx/venvs/" in s or (pipx_home and s.startswith(str(Path(pipx_home).resolve()).replace(os.sep, "/"))):
+    if "/pipx/venvs/" in s or (
+        pipx_home and s.startswith(str(Path(pipx_home).resolve()).replace(os.sep, "/"))
+    ):
         return Install(Method.PIPX)
     if _is_editable(pkg):
         return Install(Method.EDITABLE, root=pkg.parent, detail="editable / source checkout")
@@ -264,8 +266,8 @@ def installed_plugin_version() -> str | None:
 @dataclass
 class CliResult:
     ran: bool
-    ok: bool          # the CLI is at (or past) the target after the attempt — VERIFIED
-    changed: bool     # the installed version actually moved
+    ok: bool  # the CLI is at (or past) the target after the attempt — VERIFIED
+    changed: bool  # the installed version actually moved
     before: str | None
     after: str | None
     message: str
@@ -303,7 +305,11 @@ def _finalize(before: str | None, target: str | None, tool: str) -> CliResult:
     if target and after and not is_newer(target, after):
         return CliResult(True, True, False, before, after, f"CLI already at the latest ({after})")
     return CliResult(
-        True, False, False, before, after,
+        True,
+        False,
+        False,
+        before,
+        after,
         f"`{tool}` reported success but the CLI is still {after or before} "
         "(it may be version-pinned, or that release was yanked)",
     )
@@ -312,15 +318,33 @@ def _finalize(before: str | None, target: str | None, tool: str) -> CliResult:
 def upgrade_cli(install: Install, current: str | None, target: str | None) -> CliResult:
     m = install.method
     if m == Method.EDITABLE:
-        return CliResult(False, False, False, current, current,
-                         "editable/source install — update with git, not a package manager")
+        return CliResult(
+            False,
+            False,
+            False,
+            current,
+            current,
+            "editable/source install — update with git, not a package manager",
+        )
     if m == Method.MANAGED:
-        return CliResult(False, False, False, current, current,
-                         "probe-research is a dependency of this project — bump it with your "
-                         "dependency manager (e.g. `uv add probe-research@latest`) so the lockfile stays in sync")
+        return CliResult(
+            False,
+            False,
+            False,
+            current,
+            current,
+            "probe-research is a dependency of this project — bump it with your "
+            "dependency manager (e.g. `uv add probe-research@latest`) so the lockfile stays in sync",
+        )
     if m == Method.UNKNOWN:
-        return CliResult(False, False, False, current, current,
-                         "could not tell how probe was installed — update via your package manager")
+        return CliResult(
+            False,
+            False,
+            False,
+            current,
+            current,
+            "could not tell how probe was installed — update via your package manager",
+        )
     if m == Method.UV_TOOL_LEGACY:
         # H3: the old probe-agent tool owns `probe`; uninstall it, install the new.
         if _run(["uv", "tool", "uninstall", LEGACY_DIST], _UPGRADE_TIMEOUT_S) is None:
@@ -351,7 +375,7 @@ def upgrade_cli(install: Install, current: str | None, target: str | None) -> Cl
 class PluginResult:
     attempted: bool
     confirmed: bool  # plugin is at/past the target — trusted, NOT from claude's exit code
-    changed: bool    # the version actually moved this run (vs already-current)
+    changed: bool  # the version actually moved this run (vs already-current)
     before: str | None
     after: str | None
     message: str
@@ -366,7 +390,9 @@ def update_plugin(target_latest: str | None) -> PluginResult:
     """
     claude = shutil.which("claude")
     if not claude:
-        return PluginResult(False, False, False, None, None, "`claude` not found on PATH (skipping plugin update)")
+        return PluginResult(
+            False, False, False, None, None, "`claude` not found on PATH (skipping plugin update)"
+        )
 
     before = installed_plugin_version()
     completed = True
@@ -384,9 +410,7 @@ def update_plugin(target_latest: str | None) -> PluginResult:
     # flip `completed` would report the whole update as failed to everyone
     # without a tap. The marketplace refresh above already ran, so this is just
     # the install step.
-    claude_cli.run(
-        ["plugin", "update", TAP_PLUGIN_ID], timeout=claude_cli.CAPTURE_TIMEOUT_S
-    )
+    claude_cli.run(["plugin", "update", TAP_PLUGIN_ID], timeout=claude_cli.CAPTURE_TIMEOUT_S)
 
     after = installed_plugin_version()
     changed = is_newer(after, before)
@@ -398,11 +422,75 @@ def update_plugin(target_latest: str | None) -> PluginResult:
         return PluginResult(True, True, changed, before, after, msg)
     if completed:
         return PluginResult(
-            True, False, False, before, after,
+            True,
+            False,
+            False,
+            before,
+            after,
             "`claude` returned success but the plugin version did not advance "
             "(it may have run inside a Claude Code session, which no-ops)",
         )
-    return PluginResult(True, False, False, before, after, "`claude plugin update` did not complete")
+    return PluginResult(
+        True, False, False, before, after, "`claude plugin update` did not complete"
+    )
+
+
+def _codex_plugin_versions(_codex: str | None = None) -> dict[str, str]:
+    result = plugin_cli.list_plugins(plugin_cli.CODEX)
+    if not result.ok:
+        return {}
+    try:
+        body = json.loads(result.detail)
+    except ValueError:
+        return {}
+    return {
+        row["name"]: row["version"]
+        for row in body.get("installed") or []
+        if isinstance(row, dict)
+        and isinstance(row.get("name"), str)
+        and isinstance(row.get("version"), str)
+    }
+
+
+def update_codex_plugins() -> PluginResult:
+    """Refresh and re-add both Codex plugins, then verify the installed list.
+
+    Codex has no separate ``plugin update`` command. Re-adding an installed
+    plugin is its idempotent reinstall path and moves it to the refreshed
+    marketplace snapshot without first removing the working copy.
+    """
+    codex = shutil.which("codex")
+    if not codex:
+        return PluginResult(
+            False, False, False, None, None, "`codex` not found on PATH (skipping plugin update)"
+        )
+    names = ("probe-research", "probe-research-tap")
+    before_versions = _codex_plugin_versions(codex)
+    completed = plugin_cli.refresh_marketplace(plugin_cli.CODEX, MARKETPLACE).ok
+    for name in names:
+        if not completed:
+            break
+        completed = plugin_cli.install(plugin_cli.CODEX, f"{name}@{MARKETPLACE}").ok
+    after_versions = _codex_plugin_versions(codex)
+    confirmed = completed and all(after_versions.get(name) for name in names)
+    changed = confirmed and any(
+        before_versions.get(name) != after_versions.get(name) for name in names
+    )
+    before = (
+        ", ".join(f"{name}={version}" for name, version in sorted(before_versions.items())) or None
+    )
+    after = ", ".join(f"{name}={after_versions.get(name)}" for name in names) if confirmed else None
+    if confirmed:
+        message = f"Codex plugins {'updated' if changed else 'verified'} ({after})"
+        return PluginResult(True, True, changed, before, after, message)
+    return PluginResult(
+        True,
+        False,
+        False,
+        before,
+        after,
+        "Codex marketplace refresh or plugin reinstall did not complete",
+    )
 
 
 def manual_plugin_commands() -> str:
@@ -410,4 +498,12 @@ def manual_plugin_commands() -> str:
         f"claude plugin marketplace update {MARKETPLACE}\n"
         f"claude plugin update {PLUGIN_ID}\n"
         f"claude plugin update {TAP_PLUGIN_ID}  # skip if you do not have the tap"
+    )
+
+
+def manual_codex_plugin_commands() -> str:
+    return (
+        f"codex plugin marketplace upgrade {MARKETPLACE}\n"
+        f"codex plugin add probe-research@{MARKETPLACE}\n"
+        f"codex plugin add probe-research-tap@{MARKETPLACE}"
     )

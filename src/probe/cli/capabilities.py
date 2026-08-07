@@ -18,14 +18,14 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 
-from probe.cli import claude_cli
+from probe.cli import plugin_cli
 
 TAP_PLUGIN_NAME = "probe-research-tap"
+CODEX_TAP_PLUGIN_NAME = TAP_PLUGIN_NAME
 TRACKING_PLUGIN_NAME = "probe-research"
 MARKETPLACE = "research-os-agent"
 MARKETPLACE_REPO = "prbe-ai/research-os-agent"
@@ -38,6 +38,9 @@ TAP_PLUGIN_ID = f"{TAP_PLUGIN_NAME}@{MARKETPLACE}"
 ENV_INGEST_TOKEN = "PROBE_INGEST_TOKEN"
 ENV_TAP_PLUGIN_DIR = "PROBE_RESEARCH_TAP_PLUGIN_DIR"
 ENV_CONFIG_PATH = "PROBE_CONFIG_PATH"
+ENV_AGENT = "PROBE_AGENT"
+ENV_CODEX_INGEST_TOKEN = "PRBE_CODEX_TAP_TOKEN"
+ENV_CODEX_TAP_PLUGIN_DIR = "PRBE_CODEX_TAP_PLUGIN_DIR"
 
 
 class Capability(StrEnum):
@@ -80,6 +83,8 @@ class Capabilities:
     cli_version: str | None = None
     install_method: str | None = None
     claude_available: bool = False
+    codex_available: bool = False
+    agent_source: str = "claude_code"
 
     logged_in_as: str | None = None
     base_url: str | None = None
@@ -167,10 +172,33 @@ class Capabilities:
         }
 
 
-def tap_plugin_dir() -> Path:
-    env = os.environ.get(ENV_TAP_PLUGIN_DIR)
+def agent_source() -> str:
+    """Setup target: explicit override, then the coding-agent environment."""
+    explicit = (os.environ.get(ENV_AGENT) or "").strip().lower()
+    if explicit in {"claude", "claude_code"}:
+        return "claude_code"
+    if explicit == "codex":
+        return "codex"
+    return "claude_code"
+
+
+def capture_plugin_name(source: str | None = None) -> str:
+    return CODEX_TAP_PLUGIN_NAME if (source or agent_source()) == "codex" else TAP_PLUGIN_NAME
+
+
+def tap_plugin_dir(source: str | None = None) -> Path:
+    selected = source or agent_source()
+    env_name = ENV_CODEX_TAP_PLUGIN_DIR if selected == "codex" else ENV_TAP_PLUGIN_DIR
+    env = os.environ.get(env_name)
     if env:
         return Path(env)
+    if selected == "codex":
+        state = Path.home() / ".codex" / "state"
+        current = state / TAP_PLUGIN_NAME
+        legacy = state / "prbe-codex-tap-plugin"
+        # Existing pairings/outboxes stay live without making the retired
+        # standalone plugin name the default for new installations.
+        return legacy if legacy.exists() and not current.exists() else current
     return Path.home() / ".claude" / "plugins" / TAP_PLUGIN_NAME
 
 
@@ -212,7 +240,7 @@ def probe_config_credentials() -> dict:
     return raw
 
 
-def capture_token_sources() -> tuple[TokenSource, ...]:
+def capture_token_sources(source: str | None = None) -> tuple[TokenSource, ...]:
     """Every place a capture credential currently resolves from, in the
     uploader's own precedence order.
 
@@ -222,15 +250,20 @@ def capture_token_sources() -> tuple[TokenSource, ...]:
     is what the parity test in tests/test_capabilities.py exists to catch.
     """
     found: list[TokenSource] = []
-    token_file = tap_plugin_dir() / ".token"
+    selected = source or agent_source()
+    token_file = tap_plugin_dir(selected) / ".token"
     try:
         if token_file.read_text().strip():
             found.append(TokenSource.PAIRED_FILE)
     except OSError:
         pass
-    if (os.environ.get(ENV_INGEST_TOKEN) or "").strip():
+    token_env = ENV_CODEX_INGEST_TOKEN if selected == "codex" else ENV_INGEST_TOKEN
+    if (os.environ.get(token_env) or "").strip():
         found.append(TokenSource.ENVIRONMENT)
-    if str(probe_config_credentials().get("ingest_token") or "").strip():
+    if (
+        selected == "claude_code"
+        and str(probe_config_credentials().get("ingest_token") or "").strip()
+    ):
         found.append(TokenSource.PROBE_CONFIG)
     return tuple(found)
 
@@ -267,16 +300,14 @@ class PluginState:
         return [name for name in wanted if name not in self.names]
 
 
-def installed_plugins(*, claude_bin: str | None = None) -> PluginState:
-    """Plugin names Claude Code reports as installed.
+def installed_plugins(*, source: str | None = None) -> PluginState:
+    """Plugin names the selected coding agent reports as installed.
 
-    `verified=False` when `claude` is absent (normal on a GPU pod and never an
-    error) or the query could not complete.
+    ``verified=False`` when its CLI is absent (normal on a GPU pod and never
+    an error) or the query could not complete.
     """
-    binary = claude_bin or shutil.which("claude")
-    if not binary:
-        return PluginState(verified=False)
-    result = claude_cli.run(["plugin", "list"], timeout=claude_cli.LIST_TIMEOUT_S)
+    selected = source or agent_source()
+    result = plugin_cli.list_plugins(selected)
     if not result.reachable:
         return PluginState(verified=False)
     names: set[str] = set()
@@ -284,8 +315,9 @@ def installed_plugins(*, claude_bin: str | None = None) -> PluginState:
         # `probe-research` is a PREFIX of `probe-research-tap`, so a line naming
         # the tap contains both. Longest match wins per line, otherwise having
         # only the tap installed would read as tracking being on too.
-        if TAP_PLUGIN_NAME in line:
-            names.add(TAP_PLUGIN_NAME)
+        tap_name = capture_plugin_name(selected)
+        if tap_name in line:
+            names.add(tap_name)
         elif TRACKING_PLUGIN_NAME in line:
             names.add(TRACKING_PLUGIN_NAME)
     # A non-zero exit with readable output still tells us what IS installed, but
@@ -293,14 +325,14 @@ def installed_plugins(*, claude_bin: str | None = None) -> PluginState:
     return PluginState(names=frozenset(names), verified=result.ok)
 
 
-def capture_device_id() -> str | None:
+def capture_device_id(source: str | None = None) -> str | None:
     """The paired device id the uploader recorded, if any.
 
     Read straight from the tap's SQLite state rather than shelling out to it:
     `probe doctor` must work when the plugin's Python cannot run at all, which
     is exactly the situation someone runs a doctor command in.
     """
-    db = tap_plugin_dir() / "state.db"
+    db = tap_plugin_dir(source) / "state.db"
     if not db.exists():
         return None
     import sqlite3

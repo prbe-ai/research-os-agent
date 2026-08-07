@@ -18,17 +18,22 @@ take the flag path, and none of them may hang waiting for a keypress.
 
 from __future__ import annotations
 
+import json
+import os
 import sys
 from dataclasses import dataclass
 
-from probe.cli import agent_rules, autoupdate, claude_cli
+from probe.cli import agent_rules, autoupdate, claude_cli, plugin_cli
 from probe.cli.capabilities import (
+    CODEX_TAP_PLUGIN_NAME,
     MARKETPLACE,
     MARKETPLACE_REPO,
     TAP_PLUGIN_NAME,
     TRACKING_PLUGIN_NAME,
     Capabilities,
     Capability,
+    agent_source,
+    tap_plugin_dir,
 )
 from probe.cli.capture import OffMode, clear_killswitch, turn_off
 
@@ -64,6 +69,47 @@ FRESH_DEFAULTS: dict[Capability, bool] = {
     Capability.AUTO_UPDATE: True,
     Capability.AGENT_RULES: True,
 }
+
+AGENT_LABELS = {
+    "claude_code": "Claude Code",
+    "codex": "Codex",
+}
+
+
+def run_agent_menu(defaults: tuple[str, ...]):
+    """Choose every coding agent this one onboarding run should configure."""
+    import questionary
+
+    from probe.cli import tui
+
+    choices = [
+        questionary.Choice(
+            title=f"{label}\n{tui.body_indent()}  Install plugins and pair source-bound capture.",
+            value=source,
+            checked=source in defaults,
+        )
+        for source, label in AGENT_LABELS.items()
+    ]
+    message = tui.framed(
+        "One setup can configure either or both.",
+        [],
+        "Which coding agents should Probe Research connect?",
+    )
+    picked = tui.ask(
+        questionary.checkbox(
+            message,
+            choices=choices,
+            instruction="(space to toggle, enter to continue)",
+            style=tui.style(),
+            qmark=tui.qmark(),
+            pointer=tui.pointer(),
+            validate=lambda answer: bool(answer) or "Choose at least one coding agent.",
+        ),
+        height=tui.content_height(message, choices),
+    )
+    if picked is None or picked is tui.BACK:
+        return picked
+    return tuple(source for source in AGENT_LABELS if source in picked)
 
 
 @dataclass(frozen=True)
@@ -128,15 +174,11 @@ def resolve_selection(
 MENU_COPY: dict[Capability, tuple[str, tuple[str, ...]]] = {
     Capability.TRACKING: (
         "CLI + MCP  (recommended)",
-        (
-            "Skills for tracking runs, and read-only search over your lab's history.",
-        ),
+        ("Skills for tracking runs, and read-only search over your lab's history.",),
     ),
     Capability.CAPTURE: (
         "Session capture -> knowledgebase",
-        (
-            "Sends this device's Claude Code sessions so your team can search them.",
-        ),
+        ("Sends this device's Claude/Codex sessions to your team's search.",),
     ),
     Capability.AGENT_RULES: (
         "Rules in your global CLAUDE.md  (recommended)",
@@ -206,7 +248,7 @@ def reports_failure(message: str) -> bool:
     return message.startswith(_FAILURE_MARKERS)
 
 
-def refresh_marketplace() -> claude_cli.Result:
+def refresh_marketplace(*, source: str | None = None) -> claude_cli.Result:
     """Bring the local marketplace copy up to date. ONCE per wizard run.
 
     `marketplace add` on an already-added marketplace does NOT refresh it, so
@@ -225,17 +267,12 @@ def refresh_marketplace() -> claude_cli.Result:
     on disk", which exits non-zero on some versions. `update` is the one whose
     success decides whether the catalog we install from is current.
     """
-    claude_cli.run(
-        ["plugin", "marketplace", "add", MARKETPLACE_REPO],
-        timeout=claude_cli.REFRESH_TIMEOUT_S,
-    )
-    return claude_cli.run(
-        ["plugin", "marketplace", "update", MARKETPLACE],
-        timeout=claude_cli.REFRESH_TIMEOUT_S,
-    )
+    selected = source or agent_source()
+    plugin_cli.add_marketplace(selected, MARKETPLACE_REPO)
+    return plugin_cli.refresh_marketplace(selected, MARKETPLACE)
 
 
-def install_plugin(name: str, *, on_retry=None) -> claude_cli.Result:
+def install_plugin(name: str, *, source: str | None = None, on_retry=None) -> claude_cli.Result:
     """Install one plugin. Retries ONCE, after a refresh, on ANY failure.
 
     Deliberately NOT gated on matching Claude's error text. A retry that fires
@@ -249,24 +286,17 @@ def install_plugin(name: str, *, on_retry=None) -> claude_cli.Result:
     False once the run has already spent its single retry, so two plugins
     failing cannot cost two refreshes and two reinstalls.
     """
-    result = claude_cli.run(
-        ["plugin", "install", f"{name}@{MARKETPLACE}"],
-        timeout=claude_cli.INSTALL_TIMEOUT_S,
-    )
+    selected = source or agent_source()
+    result = plugin_cli.install(selected, f"{name}@{MARKETPLACE}")
     if result.ok or on_retry is None or not on_retry():
         return result
-    refresh_marketplace()
-    return claude_cli.run(
-        ["plugin", "install", f"{name}@{MARKETPLACE}"],
-        timeout=claude_cli.INSTALL_TIMEOUT_S,
-    )
+    refresh_marketplace(source=selected)
+    return plugin_cli.install(selected, f"{name}@{MARKETPLACE}")
 
 
-def uninstall_plugin(name: str) -> claude_cli.Result:
-    return claude_cli.run(
-        ["plugin", "uninstall", f"{name}@{MARKETPLACE}"],
-        timeout=claude_cli.INSTALL_TIMEOUT_S,
-    )
+def uninstall_plugin(name: str, *, source: str | None = None) -> claude_cli.Result:
+    selected = source or agent_source()
+    return plugin_cli.uninstall(selected, f"{name}@{MARKETPLACE}")
 
 
 #: What each capability's plugin cannot work without.
@@ -339,6 +369,7 @@ def authorize(
     grants: list[str],
     *,
     base_url: str,
+    capture_sources: list[str] | None = None,
     on_prompt=None,
     open_browser: bool = True,
 ) -> tuple[dict[str, dict], list[str]]:
@@ -356,15 +387,30 @@ def authorize(
     off"). `ingest_token` is exactly where the uploader looks.
     """
     from probe.sdk.config import resolve, save_context
-    from probe.sdk.device import DeviceLoginError, credentials_by_grant, device_authorize
+    from probe.sdk.device import (
+        DeviceLoginError,
+        capture_credentials_by_source,
+        credentials_by_grant,
+        device_authorize,
+    )
 
     if not grants:
         return {}, []
 
     try:
+        source = agent_source()
+        requested_sources = list(dict.fromkeys(capture_sources or [source]))
+        source_args = {}
+        if "capture" in grants:
+            source_args = (
+                {"capture_source": requested_sources[0]}
+                if len(requested_sources) == 1
+                else {"capture_sources": requested_sources}
+            )
         minted = device_authorize(
             base_url,
             grants=grants,
+            **source_args,
             on_prompt=on_prompt,
             open_browser=open_browser,
         )
@@ -372,6 +418,20 @@ def authorize(
         return {}, [f"browser approval failed: {exc}"]
 
     by_grant = credentials_by_grant(minted)
+    captures = capture_credentials_by_source(minted)
+    raw_capture_entries = [
+        entry for entry in (minted.get("grants") or []) if entry.get("grant") == "capture"
+    ]
+    if (
+        len(requested_sources) == 1
+        and len(raw_capture_entries) == 1
+        and not raw_capture_entries[0].get("capture_source")
+    ):
+        # A single-source backend predating the response discriminator is still
+        # unambiguous because the request carried exactly one source.
+        captures = {requested_sources[0]: raw_capture_entries[0]}
+    if captures:
+        by_grant["capture"] = next(iter(captures.values()))
     messages: list[str] = []
 
     updates: dict[str, str | None] = {"base_url": resolve(base_url=base_url).base_url}
@@ -379,10 +439,35 @@ def authorize(
         updates["token"] = by_grant["api"]["token"]
     if "mcp" in by_grant:
         updates["mcp_token"] = by_grant["mcp"]["token"]
-    if "capture" in by_grant:
-        updates["ingest_token"] = by_grant["capture"]["token"]
+    if "claude_code" in captures:
+        updates["ingest_token"] = captures["claude_code"]["token"]
 
     save_context(updates)
+
+    if "codex" in captures:
+        state_dir = tap_plugin_dir("codex")
+        state_dir.mkdir(parents=True, exist_ok=True)
+        token_path = state_dir / ".token"
+        token_tmp = state_dir / ".token.tmp"
+        token_tmp.write_text(captures["codex"]["token"], encoding="utf-8")
+        token_tmp.chmod(0o600)
+        os.replace(token_tmp, token_path)
+
+        # The source-bound device grant is an opaque ros_ing token, not the
+        # pairing JWT whose `iss` the standalone tap can inspect. Pin the same
+        # API origin used for authorization so the unified tap never falls back
+        # to a guessed production host (and self-hosted Codex keeps working).
+        config_path = state_dir / ".config"
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            config = {}
+        if not isinstance(config, dict):
+            config = {}
+        config["api_base_url"] = base_url.rstrip("/")
+        config_tmp = state_dir / ".config.tmp"
+        config_tmp.write_text(json.dumps(config, indent=2, sort_keys=True), encoding="utf-8")
+        os.replace(config_tmp, config_path)
 
     for grant in grants:
         if grant not in by_grant:
@@ -392,10 +477,19 @@ def authorize(
                 f"! the server did not return a '{grant}' credential — "
                 "that capability is NOT active"
             )
-    if "capture" in by_grant:
-        messages.append(
-            f"Session capture paired (device {by_grant['capture'].get('device_id', '?')})."
-        )
+    if "capture" in grants:
+        missing_sources = [source for source in requested_sources if source not in captures]
+        if missing_sources:
+            by_grant.pop("capture", None)
+            messages.append(
+                "! the server did not return capture credentials for "
+                f"{', '.join(missing_sources)} — those agents are NOT active"
+            )
+        for paired_source, credential in captures.items():
+            label = "Codex" if paired_source == "codex" else "Claude Code"
+            messages.append(
+                f"{label} Session capture paired (device {credential.get('device_id', '?')})."
+            )
     return by_grant, messages
 
 
@@ -456,9 +550,10 @@ def apply_capture(caps: Capabilities, want: bool, *, mode: OffMode, on_retry=Non
         clear_killswitch()
         if caps.capture_plugin_installed:
             return messages
-        result = install_plugin(TAP_PLUGIN_NAME, on_retry=on_retry)
+        tap_name = CODEX_TAP_PLUGIN_NAME if caps.agent_source == "codex" else TAP_PLUGIN_NAME
+        result = install_plugin(tap_name, source=caps.agent_source, on_retry=on_retry)
         if not result.ok:
-            messages.append(f"could not install {TAP_PLUGIN_NAME}: {result.detail}")
+            messages.append(f"could not install {tap_name}: {result.detail}")
         return messages
     if not caps.capture_on and not caps.capture_token_sources:
         return messages
@@ -850,6 +945,7 @@ def restart_notice(caps: Capabilities, selection: Selection) -> str | None:
     if not plugin_changed:
         return None
     return (
-        "Restart Claude Code to finish. Plugins and the MCP are read at session "
+        f"Restart {'Codex' if caps.agent_source == 'codex' else 'Claude Code'} to finish. "
+        "Plugins and the MCP are read at session "
         "start, so this session will not see them until you do."
     )

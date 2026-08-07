@@ -28,6 +28,7 @@ Semver comparison prefers packaging.version and falls back to a normalized
 numeric-triplet compare (handles 0.8 vs 0.8.0 and ignores pre-release/build
 suffixes) when packaging is not importable in the system python.
 """
+
 from __future__ import annotations
 
 import json
@@ -76,8 +77,8 @@ def _triplet(v: str):
     pre-release/build suffix. None if unparseable."""
     if not v:
         return None
-    v = str(v).strip().split()[-1]          # "probe 0.7.0" -> "0.7.0"
-    for sep in ("+", "-"):                   # 0.8.0-rc1 / 0.8.0+meta -> 0.8.0
+    v = str(v).strip().split()[-1]  # "probe 0.7.0" -> "0.7.0"
+    for sep in ("+", "-"):  # 0.8.0-rc1 / 0.8.0+meta -> 0.8.0
         v = v.split(sep, 1)[0]
     try:
         nums = [int(p) for p in v.split(".")]
@@ -92,6 +93,7 @@ def _remote_gt_local(local: str, remote: str) -> bool:
     """True iff remote is strictly newer than local."""
     try:
         from packaging.version import Version  # type: ignore
+
         return Version(str(remote)) > Version(str(local))
     except Exception:
         lp, rp = _triplet(local), _triplet(remote)
@@ -110,9 +112,7 @@ _fetch = version_policy.fetch
 
 def _local_cli(probe_bin: str):
     try:
-        out = subprocess.run(
-            [probe_bin, "--version"], capture_output=True, text=True, timeout=5
-        )
+        out = subprocess.run([probe_bin, "--version"], capture_output=True, text=True, timeout=5)
         if out.returncode == 0:
             return (out.stdout or "").strip() or None
     except Exception:
@@ -142,9 +142,17 @@ def _local_tap():
     component whose local version is unknown, so users without the tap are
     never nudged about it.
     """
-    path = os.environ.get("PROBE_RESEARCH_TAP_PLUGIN_DIR") or os.path.join(
-        os.path.expanduser("~"), ".claude", "plugins", "probe-research-tap"
-    )
+    if os.environ.get("PROBE_AGENT") == "codex":
+        path = os.environ.get("PRBE_CODEX_TAP_PLUGIN_DIR")
+        if not path:
+            state = os.path.join(os.path.expanduser("~"), ".codex", "state")
+            current = os.path.join(state, "probe-research-tap")
+            legacy = os.path.join(state, "prbe-codex-tap-plugin")
+            path = legacy if os.path.isdir(legacy) and not os.path.exists(current) else current
+    else:
+        path = os.environ.get("PROBE_RESEARCH_TAP_PLUGIN_DIR") or os.path.join(
+            os.path.expanduser("~"), ".claude", "plugins", "probe-research-tap"
+        )
     try:
         with open(os.path.join(path, ".installed_version")) as f:
             return (f.read() or "").strip() or None
@@ -262,18 +270,23 @@ def main() -> None:
     # otherwise the nudge names a component and then hands over commands that
     # cannot fix it. `probe update` covers all three itself.
     tap_stale = any(label == "transcript tap" for label, _, _ in nudges + below_min)
-    cmds = "probe update" if has_update_cmd else (
-        "uv tool upgrade probe-research && "
-        "claude plugin marketplace update research-os-agent && "
-        "claude plugin update probe-research@research-os-agent"
-        + (" && claude plugin update probe-research-tap@research-os-agent"
-           if tap_stale else "")
+    cmds = (
+        "probe update"
+        if has_update_cmd
+        else (
+            "uv tool upgrade probe-research && "
+            "claude plugin marketplace update research-os-agent && "
+            "claude plugin update probe-research@research-os-agent"
+            + (" && claude plugin update probe-research-tap@research-os-agent" if tap_stale else "")
+        )
     )
     advisory = manifest.get("advisory")
 
     if below_min:
-        head = ("⚠ Probe Research is below the minimum supported version "
-                f"({_fmt(below_min)}). Update now:")
+        head = (
+            "⚠ Probe Research is below the minimum supported version "
+            f"({_fmt(below_min)}). Update now:"
+        )
         summary = _fmt(below_min)
     else:
         head = f"⚠ Probe Research update available — {_fmt(nudges)}. Update:"
@@ -295,13 +308,15 @@ def main() -> None:
     # effect on the next one.
     _spawn_autoupdate(os.environ.get("PROBE_BIN") or "probe")
 
-    _emit({
-        "systemMessage": sys_msg,
-        "hookSpecificOutput": {
-            "hookEventName": "SessionStart",
-            "additionalContext": ctx,
-        },
-    })
+    _emit(
+        {
+            "systemMessage": sys_msg,
+            "hookSpecificOutput": {
+                "hookEventName": "SessionStart",
+                "additionalContext": ctx,
+            },
+        }
+    )
 
 
 if __name__ == "__main__":

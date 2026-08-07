@@ -1,206 +1,140 @@
 # probe-research-tap
 
-A Claude Code plugin that ships sanitized per-session Claude Code
-transcripts to the Research OS backend's `/ingest/v1/sessions/claude-code`
-endpoint. Identity is injected server-side from the ingest token (the
-plugin never sends employee fields), and the backend applies its own
-secret gate + per-session quarantine on top of the client-side sanitizer.
-Runs as a session-scoped daemon spawned by CC's `SessionStart` hook and
-torn down on `SessionEnd`.
+A single Claude Code and Codex plugin that ships sanitized per-session
+transcripts to Research OS. The two agents share pairing, consent state,
+durable outbox, retries, HTTP transport, lifecycle management, storage, status,
+and revocation. Only transcript discovery and event normalization are
+agent-specific.
 
-Zero runtime dependencies (stdlib only); Python 3.11+.
+Identity is injected server-side from a source-bound device token. The plugin
+never sends employee fields, and the gateway validates tenant and source before
+forwarding the client-sanitized batch. Runtime code is Python 3.11+ stdlib only.
 
-## Install
+## Install and authorize
 
-Add the marketplace, then install the plugin:
-
-```
-/plugin marketplace add prbe-ai/research-os-agent
-/plugin install probe-research-tap@research-os-agent
-```
-
-(the CLI equivalents are `claude plugin marketplace add prbe-ai/research-os-agent`
-and `claude plugin install probe-research-tap@research-os-agent`.)
-
-## Pairing (setup)
-
-Pair this device with your Research OS workspace:
-
-1. In the dashboard, open **Integrations → Pair Claude Code**
-   (<https://research.prbe.ai/integrations>) and copy the pairing token.
-2. Run:
-
-   ```bash
-   python3 -m tap pair <token>
-   ```
-
-`tap pair` exchanges the pairing token for a device token, writes it to
-`~/.claude/plugins/probe-research-tap/.token` (mode 0600), and pins the backend
-host — read from the token's `iss` claim, so the daemon reaches the same backend
-with no hardcoded host. Re-running `pair` on an already-paired device rotates the
-token and retires the old device server-side. To unpair:
+The supported setup path offers Claude Code and Codex as checkboxes, installs
+both selected plugin targets, and pairs them in one browser approval:
 
 ```bash
-python3 -m tap revoke
+npx probe-research
+
+# Headless equivalents:
+npx probe-research wizard --agent claude --yes
+npx probe-research wizard --agent codex --yes
+npx probe-research wizard --agent both --yes
 ```
 
-which revokes the device server-side and wipes the local token, meta, and any
-queued outbox (offline-safe — local state is cleared even if the server is
-unreachable).
-
-### Advanced / self-host
-
-If you run the probe CLI, its credentials work without pairing:
+Manual marketplace installation is also available:
 
 ```bash
-probe login
+# Claude Code
+claude plugin marketplace add prbe-ai/research-os-agent
+claude plugin install probe-research-tap@research-os-agent
+
+# Codex
+codex plugin marketplace add prbe-ai/research-os-agent
+codex plugin add probe-research-tap@research-os-agent
 ```
 
-writes `base_url` and the ingest token (`ingest_token`) to
-`$XDG_CONFIG_HOME/probe/config.json` (default `~/.config/probe/config.json`;
-`PROBE_CONFIG_PATH` overrides the file path for tests/dev). You can also set
-`PROBE_INGEST_TOKEN` / `PROBE_BASE_URL` directly.
+Codex requires a new session after installation. Open `/hooks`, review the
+Probe hook definition, and trust it; Codex deliberately skips untrusted plugin
+hooks.
 
-Resolution, highest precedence first:
+The dashboard authorization creates a source-bound device: a Codex credential
+cannot post to the Claude Code route, and a Claude Code credential cannot post
+to the Codex route. Re-running setup rotates the device credential. Use
+`probe capture off --uninstall` to revoke capture and remove the plugin.
 
-- **token:** `.token` (from `tap pair`) → `PROBE_INGEST_TOKEN` →
-  `ingest_token` in the probe CLI config
-- **base URL:** `PROBE_BASE_URL` → host pinned by `tap pair` → `base_url` in
-  the probe CLI config
+## Data flow
 
-No token → the hooks no-op (nothing to authenticate with). No base URL → the
-daemon refuses to start rather than guess a host; there is deliberately no
-hardcoded default.
-
-## How it works
-
-```
-┌─ Claude Code session ───────────────────────────────────────────────┐
-│                                                                      │
-│  SessionStart hook ──► spawns tap daemon (detached, crash-loop)      │
-│                              │                                       │
-│                              ▼                                       │
-│                       every tick (adaptive, see Cadence):            │
-│                       1. tail transcript JSONL (byte-offset cursor)  │
-│                       2. validate each new line as JSON              │
-│                       3. sanitize (strip API metadata, tool bodies)  │
-│                       4. build batch body, enqueue to sqlite outbox  │
-│                       5. drain outbox:                               │
-│                          POST /ingest/v1/sessions/claude-code        │
-│                          - 2xx → mark success                        │
-│                          - 401 → halt + clear outbox (bad token)     │
-│                          - 400/403/404 (poison) → drop the batch;    │
-│                            403 = session QUARANTINED server-side,    │
-│                            daemon keeps running                      │
-│                          - else → exponential backoff retry          │
-│                                                                      │
-│  SessionEnd hook ──► SIGTERMs daemon, cleans up sentinel             │
-└──────────────────────────────────────────────────────────────────────┘
+```text
+agent SessionStart hook
+  -> detached, session-scoped tap daemon
+  -> tail transcript/rollout JSONL from the supplied transcript_path
+  -> normalize the agent event shape and remove unsupported payloads
+  -> enqueue a durable batch in sqlite
+  -> POST /ingest/v1/sessions/{claude-code|codex}
+       2xx                 mark delivered
+       401                 halt and clear the outbox
+       400/403/404         drop rejected/poison batch and continue
+       retryable failure   exponential-backoff retry
+agent SessionEnd hook
+  -> signal the daemon and leave a shutdown sentinel
 ```
 
-The sanitizer (`tap/sanitize.py`) ships the *conversation* — user prompts,
-assistant text + thinking, plus a one-line marker per tool call — and
-strips Anthropic API metadata, CC bookkeeping events, full tool inputs,
-and full tool results before anything leaves the machine.
+Codex can supply a null `transcript_path` at session start, so the adapter can
+also discover the date-partitioned rollout by session id. The Codex transcript
+format is not a stable public interface; `tap/codex_sanitize.py` and its real
+rollout fixture are therefore a deliberately thin, separately tested adapter.
+Claude Code normalization lives in `tap/sanitize.py`.
 
 The batch body is `{device_id, session_id, batch_seq, cwd, events:[{line_no,
-raw}]}`. `device_id` comes from the pairing exchange (or is minted locally as
-a uuid4 on first daemon start when self-hosting without pairing) and persisted
-in meta; the backend passes it through to the engine as the device external id.
-Session completion is handled backend-side — the plugin sends no finalize
-message.
+raw}]}`. The backend supplies tenant/user identity and forwards the normalized
+batch to the matching engine connector. Session completion is backend-owned;
+the plugin sends no finalize message.
 
-## State files
+## State and compatibility
 
-State lives at `~/.claude/plugins/probe-research-tap/` (override via
-`PROBE_RESEARCH_TAP_PLUGIN_DIR`) — separate from the plugin code, which CC
-manages under its plugin cache.
+State is separate from plugin code:
+
+- Claude Code: `~/.claude/plugins/probe-research-tap/`
+- Codex: `~/.codex/state/probe-research-tap/`
+- Codex upgrade compatibility: an existing
+  `~/.codex/state/prbe-codex-tap-plugin/` is reused until migrated, preserving
+  its pairing and outbox.
+
+Overrides are `PROBE_RESEARCH_TAP_PLUGIN_DIR` for Claude Code and the legacy
+compatible `PRBE_CODEX_TAP_PLUGIN_DIR` for Codex.
 
 | File | Purpose |
-|------|---------|
-| `.token` | Device token written by `tap pair` (mode 0600). Absent for self-host users who auth via the probe CLI / env. |
-| `.config` | JSON: cadence overrides (see below) + the backend host pinned at pair time. |
-| `.disabled` | Presence disables the daemon entirely. |
-| `.disabled_paths` | Newline-separated cwd prefixes to skip. |
-| `state.db` | sqlite: file_offsets, outbox, meta (device_id, customer_id, paired_at, …). |
-| `logs/<session_id>.log` | Per-session log file. |
+|---|---|
+| `.token` | Mode-0600 source-bound device token |
+| `.config` | Backend origin and optional cadence overrides |
+| `.disabled` | Local all-session killswitch |
+| `.disabled_paths` | Newline-separated cwd prefixes to skip |
+| `state.db` | File offsets, durable outbox, device metadata, batch sequence |
+| `logs/<session_id>.log` | Session daemon log |
 
-## Cadence
+The daemon uses a 60-second active cadence and moves to 300 seconds after two
+empty ticks. Configure `active_interval_seconds` and `idle_interval_seconds`
+in `.config`, or set `sync_interval_seconds` to use one fixed interval.
 
-The daemon is adaptive by default:
-
-- **Active mode (60s)** while the transcript is advancing
-- **Idle mode (300s)** after two consecutive empty ticks (≈2 min of no
-  new transcript content)
-
-Active resumes the moment new lines appear. This keeps ingestion near
-real-time during work without flooding the backend on idle CC sessions.
-
-Override either side via `.config`:
+Server-side ingestion status is polled every five minutes and fails open on a
+status-check network error. Local killswitches are immediate:
 
 ```bash
-# Tighter active cadence; same idle.
-echo '{"active_interval_seconds": 30}' \
-  > ~/.claude/plugins/probe-research-tap/.config
-
-# Both knobs.
-echo '{"active_interval_seconds": 30, "idle_interval_seconds": 600}' \
-  > ~/.claude/plugins/probe-research-tap/.config
+touch ~/.codex/state/probe-research-tap/.disabled
+echo "/Users/me/private-repo" >> ~/.codex/state/probe-research-tap/.disabled_paths
 ```
 
-Or disable adaptive switching entirely with the legacy single knob — sets
-both active and idle to the same value:
+## Configuration
 
-```bash
-echo '{"sync_interval_seconds": 60}' \
-  > ~/.claude/plugins/probe-research-tap/.config
-```
-
-## Killswitches
-
-Server-side: the daemon polls `GET /ingest/v1/sessions/status`
-(`{"ingest_enabled": bool, "reason": str|null}`) with a 5-minute cache and
-skips whole ticks while ingestion is paused. Poll failures fail OPEN — the
-killswitch is for graceful pause, not fail-secure.
-
-Local — disable for one specific repo:
-
-```bash
-echo "/Users/me/private-repo" >> ~/.claude/plugins/probe-research-tap/.disabled_paths
-```
-
-Disable entirely:
-
-```bash
-touch ~/.claude/plugins/probe-research-tap/.disabled
-```
-
-## Environment variables
+Common overrides:
 
 | Variable | Purpose |
-|----------|---------|
-| `PROBE_INGEST_TOKEN` | Override the ingest token from the probe CLI config file. |
-| `PROBE_BASE_URL` | Override the backend base URL. Default: `base_url` from the probe CLI config file — no hardcoded fallback. |
-| `PROBE_CONFIG_PATH` | Override the probe CLI config file path (tests/dev). |
-| `PROBE_RESEARCH_TAP_ACTIVE_INTERVAL_SECONDS` | Override active interval. |
-| `PROBE_RESEARCH_TAP_IDLE_INTERVAL_SECONDS` | Override idle interval. |
-| `PROBE_RESEARCH_TAP_INTERVAL_SECONDS` | Legacy single-knob — applies to both. |
-| `PROBE_RESEARCH_TAP_PLUGIN_DIR` | Override state directory (for tests). |
+|---|---|
+| `PROBE_BASE_URL` | Backend origin override |
+| `PROBE_CONFIG_PATH` | Probe CLI config path override (tests/dev) |
+| `PROBE_RESEARCH_TAP_ACTIVE_INTERVAL_SECONDS` | Active interval |
+| `PROBE_RESEARCH_TAP_IDLE_INTERVAL_SECONDS` | Idle interval |
+| `PROBE_RESEARCH_TAP_INTERVAL_SECONDS` | Legacy fixed interval |
+| `PROBE_RESEARCH_TAP_PLUGIN_DIR` | Claude Code state directory |
+| `PRBE_CODEX_TAP_PLUGIN_DIR` | Codex state directory |
+| `PROBE_INGEST_TOKEN` | Claude Code token override |
+| `PRBE_CODEX_TAP_TOKEN` | Codex token override |
 
-## Subcommands
-
-```bash
-python3 -m tap pair <token>   # exchange a dashboard pairing token for a device token
-python3 -m tap watch          # daemon (called by SessionStart hook)
-python3 -m tap status         # print local state
-python3 -m tap revoke         # revoke device server-side + wipe local state
-```
+The source is set by the installed plugin hook. For direct development runs,
+set `PROBE_TAP_SOURCE=codex` to exercise the Codex adapter; the default is
+`claude_code`.
 
 ## Development
 
 ```bash
-cd plugins/probe-research-tap
-python3 -m pytest tests/ -v
-# or, with uv:
-uv run --with pytest python -m pytest tests/ -v
+pytest -q plugins/probe-research-tap/tests
+PROBE_TAP_SOURCE=codex pytest -q \
+  plugins/probe-research-tap/tests/test_codex_sanitize.py \
+  plugins/probe-research-tap/tests/test_codex_research_os_contract.py
 ```
+
+The repository-level pre-release gate also validates and installs this plugin
+through the real Codex CLI in an isolated `CODEX_HOME`.

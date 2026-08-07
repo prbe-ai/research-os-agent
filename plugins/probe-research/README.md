@@ -1,21 +1,34 @@
 # probe-research plugin
 
 Consolidates the Probe Research experiment-tracking **skills** + the read-only **MCP
-server** into one Claude Code plugin. Reads come from the MCP server; writes go through
-the `probe` CLI (installed by `/probe-research-setup`).
+server** into one Claude Code or Codex plugin. Reads come from the MCP server; writes go
+through the `probe` CLI.
 
 ## Two client surfaces
 
 Probe Research exposes experiment tracking through two separate surfaces over the same backend, for two different workflows:
 
 - **`probe` — SDK + CLI (non-agent).** A Python library (`import probe`) and the `probe` command-line tool for integrating with existing setups and manual experimentation. Drop it into a training script or pipeline to record runs, metrics, spans, and artifacts. No agent required.
-- **`probe-research` — plugin: skills + MCP (agent-centric).** Installed into a coding agent (e.g. Claude Code). Its skills teach the agent the experiment workflow, its read-only MCP server lets the agent query experiment state, and writes flow through the `probe` CLI. This is the surface for agent-driven research loops such as Anthrogen.
+- **`probe-research` — plugin: skills + MCP (agent-centric).** Installed into Claude Code or Codex. Its skills teach the agent the experiment workflow, its read-only MCP server lets the agent query experiment state, and writes flow through the `probe` CLI. This is the surface for agent-driven research loops such as Anthrogen.
 
 Same backend, two entry points: humans-in-code reach for the SDK/CLI; agents-in-the-loop use the plugin.
 
 ## Install
 
+### Codex
+
+```bash
+codex plugin marketplace add /path/to/research-os-agent
+codex plugin add probe-research@research-os-agent
+codex mcp login probe-research
 ```
+
+Start a new Codex thread after installation. Codex uses its native OAuth flow for the
+hosted MCP server; no token helper or shell-profile credential is needed.
+
+### Claude Code
+
+```bash
 claude plugin marketplace add prbe-ai/research-os-agent
 claude plugin install probe-research@research-os-agent
 /probe-research-setup
@@ -28,8 +41,9 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 ## What's inside
 
 - **Skills:** `start-research-work` (open a tracked project, experiment and run),
-  `track-research-work` (capture, verify and close it; asset versioning and
-  publication live in its `reference.md`).
+  `track-research-work` (capture, verify and close it), `capture-run-inputs`
+  (record reproducibility inputs), and `show-research-timeline` (render the
+  research arc in-session). Claude Code and Codex load this same directory.
 - **Requires Claude Code ≥ 2.1.195.** The MCP passes its credential through a headers
   helper addressed as `${CLAUDE_PLUGIN_ROOT}/bin/probe-mcp-headers`; that placeholder is
   only interpolated from 2.1.195 on. Older builds pass it through literally, the helper
@@ -44,4 +58,5 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 - **Command:** `/probe-research-setup`.
 
 Skills here are copies of the repo's canonical `skills/` (kept in sync with
-`make sync-plugin-skills`).
+`make sync-plugin-skills`). The two agent-specific manifests are thin packaging
+adapters around this one implementation.

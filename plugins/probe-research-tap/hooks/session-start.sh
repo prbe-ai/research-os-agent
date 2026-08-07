@@ -7,8 +7,23 @@
 
 set -euo pipefail
 
-PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-PLUGIN_DIR="${PROBE_RESEARCH_TAP_PLUGIN_DIR:-$HOME/.claude/plugins/probe-research-tap}"
+PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
+SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
+if [ "$SOURCE" = "codex" ]; then
+    if [ -n "${PRBE_CODEX_TAP_PLUGIN_DIR:-}" ]; then
+        PLUGIN_DIR="$PRBE_CODEX_TAP_PLUGIN_DIR"
+    elif [ -d "$HOME/.codex/state/prbe-codex-tap-plugin" ] && [ ! -e "$HOME/.codex/state/probe-research-tap" ]; then
+        # One-way compatibility: existing pairings/outboxes keep their path;
+        # clean installs use the unified package name.
+        PLUGIN_DIR="$HOME/.codex/state/prbe-codex-tap-plugin"
+    else
+        PLUGIN_DIR="$HOME/.codex/state/probe-research-tap"
+    fi
+    WATCHER_PREFIX="prbe-codex-tap"
+else
+    PLUGIN_DIR="${PROBE_RESEARCH_TAP_PLUGIN_DIR:-$HOME/.claude/plugins/probe-research-tap}"
+    WATCHER_PREFIX="probe-research-tap"
+fi
 LOG_DIR="$PLUGIN_DIR/logs"
 mkdir -p "$LOG_DIR"
 
@@ -23,14 +38,14 @@ mkdir -p "$LOG_DIR"
 # private/tmp and find defaults to -P (never follow symlinks), so `find /tmp`
 # matches the symlink itself, descends into nothing, and exits 0 having done
 # nothing at all — which the `|| true` would have hidden forever.
-find /tmp/ -maxdepth 1 -name 'probe-research-tap-watcher-*.shutdown' -mtime +2 -delete 2>/dev/null || true
+find /tmp/ -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.shutdown" -mtime +2 -delete 2>/dev/null || true
 
 HOOK_INPUT="$(cat)"
 SESSION_ID=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || echo "")
-TRANSCRIPT_PATH=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("transcript_path",""))' 2>/dev/null || echo "")
+TRANSCRIPT_PATH=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("transcript_path"); print(v if isinstance(v,str) else "")' 2>/dev/null || echo "")
 CWD=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys,os; print(json.load(sys.stdin).get("cwd") or os.getcwd())' 2>/dev/null || echo "")
 
-if [ -z "$SESSION_ID" ] || [ -z "$TRANSCRIPT_PATH" ]; then
+if [ -z "$SESSION_ID" ] || { [ "$SOURCE" != "codex" ] && [ -z "$TRANSCRIPT_PATH" ]; }; then
     printf '{"continue": true}\n'
     exit 0
 fi
@@ -43,9 +58,11 @@ LOG_FILE="${LOG_DIR}/${SESSION_ID}.log"
 # a new one. We never touch live state (.token, .config, state.db, logs), and
 # never prune CC's cache (an older version may still back a concurrent session).
 RUNNING_VER=""
-if [ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]; then
+MANIFEST="$PLUGIN_ROOT/.claude-plugin/plugin.json"
+[ "$SOURCE" = "codex" ] && MANIFEST="$PLUGIN_ROOT/.codex-plugin/plugin.json"
+if [ -f "$MANIFEST" ]; then
     RUNNING_VER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' \
-        "$PLUGIN_ROOT/.claude-plugin/plugin.json" 2>/dev/null || echo "")
+        "$MANIFEST" 2>/dev/null || echo "")
 fi
 
 # One-time cleanup of a superseded in-place install (plugin *code* living in
@@ -54,7 +71,7 @@ fi
 # NOT a developer checkout pointed at via PROBE_RESEARCH_TAP_PLUGIN_DIR (which
 # carries no such marker). PLUGIN_DIR != PLUGIN_ROOT means CC runs our code
 # from the cache, so the code files here are dead weight.
-if [ -f "$PLUGIN_DIR/.orphaned_at" ] && [ "$PLUGIN_DIR" != "$PLUGIN_ROOT" ]; then
+if [ "$SOURCE" != "codex" ] && [ -f "$PLUGIN_DIR/.orphaned_at" ] && [ "$PLUGIN_DIR" != "$PLUGIN_ROOT" ]; then
     echo "[$(date -u +%FT%TZ)] removing pre-marketplace install leftovers from $PLUGIN_DIR" >>"$LOG_FILE"
     for _stale in .git .gitattributes .gitignore .claude-plugin tap hooks tests \
                   scripts README.md pyproject.toml uv.lock .orphaned_at; do
@@ -85,7 +102,12 @@ fi
 # the probe CLI's config file ($XDG_CONFIG_HOME/probe/config.json, default
 # ~/.config/probe/config.json, written by `probe login`; PROBE_CONFIG_PATH
 # overrides for tests/dev). Surface once and no-op when none is present.
-if [ ! -f "$PLUGIN_DIR/.token" ] && [ -z "${PROBE_INGEST_TOKEN:-}" ]; then
+TOKEN_ENV="${PROBE_INGEST_TOKEN:-}"
+[ "$SOURCE" = "codex" ] && TOKEN_ENV="${PRBE_CODEX_TAP_TOKEN:-}"
+if [ ! -f "$PLUGIN_DIR/.token" ] && [ -z "$TOKEN_ENV" ]; then
+    if [ "$SOURCE" = "codex" ]; then
+        HAS_TOKEN=""
+    else
     HAS_TOKEN=$(python3 - <<'PYEOF' 2>/dev/null || echo ""
 import json
 import os
@@ -116,6 +138,7 @@ except Exception:
 print("yes" if isinstance(tok, str) and tok.strip() else "")
 PYEOF
 )
+    fi
     if [ -z "$HAS_TOKEN" ]; then
         echo "[$(date -u +%FT%TZ)] probe-research-tap: no token configured; run 'python3 -m tap pair <token>' (or 'probe login'); skipping" >>"$LOG_FILE"
         printf '{"continue": true}\n'
@@ -123,7 +146,7 @@ PYEOF
     fi
 fi
 
-PID_FILE="/tmp/probe-research-tap-watcher-${SESSION_ID}.pid"
+PID_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
 
 # If a daemon is already running for this session_id (e.g. resumed session),
 # don't spawn another.
@@ -136,7 +159,7 @@ fi
 # stale (SessionEnd no longer deletes it — see session-end.sh). Clear it before
 # spawning, or the wrapper's first `[ -f "$SHUTDOWN" ] && exit 0` check would
 # immediately kill the fresh daemon on a resumed session.
-SHUTDOWN_FILE="/tmp/probe-research-tap-watcher-${SESSION_ID}.shutdown"
+SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 rm -f "$SHUTDOWN_FILE"
 
 # Resolve Python interpreter — prefer plugin-local venv.
@@ -146,6 +169,12 @@ if [ -z "$PY" ] || [ ! -x "$PY" ]; then
     echo "[$(date -u +%FT%TZ)] no python3 found, daemon disabled" >>"$LOG_FILE"
     printf '{"continue": true}\n'
     exit 0
+fi
+
+if [ -n "$TRANSCRIPT_PATH" ]; then
+    TRANSCRIPT_ARGS=(--transcript "$TRANSCRIPT_PATH")
+else
+    TRANSCRIPT_ARGS=(--transcript-dir "${PRBE_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}")
 fi
 
 # Crash-recovery wrapper: respawn up to 5 times per minute.
@@ -163,9 +192,9 @@ fi
 # had to fork (see the spawn). Making the wrapper authoritative removes that
 # race rather than reasoning about when it can happen.
 WRAPPER_SCRIPT='
-SID="$1"; TP="$2"; CWD="$3"; PY="$4"; ROOT="$5"; LOG="$6"; PIDF="$7"
+SID="$1"; CWD="$2"; PY="$3"; ROOT="$4"; LOG="$5"; PIDF="$6"; PREFIX="$7"; shift 7
 echo $$ >"$PIDF"
-SHUTDOWN="/tmp/probe-research-tap-watcher-${SID}.shutdown"
+SHUTDOWN="/tmp/${PREFIX}-watcher-${SID}.shutdown"
 RESTART_COUNT=0
 WINDOW_START=$(date +%s)
 CHILD_PID=""
@@ -181,7 +210,7 @@ while true; do
         echo "[$(date -u +%FT%TZ)] tap: too many restarts in 1min, giving up" >>"$LOG"
         exit 1
     fi
-    "$PY" -m tap watch --session-id "$SID" --transcript "$TP" --cwd "$CWD" --plugin-root "$ROOT" >>"$LOG" 2>&1 &
+    "$PY" -m tap watch --session-id "$SID" --cwd "$CWD" --plugin-root "$ROOT" "$@" >>"$LOG" 2>&1 &
     CHILD_PID=$!
     wait "$CHILD_PID" 2>/dev/null || true
     CHILD_PID=""
@@ -211,7 +240,7 @@ done
 # so the fast path holds, but fall back to fork-then-setsid rather than leave
 # the daemon unisolated — the child rewrites the pid file, so a changed PID is
 # still recorded correctly.
-PYTHONPATH="$PLUGIN_ROOT" \
+PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
     nohup "$PY" -c '
 import os, sys
 try:
@@ -222,7 +251,7 @@ except OSError:
     os.setsid()
 os.execv(sys.argv[1], sys.argv[1:])
 ' /bin/bash -c "$WRAPPER_SCRIPT" wrapper \
-    "$SESSION_ID" "$TRANSCRIPT_PATH" "$CWD" "$PY" "$PLUGIN_ROOT" "$LOG_FILE" "$PID_FILE" \
+    "$SESSION_ID" "$CWD" "$PY" "$PLUGIN_ROOT" "$LOG_FILE" "$PID_FILE" "$WATCHER_PREFIX" "${TRANSCRIPT_ARGS[@]}" \
     </dev/null >>"$LOG_FILE" 2>&1 &
 disown
 

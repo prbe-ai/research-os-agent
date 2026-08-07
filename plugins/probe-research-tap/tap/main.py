@@ -98,11 +98,7 @@ def _install_signal_handlers() -> None:
 
 
 def _shutdown_observed(c: cfg.WatchConfig) -> bool:
-    return (
-        _shutdown_requested
-        or c.shutdown_sentinel.exists()
-        or cfg.killswitch_active()
-    )
+    return _shutdown_requested or c.shutdown_sentinel.exists() or cfg.killswitch_active()
 
 
 def _transcript_has_active_reader(path: Path) -> bool | None:
@@ -130,16 +126,48 @@ def _transcript_has_active_reader(path: Path) -> bool | None:
     return bool(result.stdout.strip())
 
 
+def _resolve_codex_transcript(transcript_dir: Path, session_id: str) -> Path | None:
+    """Find Codex's date-partitioned rollout for one session id."""
+    if not transcript_dir.is_dir():
+        return None
+    matches = sorted(transcript_dir.rglob(f"*{session_id}.jsonl"))
+    return matches[0] if matches else None
+
+
+def _wait_for_codex_transcript(
+    transcript_dir: Path,
+    session_id: str,
+    *,
+    poll_interval_s: float = 2.0,
+    max_wait_s: int = 1800,
+) -> Path | None:
+    """Wait because Codex may fire SessionStart before creating its rollout."""
+    deadline = time.time() + max_wait_s
+    while time.time() < deadline:
+        if _shutdown_requested or cfg.killswitch_active():
+            return None
+        path = _resolve_codex_transcript(transcript_dir, session_id)
+        if path is not None:
+            return path
+        time.sleep(poll_interval_s)
+    return None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tap watch")
     parser.add_argument("--session-id", required=True)
-    parser.add_argument("--transcript", required=True, type=Path)
+    parser.add_argument("--transcript", type=Path)
+    parser.add_argument("--transcript-dir", type=Path)
     parser.add_argument("--cwd", required=True, type=Path)
     # Optional on purpose: nothing in tap/ reads plugin_root, and a future hook
     # change that stops passing it must not argparse-exit the daemon into a
     # silent capture outage. session-start.sh still passes it (harmless).
     parser.add_argument("--plugin-root", required=False, default=None, type=Path)
     args = parser.parse_args(argv)
+    if args.transcript is None and args.transcript_dir is None:
+        parser.error("--transcript or --transcript-dir is required")
+    if cfg.capture_source() != "codex" and args.transcript is None:
+        parser.error("--transcript is required for Claude Code capture")
 
     log_dir = cfg.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -182,10 +210,20 @@ def main(argv: list[str] | None = None) -> int:
             cfg.shutdown_sentinel(args.session_id).touch()
         return 0
 
+    transcript_path = args.transcript
+    if transcript_path is None:
+        assert args.transcript_dir is not None
+        transcript_path = _wait_for_codex_transcript(args.transcript_dir, args.session_id)
+        if transcript_path is None:
+            log.info("Codex rollout did not appear before shutdown/timeout")
+            with contextlib.suppress(OSError):
+                cfg.shutdown_sentinel(args.session_id).touch()
+            return 0
+
     active_s, idle_s = cfg.intervals()
     config = cfg.WatchConfig(
         session_id=args.session_id,
-        transcript_path=args.transcript,
+        transcript_path=transcript_path,
         cwd=args.cwd,
         plugin_root=args.plugin_root,
         token=token,
@@ -215,8 +253,10 @@ def main(argv: list[str] | None = None) -> int:
         no_fingerprint = not rejected_fp
         if token_changed or cooldown_expired or no_fingerprint:
             reason = (
-                "ingest token changed since last 401" if token_changed
-                else "halt cooldown expired; re-probing" if cooldown_expired
+                "ingest token changed since last 401"
+                if token_changed
+                else "halt cooldown expired; re-probing"
+                if cooldown_expired
                 else "no rejected-token fingerprint recorded"
             )
             log.info("clearing 401 halt (%s) and resuming", reason)
@@ -232,8 +272,11 @@ def main(argv: list[str] | None = None) -> int:
 
     log.info(
         "tap starting session=%s transcript=%s cwd=%s active=%ds idle=%ds",
-        config.session_id, config.transcript_path, config.cwd,
-        config.active_interval_s, config.idle_interval_s,
+        config.session_id,
+        config.transcript_path,
+        config.cwd,
+        config.active_interval_s,
+        config.idle_interval_s,
     )
     try:
         return _run_loop(config, storage)
@@ -277,10 +320,13 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     # under "last_batch_seq:<session>" and bump it after every enqueue, so a
     # restart picks up at last_seq+1 instead of 0.
     seq_meta_key = _batch_seq_meta_key(c.session_id)
-    batch_seq = max(
-        storage.max_batch_seq(c.session_id),
-        _read_int_meta(storage, seq_meta_key, default=-1),
-    ) + 1
+    batch_seq = (
+        max(
+            storage.max_batch_seq(c.session_id),
+            _read_int_meta(storage, seq_meta_key, default=-1),
+        )
+        + 1
+    )
 
     missing_ticks = 0
     tick_count = 0
@@ -305,9 +351,7 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
         # catches up automatically. On poll error we fail OPEN inside
         # is_ingestion_enabled itself; here we just consume the (enabled, reason)
         # tuple.
-        ks_enabled, ks_reason = killswitch.is_ingestion_enabled(
-            token=c.token, base_url=base_url
-        )
+        ks_enabled, ks_reason = killswitch.is_ingestion_enabled(token=c.token, base_url=base_url)
         if not ks_enabled:
             if not in_killswitch_mode:
                 log.info(
@@ -380,7 +424,9 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
         try:
             drained = 0
             while drained < MAX_DRAIN_PER_TICK and outbox.drain_once(
-                storage=storage, token=c.token, base_url=base_url,
+                storage=storage,
+                token=c.token,
+                base_url=base_url,
                 session_id=c.session_id,
             ):
                 drained += 1
@@ -422,8 +468,11 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
         else:
             empty_ticks += 1
             if empty_ticks == IDLE_THRESHOLD_TICKS and not in_idle_mode:
-                log.info("idle for %d ticks; switching to idle cadence (%ds)",
-                         empty_ticks, c.idle_interval_s)
+                log.info(
+                    "idle for %d ticks; switching to idle cadence (%ds)",
+                    empty_ticks,
+                    c.idle_interval_s,
+                )
                 in_idle_mode = True
         sleep_s = c.idle_interval_s if in_idle_mode else c.active_interval_s
 
@@ -436,9 +485,7 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     return 0
 
 
-def _tick_read(
-    c: cfg.WatchConfig, storage: Storage
-) -> tuple[list[bytes], int, Callable[[], None]]:
+def _tick_read(c: cfg.WatchConfig, storage: Storage) -> tuple[list[bytes], int, Callable[[], None]]:
     """Read new lines from the transcript and validate; do NOT persist offset.
 
     Returns (validated_lines, base_line_no_for_first_line, commit_fn). The
@@ -468,16 +515,18 @@ def _tick_read(
         log.warning("dropped %d malformed JSON lines this tick", invalid_count)
 
     def commit() -> None:
-        storage.upsert_offset(FileOffset(
-            path=path_str,
-            session_id=c.session_id,
-            cwd=str(c.cwd),
-            last_line_no=new_last_line_no,
-            last_seen_at=int(time.time()),
-            inode=res.inode,
-            size=res.file_size,
-            byte_offset=res.new_byte_offset,
-        ))
+        storage.upsert_offset(
+            FileOffset(
+                path=path_str,
+                session_id=c.session_id,
+                cwd=str(c.cwd),
+                last_line_no=new_last_line_no,
+                last_seen_at=int(time.time()),
+                inode=res.inode,
+                size=res.file_size,
+                byte_offset=res.new_byte_offset,
+            )
+        )
 
     return valid, base_line_no, commit
 

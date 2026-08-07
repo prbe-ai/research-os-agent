@@ -34,6 +34,8 @@ def isolate(tmp_path, monkeypatch):
     # a test that sets only one writes to the developer's REAL config.
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("PROBE_AGENT", raising=False)
+    monkeypatch.delenv("PROBE_TAP_SOURCE", raising=False)
     monkeypatch.delenv(ENV_INGEST_TOKEN, raising=False)
     (tmp_path / "tap").mkdir(parents=True, exist_ok=True)
     (tmp_path / "probe").mkdir(parents=True, exist_ok=True)
@@ -72,7 +74,7 @@ def test_the_capture_row_still_says_what_it_sends_and_where():
     _, detail = setup.MENU_COPY[Capability.CAPTURE]
     blob = " ".join(detail)
     assert "this device's" in blob
-    assert "Claude Code sessions" in blob
+    assert "Claude/Codex sessions" in blob
 
 
 def test_a_scripted_yes_can_still_decline_capture():
@@ -94,17 +96,13 @@ def test_rerun_preserves_capture_when_the_flag_is_omitted():
     )
     assert configured.capture_on is True
 
-    selection = setup.resolve_selection(
-        configured, tracking=None, capture=None, auto_update=None
-    )
+    selection = setup.resolve_selection(configured, tracking=None, capture=None, auto_update=None)
     assert selection.capture is True, "an omitted flag must preserve, never disable"
 
 
 def test_rerun_preserves_auto_update_when_the_flag_is_omitted():
     configured = _caps(auto_update_enabled=True, logged_in_as="richard@prbe.ai")
-    selection = setup.resolve_selection(
-        configured, tracking=None, capture=None, auto_update=None
-    )
+    selection = setup.resolve_selection(configured, tracking=None, capture=None, auto_update=None)
     assert selection.auto_update is True
 
 
@@ -123,12 +121,16 @@ def test_explicit_flags_always_win():
 def test_capture_only_asks_for_capture_alone():
     """Someone who ticked only session capture must not be handed a
     read/write/delete PAT they never asked for."""
-    grants = setup.grants_for(setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False))
+    grants = setup.grants_for(
+        setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False)
+    )
     assert grants == ["capture"]
 
 
 def test_tracking_asks_for_a_separate_read_only_mcp_credential():
-    grants = setup.grants_for(setup.Selection(tracking=True, capture=True, auto_update=False, agent_rules=False))
+    grants = setup.grants_for(
+        setup.Selection(tracking=True, capture=True, auto_update=False, agent_rules=False)
+    )
     assert grants == ["api", "mcp", "capture"]
 
 
@@ -189,9 +191,7 @@ def test_turning_capture_back_on_clears_the_killswitch(isolate):
 def test_killswitch_alone_means_capture_is_not_on(isolate):
     """A paired device with the killswitch set ships nothing, so the menu must
     not show capture as on."""
-    caps = _caps(
-        capture_token_sources=(TokenSource.PAIRED_FILE,), capture_killswitched=True
-    )
+    caps = _caps(capture_token_sources=(TokenSource.PAIRED_FILE,), capture_killswitched=True)
     assert caps.capture_on is False
 
 
@@ -320,9 +320,7 @@ def test_doctor_names_every_credential_source_not_just_the_winning_one():
 
 def test_doctor_reports_a_never_run_updater_distinctly_from_a_working_one():
     assert "never run on this device" in doctor.render(_caps())
-    assert "FAILED" in doctor.render(
-        _caps(last_update_attempt="FAILED (2026-07-24 10:00): boom")
-    )
+    assert "FAILED" in doctor.render(_caps(last_update_attempt="FAILED (2026-07-24 10:00): boom"))
 
 
 def test_doctor_renders_on_a_bare_machine_without_raising():
@@ -357,7 +355,7 @@ def test_capture_menu_copy_is_scoped_to_this_device():
     _, detail = setup.MENU_COPY[Capability.CAPTURE]
     blob = " ".join(detail)
     assert "this device's" in blob, "scope must be explicit"
-    assert "Claude Code sessions" in blob
+    assert "Claude/Codex sessions" in blob
     # One line, not a wall.
     assert len(detail) == 1
 
@@ -402,9 +400,7 @@ def test_off_clears_a_context_scoped_token_and_verifies(isolate):
     assert capture_token_sources() == ()
 
 
-def test_off_is_not_verified_when_the_killswitch_could_not_be_written(
-    isolate, monkeypatch
-):
+def test_off_is_not_verified_when_the_killswitch_could_not_be_written(isolate, monkeypatch):
     """Credentials gone is not enough: without the killswitch the next session
     respawns the uploader."""
     monkeypatch.setattr(capture, "_set_killswitch", lambda: False)
@@ -421,9 +417,7 @@ def test_off_is_not_verified_while_an_uploader_survives(isolate, monkeypatch):
     assert "uploader still running" in result.summary()
 
 
-def test_a_planted_pid_file_cannot_get_an_unrelated_process_killed(
-    isolate, monkeypatch
-):
+def test_a_planted_pid_file_cannot_get_an_unrelated_process_killed(isolate, monkeypatch):
     """/tmp is world-writable, so the PID files there are untrusted input."""
     killed: list[int] = []
     monkeypatch.setattr(capture.os, "kill", lambda pid, sig: killed.append(pid))
@@ -444,9 +438,7 @@ def test_an_all_off_install_is_not_mistaken_for_a_fresh_machine():
     }
     assert all_off.configured is True
 
-    selection = setup.resolve_selection(
-        all_off, tracking=None, capture=None, auto_update=None
-    )
+    selection = setup.resolve_selection(all_off, tracking=None, capture=None, auto_update=None)
     assert selection.tracking is False
     assert selection.auto_update is False
 
@@ -454,9 +446,7 @@ def test_an_all_off_install_is_not_mistaken_for_a_fresh_machine():
 def test_a_genuinely_fresh_machine_still_gets_defaults():
     fresh = _caps()
     assert fresh.configured is False
-    selection = setup.resolve_selection(
-        fresh, tracking=None, capture=None, auto_update=None
-    )
+    selection = setup.resolve_selection(fresh, tracking=None, capture=None, auto_update=None)
     assert selection.tracking is True
     assert selection.auto_update is True
 
@@ -509,6 +499,7 @@ def test_authorize_persists_every_minted_credential(isolate, monkeypatch):
     )
 
     assert sent["grants"] == ["api", "mcp", "capture"]
+    assert sent["capture_source"] == "claude_code"
     assert set(by_grant) == {"api", "mcp", "capture"}
     assert any("paired" in m for m in messages)
 
@@ -522,32 +513,123 @@ def test_authorize_persists_every_minted_credential(isolate, monkeypatch):
     assert creds["ingest_token"] == "ros_ing_dev"
 
 
-def test_authorize_says_so_when_the_server_returns_nothing_for_a_grant(
-    isolate, monkeypatch
+def test_codex_authorization_is_source_bound_and_writes_the_codex_token(
+    isolate, monkeypatch, tmp_path
 ):
+    sent = {}
+
+    def fake_device_authorize(base_url, **kwargs):
+        sent.update(kwargs)
+        return {"grants": [{"grant": "capture", "token": "ros_ing_codex", "device_id": "cx-1"}]}
+
+    monkeypatch.setenv("PROBE_AGENT", "codex")
+    monkeypatch.setenv("PRBE_CODEX_TAP_PLUGIN_DIR", str(tmp_path))
+    monkeypatch.setattr("probe.sdk.device.device_authorize", fake_device_authorize)
+
+    by_grant, _messages = setup.authorize(
+        ["capture"], base_url="https://api.research.prbe.ai", open_browser=False
+    )
+
+    assert sent["capture_source"] == "codex"
+    assert by_grant["capture"]["device_id"] == "cx-1"
+    assert (tmp_path / ".token").read_text() == "ros_ing_codex"
+    assert (tmp_path / ".token").stat().st_mode & 0o777 == 0o600
+
+
+def test_one_authorization_pairs_claude_and_codex_with_distinct_tokens(
+    isolate, monkeypatch, tmp_path
+):
+    sent = {}
+
+    def fake_device_authorize(base_url, **kwargs):
+        sent.update(kwargs)
+        return {
+            "grants": [
+                {
+                    "grant": "capture",
+                    "capture_source": "claude_code",
+                    "token": "ros_ing_claude",
+                    "device_id": "cc-1",
+                },
+                {
+                    "grant": "capture",
+                    "capture_source": "codex",
+                    "token": "ros_ing_codex",
+                    "device_id": "cx-1",
+                },
+            ]
+        }
+
+    codex_state = tmp_path / "codex-tap"
+    monkeypatch.setenv("PRBE_CODEX_TAP_PLUGIN_DIR", str(codex_state))
+    monkeypatch.setattr("probe.sdk.device.device_authorize", fake_device_authorize)
+
+    granted, messages = setup.authorize(
+        ["capture"],
+        capture_sources=["claude_code", "codex"],
+        base_url="https://api.research.prbe.ai",
+        open_browser=False,
+    )
+
+    assert sent["capture_sources"] == ["claude_code", "codex"]
+    assert "capture_source" not in sent
+    assert granted["capture"]["capture_source"] == "claude_code"
+    assert capture_token_sources("claude_code") == (TokenSource.PROBE_CONFIG,)
+    assert (codex_state / ".token").read_text() == "ros_ing_codex"
+    assert any("Claude Code Session capture paired" in message for message in messages)
+    assert any("Codex Session capture paired" in message for message in messages)
+
+
+def test_capture_credentials_are_indexed_by_source_without_collapsing():
+    from probe.sdk.device import capture_credentials_by_source
+
+    minted = {
+        "grants": [
+            {"grant": "capture", "capture_source": "claude_code", "token": "one"},
+            {"grant": "capture", "capture_source": "codex", "token": "two"},
+        ]
+    }
+    assert {
+        source: credential["token"]
+        for source, credential in capture_credentials_by_source(minted).items()
+    } == {"claude_code": "one", "codex": "two"}
+
+
+def test_codex_plugin_install_uses_codex_marketplace_commands(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setenv("PROBE_AGENT", "codex")
+    monkeypatch.setattr(
+        setup.plugin_cli,
+        "install",
+        lambda source, plugin_id: (
+            calls.append([source, plugin_id]) or setup.claude_cli.Result(ok=True, detail="ok")
+        ),
+    )
+
+    assert setup.install_plugin("probe-research-tap").ok is True
+    assert calls == [
+        ["codex", "probe-research-tap@research-os-agent"],
+    ]
+
+
+def test_authorize_says_so_when_the_server_returns_nothing_for_a_grant(isolate, monkeypatch):
     """Approved but not minted must not read as success."""
     monkeypatch.setattr(
         "probe.sdk.device.device_authorize",
         lambda base_url, **kw: {"grants": [{"grant": "api", "token": "probe_pat_x"}]},
     )
-    _, messages = setup.authorize(
-        ["api", "capture"], base_url="https://x", open_browser=False
-    )
+    _, messages = setup.authorize(["api", "capture"], base_url="https://x", open_browser=False)
     assert any("capture" in m and "NOT active" in m for m in messages)
 
 
-def test_authorize_reports_a_failed_approval_instead_of_claiming_success(
-    isolate, monkeypatch
-):
+def test_authorize_reports_a_failed_approval_instead_of_claiming_success(isolate, monkeypatch):
     from probe.sdk.device import DeviceLoginError
 
     def boom(base_url, **kw):
         raise DeviceLoginError("the user denied this request")
 
     monkeypatch.setattr("probe.sdk.device.device_authorize", boom)
-    by_grant, messages = setup.authorize(
-        ["api"], base_url="https://x", open_browser=False
-    )
+    by_grant, messages = setup.authorize(["api"], base_url="https://x", open_browser=False)
     assert by_grant == {}
     assert any("denied" in m for m in messages)
 
@@ -656,7 +738,7 @@ def test_the_menu_reads_install_then_uninstall_then_the_rest():
 
 
 def test_state_summary_shows_the_killswitch_rather_than_a_bare_off(isolate):
-    """"off" and "off because you disabled it" are different situations."""
+    """ "off" and "off because you disabled it" are different situations."""
     killswitched = _caps(
         capture_token_sources=(TokenSource.PAIRED_FILE,), capture_killswitched=True
     )
@@ -697,9 +779,7 @@ def test_ephemeral_launch_installs_the_cli_persistently(monkeypatch):
         stdout = ""
         stderr = ""
 
-    monkeypatch.setattr(
-        bootstrap.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or Done()
-    )
+    monkeypatch.setattr(bootstrap.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or Done())
 
     result = bootstrap.ensure_persistent_install()
 
@@ -806,7 +886,9 @@ def test_an_auto_update_only_change_does_not_send_you_off_to_restart():
 
 def test_turning_a_plugin_OFF_also_needs_a_restart():
     already = _caps(tracking_plugin_installed=True, logged_in_as="richard@prbe.ai")
-    turning_off = setup.Selection(tracking=False, capture=False, auto_update=False, agent_rules=False)
+    turning_off = setup.Selection(
+        tracking=False, capture=False, auto_update=False, agent_rules=False
+    )
     assert setup.restart_notice(already, turning_off) is not None
 
 
@@ -868,11 +950,10 @@ def test_every_action_acts_rather_than_printing_a_command():
     # NOT `from probe.cli import main` -- probe/cli/__init__.py defines a main()
     # FUNCTION that shadows the submodule of the same name.
     import probe.cli.main  # noqa: F401
+
     cli_main = sys.modules["probe.cli.main"]
 
-    source = inspect.getsource(cli_main.wizard) + inspect.getsource(
-        cli_main._run_wizard_action
-    )
+    source = inspect.getsource(cli_main.wizard) + inspect.getsource(cli_main._run_wizard_action)
     # The specific regression: a literal instruction to go run something.
     assert 'print("Run:' not in source
     assert "perform_update" in source, "Update must perform the update in-process"
@@ -886,6 +967,7 @@ def test_update_command_is_hidden_but_still_works():
     import sys
 
     import probe.cli.main  # noqa: F401
+
     app = sys.modules["probe.cli.main"].app
 
     by_name = {c.name: c for c in app.registered_commands}
@@ -897,6 +979,7 @@ def test_the_wizard_is_the_only_discoverable_entry_point():
     import sys
 
     import probe.cli.main  # noqa: F401
+
     app = sys.modules["probe.cli.main"].app
 
     visible = {c.name for c in app.registered_commands if not c.hidden}
@@ -1020,7 +1103,7 @@ def test_bootstrap_upgrades_an_OLD_install_not_just_a_missing_one(monkeypatch):
 
 
 def test_a_failed_approval_does_not_claim_the_install_finished():
-    """"Restart Claude Code to finish" after a FAILED approval reads as success.
+    """ "Restart Claude Code to finish" after a FAILED approval reads as success.
     The user restarts, finds the capability off, and has no idea why."""
     import inspect
     import sys
@@ -1248,7 +1331,7 @@ def test_uninstall_preserves_token_and_explicit_backend_for_final_snapshot(
 
 
 def test_escape_is_distinct_from_ctrl_c():
-    """"Go back one step" and "abandon the whole wizard" are different
+    """ "Go back one step" and "abandon the whole wizard" are different
     intentions. Collapsing both to None would make Escape quit."""
     from probe.cli import tui
 
@@ -1356,9 +1439,7 @@ def test_answering_the_auto_update_question_keeps_every_other_choice(monkeypatch
     from probe.cli.actions import Action
 
     cli_main = sys.modules["probe.cli.main"]
-    picked = wizard.Selection(
-        tracking=True, capture=False, auto_update=False, agent_rules=True
-    )
+    picked = wizard.Selection(tracking=True, capture=False, auto_update=False, agent_rules=True)
     monkeypatch.setattr(tui, "interactive", lambda: True)
     monkeypatch.setattr(tui, "clear", lambda: None)
     monkeypatch.setattr(tui, "say", lambda *a, **k: None)
@@ -1451,24 +1532,57 @@ def test_the_agent_rules_flag_actually_parses(monkeypatch):
     from probe.cli.main import app
 
     seen: list = []
-    monkeypatch.setattr(
-        bootstrap, "ensure_persistent_install", lambda: SimpleNamespace(message="")
-    )
+    monkeypatch.setattr(bootstrap, "ensure_persistent_install", lambda: SimpleNamespace(message=""))
     monkeypatch.setattr(doctor_impl, "collect", lambda: _caps())
     monkeypatch.setattr(wizard, "interactive", lambda: False)
     monkeypatch.setattr(wizard, "plan", lambda caps, selection: seen.append(selection) or [])
 
     for flag, expected in (("--agent-rules", True), ("--no-agent-rules", False)):
         seen.clear()
-        result = CliRunner().invoke(
-            app, ["wizard", "--action", "configure", "--yes", flag]
-        )
+        result = CliRunner().invoke(app, ["wizard", "--action", "configure", "--yes", flag])
         assert result.exit_code == 0, result.output
         assert seen and seen[0].agent_rules is expected, f"{flag} did not parse"
 
 
+def test_agent_both_runs_one_shared_authorization_then_configures_each_agent(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from probe.cli import bootstrap
+    from probe.cli import doctor as doctor_impl
+    import probe.cli.main  # noqa: F401
+
+    cli_main = sys.modules["probe.cli.main"]
+
+    monkeypatch.setattr(bootstrap, "ensure_persistent_install", lambda: SimpleNamespace(message=""))
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda: _caps(agent_source=os.environ.get("PROBE_AGENT", "claude_code")),
+    )
+    calls: list[dict] = []
+
+    def record(action, **kwargs):
+        calls.append({"source": os.environ["PROBE_AGENT"], **kwargs})
+        return []
+
+    monkeypatch.setattr(cli_main, "_run_wizard_action", record)
+    result = CliRunner().invoke(
+        cli_main.app,
+        ["wizard", "--agent", "both", "--action", "configure", "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [call["source"] for call in calls] == ["claude_code", "codex"]
+    assert calls[0]["authorization_needs"] == ["api", "mcp", "capture"]
+    assert calls[0]["capture_sources"] == ["claude_code", "codex"]
+    assert calls[1]["authorization_needs"] is None
+
+
 def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_path):
-    """"Removed." used to be false outside the repo: the plugin went, the
+    """ "Removed." used to be false outside the repo: the plugin went, the
     credential went, and the global CLAUDE.md kept telling every agent in every
     repository to use the two skills this call had just uninstalled.
 
@@ -1484,9 +1598,9 @@ def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_p
     agent_rules.install(memory)
     assert agent_rules.is_installed(memory)
 
-    monkeypatch.setattr(setup, "turn_off", lambda mode: SimpleNamespace(
-        summary=lambda: "capture off", warnings=()
-    ))
+    monkeypatch.setattr(
+        setup, "turn_off", lambda mode: SimpleNamespace(summary=lambda: "capture off", warnings=())
+    )
     monkeypatch.setattr(setup, "uninstall_plugin", lambda name: (True, "removed"))
     monkeypatch.setattr(setup.autoupdate, "save", lambda **kw: None)
 
@@ -1503,9 +1617,7 @@ def test_a_stale_block_is_something_to_do_not_nothing_to_change():
     said "Nothing to change" while `probe doctor` said "re-run probe wizard".
     A POINTER_VERSION bump could not reach a machine at all."""
     stale = _caps(agent_rules_installed=True, agent_rules_stale=True)
-    keep = setup.Selection(
-        tracking=False, capture=False, auto_update=False, agent_rules=True
-    )
+    keep = setup.Selection(tracking=False, capture=False, auto_update=False, agent_rules=True)
 
     steps = setup.plan(stale, keep)
 
@@ -1837,9 +1949,7 @@ def test_the_interactive_wizard_starts_without_crashing():
     action menu, a fresh one goes straight to the capability picker -- both go
     through `tui.ask`, so the margin claim holds either way.
     """
-    screen = _pty_screen(
-        [_probe_binary(), "wizard"], rows=24, cols=80, keys=b"\x1b[B\x1b[A"
-    )
+    screen = _pty_screen([_probe_binary(), "wizard"], rows=24, cols=80, keys=b"\x1b[B\x1b[A")
     text = "\n".join(screen.lines())
 
     assert "Traceback" not in text, screen.dump()
@@ -2101,7 +2211,9 @@ def test_the_wizard_never_drops_to_a_bare_prompt():
 
     import probe.cli.main  # noqa: F401
 
-    assert "typer.confirm" not in inspect.getsource(sys.modules["probe.cli.main"]._run_wizard_action)
+    assert "typer.confirm" not in inspect.getsource(
+        sys.modules["probe.cli.main"]._run_wizard_action
+    )
 
 
 def test_a_confirm_does_not_count_an_instruction_row():
@@ -2383,16 +2495,14 @@ def test_a_present_plugin_is_not_reinstalled(monkeypatch):
 
 
 def test_the_plan_says_sign_in_when_only_the_credential_is_missing():
-    """"enable CLI + MCP" on a machine whose plugin is already installed
+    """ "enable CLI + MCP" on a machine whose plugin is already installed
     describes work the run will not do. It is also the COMMON first-run case,
     because capture_on is credential-only."""
     from probe.cli import setup as wizard
     from probe.cli.capabilities import Capability
 
     caps = _caps(tracking_plugin_installed=True, capture_plugin_installed=True)
-    selection = wizard.Selection(
-        tracking=True, capture=True, auto_update=False, agent_rules=False
-    )
+    selection = wizard.Selection(tracking=True, capture=True, auto_update=False, agent_rules=False)
     steps = wizard.plan(caps, selection)
 
     assert any("sign in" in step for step in steps), steps
@@ -2462,7 +2572,7 @@ def test_a_failed_install_retries_once_on_any_failure(monkeypatch):
         return claude_cli.Result(ok=True)
 
     monkeypatch.setattr(claude_cli, "run", fake_run)
-    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: refreshed.append(1))
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda **_kwargs: refreshed.append(1))
 
     budget = [1]
 
@@ -2490,7 +2600,7 @@ def test_the_retry_budget_is_per_run_not_per_plugin(monkeypatch):
     monkeypatch.setattr(
         claude_cli, "run", lambda args, *, timeout: claude_cli.Result(ok=False, detail="no")
     )
-    monkeypatch.setattr(wizard, "refresh_marketplace", lambda: refreshed.append(1))
+    monkeypatch.setattr(wizard, "refresh_marketplace", lambda **_kwargs: refreshed.append(1))
 
     budget = [1]
 
@@ -2507,7 +2617,7 @@ def test_the_retry_budget_is_per_run_not_per_plugin(monkeypatch):
 
 
 def test_a_verified_absent_plugin_fails_the_run(monkeypatch):
-    """"Restart Claude Code to finish" after a failed install reads as success:
+    """ "Restart Claude Code to finish" after a failed install reads as success:
     the user restarts, finds Probe absent, and has no idea why."""
     import sys
 
@@ -2601,7 +2711,11 @@ def test_plugin_state_will_not_report_absence_it_did_not_verify():
 def test_installed_plugins_is_unverified_without_claude(monkeypatch):
     from probe.cli import capabilities
 
-    monkeypatch.setattr(capabilities.shutil, "which", lambda _: None)
+    monkeypatch.setattr(
+        capabilities.plugin_cli,
+        "list_plugins",
+        lambda _source: capabilities.plugin_cli.claude_cli.Result(ok=False, reachable=False),
+    )
     state = capabilities.installed_plugins()
     assert state.verified is False
     assert len(state) == 0
@@ -2907,9 +3021,7 @@ def test_no_install_means_no_marketplace_refresh(monkeypatch):
     monkeypatch.setattr(wizard, "needs_authorization", lambda caps, selection: [])
     monkeypatch.setattr(cli_main, "_register_local_capabilities", lambda *a, **k: [])
 
-    already = _caps(
-        tracking_plugin_installed=True, logged_in_as="x@y.z", plugins_verified=True
-    )
+    already = _caps(tracking_plugin_installed=True, logged_in_as="x@y.z", plugins_verified=True)
     monkeypatch.setattr(doctor_impl, "collect", lambda *a, **k: already)
 
     cli_main._run_wizard_action(
@@ -2998,6 +3110,8 @@ def test_the_credential_is_minted_before_the_plugin_is_installed(monkeypatch):
     assert order.index("authorize") < order.index("install:probe-research"), (
         f"the plugin was installed before it had a credential to serve: {order}"
     )
+
+
 # --- the picker: enter activates, Next ends it ------------------------------
 
 
@@ -3016,9 +3130,7 @@ def _built_menu(defaults=None):
         if index:
             choices.append(questionary.Separator(" "))
         row = questionary.Choice(
-            title=wizard._menu_row(
-                title, detail, checked=defaults[capability], indent=indent
-            ),
+            title=wizard._menu_row(title, detail, checked=defaults[capability], indent=indent),
             value=capability,
             checked=defaults[capability],
         )
@@ -3355,12 +3467,13 @@ def test_a_rerun_that_already_holds_its_grants_is_not_gated():
     that as failure would refuse to install on every machine already signed in."""
     from probe.cli.capabilities import Capability
 
-    assert setup.blocked_by_missing_grants(
-        Capability.TRACKING, needed=[], granted={}
-    ) == []
-    assert setup.blocked_by_missing_grants(
-        Capability.TRACKING, needed=["api", "mcp"], granted={"api": {}, "mcp": {}}
-    ) == []
+    assert setup.blocked_by_missing_grants(Capability.TRACKING, needed=[], granted={}) == []
+    assert (
+        setup.blocked_by_missing_grants(
+            Capability.TRACKING, needed=["api", "mcp"], granted={"api": {}, "mcp": {}}
+        )
+        == []
+    )
     assert setup.blocked_by_missing_grants(
         Capability.TRACKING, needed=["api", "mcp"], granted={"api": {}}
     ) == ["mcp"]
@@ -3371,9 +3484,7 @@ def test_the_grant_table_is_the_only_source_of_what_a_capability_needs():
     third grant gets added to the request and not to the check."""
     from probe.cli.capabilities import Capability
 
-    everything = setup.Selection(
-        tracking=True, capture=True, auto_update=False, agent_rules=False
-    )
+    everything = setup.Selection(tracking=True, capture=True, auto_update=False, agent_rules=False)
     requested = set(setup.grants_for(everything))
     tabled = {g for grants in setup.CAPABILITY_GRANTS.values() for g in grants}
     assert requested == tabled
@@ -3381,6 +3492,4 @@ def test_the_grant_table_is_the_only_source_of_what_a_capability_needs():
     for capability in (Capability.TRACKING, Capability.CAPTURE):
         needed = list(setup.CAPABILITY_GRANTS[capability])
         # Every grant the table names must be able to block its own capability.
-        assert setup.blocked_by_missing_grants(
-            capability, needed=needed, granted={}
-        ) == needed
+        assert setup.blocked_by_missing_grants(capability, needed=needed, granted={}) == needed

@@ -1,7 +1,6 @@
 """CLI dispatch: `python -m tap <subcommand>`.
 
-Install + registration are owned by Claude Code's plugin system — users
-install via `claude plugin install probe-research-tap@research-os-agent`.
+Install + registration are owned by the Claude Code or Codex plugin system.
 Auth is device pairing: `python -m tap pair <token>` exchanges a
 dashboard-minted pairing token for a device token (the manual/self-host
 alternative is the probe CLI's `probe login`). This CLI covers the plugin's
@@ -37,15 +36,19 @@ def main(argv: list[str] | None = None) -> int:
 
     if cmd == "watch":
         from tap.main import main as watch_main
+
         return watch_main(rest)
     if cmd == "pair":
         from tap.pair import main as pair_main
+
         return pair_main(rest)
     if cmd == "status":
         from tap.status import main as status_main
+
         return status_main(rest)
     if cmd == "revoke":
         from tap.revoke import main as revoke_main
+
         return revoke_main(rest)
 
     print(f"unknown subcommand {cmd!r}; try `python -m tap help`", file=sys.stderr)

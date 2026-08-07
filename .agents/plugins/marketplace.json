@@ -1,0 +1,32 @@
+{
+  "name": "research-os-agent",
+  "interface": {
+    "displayName": "Probe Research OS"
+  },
+  "plugins": [
+    {
+      "name": "probe-research",
+      "source": {
+        "source": "local",
+        "path": "./plugins/probe-research"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
+      "name": "probe-research-tap",
+      "source": {
+        "source": "local",
+        "path": "./plugins/probe-research-tap"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

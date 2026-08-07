@@ -5,7 +5,9 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_TAP_SOURCE=codex; exec \"$ROOT/hooks/session-start.sh\"'",
+            "timeout": 10,
+            "statusMessage": "Starting Probe transcript capture"
           }
         ]
       }
@@ -15,7 +17,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh"
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_TAP_SOURCE=codex; exec \"$ROOT/hooks/session-end.sh\"'",
+            "timeout": 3
           }
         ]
       }

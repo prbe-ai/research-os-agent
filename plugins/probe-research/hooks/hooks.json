@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh"
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; exec \"$ROOT/hooks/session-start.sh\"'"
           }
         ]
       }

@@ -19,6 +19,7 @@ from dataclasses import dataclass
 
 from probe import __version__
 from probe.cli import autoupdate, updater
+from probe.cli.capabilities import agent_source
 
 
 @dataclass
@@ -128,14 +129,21 @@ def perform_update(
     restart_needed = False
     pres: updater.PluginResult | None = None
     if include_plugin:
-        lines.append("Claude Code plugins:")
-        pres = updater.update_plugin(plugin_target)
+        codex = agent_source() == "codex"
+        lines.append("Codex plugins:" if codex else "Claude Code plugins:")
+        pres = updater.update_codex_plugins() if codex else updater.update_plugin(plugin_target)
         lines.append(f"  {pres.message}")
         if pres.confirmed and pres.changed:
             restart_needed = True
         elif not pres.confirmed:
-            lines.append("  update them manually, then restart Claude Code:")
-            lines.extend(f"    {line}" for line in updater.manual_plugin_commands().split("\n"))
+            agent_name = "Codex" if codex else "Claude Code"
+            lines.append(f"  update them manually, then restart {agent_name}:")
+            commands = (
+                updater.manual_codex_plugin_commands()
+                if codex
+                else updater.manual_plugin_commands()
+            )
+            lines.extend(f"    {line}" for line in commands.split("\n"))
 
     # `attempted` is what separates "the plugin update failed" from "there was no
     # Claude Code to update" -- a CLI-only user has no `claude` on PATH, and

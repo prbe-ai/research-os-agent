@@ -9,7 +9,7 @@ Implemented experiment calls map onto real endpoints.
 Probe Research exposes experiment tracking through two separate surfaces over the same backend, for two different workflows:
 
 - **`probe` — SDK + CLI (non-agent).** A Python library (`import probe`) and the `probe` command-line tool for integrating with existing setups and manual experimentation. Drop it into a training script or pipeline to record runs, metrics, spans, and artifacts. No agent required.
-- **`probe-research` — plugin: skills + MCP (agent-centric).** Installed into a coding agent (e.g. Claude Code). Its skills teach the agent the experiment workflow, its read-only MCP server lets the agent query experiment state, and writes flow through the `probe` CLI. This is the surface for agent-driven research loops such as Anthrogen.
+- **`probe-research` — plugin: skills + MCP (agent-centric).** Installed into a coding agent (Claude Code or Codex). Its skills teach the agent the experiment workflow, its read-only MCP server lets the agent query experiment state, and writes flow through the `probe` CLI. This is the surface for agent-driven research loops such as Anthrogen.
 
 Same backend, two entry points: humans-in-code reach for the SDK/CLI; agents-in-the-loop use the plugin.
 
@@ -24,12 +24,17 @@ src/probe/
 └── mcp/       # `probe-research-mcp`: strictly read-only tools and resources
 skills/
 ├── start-research-work/
-└── track-research-work/
+├── track-research-work/
+├── capture-run-inputs/
+└── show-research-timeline/
 ```
 
 The SDK is the implementation. The CLI, MCP source adapter, future hooks,
 Python experiments, and passive platform integrations all use it. CLI and SDK
 therefore have capability parity; they differ only in ergonomics.
+
+Codex packaging, transcript capture, and the three-layer release gate are
+documented in [docs/codex-integration.md](docs/codex-integration.md).
 
 | Surface | SDK | CLI | Intended caller |
 |---|---|---|---|

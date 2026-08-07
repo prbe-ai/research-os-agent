@@ -1,7 +1,7 @@
 {
   "name": "probe-research",
   "version": "0.11.0",
-  "description": "Setup wizard for Probe Research in Claude Code. Runs from zero with npx.",
+  "description": "Setup wizard for Probe Research in Claude Code and Codex. Runs from zero with npx.",
   "bin": {
     "probe-research": "bin/probe-research.js"
   },
@@ -19,6 +19,7 @@
   "homepage": "https://research.prbe.ai/connect",
   "keywords": [
     "claude-code",
+    "codex",
     "mlops",
     "experiment-tracking",
     "probe-research"

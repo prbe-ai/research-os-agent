@@ -25,7 +25,10 @@ import pytest
 
 _HOOK = (
     Path(__file__).resolve().parents[1]
-    / "plugins" / "probe-research" / "hooks" / "version_check.py"
+    / "plugins"
+    / "probe-research"
+    / "hooks"
+    / "version_check.py"
 )
 
 
@@ -51,6 +54,12 @@ def hook():
     return _load_hook()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_agent_environment(monkeypatch) -> None:
+    monkeypatch.delenv("PROBE_AGENT", raising=False)
+    monkeypatch.delenv("PRBE_CODEX_TAP_PLUGIN_DIR", raising=False)
+
+
 def _tap_dir(tmp_path: Path, version: str | None) -> Path:
     d = tmp_path / "probe-research-tap"
     d.mkdir(parents=True, exist_ok=True)
@@ -60,9 +69,7 @@ def _tap_dir(tmp_path: Path, version: str | None) -> Path:
 
 
 def test_local_tap_reads_the_installed_version(hook, tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv(
-        "PROBE_RESEARCH_TAP_PLUGIN_DIR", str(_tap_dir(tmp_path, "0.1.2"))
-    )
+    monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(_tap_dir(tmp_path, "0.1.2")))
     assert hook._local_tap() == "0.1.2"
 
 
@@ -76,21 +83,24 @@ def test_local_tap_tolerates_trailing_whitespace(hook, tmp_path, monkeypatch) ->
     assert hook._local_tap() == "0.1.3"
 
 
+def test_local_tap_reads_the_codex_state_dir(hook, tmp_path, monkeypatch) -> None:
+    state = _tap_dir(tmp_path, "0.1.3")
+    monkeypatch.setenv("PROBE_AGENT", "codex")
+    monkeypatch.setenv("PRBE_CODEX_TAP_PLUGIN_DIR", str(state))
+    assert hook._local_tap() == "0.1.3"
+
+
 def test_no_tap_installed_reads_as_unknown_not_stale(hook, tmp_path, monkeypatch) -> None:
     """The tap is optional. A missing state dir must be None so main() skips it —
     nudging someone to update a plugin they never installed is noise."""
-    monkeypatch.setenv(
-        "PROBE_RESEARCH_TAP_PLUGIN_DIR", str(tmp_path / "does-not-exist")
-    )
+    monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(tmp_path / "does-not-exist"))
     assert hook._local_tap() is None
 
 
 def test_manifest_carries_a_tap_entry() -> None:
     """Without this the hook has nothing to compare against and the tap is
     silently exempt from staleness checks — the gap this suite exists to close."""
-    manifest = json.loads(
-        (Path(__file__).resolve().parents[1] / "client-version.json").read_text()
-    )
+    manifest = json.loads((Path(__file__).resolve().parents[1] / "client-version.json").read_text())
     assert "tap" in manifest, "client-version.json has no tap entry"
     assert manifest["tap"].get("latest"), "tap.latest is empty"
 
@@ -103,8 +113,7 @@ _MANIFEST = {
 }
 
 
-def _drive(hook, monkeypatch, capsys, *, tap_version, cli="9.9.9", plugin="9.9.9",
-           manifest=None):
+def _drive(hook, monkeypatch, capsys, *, tap_version, cli="9.9.9", plugin="9.9.9", manifest=None):
     """Run the hook's main() against a stubbed manifest and capture its output.
 
     Drives the REAL decision path rather than grepping the source, so a
@@ -112,8 +121,9 @@ def _drive(hook, monkeypatch, capsys, *, tap_version, cli="9.9.9", plugin="9.9.9
     versa) is caught.
     """
     manifest = _MANIFEST if manifest is None else manifest
-    monkeypatch.setattr(hook.version_policy, "read_cache",
-                        lambda *a, **k: (manifest, 10.0**12, True))
+    monkeypatch.setattr(
+        hook.version_policy, "read_cache", lambda *a, **k: (manifest, 10.0**12, True)
+    )
     monkeypatch.setattr(hook.version_policy, "cache_is_fresh", lambda *a, **k: True)
     monkeypatch.setattr(hook, "_local_cli", lambda *_: cli)
     monkeypatch.setattr(hook, "_local_plugin", lambda *_: plugin)
@@ -149,8 +159,7 @@ def test_a_manifest_without_a_tap_entry_disables_only_the_tap(hook, monkeypatch,
     nudges — each key fails independently."""
     manifest = {k: v for k, v in _MANIFEST.items() if k != "tap"}
     manifest["plugin"] = {"latest": "9.9.9", "min": "0.6.0"}
-    out = _drive(hook, monkeypatch, capsys, tap_version="0.1.2",
-                 plugin="0.1.0", manifest=manifest)
+    out = _drive(hook, monkeypatch, capsys, tap_version="0.1.2", plugin="0.1.0", manifest=manifest)
     msg = out.get("systemMessage", "")
     assert "transcript tap" not in msg
     assert "plugin" in msg, "an absent tap entry broke the other nudges"

@@ -13,8 +13,11 @@ if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
 
-PID_FILE="/tmp/probe-research-tap-watcher-${SESSION_ID}.pid"
-SHUTDOWN_FILE="/tmp/probe-research-tap-watcher-${SESSION_ID}.shutdown"
+SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
+WATCHER_PREFIX="probe-research-tap"
+[ "$SOURCE" = "codex" ] && WATCHER_PREFIX="prbe-codex-tap"
+PID_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
+SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 
 touch "$SHUTDOWN_FILE"
 

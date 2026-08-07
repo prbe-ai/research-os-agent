@@ -46,6 +46,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 PLUGIN_NAME = "probe-research-tap"
+CODEX_LEGACY_PLUGIN_NAME = "prbe-codex-tap-plugin"
+SOURCE_ENV = "PROBE_TAP_SOURCE"
+CODEX_TOKEN_ENV = "PRBE_CODEX_TAP_TOKEN"
+CODEX_PLUGIN_DIR_ENV = "PRBE_CODEX_TAP_PLUGIN_DIR"
 
 DEFAULT_ACTIVE_INTERVAL_SECONDS = 60
 DEFAULT_IDLE_INTERVAL_SECONDS = 300
@@ -79,6 +83,16 @@ ALLOWED_HOST_SUFFIX = ".prbe.ai"
 
 
 def plugin_dir() -> Path:
+    if capture_source() == "codex":
+        env = os.environ.get(CODEX_PLUGIN_DIR_ENV)
+        if env:
+            return Path(env)
+        state = Path.home() / ".codex" / "state"
+        current = state / PLUGIN_NAME
+        legacy = state / CODEX_LEGACY_PLUGIN_NAME
+        # Preserve a standalone tap's durable state during the merge, while
+        # giving clean installs the unified plugin name.
+        return legacy if legacy.exists() and not current.exists() else current
     env = os.environ.get("PROBE_RESEARCH_TAP_PLUGIN_DIR")
     if env:
         return Path(env)
@@ -115,7 +129,16 @@ def log_dir() -> Path:
 
 
 def shutdown_sentinel(session_id: str) -> Path:
-    return Path("/tmp") / f"probe-research-tap-watcher-{session_id}.shutdown"
+    prefix = "prbe-codex-tap" if capture_source() == "codex" else PLUGIN_NAME
+    return Path("/tmp") / f"{prefix}-watcher-{session_id}.shutdown"
+
+
+def capture_source() -> str:
+    return "codex" if os.environ.get(SOURCE_ENV, "").strip().lower() == "codex" else "claude_code"
+
+
+def webhook_path() -> str:
+    return "/ingest/v1/sessions/codex" if capture_source() == "codex" else WEBHOOK_PATH
 
 
 class APIBaseURLUnset(RuntimeError):
@@ -298,9 +321,12 @@ def load_token() -> str | None:
                 return t
         except OSError:
             pass
-    env = os.environ.get(ENV_INGEST_TOKEN, "").strip()
+    token_env = CODEX_TOKEN_ENV if capture_source() == "codex" else ENV_INGEST_TOKEN
+    env = os.environ.get(token_env, "").strip()
     if env:
         return env
+    if capture_source() == "codex":
+        return None
     tok = _read_probe_config().get("ingest_token")
     if isinstance(tok, str) and tok.strip():
         return tok.strip()

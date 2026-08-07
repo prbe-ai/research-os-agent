@@ -77,6 +77,8 @@ def device_authorize(
     *,
     scopes: list[str] | None = None,
     grants: list[str] | None = None,
+    capture_source: str | None = None,
+    capture_sources: list[str] | None = None,
     token_name: str | None = None,
     open_browser: bool = True,
     on_prompt: Callable[[DevicePrompt], None] | None = None,
@@ -118,6 +120,10 @@ def device_authorize(
         # `grants: null` would fail validation there.
         if grants is not None:
             body["grants"] = grants
+        if capture_source is not None:
+            body["capture_source"] = capture_source
+        if capture_sources is not None:
+            body["capture_sources"] = capture_sources
         start = http.post(_START_PATH, json=body)
         if start.status_code != 201:
             _code, desc = _error_code(start)
@@ -189,3 +195,10 @@ def credentials_by_grant(minted: dict) -> dict[str, dict]:
             "token_id": minted.get("id"),
         }
     return by_grant
+
+
+def capture_credentials_by_source(minted: dict) -> dict[str, dict]:
+    """Index capture credentials without collapsing a dual-agent approval."""
+    entries = minted.get("grants") or []
+    captures = [entry for entry in entries if entry.get("grant") == "capture"]
+    return {str(entry.get("capture_source") or "claude_code"): entry for entry in captures}

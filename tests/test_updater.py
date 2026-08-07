@@ -22,10 +22,10 @@ from probe.cli import updater
 @pytest.mark.parametrize(
     ("a", "b", "expected"),
     [
-        ("0.10.0", "0.9.0", True),   # NOT a string compare
+        ("0.10.0", "0.9.0", True),  # NOT a string compare
         ("0.9.0", "0.10.0", False),
         ("0.7.0", "0.7.0", False),
-        ("0.8.0", "0.8", False),     # 0.8 normalizes to 0.8.0
+        ("0.8.0", "0.8", False),  # 0.8 normalizes to 0.8.0
         (None, "0.7.0", False),
         ("0.7.0", None, False),
     ],
@@ -40,17 +40,25 @@ def _patch_pkg(monkeypatch, path: str):
 
 
 def test_detect_uv_tool(monkeypatch):
-    _patch_pkg(monkeypatch, "/home/u/.local/share/uv/tools/probe-research/lib/python3.12/site-packages/probe")
+    _patch_pkg(
+        monkeypatch,
+        "/home/u/.local/share/uv/tools/probe-research/lib/python3.12/site-packages/probe",
+    )
     assert updater.detect_install().method == updater.Method.UV_TOOL
 
 
 def test_detect_uv_tool_legacy(monkeypatch):
-    _patch_pkg(monkeypatch, "/home/u/.local/share/uv/tools/probe-agent/lib/python3.12/site-packages/probe")
+    _patch_pkg(
+        monkeypatch, "/home/u/.local/share/uv/tools/probe-agent/lib/python3.12/site-packages/probe"
+    )
     assert updater.detect_install().method == updater.Method.UV_TOOL_LEGACY
 
 
 def test_detect_pipx(monkeypatch):
-    _patch_pkg(monkeypatch, "/home/u/.local/share/pipx/venvs/probe-research/lib/python3.12/site-packages/probe")
+    _patch_pkg(
+        monkeypatch,
+        "/home/u/.local/share/pipx/venvs/probe-research/lib/python3.12/site-packages/probe",
+    )
     assert updater.detect_install().method == updater.Method.PIPX
 
 
@@ -80,21 +88,22 @@ def test_detect_managed_out_of_project_poetry(monkeypatch):
 
 
 def test_venv_root_both_layouts():
-    assert updater._venv_root(
-        Path("/home/u/app/.venv/lib/python3.12/site-packages/probe")
-    ) == Path("/home/u/app/.venv")
+    assert updater._venv_root(Path("/home/u/app/.venv/lib/python3.12/site-packages/probe")) == Path(
+        "/home/u/app/.venv"
+    )
     # Windows Lib/site-packages is one level shallower — must not overshoot to the project.
-    assert updater._venv_root(
-        Path("/c/proj/.venv/Lib/site-packages/probe")
-    ) == Path("/c/proj/.venv")
+    assert updater._venv_root(Path("/c/proj/.venv/Lib/site-packages/probe")) == Path(
+        "/c/proj/.venv"
+    )
 
 
 # -- CLI upgrade dispatch (H3/H5/H6) ---------------------------------------
 def _record_run(monkeypatch):
     calls: list[list[str]] = []
     monkeypatch.setattr(
-        updater, "_run",
-        lambda cmd, timeout: (calls.append(cmd) or subprocess.CompletedProcess(cmd, 0)),
+        updater,
+        "_run",
+        lambda cmd, timeout: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0),
     )
     return calls
 
@@ -157,7 +166,9 @@ def test_upgrade_pipx(monkeypatch):
     assert calls == [["pipx", "upgrade", "probe-research"]]
 
 
-@pytest.mark.parametrize("method", [updater.Method.EDITABLE, updater.Method.MANAGED, updater.Method.UNKNOWN])
+@pytest.mark.parametrize(
+    "method", [updater.Method.EDITABLE, updater.Method.MANAGED, updater.Method.UNKNOWN]
+)
 def test_upgrade_refuses_and_never_runs(monkeypatch, method):
     calls = _record_run(monkeypatch)
     res = updater.upgrade_cli(updater.Install(method), "0.8.1", "0.8.2")
@@ -192,7 +203,9 @@ def test_plugin_confirmed_when_version_advances(monkeypatch):
 def test_plugin_noop_not_confirmed_even_on_zero_exit(monkeypatch):
     # claude exits 0 but the version never moves (nested-session no-op) -> NOT confirmed (H1)
     monkeypatch.setattr(updater.shutil, "which", lambda _n: "/usr/bin/claude")
-    monkeypatch.setattr(updater.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(
+        updater.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0)
+    )
     monkeypatch.setattr(updater, "installed_plugin_version", lambda: "0.6.0")
     res = updater.update_plugin("0.7.0")
     assert res.attempted and not res.confirmed
@@ -208,10 +221,47 @@ def test_plugin_already_current_is_confirmed_but_unchanged(monkeypatch):
     # at target already: confirmed=True (post-condition holds) but changed=False, so
     # the caller won't falsely tell the user to restart for a no-op.
     monkeypatch.setattr(updater.shutil, "which", lambda _n: "/usr/bin/claude")
-    monkeypatch.setattr(updater.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(
+        updater.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(cmd, 0)
+    )
     monkeypatch.setattr(updater, "installed_plugin_version", lambda: "0.8.1")
     res = updater.update_plugin("0.8.1")
     assert res.confirmed and not res.changed and "already" in res.message
+
+
+def test_codex_update_refreshes_and_readds_both_plugins_then_verifies(monkeypatch):
+    calls: list[list[str]] = []
+    monkeypatch.setattr(updater.shutil, "which", lambda name: "/usr/bin/codex")
+    monkeypatch.setattr(
+        updater.plugin_cli,
+        "refresh_marketplace",
+        lambda source, marketplace: (
+            calls.append([source, "refresh", marketplace]) or updater.claude_cli.Result(ok=True)
+        ),
+    )
+    monkeypatch.setattr(
+        updater.plugin_cli,
+        "install",
+        lambda source, plugin_id: (
+            calls.append([source, "install", plugin_id]) or updater.claude_cli.Result(ok=True)
+        ),
+    )
+    versions = iter(
+        [
+            {"probe-research": "0.16.0", "probe-research-tap": "0.1.2"},
+            {"probe-research": "0.16.1", "probe-research-tap": "0.1.3"},
+        ]
+    )
+    monkeypatch.setattr(updater, "_codex_plugin_versions", lambda codex: next(versions))
+
+    result = updater.update_codex_plugins()
+
+    assert result.confirmed and result.changed
+    assert calls == [
+        ["codex", "refresh", "research-os-agent"],
+        ["codex", "install", "probe-research@research-os-agent"],
+        ["codex", "install", "probe-research-tap@research-os-agent"],
+    ]
 
 
 # -- --check exit codes (H7) -----------------------------------------------
@@ -220,6 +270,7 @@ def _patch_fetch(monkeypatch, manifest=None, exc=None):
         if exc:
             raise exc
         return manifest
+
     monkeypatch.setattr(updater, "fetch_latest", fake)
 
 

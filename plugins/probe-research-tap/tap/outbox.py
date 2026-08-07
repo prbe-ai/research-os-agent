@@ -15,7 +15,6 @@ import time
 
 from tap import config as cfg
 from tap import httpclient
-from tap.sanitize import sanitize_event
 from tap.storage import Storage
 
 log = logging.getLogger("probe-research-tap.outbox")
@@ -71,6 +70,10 @@ def build_batch_body(
             raw = json.loads(line)
         except (ValueError, UnicodeDecodeError):
             raw = line.decode("utf-8", errors="replace")
+        if cfg.capture_source() == "codex":
+            from tap.codex_sanitize import sanitize_event
+        else:
+            from tap.sanitize import sanitize_event
         sanitized = sanitize_event(raw)
         if sanitized is None:
             continue
@@ -122,7 +125,7 @@ def drain_once(*, storage: Storage, token: str, base_url: str, session_id: str) 
         storage.mark_failure(row.id, now + 30, "no ingest token")
         return True
 
-    url = base_url + cfg.WEBHOOK_PATH
+    url = base_url + cfg.webhook_path()
     resp = httpclient.post_json(url, row.body, bearer=token)
 
     if resp.classification == httpclient.Classification.SUCCESS:
@@ -137,7 +140,9 @@ def drain_once(*, storage: Storage, token: str, base_url: str, session_id: str) 
         # per-batch server-side decision, not a credential failure.
         log.warning(
             "outbox: poison drop id=%d status=%d body=%r",
-            row.id, resp.status, resp.body[:200],
+            row.id,
+            resp.status,
+            resp.body[:200],
         )
         storage.mark_success(row.id)
         return True
@@ -150,8 +155,10 @@ def drain_once(*, storage: Storage, token: str, base_url: str, session_id: str) 
         # the fingerprint to self-clear once the token actually changes, and the
         # timestamp to self-clear after a cooldown (transient 401 re-probe).
         storage.set_meta_pair(
-            "last_401_at", str(now),
-            "last_401_token_sha256", token_fingerprint(token),
+            "last_401_at",
+            str(now),
+            "last_401_token_sha256",
+            token_fingerprint(token),
         )
         raise HaltError(
             "ingest token rejected (401) — fix PROBE_INGEST_TOKEN or run "
