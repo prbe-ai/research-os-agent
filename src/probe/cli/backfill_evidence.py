@@ -397,8 +397,24 @@ def to_jsonl(evidence: Evidence) -> str:
     nothing.
     """
     root = Path(evidence.root)
-    lines: list[str] = []
+    #: (sort key, line). ROWS ARE INTERLEAVED BY DIRECTORY, not emitted in two
+    #: blocks. Sampled rows used to come first and every rollup after them,
+    #: which is harmless in one prompt and ruinous once the evidence is sliced:
+    #: sampling stops at SAMPLE_BUDGET_FILES, so on any folder big enough to
+    #: chunk the sampled rows fill the early slices and EVERY rollup lands in a
+    #: later one containing no sample text at all. Those slices are then asked
+    #: to place tail files "with their neighbours" while holding no neighbours,
+    #: and `resolve` expands each rollup to every file beneath it -- so one
+    #: blind guess misfiles thousands of files and the reconcile still reports
+    #: a clean plan, because they were assigned, just wrongly.
+    #:
+    #: Sorting both kinds on the rollup key puts a directory's readable files
+    #: next to the count of what else is in it, in one slice.
+    rows: list[tuple[tuple[str, str], str]] = []
     tail: dict[str, list[FileEvidence]] = {}
+
+    def rollup_key(rel: str) -> str:
+        return "/".join(Path(rel).parent.parts[:ROLLUP_MAX_DEPTH])
 
     for f in evidence.files:
         rel = _rel(root, f.path)
@@ -409,8 +425,7 @@ def to_jsonl(evidence: Evidence) -> str:
         # 50,295 sampleless evidence rows and 2.3M tokens; sample-keyed leaves
         # 600 and fits.
         if not f.sample:
-            parts = Path(rel).parent.parts[:ROLLUP_MAX_DEPTH]
-            tail.setdefault("/".join(parts), []).append(f)
+            tail.setdefault(rollup_key(rel), []).append(f)
             continue
         row: dict[str, object] = {"path": rel, "size": f.size, "tier": f.tier.value}
         if f.mtime:
@@ -419,7 +434,7 @@ def to_jsonl(evidence: Evidence) -> str:
             row["sample"] = f.sample
             if f.truncated:
                 row["sample_truncated"] = True
-        lines.append(json.dumps(row, ensure_ascii=False))
+        rows.append(((rollup_key(rel), rel), json.dumps(row, ensure_ascii=False)))
 
     for directory in sorted(tail):
         group = tail[directory]
@@ -445,8 +460,13 @@ def to_jsonl(evidence: Evidence) -> str:
             row["unread_text_files"] = unsampled
         if stamps:
             row["mtime_span"] = [int(min(stamps)), int(max(stamps))]
-        lines.append(json.dumps(row, ensure_ascii=False))
-    return "\n".join(lines)
+        # "￿" sorts after any real filename, so the rollup closes its
+        # directory's group: the files that could be read, then the count of
+        # what else is in there.
+        rows.append(((directory, "￿"), json.dumps(row, ensure_ascii=False)))
+
+    rows.sort(key=lambda pair: pair[0])
+    return "\n".join(line for _, line in rows)
 
 
 # -- fitting the evidence into a context window ------------------------------
@@ -478,6 +498,18 @@ CHUNK_MAX_ROWS = 500
 def estimate_tokens(text: str) -> int:
     """Roughly how many tokens `text` costs. Deliberately pessimistic."""
     return int(len(text) / _CHARS_PER_TOKEN) + 1
+
+
+def needs_chunking(evidence) -> bool:
+    """Whether this folder's evidence is too big for one prompt.
+
+    One place, because two callers have to agree: `classify` uses it to pick a
+    route, and the review gate uses it to decide where a correction goes. If
+    they ever disagreed, a correction on a chunked folder would be handed to
+    the single-shot reviser -- which starts cold and is told to re-read a
+    folder that does not fit.
+    """
+    return estimate_tokens(to_jsonl(evidence)) > SINGLE_SHOT_TOKEN_BUDGET
 
 
 def chunk_lines(

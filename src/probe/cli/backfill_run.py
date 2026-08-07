@@ -125,7 +125,7 @@ def classify(
     placements low confidence.
     """
     jsonl = evidence_mod.to_jsonl(ev)
-    if evidence_mod.estimate_tokens(jsonl) > evidence_mod.SINGLE_SHOT_TOKEN_BUDGET:
+    if evidence_mod.needs_chunking(ev):
         # TOO BIG FOR ONE PROMPT. Not a slow path -- a rejected one: the whole
         # evidence set is a single message, so `--autocompact` cannot help
         # (it compacts across TURNS and there are none yet) and the request
@@ -168,32 +168,80 @@ def classify(
     return plan_mod.parse(tail), tail, session
 
 
+#: Tokens the slice summaries may occupy in the naming prompt. Smaller than a
+#: chunk budget because this pass is short and its input is prose, and because
+#: leaving room matters more here than anywhere else: naming is the ONE step
+#: that sees the whole folder, and it only sees it through these.
+NAMING_TOKEN_BUDGET = 60_000
+
+#: Attempts per chunked pass. A pass is a whole agent turn over a slice, and
+#: the failures that hit it are overwhelmingly transient -- a dropped
+#: connection, a turn that ended in prose without its closing JSON. Losing a
+#: forty-slice run to one of those, after an hour of successful slices, is the
+#: expensive outcome; a second attempt costs one slice.
+PASS_ATTEMPTS = 2
+
+
 def _run_pass(
     folder: Path, prompt: str, *, agent: bf.Agent, heading: str, work_dir: Path,
-    total: int, stream=None, key: str,
-) -> dict | None:
-    """One agent turn that answers with JSON. Returns the object, or None.
+    total: int, stream=None, key: str, attempts: int = PASS_ATTEMPTS,
+) -> tuple[dict | None, str]:
+    """One agent turn that answers with JSON. Returns ``(object, detail)``.
+
+    The DETAIL is returned, not swallowed. Discarding it and substituting
+    "slice 3 of 9 could not be read" hid every message worth acting on --
+    "`claude` is not on PATH", the parenthesis-in-path refusal, "the agent did
+    not finish in time" -- behind a sentence naming only where it happened.
 
     Each chunked pass gets its OWN session. They are deliberately independent --
     that is the whole design -- so sharing one would reintroduce the carry-over
     the chunking exists to avoid, and would put the earlier chunks' evidence
-    back in the context that has to hold the later ones.
+    back in the context that has to hold the later ones. A retry is a fresh
+    session for the same reason.
     """
-    ok, tail = bf.launch_agent(
-        folder, prompt, agent=agent, workdir=work_dir, heading=heading,
-        total=total, timeout=CLASSIFY_TIMEOUT_S, stream=stream,
-        session_id=new_session_id() if agent is bf.Agent.CLAUDE else None,
-    )
-    if not ok:
-        return None
-    # Last wins: an agent that restates its answer means the later one.
-    found = None
-    for line in tail.splitlines():
-        if key not in line:
-            continue
-        for data in bf._embedded_summaries(line.strip(), key=key):
-            found = data
-    return found
+    detail = ""
+    for attempt in range(max(1, attempts)):
+        ok, tail = bf.launch_agent(
+            folder, prompt, agent=agent, workdir=work_dir, heading=heading,
+            total=total, timeout=CLASSIFY_TIMEOUT_S, stream=stream,
+            session_id=new_session_id() if agent is bf.Agent.CLAUDE else None,
+        )
+        last = tail.splitlines()[-1] if tail.strip() else "no output"
+        if ok:
+            # Last wins: an agent that restates its answer means the later one.
+            found = None
+            for line in tail.splitlines():
+                if key not in line:
+                    continue
+                for data in bf._embedded_summaries(line.strip(), key=key):
+                    found = data
+            if found is not None:
+                return found, ""
+            detail = f"answered without a usable `{key}` object ({last})"
+        else:
+            detail = last
+        if attempt + 1 < max(1, attempts):
+            detail += "  (retried)"
+    return None, detail
+
+
+def _fit_findings(findings: list[dict]) -> tuple[str, int]:
+    """Slice summaries as JSON that fits the naming prompt. Returns (json, dropped).
+
+    WHOLE ENTRIES, measured with the same estimator as everything else. The
+    first version cut the encoded string at a fixed 200,000 characters, which
+    lands mid-object: the naming pass then saw a malformed tail, silently never
+    learned what the last slices contained, and named projects those slices'
+    files were afterwards forced into. Dropping entries loses the same
+    information but says how many, so the caller can report it.
+    """
+    kept = list(findings)
+    while kept:
+        text = json.dumps(kept, indent=1)
+        if evidence_mod.estimate_tokens(text) <= NAMING_TOKEN_BUDGET:
+            return text, len(findings) - len(kept)
+        kept.pop()
+    return "[]", len(findings)
 
 
 def classify_chunked(
@@ -204,6 +252,7 @@ def classify_chunked(
     existing: list[str],
     work_dir: Path,
     stream=None,
+    feedback: str = "",
 ) -> tuple[plan_mod.Plan | None, str]:
     """Classify a folder too big to fit one prompt. Survey -> name -> assign.
 
@@ -232,33 +281,38 @@ def classify_chunked(
     # -- survey: what does each slice look like, locally
     findings: list[dict] = []
     for i, chunk in enumerate(chunks, start=1):
-        got = _run_pass(
+        got, detail = _run_pass(
             folder,
             prompts.survey(root=folder, evidence_jsonl="\n".join(chunk),
-                           index=i, total=n, work_dir=str(work_dir)),
+                           index=i, total=n, work_dir=str(work_dir),
+                           truncated=ev.sample_budget_hit),
             agent=agent, work_dir=work_dir, stream=stream, total=ev.total_files,
             heading=f"Reading {folder.name} — slice {i} of {n}", key="findings",
         )
         if got is None:
-            return None, f"slice {i} of {n} could not be read"
+            return None, f"slice {i} of {n} could not be read: {detail}"
         findings.append({"slice": i, **got})
 
     # -- name: the only step that sees the whole folder at once
-    named = _run_pass(
+    findings_json, dropped = _fit_findings(findings)
+    named, detail = _run_pass(
         folder,
-        prompts.name_projects(root=folder,
-                              findings_json=json.dumps(findings, indent=1)[:200_000],
-                              existing=existing),
+        prompts.name_projects(root=folder, findings_json=findings_json,
+                              existing=existing, feedback=feedback),
         agent=agent, work_dir=work_dir, stream=stream, total=ev.total_files,
         heading=f"Naming the projects in {folder.name}", key="projects",
     )
     if named is None or not named.get("projects"):
-        return None, "the projects could not be named from the slice summaries"
+        return None, f"the projects could not be named: {detail or 'no projects'}"
     specs = [
         plan_mod.ProjectSpec(
             slug=str(p.get("slug") or "").strip(),
             name=str(p.get("name") or p.get("slug") or "").strip(),
             description=str(p.get("description") or "").strip(),
+            # Asked for by `name_projects` and parsed by `_plan_from` on the
+            # other route. Dropping them here made the two paths produce
+            # different Plans from the same agent answer.
+            tags=[str(t) for t in (p.get("tags") or []) if t],
         )
         for p in named["projects"]
         if isinstance(p, dict) and p.get("slug")
@@ -269,19 +323,33 @@ def classify_chunked(
     allowed = {s.slug for s in specs}
 
     # -- assign: independent per chunk, against the fixed list
-    assignments: list[plan_mod.Assignment] = []
-    unsure: list[str] = []
-    for i, chunk in enumerate(chunks, start=1):
-        got = _run_pass(
+    #
+    # CONCURRENT, and that is the payoff of the whole design rather than a
+    # bolted-on optimisation: a slice needs nothing from its siblings, so
+    # nothing is serialised except by the worker bound. Bounded for the same
+    # reason `run_units` is -- each one is a whole agent paying its own context
+    # floor.
+    def file_one(pair: tuple[int, list[str]]):
+        i, chunk = pair
+        return i, _run_pass(
             folder,
             prompts.assign_chunk(root=folder, evidence_jsonl="\n".join(chunk),
                                  projects=listing, index=i, total=n,
-                                 work_dir=str(work_dir)),
+                                 work_dir=str(work_dir),
+                                 truncated=ev.sample_budget_hit),
             agent=agent, work_dir=work_dir, stream=stream, total=ev.total_files,
             heading=f"Filing slice {i} of {n}", key="assignments",
         )
+
+    numbered = list(enumerate(chunks, start=1))
+    with ThreadPoolExecutor(max_workers=max(1, min(DEFAULT_CONCURRENCY, n))) as pool:
+        filed = sorted(pool.map(file_one, numbered))
+
+    assignments: list[plan_mod.Assignment] = []
+    unsure: list[str] = []
+    for i, (got, detail) in filed:
         if got is None:
-            return None, f"slice {i} of {n} could not be filed"
+            return None, f"slice {i} of {n} could not be filed: {detail}"
         for row in got.get("assignments") or []:
             if not isinstance(row, dict):
                 continue
@@ -329,7 +397,8 @@ def classify_chunked(
         unsure=list(dict.fromkeys(unsure)),
         summary=str(named.get("summary") or ""),
     )
-    return plan, f"classified in {n} slices"
+    note = f"; {dropped} slice summary(ies) did not fit the naming step" if dropped else ""
+    return plan, f"classified in {n} slices{note}"
 
 
 def revise(
@@ -856,10 +925,28 @@ def execute(
                 )
                 if not feedback:
                     break
-                revised, rtail, session = revise(
-                    folder, ev, feedback, agent=agent,
-                    session_id=session, work_dir=work_dir,
-                )
+                if evidence_mod.needs_chunking(ev):
+                    # A CORRECTION ON A CHUNKED FOLDER RE-RUNS THE CHUNKED
+                    # ROUTE. `revise` would otherwise start cold and be told to
+                    # "re-read the evidence" -- on a folder just measured as too
+                    # big to read in one prompt. It would answer from nothing,
+                    # produce a handful of assignments, and because nothing is
+                    # `unknown` or `duplicated` that plan reads as trustworthy
+                    # and REPLACES the good one. One typed sentence, whole
+                    # classification gone.
+                    #
+                    # The correction goes to the NAMING pass, which is where the
+                    # decisions a reviewer argues with are made; the slices are
+                    # then re-filed against the corrected list.
+                    revised, rtail = classify_chunked(
+                        folder, ev, agent=agent, existing=existing,
+                        work_dir=work_dir, feedback=feedback,
+                    )
+                else:
+                    revised, rtail, session = revise(
+                        folder, ev, feedback, agent=agent,
+                        session_id=session, work_dir=work_dir,
+                    )
                 if revised is None:
                     # KEEP THE PLAN WE HAD. A correction that round-trips badly
                     # must not cost the reviewer the plan they were reading, or

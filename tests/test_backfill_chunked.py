@@ -24,6 +24,7 @@ import pytest
 
 from probe.cli import backfill as bf
 from probe.cli import backfill_evidence as ev
+from probe.cli import backfill_prompts as bp
 from probe.cli import backfill_run as br
 
 
@@ -347,3 +348,180 @@ def test_a_relocated_row_is_marked_low_confidence(folder, monkeypatch):
     plan, _, _ = br.classify(folder, _evidence(600), agent=bf.Agent.CLAUDE,
                              existing=[], work_dir=folder / ".w")
     assert plan.assignments and all(a.confidence == "low" for a in plan.assignments)
+
+
+# -- the review follow-ups ---------------------------------------------------
+
+
+def test_a_rollup_travels_with_its_own_directory_not_at_the_end():
+    """Emitting all sampled rows first and every rollup after them is harmless
+    in one prompt and ruinous once sliced: sampling stops at
+    SAMPLE_BUDGET_FILES, so on a folder big enough to chunk every `dir` row
+    lands in a later slice holding no sample text at all -- and is then asked to
+    place tail files "with their neighbours" while holding no neighbours."""
+    files = [
+        ev.FileEvidence(path=f"/drive/{area}/src/f{i}.py", size=10, mtime=0,
+                        tier=ev.Tier.EVIDENCE, sample="x")
+        for area in ("alpha", "beta") for i in range(3)
+    ] + [
+        ev.FileEvidence(path=f"/drive/{area}/ckpt/step_{i}.pt", size=10, mtime=0,
+                        tier=ev.Tier.TAIL)
+        for area in ("alpha", "beta") for i in range(4)
+    ]
+    e = ev.Evidence(root="/drive", files=files, clusters=[],
+                    sampled_files=6, sampled_bytes=6)
+    rows = [json.loads(ln) for ln in ev.to_jsonl(e).splitlines()]
+
+    # Every rollup sits AMONG rows sharing its own top-level directory -- on
+    # either side, since a directory's rollup may sort before or after its
+    # sampled siblings depending on the names. What must not happen is every
+    # rollup ending up in one block at the end.
+    for i, row in enumerate(rows):
+        if "dir" not in row:
+            continue
+        area = row["dir"].split("/")[0]
+        window = rows[max(0, i - 4):i] + rows[i + 1:i + 5]
+        assert any(n.get("path", "").startswith(area + "/") for n in window), (
+            f"rollup {row['dir']} has no sampled neighbour from {area}"
+        )
+    # And they are not all bunched at the end.
+    dir_positions = [i for i, r in enumerate(rows) if "dir" in r]
+    assert min(dir_positions) < len(rows) - len(dir_positions), (
+        "every rollup landed in a trailing block"
+    )
+
+
+def test_the_truncation_caveat_reaches_the_chunked_prompts(folder, monkeypatch):
+    """The chunked route fires on exactly the folders that blow the 600-file
+    sample cap, so `sample_budget_hit` is true in essentially every chunked run
+    -- and the agent was never told."""
+    agent = _Agent()
+    monkeypatch.setattr(bf, "launch_agent", agent)
+    big = _evidence(600)
+    big.sample_budget_hit = True
+    br.classify(folder, big, agent=bf.Agent.CLAUDE, existing=[],
+                work_dir=folder / ".w")
+
+    # BOTH passes, checked separately. Asserting only that "some chunked
+    # prompt" carries it let the survey pass lose it silently while the assign
+    # pass kept it -- and the survey pass is the one deciding what the folder
+    # even contains.
+    surveys = [p for p in agent.prompts if "work out what is in it" in p]
+    assigns = [p for p in agent.prompts if "already decided" in p]
+    assert surveys and assigns
+    assert all("sample budget was reached" in p for p in surveys), "survey pass"
+    assert all("sample budget was reached" in p for p in assigns), "assign pass"
+
+
+def test_a_failed_pass_reports_what_the_agent_actually_said(folder, monkeypatch):
+    """Substituting "slice 1 of 3 could not be read" hid every message worth
+    acting on -- "`claude` is not on PATH", the confinement refusal, a
+    timeout -- behind a sentence naming only where it happened."""
+    def dying(folder_, prompt, **kw):
+        return False, "`claude` is not on PATH — install Claude Code"
+
+    monkeypatch.setattr(bf, "launch_agent", dying)
+    _, tail, _ = br.classify(folder, _evidence(600), agent=bf.Agent.CLAUDE,
+                             existing=[], work_dir=folder / ".w")
+    assert "not on PATH" in tail
+
+
+def test_a_transient_pass_failure_is_retried(folder, monkeypatch):
+    """Losing a forty-slice run to one dropped connection, after an hour of
+    successful slices, is the expensive outcome."""
+    attempts: list[int] = []
+
+    class _Flaky(_Agent):
+        def __call__(self, folder_, prompt, **kw):
+            if "work out what is in it" in prompt:
+                attempts.append(1)
+                if len(attempts) == 1:
+                    return False, "connection reset"
+            return super().__call__(folder_, prompt, **kw)
+
+    monkeypatch.setattr(bf, "launch_agent", _Flaky())
+    plan, _, _ = br.classify(folder, _evidence(600), agent=bf.Agent.CLAUDE,
+                             existing=[], work_dir=folder / ".w")
+    assert plan is not None, "one transient failure killed the whole run"
+    assert len(attempts) > 1
+
+
+def test_slice_summaries_are_dropped_whole_never_cut_mid_object():
+    """A fixed character slice lands inside an object: the naming pass then
+    sees a malformed tail, silently never learns what the last slices held, and
+    names projects those slices' files are afterwards forced into."""
+    findings = [{"slice": i, "work": "w" * 5_000, "evidence": []} for i in range(200)]
+    text, dropped = br._fit_findings(findings)
+    assert dropped > 0, "this fixture was meant to overflow"
+    # VALID JSON is the property the character slice broke: it cut inside an
+    # object, so the naming pass saw a malformed tail and simply never learned
+    # what the last slices held.
+    kept = json.loads(text)
+    assert len(kept) == len(findings) - dropped
+    # Every entry that survived is intact, not a prefix of itself.
+    assert all(len(k["work"]) == 5_000 for k in kept)
+    assert [k["slice"] for k in kept] == list(range(len(kept)))
+
+
+def test_the_naming_pass_carries_a_reviewer_correction():
+    prompt = bp.name_projects(root="/r", findings_json="[]", existing=[],
+                              feedback="lockfiles are not research")
+    assert "lockfiles are not research" in prompt
+    assert "outranks" in prompt
+
+
+def test_a_correction_on_a_chunked_folder_reruns_the_chunked_route(
+    folder, monkeypatch
+):
+    """`revise` would start cold and be told to "re-read the evidence" -- on a
+    folder just measured as too big to read in one prompt. It would answer from
+    nothing, and because nothing is unknown or duplicated that plan reads as
+    trustworthy and REPLACES the good one."""
+    monkeypatch.setattr(bf, "launch_agent", _Agent())
+    monkeypatch.setattr(br, "run_units", lambda *a, **k: [])
+    monkeypatch.setattr(br, "enqueue_manifests", lambda *a, **k: (0, []))
+    monkeypatch.setattr(br, "ensure_projects", lambda c, p, a: (["alpha"], []))
+    monkeypatch.setattr(br.evidence_mod, "gather", lambda f: _evidence(600))
+
+    revises: list = []
+    monkeypatch.setattr(br, "revise", lambda *a, **k: revises.append(1) or (None, "", None))
+    chunked: list = []
+    real = br.classify_chunked
+    monkeypatch.setattr(br, "classify_chunked",
+                        lambda *a, **k: chunked.append(k.get("feedback")) or real(*a, **k))
+
+    answers = iter(["merge the two projects", ""])
+    # `tui` is imported inside `execute`, so the module itself is patched.
+    from probe.cli import tui
+    monkeypatch.setattr(tui, "page",
+                        lambda lines, prompt=None: next(answers, "") if prompt else "")
+    monkeypatch.setattr(tui, "interactive", lambda: True)
+
+    class _C:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def list_projects(self): return []
+
+    br.execute(client_factory=_C, folder=folder, agent=bf.Agent.CLAUDE)
+    assert revises == [], "the single-shot reviser must not touch a chunked folder"
+    assert "merge the two projects" in chunked
+
+
+def test_tags_survive_the_chunked_route(folder, monkeypatch):
+    """`name_projects` asks for them and `_plan_from` parses them on the other
+    route; dropping them made the two paths produce different Plans from the
+    same answer."""
+    class _Tagged(_Agent):
+        def __call__(self, folder_, prompt, **kw):
+            if "deciding how one research folder" in prompt:
+                return True, _envelope({
+                    "projects": [{"slug": "alpha", "name": "a", "description": "d",
+                                  "tags": ["proteins", "rl"]}],
+                    "summary": "s",
+                })
+            return super().__call__(folder_, prompt, **kw)
+
+    monkeypatch.setattr(bf, "launch_agent", _Tagged(projects=("alpha",)))
+    plan, _, _ = br.classify(folder, _evidence(600), agent=bf.Agent.CLAUDE,
+                             existing=[], work_dir=folder / ".w")
+    assert plan.projects[0].tags == ["proteins", "rl"]
