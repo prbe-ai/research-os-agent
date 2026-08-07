@@ -72,7 +72,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from uuid import UUID
 
-from ..sdk.errors import NotFoundError, UnfilteredListing
+from ..sdk.errors import NotFoundError
 
 #: Kinds whose bare ref is a slug. Runs name themselves by petname and are
 #: resolved server-side; artifacts have ids only.

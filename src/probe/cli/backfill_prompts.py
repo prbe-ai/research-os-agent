@@ -127,6 +127,29 @@ GROUP INTO EXPERIMENTS ONLY IF THE EVIDENCE IS THERE.
     wrong answer that looks like a right one, and it is worse than no answer."""
 
 
+#: What to say about mtime, given whether it still carries information.
+#:
+#: The positive form is the whole reason mtime is in the evidence at all. The
+#: negative one exists because a COPY erases it: `cp -r`, or an rsync without
+#: `--times`, stamps every file with the copy time, so a shared drive someone
+#: was handed collapses into one burst. Left unsaid, the agent goes on being
+#: told that timestamps group work the directory tree does not -- and goes on
+#: believing it, which is worse than having no signal.
+MTIME_USEFUL = """\
+Files written within minutes of each other are usually one run, so `mtime` and
+`mtime_span` group work that the directory tree does not."""
+
+MTIME_DEAD = """\
+IGNORE `mtime` AND `mtime_span` HERE. Nearly every file carries the same
+timestamp, which happens when a folder has been copied -- so "written together"
+separates nothing on this drive and is not evidence of anything. Group on what
+the files SAY."""
+
+
+def mtime_guidance(uninformative: bool) -> str:
+    return MTIME_DEAD if uninformative else MTIME_USEFUL
+
+
 def _block(*fragments: str) -> str:
     return "\n\n".join(f for f in fragments if f)
 
@@ -135,7 +158,8 @@ def _block(*fragments: str) -> str:
 
 
 def classify(
-    *, root, evidence_jsonl: str, existing: list[str], truncated: bool, work_dir: str
+    *, root, evidence_jsonl: str, existing: list[str], truncated: bool, work_dir: str,
+    mtime_uninformative: bool = False,
 ) -> str:
     """Decide which project each FILE belongs to. Uploads nothing.
 
@@ -150,6 +174,7 @@ def classify(
         if existing
         else "No projects exist yet. You are naming them for the first time."
     )
+    mtime_note = mtime_guidance(mtime_uninformative)
     caveat = (
         "\n\nNOTE: the sample budget was reached, so some evidence files were "
         "listed without their contents. Where you are placing a file on its path "
@@ -187,8 +212,7 @@ EVIDENCE. One JSON object per line, in TWO shapes.
     ASSIGN A ROLLUP ROW BY ITS "dir" VALUE, exactly as written, and every file
     under it goes with it. Do not invent per-file paths for them.
 
-Files written within minutes of each other are usually one run, so `mtime` and
-`mtime_span` group work that the directory tree does not.{caveat}
+{mtime_note}{caveat}
 
 {evidence_jsonl}
 
@@ -576,10 +600,11 @@ Answer with JSON on its own line and nothing after it:
 
 def assign_chunk(
     *, root, evidence_jsonl: str, projects: str, index: int, total: int,
-    work_dir: str, truncated: bool = False,
+    work_dir: str, truncated: bool = False, mtime_uninformative: bool = False,
 ) -> str:
     """Map one slice's rows onto an already-decided project list."""
     caveat = TRUNCATED_CAVEAT if truncated else ""
+    mtime_note = mtime_guidance(mtime_uninformative)
     return f"""\
 You are filing part of a research folder into projects that are already decided.
 
@@ -600,8 +625,7 @@ EVIDENCE. One JSON object per line. A row with "path" is one file. A row with
 {evidence_jsonl}
 {caveat}
 
-Files written within minutes of each other are usually one run, so `mtime` and
-`mtime_span` group work the directory tree does not.
+{mtime_note}
 
 TAIL FILES INHERIT. A checkpoint carries no evidence of what it belongs to, so
 place it with its neighbours and say which neighbours decided it.

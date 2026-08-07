@@ -433,3 +433,42 @@ def test_classify_shows_the_agent_what_already_exists(folder, monkeypatch):
     br.classify(folder, ev.gather(folder), agent=bf.Agent.CLAUDE,
                 existing=["odyssey-infill-v3"], work_dir=folder / ".work")
     assert "odyssey-infill-v3" in fake.calls[0]["prompt"]
+
+
+def test_the_gate_names_the_linked_directories_it_skipped(tmp_path):
+    """A silent skip is the failure this exists to prevent, and the GATE is
+    where it has to appear: afterwards it is only a regret."""
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "hidden.py").write_text("x\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "seen.py").write_text("y\n")
+    (root / "shared_data").symlink_to(real)
+
+    census = bf.scan(root, cap=10**9)
+    e = ev.gather(root)
+    files = sorted(bp.relative_paths(e))
+    plan = bp.Plan(projects=[bp.ProjectSpec(slug="p", name="p", description="d")],
+                   assignments=[bp.Assignment(path=f, project="p") for f in files],
+                   summary="s")
+    assigned, disc = bp.resolve(e, plan)
+    body = br.describe_plan(e, plan, assigned, disc, census)
+
+    joined = "\n".join(body)
+    assert "shared_data" in joined, "the skipped link was not named"
+    assert "1 linked directory was NOT followed" in joined
+    assert "separately" in joined, "it must say what to do about it"
+
+
+def test_the_gate_says_nothing_when_there_are_no_links(tmp_path):
+    (tmp_path / "a.py").write_text("x\n")
+    census = bf.scan(tmp_path, cap=10**9)
+    e = ev.gather(tmp_path)
+    files = sorted(bp.relative_paths(e))
+    plan = bp.Plan(projects=[bp.ProjectSpec(slug="p", name="p", description="d")],
+                   assignments=[bp.Assignment(path=f, project="p") for f in files],
+                   summary="s")
+    assigned, disc = bp.resolve(e, plan)
+    assert not any("linked" in ln
+                   for ln in br.describe_plan(e, plan, assigned, disc, census))

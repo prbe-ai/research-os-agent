@@ -1135,3 +1135,74 @@ def test_a_failed_unit_says_rerunning_is_safe(tmp_path, monkeypatch):
     assert any("did not finish" in ln for ln in lines)
 
 
+
+
+# -- shared drives: what the walk cannot see, and what it must say ----------
+
+
+def test_a_symlinked_directory_is_recorded_not_followed(tmp_path):
+    """Not following is right -- a link can point at its own parent, or on a
+    shared drive at somebody else's dataset an import would file under this
+    project. Doing it SILENTLY is what was wrong: the census reported the
+    smaller number, the reconcile agreed, and a folder reachable through a link
+    was simply absent."""
+    real = tmp_path / "real" / "nested"
+    real.mkdir(parents=True)
+    (real / "deep.py").write_text("x\n")
+    (tmp_path / "real" / "top.py").write_text("y\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "direct.py").write_text("z\n")
+    (root / "linked_dir").symlink_to(tmp_path / "real")
+
+    census = backfill.scan(root, cap=10**9)
+    assert census.files == 1, "a linked directory must not be walked into"
+    assert [link for link, _ in census.linked_dirs] == ["linked_dir"]
+    # The TARGET rides along: the advice is "import what it points at", which
+    # is unusable without it.
+    assert census.linked_dirs[0][1] == str(tmp_path / "real")
+    assert "1 linked directory not followed" in census.describe()
+
+
+def test_a_link_pointing_inside_the_folder_is_not_worth_warning_about(tmp_path):
+    """`latest -> runs/2024-05-01` is the most common symlink in a research
+    folder, and its target is walked anyway by its real path -- so nothing is
+    missing. Warning there is crying wolf on the ordinary case, which is how
+    the one real cross-drive link stops being read."""
+    runs = tmp_path / "runs" / "2024-05-01"
+    runs.mkdir(parents=True)
+    (runs / "cfg.yaml").write_text("lr: 1\n")
+    (tmp_path / "train.py").write_text("x\n")
+    (tmp_path / "latest").symlink_to(runs)
+
+    census = backfill.scan(tmp_path, cap=10**9)
+    assert census.linked_dirs == ()
+    assert "linked" not in census.describe()
+
+
+def test_an_unresolvable_link_is_recorded_not_dropped(tmp_path):
+    """A dead mount or a path this host cannot see is exactly the interesting
+    kind -- it is the case where files really are unreachable."""
+    (tmp_path / "a.py").write_text("x\n")
+    (tmp_path / "gone").symlink_to(tmp_path / "nowhere-at-all")
+    census = backfill.scan(tmp_path, cap=10**9)
+    assert census.linked_dirs == () or census.linked_dirs[0][0] == "gone"
+
+
+def test_a_folder_with_no_links_says_nothing_about_them(tmp_path):
+    """A note on every folder is a note nobody reads."""
+    (tmp_path / "a.py").write_text("x\n")
+    census = backfill.scan(tmp_path, cap=10**9)
+    assert census.linked_dirs == ()
+    assert "linked" not in census.describe()
+
+
+def test_a_symlinked_file_is_still_counted(tmp_path):
+    """Only DIRECTORIES are skipped. A linked file is one file, resolvable, and
+    dropping it would understate the denominator."""
+    (tmp_path / "real.py").write_text("x\n")
+    root = tmp_path / "root"
+    root.mkdir()
+    (root / "link.py").symlink_to(tmp_path / "real.py")
+    census = backfill.scan(root, cap=10**9)
+    assert census.files == 1 and census.linked_dirs == ()

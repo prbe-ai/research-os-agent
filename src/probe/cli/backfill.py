@@ -185,11 +185,29 @@ class Census:
     files: int
     bytes: int
     capped: bool = False
+    #: Symlinked directories the walk declined to follow.
+    #:
+    #: NOT followed, and that is the right call -- a symlink can point at its
+    #: own parent (an unbounded walk) or, on a shared drive, at somebody else's
+    #: dataset, which an import would then file under this project. What was
+    #: wrong is that it happened SILENTLY: the census reported the smaller
+    #: number, the reconcile agreed with it, and a folder reachable through a
+    #: link was simply absent with nothing to say so. That is the "silent 2%
+    #: coverage that reads as done" this module exists to make impossible.
+    #: Sorted, so two runs over the same drive show the same list -- the gate
+    #: prints only the first few, and a reviewer who cannot reproduce what they
+    #: were shown cannot act on it. Each entry is (link, target): the advice is
+    #: "import what it points at", which is unusable without the target.
+    linked_dirs: tuple[tuple[str, str], ...] = ()
 
     def describe(self) -> str:
         count = f"{self.files:,}{'+' if self.capped else ''}"
         noun = "file" if self.files == 1 and not self.capped else "files"
-        return f"{count} {noun}   {human_bytes(self.bytes)}"
+        line = f"{count} {noun}   {human_bytes(self.bytes)}"
+        if self.linked_dirs:
+            n = len(self.linked_dirs)
+            line += f"   ({n} linked director{'y' if n == 1 else 'ies'} not followed)"
+        return line
 
 
 def human_bytes(n: int) -> str:
@@ -211,8 +229,34 @@ def scan(root: Path, *, cap: int = COUNT_CAP) -> Census:
     """
     files = 0
     total = 0
+    linked: list[str] = []
     for dirpath, dirnames, filenames in os.walk(root, onerror=lambda _: None):
-        dirnames[:] = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        keep = [d for d in dirnames if d not in SKIP_DIRS and not d.startswith(".")]
+        # RECORDED, still not followed. `os.walk` skips linked directories by
+        # default and said nothing about it, so a share whose folders are
+        # symlinks to the real data imported a fraction of itself and reported
+        # that fraction as the whole. Naming them is the fix; following them is
+        # not -- see `Census.linked_dirs`.
+        for d in keep:
+            candidate = Path(dirpath) / d
+            try:
+                if not candidate.is_symlink():
+                    continue
+                # OUTSIDE `root` ONLY. `latest -> runs/2024-05-01` is the most
+                # common symlink in a research folder, and its target is walked
+                # anyway by its real path -- warning there is crying wolf on the
+                # ordinary case, which is how the one real cross-drive link
+                # stops being read.
+                target = candidate.resolve()
+                if root.resolve() in target.parents or target == root.resolve():
+                    continue
+                linked.append((str(candidate.relative_to(root)), str(target)))
+            except OSError:
+                # An unresolvable link is exactly the interesting kind -- a
+                # dead mount, a path this host cannot see -- so it is recorded
+                # rather than dropped.
+                linked.append((str(candidate.relative_to(root)), "(unresolvable)"))
+        dirnames[:] = keep
         for name in filenames:
             if name.startswith("."):
                 continue
@@ -225,8 +269,12 @@ def scan(root: Path, *, cap: int = COUNT_CAP) -> Census:
                 # it too, and a denominator that skips it hides the mismatch.
                 pass
             if files >= cap:
-                return Census(files=files, bytes=total, capped=True)
-    return Census(files=files, bytes=total)
+                # CAPPED: the link list stopped where the walk did, so it is
+                # NOT a complete answer. `capped` is what says so -- an empty
+                # tuple here must not be read as "there are none".
+                return Census(files=files, bytes=total, capped=True,
+                              linked_dirs=tuple(sorted(linked)))
+    return Census(files=files, bytes=total, linked_dirs=tuple(sorted(linked)))
 
 
 def subdirectories(root: Path) -> list[Path]:

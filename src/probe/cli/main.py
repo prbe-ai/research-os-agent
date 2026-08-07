@@ -27,7 +27,6 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
-from uuid import uuid4
 
 import typer
 from pydantic import ValidationError

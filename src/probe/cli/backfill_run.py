@@ -151,6 +151,7 @@ def classify(
         existing=existing,
         truncated=ev.sample_budget_hit,
         work_dir=str(work_dir),
+        mtime_uninformative=ev.mtime_uninformative,
     )
     session = new_session_id() if agent is bf.Agent.CLAUDE else None
     ok, tail = bf.launch_agent(
@@ -330,6 +331,11 @@ def classify_chunked(
     # nothing is serialised except by the worker bound. Bounded for the same
     # reason `run_units` is -- each one is a whole agent paying its own context
     # floor.
+    # HOISTED. `mtime_uninformative` walks every file in the folder, and this
+    # was inside `file_one` -- so a 200,000-file drive rebuilt a 200,000-element
+    # list once per slice, across dozens of slices, all holding the GIL.
+    mtime_dead = ev.mtime_uninformative
+
     def file_one(pair: tuple[int, list[str]]):
         i, chunk = pair
         return i, _run_pass(
@@ -337,7 +343,8 @@ def classify_chunked(
             prompts.assign_chunk(root=folder, evidence_jsonl="\n".join(chunk),
                                  projects=listing, index=i, total=n,
                                  work_dir=str(work_dir),
-                                 truncated=ev.sample_budget_hit),
+                                 truncated=ev.sample_budget_hit,
+                                 mtime_uninformative=mtime_dead),
             agent=agent, work_dir=work_dir, stream=stream, total=ev.total_files,
             heading=f"Filing slice {i} of {n}", key="assignments",
         )
@@ -485,6 +492,7 @@ def describe_plan(
     plan: plan_mod.Plan,
     assigned: dict[str, str],
     disc: plan_mod.Discrepancy,
+    census: bf.Census | None = None,
 ) -> list[str]:
     """The approval screen's body: what will happen, and what is uncertain.
 
@@ -514,6 +522,18 @@ def describe_plan(
     notes = disc.describe()
     if notes:
         lines += ["", *notes]
+    if census is not None and census.linked_dirs:
+        # AT THE GATE, not in the final report: this is a reason to stop and
+        # point somewhere else, and after the import it is only a regret.
+        shown = list(census.linked_dirs[:5])
+        n = len(census.linked_dirs)
+        noun = "directory was" if n == 1 else "directories were"
+        lines += ["", f"{n} linked {noun} NOT followed, so anything only "
+                      "reachable through them is not in this plan:"]
+        lines += [f"  {d}" for d in shown]
+        if len(census.linked_dirs) > len(shown):
+            lines.append(f"  ... and {len(census.linked_dirs) - len(shown)} more")
+        lines.append("  Import the directory each one points at separately.")
     if plan.summary:
         lines += ["", plan.summary]
     return lines
@@ -1071,7 +1091,7 @@ def _execute(
             a, d = plan_mod.resolve(ev, p)
             if project:
                 a = dict.fromkeys(a, project)
-            return a, d, describe_plan(ev, p, a, d)
+            return a, d, describe_plan(ev, p, a, d, census)
 
         assigned, disc, body = settle(plan)
         if not disc.trustworthy:
