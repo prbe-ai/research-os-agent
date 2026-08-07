@@ -442,3 +442,149 @@ Finish with JSON on its own line:
 
 {{"project": "{project}", "chars": N, "gaps_noted": N}}
 """
+
+
+# -- pass 1, chunked: survey -> name -> assign -------------------------------
+#
+# Used only when the evidence does not fit one prompt. THE SPLIT IS CHOSEN SO NO
+# CHUNK EVER NEEDS ANOTHER CHUNK'S DETAIL, because the obvious alternative --
+# feed the agent chunks in sequence and let auto-compaction absorb the overflow
+# -- is wrong in a way that does not announce itself. Compaction is lossy, and
+# what it discards is exactly the evidence the classification runs on: early
+# files would be placed against evidence and later ones against a summary of it,
+# with nothing at the review gate to say which was which.
+#
+# So the global decision is made ONCE, on summaries small enough to fit
+# together, and everything else is per-chunk and independent:
+#
+#   SURVEY  each chunk describes what work it seems to contain. Local only.
+#   NAME    one pass over those descriptions decides the project list.
+#   ASSIGN  each chunk maps its own rows onto that fixed list. Independent,
+#           so it parallelises and a failed chunk retries alone.
+
+
+def survey(*, root, evidence_jsonl: str, index: int, total: int, work_dir: str) -> str:
+    """Describe one slice of a folder. Names nothing globally."""
+    return f"""\
+You are reading part of a research folder to work out what is in it.
+
+FOLDER: {root}
+This is slice {index} of {total}. You are seeing SOME of the folder, not all of it.
+
+{readonly(root=root, work_dir=work_dir)}
+
+Do NOT name projects yet, and do not try to guess what the other slices hold.
+Something else decides the project list once every slice has reported. Your job
+is to say, concretely, what lines of work THIS slice shows evidence of.
+
+EVIDENCE. One JSON object per line, in two shapes: a row with "path" is one
+sampled file and `sample` is what it says; a row with "dir" is every remaining
+file in that directory rolled up, counted rather than listed.
+
+{evidence_jsonl}
+
+For each distinct line of work you can see, say what it is, what in this slice
+shows it, and roughly how much of the slice belongs to it. Be specific -- "an
+attention-vs-consensus ablation with Hessian max-LR analysis" is useful,
+"machine learning code" is not. If part of this slice is plainly build noise,
+caches or vendored dependencies, say so as its own entry.
+
+Answer with JSON on its own line and nothing after it:
+
+{{"findings": [{{"work": "<what this line of work is, one sentence>",
+                "evidence": ["<path or dir that shows it>", ...],
+                "approx_files": <int>}}],
+  "notes": "<anything the naming step should know, or empty>"}}
+"""
+
+
+def name_projects(*, root, findings_json: str, existing: list[str]) -> str:
+    """Turn every slice's findings into ONE project list. The only global step."""
+    known = (
+        "Projects that already exist. Prefer these over inventing new ones:\n    "
+        + "\n    ".join(existing)
+        if existing
+        else "No projects exist yet. You are naming them for the first time."
+    )
+    return f"""\
+You are deciding how one research folder should be organised in Probe.
+
+FOLDER: {root}
+
+The folder was read in slices. Below is what each slice reported. You are NOT
+seeing the files -- you are seeing every slice's account of them, which is the
+whole folder, and deciding the project list from it.
+
+{known}
+
+{findings_json}
+
+THE SAME WORK APPEARS IN SEVERAL SLICES. That is the normal case, not a
+conflict: one line of work spills across directories, and the slices are cut by
+size rather than by meaning. Merge those into ONE project. Two projects for what
+is plainly the same work is the expensive mistake here -- it splits the record
+in half and every later comparison reads them as different things.
+
+{REUSE}
+
+{DESCRIPTIONS}
+
+    Name projects for the WORK, not the directory. `odyssey-infill-v3` and
+    `esm3-baseline` are names someone will recognise in six months; `workspace`,
+    `data` and `michael` are not.
+
+Keep the list SHORT. A folder is rarely more than a handful of lines of work,
+and every extra project is one more place someone has to look. Build noise and
+caches belong in one project of their own, not scattered.
+
+Answer with JSON on its own line and nothing after it:
+
+{{"projects": [{{"slug": "...", "name": "...", "description": "...",
+                "tags": ["..."]}}],
+  "summary": "<one sentence on what this folder contains>"}}
+"""
+
+
+def assign_chunk(
+    *, root, evidence_jsonl: str, projects: str, index: int, total: int, work_dir: str
+) -> str:
+    """Map one slice's rows onto an already-decided project list."""
+    return f"""\
+You are filing part of a research folder into projects that are already decided.
+
+FOLDER: {root}
+This is slice {index} of {total}.
+
+{readonly(root=root, work_dir=work_dir)}
+
+THE PROJECTS. Use these and only these. You may not invent one, rename one, or
+leave a row out:
+
+{projects}
+
+EVIDENCE. One JSON object per line. A row with "path" is one file. A row with
+"dir" is every remaining file in that directory, rolled up -- assign it by its
+"dir" value, exactly as written, and every file under it goes with it.
+
+{evidence_jsonl}
+
+Files written within minutes of each other are usually one run, so `mtime` and
+`mtime_span` group work the directory tree does not.
+
+TAIL FILES INHERIT. A checkpoint carries no evidence of what it belongs to, so
+place it with its neighbours and say which neighbours decided it.
+
+If a row genuinely does not fit any project, put it in whichever is closest and
+mark it low confidence -- do NOT drop it. A row you leave out is a file that
+does not get imported, and nothing downstream can tell that from an oversight.
+
+Answer with JSON on its own line and nothing after it:
+
+{{"assignments": [{{"path": "<a row's \"path\", or a rollup row's \"dir\", verbatim>",
+                   "project": "<one of the slugs above>",
+                   "confidence": "high"|"low", "why": "<short>"}}],
+  "unsure": ["<path>", ...]}}
+
+EVERY row above must appear exactly once in `assignments` -- {index} of {total}
+slices is still all of this slice.
+"""

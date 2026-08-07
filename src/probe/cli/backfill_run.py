@@ -124,9 +124,29 @@ def classify(
     the sample budget truncated the input and instructs the agent to mark those
     placements low confidence.
     """
+    jsonl = evidence_mod.to_jsonl(ev)
+    if evidence_mod.estimate_tokens(jsonl) > evidence_mod.SINGLE_SHOT_TOKEN_BUDGET:
+        # TOO BIG FOR ONE PROMPT. Not a slow path -- a rejected one: the whole
+        # evidence set is a single message, so `--autocompact` cannot help
+        # (it compacts across TURNS and there are none yet) and the request
+        # fails outright. The chunked route is a genuinely different shape,
+        # so it lives in its own function; see `classify_chunked`.
+        #
+        # Single-shot stays the DEFAULT because it is the better
+        # classification when it is possible: every file judged against every
+        # other, in one decision, with no summary in between.
+        plan, tail = classify_chunked(
+            folder, ev, agent=agent, existing=existing,
+            work_dir=work_dir, stream=stream,
+        )
+        # No session to hand back: the chunked route runs many, and resuming
+        # "the" one would resume whichever ran last. A correction after this
+        # re-classifies cold, which the revise prompt is told about.
+        return plan, tail, None
+
     prompt = prompts.classify(
         root=folder,
-        evidence_jsonl=evidence_mod.to_jsonl(ev),
+        evidence_jsonl=jsonl,
         existing=existing,
         truncated=ev.sample_budget_hit,
         work_dir=str(work_dir),
@@ -146,6 +166,170 @@ def classify(
     if not ok:
         return None, tail, session
     return plan_mod.parse(tail), tail, session
+
+
+def _run_pass(
+    folder: Path, prompt: str, *, agent: bf.Agent, heading: str, work_dir: Path,
+    total: int, stream=None, key: str,
+) -> dict | None:
+    """One agent turn that answers with JSON. Returns the object, or None.
+
+    Each chunked pass gets its OWN session. They are deliberately independent --
+    that is the whole design -- so sharing one would reintroduce the carry-over
+    the chunking exists to avoid, and would put the earlier chunks' evidence
+    back in the context that has to hold the later ones.
+    """
+    ok, tail = bf.launch_agent(
+        folder, prompt, agent=agent, workdir=work_dir, heading=heading,
+        total=total, timeout=CLASSIFY_TIMEOUT_S, stream=stream,
+        session_id=new_session_id() if agent is bf.Agent.CLAUDE else None,
+    )
+    if not ok:
+        return None
+    # Last wins: an agent that restates its answer means the later one.
+    found = None
+    for line in tail.splitlines():
+        if key not in line:
+            continue
+        for data in bf._embedded_summaries(line.strip(), key=key):
+            found = data
+    return found
+
+
+def classify_chunked(
+    folder: Path,
+    ev: evidence_mod.Evidence,
+    *,
+    agent: bf.Agent,
+    existing: list[str],
+    work_dir: Path,
+    stream=None,
+) -> tuple[plan_mod.Plan | None, str]:
+    """Classify a folder too big to fit one prompt. Survey -> name -> assign.
+
+    THE SPLIT IS CHOSEN SO NO CHUNK NEEDS ANOTHER CHUNK'S DETAIL. Feeding the
+    agent chunks in sequence and letting `--autocompact` absorb the overflow is
+    the obvious alternative and it is wrong in a way that does not announce
+    itself: compaction is lossy, and what it drops is exactly the evidence the
+    classification runs on. Early files would be placed against evidence and
+    later ones against a summary of it, with nothing at the review gate able to
+    tell the two apart.
+
+    So the one genuinely global decision -- what the projects ARE -- is made
+    once, over summaries small enough to fit together. Everything else is
+    per-chunk: each slice maps its own rows onto that fixed list, needing
+    nothing from its siblings.
+
+    Returns ``(plan, tail)`` like :func:`classify`, so the caller cannot tell
+    which route produced the plan. A pass that fails returns no plan rather
+    than a partial one: a classification silently missing files is the single
+    outcome worth failing the run over.
+    """
+    jsonl = evidence_mod.to_jsonl(ev)
+    chunks = evidence_mod.chunk_lines(jsonl)
+    n = len(chunks)
+
+    # -- survey: what does each slice look like, locally
+    findings: list[dict] = []
+    for i, chunk in enumerate(chunks, start=1):
+        got = _run_pass(
+            folder,
+            prompts.survey(root=folder, evidence_jsonl="\n".join(chunk),
+                           index=i, total=n, work_dir=str(work_dir)),
+            agent=agent, work_dir=work_dir, stream=stream, total=ev.total_files,
+            heading=f"Reading {folder.name} — slice {i} of {n}", key="findings",
+        )
+        if got is None:
+            return None, f"slice {i} of {n} could not be read"
+        findings.append({"slice": i, **got})
+
+    # -- name: the only step that sees the whole folder at once
+    named = _run_pass(
+        folder,
+        prompts.name_projects(root=folder,
+                              findings_json=json.dumps(findings, indent=1)[:200_000],
+                              existing=existing),
+        agent=agent, work_dir=work_dir, stream=stream, total=ev.total_files,
+        heading=f"Naming the projects in {folder.name}", key="projects",
+    )
+    if named is None or not named.get("projects"):
+        return None, "the projects could not be named from the slice summaries"
+    specs = [
+        plan_mod.ProjectSpec(
+            slug=str(p.get("slug") or "").strip(),
+            name=str(p.get("name") or p.get("slug") or "").strip(),
+            description=str(p.get("description") or "").strip(),
+        )
+        for p in named["projects"]
+        if isinstance(p, dict) and p.get("slug")
+    ]
+    if not specs:
+        return None, "the naming pass produced no usable project"
+    listing = "\n".join(f"    {s.slug}  —  {s.description or s.name}" for s in specs)
+    allowed = {s.slug for s in specs}
+
+    # -- assign: independent per chunk, against the fixed list
+    assignments: list[plan_mod.Assignment] = []
+    unsure: list[str] = []
+    for i, chunk in enumerate(chunks, start=1):
+        got = _run_pass(
+            folder,
+            prompts.assign_chunk(root=folder, evidence_jsonl="\n".join(chunk),
+                                 projects=listing, index=i, total=n,
+                                 work_dir=str(work_dir)),
+            agent=agent, work_dir=work_dir, stream=stream, total=ev.total_files,
+            heading=f"Filing slice {i} of {n}", key="assignments",
+        )
+        if got is None:
+            return None, f"slice {i} of {n} could not be filed"
+        for row in got.get("assignments") or []:
+            if not isinstance(row, dict):
+                continue
+            # EITHER KEY. A rollup row is addressed by `dir` -- the assign
+            # prompt says to use it verbatim -- and the agent echoes whichever
+            # key it was shown. `backfill_plan._plan_from` already carries this
+            # fix with a comment saying accepting only `path` "dropped every
+            # directory assignment silently, so thousands of files fell to
+            # inheritance with nothing reported". This path reintroduced it.
+            raw = row.get("path") or row.get("dir")
+            if not raw:
+                continue
+            slug = str(row.get("project") or "")
+            # A slug outside the list is the agent inventing a project after
+            # being told not to. Dropping the row would lose files silently, so
+            # it is parked in the first project and flagged instead -- the
+            # reviewer sees it, and `resolve` still accounts for every file.
+            confidence = str(row.get("confidence") or "high")
+            if slug not in allowed:
+                unsure.append(str(raw))
+                slug = specs[0].slug
+                # LOW, whatever the agent claimed. It was told not to invent a
+                # slug; a row we relocated on its behalf is not a confident
+                # placement, and anything filtering on confidence would read it
+                # as one.
+                confidence = "low"
+            assignments.append(plan_mod.Assignment(
+                path=str(raw), project=slug, confidence=confidence,
+                why=str(row.get("why") or ""),
+            ))
+        unsure += [str(u) for u in (got.get("unsure") or []) if u]
+
+    if not assignments:
+        # `_plan_from` ends with the same guard, and without it here an
+        # all-empty result is not an error: `resolve` returns an empty map,
+        # nothing is `unknown` or `duplicated` so the plan reads as
+        # trustworthy, `pack` yields no units, and the run reports
+        # "N files found on disk · 0 queued · 0/0 units done" as a success.
+        # A green no-op is the worst possible answer here -- it is the one a
+        # reader stops investigating.
+        return None, "no slice placed a single file"
+
+    plan = plan_mod.Plan(
+        projects=specs, assignments=assignments,
+        unsure=list(dict.fromkeys(unsure)),
+        summary=str(named.get("summary") or ""),
+    )
+    return plan, f"classified in {n} slices"
 
 
 def revise(
