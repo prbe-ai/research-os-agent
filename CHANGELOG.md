@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+
+- **Dashboard names, descriptions and hypotheses now default to plain, contextual
+  language.** The `start-research-work` skill asks agents to keep display copy short
+  and understandable, preserve uncertainty, move execution-level jargon into the
+  structured run record, and use known company projects, milestones and decisions
+  without inventing internal context.
+
 ### Added
 
 - **Opt-in automatic hardware metrics (`probe.hw`).** `run(hw=True)` — or
