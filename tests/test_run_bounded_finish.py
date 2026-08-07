@@ -14,7 +14,6 @@ from __future__ import annotations
 import pytest
 
 from probe.sdk import errors
-from probe.sdk.journal import Journal
 from probe.sdk.run import Run
 
 from tests.conftest import make_client

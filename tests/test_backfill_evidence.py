@@ -292,3 +292,71 @@ def test_the_evidence_walk_and_the_census_count_the_same_folder(tmp_path):
 
     assert evidence.total_files == census.files
     assert evidence.total_bytes == census.bytes
+
+
+# -- the mtime signal dies on a copied drive --------------------------------
+
+
+def _dated(stamps):
+    return [ev.FileEvidence(path=f"/d/f{i}.py", size=1, mtime=t, tier=ev.Tier.EVIDENCE)
+            for i, t in enumerate(stamps)]
+
+
+def _ev(files):
+    return ev.Evidence(root="/d", files=files, clusters=ev.cluster_by_mtime(files),
+                       sampled_files=0, sampled_bytes=0)
+
+
+def test_a_bulk_copied_drive_has_no_usable_mtime_signal():
+    """`cp -r`, or an rsync without `--times`, stamps every file with the copy
+    time. The whole drive becomes one burst and "written together" separates
+    nothing -- which is the normal state of a share someone was handed."""
+    assert _ev(_dated([1_700_000_000.0] * 60)).mtime_uninformative
+
+
+def test_work_written_over_days_keeps_its_signal():
+    spread = [1_700_000_000.0 + i * 3600 for i in range(60)]
+    assert not _ev(_dated(spread)).mtime_uninformative
+
+
+def test_a_small_folder_written_in_one_sitting_is_not_flagged():
+    """It genuinely IS one burst, and saying so would be noise on exactly the
+    folders where a person can see the answer anyway."""
+    assert not _ev(_dated([1_700_000_000.0] * 8)).mtime_uninformative
+
+
+def test_a_long_run_writing_steadily_is_not_mistaken_for_a_copy():
+    """THE FALSE POSITIVE, and the reason this is measured on span rather than
+    on cluster count. `cluster_by_mtime` chains transitively across a 15-minute
+    gap, so a run writing a checkpoint every 5 minutes for five hours collapses
+    into ONE cluster -- and the first version declared that dead, throwing away
+    timestamps that genuinely spanned the afternoon."""
+    every_5_min = [1_700_000_000.0 + i * 300 for i in range(60)]
+    e = _ev(_dated(every_5_min))
+    assert len(e.clusters) == 1, "fixture no longer reproduces the chaining"
+    assert not e.mtime_uninformative
+
+
+def test_a_straggler_edited_later_keeps_the_signal_alive():
+    """One file touched a day after a copy is a real timestamp difference, and
+    span is the honest reading of it -- the folder is no longer one window."""
+    stamps = [1_700_000_000.0] * 58 + [1_700_900_000.0]
+    assert not _ev(_dated(stamps)).mtime_uninformative
+
+
+def test_undated_files_do_not_mask_a_dead_signal():
+    """The denominator is DATED files only, and the direction matters.
+
+    `cluster_by_mtime` already drops mtime=0 -- so counting those in the
+    denominator while they can never appear in a cluster makes the ratio
+    unreachable, and a genuinely copied drive full of unreadable checkpoints
+    would report a healthy signal it does not have. A tail-heavy share is
+    exactly where that combination shows up.
+    """
+    copied = _dated([1_700_000_000.0] * 60)          # every one the copy time
+    undated = [ev.FileEvidence(path=f"/d/ckpt{i}.pt", size=0, mtime=0.0,
+                               tier=ev.Tier.TAIL) for i in range(200)]
+    assert _ev(copied).mtime_uninformative, "fixture is not actually dead"
+    assert _ev(copied + undated).mtime_uninformative, (
+        "undated files masked a dead signal"
+    )

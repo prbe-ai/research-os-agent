@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import subprocess
 
-import pytest
 
 from probe.sdk.snapshot import commit_on_remote
 

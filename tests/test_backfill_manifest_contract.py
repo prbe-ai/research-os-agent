@@ -8,7 +8,6 @@ disagreement was invisible: rows parsed fine and landed with the wrong names.
 
 from __future__ import annotations
 
-import json
 import re
 
 from probe.cli import backfill_prompts as bp

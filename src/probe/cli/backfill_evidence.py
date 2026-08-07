@@ -131,6 +131,10 @@ LARGE_EVIDENCE_BYTES = 4 * 1024 * 1024
 #: row the agent cannot split at any confidence.
 ROLLUP_MAX_DEPTH = 4
 
+#: Below this many dated files, one cluster means nothing either way -- a small
+#: folder written in one sitting genuinely IS one burst.
+UNINFORMATIVE_MIN_FILES = 25
+
 #: Files written within this many seconds of each other are treated as one
 #: burst. Research runs write their outputs together; the gaps between runs are
 #: minutes to days, so this separates cleanly without tuning per folder.
@@ -180,6 +184,42 @@ class Evidence:
     #: MUST say so: an agent told it saw everything, when it saw a prefix, will
     #: report confidence it has not earned.
     sample_budget_hit: bool = False
+
+    @property
+    def mtime_uninformative(self) -> bool:
+        """True when every file's mtime falls in one window, so it separates nothing.
+
+        Clustering is the grouping signal that survives a messy tree -- files
+        written within minutes of each other are usually one run. A COPY
+        destroys it: `cp -r`, or an rsync without `--times`, stamps files with
+        the copy time rather than the original, and "written together" stops
+        distinguishing anything. That is the normal state of a shared drive
+        someone was handed, and left unsaid the classifier goes on being told
+        timestamps group work the directory tree does not -- and goes on
+        believing it, which is worse than having no signal.
+
+        THE SPAN, not the cluster count, and the first version got this wrong
+        in both directions. `cluster_by_mtime` chains transitively across a
+        15-minute gap, so a real run writing a checkpoint every 5 minutes for
+        five hours collapsed into ONE cluster and was declared dead -- throwing
+        away timestamps that genuinely spanned the afternoon. And a copy
+        interrupted a few times produced several clusters and was declared
+        healthy, which is the case this exists for.
+
+        WHAT IT CANNOT SEE, stated rather than papered over: a copy that runs
+        for hours spreads its mtimes over those hours, and by timestamps alone
+        that is indistinguishable from work done over the same hours. This
+        catches the clear case -- everything inside one window -- and says
+        nothing about the rest, which is the honest limit of the evidence.
+
+        The floor matters as much as the span. A folder of eight files written
+        in one sitting IS one burst, and flagging it would be noise on exactly
+        the folders where a person can see the answer anyway.
+        """
+        stamps = [f.mtime for f in self.files if f.mtime > 0]
+        if len(stamps) < UNINFORMATIVE_MIN_FILES:
+            return False
+        return max(stamps) - min(stamps) <= CLUSTER_GAP_SECONDS
 
     @property
     def total_files(self) -> int:

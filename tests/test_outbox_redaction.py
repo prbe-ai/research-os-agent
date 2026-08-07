@@ -7,7 +7,6 @@ source; the adapter folds onto it at the P6 rebase.
 
 from __future__ import annotations
 
-import json
 
 import pytest
 
