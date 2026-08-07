@@ -233,14 +233,17 @@ def test_a_rollup_carries_the_time_span_so_bursts_stay_visible(tmp_path):
     assert hi - lo == 1200
 
 
-def test_tail_files_at_the_root_roll_up_under_an_empty_dir(tmp_path):
+def test_tail_files_at_the_root_roll_up_under_a_dot(tmp_path):
     _write(tmp_path, "model.pt", "W")
     rollup = next(
         json.loads(x)
         for x in ev.to_jsonl(ev.gather(tmp_path)).splitlines()
         if "dir" in json.loads(x)
     )
-    assert rollup["dir"] == ""
+    # "." and not "": an empty string is falsy, and every consumer that checks
+    # truthiness drops it -- which made root-level checkpoints, the most common
+    # place a researcher leaves them, silently unassignable.
+    assert rollup["dir"] == "."
     assert rollup["files"] == 1
 
 

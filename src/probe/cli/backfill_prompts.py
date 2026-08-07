@@ -178,12 +178,14 @@ Answer with JSON on its own line and nothing after it:
 
 {{"projects": [{{"slug": "...", "name": "...", "description": "...",
                 "tags": ["..."]}}],
-  "assignments": [{{"path": "<relative path>", "project": "<slug>",
+  "assignments": [{{"path": "<a row's \"path\", or a rollup row's \"dir\", verbatim>",
+                   "project": "<slug>",
                    "confidence": "high"|"low", "why": "<short>"}}],
   "unsure": ["<relative path>", ...],
   "summary": "<one sentence on what this folder contains>"}}
 
-Every file in the evidence must appear exactly once in `assignments`. Put
+Every ROW above must appear exactly once in `assignments` -- a rollup row
+counts once and carries all its files with it. Put
 anything you are genuinely unsure about in `unsure` as well -- that list is what
 the human reviews first, and a short honest one is worth more than none.
 """

@@ -125,7 +125,11 @@ LARGE_EVIDENCE_BYTES = 4 * 1024 * 1024
 #: and a real checkout has thousands of them. Measured on a 109,706-file tree:
 #: unbounded depth gave 15,842 rollup rows and ~800k tokens; depth 3 gives a few
 #: hundred. The files are still all counted; only the grouping is coarser.
-ROLLUP_MAX_DEPTH = 3
+#:
+#: FOUR, not three: `<person>/<project>/<run>/checkpoints/` is a routine
+#: layout, and at three every run under one project collapses into a single
+#: row the agent cannot split at any confidence.
+ROLLUP_MAX_DEPTH = 4
 
 #: Files written within this many seconds of each other are treated as one
 #: burst. Research runs write their outputs together; the gaps between runs are
@@ -422,7 +426,11 @@ def to_jsonl(evidence: Evidence) -> str:
         stamps = [f.mtime for f in group if f.mtime > 0]
         exts = sorted({Path(f.path).suffix.lower() for f in group if Path(f.path).suffix})
         row = {
-            "dir": directory,
+            # "." for the root, never "": an empty string is falsy and every
+            # consumer that checks truthiness drops it, so root-level
+            # checkpoints -- the most common place to leave them -- became
+            # unassignable.
+            "dir": directory or ".",
             "tier": "tail",
             "files": len(group),
             "bytes": sum(f.size for f in group),
