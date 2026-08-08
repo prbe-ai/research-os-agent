@@ -62,7 +62,7 @@ class Capability(StrEnum):
     """Keeps the CLI and plugins current in the background."""
 
     AGENT_RULES = "agent_rules"
-    """A pointer to the tracking skills in the user's global CLAUDE.md."""
+    """Knowledge-search and tracking guidance in the selected agent's global rules."""
 
 
 class TokenSource(StrEnum):

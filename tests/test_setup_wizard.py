@@ -89,6 +89,9 @@ def test_wizard_copy_names_exactly_the_selected_agents():
     assert "Claude Code and Codex sessions" in both
     assert "CLAUDE.md" in setup.menu_copy("claude_code")[Capability.AGENT_RULES][0]
     assert "AGENTS.md" in setup.menu_copy("codex")[Capability.AGENT_RULES][0]
+    assert "search and track research" in " ".join(
+        setup.menu_copy("codex")[Capability.AGENT_RULES][1]
+    )
 
 
 def test_a_scripted_yes_can_still_decline_capture():
