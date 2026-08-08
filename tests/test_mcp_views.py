@@ -264,6 +264,35 @@ def test_versions_view_is_real_against_the_live_registry(client, app):
     assert result["completeness"]["missing"] == []
 
 
+# -- experiment reproduce: a MAP of per-run summaries, not N assemblies -------
+
+
+def test_experiment_reproduce_view_lists_run_summaries(client, app):
+    """Delegates to /v1/experiments/{id}/reproduce — a map of compact summaries, each
+    with a `reproduce_url` for drill-down, so it stays one cheap read at any scale."""
+    rid, experiment_id, _, _ = _populated(client, app)
+    data = _service(client).get_entity(f"experiment:{experiment_id}", view="reproduce")["data"]
+    assert data["completeness"]["total"] >= 1
+    assert any(r["reproduce_url"].endswith(f"/v1/runs/{rid}/reproduce") for r in data["runs"])
+
+
+def test_experiment_reproduce_view_accepts_version_filter(client, app):
+    """`filters={"version": N}` pins against a minted manifest — applied server-side."""
+    _, experiment_id, _, _ = _populated(client, app)
+    result = _service(client).get_entity(
+        f"experiment:{experiment_id}", view="reproduce", filters={"version": 3}
+    )
+    assert result["data"]["resolved_version"] == 3
+
+
+def test_experiment_reproduce_view_rejects_unknown_filter(client, app):
+    _, experiment_id, _, _ = _populated(client, app)
+    with pytest.raises(errors.ValidationError):
+        _service(client).get_entity(
+            f"experiment:{experiment_id}", view="reproduce", filters={"bogus": 1}
+        )
+
+
 # -- token_budget actually bounds ---------------------------------------------
 
 

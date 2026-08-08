@@ -515,6 +515,7 @@ _VIEWS: dict[tuple[str, str], str] = {
     (EntityType.EXPERIMENT, View.LINEAGE): "_view_experiment_lineage",
     (EntityType.EXPERIMENT, View.GROUPS): "_view_groups",
     (EntityType.EXPERIMENT, View.VERSIONS): "_view_versions",
+    (EntityType.EXPERIMENT, View.REPRODUCE): "_view_experiment_reproduce",
     (EntityType.PROJECT, View.CARD): "_view_project_card",
     (EntityType.PROJECT, View.NOTES): "_view_project_notes",
     # A project's only view used to be `card`, so a project-anchored artifact
@@ -562,6 +563,10 @@ _VIEW_FILTERS: dict[tuple[str, str], set[str]] = {
     # takes no filter, so this is an honest client-side narrowing of a fully-read
     # chain rather than a filter the backend silently ignored.
     (EntityType.ARTIFACT, View.VERSIONS): {"requirement"},
+    # `version` pins the reproduce map against a minted experiment_versions manifest.
+    # Applied server-side by /v1/experiments/{id}/reproduce?version=N — an honest
+    # backend filter, not a client-side narrowing.
+    (EntityType.EXPERIMENT, View.REPRODUCE): {"version"},
     # `at` is deliberately absent: the SDK accepted it and never read it, and
     # no backend as-of resolution exists. Advertising a parameter that silently
     # does nothing is worse than not having one.
@@ -1601,6 +1606,23 @@ class ResearchReadService:
         return _ViewData(
             rows=self.source.experiment_versions(str(entity["id"])), rows_key="versions"
         )
+
+    def _view_experiment_reproduce(self, entity: dict, request: _Req) -> _ViewData:
+        """Per-run reproduction summaries across the experiment — a MAP, not N full
+        assemblies. Each summary carries a ``reproduce_url`` for drill-down (via
+        ``get_entity(view="reproduce")`` on the run), so this stays one cheap read
+        regardless of run count. ``filters={"version": N}`` pins against a frozen
+        experiment_versions manifest; omitted reads live rows.
+
+        Atomic + overflow-reported like the run view: the summaries are compact by
+        construction, so this fits for any real experiment — and if it ever does not,
+        ``get_entity`` reports ``token_budget_exceeded`` rather than dropping runs
+        (a map with runs missing is a map that lies about which runs exist)."""
+        version = request.filters.get("version")
+        record = self.source.experiment_reproduce(
+            str(entity["id"]), version=int(version) if version is not None else None
+        )
+        return _ViewData(payload=record)
 
     def _view_wiki_card(self, entity: dict, request: _Req) -> _ViewData:
         """The team wiki, WHOLE. Not a glance — see the `_VIEWS` entry.
