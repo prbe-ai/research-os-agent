@@ -11,6 +11,8 @@ verdict rather than an error, and `?version=N` reaches the backend.
 
 from __future__ import annotations
 
+from probe.mcp.source import ResearchOSSource
+
 
 def _seed_run(client, app):
     """A minimal run with no capture — the legacy shape the endpoint must degrade on."""
@@ -47,3 +49,11 @@ def test_experiment_reproduce_forwards_version(client, app):
     _, eid = _seed_run(client, app)
     rec = client.experiment_reproduce(eid, version=2)
     assert rec["resolved_version"] == 2
+
+
+def test_source_reproduce_passthrough(client, app):
+    rid, eid = _seed_run(client, app)
+    src = ResearchOSSource(client)
+    assert src.reproduce(rid)["run"]["id"] == rid
+    assert src.experiment_reproduce(eid)["completeness"]["total"] == 1
+    assert src.experiment_reproduce(eid, version=1)["resolved_version"] == 1
