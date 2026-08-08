@@ -2864,6 +2864,36 @@ def run_check(
         raise typer.Exit(2)
 
 
+@run_app.command("reproduce")
+def run_reproduce(
+    run: str = run_ref(),
+    export: str = typer.Option(
+        None,
+        "--export",
+        help="write the record as a portable JSON bundle (a rendering, not the source of truth)",
+    ),
+) -> None:
+    """Pull the server-assembled reproduction record for a run.
+
+    One read assembles everything reproduction needs — execution record, launch
+    context, a copyable restore command, code snapshot, inputs-decision, notes,
+    lockfiles, lineage edges, per-span environments, and a completeness verdict.
+    It is assembled by research-os (`GET /v1/runs/{id}/reproduce`), not here: the
+    backend is the one place that reads every piece together. A run captured before
+    capture-core still answers with an honest degraded record, never an error.
+
+    `--export` writes the record to a file as a portable JSON bundle — a rendering
+    you can hand off, never the source of truth (that stays the run).
+    """
+    with _client() as c:
+        record = c.run_reproduce(_ref(c, "run", run).id)
+    if export:
+        Path(export).write_text(json.dumps(record, indent=2, sort_keys=True))
+        typer.echo(f"wrote {export}")
+    else:
+        _print_json(record)
+
+
 @run_app.command("delete")
 def run_delete(
     run: str = run_ref(),
@@ -5664,6 +5694,41 @@ def experiment_create(
         )
     _print_json(created)
     _print_link("experiment", created.get("id"))
+
+
+@experiment_app.command("reproduce")
+def experiment_reproduce(
+    experiment_id: str = slug_ref("experiment"),
+    version: int = typer.Option(
+        None, "--version", help="pin against a minted experiment version (else live rows)"
+    ),
+) -> None:
+    """Pull per-run reproduction summaries for an experiment.
+
+    A MAP, not N full assemblies: each summary carries a `reproduce_url` — drill
+    into one run with `probe run reproduce RUN`. `--version N` reads a frozen
+    `experiment freeze` manifest instead of the live run set.
+    """
+    with _client() as c:
+        _print_json(
+            c.experiment_reproduce(_ref(c, "experiment", experiment_id).id, version=version)
+        )
+
+
+@experiment_app.command("freeze")
+def experiment_freeze(
+    experiment_id: str = slug_ref("experiment"),
+    label: str = typer.Option(None, "--label", help="a human name for this frozen manifest"),
+) -> None:
+    """Freeze the experiment: mint an immutable version pinning its current run set.
+
+    An ergonomic alias for `probe version create` — the moment you publish or hand
+    off an experiment, this pins exactly which runs and artifacts it comprised, so
+    `experiment reproduce --version N` resolves against that manifest forever. No
+    new backend: it mints the same `experiment_versions` row.
+    """
+    with _client() as c:
+        _print_json(c.experiment_version(_ref(c, "experiment", experiment_id).id, label=label))
 
 
 @experiment_app.command("get")

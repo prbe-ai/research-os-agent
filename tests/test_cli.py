@@ -873,3 +873,44 @@ def test_metrics_backfill_rejects_a_non_numeric_step_as_a_usage_error(
     assert rc == 2
     assert "epoch-3" in capsys.readouterr().err
     assert wired.metric_batches_posted == []
+
+
+# -- reproduce pull surface ---------------------------------------------------
+
+
+def _start_run(capsys) -> str:
+    cli.main(["run", "start", "--experiment", "e", "--name", "r1"])
+    return capsys.readouterr().out.strip()
+
+
+def test_run_reproduce_prints_the_server_record(wired, capsys):
+    rid = _start_run(capsys)
+    assert cli.main(["run", "reproduce", rid]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["run"]["id"] == rid
+    assert out["restore_command"].startswith("probe snapshot-restore")
+    assert out["completeness"]["state"] in {"incomplete", "unverified"}
+
+
+def test_run_reproduce_export_writes_a_portable_bundle(wired, capsys, tmp_path):
+    rid = _start_run(capsys)
+    dest = tmp_path / "repro.json"
+    assert cli.main(["run", "reproduce", rid, "--export", str(dest)]) == 0
+    assert f"wrote {dest}" in capsys.readouterr().out
+    assert json.loads(dest.read_text())["run"]["id"] == rid
+
+
+def test_experiment_reproduce_prints_run_summaries(wired, capsys):
+    _start_run(capsys)  # a bare ref is a slug, so address the experiment by its slug "e"
+    assert cli.main(["experiment", "reproduce", "e"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["completeness"]["total"] >= 1
+    assert out["runs"][0]["reproduce_url"].endswith("/reproduce")
+
+
+def test_experiment_freeze_mints_a_version(wired, capsys):
+    _start_run(capsys)
+    assert cli.main(["experiment", "freeze", "e", "--label", "v1"]) == 0
+    minted = json.loads(capsys.readouterr().out)
+    # freeze is an ergonomic alias for the version mint (POST .../versions)
+    assert minted.get("label") == "v1" or "id" in minted
