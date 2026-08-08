@@ -1288,22 +1288,27 @@ class FakeApp:
                 return httpx.Response(404, json={"detail": "run not found"})
             launch = (run.get("metadata") or {}).get("launch")
             env_ref = run.get("env_ref")
+            # The real endpoint assembles hypothesis (from the run's experiment) and
+            # the execution record (by resolving env_ref). Mirror that so the client
+            # passthrough is exercised against a populated record, not a stub. The
+            # authoritative completeness rules live and are tested server-side; the
+            # fake carries only the env_ref signal + the launch advisory, enough to
+            # prove the view surfaces them.
+            exp = self.experiments.get(run.get("experiment_id") or "")
+            hypothesis = exp.get("hypothesis") if exp else None
+            execution_record = self.execution_records.get(env_ref) if env_ref else None
             code_snapshot = next(
                 (a for a in self.artifacts.get(run["id"], []) if a.get("kind") == "code_snapshot"),
                 None,
             )
-            missing = []
-            if not env_ref:
-                missing.append("execution_record")
-            if code_snapshot is None:
-                missing.append("code_snapshot_artifact")
+            missing = [] if env_ref else ["execution_record"]
             advisories = [] if launch else ["launch_context"]
             return httpx.Response(
                 200,
                 json={
                     "run": run,
-                    "hypothesis": None,
-                    "execution_record": None,
+                    "hypothesis": hypothesis,
+                    "execution_record": execution_record,
                     "launch": launch,
                     "restore_command": f"probe snapshot-restore {run.get('short_id') or run['id']}",
                     "code_snapshot": code_snapshot,

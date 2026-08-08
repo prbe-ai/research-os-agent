@@ -733,29 +733,6 @@ def _wiki_excerpt(wiki: Any) -> dict | None:
     return {**wiki, "read_all": _WIKI_READ_ALL}
 
 
-def _summarize_manifest(record: dict | None) -> dict | None:
-    """Drop the per-file manifest rows, keep the counts that decide the answer.
-
-    `reproduce` is an atomic view: it is never truncated, so anything unbounded
-    inside it makes the whole call fail. The code manifest holds one row per
-    captured file — 224 rows was 94% of the payload on a small repo and blew the
-    token budget outright. The summary (`tree_sha256`, `base_commit`, `remote`,
-    and the two counts) is what tells you whether the run is reproducible; the
-    rows only matter once you are actually fetching bytes, and they stay
-    available in full at `/v1/execution-records/{env_ref}`.
-    """
-    manifest = ((record or {}).get("code") or {}).get("manifest")
-    if not isinstance(manifest, dict) or "entries" not in manifest:
-        return record
-    entries = manifest.get("entries") or []
-    trimmed = {k: v for k, v in manifest.items() if k != "entries"}
-    trimmed["entries_omitted"] = len(entries)
-    return {
-        **record,
-        "code": {**record["code"], "manifest": trimmed},
-    }
-
-
 class ResearchReadService:
     """Compact, provenance-bearing read model exposed through MCP."""
 
@@ -1464,30 +1441,26 @@ class ResearchReadService:
             return None
 
     def _view_reproduce(self, entity: dict, request: _Req) -> _ViewData:
-        """Hypothesis + the pinned environment + config — an actual reproduction,
-        where this used to hand back the same bundle as three other views."""
-        missing: list[str] = []
-        hypothesis = self._hypothesis_of(entity, missing)
-        env_ref = entity.get("env_ref")
-        record = None
-        if env_ref:
-            try:
-                record = self.source.execution_record(str(env_ref))
-            except errors.NotFoundError:
-                missing.append(MissingMarker.EXECUTION_RECORD)
-        else:
-            # Conditional, not decorative: this run genuinely captured no
-            # environment, so it cannot be reproduced from here.
-            missing.append(MissingMarker.EXECUTION_RECORD)
-        return _ViewData(
-            payload={
-                "hypothesis": hypothesis,
-                "config": entity.get("config"),
-                "env_ref": env_ref,
-                "execution_record": _summarize_manifest(record),
-            },
-            missing=missing,
-        )
+        """The server-assembled reproduction record (research-os /reproduce), not a
+        client-side re-derivation. This used to hand back the same bundle as three
+        other views, then assembled the manifest here; now the backend — the one
+        place that reads execution record, launch, code snapshot, inputs, lockfiles,
+        edges and span envs together — assembles it and this view delegates.
+
+        Atomic: never truncated. A reproduction manifest with fields dropped to fit
+        reproduces nothing, so overflow is REPORTED by ``get_entity``
+        (``token_budget_exceeded``) instead of corrupting the answer.
+
+        The envelope's ``missing`` carries the server's ``completeness.missing``
+        verbatim — the reproduction-BLOCKING gaps (no execution record, no code
+        snapshot, a launch slot that failed to capture) — so this view still reads
+        ``partial`` when a run cannot be fully rebuilt. ``advisories`` stay in the
+        payload's ``completeness`` block: they are judgment calls (no notes, no
+        inputs decision) and legacy gaps (a pre-capture-core run has no launch
+        context), never a degraded response."""
+        record = self.source.reproduce(str(entity["id"]))
+        completeness = record.get("completeness") or {}
+        return _ViewData(payload=record, missing=list(completeness.get("missing") or []))
 
     def _view_handoff(self, entity: dict, request: _Req) -> _ViewData:
         """What a new session needs to continue.
