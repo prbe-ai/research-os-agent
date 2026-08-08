@@ -2083,6 +2083,24 @@ class Client:
     def run_bundle(self, run_id: str) -> dict:
         return self.transport.get(f"/v1/runs/{run_id}/bundle")
 
+    def run_reproduce(self, run_id: str) -> dict:
+        """GET /v1/runs/{id}/reproduce — the server-assembled reproduction record:
+        execution record, launch context, restore command, code snapshot,
+        inputs-decision (content inlined when small), notes, lockfiles, lineage
+        edges, per-span env refs, and a completeness verdict. This is a thin
+        passthrough on purpose — the backend is the one place that reads every
+        piece together (research-os app/read_models/reproduce.py). A run captured
+        before capture-core answers 200 with a degraded body, never a 404."""
+        return self.transport.get(f"/v1/runs/{run_id}/reproduce")
+
+    def experiment_reproduce(self, experiment_id: str, *, version: int | None = None) -> dict:
+        """GET /v1/experiments/{id}/reproduce — per-run reproduction summaries (a
+        map, not N full assemblies; each summary carries a `reproduce_url` for
+        drill-down). `version` pins against a minted experiment_versions manifest;
+        omitted reads live rows."""
+        params = {"version": version} if version is not None else None
+        return self.transport.get(f"/v1/experiments/{experiment_id}/reproduce", params=params)
+
     def run_lineage(self, run_id: str) -> dict:
         return self.transport.get(f"/v1/runs/{run_id}/lineage")
 
