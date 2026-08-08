@@ -24,6 +24,11 @@ The Codex integration is split across two repositories:
    helper is not treated as proof that Codex is logged in.
    Headless automation can express the same choice with
    `probe wizard --agent both --yes`.
+7. The optional global-guidance capability writes one versioned, managed block
+   to `$CODEX_HOME/AGENTS.md` (normally `~/.codex/AGENTS.md`). It tells Codex to
+   search the Research OS knowledge base through the installed `probe-research`
+   MCP before research design, then use the shared tracking skills. Existing
+   user-authored instructions outside the managed markers are preserved.
 
 ## Gate 1: contracts and regression tests
 

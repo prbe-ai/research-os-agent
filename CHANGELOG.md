@@ -4,6 +4,12 @@
 
 ### Changed
 
+- **Global Codex guidance now explicitly searches Research OS before research
+  design.** The wizard-managed block in `~/.codex/AGENTS.md` tells Codex to look
+  for relevant experiments, decisions, documents, artifacts and captured agent
+  sessions through the `probe-research` MCP instead of treating the checked-out
+  repository as the team's complete history. The same shared guidance body is
+  used for Claude Code to avoid maintaining two divergent policies.
 - **Dashboard names, descriptions and hypotheses now default to plain, contextual
   language.** The `start-research-work` skill asks agents to keep display copy short
   and understandable, preserve uncertainty, move execution-level jargon into the

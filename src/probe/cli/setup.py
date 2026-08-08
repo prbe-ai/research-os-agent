@@ -212,7 +212,7 @@ def menu_copy(
         ),
         Capability.AGENT_RULES: (
             f"Rules in your global {rules}  (recommended)",
-            (f"Prompts {agents} to use Probe during research.",),
+            (f"Prompts {agents} to search and track research in Probe.",),
         ),
     }
 

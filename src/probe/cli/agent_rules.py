@@ -36,7 +36,7 @@ END_MARKER = "<!-- probe-research:end -->"
 
 #: Bumped when POINTER_BODY changes, so an older installed block is recognised
 #: as stale and rewritten instead of being left in place or duplicated.
-POINTER_VERSION = 4
+POINTER_VERSION = 5
 
 POINTER_BODY = """## Probe research tracking
 
@@ -45,6 +45,14 @@ curation, benchmarks, designing any of them, or building and provisioning the
 pipelines, data and hardware they run on -- register the project in Probe
 BEFORE designing or scaffolding, not after a run exists; add the experiment
 when there is a hypothesis to test.
+
+Before proposing a research direction or implementation, search the Probe
+Research knowledge base for prior experiments, decisions, documents, artifacts
+and captured coding-agent sessions that could change the plan. Use the installed
+`probe-research` MCP read surface; do not treat the local repository as the
+team's complete research history. If that read surface is unavailable, say so
+instead of silently proceeding as though no prior work exists.
+
 Append decisions, findings and reversals to the project's notes as they happen,
 and read them on arrival. A plan-first or approval-gated brief does not defer
 this: registering is not the gated action.

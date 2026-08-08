@@ -264,9 +264,26 @@ def test_the_rule_is_conditional_on_the_work_being_research() -> None:
     teaches the agent that the block does not apply to it, which costs the
     block its authority everywhere including the sessions it was written for.
     """
-    body = agent_rules.POINTER_BODY
+    body = " ".join(agent_rules.POINTER_BODY.split())
     assert "When the work is research" in body
     assert "BEFORE designing or scaffolding" in body
+
+
+def test_the_rule_requires_prior_knowledge_search_before_design() -> None:
+    """The global file is the only instruction loaded before skill selection.
+
+    Naming only the tracking skills leaves Codex able to start a new project
+    without first discovering the team's existing experiments and decisions.
+    The standing rule must make the read step explicit while leaving detailed
+    tool procedure in the plugin and skills, where releases can update it.
+    """
+    body = " ".join(agent_rules.POINTER_BODY.split())
+    assert "Before proposing a research direction or implementation" in body
+    assert "search the Probe Research knowledge base" in body
+    assert "`probe-research` MCP read surface" in body
+    assert "captured coding-agent sessions" in body
+    assert "local repository" in body
+    assert "If that read surface is unavailable, say so" in body
 
 
 def test_the_block_names_skills_and_not_commands_that_rot() -> None:
