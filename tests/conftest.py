@@ -95,8 +95,10 @@ _RUN_SERIES = re.compile(r"^/v1/runs/([^/]+)/series$")
 _RUN_ARTIFACTS = re.compile(r"^/v1/runs/([^/]+)/artifacts$")
 _RUN_REOPEN = re.compile(r"^/v1/runs/([^/]+)/reopen$")
 _RUN_BUNDLE = re.compile(r"^/v1/runs/([^/]+)/bundle$")
+_RUN_REPRODUCE = re.compile(r"^/v1/runs/([^/]+)/reproduce$")
 _RUN_LINEAGE = re.compile(r"^/v1/runs/([^/]+)/lineage$")
 _RUN_ITEM = re.compile(r"^/v1/runs/([^/]+)$")
+_EXPERIMENT_REPRODUCE = re.compile(r"^/v1/experiments/([^/]+)/reproduce$")
 _EXP_RUNS = re.compile(r"^/v1/experiments/([^/]+)/runs$")
 _PROJ_RUNS = re.compile(r"^/v1/projects/([^/]+)/runs$")
 _EXP_ITEM = re.compile(r"^/v1/experiments/([^/]+)$")
@@ -1271,6 +1273,90 @@ class FakeApp:
                     "span_types": [],
                     "parent_run_id": self.runs[rid].get("parent_run_id"),
                     "child_run_ids": [],
+                },
+            )
+
+        m = _RUN_REPRODUCE.match(path)
+        if m and method == "GET":
+            rid = m.group(1)
+            run = self.runs.get(rid) or next(
+                (r for r in self.runs.values() if r.get("short_id") == rid), None
+            )
+            if run is None:
+                # The real endpoint 404s an unknown run (resolve_run_ref) rather than
+                # auto-vivifying it — the reproduce route must not invent a run.
+                return httpx.Response(404, json={"detail": "run not found"})
+            launch = (run.get("metadata") or {}).get("launch")
+            env_ref = run.get("env_ref")
+            # The real endpoint assembles hypothesis (from the run's experiment) and
+            # the execution record (by resolving env_ref). Mirror that so the client
+            # passthrough is exercised against a populated record, not a stub. The
+            # authoritative completeness rules live and are tested server-side; the
+            # fake carries only the env_ref signal + the launch advisory, enough to
+            # prove the view surfaces them.
+            exp = self.experiments.get(run.get("experiment_id") or "")
+            hypothesis = exp.get("hypothesis") if exp else None
+            execution_record = self.execution_records.get(env_ref) if env_ref else None
+            code_snapshot = next(
+                (a for a in self.artifacts.get(run["id"], []) if a.get("kind") == "code_snapshot"),
+                None,
+            )
+            missing = [] if env_ref else ["execution_record"]
+            advisories = [] if launch else ["launch_context"]
+            return httpx.Response(
+                200,
+                json={
+                    "run": run,
+                    "hypothesis": hypothesis,
+                    "execution_record": execution_record,
+                    "launch": launch,
+                    "restore_command": f"probe snapshot-restore {run.get('short_id') or run['id']}",
+                    "code_snapshot": code_snapshot,
+                    "inputs_decision": [],
+                    "note_artifacts": [],
+                    "lockfiles": [],
+                    "edges": [],
+                    "span_env_refs": [],
+                    "completeness": {
+                        "state": "incomplete" if missing else "unverified",
+                        "missing": missing,
+                        "advisories": advisories,
+                    },
+                },
+            )
+
+        m = _EXPERIMENT_REPRODUCE.match(path)
+        if m and method == "GET":
+            eid = m.group(1)
+            exp = self.experiments.get(eid)
+            if exp is None:
+                return httpx.Response(404, json={"detail": "experiment not found"})
+            version = request.url.params.get("version")
+            summaries = [
+                {
+                    "id": r["id"],
+                    "short_id": r.get("short_id"),
+                    "status": r.get("status", "running"),
+                    "env_ref": r.get("env_ref"),
+                    "has_launch": bool((r.get("metadata") or {}).get("launch")),
+                    "state": "unverified" if r.get("env_ref") else "incomplete",
+                    "missing_pin": False,
+                    "reproduce_url": f"/v1/runs/{r['id']}/reproduce",
+                }
+                for r in self.runs.values()
+                if r.get("experiment_id") == eid
+            ]
+            return httpx.Response(
+                200,
+                json={
+                    "versions": [],
+                    "resolved_version": int(version) if version else None,
+                    "runs": summaries,
+                    "completeness": {
+                        "total": len(summaries),
+                        "incomplete": sum(1 for s in summaries if s["state"] == "incomplete"),
+                        "missing_pins": 0,
+                    },
                 },
             )
 

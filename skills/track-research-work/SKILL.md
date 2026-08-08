@@ -129,6 +129,12 @@ gets made. Record with the surface the run was opened with.
    Experiments have no notes field — a claim about an experiment goes in the
    project's notes, or in `probe experiment set --description`.
 
+   The launch context capture now records automatically — the exact argv, the seeds,
+   the container, the determinism flags — is worth a note the moment it SURPRISES you:
+   a seed you did not set, a non-deterministic op you had to allow, a flag you flipped
+   to make a run finish. `probe run reproduce` will show a reader WHAT the launch was;
+   only a note says why it was odd.
+
    **Never block on delivery: async mode.** Any CLI write above takes `--async`
    (or `PROBE_ASYNC=1` for a whole session): the write is queued in a durable
    local outbox and the command returns immediately; a background drainer
@@ -219,9 +225,20 @@ gets made. Record with the surface the run was opened with.
    pinning a version or opening a new identity is step 4 of `start-research-work`;
    the syntax is in `reference.md`.
 
-5. **Before handoff or completion**, read `view="handoff"` or `view="reproduce"`.
-   Report missing capture honestly: `completeness.missing` is the answer, not your
-   recollection of what you logged.
+5. **Claim gate: before you report a run done or handoff-ready**, run `probe run check
+   RUN` and state its verdict verbatim. The gate is machine-checkable — exit code 2 is
+   `incomplete` — so it is the exit code, not your recollection of what you logged. If
+   `incomplete`, fix it (usually a missing snapshot on a launch OUTSIDE `probe
+   exec`/`run()` — see `start-research-work` step 5) or say why not, in the handoff
+   note. `advisories` (no notes, no inputs-decision, a pre-capture-core run with no
+   launch context) are worth knowing but never block the claim.
+
+   To pull the whole record — for a handoff, or a question about how a past run was
+   run — `probe run reproduce RUN` (MCP `view="reproduce"`) assembles everything
+   reproduction needs: execution record, launch context, restore command, inputs,
+   lockfiles, lineage and per-span environments. `probe experiment reproduce EXP` is
+   the per-run map across an experiment. `completeness.missing` is the answer, never
+   your optimism.
 
    A session that opened no run still ends. Append what you would do next and what is
    still unresolved to the project's notes, or planning work ends silently and the next session
@@ -230,8 +247,11 @@ gets made. Record with the surface the run was opened with.
 6. **Close with the real outcome** — `completed` / `failed` / `crashed` / `canceled`,
    via `run.finish("failed")` or `probe run end RUN --status failed`. In-script,
    `with run:` closes the run for you and records `failed` when the loop raises.
-   Minting an immutable experiment version is a separate act the researcher asks for
-   explicitly; see `reference.md`.
+   At an experiment's completion or publication, **freeze it**: `probe experiment
+   freeze EXP --label L` mints an immutable version pinning exactly which runs and
+   artifacts it comprised, so `probe experiment reproduce EXP --version N` resolves
+   against that manifest forever — even after runs are edited or deleted. Do it when
+   you publish, not "later"; see `reference.md`.
 
    **Status cannot say "the harness was broken", and must not be made to.** Those
    four values are LIFECYCLE — whether the process finished — and the reaper, the

@@ -272,18 +272,26 @@ near-miss of an existing slug rather than warning.)
    most expensive avoidable error here: two scorers with the same intent and
    different behaviour make every result that used either one unreproducible.
 
-5. **Snapshot before launch.** `run.snapshot()` / `probe snapshot RUN_ID` captures
-   code + env and pins `env_ref`. A run with no execution record cannot be reproduced
-   and cannot be published. Record W&B, scheduler, pod, image and storage ids with
-   `run.link(...)` / `probe link` as they appear; they land on `foreign_keys`.
+5. **Verify capture; snapshot only when you launched outside the tools.** Capture is
+   now automatic: `probe exec` and the SDK `run()` snapshot code + env and pin
+   `env_ref` for you, and also record the launch context (argv, seeds, env allowlist,
+   container). So this is a *verify* step, not an action — run `probe run check RUN`
+   and read the verdict: `unverified` (nothing obviously absent — the default, and NOT
+   a promise it rebuilds), `incomplete` (a real gap — exit code 2), or `complete`
+   (only under `--verify`, which resolves the recorded commit against its remote).
+   Record W&B, scheduler, pod, image and storage ids with `run.link(...)` / `probe
+   link` as they appear; they land on `foreign_keys` and stay mandatory — the tools
+   cannot know them.
 
-   The two spellings read the environment differently, because they have to.
-   `run.snapshot()` runs INSIDE the training venv and records that interpreter.
-   `probe snapshot` is a separate process — normally a uv-tool install with its
-   own packages — so it detects the project's venv (`.venv`/`venv`/`env` up to the
-   git root, then `VIRTUAL_ENV`, then `CONDA_PREFIX`). If the venv lives somewhere
-   else, pass `--venv PATH`; the command fails loudly rather than recording the
-   CLI's own packages as the project's.
+   Snapshot **explicitly** only when code executes OUTSIDE `probe exec`/`run()` (a
+   bare `sbatch`, a notebook, a container you did not launch through the SDK):
+   `run.snapshot()` / `probe snapshot RUN_ID`. The two spellings read the environment
+   differently, because they have to. `run.snapshot()` runs INSIDE the training venv
+   and records that interpreter. `probe snapshot` is a separate process — normally a
+   uv-tool install with its own packages — so it detects the project's venv
+   (`.venv`/`venv`/`env` up to the git root, then `VIRTUAL_ENV`, then `CONDA_PREFIX`).
+   If the venv lives somewhere else, pass `--venv PATH`; the command fails loudly
+   rather than recording the CLI's own packages as the project's.
 
 6. **Describe it and tag it.** `--description` takes free text on `run start` too,
    not just the two containers. Use the same dashboard-language rules above: one

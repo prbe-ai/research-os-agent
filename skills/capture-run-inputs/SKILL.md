@@ -14,6 +14,12 @@ The mechanism already exists and is not your job: `probe snapshot RUN --include 
 stores what you name, `probe snapshot-restore RUN DEST` rebuilds it. Your job is
 the list of globs, and the record of how you chose them.
 
+**Lockfiles are no longer on your list.** `requirements*.txt`, `uv.lock`,
+`poetry.lock`, `package-lock.json` and their kin are captured automatically now — you
+do not `--include` them. What stays yours is the judgment the tools cannot make:
+datasets, base checkpoints, tokenizers, out-of-tree configs, and the
+`inputs-decision.json` that records why you chose them.
+
 ## Inputs, not outputs
 
 The distinction is load-bearing and easy to blur.

@@ -580,7 +580,7 @@ def create_server(
         dashboard `url`, so one call tells you what else you can ask for:
 
           run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events
-          experiment  card | artifacts | lineage | groups | versions
+          experiment  card | artifacts | lineage | groups | versions | reproduce
           artifact    card | versions
           project     card | artifacts | notes
           group       card
