@@ -914,3 +914,39 @@ def test_experiment_freeze_mints_a_version(wired, capsys):
     minted = json.loads(capsys.readouterr().out)
     # freeze is an ergonomic alias for the version mint (POST .../versions)
     assert minted.get("label") == "v1" or "id" in minted
+
+
+def test_run_reproduce_materialize_writes_inputs_and_manifest(wired, capsys, tmp_path, monkeypatch):
+    from probe.sdk.client import Client
+
+    rid = _start_run(capsys)
+    # The fake's reproduce route returns empty inputs; substitute a record that
+    # exercises the writer — one inlined input and one omitted (too large).
+    record = {
+        "run": {"id": rid, "env_ref": None, "config": {}},
+        "restore_command": "probe snapshot-restore x",
+        "inputs_decision": [
+            {"artifact": {"name": "inputs-decision.json"}, "content": '{"dataset": "d1"}',
+             "content_omitted_reason": None},
+            {"artifact": {"name": "big.bin"}, "content": None,
+             "content_omitted_reason": "too large to inline (2 MiB)"},
+        ],
+        "lockfiles": [],
+        "completeness": {"state": "unverified", "missing": [], "advisories": []},
+    }
+    monkeypatch.setattr(Client, "run_reproduce", lambda self, run_id: record)
+
+    dest = tmp_path / "work"
+    assert cli.main(["run", "reproduce", rid, "--materialize", str(dest)]) == 0
+    assert (dest / "reproduce-manifest.json").exists()
+    assert json.loads((dest / "inputs-decision.json").read_text())["dataset"] == "d1"
+    # an omitted input is NOT silently skipped — it leaves a marker naming the reason
+    assert (dest / "big.bin.omitted").read_text().startswith("too large")
+
+
+def test_run_reproduce_export_and_materialize_are_mutually_exclusive(wired, capsys, tmp_path):
+    rid = _start_run(capsys)
+    rc = cli.main(
+        ["run", "reproduce", rid, "--export", str(tmp_path / "x.json"), "--materialize", str(tmp_path / "d")]
+    )
+    assert rc == 2  # BadParameter -> click usage exit code
