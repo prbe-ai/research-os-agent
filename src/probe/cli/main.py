@@ -2864,6 +2864,95 @@ def run_check(
         raise typer.Exit(2)
 
 
+def _materialize_record(c: Any, run_id: str, record: dict, dest: str) -> dict:
+    """Reconstruct a runnable directory from a reproduction record: restore the
+    captured code tree (lockfiles included — they ride in the tree), write the
+    inputs-decision artifacts that carry inline content, and drop the full record
+    as ``reproduce-manifest.json``.
+
+    An inputs-decision whose content was omitted (too large to inline) is written
+    as a ``.omitted`` marker naming the reason rather than skipped — a missing file
+    with no note reads as "there was nothing", which is the confident-wrong answer
+    the reproduce surface exists to avoid.
+    """
+    dest_path = Path(dest)
+    dest_path.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Any] = {"dest": str(dest_path), "code_tree": None, "inputs": [], "manifest": None}
+
+    env_ref = (record.get("run") or {}).get("env_ref")
+    if env_ref:
+        result = _restore_captured_tree(c, run_id, env_ref, str(dest_path))
+        written["code_tree"] = {
+            "n_restored": result["n_restored"],
+            "n_unavailable": result["n_unavailable"],
+            "tree_matches": result["tree_matches"],
+        }
+    else:
+        written["code_tree"] = "no execution record — code tree not captured"
+
+    for item in record.get("inputs_decision") or []:
+        artifact = item.get("artifact") or {}
+        name = artifact.get("name") or "inputs-decision.json"
+        target = dest_path / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if item.get("content") is not None:
+            target.write_text(item["content"])
+            written["inputs"].append(name)
+        elif item.get("content_omitted_reason"):
+            marker = dest_path / f"{name}.omitted"
+            marker.write_text(str(item["content_omitted_reason"]))
+            written["inputs"].append(f"{name}.omitted")
+
+    (dest_path / "reproduce-manifest.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True)
+    )
+    written["manifest"] = "reproduce-manifest.json"
+    return written
+
+
+@run_app.command("reproduce")
+def run_reproduce(
+    run: str = run_ref(),
+    export: str = typer.Option(
+        None,
+        "--export",
+        help="write the record as a portable JSON bundle (a rendering, not the source of truth)",
+    ),
+    materialize: str = typer.Option(
+        None,
+        "--materialize",
+        help="reconstruct a runnable directory: restore the code tree + write inputs and the manifest",
+    ),
+) -> None:
+    """Pull the server-assembled reproduction record for a run.
+
+    One read assembles everything reproduction needs — execution record, launch
+    context, a copyable restore command, code snapshot, inputs-decision, notes,
+    lockfiles, lineage edges, per-span environments, and a completeness verdict.
+    It is assembled by research-os (`GET /v1/runs/{id}/reproduce`), not here: the
+    backend is the one place that reads every piece together. A run captured before
+    capture-core still answers with an honest degraded record, never an error.
+
+    `--export FILE` writes the record as a portable JSON bundle — a rendering you can
+    hand off, never the source of truth (that stays the run). `--materialize DIR`
+    goes further: it rebuilds the captured code tree and writes the inputs, leaving a
+    directory you can run.
+    """
+    if export and materialize:
+        raise typer.BadParameter("pass --export OR --materialize, not both")
+    with _client() as c:
+        run_id = _ref(c, "run", run).id
+        record = c.run_reproduce(run_id)
+        if materialize:
+            _print_json(_materialize_record(c, run_id, record, materialize))
+            return
+    if export:
+        Path(export).write_text(json.dumps(record, indent=2, sort_keys=True))
+        typer.echo(f"wrote {export}")
+    else:
+        _print_json(record)
+
+
 @run_app.command("delete")
 def run_delete(
     run: str = run_ref(),
@@ -5112,6 +5201,47 @@ def snapshot_show(
     )
 
 
+def _restore_captured_tree(
+    c: Any, run_id: str, env_ref: str, dest: str, *, verify_only: bool = False
+) -> dict:
+    """Rebuild a run's captured working tree into ``dest`` from its execution
+    record's code manifest plus the uploaded ``code-bytes`` archive.
+
+    Shared by ``snapshot-restore`` and ``run reproduce --materialize`` so both fetch,
+    verify, and write bytes exactly one way — every file is checked against the
+    sha256 the manifest recorded, and a mismatch is reported UNAVAILABLE rather than
+    written. Lockfiles ride in the tree here; they are not written from the reproduce
+    record's `lockfiles` list, which carries path+sha256 for VISIBILITY, not bytes.
+    Returns the ``restore_snapshot`` result dict.
+    """
+    from ..sdk.restore import restore_snapshot
+
+    record = c.transport.get(f"/v1/execution-records/{env_ref}")
+    manifest = ((record or {}).get("code") or {}).get("manifest") or {}
+
+    archive = None
+    tmp = None
+    rows = c.list_run_artifacts(run_id, kind="code_bytes") or []
+    rows = rows.get("items", rows) if isinstance(rows, dict) else rows
+    if rows:
+        tmp = tempfile.NamedTemporaryFile(prefix="probe-code-", suffix=".tar.gz", delete=False)
+        tmp.close()
+        try:
+            c.download_artifact_to(rows[0]["id"], tmp.name)
+            archive = tmp.name
+        except Exception as exc:  # noqa: BLE001 -- reported per file by restore_snapshot
+            print(f"warning: could not download code-bytes: {exc}", file=sys.stderr)
+
+    try:
+        return restore_snapshot(manifest, dest, archive_path=archive, verify_only=verify_only)
+    finally:
+        if tmp is not None:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+
+
 @app.command("snapshot-restore")
 def snapshot_restore(
     run: str = typer.Argument(...),
@@ -5129,8 +5259,6 @@ def snapshot_restore(
 
     Exits non-zero if any file could not be produced.
     """
-    from ..sdk.restore import restore_snapshot
-
     if not verify_only and not dest:
         raise typer.BadParameter("DEST is required unless --verify-only is passed")
 
@@ -5140,32 +5268,9 @@ def snapshot_restore(
         if not env_ref:
             print(f"error: run {run} has no execution record to restore", file=sys.stderr)
             raise typer.Exit(1)
-        record = c.transport.get(f"/v1/execution-records/{env_ref}")
-        manifest = ((record or {}).get("code") or {}).get("manifest") or {}
-
-        archive = None
-        tmp = None
-        rows = c.list_run_artifacts(handle.id, kind="code_bytes") or []
-        rows = rows.get("items", rows) if isinstance(rows, dict) else rows
-        if rows:
-            tmp = tempfile.NamedTemporaryFile(prefix="probe-code-", suffix=".tar.gz", delete=False)
-            tmp.close()
-            try:
-                c.download_artifact_to(rows[0]["id"], tmp.name)
-                archive = tmp.name
-            except Exception as exc:  # noqa: BLE001 -- reported per file below
-                print(f"warning: could not download code-bytes: {exc}", file=sys.stderr)
-
-    try:
-        result = restore_snapshot(
-            manifest, dest or ".", archive_path=archive, verify_only=verify_only
+        result = _restore_captured_tree(
+            c, handle.id, env_ref, dest or ".", verify_only=verify_only
         )
-    finally:
-        if tmp is not None:
-            try:
-                os.unlink(tmp.name)
-            except OSError:
-                pass
 
     for f in result["files"]:
         if f["status"] == "unavailable":
@@ -5664,6 +5769,41 @@ def experiment_create(
         )
     _print_json(created)
     _print_link("experiment", created.get("id"))
+
+
+@experiment_app.command("reproduce")
+def experiment_reproduce(
+    experiment_id: str = slug_ref("experiment"),
+    version: int = typer.Option(
+        None, "--version", help="pin against a minted experiment version (else live rows)"
+    ),
+) -> None:
+    """Pull per-run reproduction summaries for an experiment.
+
+    A MAP, not N full assemblies: each summary carries a `reproduce_url` — drill
+    into one run with `probe run reproduce RUN`. `--version N` reads a frozen
+    `experiment freeze` manifest instead of the live run set.
+    """
+    with _client() as c:
+        _print_json(
+            c.experiment_reproduce(_ref(c, "experiment", experiment_id).id, version=version)
+        )
+
+
+@experiment_app.command("freeze")
+def experiment_freeze(
+    experiment_id: str = slug_ref("experiment"),
+    label: str = typer.Option(None, "--label", help="a human name for this frozen manifest"),
+) -> None:
+    """Freeze the experiment: mint an immutable version pinning its current run set.
+
+    An ergonomic alias for `probe version create` — the moment you publish or hand
+    off an experiment, this pins exactly which runs and artifacts it comprised, so
+    `experiment reproduce --version N` resolves against that manifest forever. No
+    new backend: it mints the same `experiment_versions` row.
+    """
+    with _client() as c:
+        _print_json(c.experiment_version(_ref(c, "experiment", experiment_id).id, label=label))
 
 
 @experiment_app.command("get")

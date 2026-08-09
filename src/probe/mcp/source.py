@@ -570,6 +570,17 @@ class ResearchOSSource:
         settings, paths. This is what makes the reproduce view a reproduction."""
         return self.client.get_execution_record(content_hash)
 
+    def reproduce(self, run_id: str) -> dict:
+        """The server-assembled run reproduction record. Passthrough: the client is
+        thin here on purpose — the backend is the one place that reads every piece
+        together (research-os /reproduce)."""
+        return self.client.run_reproduce(run_id)
+
+    def experiment_reproduce(self, experiment_id: str, *, version: int | None = None) -> dict:
+        """Per-run reproduction summaries across an experiment; ``version`` pins
+        against a minted manifest. Passthrough to research-os /reproduce."""
+        return self.client.experiment_reproduce(experiment_id, version=version)
+
     def experiment(self, experiment_id: str) -> dict:
         return self.client.get_experiment(experiment_id)
 

@@ -17585,6 +17585,66 @@
         ]
       }
     },
+    "/v1/experiments/{experiment_id}/reproduce": {
+      "get": {
+        "description": "The experiment-level reproduce manifest: the experiment, its minted-version history, and a per-run summary -- live by default, or pinned to a minted version via `?version=N`. Deliberately a summary, not N full assemblies; each row's `reproduce_url` is the drill-down.",
+        "operationId": "get_experiment_reproduce_v1_experiments__experiment_id__reproduce_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "experiment_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Experiment Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "version",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Version"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Experiment Reproduce",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
     "/v1/experiments/{experiment_id}/runs": {
       "post": {
         "operationId": "create_run_v1_experiments__experiment_id__runs_post",
@@ -21709,6 +21769,49 @@
           }
         },
         "summary": "Get Lineage",
+        "tags": [
+          "runs"
+        ]
+      }
+    },
+    "/v1/runs/{run_ref}/reproduce": {
+      "get": {
+        "description": "Everything needed to reproduce one run, assembled in one read: execution record, launch context, code snapshot, inputs decisions, notes, lockfiles, lineage edges, span-level env refs, and a completeness verdict. `run_ref` is a UUID or a petname short_id. Legacy runs return 200 with an honestly-degraded body, not an error.",
+        "operationId": "get_reproduce_v1_runs__run_ref__reproduce_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_ref",
+            "required": true,
+            "schema": {
+              "title": "Run Ref",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Reproduce",
         "tags": [
           "runs"
         ]

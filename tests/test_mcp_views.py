@@ -86,6 +86,14 @@ def _populated(client, app, *, spans: int = 3):
         {"id": artifact_id, "run_id": rid, "name": "loss.png", "kind": "figure",
          "status": "ready", "is_reference": False, "uri": "s3://b/loss.png",
          "customer_id": "lab-42", "created_at": "2026-07-16T00:00:00Z"},
+        # A code_snapshot so a fully-populated run reads REPRODUCIBLE (env_ref +
+        # snapshot => completeness.missing == []). The server's _completeness keys the
+        # `code_snapshot_artifact` gap on this exact kind; the meta mirrors what a real
+        # snapshot writes (nothing pending, a lockfile captured).
+        {"id": str(uuid.uuid4()), "run_id": rid, "name": ".probe/snapshot", "kind": "code_snapshot",
+         "status": "ready", "is_reference": False, "uri": "s3://b/snap.tar",
+         "meta": {"n_pending_upload": 0, "n_lockfiles": 1},
+         "customer_id": "lab-42", "created_at": "2026-07-16T00:00:00Z"},
     ]
     app.run_events[rid] = [
         {"id": "ev-1", "customer_id": "lab-42", "event_type": "run.created",
@@ -212,15 +220,19 @@ def test_view_not_available_for_this_kind_names_the_kinds_real_views(client, app
 # -- reproduce: an actual reproduction ---------------------------------------
 
 
-def test_reproduce_resolves_env_ref_through_its_execution_record(client, app):
-    """This used to return a bundle and call that reproduction."""
+def test_reproduce_delegates_to_the_server_assembled_record(client, app):
+    """This used to return a bundle and call that reproduction; then it assembled
+    the manifest client-side. Now it delegates to research-os /reproduce, so the
+    view is a faithful passthrough of the one place that reads every piece together."""
     rid, _, _, content_hash = _populated(client, app)
     data = _service(client).get_entity(f"run:{rid}", view="reproduce")["data"]
 
     assert data["hypothesis"] == "relative paths fix scoring"
-    assert data["env_ref"] == content_hash
+    assert data["run"]["env_ref"] == content_hash  # env_ref lives on the run core now
     assert data["execution_record"]["code"] == {"git_sha": "abc123"}
     assert data["execution_record"]["hardware"] == {"gpu": "H100"}
+    assert data["restore_command"].startswith("probe snapshot-restore")
+    assert "completeness" in data
     assert "bundle" not in data
 
 
@@ -231,7 +243,9 @@ def test_reproduce_without_an_env_ref_reports_it_missing(client, app):
     client.create_experiment("e", "e", hypothesis="h", project_id=_proj["id"])
     run = client.run(project="folding", experiment="e", name="no-env")
     result = _service(client).get_entity(f"run:{run.id}", view="reproduce")
-    assert result["completeness"]["missing"] == ["execution_record"]
+    # The server's completeness flags BOTH the absent execution record and the absent
+    # code snapshot (mirrored from check_run) — verified against a live server.
+    assert result["completeness"]["missing"] == ["execution_record", "code_snapshot_artifact"]
     assert result["completeness"]["state"] == "partial"
 
 
@@ -258,6 +272,36 @@ def test_versions_view_is_real_against_the_live_registry(client, app):
     result = _service(client).get_entity(f"experiment:{experiment_id}", view="versions")
     assert [v["label"] for v in result["data"]["versions"]] == ["v1"]
     assert result["completeness"]["missing"] == []
+
+
+# -- experiment reproduce: a MAP of per-run summaries, not N assemblies -------
+
+
+def test_experiment_reproduce_view_lists_run_summaries(client, app):
+    """Delegates to /v1/experiments/{id}/reproduce — a map of compact summaries, each
+    with a `reproduce_url` for drill-down, so it stays one cheap read at any scale."""
+    rid, experiment_id, _, _ = _populated(client, app)
+    data = _service(client).get_entity(f"experiment:{experiment_id}", view="reproduce")["data"]
+    assert data["completeness"]["runs_total"] >= 1
+    assert data["experiment"]["id"] == experiment_id  # the manifest carries the experiment
+    assert any(r["reproduce_url"].endswith(f"/v1/runs/{rid}/reproduce") for r in data["runs"])
+
+
+def test_experiment_reproduce_view_accepts_version_filter(client, app):
+    """`filters={"version": N}` pins against a minted manifest — applied server-side."""
+    _, experiment_id, _, _ = _populated(client, app)
+    result = _service(client).get_entity(
+        f"experiment:{experiment_id}", view="reproduce", filters={"version": 3}
+    )
+    assert result["data"]["resolved_version"] == 3
+
+
+def test_experiment_reproduce_view_rejects_unknown_filter(client, app):
+    _, experiment_id, _, _ = _populated(client, app)
+    with pytest.raises(errors.ValidationError):
+        _service(client).get_entity(
+            f"experiment:{experiment_id}", view="reproduce", filters={"bogus": 1}
+        )
 
 
 # -- token_budget actually bounds ---------------------------------------------
@@ -313,7 +357,7 @@ def test_reproduce_is_atomic_and_reports_overflow_instead_of_truncating(client, 
     assert result["completeness"]["missing"] == ["token_budget_exceeded"]
     assert result["completeness"]["state"] == "partial"
     assert result["next_cursor"] is None  # nothing to paginate
-    assert len(result["data"]["config"]) == 50  # intact, not quietly trimmed
+    assert len(result["data"]["run"]["config"]) == 50  # intact, not quietly trimmed
 
 
 # -- cursor: real, and un-rebasable -------------------------------------------
@@ -419,15 +463,21 @@ def test_a_project_direct_run_reports_no_hypothesis_without_a_missing_marker(cli
     assert "experiment" not in result["completeness"]["missing"]
 
 
-def test_a_run_with_no_parent_ids_at_all_still_says_the_experiment_is_missing(client, app):
-    """A pre-0054 row carrying neither id cannot be told apart from a broken
-    read, so the marker stays — absence of BOTH ids is still a gap."""
+def test_an_orphan_run_still_reproduces_with_its_lineage_gap_in_the_run_core(client, app):
+    """A run carrying neither id has no hypothesis, but it still reproduces: since the
+    view delegates to /reproduce, reproduction `missing` is about the ENVIRONMENT
+    (env_ref, code), not lineage bookkeeping. The orphan state is not hidden — it is
+    visible in the run core (both ids null) — it just does not masquerade as a
+    reproducibility gap. The 'experiment' marker was client-side hypothesis logic the
+    server now owns; handoff still surfaces it (see the handoff test above)."""
     rid, _, _, _ = _populated(client, app)
     app.runs[rid]["experiment_id"] = None
     app.runs[rid]["project_id"] = None
     result = _service(client).get_entity(f"run:{rid}", view="reproduce")
     assert result["data"]["hypothesis"] is None
-    assert "experiment" in result["completeness"]["missing"]
+    assert result["data"]["run"]["experiment_id"] is None
+    assert result["data"]["run"]["project_id"] is None
+    assert "experiment" not in result["completeness"]["missing"]
 
 
 def test_an_empty_filter_value_is_dropped_not_echoed_as_applied(client, app):

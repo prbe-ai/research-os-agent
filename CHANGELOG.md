@@ -15,8 +15,32 @@
   and understandable, preserve uncertainty, move execution-level jargon into the
   structured run record, and use known company projects, milestones and decisions
   without inventing internal context.
+- **The reproduce view now delegates to the server.** `get_entity(view="reproduce")`
+  on a run no longer re-assembles a manifest client-side — it reads
+  research-os `GET /v1/runs/{id}/reproduce`, the one place that reads execution
+  record, launch context, code snapshot, inputs, lockfiles, lineage and per-span
+  environments together. The envelope surfaces the server's
+  `completeness.missing` verbatim, so an incomplete run still reads `partial`.
+- **The research skills teach capture as automatic, not manual.**
+  `start-research-work`'s snapshot step became a *verify* step (`probe exec`/`run()`
+  auto-capture; confirm with `probe run check`); `track-research-work` gained a
+  machine-checkable claim gate (`probe run check`, exit 2) and a `probe experiment
+  freeze` at completion; `capture-run-inputs` drops lockfiles from the manual
+  checklist (they are captured automatically now).
 
 ### Added
+
+- **`probe run reproduce RUN`** pulls the server-assembled reproduction record for a
+  run; `--export FILE` writes it as a portable JSON bundle, and `--materialize DIR`
+  reconstructs a runnable directory (restores the captured code tree, writes the
+  inputs-decision artifacts, and drops the full record as `reproduce-manifest.json`).
+- **`probe experiment reproduce EXP`** pulls per-run reproduction summaries across an
+  experiment — a map, each row carrying a `reproduce_url` drill-down — with
+  `--version N` to pin against a frozen manifest. **`probe experiment freeze EXP`**
+  is an ergonomic alias for minting that immutable `experiment_versions` manifest.
+- **An experiment-level `reproduce` MCP view.** `get_entity(view="reproduce")` now
+  works on an experiment, not just a run, returning the same per-run summary map with
+  `filters={"version": N}` for version pinning.
 
 - **One `npx probe-research` onboarding flow configures Claude Code, Codex, or
   both.** The interactive wizard presents both agents as explicit choices;
