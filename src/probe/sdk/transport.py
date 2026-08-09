@@ -104,9 +104,15 @@ class Transport:
                 ).hexdigest()
                 headers["X-Signature"] = f"sha256={sig}"
         else:
-            if not self.settings.token:
-                raise errors.AuthError("no API token configured (run `probe login`)")
-            headers["Authorization"] = f"Bearer {self.settings.token}"
+            # /v1 accepts a user PAT (probe_pat_) OR a read-only service token
+            # (probe_svc_); the backend dispatches on the prefix. A Reader carries
+            # only the service token.
+            bearer = self.settings.token or self.settings.service_token
+            if not bearer:
+                raise errors.AuthError(
+                    "no API token configured (run `probe login`, or set PROBE_SERVICE_TOKEN)"
+                )
+            headers["Authorization"] = f"Bearer {bearer}"
         return headers
 
     # -- core request -------------------------------------------------------
