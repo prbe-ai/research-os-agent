@@ -86,6 +86,14 @@ def _populated(client, app, *, spans: int = 3):
         {"id": artifact_id, "run_id": rid, "name": "loss.png", "kind": "figure",
          "status": "ready", "is_reference": False, "uri": "s3://b/loss.png",
          "customer_id": "lab-42", "created_at": "2026-07-16T00:00:00Z"},
+        # A code_snapshot so a fully-populated run reads REPRODUCIBLE (env_ref +
+        # snapshot => completeness.missing == []). The server's _completeness keys the
+        # `code_snapshot_artifact` gap on this exact kind; the meta mirrors what a real
+        # snapshot writes (nothing pending, a lockfile captured).
+        {"id": str(uuid.uuid4()), "run_id": rid, "name": ".probe/snapshot", "kind": "code_snapshot",
+         "status": "ready", "is_reference": False, "uri": "s3://b/snap.tar",
+         "meta": {"n_pending_upload": 0, "n_lockfiles": 1},
+         "customer_id": "lab-42", "created_at": "2026-07-16T00:00:00Z"},
     ]
     app.run_events[rid] = [
         {"id": "ev-1", "customer_id": "lab-42", "event_type": "run.created",
@@ -235,7 +243,9 @@ def test_reproduce_without_an_env_ref_reports_it_missing(client, app):
     client.create_experiment("e", "e", hypothesis="h", project_id=_proj["id"])
     run = client.run(project="folding", experiment="e", name="no-env")
     result = _service(client).get_entity(f"run:{run.id}", view="reproduce")
-    assert result["completeness"]["missing"] == ["execution_record"]
+    # The server's completeness flags BOTH the absent execution record and the absent
+    # code snapshot (mirrored from check_run) — verified against a live server.
+    assert result["completeness"]["missing"] == ["execution_record", "code_snapshot_artifact"]
     assert result["completeness"]["state"] == "partial"
 
 
@@ -272,7 +282,8 @@ def test_experiment_reproduce_view_lists_run_summaries(client, app):
     with a `reproduce_url` for drill-down, so it stays one cheap read at any scale."""
     rid, experiment_id, _, _ = _populated(client, app)
     data = _service(client).get_entity(f"experiment:{experiment_id}", view="reproduce")["data"]
-    assert data["completeness"]["total"] >= 1
+    assert data["completeness"]["runs_total"] >= 1
+    assert data["experiment"]["id"] == experiment_id  # the manifest carries the experiment
     assert any(r["reproduce_url"].endswith(f"/v1/runs/{rid}/reproduce") for r in data["runs"])
 
 

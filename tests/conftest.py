@@ -1290,10 +1290,7 @@ class FakeApp:
             env_ref = run.get("env_ref")
             # The real endpoint assembles hypothesis (from the run's experiment) and
             # the execution record (by resolving env_ref). Mirror that so the client
-            # passthrough is exercised against a populated record, not a stub. The
-            # authoritative completeness rules live and are tested server-side; the
-            # fake carries only the env_ref signal + the launch advisory, enough to
-            # prove the view surfaces them.
+            # passthrough is exercised against a populated record, not a stub.
             exp = self.experiments.get(run.get("experiment_id") or "")
             hypothesis = exp.get("hypothesis") if exp else None
             execution_record = self.execution_records.get(env_ref) if env_ref else None
@@ -1301,8 +1298,35 @@ class FakeApp:
                 (a for a in self.artifacts.get(run["id"], []) if a.get("kind") == "code_snapshot"),
                 None,
             )
-            missing = [] if env_ref else ["execution_record"]
-            advisories = [] if launch else ["launch_context"]
+            # Mirror the server's _completeness verdict EXACTLY (research-os
+            # app/read_models/reproduce.py), validated against a live uvicorn+Postgres
+            # cross-repo smoke. The MCP run view forwards `missing` verbatim, so this
+            # fidelity is load-bearing — a drifted fake would green a wrong client.
+            missing: list = []
+            advisories: list = []
+            if not env_ref:
+                missing.append("execution_record")
+            if code_snapshot is None:
+                missing.append("code_snapshot_artifact")
+            else:
+                meta = code_snapshot.get("meta") or {}
+                if meta.get("n_pending_upload", 0) > 0:
+                    missing.append("pending_code_bytes")
+                if meta.get("n_lockfiles", 0) == 0:
+                    advisories.append("no_lockfiles")
+            if not launch:
+                advisories.append("launch_context")
+            else:
+                for slot in ("process", "runtime", "determinism"):
+                    if not launch.get(slot):
+                        missing.append(f"launch_{slot}")
+                if launch.get("errors"):
+                    advisories.append("launch_errors")
+            inputs_decision: list = []  # the fake carries none, so the advisory always fires
+            if not inputs_decision:
+                advisories.append("inputs_decision")
+            if not run.get("notes"):
+                advisories.append("notes")
             return httpx.Response(
                 200,
                 json={
@@ -1312,7 +1336,7 @@ class FakeApp:
                     "launch": launch,
                     "restore_command": f"probe snapshot-restore {run.get('short_id') or run['id']}",
                     "code_snapshot": code_snapshot,
-                    "inputs_decision": [],
+                    "inputs_decision": inputs_decision,
                     "note_artifacts": [],
                     "lockfiles": [],
                     "edges": [],
@@ -1332,29 +1356,44 @@ class FakeApp:
             if exp is None:
                 return httpx.Response(404, json={"detail": "experiment not found"})
             version = request.url.params.get("version")
-            summaries = [
-                {
-                    "id": r["id"],
-                    "short_id": r.get("short_id"),
-                    "status": r.get("status", "running"),
-                    "env_ref": r.get("env_ref"),
-                    "has_launch": bool((r.get("metadata") or {}).get("launch")),
-                    "state": "unverified" if r.get("env_ref") else "incomplete",
-                    "missing_pin": False,
-                    "reproduce_url": f"/v1/runs/{r['id']}/reproduce",
-                }
-                for r in self.runs.values()
-                if r.get("experiment_id") == eid
-            ]
+            # Mirror ExperimentReproduce + _rollup_completeness + _run_summary_state
+            # EXACTLY (research-os app/read_models/reproduce.py) — the `experiment`
+            # object, the has_code_snapshot signal, and the runs_* rollup keys were
+            # all confirmed against a live uvicorn+Postgres cross-repo smoke.
+            summaries = []
+            for r in self.runs.values():
+                if r.get("experiment_id") != eid:
+                    continue
+                has_code = any(
+                    a.get("kind") == "code_snapshot" for a in self.artifacts.get(r["id"], [])
+                )
+                state = "unverified" if (r.get("env_ref") and has_code) else "incomplete"
+                summaries.append(
+                    {
+                        "id": r["id"],
+                        "short_id": r.get("short_id"),
+                        "name": r.get("name"),
+                        "status": r.get("status", "running"),
+                        "description": r.get("description"),
+                        "env_ref": r.get("env_ref"),
+                        "has_launch": bool((r.get("metadata") or {}).get("launch")),
+                        "has_code_snapshot": has_code,
+                        "state": state,
+                        "missing_pin": False,
+                        "reproduce_url": f"/v1/runs/{r['id']}/reproduce",
+                    }
+                )
             return httpx.Response(
                 200,
                 json={
+                    "experiment": exp,
                     "versions": [],
                     "resolved_version": int(version) if version else None,
                     "runs": summaries,
                     "completeness": {
-                        "total": len(summaries),
-                        "incomplete": sum(1 for s in summaries if s["state"] == "incomplete"),
+                        "runs_total": len(summaries),
+                        "runs_unverified": sum(1 for s in summaries if s["state"] == "unverified"),
+                        "runs_incomplete": sum(1 for s in summaries if s["state"] == "incomplete"),
                         "missing_pins": 0,
                     },
                 },

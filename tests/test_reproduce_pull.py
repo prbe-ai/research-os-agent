@@ -41,7 +41,8 @@ def test_run_reproduce_legacy_run_is_incomplete_not_error(client, app):
 def test_experiment_reproduce_lists_run_summaries(client, app):
     rid, eid = _seed_run(client, app)
     rec = client.experiment_reproduce(eid)
-    assert rec["completeness"]["total"] == 1
+    assert rec["completeness"]["runs_total"] == 1
+    assert rec["experiment"]["id"] == eid
     assert rec["runs"][0]["reproduce_url"] == f"/v1/runs/{rid}/reproduce"
 
 
@@ -55,5 +56,5 @@ def test_source_reproduce_passthrough(client, app):
     rid, eid = _seed_run(client, app)
     src = ResearchOSSource(client)
     assert src.reproduce(rid)["run"]["id"] == rid
-    assert src.experiment_reproduce(eid)["completeness"]["total"] == 1
+    assert src.experiment_reproduce(eid)["completeness"]["runs_total"] == 1
     assert src.experiment_reproduce(eid, version=1)["resolved_version"] == 1

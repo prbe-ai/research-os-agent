@@ -904,7 +904,8 @@ def test_experiment_reproduce_prints_run_summaries(wired, capsys):
     _start_run(capsys)  # a bare ref is a slug, so address the experiment by its slug "e"
     assert cli.main(["experiment", "reproduce", "e"]) == 0
     out = json.loads(capsys.readouterr().out)
-    assert out["completeness"]["total"] >= 1
+    assert out["completeness"]["runs_total"] >= 1
+    assert out["experiment"]["slug"] == "e"
     assert out["runs"][0]["reproduce_url"].endswith("/reproduce")
 
 
