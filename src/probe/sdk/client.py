@@ -641,6 +641,7 @@ class Client:
         *,
         workspace_id: str | None = None,
         description: str | None = None,
+        summary_markdown: str | None = None,
         tags: list[str] | None = None,
         metadata: dict | None = None,
     ) -> dict:
@@ -654,6 +655,8 @@ class Client:
             body["workspace_id"] = workspace_id
         if description is not None:
             body["description"] = description
+        if summary_markdown is not None:
+            body["summary_markdown"] = summary_markdown
         if tags is not None:
             body["tags"] = tags
         if metadata is not None:
@@ -763,10 +766,15 @@ class Client:
         *,
         name: str | None = None,
         description: str | None = None,
+        summary_markdown: str | None = None,
         tags: list[str] | None = None,
         metadata: dict | None = None,
     ) -> dict:
-        """PATCH /v1/projects/{id} for display fields only.
+        """PATCH /v1/projects/{id} for display fields and visible Markdown.
+
+        ``summary_markdown`` is the human/agent-maintained document displayed
+        below the live AI project summary. It is replaced wholesale; ``""``
+        clears it. AI summary refreshes do not touch it.
 
         ``tags`` REPLACES the whole list ([] clears); the server normalizes to
         lowercase-kebab (CONTRACT.md "tags").
@@ -780,6 +788,7 @@ class Client:
             for key, value in {
                 "name": name,
                 "description": description,
+                "summary_markdown": summary_markdown,
                 "tags": tags,
                 "metadata": metadata,
             }.items()
@@ -788,6 +797,13 @@ class Client:
         if not body:
             raise ValueError("update_project needs at least one field to set")
         row = self.transport.patch(f"/v1/projects/{project_id}", body)
+        if summary_markdown is not None:
+            expected = summary_markdown if summary_markdown.strip() else ""
+            if row.get("summary_markdown") != expected:
+                raise errors.RosError(
+                    "the research-os backend accepted the project summary write but "
+                    "did not store it; upgrade the backend before relying on --summary"
+                )
         if tags is not None:
             self._verify_tags_written(tags, row, "PATCH /v1/projects/{id}")
         return row

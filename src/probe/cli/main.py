@@ -2276,11 +2276,20 @@ def notes_opt() -> Any:
     return typer.Option(None, "--notes", help=NOTES_HELP)
 
 
+def project_summary_opt() -> Any:
+    return typer.Option(
+        None,
+        "--summary",
+        help="visible Markdown below the AI summary: literal, @file, or - for stdin",
+    )
+
+
 @project_app.command("create")
 def project_create(
     slug: str = typer.Argument(..., help="url-safe identifier, unique per tenant"),
     name: str = typer.Option(None, "--name", help="display name (defaults to the slug)"),
     description: str = description_opt(),
+    summary: str = project_summary_opt(),
     tag: list[str] = typer.Option(None, "--tag", help="tag at creation (repeatable)"),
     workspace: str = typer.Option(
         None, "--workspace", help="workspace slug (or id:<uuid>); defaults to the active one"
@@ -2297,6 +2306,7 @@ def project_create(
             name,
             workspace_id=_resolve_workspace(c, workspace),
             description=description,
+            summary_markdown=_text_value(summary),
             tags=tag or None,
         )
     _print_json(created)
@@ -2367,6 +2377,7 @@ def project_set(
     project_id: str = slug_ref("project"),
     name: str = typer.Option(None, "--name"),
     description: str = description_opt(),
+    summary: str = project_summary_opt(),
     workspace: str = typer.Option(None, "--workspace", help="not here — use `probe project move`"),
 ) -> None:
     """Update a project's display fields."""
@@ -2385,6 +2396,7 @@ def project_set(
                 _project_id(c, project_id),
                 name=name,
                 description=description,
+                summary_markdown=_text_value(summary),
             )
         )
 

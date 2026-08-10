@@ -567,6 +567,21 @@ def test_every_addressable_kind_amends_with_set(wired, capsys):
     assert cli.main(["project", "patch", "vocab-p", "--name", "B"]) == 0
 
 
+def test_project_summary_accepts_a_markdown_file(wired, capsys, tmp_path):
+    body = "# Durable context\n\nThis survives AI summary refreshes.\n"
+    source = tmp_path / "PROJECT.md"
+    source.write_text(body)
+    cli.main(["project", "create", "summary-p"])
+
+    assert (
+        cli.main(["project", "set", "summary-p", "--summary", f"@{source}"])
+        == 0
+    )
+
+    project = next(row for row in wired.projects.values() if row["slug"] == "summary-p")
+    assert project["summary_markdown"] == body
+
+
 def test_every_addressable_kind_has_a_read_verb(wired, capsys):
     """Experiments had none at all, and a run's was only the top-level `probe get`.
 
