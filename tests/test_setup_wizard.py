@@ -1755,6 +1755,70 @@ def test_agent_both_runs_one_shared_authorization_then_configures_each_agent(mon
     assert calls[1]["authorization_needs"] is None
 
 
+def test_adding_codex_to_a_configured_claude_machine_keeps_claude_switched_on(monkeypatch):
+    """The second-agent install must not arrive with every box unticked.
+
+    Everyone who set up Claude Code before Codex existed hits this path, and
+    the wizard used to derive its preselection from the INTERSECTION of the two
+    agents' state. Claude Code has everything, a fresh Codex has nothing, so
+    every capability read as off -- and an off box is not neutral here: the
+    apply path turns it into "remove the CLI + MCP plugin" and "turn Session
+    capture off" against the agent that has them. Accepting the defaults tore
+    down a working install on the way to adding a second agent.
+    """
+    import sys
+    from types import SimpleNamespace
+
+    from typer.testing import CliRunner
+
+    from probe.cli import bootstrap
+    from probe.cli import doctor as doctor_impl
+    import probe.cli.main  # noqa: F401
+
+    cli_main = sys.modules["probe.cli.main"]
+
+    configured_claude = _caps(
+        agent_source="claude_code",
+        tracking_plugin_installed=True,
+        capture_plugin_installed=True,
+        capture_token_sources=(TokenSource.PAIRED_FILE,),
+        agent_rules_installed=True,
+        auto_update_enabled=True,
+        logged_in_as="richard@prbe.ai",
+    )
+    fresh_codex = _caps(agent_source="codex", logged_in_as="richard@prbe.ai")
+    assert configured_claude.capture_on and not fresh_codex.capture_on, "fixture is wrong"
+
+    monkeypatch.setattr(bootstrap, "ensure_persistent_install", lambda: SimpleNamespace(message=""))
+    monkeypatch.setattr(
+        doctor_impl,
+        "collect",
+        lambda: fresh_codex if os.environ.get("PROBE_AGENT") == "codex" else configured_claude,
+    )
+    calls: list[dict] = []
+
+    def record(action, **kwargs):
+        calls.append({"source": os.environ["PROBE_AGENT"], **kwargs})
+        return []
+
+    monkeypatch.setattr(cli_main, "_run_wizard_action", record)
+    result = CliRunner().invoke(
+        cli_main.app,
+        ["wizard", "--agent", "both", "--action", "configure", "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert [call["source"] for call in calls] == ["claude_code", "codex"]
+    for call in calls:
+        selection = call["selection_override"]
+        # Union, not intersection: what the DEVICE already does carries over,
+        # and the lagging agent is brought up to it.
+        assert selection.tracking is True, f"{call['source']} would lose tracking"
+        assert selection.capture is True, f"{call['source']} would lose capture"
+        assert selection.agent_rules is True, f"{call['source']} would lose its rules block"
+        assert selection.auto_update is True
+
+
 def test_agent_both_uses_one_dual_agent_uninstall_confirmation(monkeypatch):
     import sys
     from types import SimpleNamespace

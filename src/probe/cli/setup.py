@@ -162,6 +162,7 @@ def resolve_selection(
     auto_update: bool | None,
     agent_rules: bool | None = None,
     configured: bool | None = None,
+    current_override: dict[Capability, bool] | None = None,
 ) -> Selection:
     """The flag truth table. An omitted flag means one thing, and only one.
 
@@ -172,8 +173,16 @@ def resolve_selection(
     or any re-run that names one flag and not the others -- would silently
     revoke a developer's capture pairing or switch on auto-update behind their
     back. An omitted flag must never be read as "disable".
+
+    `current_override` supplies "current" when one snapshot cannot express it.
+    A run configuring BOTH agents has two snapshots, and what PRESERVE has to
+    keep is what the DEVICE has -- the union -- not what the agents agree on.
+    Deriving it from the intersection instead reads a machine with Claude Code
+    set up and Codex fresh as having nothing on, and PRESERVE then faithfully
+    preserves nothing: every box unticked, and the apply path turns Claude
+    Code's capture off on the way to installing Codex.
     """
-    current = caps.enabled()
+    current = current_override if current_override is not None else caps.enabled()
     if configured is None:
         configured = caps.configured
     fallback = current if configured else FRESH_DEFAULTS

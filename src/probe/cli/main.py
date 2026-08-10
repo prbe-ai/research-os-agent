@@ -1054,6 +1054,17 @@ def wizard(
                 ),
                 plugins_verified=all(item.plugins_verified for item in caps_by_source.values()),
             )
+            # ...but what the boxes come up TICKED as is a different question,
+            # and the intersection answers it wrongly. Adding Codex to a machine
+            # where Claude Code is already set up makes every `all()` false, so
+            # PRESERVE preserves nothing and the menu opens empty -- which the
+            # apply path below reads, per agent, as "remove the CLI + MCP
+            # plugin" and "turn Session capture off" for the agent that HAS
+            # them. Preselect from the union: what this device already does.
+            union_enabled = {
+                capability: any(item.enabled()[capability] for item in caps_by_source.values())
+                for capability in wizard.Capability
+            }
             shared_selection = wizard.resolve_selection(
                 aggregate,
                 tracking=tracking,
@@ -1061,6 +1072,7 @@ def wizard(
                 auto_update=auto_update,
                 agent_rules=agent_rules,
                 configured=configured,
+                current_override=union_enabled,
             )
             if not yes and not explicit_flags and wizard.interactive():
                 tui.clear()
