@@ -6,6 +6,7 @@ Env vars:
   PROBE_BASE_URL      e.g. https://api.research.prbe.ai
   PROBE_TOKEN         a user API token (probe_pat_...) for /v1
   PROBE_MCP_TOKEN     a read-only token for the MCP surface (see mcp_token below)
+  PROBE_SERVICE_TOKEN a read-only egress token (probe_svc_...) for the read-only Reader
   PROBE_INGEST_TOKEN  an ingest token (ros_ing_...) for /ingest
   PROBE_HMAC_SECRET   optional shared secret for the X-Signature body HMAC on /ingest
   PROBE_WORKSPACE     the active workspace id, overriding the context file
@@ -72,6 +73,7 @@ _CONTEXT_KEYS = (
     "base_url",
     "token",
     "mcp_token",
+    "service_token",
     "ingest_token",
     "hmac_secret",
     "workspace",
@@ -314,6 +316,7 @@ class Settings:
     base_url: str
     token: str | None = None
     mcp_token: str | None = None
+    service_token: str | None = None
     ingest_token: str | None = None
     hmac_secret: str | None = None
     workspace: str | None = None
@@ -325,6 +328,7 @@ def resolve(
     base_url: str | None = None,
     token: str | None = None,
     mcp_token: str | None = None,
+    service_token: str | None = None,
     ingest_token: str | None = None,
     hmac_secret: str | None = None,
     workspace: str | None = None,
@@ -346,6 +350,11 @@ def resolve(
             or DEFAULT_BASE_URL
         ).rstrip("/"),
         token=token or os.environ.get("PROBE_TOKEN") or file.get("token"),
+        # A read-only egress credential (probe_svc_) for an external product. Like
+        # mcp_token it can never write; unlike it, it is team-scoped and userless.
+        service_token=(
+            service_token or os.environ.get("PROBE_SERVICE_TOKEN") or file.get("service_token")
+        ),
         # Env first keeps every shell that already exports PROBE_MCP_TOKEN working
         # unchanged. Never falls back to `token`: that one can write.
         mcp_token=mcp_token or os.environ.get("PROBE_MCP_TOKEN") or file.get("mcp_token"),
