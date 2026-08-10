@@ -86,12 +86,13 @@ a basis for it.
 `create` is part of starting work (see `start-research-work` step 2). The rest is
 curation — it fires when someone is tidying structure, not when work is happening.
 
-`probe project create | list | get | use | patch | move | delete`
+`probe project create | list | get | use | set | move | delete`
+`probe project set PROJECT --summary TEXT|@FILE|-` — visible Markdown below the live AI summary
 `probe experiment create | set | delete | edges`
 `probe run set RUN [--name NAME] [--description DESCRIPTION] [--notes TEXT|@FILE|-]`
 `probe group create EXP --name NAME [--kind KIND] [--spec JSON|@FILE] [--notes ...]`
 `probe group set GROUP [--name NAME] [--spec JSON|@FILE] [--notes TEXT|@FILE|-]`
-`probe notes show | write [FILE] [--append]` — the PROJECT's notes
+`probe notes show | write [FILE] [--append]` — the PROJECT's hidden agent briefing
 
 `probe project use SLUG` sets the ambient project — MACHINE-globally, shared by every
 process on the box, so prefer `--project` or `PROBE_PROJECT` when another session

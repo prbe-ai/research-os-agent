@@ -618,6 +618,7 @@ class FakeApp:
                 # and typed anyOf[uuid, null], because legacy rows predate workspaces.
                 "workspace_id": body.get("workspace_id"),
                 "description": body.get("description"),
+                "summary_markdown": body.get("summary_markdown"),
                 "metadata": body.get("metadata") or {},
                 "created_at": _T0,
             }
@@ -690,7 +691,7 @@ class FakeApp:
                     for rid, run in self.runs.items():
                         if run.get("project_id") == pid:
                             self.reindexed.append(rid)
-            for field in ("name", "description", "metadata"):
+            for field in ("name", "description", "summary_markdown", "metadata"):
                 if body.get(field) is not None:
                     row[field] = body[field]
             # `notes` is gated so the fake can be a backend on EITHER side of
