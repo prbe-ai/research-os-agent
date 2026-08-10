@@ -72,11 +72,21 @@ def _isolate_config_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> N
     root = tmp_path_factory.mktemp("xdg-config")
     monkeypatch.setenv("XDG_CONFIG_HOME", str(root))
     monkeypatch.setenv("HOME", str(root))
+    # CODEX_HOME is the same hole one directory over, and it now has a WRITER
+    # behind it: the wizard registers the Codex MCP by editing
+    # `$CODEX_HOME/config.toml`. Redirecting HOME alone leaves a developer who
+    # exports CODEX_HOME pointing every test at their real Codex config, where
+    # a bad write does not just lose a token — Codex refuses to start.
+    monkeypatch.delenv("CODEX_HOME", raising=False)
     yield
+    from probe.cli.codex_config import config_path as codex_config_path
     from probe.sdk.config import config_path
 
     assert real_home not in config_path().resolve().parents, (
         f"config isolation was defeated: {config_path()} is inside the real home"
+    )
+    assert real_home not in codex_config_path().resolve().parents, (
+        f"Codex config isolation was defeated: {codex_config_path()} is inside the real home"
     )
 
 

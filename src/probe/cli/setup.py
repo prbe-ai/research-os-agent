@@ -23,7 +23,7 @@ import os
 import sys
 from dataclasses import dataclass
 
-from probe.cli import agent_rules, autoupdate, claude_cli, plugin_cli
+from probe.cli import agent_rules, autoupdate, claude_cli, codex_config, plugin_cli
 from probe.cli.capabilities import (
     CODEX_MCP_NAME,
     CODEX_TAP_PLUGIN_NAME,
@@ -662,24 +662,70 @@ def apply_tracking(want: bool, *, on_retry=None) -> list[str]:
     return messages
 
 
+def _reuse_approval_for_codex_mcp(notes: list[str]) -> bool:
+    """Serve Codex the read token the browser approval already minted.
+
+    The approval this run just performed asks for `api` and `mcp` together and
+    stores both, so by the time we get here the credential Codex needs is
+    already on disk. Sending the user to a second page to mint another one is
+    the whole complaint: it is redundant, and it is the step that times out.
+
+    Declines quietly whenever anything is not exactly right -- no token yet, no
+    plugin manifest to read the URL from, an unparseable config -- because the
+    OAuth flow below still works and a slower install beats a wrong one.
+    """
+    from probe.sdk.config import load_context
+
+    try:
+        token = (load_context() or {}).get("mcp_token")
+    except Exception:  # noqa: BLE001 - a config we cannot read is just "no shortcut"
+        token = None
+    if not token:
+        return False
+
+    url = codex_config.plugin_mcp_url(CODEX_MCP_NAME, marketplace=MARKETPLACE)
+    if not url:
+        return False
+
+    try:
+        codex_config.write_mcp_bearer(CODEX_MCP_NAME, url=url, token=token)
+    except codex_config.ConfigError as exc:
+        notes.append(f"! could not reuse your sign-in for the Codex MCP: {exc}")
+        return False
+    return True
+
+
 def apply_codex_mcp_auth() -> list[str]:
-    """Make the Codex-hosted MCP usable through Codex's supported OAuth flow."""
+    """Authorize the Codex-hosted MCP, reusing this run's approval if it can."""
     status = plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME)
     if status in {"o_auth", "bearer_token"}:
         return []
+
+    notes: list[str] = []
+    if _reuse_approval_for_codex_mcp(notes):
+        verified = plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME)
+        if verified == codex_config.BEARER_STATUS:
+            return [*notes, "Codex MCP authorized from your Probe sign-in."]
+        notes.append(
+            f"! wrote the Codex MCP credential but Codex reports "
+            f"{verified or 'unknown'}; falling back to its own login."
+        )
+
     result = plugin_cli.login_codex_mcp(CODEX_MCP_NAME)
     if not result.ok:
         return [
+            *notes,
             f"could not log in to the {CODEX_MCP_NAME} MCP: {result.detail}. "
-            f"Run `codex mcp login {CODEX_MCP_NAME}` and then re-run `probe doctor`."
+            f"Run `codex mcp login {CODEX_MCP_NAME}` and then re-run `probe doctor`.",
         ]
     verified = plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME)
     if verified not in {"o_auth", "bearer_token"}:
         return [
+            *notes,
             f"! Codex completed the login command but {CODEX_MCP_NAME} still reports "
-            f"{verified or 'unknown'}; run `codex mcp login {CODEX_MCP_NAME}` again."
+            f"{verified or 'unknown'}; run `codex mcp login {CODEX_MCP_NAME}` again.",
         ]
-    return [f"Codex MCP logged in ({CODEX_MCP_NAME})."]
+    return [*notes, f"Codex MCP logged in ({CODEX_MCP_NAME})."]
 
 
 def apply_auto_update(want: bool) -> list[str]:
@@ -1037,6 +1083,21 @@ def remove_everything(caps: Capabilities) -> list[str]:
     ok, detail = uninstall_plugin(TRACKING_PLUGIN_NAME)
     if not ok and "not found" not in detail.lower():
         messages.append(f"! could not remove {TRACKING_PLUGIN_NAME}: {detail}")
+
+    # The MCP entry we may have written into the user's own config.toml is not
+    # ours to leave behind: after this call its token is orphaned, so Codex
+    # would keep a server that lists as configured and answers 401.
+    if caps.agent_source == "codex":
+        try:
+            removed = codex_config.remove_mcp_server(CODEX_MCP_NAME)
+        except codex_config.ConfigError as exc:
+            messages.append(
+                f"! left the Codex MCP entry in place: {exc}. "
+                f"Delete [mcp_servers.{CODEX_MCP_NAME}] by hand."
+            )
+        else:
+            if removed.changed:
+                messages.append(f"Removed the {CODEX_MCP_NAME} MCP entry from {removed.path}.")
 
     # The block lives OUTSIDE the repo, in the researcher's global CLAUDE.md,
     # and removal used to skip it entirely -- so "Removed." left every agent in

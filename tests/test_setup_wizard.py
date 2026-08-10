@@ -541,8 +541,67 @@ def test_setup_requests_only_the_grants_it_still_needs():
     assert setup.needs_authorization(_caps(), everything) == ["api", "mcp", "capture"]
 
 
+def _no_reuse(monkeypatch):
+    """Force the OAuth fallback: no read token means no shortcut to take."""
+    from probe.cli import codex_config
+
+    monkeypatch.setattr(codex_config, "plugin_mcp_url", lambda _name, **_kw: None)
+
+
+def test_the_browser_approval_already_held_authorizes_the_codex_mcp(monkeypatch, tmp_path):
+    """One approval, both agents. The run that gets here has just minted an
+    `mcp` read token (grants_for asks for `api` and `mcp` together), and Codex
+    accepts a static Authorization header on a user-level entry — so sending the
+    user to a second page to mint a second token buys nothing, and it is the
+    step that times out. `codex mcp login` must not be reached at all."""
+    from probe.cli import codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_from_signin"})
+    monkeypatch.setattr(
+        codex_config, "plugin_mcp_url", lambda _name, **_kw: "https://mcp.research.prbe.ai/mcp"
+    )
+    statuses = iter(["not_logged_in", "bearer_token"])
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
+
+    def _must_not_run(_name):
+        raise AssertionError("a second browser approval was requested")
+
+    monkeypatch.setattr(plugin_cli, "login_codex_mcp", _must_not_run)
+
+    assert setup.apply_codex_mcp_auth() == ["Codex MCP authorized from your Probe sign-in."]
+
+    written = (tmp_path / "config.toml").read_text(encoding="utf-8")
+    assert "Bearer probe_pat_from_signin" in written
+    assert "bearer_token =" not in written  # the key that stops Codex booting
+
+
+def test_codex_falls_back_to_its_own_login_when_the_shortcut_cannot_apply(monkeypatch, tmp_path):
+    """No manifest to read the URL from — registering a guessed URL with a live
+    token is worse than the extra approval, so the old path must still run."""
+    from probe.cli import claude_cli, codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_from_signin"})
+    monkeypatch.setattr(codex_config, "plugin_mcp_url", lambda _name, **_kw: None)
+    statuses = iter(["not_logged_in", "o_auth"])
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
+    monkeypatch.setattr(
+        plugin_cli,
+        "login_codex_mcp",
+        lambda _name: claude_cli.Result(ok=True, detail="Login successful"),
+    )
+
+    assert setup.apply_codex_mcp_auth() == ["Codex MCP logged in (probe-research)."]
+    assert not (tmp_path / "config.toml").exists()
+
+
 def test_codex_mcp_login_is_verified_after_the_supported_oauth_flow(monkeypatch):
     from probe.cli import claude_cli, plugin_cli
+
+    _no_reuse(monkeypatch)
 
     statuses = iter(["not_logged_in", "o_auth"])
     monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
@@ -556,6 +615,8 @@ def test_codex_mcp_login_is_verified_after_the_supported_oauth_flow(monkeypatch)
 
 def test_codex_mcp_login_failure_is_actionable(monkeypatch):
     from probe.cli import claude_cli, plugin_cli
+
+    _no_reuse(monkeypatch)
 
     monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: "not_logged_in")
     monkeypatch.setattr(

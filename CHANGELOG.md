@@ -16,6 +16,18 @@
 
 ### Changed
 
+- **Setting up Codex is one browser approval, the same as Claude Code.** The
+  approval the wizard already runs mints the read token (`api` and `mcp` are
+  requested together), so a second page to mint another one bought nothing —
+  and it was the step that failed, on a three-minute timeout. Codex now gets
+  that token through a user-level `[mcp_servers.probe-research]` entry, which
+  overrides the plugin's OAuth declaration and reports `bearer_token`. One
+  agent or both, it is one approval. The MCP is still hosted; nothing moves on
+  to the user's machine. `codex mcp login` remains the fallback for anyone
+  whose config cannot be read or written, and `probe wizard`'s removal path
+  takes the entry back out so an uninstall cannot leave an orphaned credential
+  pointing at the hosted server.
+
 - **Global Codex guidance now explicitly searches Research OS before research
   design.** The wizard-managed block in `~/.codex/AGENTS.md` tells Codex to look
   for relevant experiments, decisions, documents, artifacts and captured agent
