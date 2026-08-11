@@ -33,6 +33,7 @@ import pytest
 from probe.connectors.harbor_runner import (
     SandboxStateOptions,
     SandboxStateRecorder,
+    _harbor_install_guidance,
 )
 from probe.connectors.sandbox_state import (
     BEGIN_BYTES,
@@ -341,6 +342,16 @@ class TestSandboxStateProtocol:
 # Contract canary — requires harbor installed; the loud-upgrade tripwire.
 # ---------------------------------------------------------------------------
 class TestHarborContract:
+    def test_install_guidance_preserves_probe_on_python_311(self):
+        guidance = _harbor_install_guidance((3, 11))
+        assert "Harbor integration requires Python 3.12+" in guidance
+        assert "Probe itself still supports Python 3.11" in guidance
+
+    def test_install_guidance_names_the_current_extra_on_python_312(self):
+        guidance = _harbor_install_guidance((3, 12))
+        assert "probe-research[harbor]" in guidance
+        assert "probe-agent" not in guidance
+
     def test_installed_harbor_matches_pinned_surface(self):
         pytest.importorskip("harbor", reason="harbor not installed")
         from probe.connectors.harbor_runner import verify_harbor_contract

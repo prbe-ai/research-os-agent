@@ -34,8 +34,9 @@ swallowed and recorded in the recorder's status and the bundle's meta.json
 (``CancelledError`` must unwind: the trial is already dead and losing the end
 snapshot there is correct).
 
-Version coupling: harbor is an OPTIONAL dependency (``probe-agent[harbor]``),
-imported lazily so the SDK itself never requires it.  The exact API surface
+Version coupling: harbor is an OPTIONAL Python-3.12+ dependency
+(``probe-research[harbor]``), imported lazily so the SDK itself never requires
+it and remains compatible with Python 3.11.  The exact API surface
 this module touches is asserted by ``verify_harbor_contract()`` — called at
 attach time and by the CI canary test — so a harbor upgrade that moves the
 undocumented hook API breaks loudly at setup, never silently inside a hook.
@@ -48,6 +49,7 @@ import asyncio
 import contextlib
 import shlex
 import shutil
+import sys
 import tempfile
 import uuid
 from dataclasses import dataclass
@@ -78,11 +80,28 @@ _BEGIN_UPLOAD_NAME = "begin.jsonl.gz"
 
 
 class HarborNotInstalledError(RuntimeError):
-    """harbor is not importable; install the ``probe-agent[harbor]`` extra."""
+    """Harbor is unavailable or this interpreter is older than Python 3.12."""
 
 
 class HarborContractError(RuntimeError):
     """The installed harbor no longer matches the API surface we pin."""
+
+
+def _harbor_install_guidance(
+    python_version: tuple[int, int] | None = None,
+) -> str:
+    """Explain the optional dependency without misrepresenting Probe's floor."""
+    current = python_version or sys.version_info[:2]
+    if current < (3, 12):
+        return (
+            "the Harbor integration requires Python 3.12+; Probe itself still "
+            "supports Python 3.11. Recreate this environment with Python 3.12 "
+            "or newer, then install `probe-research[harbor]`"
+        )
+    return (
+        "harbor is not installed; `pip install 'probe-research[harbor]'` "
+        "(or `pip install harbor`) to use the instrumented trial runner"
+    )
 
 
 def verify_harbor_contract() -> list[str]:
@@ -105,10 +124,7 @@ def verify_harbor_contract() -> list[str]:
         from harbor.trial.hooks import TrialEvent
         from harbor.trial.trial import Trial
     except ImportError as exc:
-        raise HarborNotInstalledError(
-            "harbor is not installed; `pip install 'probe-agent[harbor]'` "
-            "(or `pip install harbor`) to use the instrumented trial runner"
-        ) from exc
+        raise HarborNotInstalledError(_harbor_install_guidance()) from exc
 
     for event in ("AGENT_START", "AGENT_END"):
         if not hasattr(TrialEvent, event):

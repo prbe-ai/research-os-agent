@@ -406,6 +406,21 @@ def test_distribution_name_matches_pyproject():
     assert probe._DISTRIBUTION == pyproject["project"]["name"] == "probe-research"
 
 
+def test_harbor_extra_does_not_raise_probes_python_floor():
+    """Harbor needs 3.12, but ordinary Probe installs still support 3.11.
+
+    Without the dependency marker, uv's universal resolver rejects the whole
+    project—including dev environments that never install the Harbor extra.
+    """
+    import tomllib
+
+    pyproject = tomllib.loads((Path(__file__).resolve().parent.parent / "pyproject.toml").read_text())
+    assert pyproject["project"]["requires-python"] == ">=3.11"
+    assert pyproject["project"]["optional-dependencies"]["harbor"] == [
+        "harbor>=0.20,<0.22; python_version >= '3.12'"
+    ]
+
+
 def test_version_resolves_from_the_installed_distribution():
     """Guards the same seam from the other side: an installed tree must report a real
     version. The whole pitch is reproducibility — a client that cannot say what it is

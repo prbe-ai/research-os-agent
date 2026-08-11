@@ -50,14 +50,13 @@ regen: dump-openapi gen-models parity
 # Run this whenever a tool's SIGNATURE or DOCSTRING changes; never hand-edit the
 # fixture.
 #
-# PYTHONPATH is the whole point. `uv venv` fails in this repo's worktrees
-# (requires-python allows 3.11, but the harbor extra needs >=3.12), so worktree
-# work runs against the primary checkout's interpreter -- and a bare
-# `import probe.mcp.server` then resolves to the INSTALLED package, not your
-# edits. You would snapshot the OLD schema, the pin would compare old to old,
-# and the suite would go green while the shipped tool schema was never checked.
-# Forcing the source tree onto the front of sys.path is what makes that
-# impossible. Override PY= to point at a different interpreter.
+# PYTHONPATH is the whole point. Worktrees sometimes run against the primary
+# checkout's interpreter, and a bare `import probe.mcp.server` then resolves to
+# the INSTALLED package, not your edits. You would snapshot the OLD schema, the
+# pin would compare old to old, and the suite would go green while the shipped
+# tool schema was never checked. Forcing the source tree onto the front of
+# sys.path is what makes that impossible. Override PY= to point at a different
+# interpreter.
 PY ?= python
 regen-mcp-schema:
 	@PYTHONPATH=$(CURDIR)/src $(PY) -c "import anyio, json, probe.mcp.server as m; \
