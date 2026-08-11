@@ -1111,14 +1111,14 @@ def test_installing_a_plugin_tells_you_to_restart_claude_code():
     fresh = _caps()
     turning_on = setup.Selection(tracking=True, capture=False, auto_update=False, agent_rules=False)
     notice = setup.restart_notice(fresh, turning_on)
-    assert notice and "Restart Claude Code" in notice
+    assert notice and any("Restart Claude Code" in line for line in notice)
 
 
 def test_capture_alone_also_needs_a_restart():
     notice = setup.restart_notice(
         _caps(), setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False)
     )
-    assert notice is not None
+    assert notice
 
 
 def test_codex_capture_restart_notice_explains_hook_trust_boundary():
@@ -1126,10 +1126,13 @@ def test_codex_capture_restart_notice_explains_hook_trust_boundary():
         _caps(agent_source="codex"),
         setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False),
     )
-    assert notice is not None
-    assert "/hooks" in notice
-    assert "Installation succeeds" in notice
-    assert "untrusted hook" in notice
+    # Each line is one bullet, so the hook approval and its consequence are
+    # separately readable rather than the tail of a paragraph.
+    assert notice
+    joined = " ".join(notice)
+    assert "/hooks" in joined
+    assert "capture is installed but sends nothing" in joined
+    assert all(len(line) <= 80 for line in notice), f"a bullet ran long: {notice}"
 
 
 def test_retiring_legacy_codex_tap_requires_a_restart_even_when_capture_stays_on():
@@ -1141,7 +1144,7 @@ def test_retiring_legacy_codex_tap_requires_a_restart_even_when_capture_stays_on
         capture_credential_valid=True,
     )
     selection = setup.Selection(tracking=False, capture=True, auto_update=False, agent_rules=False)
-    assert setup.restart_notice(caps, selection) is not None
+    assert setup.restart_notice(caps, selection)
 
 
 def test_an_auto_update_only_change_does_not_send_you_off_to_restart():
@@ -1152,7 +1155,7 @@ def test_an_auto_update_only_change_does_not_send_you_off_to_restart():
         capture_token_sources=(TokenSource.PAIRED_FILE,),
     )
     same_plugins = setup.Selection(tracking=True, capture=True, auto_update=True, agent_rules=False)
-    assert setup.restart_notice(already, same_plugins) is None
+    assert setup.restart_notice(already, same_plugins) == []
 
 
 def test_turning_a_plugin_OFF_also_needs_a_restart():
@@ -1160,7 +1163,7 @@ def test_turning_a_plugin_OFF_also_needs_a_restart():
     turning_off = setup.Selection(
         tracking=False, capture=False, auto_update=False, agent_rules=False
     )
-    assert setup.restart_notice(already, turning_off) is not None
+    assert setup.restart_notice(already, turning_off)
 
 
 # --- menu readability ------------------------------------------------------
@@ -3228,6 +3231,45 @@ def test_progress_redraws_one_centred_screen_on_a_terminal(monkeypatch, capsys):
 
     body = [ln.strip() for ln in capsys.readouterr().out.split("\n") if ln.strip()]
     assert all(len(ln) <= tui.CONTENT_WIDTH for ln in body), "must wrap inside the block"
+
+
+def test_the_finished_screen_separates_what_changed_from_what_to_do_next():
+    """The end of the install answers two questions, and used to answer both in
+    one undifferentiated run of prose. The action people missed -- approve the
+    Codex hook, or capture sends nothing -- was the last sentence of the last
+    paragraph. Outcomes and actions now sit under their own headings, one short
+    bullet each."""
+    from probe.cli import tui
+
+    progress = tui.Progress("This run will:", ["install the plugin"])
+    progress.finish(0, ok=True)
+    progress.note("Codex MCP authorized from your Probe sign-in.")
+    progress.note_next("Restart Codex — plugins and the MCP load at session start.")
+
+    block = progress.block()
+    text = "\n".join(block)
+    assert "What changed:" in text
+    assert "What's next:" in text
+    assert block.index("What changed:") < block.index("What's next:"), "outcomes come first"
+
+    changed = block.index("What changed:")
+    nxt = block.index("What's next:")
+    assert block[changed + 1] == "  - Codex MCP authorized from your Probe sign-in."
+    assert block[nxt + 1].startswith("  - Restart Codex")
+
+
+def test_a_run_with_nothing_left_to_do_shows_no_next_heading():
+    """An empty section is a question the reader has to answer before they can
+    ignore it."""
+    from probe.cli import tui
+
+    progress = tui.Progress("This run will:", ["flip auto-update"])
+    progress.finish(0, ok=True)
+    progress.note("Auto-update on.")
+
+    text = "\n".join(progress.block())
+    assert "What changed:" in text
+    assert "What's next:" not in text
 
 
 def test_progress_marks_a_failed_step_distinctly(monkeypatch, capsys):

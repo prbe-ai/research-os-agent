@@ -22,6 +22,7 @@ import json
 import os
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 
 from probe.cli import agent_rules, autoupdate, claude_cli, codex_config, plugin_cli
 from probe.cli.capabilities import (
@@ -76,6 +77,17 @@ AGENT_LABELS = {
     "claude_code": "Claude Code",
     "codex": "Codex",
 }
+
+
+def short_path(path: Path) -> str:
+    """`~/.codex/AGENTS.md`, not the full home-prefixed path.
+
+    A summary bullet is read at a glance, and `/Users/<name>/` at the front of
+    every path is the part with no information in it."""
+    try:
+        return f"~/{path.relative_to(Path.home())}"
+    except ValueError:
+        return str(path)
 
 
 def agent_label(sources: tuple[str, ...] | list[str] | str) -> str:
@@ -768,12 +780,12 @@ def apply_agent_rules(want: bool, *, stale: bool = False) -> list[str]:
     if not want:
         return [f"Removed the Probe block from your global {path.name}."] if changed else []
     if stale and changed:
-        return [f"Refreshed the Probe block in {path}."]
+        return [f"Refreshed the Probe block in {short_path(path)}."]
     if changed:
-        return [
-            f"Added a Probe tracking rule to {path}. It points at the skills and "
-            "leaves the rest of the file alone."
-        ]
+        # One line, because it is one bullet in a summary. The reassurance this
+        # used to carry -- that the rest of the file is untouched -- is a
+        # property of the writer, not news to report on every install.
+        return [f"Probe tracking rule added to {short_path(path)}."]
     return []
 
 
@@ -1125,8 +1137,13 @@ def remove_everything(caps: Capabilities) -> list[str]:
     return messages
 
 
-def restart_notice(caps: Capabilities, selection: Selection) -> str | None:
-    """Tell the user to restart their coding agent, when it actually matters.
+def restart_notice(caps: Capabilities, selection: Selection) -> list[str]:
+    """What the user still has to do, one short line each.
+
+    Returned as separate lines rather than a paragraph because this is rendered
+    as a bulleted "What's next" list: a three-sentence blob in one bullet is the
+    thing nobody reads, and the sentence people were missing -- approve the hook
+    or capture sends nothing -- was the last one in it.
 
     Plugin installs and the MCP wiring only take effect on restart -- Claude
     Code reads them at session start and `probe` cannot restart it. Without this
@@ -1144,16 +1161,12 @@ def restart_notice(caps: Capabilities, selection: Selection) -> str | None:
         or caps.legacy_capture_plugin_installed
     )
     if not plugin_changed:
-        return None
+        return []
     agent = "Codex" if caps.agent_source == "codex" else "Claude Code"
-    notice = (
-        f"Restart {agent} to finish. Plugins and the MCP are read at session "
-        "start, so this session will not see them until you do."
-    )
+    steps = [f"Restart {agent} — plugins and the MCP load at session start."]
     if caps.agent_source == "codex" and selection.capture:
-        notice += (
-            " In the new Codex session, open `/hooks`, review Probe Session "
-            "Capture, and approve it once. Installation succeeds without this "
-            "approval, but Codex will not run an untrusted hook."
-        )
-    return notice
+        # Codex will not run a hook nobody trusted, and it says nothing when it
+        # declines. Without this line capture looks installed and sends nothing.
+        steps.append("In the new session: `/hooks` › approve Probe Session Capture.")
+        steps.append("Until you do, capture is installed but sends nothing.")
+    return steps
