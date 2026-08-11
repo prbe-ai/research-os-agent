@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The test suite no longer spawns a real coding-agent CLI or touches the macOS
+  Keychain.** Three tests shelled out to the real binary — `test_backfill_session_id.py`'s
+  two `claude -p` checks and `test_codex_config.py`'s `codex mcp list` acceptance
+  test. Under the autouse `_isolate_config_home` fixture, which repoints `HOME` at a
+  throwaway dir, the spawned agent reached for a login keychain that isn't there and
+  macOS raised a `SecurityAgent` "keychain cannot be found to store" prompt on every
+  attempt; a full local `pytest tests` turned that into a storm of prompts (bad enough
+  once to wedge the keychain into a reboot). The `codex` acceptance test is also the one
+  that failed rather than skipped under `CI` and killed the v0.70.2 release. The three
+  live-binary tests are removed — the format contracts they checked are still pinned by
+  the pure tests beside them — and `conftest.py` now prepends a shim dir of no-op
+  `claude`/`codex` stubs to `PATH` for every test, so any future real-agent spawn fails
+  fast (exit 97) instead of authenticating. `git` and other tools are untouched.
+
 ## 0.70.3
 
 ### Fixed

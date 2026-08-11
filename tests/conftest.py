@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import tempfile
 import uuid
@@ -88,6 +89,35 @@ def _isolate_config_home(monkeypatch: pytest.MonkeyPatch, tmp_path_factory) -> N
     assert real_home not in codex_config_path().resolve().parents, (
         f"Codex config isolation was defeated: {codex_config_path()} is inside the real home"
     )
+
+
+# A shim dir holding loud no-op `claude`/`codex` stubs, built once. It is prepended to
+# PATH for every test (see `_no_real_agent_cli`) so an accidental real-agent spawn fails
+# fast with exit 97 instead of authenticating -- which, under the isolated HOME above,
+# means reaching for a login keychain that isn't there and storming SecurityAgent. A
+# `claude -p` that escaped this once wedged the keychain hard enough to force a reboot.
+# `git` and every other binary are left untouched.
+_NO_AGENT_BIN = tempfile.mkdtemp(prefix="probe-tests-no-agent-")
+for _name in ("claude", "codex"):
+    _stub = Path(_NO_AGENT_BIN) / _name
+    _stub.write_text(
+        "#!/bin/sh\n"
+        f'echo "tests must not run the real {_name} CLI (it reads the macOS '
+        'keychain); mock the spawn instead" >&2\n'
+        "exit 97\n"
+    )
+    _stub.chmod(0o755)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_agent_cli(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make a real coding-agent CLI spawn fail loudly instead of touching the keychain.
+
+    Autouse and unconditional, alongside ``_isolate_config_home``: together they are the
+    invariant that a test can neither read the developer's real credentials nor prompt
+    for the keychain. See ``_NO_AGENT_BIN`` for the why.
+    """
+    monkeypatch.setenv("PATH", f"{_NO_AGENT_BIN}{os.pathsep}{os.environ['PATH']}")
 
 
 _RUN_METRICS = re.compile(r"^/v1/runs/([^/]+)/metrics$")

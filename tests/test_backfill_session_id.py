@@ -6,18 +6,18 @@ Must be a valid UUID". The agent exits before reading a single file, so the
 classify pass returns no plan and the whole import stops having done nothing.
 
 Nothing caught it because every other test fakes `launch_agent`, so the id never
-reached the binary that validates it. These tests check the FORMAT contract
-directly, and the last one runs the real binary when it is installed.
+reached the binary that validates it. These tests pin the FORMAT contract
+directly: `new_session_id()` must emit the dashed canonical UUID (the 32-char hex
+form is the shape Claude Code rejects). Confirming that against the real `claude`
+binary is deliberately NOT done here -- tests never spawn a real agent CLI (it
+authenticates against the macOS keychain, and a suite that shelled out to
+`claude -p` once wedged the login keychain hard enough to force a reboot).
 """
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 import uuid
 from pathlib import Path
-
-import pytest
 
 from probe.cli import backfill as bf
 from probe.cli import backfill_run as br
@@ -38,31 +38,3 @@ def test_the_argv_carries_a_valid_uuid():
     sid = br.new_session_id()
     argv = bf.agent_argv(bf.Agent.CLAUDE, "/bin/claude", "P", Path("/tmp"), session_id=sid)
     assert uuid.UUID(argv[argv.index("--session-id") + 1])
-
-
-@pytest.mark.skipif(shutil.which("claude") is None, reason="claude not installed")
-def test_the_real_binary_accepts_what_we_generate():
-    """The check that would have caught this.
-
-    A REAL `-p` invocation, because `--help` short-circuits before validation --
-    which is how the first version of this test passed against the very bug it
-    was written for. Whatever else the run does is irrelevant; all that is
-    asserted is that the id got past the parser."""
-    proc = subprocess.run(
-        ["claude", "-p", "say OK", "--session-id", br.new_session_id(),
-         "--allowedTools", "Read"],
-        capture_output=True, text=True, timeout=90,
-    )
-    assert "Invalid session ID" not in (proc.stdout + proc.stderr)
-
-
-@pytest.mark.skipif(shutil.which("claude") is None, reason="claude not installed")
-def test_the_real_binary_rejects_the_hex_form_this_bug_shipped():
-    """Proves the test above has teeth: the shape we shipped IS refused, and
-    refused at argument parse, so this costs no API call."""
-    proc = subprocess.run(
-        ["claude", "-p", "say OK", "--session-id", uuid.uuid4().hex,
-         "--allowedTools", "Read"],
-        capture_output=True, text=True, timeout=60,
-    )
-    assert "Invalid session ID" in (proc.stdout + proc.stderr)
