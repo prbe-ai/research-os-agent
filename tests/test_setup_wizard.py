@@ -541,8 +541,103 @@ def test_setup_requests_only_the_grants_it_still_needs():
     assert setup.needs_authorization(_caps(), everything) == ["api", "mcp", "capture"]
 
 
+def _no_reuse(monkeypatch):
+    """Force the OAuth fallback: no read token means no shortcut to take."""
+    from probe.cli import codex_config
+
+    monkeypatch.setattr(codex_config, "plugin_mcp_url", lambda _name, **_kw: None)
+
+
+def test_the_browser_approval_already_held_authorizes_the_codex_mcp(monkeypatch, tmp_path):
+    """One approval, both agents. The run that gets here has just minted an
+    `mcp` read token (grants_for asks for `api` and `mcp` together), and Codex
+    accepts a static Authorization header on a user-level entry — so sending the
+    user to a second page to mint a second token buys nothing, and it is the
+    step that times out. `codex mcp login` must not be reached at all."""
+    from probe.cli import codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_from_signin"})
+    monkeypatch.setattr(
+        codex_config, "plugin_mcp_url", lambda _name, **_kw: "https://mcp.research.prbe.ai/mcp"
+    )
+    statuses = iter(["not_logged_in", "bearer_token"])
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
+
+    def _must_not_run(_name):
+        raise AssertionError("a second browser approval was requested")
+
+    monkeypatch.setattr(plugin_cli, "login_codex_mcp", _must_not_run)
+
+    assert setup.apply_codex_mcp_auth() == ["Codex MCP authorized from your Probe sign-in."]
+
+    written = (tmp_path / "config.toml").read_text(encoding="utf-8")
+    assert "Bearer probe_pat_from_signin" in written
+    assert "bearer_token =" not in written  # the key that stops Codex booting
+
+
+def test_a_codex_config_we_cannot_confirm_is_put_back_exactly_as_it_was(monkeypatch, tmp_path):
+    """Falling back is not enough when the write itself may be the problem.
+
+    `codex mcp list` failing is indistinguishable from a config Codex cannot
+    load, and that state does not end when this command does -- every codex
+    invocation is down until someone edits the file. So an unconfirmed write is
+    reverted before the OAuth fallback runs, rather than left underneath it.
+    """
+    from probe.cli import claude_cli, codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    before = 'model = "gpt-5.6"\n\n[tui]\ntheme = "dark"\n'
+    (tmp_path / "config.toml").write_text(before, encoding="utf-8")
+
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_from_signin"})
+    monkeypatch.setattr(
+        codex_config, "plugin_mcp_url", lambda _name, **_kw: "https://mcp.research.prbe.ai/mcp"
+    )
+    # `not_logged_in` first (so the shortcut is attempted), then None -- what a
+    # config Codex refuses to load actually looks like from here.
+    statuses = iter(["not_logged_in", None, "o_auth"])
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
+    monkeypatch.setattr(
+        plugin_cli,
+        "login_codex_mcp",
+        lambda _name: claude_cli.Result(ok=True, detail="Login successful"),
+    )
+
+    messages = setup.apply_codex_mcp_auth()
+
+    assert (tmp_path / "config.toml").read_text(encoding="utf-8") == before
+    assert any("back as it was" in message for message in messages)
+    assert messages[-1] == "Codex MCP logged in (probe-research)."
+
+
+def test_codex_falls_back_to_its_own_login_when_the_shortcut_cannot_apply(monkeypatch, tmp_path):
+    """No manifest to read the URL from — registering a guessed URL with a live
+    token is worse than the extra approval, so the old path must still run."""
+    from probe.cli import claude_cli, codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_from_signin"})
+    monkeypatch.setattr(codex_config, "plugin_mcp_url", lambda _name, **_kw: None)
+    statuses = iter(["not_logged_in", "o_auth"])
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
+    monkeypatch.setattr(
+        plugin_cli,
+        "login_codex_mcp",
+        lambda _name: claude_cli.Result(ok=True, detail="Login successful"),
+    )
+
+    assert setup.apply_codex_mcp_auth() == ["Codex MCP logged in (probe-research)."]
+    assert not (tmp_path / "config.toml").exists()
+
+
 def test_codex_mcp_login_is_verified_after_the_supported_oauth_flow(monkeypatch):
     from probe.cli import claude_cli, plugin_cli
+
+    _no_reuse(monkeypatch)
 
     statuses = iter(["not_logged_in", "o_auth"])
     monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
@@ -556,6 +651,8 @@ def test_codex_mcp_login_is_verified_after_the_supported_oauth_flow(monkeypatch)
 
 def test_codex_mcp_login_failure_is_actionable(monkeypatch):
     from probe.cli import claude_cli, plugin_cli
+
+    _no_reuse(monkeypatch)
 
     monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: "not_logged_in")
     monkeypatch.setattr(
@@ -1936,7 +2033,7 @@ def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_p
     removed everything could never look fresh again."""
     from types import SimpleNamespace
 
-    from probe.cli import agent_rules
+    from probe.cli import agent_rules, claude_cli
 
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     memory = tmp_path / "CLAUDE.md"
@@ -1947,7 +2044,15 @@ def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_p
     monkeypatch.setattr(
         setup, "turn_off", lambda mode: SimpleNamespace(summary=lambda: "capture off", warnings=())
     )
-    monkeypatch.setattr(setup, "uninstall_plugin", lambda name: (True, "removed"))
+    # A Result, which is what `uninstall_plugin` actually returns. The old stub
+    # handed back a 2-tuple, matching the caller's broken unpacking rather than
+    # the real signature -- so this test passed for as long as production
+    # crashed.
+    monkeypatch.setattr(
+        setup,
+        "uninstall_plugin",
+        lambda name: claude_cli.Result(ok=True, detail="removed"),
+    )
     monkeypatch.setattr(setup.autoupdate, "save", lambda **kw: None)
 
     messages = setup.remove_everything(_caps(agent_rules_installed=True))
@@ -1955,6 +2060,39 @@ def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_p
     assert not agent_rules.is_installed(memory), "the block outlived 'Removed.'"
     assert memory.read_text() == "# mine\n", "and the user's own text survived"
     assert any("CLAUDE.md" in m for m in messages), "removal must be reported"
+
+
+def test_removing_probe_takes_the_codex_mcp_entry_with_it(monkeypatch, tmp_path):
+    """The entry we wrote holds a token this removal just orphaned.
+
+    Left behind, Codex keeps a server that lists as configured and answers 401
+    on every call. This runs at the END of `remove_everything`, which is why
+    the TypeError two lines above it -- `ok, detail = uninstall_plugin(...)` --
+    mattered so much: nothing down here ran at all.
+    """
+    from types import SimpleNamespace
+
+    from probe.cli import claude_cli, codex_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://mcp.research.prbe.ai/mcp", token="probe_pat_x"
+    )
+    config = tmp_path / "config.toml"
+    assert "probe-research" in config.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        setup, "turn_off", lambda mode: SimpleNamespace(summary=lambda: "capture off", warnings=())
+    )
+    monkeypatch.setattr(
+        setup, "uninstall_plugin", lambda name: claude_cli.Result(ok=True, detail="removed")
+    )
+    monkeypatch.setattr(setup.autoupdate, "save", lambda **kw: None)
+
+    messages = setup.remove_everything(_caps(agent_source="codex"))
+
+    assert "probe-research" not in config.read_text(encoding="utf-8")
+    assert any("MCP entry" in message for message in messages)
 
 
 def test_a_stale_block_is_something_to_do_not_nothing_to_change():

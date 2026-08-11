@@ -13,8 +13,34 @@
   tore down a working install while adding the second agent. Preselection now
   comes from the union: what the device already does carries over, and the
   lagging agent is brought up to it.
+- **`probe wizard --action uninstall` no longer crashes partway through.** It
+  raised `TypeError: cannot unpack non-iterable Result object` on the first
+  line of removal that touches a plugin, which left the machine half-removed:
+  plugins gone, but the managed instruction block, the auto-update flag and the
+  Codex MCP entry all untouched, and a traceback instead of a summary. The
+  test covering removal stubbed that call as a 2-tuple, matching the broken
+  unpacking rather than the real signature, so it passed for as long as the
+  command was broken.
 
 ### Changed
+
+- **Setting up Codex is one browser approval, the same as Claude Code.** The
+  approval the wizard already runs mints the read token (`api` and `mcp` are
+  requested together), so a second page to mint another one bought nothing —
+  and it was the step that failed, on a three-minute timeout. Codex now gets
+  that token through a user-level `[mcp_servers.probe-research]` entry, which
+  overrides the plugin's OAuth declaration and reports `bearer_token`. One
+  agent or both, it is one approval. The MCP is still hosted; nothing moves on
+  to the user's machine. `codex mcp login` remains the fallback for anyone
+  whose config cannot be read or written, and `probe wizard`'s removal path
+  takes the entry back out so an uninstall cannot leave an orphaned credential
+  pointing at the hosted server.
+
+  The write is confirmed with Codex itself and reverted byte-for-byte if Codex
+  does not accept it. Valid TOML is not the same as an acceptable config —
+  a `bearer_token` key parses fine and then stops Codex from starting at all —
+  so a status we cannot read is treated as a config we may have broken, and put
+  back before the fallback runs.
 
 - **Global Codex guidance now explicitly searches Research OS before research
   design.** The wizard-managed block in `~/.codex/AGENTS.md` tells Codex to look
