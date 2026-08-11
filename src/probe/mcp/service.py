@@ -1241,6 +1241,9 @@ class ResearchReadService:
                 data["url"] = url
         missing = list(result.missing)
         next_cursor: str | None = None
+        # A row view that emitted every row it has. False for an atomic view,
+        # which has no rows and therefore no "walk" to be at the end of.
+        rows_exhausted = False
 
         if result.rows is None:
             if request.offset:
@@ -1256,6 +1259,7 @@ class ResearchReadService:
             emitted = _fit(window, max(0, token_budget - _tokens(data)))
             data[result.rows_key] = emitted
             budget_cut = len(emitted) < len(window)
+            rows_exhausted = not budget_cut and not result.more_beyond
             if budget_cut or result.more_beyond:
                 next_cursor = _join_get_cursor(view, request.offset + len(emitted))
             if budget_cut:
@@ -1267,6 +1271,28 @@ class ResearchReadService:
 
         if _tokens(data) > token_budget and MissingMarker.TRUNCATED_BY_TOKEN_BUDGET not in missing:
             missing.append(MissingMarker.TOKEN_BUDGET_EXCEEDED)
+        # On the LAST page of a row walk, token_budget_exceeded says the opposite
+        # of every other marker here: not "data is missing" but "you have all of
+        # it, and it cost more than you asked for". Nothing was withheld, so there
+        # is nothing to continue, so next_cursor is correctly None -- and the pair
+        # `state=partial` + `next_cursor=None` told a caller walking the cursor
+        # that something was missing with no way to fetch it. That walk never
+        # terminates cleanly: every page but the last reports partial-with-cursor
+        # (true), and the last reports partial-without (a dead end). Reachable
+        # with no rows at all, too -- `_fit` emits one row at a floor of 0, so any
+        # entity whose FIXED part outgrows the budget lands here.
+        #
+        # Only for a row view that reached its end. An ATOMIC view (reproduce)
+        # keeps reporting partial: it has no pagination to be at the end of, and
+        # over-budget there is a standing warning that the manifest is bigger than
+        # the caller can hold -- deliberate, and pinned by test_mcp_views.
+        #
+        # The marker rides along either way; it just stops deciding the verdict.
+        verdict = [
+            m
+            for m in missing
+            if not (m == MissingMarker.TOKEN_BUDGET_EXCEEDED and rows_exhausted)
+        ]
         # NO_MATCH outranks PARTIAL: it is the ANSWER to the question asked, while
         # `missing` describes the response's own completeness, and the two are
         # independent. A truncated no-match that reported state="partial" would
@@ -1275,7 +1301,7 @@ class ResearchReadService:
         if result.no_match:
             state = EnvelopeState.NO_MATCH
         else:
-            state = EnvelopeState.PARTIAL if missing else EnvelopeState.COMPLETE
+            state = EnvelopeState.PARTIAL if verdict else EnvelopeState.COMPLETE
         return self._envelope(
             data,
             state=state,

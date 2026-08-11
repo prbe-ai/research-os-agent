@@ -167,3 +167,73 @@ def test_snapshot_of_a_non_git_dir_records_no_commit(client, app, project):
     assert meta["vcs"] is None
     assert meta["n_pending_upload"] == 0, "the bytes are stored"
     assert meta["skipped"], "the exclusions travel with the record"
+
+
+# --- the walk is bounded --------------------------------------------------
+#
+# Git bounds its own walk by what it tracks. A bare directory has nothing to
+# bound it, so the walk is whatever sits under the cwd -- and `probe run start`
+# runs wherever a person's shell is parked. Measured 2026-08-10 in a directory
+# of ~245 checkouts: 276,507 entries, 54.6s of walk-and-hash before a 256MB
+# upload cap to fail against at the end. The run was created in under a second;
+# the whole stall was capture.
+
+
+def test_a_workspace_sized_directory_is_refused_not_hashed(tmp_path):
+    from probe.sdk.snapshot import SnapshotTooLarge
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    for n in range(12):
+        (root / f"f{n}.py").write_text("x = 1\n")
+
+    with pytest.raises(SnapshotTooLarge, match="not a git repository"):
+        capture_directory_manifest(str(root), max_entries=5)
+
+
+def test_the_ceiling_is_checked_during_the_walk_not_after(tmp_path, monkeypatch):
+    """The cost being bounded IS the walk, so the refusal must not first pay it.
+
+    Pinned by counting sha256 reads: a ceiling enforced on the finished manifest
+    would hash all twelve files before deciding it did not want them.
+    """
+    from probe.sdk import snapshot as snapshot_mod
+
+    root = tmp_path / "workspace"
+    root.mkdir()
+    for n in range(12):
+        (root / f"f{n:02d}.py").write_text("x = 1\n")
+
+    hashed = []
+    real = snapshot_mod._file_sha256
+    monkeypatch.setattr(
+        snapshot_mod,
+        "_file_sha256",
+        lambda p, *a, **kw: (hashed.append(p), real(p, *a, **kw))[1],
+    )
+
+    with pytest.raises(snapshot_mod.SnapshotTooLarge):
+        snapshot_mod.capture_directory_manifest(str(root), max_entries=5)
+
+    assert len(hashed) <= 5, f"hashed {len(hashed)} files past a ceiling of 5"
+
+
+def test_an_ordinary_project_is_nowhere_near_the_default_ceiling(project):
+    """The ceiling must not turn into a gate on real work."""
+    from probe.sdk.snapshot import DEFAULT_MAX_DIRECTORY_ENTRIES
+
+    m = capture_directory_manifest(str(project))
+    assert 0 < len(m["entries"]) < DEFAULT_MAX_DIRECTORY_ENTRIES
+
+
+def test_include_reaches_the_non_git_path(project):
+    """capture_manifest used to delegate with the cwd ALONE, so an explicitly
+    included file was silently absent from every non-git manifest -- the one
+    place the caller had said out loud that it mattered.
+
+    `.venv/` is the sharpest case available: the walk drops it by policy, so the
+    file appears if and only if `include=` survived the delegation.
+    """
+    m = capture_manifest(str(project), include=[".venv/lib/huge.py"])
+
+    assert ".venv/lib/huge.py" in _paths(m), f"include= dropped; got {_paths(m)}"
