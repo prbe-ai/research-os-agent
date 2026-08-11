@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.70.2
+
 ### Fixed
 
 - **Rotating the read token now re-points Codex at it.** `probe login` and
