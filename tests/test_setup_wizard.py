@@ -364,6 +364,42 @@ def test_no_change_means_no_plan():
 # --- doctor ----------------------------------------------------------------
 
 
+def test_doctor_notices_codex_holding_a_token_this_device_replaced(monkeypatch, tmp_path):
+    """The health check used to report a rotated credential as authenticated.
+    `codex mcp list` says `bearer_token` for any header at all, so the only
+    local signal is the value itself."""
+    from probe.cli import codex_config
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://mcp.research.prbe.ai/mcp", token="probe_pat_old"
+    )
+
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_new"})
+    stale = doctor.stale_codex_token_warning()
+    assert stale and "older read token" in stale
+
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_old"})
+    assert doctor.stale_codex_token_warning() is None
+
+
+def test_doctor_stays_quiet_when_there_is_nothing_to_compare(monkeypatch, tmp_path):
+    """No entry, or no stored token, is not evidence of drift."""
+    from probe.cli import codex_config
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_new"})
+    assert doctor.stale_codex_token_warning() is None, "no Codex entry to be stale"
+
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://mcp.research.prbe.ai/mcp", token="probe_pat_old"
+    )
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {})
+    assert doctor.stale_codex_token_warning() is None, "no token held to compare against"
+
+
 def test_doctor_names_every_credential_source_not_just_the_winning_one():
     """A user who believes capture is off deserves to see what is keeping it
     alive."""
@@ -611,6 +647,82 @@ def test_a_codex_config_we_cannot_confirm_is_put_back_exactly_as_it_was(monkeypa
     assert (tmp_path / "config.toml").read_text(encoding="utf-8") == before
     assert any("back as it was" in message for message in messages)
     assert messages[-1] == "Codex MCP logged in (probe-research)."
+
+
+def test_rotating_the_read_token_re_points_codex_at_the_new_one(monkeypatch, tmp_path):
+    """A rotation used to leave Codex holding the revoked token, and nothing
+    said so: `codex mcp list` answers `bearer_token` for any header at all, so
+    the health check stayed green while every Codex call 401'd."""
+    from probe.cli import codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://mcp.research.prbe.ai/mcp", token="probe_pat_old"
+    )
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_new"})
+    monkeypatch.setattr(
+        codex_config, "plugin_mcp_url", lambda _name, **_kw: "https://mcp.research.prbe.ai/mcp"
+    )
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: "bearer_token")
+
+    messages = setup.sync_codex_mcp_token()
+
+    assert codex_config.configured_bearer("probe-research") == "probe_pat_new"
+    assert messages == ["Codex MCP updated to your current read token."]
+
+
+def test_a_codex_entry_that_already_matches_is_left_untouched(monkeypatch, tmp_path):
+    """A no-op re-run must not rewrite the user's config for nothing."""
+    from probe.cli import codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://mcp.research.prbe.ai/mcp", token="probe_pat_same"
+    )
+    before = (tmp_path / "config.toml").read_text(encoding="utf-8")
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_same"})
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: "bearer_token")
+
+    assert setup.sync_codex_mcp_token() == []
+    assert (tmp_path / "config.toml").read_text(encoding="utf-8") == before
+
+
+def test_rotation_does_not_create_a_codex_entry_on_a_machine_without_one(monkeypatch, tmp_path):
+    """`probe mcp token set` on a Claude-only machine must stay a no-op.
+    Creating the entry is an install decision, not a rotation one."""
+    from probe.cli import codex_config
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_new"})
+    monkeypatch.setattr(
+        codex_config, "plugin_mcp_url", lambda _name, **_kw: "https://mcp.research.prbe.ai/mcp"
+    )
+
+    assert setup.sync_codex_mcp_token() == []
+    assert not (tmp_path / "config.toml").exists()
+
+
+def test_a_wizard_rerun_after_a_rotation_repairs_the_codex_token(monkeypatch, tmp_path):
+    """`bearer_token` used to end the step early. That is exactly the state a
+    stale token is in, so the one command that should have fixed it did not."""
+    from probe.cli import codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://mcp.research.prbe.ai/mcp", token="probe_pat_old"
+    )
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_new"})
+    monkeypatch.setattr(
+        codex_config, "plugin_mcp_url", lambda _name, **_kw: "https://mcp.research.prbe.ai/mcp"
+    )
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: "bearer_token")
+
+    assert setup.apply_codex_mcp_auth() == ["Codex MCP updated to your current read token."]
+    assert codex_config.configured_bearer("probe-research") == "probe_pat_new"
 
 
 def test_codex_falls_back_to_its_own_login_when_the_shortcut_cannot_apply(monkeypatch, tmp_path):

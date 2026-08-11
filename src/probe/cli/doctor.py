@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import shutil
 
-from probe.cli import agent_rules, autoupdate, plugin_cli
+from probe.cli import agent_rules, autoupdate, codex_config, plugin_cli
 from probe.cli.capabilities import (
     ENV_CODEX_INGEST_TOKEN,
     ENV_INGEST_TOKEN,
@@ -157,6 +157,33 @@ def render(caps: Capabilities) -> str:
     return "\n".join(lines)
 
 
+def stale_codex_token_warning() -> str | None:
+    """Codex holding a read token this device has already replaced.
+
+    `codex mcp list` reports `bearer_token` for ANY header, so Codex's own
+    status cannot tell a current credential from a revoked one -- it says
+    authenticated either way, and every call 401s. Comparing the configured
+    header against the token we hold is the only local signal there is.
+
+    Silent whenever either side is unknown: no entry, no stored token, or an
+    unreadable config is not evidence of drift.
+    """
+    from probe.cli.capabilities import CODEX_MCP_NAME
+
+    configured = codex_config.configured_bearer(CODEX_MCP_NAME)
+    if not configured:
+        return None
+    from probe.cli.setup import current_mcp_token
+
+    held = current_mcp_token()
+    if not held or configured == held:
+        return None
+    return (
+        "the Codex MCP is using an older read token than this device holds; "
+        "re-run `probe wizard` to re-point it"
+    )
+
+
 def collect() -> Capabilities:
     """Snapshot this device. Every probe is individually fail-soft."""
     from probe import __version__
@@ -229,6 +256,10 @@ def collect() -> Capabilities:
                 "the probe-research MCP is installed but not logged in; "
                 "re-run `probe wizard` to complete Codex OAuth"
             )
+        elif status == codex_config.BEARER_STATUS:
+            stale = stale_codex_token_warning()
+            if stale:
+                warnings.append(stale)
 
     if TokenSource.ENVIRONMENT in sources:
         token_env = ENV_CODEX_INGEST_TOKEN if selected_agent == "codex" else ENV_INGEST_TOKEN

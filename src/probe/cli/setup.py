@@ -718,10 +718,60 @@ def _reuse_approval_for_codex_mcp(notes: list[str]) -> bool:
     return True
 
 
+def current_mcp_token() -> str | None:
+    """The read token this device holds, or None."""
+    from probe.sdk.config import load_context
+
+    try:
+        return (load_context() or {}).get("mcp_token") or None
+    except Exception:  # noqa: BLE001 - an unreadable config is "no token", not a crash
+        return None
+
+
+def sync_codex_mcp_token() -> list[str]:
+    """Re-point an existing Codex entry at the CURRENT read token.
+
+    Rotating the credential (`probe login`, `probe mcp token set`) writes a new
+    `mcp_token` and used to leave Codex holding the old one. Nothing noticed:
+    `codex mcp list` reports `bearer_token` for any header at all, so the health
+    check stayed green while every Codex call 401'd.
+
+    Only ever UPDATES an entry that already exists. Creating one is an install
+    decision -- it needs the plugin's URL and a verification step -- and
+    `probe mcp token set` on a machine that never set up Codex must stay a
+    no-op.
+    """
+    token = current_mcp_token()
+    if not token:
+        return []
+    try:
+        configured = codex_config.configured_bearer(CODEX_MCP_NAME)
+    except Exception:  # noqa: BLE001
+        return []
+    if configured is None or configured == token:
+        return []
+
+    url = codex_config.plugin_mcp_url(CODEX_MCP_NAME, marketplace=MARKETPLACE)
+    if not url:
+        return []
+    try:
+        written = codex_config.write_mcp_bearer(CODEX_MCP_NAME, url=url, token=token)
+    except codex_config.ConfigError as exc:
+        return [f"! Codex is still using the previous read token: {exc}"]
+    if plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME) != codex_config.BEARER_STATUS:
+        codex_config.restore(written)
+        return ["! could not update the Codex MCP token; its config is back as it was."]
+    return ["Codex MCP updated to your current read token."]
+
+
 def apply_codex_mcp_auth() -> list[str]:
     """Authorize the Codex-hosted MCP, reusing this run's approval if it can."""
     status = plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME)
-    if status in {"o_auth", "bearer_token"}:
+    if status == codex_config.BEARER_STATUS:
+        # Authenticated with a header -- but Codex cannot say WHICH token, so a
+        # re-run after a rotation has to check rather than assume.
+        return sync_codex_mcp_token()
+    if status == "o_auth":
         return []
 
     notes: list[str] = []

@@ -1783,6 +1783,14 @@ def mcp_token_set(
         updates["base_url"] = base
     path = save_context(updates)
 
+    # Codex holds its own copy of this token in ~/.codex/config.toml. Leaving
+    # the old one there is a silent 401 on every Codex call, with a health check
+    # that still says authenticated.
+    from probe.cli import setup as _wizard
+
+    for line in _wizard.sync_codex_mcp_token():
+        print(line)
+
     who = (identity or {}).get("email") or "unverified"
     # Never report success without saying whether it was actually checked — an
     # unverified write that reads like a verified one is how this broke before.

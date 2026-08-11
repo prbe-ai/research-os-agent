@@ -228,7 +228,6 @@ def test_the_url_comes_from_the_installed_plugin_not_a_constant(tmp_path, monkey
     assert missing is None
 
 
-@pytest.mark.skipif(shutil.which("codex") is None, reason="codex not installed")
 def test_codex_itself_accepts_what_we_write(tmp_path):
     """The only check that can catch the failure that matters.
 
@@ -242,6 +241,15 @@ def test_codex_itself_accepts_what_we_write(tmp_path):
     config Codex already had, and requires `codex mcp list --json` to still
     parse AND to report our server as authenticated by the header.
     """
+    if shutil.which("codex") is None:
+        # A skip is the right answer on a laptop without Codex and the WRONG one
+        # in CI: this is the only test that asks Codex anything, so a silently
+        # skipped install would drop the coverage back to zero while the suite
+        # stayed green -- which is the failure mode it exists to prevent.
+        if os.environ.get("CI"):
+            pytest.fail("codex is not installed in CI; the acceptance test cannot be skipped here")
+        pytest.skip("codex not installed")
+
     home = tmp_path / "codex-home"
     home.mkdir()
     (home / "config.toml").write_text(
@@ -287,3 +295,32 @@ def test_codex_itself_accepts_what_we_write(tmp_path):
     assert ours[0].get("auth_status") == codex_config.BEARER_STATUS
     # The rest of the user's config survived the edit.
     assert any(s.get("name") == "unrelated" for s in servers if isinstance(s, dict))
+
+
+def test_the_configured_token_is_readable_so_rotation_can_be_detected(tmp_path):
+    """`codex mcp list` says `bearer_token` for ANY header, current or revoked.
+    Telling those apart needs the value itself."""
+    path = _config(tmp_path)
+    assert codex_config.configured_bearer("probe-research", path=path) is None
+
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://example.test/mcp", token="probe_pat_first", path=path
+    )
+    assert codex_config.configured_bearer("probe-research", path=path) == "probe_pat_first"
+
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://example.test/mcp", token="probe_pat_second", path=path
+    )
+    assert codex_config.configured_bearer("probe-research", path=path) == "probe_pat_second"
+
+
+def test_reading_a_broken_or_foreign_config_reports_no_token_rather_than_raising(tmp_path):
+    path = _config(tmp_path)
+    path.write_text("[mcp_servers.probe-research\nbroken", encoding="utf-8")
+    assert codex_config.configured_bearer("probe-research", path=path) is None
+
+    path.write_text(
+        '[mcp_servers.probe-research]\nurl = "https://example.test/mcp"\noauth = true\n',
+        encoding="utf-8",
+    )
+    assert codex_config.configured_bearer("probe-research", path=path) is None

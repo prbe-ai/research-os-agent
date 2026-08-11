@@ -4,6 +4,44 @@
 
 ### Fixed
 
+- **Rotating the read token now re-points Codex at it.** `probe login` and
+  `probe mcp token set` wrote a new `mcp_token` and left Codex holding the old
+  one, which 401s on every call — and nothing said so, because `codex mcp list`
+  reports `bearer_token` for any header at all, so the health check stayed
+  green. Rotation updates an existing Codex entry (never creates one), a wizard
+  re-run repairs a drifted token instead of stopping at "already authenticated",
+  and `probe doctor` compares the configured header against the token this
+  device holds and says when they differ.
+
+### Changed
+
+- **CI installs the Codex CLI**, so the test that asks Codex whether it accepts
+  the config we write actually runs there. It was gated on `codex` being on
+  PATH, which meant the only coverage of the one failure that stops Codex from
+  starting was a developer's laptop. The test now fails rather than skips when
+  `CI` is set and Codex is missing, so the coverage cannot silently vanish
+  again.
+- **A release stamps the CHANGELOG.** The bump commit touched `pyproject.toml`
+  and `client-version.json` only, so every release shipped with its entries
+  still under `## Unreleased` and the published history had no version headings
+  at all. 0.70.0 and 0.70.1 are stamped retroactively here.
+
+## 0.70.1
+
+### Changed
+
+- **The wizard's finished screen is two labelled lists, not a paragraph.**
+  It ends by answering two different questions — what changed, and what you
+  still have to do — and used to answer both in one undifferentiated run of
+  prose. The action people missed sat at the end of it: approve the Codex hook,
+  or capture is installed and sends nothing. Outcomes now appear under
+  `What changed:` and actions under `What's next:`, one short bullet each, and
+  paths are shown as `~/.codex/AGENTS.md` rather than home-prefixed in full.
+
+## 0.70.0
+
+### Fixed
+
 - **Adding Codex to a machine that already runs Claude Code no longer arrives
   with every box unticked.** The dual-agent menu derived its preselection from
   the intersection of the two agents' state, so a configured Claude Code plus a
@@ -23,14 +61,6 @@
   command was broken.
 
 ### Changed
-
-- **The wizard's finished screen is two labelled lists, not a paragraph.**
-  It ends by answering two different questions — what changed, and what you
-  still have to do — and used to answer both in one undifferentiated run of
-  prose. The action people missed sat at the end of it: approve the Codex hook,
-  or capture is installed and sends nothing. Outcomes now appear under
-  `What changed:` and actions under `What's next:`, one short bullet each, and
-  paths are shown as `~/.codex/AGENTS.md` rather than home-prefixed in full.
 
 - **Setting up Codex is one browser approval, the same as Claude Code.** The
   approval the wizard already runs mints the read token (`api` and `mcp` are
