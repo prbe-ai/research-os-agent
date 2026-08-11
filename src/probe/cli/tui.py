@@ -97,9 +97,7 @@ def wrap(text: str, width: int = CONTENT_WIDTH) -> list[str]:
 
     lead = " " * (len(text) - len(text.lstrip()))
     hang = lead + ("  " if text.lstrip().startswith("- ") else "")
-    return (
-        textwrap.wrap(text.strip(), width, initial_indent=lead, subsequent_indent=hang) or [""]
-    )
+    return textwrap.wrap(text.strip(), width, initial_indent=lead, subsequent_indent=hang) or [""]
 
 
 def say(text: str = "") -> None:
@@ -452,9 +450,7 @@ def bind_escape(question):
     return question
 
 
-def ask(
-    question, height: int | None = None, header: str | Sequence[str] | None = None
-):
+def ask(question, height: int | None = None, header: str | Sequence[str] | None = None):
     """Run a prompt full-screen and centred, with Escape bound.
 
     Returns BACK, None (Ctrl-C), or the chosen value.
@@ -645,6 +641,7 @@ class Progress:
         self._steps = list(steps)
         self._state = [_PENDING] * len(steps)
         self._results: list[str] = []
+        self._next: list[str] = []
         self._queued: list[str] = []
 
     # -- state ---------------------------------------------------------------
@@ -671,6 +668,21 @@ class Progress:
                 self._queued.append(line)
         self.render()
 
+    def note_next(self, *lines: str) -> None:
+        """Attach an action the user still has to take, after this run ends.
+
+        A separate bucket because the two halves of this screen answer different
+        questions -- what happened, and what you do now -- and a reader looking
+        for the second one should not have to find it inside a paragraph about
+        the first. `Restart Codex` and `approve the hook` used to sit at the end
+        of a wall of prose, which is where the hook approval got missed.
+        """
+        for line in lines:
+            if line:
+                self._next.append(line)
+                self._queued.append(line)
+        self.render()
+
     # -- rendering -----------------------------------------------------------
 
     def _done(self) -> int:
@@ -689,7 +701,9 @@ class Progress:
         ]
         lines += ["", self.bar()]
         if self._results:
-            lines += ["", *self._results]
+            lines += ["", "What changed:", *(f"  - {line}" for line in self._results)]
+        if self._next:
+            lines += ["", "What's next:", *(f"  - {line}" for line in self._next)]
         return lines
 
     def render(self) -> None:

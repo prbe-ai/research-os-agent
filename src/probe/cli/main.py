@@ -1652,9 +1652,7 @@ def _run_wizard_action(
             f"Could not confirm the plugins are installed ({wizard.agent_label(caps.agent_source)} did not answer). "
             "Run `probe doctor` to check.",
         )
-    notice = wizard.restart_notice(caps, selection)
-    if notice:
-        progress.note("", notice)
+    progress.note_next(*wizard.restart_notice(caps, selection))
     progress.close()
     for message in _register_local_capabilities(
         after,
@@ -2901,7 +2899,12 @@ def _materialize_record(c: Any, run_id: str, record: dict, dest: str) -> dict:
     """
     dest_path = Path(dest)
     dest_path.mkdir(parents=True, exist_ok=True)
-    written: dict[str, Any] = {"dest": str(dest_path), "code_tree": None, "inputs": [], "manifest": None}
+    written: dict[str, Any] = {
+        "dest": str(dest_path),
+        "code_tree": None,
+        "inputs": [],
+        "manifest": None,
+    }
 
     env_ref = (record.get("run") or {}).get("env_ref")
     if env_ref:
@@ -2927,9 +2930,7 @@ def _materialize_record(c: Any, run_id: str, record: dict, dest: str) -> dict:
             marker.write_text(str(item["content_omitted_reason"]))
             written["inputs"].append(f"{name}.omitted")
 
-    (dest_path / "reproduce-manifest.json").write_text(
-        json.dumps(record, indent=2, sort_keys=True)
-    )
+    (dest_path / "reproduce-manifest.json").write_text(json.dumps(record, indent=2, sort_keys=True))
     written["manifest"] = "reproduce-manifest.json"
     return written
 
@@ -5292,9 +5293,7 @@ def snapshot_restore(
         if not env_ref:
             print(f"error: run {run} has no execution record to restore", file=sys.stderr)
             raise typer.Exit(1)
-        result = _restore_captured_tree(
-            c, handle.id, env_ref, dest or ".", verify_only=verify_only
-        )
+        result = _restore_captured_tree(c, handle.id, env_ref, dest or ".", verify_only=verify_only)
 
     for f in result["files"]:
         if f["status"] == "unavailable":

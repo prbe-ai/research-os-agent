@@ -24,6 +24,14 @@
 
 ### Changed
 
+- **The wizard's finished screen is two labelled lists, not a paragraph.**
+  It ends by answering two different questions — what changed, and what you
+  still have to do — and used to answer both in one undifferentiated run of
+  prose. The action people missed sat at the end of it: approve the Codex hook,
+  or capture is installed and sends nothing. Outcomes now appear under
+  `What changed:` and actions under `What's next:`, one short bullet each, and
+  paths are shown as `~/.codex/AGENTS.md` rather than home-prefixed in full.
+
 - **Setting up Codex is one browser approval, the same as Claude Code.** The
   approval the wizard already runs mints the read token (`api` and `mcp` are
   requested together), so a second page to mint another one bought nothing —
