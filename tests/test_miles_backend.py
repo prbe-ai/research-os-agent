@@ -124,6 +124,51 @@ class TestFoldedDeltas:
         finally:
             tracker.finish()
 
+    def test_run_spec_carries_the_parent_run(self, monkeypatch, tmp_path):
+        """A run can say what it came from.
+
+        Asserted on what reached client.run(), not on the spec dict: the
+        consumer filters some keys out before the call, so a spec-only
+        assertion would pass while the edge was still dropped.
+        """
+        tracker = self._tracker(
+            monkeypatch, tmp_path, probe_parent_run="parent-run-id"
+        )
+        try:
+            (client,) = FakeClient.instances
+            (run_kwargs,) = client.run_calls
+            assert run_kwargs["parent_run_id"] == "parent-run-id"
+            # The server enum is fork|resume|retry|branch and rejects anything
+            # else, so nothing is invented when the caller did not ask.
+            assert "parent_relation" not in run_kwargs
+        finally:
+            tracker.finish()
+
+    def test_run_spec_takes_the_parent_from_the_environment(
+        self, monkeypatch, tmp_path
+    ):
+        """Ray actors get env, not the launcher's argv."""
+        monkeypatch.setenv("PROBE_PARENT_RUN", "env-parent")
+        monkeypatch.setenv("PROBE_PARENT_RELATION", "branch")
+        tracker = self._tracker(monkeypatch, tmp_path)
+        try:
+            (client,) = FakeClient.instances
+            (run_kwargs,) = client.run_calls
+            assert run_kwargs["parent_run_id"] == "env-parent"
+            assert run_kwargs["parent_relation"] == "branch"
+        finally:
+            tracker.finish()
+
+    def test_run_spec_omits_parent_when_unset(self, monkeypatch, tmp_path):
+        monkeypatch.delenv("PROBE_PARENT_RUN", raising=False)
+        tracker = self._tracker(monkeypatch, tmp_path)
+        try:
+            (client,) = FakeClient.instances
+            (run_kwargs,) = client.run_calls
+            assert "parent_run_id" not in run_kwargs
+        finally:
+            tracker.finish()
+
     def test_run_spec_omits_budget_when_plan_unknown(self, monkeypatch, tmp_path):
         tracker = self._tracker(monkeypatch, tmp_path)
         try:
