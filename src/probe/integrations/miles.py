@@ -340,6 +340,27 @@ def _run_spec(args, external_id: str) -> dict[str, Any]:
             "cwd": getattr(args, "probe_snapshot_cwd", None),
         },
     }
+    # Lineage. A run produced by this backend previously had no way to say
+    # what it came from: `_run_spec` had no parent field and nothing can set
+    # one afterwards, so an eval of a training run's checkpoint recorded no
+    # edge back to it. `links` is not a substitute -- those become
+    # foreign_keys, which a human can follow and a query cannot.
+    #
+    # client.run() takes **run_kw, so this flows through untouched.
+    parent = getattr(args, "probe_parent_run", None) or os.environ.get(
+        "PROBE_PARENT_RUN"
+    )
+    if parent:
+        spec["parent_run_id"] = str(parent)
+        # Server-side enum: fork | resume | retry | branch. Left unset unless
+        # asked for -- an unrecognised value is rejected, and none of those
+        # honestly describes "evaluated this run's checkpoint".
+        relation = getattr(args, "probe_parent_relation", None) or os.environ.get(
+            "PROBE_PARENT_RELATION"
+        )
+        if relation:
+            spec["parent_relation"] = str(relation)
+
     if planned := planned_labeled_points(args):
         spec["labeled_point_budget"] = planned
     return spec
