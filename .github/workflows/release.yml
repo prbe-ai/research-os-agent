@@ -121,6 +121,25 @@ jobs:
                   r'("version"\s*:\s*")[^"]*(")', pv, "plugin.json version")
               sub("client-version.json",
                   r'("plugin"\s*:\s*\{[^}]*?"latest"\s*:\s*")[^"]*(")', pv, "manifest plugin.latest")
+          # Stamp the CHANGELOG. Without this every release shipped with its
+          # entries still under "## Unreleased", so the published history had no
+          # version headings at all and three "Unreleased" sections accumulated.
+          # Non-fatal: a release must not fail over a changelog heading, and an
+          # already-stamped file (or one with nothing new) is a normal state.
+          if v:
+              changelog = pathlib.Path("CHANGELOG.md")
+              if not changelog.exists():
+                  print("::warning::CHANGELOG.md not found; not stamped")
+              else:
+                  text = changelog.read_text()
+                  # `## 0.28.0`, matching every heading already in the file.
+                  heading = f"## {v}"
+                  if "## Unreleased" not in text:
+                      print("::warning::no '## Unreleased' section; CHANGELOG not stamped")
+                  else:
+                      changelog.write_text(
+                          text.replace("## Unreleased", f"## Unreleased\n\n{heading}", 1)
+                      )
           PY
           if [ -n "$VERSION" ] && [ -n "$PLUGIN_VERSION" ]; then
             MSG="chore: release cli v$VERSION + plugin $PLUGIN_VERSION"
@@ -131,7 +150,7 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add pyproject.toml client-version.json plugins/probe-research/.claude-plugin/plugin.json
+          git add pyproject.toml client-version.json plugins/probe-research/.claude-plugin/plugin.json CHANGELOG.md
           git commit -m "$MSG"
           for t in $TAGS; do git tag -a "$t" -m "$t"; done
           if [ "$DRY_RUN" = "true" ]; then

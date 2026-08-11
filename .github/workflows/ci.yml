@@ -24,6 +24,14 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - run: pip install -e ".[dev]"
+      # The Codex CLI, so tests/test_codex_config.py can ask the REAL binary
+      # whether the config we write is one it will load. Every other test there
+      # asserts the output parses as TOML, and `bearer_token` is the standing
+      # proof that parsing is not acceptance: valid TOML that Codex rejects, and
+      # the rejection takes down its whole config load rather than one server.
+      # Without this the only check that catches that is a local-machine skip.
+      - name: Codex CLI (for the config-acceptance test)
+        run: npm install -g @openai/codex@0.147.0
       # tests/test_parity.py is the contract guard: it fails when a backend route in
       # schema/openapi.json has no client call site (or when the allowlists go stale).
       - run: pytest -q

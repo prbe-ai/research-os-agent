@@ -96,6 +96,28 @@ def plugin_mcp_url(name: str, *, marketplace: str) -> str | None:
     return None
 
 
+def configured_bearer(name: str, *, path: Path | None = None) -> str | None:
+    """The token currently in the header we wrote, or None if there is no entry.
+
+    Rotation is the reason this exists. `codex mcp list` reports `bearer_token`
+    for ANY header, valid or not, so Codex's own view cannot tell a current
+    credential from one revoked a week ago -- it says "authenticated" either
+    way, right up until every call 401s.
+    """
+    target = path or config_path()
+    try:
+        parsed = tomllib.loads(target.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return None
+    entry = (parsed.get("mcp_servers") or {}).get(name)
+    if not isinstance(entry, dict):
+        return None
+    header = (entry.get("http_headers") or {}).get("Authorization")
+    if not isinstance(header, str) or not header.startswith("Bearer "):
+        return None
+    return header[len("Bearer ") :].strip() or None
+
+
 def _toml_string(value: str) -> str:
     """A TOML basic string. `json.dumps` escapes exactly what TOML needs here."""
     return json.dumps(value)
