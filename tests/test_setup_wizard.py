@@ -2033,7 +2033,7 @@ def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_p
     removed everything could never look fresh again."""
     from types import SimpleNamespace
 
-    from probe.cli import agent_rules
+    from probe.cli import agent_rules, claude_cli
 
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     memory = tmp_path / "CLAUDE.md"
@@ -2044,7 +2044,15 @@ def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_p
     monkeypatch.setattr(
         setup, "turn_off", lambda mode: SimpleNamespace(summary=lambda: "capture off", warnings=())
     )
-    monkeypatch.setattr(setup, "uninstall_plugin", lambda name: (True, "removed"))
+    # A Result, which is what `uninstall_plugin` actually returns. The old stub
+    # handed back a 2-tuple, matching the caller's broken unpacking rather than
+    # the real signature -- so this test passed for as long as production
+    # crashed.
+    monkeypatch.setattr(
+        setup,
+        "uninstall_plugin",
+        lambda name: claude_cli.Result(ok=True, detail="removed"),
+    )
     monkeypatch.setattr(setup.autoupdate, "save", lambda **kw: None)
 
     messages = setup.remove_everything(_caps(agent_rules_installed=True))
@@ -2052,6 +2060,39 @@ def test_removing_probe_also_takes_the_block_out_of_claude_md(monkeypatch, tmp_p
     assert not agent_rules.is_installed(memory), "the block outlived 'Removed.'"
     assert memory.read_text() == "# mine\n", "and the user's own text survived"
     assert any("CLAUDE.md" in m for m in messages), "removal must be reported"
+
+
+def test_removing_probe_takes_the_codex_mcp_entry_with_it(monkeypatch, tmp_path):
+    """The entry we wrote holds a token this removal just orphaned.
+
+    Left behind, Codex keeps a server that lists as configured and answers 401
+    on every call. This runs at the END of `remove_everything`, which is why
+    the TypeError two lines above it -- `ok, detail = uninstall_plugin(...)` --
+    mattered so much: nothing down here ran at all.
+    """
+    from types import SimpleNamespace
+
+    from probe.cli import claude_cli, codex_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    codex_config.write_mcp_bearer(
+        "probe-research", url="https://mcp.research.prbe.ai/mcp", token="probe_pat_x"
+    )
+    config = tmp_path / "config.toml"
+    assert "probe-research" in config.read_text(encoding="utf-8")
+
+    monkeypatch.setattr(
+        setup, "turn_off", lambda mode: SimpleNamespace(summary=lambda: "capture off", warnings=())
+    )
+    monkeypatch.setattr(
+        setup, "uninstall_plugin", lambda name: claude_cli.Result(ok=True, detail="removed")
+    )
+    monkeypatch.setattr(setup.autoupdate, "save", lambda **kw: None)
+
+    messages = setup.remove_everything(_caps(agent_source="codex"))
+
+    assert "probe-research" not in config.read_text(encoding="utf-8")
+    assert any("MCP entry" in message for message in messages)
 
 
 def test_a_stale_block_is_something_to_do_not_nothing_to_change():

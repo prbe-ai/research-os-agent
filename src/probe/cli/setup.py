@@ -700,8 +700,7 @@ def _reuse_approval_for_codex_mcp(notes: list[str]) -> bool:
     if plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME) != codex_config.BEARER_STATUS:
         codex_config.restore(written)
         notes.append(
-            "! Codex did not accept the credential from your sign-in; "
-            "its config is back as it was."
+            "! Codex did not accept the credential from your sign-in; its config is back as it was."
         )
         return False
     return True
@@ -1086,9 +1085,15 @@ def remove_everything(caps: Capabilities) -> list[str]:
     messages.append(result.summary())
     messages.extend(f"! {warning}" for warning in result.warnings)
 
-    ok, detail = uninstall_plugin(TRACKING_PLUGIN_NAME)
-    if not ok and "not found" not in detail.lower():
-        messages.append(f"! could not remove {TRACKING_PLUGIN_NAME}: {detail}")
+    # `uninstall_plugin` returns a Result, not a 2-tuple. Unpacking it raised
+    # TypeError on the FIRST line of removal that touches a plugin, so
+    # `probe wizard --action uninstall` crashed for everyone -- after the
+    # plugins were gone, before the instruction block, the auto-update flag and
+    # (below) the Codex MCP entry were dealt with. A half-removed machine that
+    # ends in a traceback, and no test caught it because none called this.
+    removal = uninstall_plugin(TRACKING_PLUGIN_NAME)
+    if not removal.ok and "not found" not in removal.detail.lower():
+        messages.append(f"! could not remove {TRACKING_PLUGIN_NAME}: {removal.detail}")
 
     # The MCP entry we may have written into the user's own config.toml is not
     # ours to leave behind: after this call its token is orphaned, so Codex

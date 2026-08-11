@@ -13,6 +13,14 @@
   tore down a working install while adding the second agent. Preselection now
   comes from the union: what the device already does carries over, and the
   lagging agent is brought up to it.
+- **`probe wizard --action uninstall` no longer crashes partway through.** It
+  raised `TypeError: cannot unpack non-iterable Result object` on the first
+  line of removal that touches a plugin, which left the machine half-removed:
+  plugins gone, but the managed instruction block, the auto-update flag and the
+  Codex MCP entry all untouched, and a traceback instead of a summary. The
+  test covering removal stubbed that call as a 2-tuple, matching the broken
+  unpacking rather than the real signature, so it passed for as long as the
+  command was broken.
 
 ### Changed
 
