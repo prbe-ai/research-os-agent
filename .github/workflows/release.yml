@@ -186,6 +186,16 @@ jobs:
           echo "releasing $pkg"
       - if: ${{ github.event_name == 'push' || inputs.version != '' }}
         run: pip install -e ".[dev]"
+      # The same suite CI runs, so it needs the same tools. The Codex
+      # config-acceptance test refuses to SKIP when `CI` is set -- silently
+      # dropping the one check that asks Codex anything is the failure it
+      # exists to prevent -- and this job sets `CI` like every other. Without
+      # codex here the gate fails the release, which is what happened to
+      # v0.70.2: the bump commit and tag pushed, the publish never ran, and the
+      # version manifest was left advertising a release PyPI did not have.
+      - if: ${{ github.event_name == 'push' || inputs.version != '' }}
+        name: Codex CLI (for the config-acceptance test)
+        run: npm install -g @openai/codex@0.147.0
       - if: ${{ github.event_name == 'push' || inputs.version != '' }}
         run: pytest -q # gate: never publish a red tree
       - if: ${{ github.event_name == 'push' || inputs.version != '' }}

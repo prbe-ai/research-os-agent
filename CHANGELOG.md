@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The release gate can run the Codex acceptance test.** `release.yml` runs
+  the same suite as CI as a publish gate, but only CI installed the Codex CLI —
+  and that test fails rather than skips when `CI` is set, by design. v0.70.2
+  died on it after the bump commit and tag had already pushed, leaving the
+  version manifest advertising a release PyPI did not have.
+
 ## 0.70.2
 
 ### Fixed
