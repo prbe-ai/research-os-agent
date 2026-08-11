@@ -772,9 +772,9 @@ class Client:
     ) -> dict:
         """PATCH /v1/projects/{id} for display fields and visible Markdown.
 
-        ``summary_markdown`` is the human/agent-maintained document displayed
-        below the live AI project summary. It is replaced wholesale; ``""``
-        clears it. AI summary refreshes do not touch it.
+        ``summary_markdown`` is the human/agent-maintained suffix rendered with
+        the server-owned AI narrative as one Project Summary. The suffix is
+        replaced wholesale; ``""`` clears it. AI refreshes do not touch it.
 
         ``tags`` REPLACES the whole list ([] clears); the server normalizes to
         lowercase-kebab (CONTRACT.md "tags").
