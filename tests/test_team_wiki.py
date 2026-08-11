@@ -551,3 +551,36 @@ def test_the_cli_on_a_pre_pages_backend_names_the_fix(wired, capsys):
 
     assert cli.main(["wiki", "list"]) != 0
     assert "predates the multi-page team wiki" in capsys.readouterr().err
+
+
+def test_wiki_versions_reads_the_index_PAGE_not_the_legacy_document(client, app):
+    """`get_entity(ref="wiki", view="versions")` must read the FRONT PAGE.
+
+    The legacy `GET /v1/wiki/versions` reports the history of the old
+    single-document wiki, which is a DIFFERENT document from the one
+    `get_entity(ref="wiki")` returns now. A caller reading the body and then its
+    history was shown two unrelated things, and a revert offered against that
+    list would have restored content nobody reads.
+
+    The two sources are given DELIBERATELY DIFFERENT data: with identical
+    fixtures this passes against either implementation, which is how the first
+    version of this test certified the bug it exists to catch.
+    """
+    app.wiki_history = [
+        {
+            "version": 99,
+            "author": "agent:wiki",
+            "summary": "LEGACY document revision",
+            "created_at": "2020-01-01T00:00:00Z",
+            "size_chars": 1,
+        }
+    ]
+    _seed_pages(app, ("index", "contents", "# lab\n"))
+
+    rows = _service(client).get_entity("wiki", view="versions")["data"]["versions"]
+
+    assert rows, "the index page has a history and it must be the one returned"
+    assert all("LEGACY" not in (r.get("summary") or "") for r in rows), (
+        "history came from the legacy document, not the index page"
+    )
+    assert all(r["version"] != 99 for r in rows)

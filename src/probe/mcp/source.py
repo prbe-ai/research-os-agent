@@ -16,6 +16,13 @@ from .contract import Capability, EntityType
 _SUPPORT_RECHECK_SECONDS = 300.0
 
 
+# The wiki's front page: the engine always writes the index to this identity,
+# and `GET /v1/wiki` resolves to it. Named here so the history view and the card
+# view cannot drift on which page "the wiki" means.
+_INDEX_WIKI_TYPE = "index"
+_INDEX_SLUG = "contents"
+
+
 class ResearchOSSource:
     """Read authoritative structured data through Probe Research APIs.
 
@@ -577,15 +584,26 @@ class ResearchOSSource:
         return self.client.list_experiment_versions(experiment_id)
 
     def wiki_versions(self, *, limit: int | None = None) -> dict:
-        """The team wiki's history page, newest first, WITHOUT bodies.
+        """The wiki FRONT PAGE's history, newest first, WITHOUT bodies.
 
-        `limit` only -- the backend's `before_version` cursor is deliberately not
-        plumbed through. `get_entity`'s pagination is an OFFSET into the rows a
-        view returned, so a keyset cursor here would be a second, incompatible
-        position that the envelope has no way to hand back. The view fetches a
-        window plus a lookahead through `_bounded`, exactly like spans and metric
-        points do against their own limit-only routes."""
-        return self.client.wiki_versions(limit=limit)
+        Reads the index page (`index/contents`) through the page API rather than
+        the legacy `GET /v1/wiki/versions`. That route reports the history of the
+        old single-document wiki, which is a DIFFERENT document from the one
+        `get_entity(ref="wiki")` now returns -- so a caller reading the body and
+        then its history was shown two unrelated things, and a revert offered
+        against that list would have restored content nobody reads.
+
+        `limit` only, and it is applied here rather than sent: the page-history
+        route returns a page's whole chain and takes no cursor, so slicing is the
+        honest way to bound it. The backend's absent cursor is why
+        `next_before_version` is always None -- see the view, which says where
+        older revisions are instead of implying a full page is the whole history.
+        """
+        page = self.client.wiki_page_versions(_INDEX_WIKI_TYPE, _INDEX_SLUG)
+        versions = page.get("versions") or []
+        if limit is not None:
+            versions = versions[:limit]
+        return {"versions": versions, "next_before_version": None}
 
     def execution_record(self, content_hash: str) -> dict:
         """The pinned environment behind ``run.env_ref`` — code, deps, hardware,
