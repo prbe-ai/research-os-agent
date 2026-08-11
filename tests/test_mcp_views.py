@@ -115,10 +115,22 @@ def _populated(client, app, *, spans: int = 3):
          "customer_id": "lab-42", "created_at": "2026-07-16T00:00:00Z"},
     ]
     client.create_artifact_version(shared_id, uri="r2://bucket/v1")
-    # The TEAM WIKI (research-os 0098) — a document AND a history, because the
+    # The TEAM WIKI — a front page, a PAGE and a history, because the
     # honest-envelope guard below walks every (kind, view) pair and an empty wiki
-    # would let `versions` pass by having nothing to report.
-    client.set_wiki("# lab\n\nHarbor has no generic-k8s backend.\n", 0, summary="seed")
+    # would let `versions` and `pages` pass by having nothing to report.
+    app.wiki_index = {
+        "body": "# lab\n\nHarbor has no generic-k8s backend.\n",
+        "entries": [],
+        "updated_at": "2026-08-05T04:00:00Z",
+        "version": 1,
+    }
+    client.set_wiki_page(
+        "runbook",
+        "harbor-k8s",
+        title="Harbor on Kubernetes",
+        body="Harbor has no generic-k8s backend; use GKE.\n",
+        version=0,
+    )
     return rid, experiment_id, group["id"], record["content_hash"]
 
 

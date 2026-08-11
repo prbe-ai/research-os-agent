@@ -354,7 +354,7 @@ REACH FOR THESE TOOLS WHEN:
 - You need to figure out what another researcher is doing.
 - You just arrived in an unfamiliar project and do not know what is in it.
 
-START WITH THE TEAM WIKI. An unscoped browse_research carries an excerpt of it, and get_entity(ref="wiki") has the whole document: one markdown page per team saying what this lab works on, what it has already learned, and what not to repeat. Read it before you plan, not after you are stuck -- structure alone (project names, run counts) tells you what exists and nothing about what any of it means. It is regenerated nightly and edited by hand, so it is the team's current best account rather than a permanent record; when you learn something that contradicts it, `probe wiki write` is how you correct it.
+START WITH THE TEAM WIKI. An unscoped browse_research carries an excerpt of it, and get_entity(ref="wiki") is its FRONT PAGE: what this lab works on, what it has already learned, and what not to repeat. The wiki is a set of PAGES -- get_entity(ref="wiki", view="pages") lists them all (type, slug, title) and get_entity(ref="wiki:<type>/<slug>") opens one. Read the front page before you plan, not after you are stuck -- structure alone (project names, run counts) tells you what exists and nothing about what any of it means. Pages are written by a nightly synthesis run and edited by hand, so they are the team's current best account rather than a permanent record; when you learn something that contradicts one, `probe wiki write <type>/<slug>` is how you correct it.
 
 REUSE BEFORE YOU CREATE. Duplicate identities are the most expensive avoidable error in this system: two scorers with the same intent and different behaviour make every result that used either one unreproducible. Before writing any reusable artifact, call get_entity(ref="artifact:<name>", view="versions"). Artifacts resolve by NAME at the shared (lab-wide) level, which is where an official one lives.
 
@@ -584,7 +584,7 @@ def create_server(
           artifact    card | versions
           project     card | artifacts | notes
           group       card
-          wiki        card | versions
+          wiki        card | versions | pages
 
         `ref="artifact:<name>"` with `view="versions"` is the reuse check before you
         create a script, scorer, dataset, config or image. The NAME axis is the reuse
@@ -611,16 +611,22 @@ def create_server(
         `card`, so you have usually already seen it by the time you would ask; this
         view returns the whole file. Write it with `probe notes write`.
 
-        `ref="wiki"` is the TEAM's wiki -- the lab-wide sibling of those notes, and
-        the ref takes no id because there is exactly one per team. Its `card` is the
-        WHOLE document (an excerpt already rode along on `browse_research`, so if
-        you are asking here you want the rest); `view="versions"` is its history,
-        newest first, carrying `author` and `size_chars` but no bodies. A team that
-        has never had one reads back `{body: "", version: 0}` — that is a real
-        answer, not a failed read. It is REGENERATED nightly and hand-edited between
-        passes, so treat it as the team's current best account rather than a
-        permanent record; `probe wiki write` is how you correct it, and the version
-        check there is what stops two writers overwriting each other.
+        `ref="wiki"` is the TEAM's wiki -- the lab-wide sibling of those notes.
+        It is a set of PAGES, and the bare ref is its FRONT PAGE (an excerpt
+        already rode along on `browse_research`, so if you are asking here you
+        want the rest). `view="pages"` lists every page -- type, slug, title,
+        when it last moved, no bodies -- and `ref="wiki:<type>/<slug>"` opens
+        one. `wiki_type` is free-form: the synthesis agent invents types as it
+        needs them (`repo`, `runbook`, `person`, ...), so read the list rather
+        than guessing a slug. `view="versions"` is the front page's history.
+
+        A team with no pages reads back an empty body — a real answer, not a
+        failed read — and the card says so in words, including whether pages
+        exist behind a front page that has not been written yet. Pages are
+        REGENERATED nightly and hand-edited between passes, so treat them as
+        the team's current best account rather than a permanent record;
+        `probe wiki write <type>/<slug>` is how you correct one, and its
+        version check is what stops two writers overwriting each other.
 
         `trajectory` = the run's actual spans, `reproduce` = hypothesis + resolved
         env_ref, `handoff` = what a new session needs; the other views are what

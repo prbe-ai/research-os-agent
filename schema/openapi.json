@@ -11856,12 +11856,194 @@
         "title": "WideSeriesResult",
         "type": "object"
       },
+      "WikiIndexEntryOut": {
+        "properties": {
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "wiki_type": {
+            "title": "Wiki Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wiki_type",
+          "slug",
+          "updated_at",
+          "version"
+        ],
+        "title": "WikiIndexEntryOut",
+        "type": "object"
+      },
+      "WikiIndexOut": {
+        "description": "The wiki's front page: the agent's rendered overview plus the\nmachine-readable list of what it links to.",
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/WikiIndexEntryOut"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "body",
+          "entries"
+        ],
+        "title": "WikiIndexOut",
+        "type": "object"
+      },
+      "WikiPageDetailOut": {
+        "description": "One page, whole.",
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "doc_class": {
+            "title": "Doc Class",
+            "type": "string"
+          },
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "wiki_type": {
+            "title": "Wiki Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wiki_type",
+          "slug",
+          "body",
+          "version",
+          "updated_at",
+          "doc_class"
+        ],
+        "title": "WikiPageDetailOut",
+        "type": "object"
+      },
+      "WikiPageListOut": {
+        "properties": {
+          "count": {
+            "title": "Count",
+            "type": "integer"
+          },
+          "pages": {
+            "items": {
+              "$ref": "#/components/schemas/WikiPageRef"
+            },
+            "title": "Pages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "pages",
+          "count"
+        ],
+        "title": "WikiPageListOut",
+        "type": "object"
+      },
       "WikiPageOut": {
         "description": "The current document. Returned for a team that has never generated one too\n-- see `app/wiki/service.read_page`: an empty team gets a well-formed empty\ndocument at version 0, never a 404.",
         "properties": {
           "body": {
             "title": "Body",
             "type": "string"
+          },
+          "generation_enabled": {
+            "default": false,
+            "title": "Generation Enabled",
+            "type": "boolean"
+          },
+          "generation_pending": {
+            "default": false,
+            "title": "Generation Pending",
+            "type": "boolean"
+          },
+          "source": {
+            "$ref": "#/components/schemas/WikiSource",
+            "default": "legacy_document"
           },
           "updated_at": {
             "anyOf": [
@@ -11885,6 +12067,93 @@
           "version"
         ],
         "title": "WikiPageOut",
+        "type": "object"
+      },
+      "WikiPageRef": {
+        "description": "One row of `probe wiki list`. Carries no body.",
+        "properties": {
+          "slug": {
+            "title": "Slug",
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "updated_at": {
+            "format": "date-time",
+            "title": "Updated At",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          },
+          "wiki_type": {
+            "title": "Wiki Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wiki_type",
+          "slug",
+          "updated_at",
+          "version"
+        ],
+        "title": "WikiPageRef",
+        "type": "object"
+      },
+      "WikiPageWrite": {
+        "description": "A version-checked write to ONE page.\n\nSame three-status contract as the single-document `WikiWrite` it\nreplaces, per page: equal version wins, stale gets 409 carrying the\ncurrent body, absent gets 428.",
+        "properties": {
+          "body": {
+            "maxLength": 1048576,
+            "title": "Body",
+            "type": "string"
+          },
+          "summary": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Summary"
+          },
+          "title": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "title",
+          "body"
+        ],
+        "title": "WikiPageWrite",
         "type": "object"
       },
       "WikiRegenerateOut": {
@@ -11920,6 +12189,15 @@
         ],
         "title": "WikiRevert",
         "type": "object"
+      },
+      "WikiSource": {
+        "description": "Which wiki answered `GET /v1/wiki` during the migration to pages.\n\nA string enum rather than a bool (`is_legacy`) because a third value is\nalready foreseeable -- the fallback disappears when the legacy table\ndoes -- and because the field is read by humans in a JSON dump at least\nas often as by code.",
+        "enum": [
+          "engine_index",
+          "legacy_document"
+        ],
+        "title": "WikiSource",
+        "type": "string"
       },
       "WikiVersionOut": {
         "description": "One row of the history list. Deliberately CARRIES NO BODY.\n\n`wiki_page_versions.body` is a whole document, capped at MAX_TEAM_WIKI (20k).\nA 50-row page carrying bodies would be a megabyte, and the caller that wants\none body already has a route for it -- reverting, or reading the current\ndocument. The history list answers a different question (\"what happened, and\nwhich version do I want?\"), and the fields below are exactly what it takes to\nanswer it.\n\n`size_chars` is here so the list can show a revision that collapsed the\ndocument without anyone fetching two bodies to diff them. It is the cheap\nsignal the arithmetic guard (locked decision 9) works from, surfaced to a\nhuman for the same reason the guard uses it.",
@@ -22582,7 +22860,7 @@
     },
     "/v1/wiki": {
       "get": {
-        "description": "The team's current wiki. A team with none gets an empty document at\nversion 0, which is also the version a first write must send.",
+        "description": "The team's wiki as ONE document -- now the multi-page wiki's FRONT PAGE.\n\nKept alive rather than retired because every shipped CLI, the MCP's\n`get_entity(ref=\"wiki\")` and the browse excerpt all call it, and what\nthey each do with the answer -- print it, quote it, orient an agent --\nis still exactly right when the answer is the index page.\n\nTHE FALLBACK IS NOT A HEDGE. A team whose synthesis agent has not run\nyet has no index page and, today, still has a legacy document with real\ncontent in it. Serving an empty body in that window would tell every\nreader the team has no wiki, which is both false and the single most\ndamaging thing this route can say. So an absent index falls back, and\n`source` reports which model answered so no consumer has to guess.\n\nREMOVAL CONDITION, so this shim does not become permanent by default:\nthe fallback goes when the legacy `experiment.wiki_pages` table does\n(the old sweep is being deleted separately). At that point the `else`\nbranch is unreachable and should be deleted with it.",
         "operationId": "get_wiki_v1_wiki_get",
         "responses": {
           "200": {
@@ -22602,7 +22880,7 @@
         ]
       },
       "put": {
-        "description": "Replace the document, if it is still at the version the caller read.",
+        "description": "410 GONE. The wiki is pages now; a whole-document write has no target.\n\n410 rather than 404 because the distinction is the entire message: 404\nsays \"no such route, check your URL\", which sends a caller looking for a\ntypo. 410 says \"this existed, it is deliberately gone, stop calling it\"\n-- and unlike 404 it is defined as PERMANENT, so a client that caches\nthe outcome caches the truth.\n\nNot 426 Upgrade Required either: that status is about switching HTTP\nprotocol versions, and a client library that implements it literally\nwould try to renegotiate the connection.\n\nThe body is DISCARDED and the caller is told so in the first sentence.\nThe alternative -- writing it to the index page -- is unavailable (the\nengine reserves `index` against writes because it is regenerated from\nthe other pages) and would be wrong even if it were not: the caller\nasked to replace the team's wiki, and silently turning that into an\nedit of one generated page is precisely the silent change of meaning\nthe migration rule forbids.",
         "operationId": "put_wiki_v1_wiki_put",
         "requestBody": {
           "content": {
@@ -22637,6 +22915,318 @@
           }
         },
         "summary": "Put Wiki",
+        "tags": [
+          "wiki"
+        ]
+      }
+    },
+    "/v1/wiki/index": {
+      "get": {
+        "description": "The wiki's front page.\n\n`body` is empty for a team whose synthesis agent has never run -- NOT a\n404. \"No front page yet\" and \"no such team\" are different claims and\nonly one of them can be true for a caller holding a valid credential;\nthis is the same reasoning that keeps `GET /v1/wiki` from 404ing.\n`entries` is still populated in that case, so a reader gets the list of\npages even before the agent has written prose about them.",
+        "operationId": "get_wiki_index_v1_wiki_index_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiIndexOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Wiki Index",
+        "tags": [
+          "wiki"
+        ]
+      }
+    },
+    "/v1/wiki/pages": {
+      "get": {
+        "description": "Every page in the team's wiki, newest-updated first.\n\nThe engine excludes the reserved `index` type from this list, and that\nexclusion is right rather than incidental: the index is generated FROM\nthis list, so including it would offer a page whose content is a\nrendering of the rest of the response.",
+        "operationId": "list_wiki_pages_v1_wiki_pages_get",
+        "parameters": [
+          {
+            "description": "filter to one wiki_type",
+            "in": "query",
+            "name": "type",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "filter to one wiki_type",
+              "title": "Type"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiPageListOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Wiki Pages",
+        "tags": [
+          "wiki"
+        ]
+      }
+    },
+    "/v1/wiki/pages/{wiki_type}/{slug}": {
+      "get": {
+        "description": "One page. 404 when there is no such page -- and here a 404 IS right,\nunlike on the index: the caller named a resource, so being told the name\nmatches nothing is an answer they can act on.",
+        "operationId": "get_wiki_page_v1_wiki_pages__wiki_type___slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wiki_type",
+            "required": true,
+            "schema": {
+              "title": "Wiki Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiPageDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Wiki Page",
+        "tags": [
+          "wiki"
+        ]
+      },
+      "put": {
+        "description": "Replace ONE page, if it is still at the version the caller read.\n\nTHE 428 IS ENFORCED HERE AND NOT ON THE ENGINE, which accepts a write\nwith no precondition. That asymmetry is deliberate: the engine's route\nhas an older consumer (the dashboard, through the prbe-backend BFF)\nthat has never sent a version, and making the precondition mandatory\nthere would break it. Every caller of THIS route is new, so it can be\nheld to the contract that makes concurrent writing safe.\n\nA stale write gets the engine's 409 passed through untouched, body and\nall -- see `app/wiki/pages._mapped_engine_error`. The caller merges\nagainst `current_body` without a second round trip.",
+        "operationId": "put_wiki_page_v1_wiki_pages__wiki_type___slug__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wiki_type",
+            "required": true,
+            "schema": {
+              "title": "Wiki Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WikiPageWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiPageDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Wiki Page",
+        "tags": [
+          "wiki"
+        ]
+      }
+    },
+    "/v1/wiki/pages/{wiki_type}/{slug}/revert": {
+      "post": {
+        "description": "Copy a prior version of ONE page FORWARD as a new version.\n\nNot version-checked, for the reason the single-document revert is not:\nthe version the caller names is the one they want BACK, and asserting\nwhich version they are reverting FROM answers a question a revert does\nnot ask. History is never rewritten -- reverting to 3 appends 3's body\nas version 6.",
+        "operationId": "revert_wiki_page_v1_wiki_pages__wiki_type___slug__revert_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wiki_type",
+            "required": true,
+            "schema": {
+              "title": "Wiki Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WikiRevert"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiPageDetailOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Revert Wiki Page",
+        "tags": [
+          "wiki"
+        ]
+      }
+    },
+    "/v1/wiki/pages/{wiki_type}/{slug}/versions": {
+      "get": {
+        "description": "One page's history, newest first, WITHOUT bodies.\n\nNo `before_version` cursor, unlike the single-document history: the\nengine returns a page's whole history in one response and has no\npaging parameter to forward. Inventing one here would mean slicing in\nthis process and reporting a `next_before_version` the engine cannot\nhonour -- a cursor that lies is worse than no cursor.",
+        "operationId": "list_wiki_page_versions_v1_wiki_pages__wiki_type___slug__versions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "wiki_type",
+            "required": true,
+            "schema": {
+              "title": "Wiki Type",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WikiVersionsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Wiki Page Versions",
         "tags": [
           "wiki"
         ]

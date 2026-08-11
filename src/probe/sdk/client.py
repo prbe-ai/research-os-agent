@@ -3093,6 +3093,105 @@ class Client:
             except errors.NotFoundError:
                 raise self._wiki_absent() from exc
             raise
+
+    # -- the wiki's PAGES ---------------------------------------------------
+    #
+    # The wiki is a set of pages keyed `(wiki_type, slug)` now, not one
+    # document. `get_wiki` above still works and returns the FRONT PAGE; these
+    # reach the individual pages.
+    #
+    # `wiki_type` is FREE-FORM -- the nightly synthesis agent invents types as
+    # it needs them -- so nothing here validates it against a list. A closed
+    # set in this client would reject a page the server is happily serving,
+    # and the user would have no way to tell that from a missing page.
+
+    @staticmethod
+    def _pages_absent() -> errors.NotFoundError:
+        return errors.NotFoundError(
+            "this Probe Research backend predates the multi-page team wiki: "
+            "upgrade the server. `probe wiki read` still works against the "
+            "single document these older backends serve."
+        )
+
+    def list_wiki_pages(self, wiki_type: str | None = None, limit: int | None = None) -> dict:
+        """``GET /v1/wiki/pages`` — every page, newest-updated first.
+
+        Carries no bodies: this is the index a reader scans to decide what to
+        open, and a wiki of any size would be megabytes if it inlined them.
+        """
+        params: dict = {}
+        if wiki_type is not None:
+            params["type"] = wiki_type
+        if limit is not None:
+            params["limit"] = limit
+        try:
+            return self.transport.get("/v1/wiki/pages", params=params or None)
+        except errors.NotFoundError as exc:
+            raise self._pages_absent() from exc
+
+    def get_wiki_index(self) -> dict:
+        """``GET /v1/wiki/index`` — the front page plus the list it links to.
+
+        `body` is empty for a team whose synthesis agent has not run yet, and
+        that is an answer rather than an error -- `entries` is still populated,
+        so a reader sees what exists before anything has written prose about it.
+        """
+        try:
+            return self.transport.get("/v1/wiki/index")
+        except errors.NotFoundError as exc:
+            raise self._pages_absent() from exc
+
+    def get_wiki_page(self, wiki_type: str, slug: str) -> dict:
+        """``GET /v1/wiki/pages/{type}/{slug}`` — one page, whole.
+
+        A 404 here is REAL -- it means no such page -- so unlike the
+        single-document routes it is passed through untouched. Rewriting it
+        into "upgrade your server" would hide the ordinary case of a mistyped
+        slug behind an instruction that cannot help.
+        """
+        return self.transport.get(f"/v1/wiki/pages/{wiki_type}/{slug}")
+
+    def set_wiki_page(
+        self,
+        wiki_type: str,
+        slug: str,
+        title: str,
+        body: str,
+        version: int,
+        summary: str | None = None,
+    ) -> dict:
+        """``PUT /v1/wiki/pages/{type}/{slug}`` — replace ONE page, if it is
+        still at ``version``.
+
+        Same contract as :meth:`set_wiki` had for the whole document, now per
+        page: ``version`` is required (the route answers 428 without it),
+        ``version=0`` asserts the page does not exist yet, and a stale write
+        raises :class:`errors.ConflictError` whose ``detail`` carries
+        ``current_body`` so the loser can merge without a second request.
+
+        NOT routed through :meth:`write`, for the reason :meth:`set_wiki`
+        gives: in ``async_writes`` mode the outbox would deliver a
+        version-checked write minutes later against a version that has since
+        moved, turning a conflict the caller could have merged into one it
+        never sees.
+        """
+        payload: dict = {"title": title, "body": body, "version": version}
+        if summary is not None:
+            payload["summary"] = summary
+        return self.transport.put(f"/v1/wiki/pages/{wiki_type}/{slug}", payload)
+
+    def wiki_page_versions(self, wiki_type: str, slug: str) -> dict:
+        """``GET /v1/wiki/pages/{type}/{slug}/versions`` — one page's history,
+        newest first, WITHOUT bodies."""
+        return self.transport.get(f"/v1/wiki/pages/{wiki_type}/{slug}/versions")
+
+    def revert_wiki_page(self, wiki_type: str, slug: str, version: int) -> dict:
+        """``POST /v1/wiki/pages/{type}/{slug}/revert`` — copy a prior version
+        of one page FORWARD as a new one. History is never rewritten."""
+        return self.transport.post(
+            f"/v1/wiki/pages/{wiki_type}/{slug}/revert", {"version": version}
+        )
+
     def append_project_notes(self, project_id: str, text: str) -> str:
         """Extend the project's notes WITHOUT reading them first.
 

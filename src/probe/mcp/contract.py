@@ -90,6 +90,10 @@ class View(StrEnum):
     """
 
     CARD = "card"  # the cheap identity/status glance (the default)
+    # On the wiki: every page's type/slug/title/updated_at, no bodies. The
+    # wiki's own table of contents -- the front page is prose ABOUT the wiki,
+    # this is the machine-readable list of what is in it.
+    PAGES = "pages"
     TRAJECTORY = "trajectory"  # the spans themselves, not span_type COUNTS
     METRICS = "metrics"  # series summaries; filters.key drills to raw points
     ARTIFACTS = "artifacts"  # the artifact list
