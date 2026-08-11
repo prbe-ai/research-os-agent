@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.70.3
+
 ### Fixed
 
 - **The release gate can run the Codex acceptance test.** `release.yml` runs
