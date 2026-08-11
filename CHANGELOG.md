@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Adding Codex to a machine that already runs Claude Code no longer arrives
+  with every box unticked.** The dual-agent menu derived its preselection from
+  the intersection of the two agents' state, so a configured Claude Code plus a
+  fresh Codex read as "nothing is on" — and an unticked box is not neutral on
+  the apply path, which turns it into "remove the CLI + MCP plugin" and "turn
+  Session capture off" against the agent that has them. Accepting the defaults
+  tore down a working install while adding the second agent. Preselection now
+  comes from the union: what the device already does carries over, and the
+  lagging agent is brought up to it.
+
 ### Changed
 
 - **Global Codex guidance now explicitly searches Research OS before research
