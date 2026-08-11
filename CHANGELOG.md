@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.71.0
+
 ### Fixed
 
 - **`probe run start` no longer stalls for a minute in a directory that is not
