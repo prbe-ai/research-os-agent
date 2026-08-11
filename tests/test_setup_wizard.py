@@ -577,6 +577,42 @@ def test_the_browser_approval_already_held_authorizes_the_codex_mcp(monkeypatch,
     assert "bearer_token =" not in written  # the key that stops Codex booting
 
 
+def test_a_codex_config_we_cannot_confirm_is_put_back_exactly_as_it_was(monkeypatch, tmp_path):
+    """Falling back is not enough when the write itself may be the problem.
+
+    `codex mcp list` failing is indistinguishable from a config Codex cannot
+    load, and that state does not end when this command does -- every codex
+    invocation is down until someone edits the file. So an unconfirmed write is
+    reverted before the OAuth fallback runs, rather than left underneath it.
+    """
+    from probe.cli import claude_cli, codex_config, plugin_cli
+    from probe.sdk import config as sdk_config
+
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    before = 'model = "gpt-5.6"\n\n[tui]\ntheme = "dark"\n'
+    (tmp_path / "config.toml").write_text(before, encoding="utf-8")
+
+    monkeypatch.setattr(sdk_config, "load_context", lambda: {"mcp_token": "probe_pat_from_signin"})
+    monkeypatch.setattr(
+        codex_config, "plugin_mcp_url", lambda _name, **_kw: "https://mcp.research.prbe.ai/mcp"
+    )
+    # `not_logged_in` first (so the shortcut is attempted), then None -- what a
+    # config Codex refuses to load actually looks like from here.
+    statuses = iter(["not_logged_in", None, "o_auth"])
+    monkeypatch.setattr(plugin_cli, "codex_mcp_auth_status", lambda _name: next(statuses))
+    monkeypatch.setattr(
+        plugin_cli,
+        "login_codex_mcp",
+        lambda _name: claude_cli.Result(ok=True, detail="Login successful"),
+    )
+
+    messages = setup.apply_codex_mcp_auth()
+
+    assert (tmp_path / "config.toml").read_text(encoding="utf-8") == before
+    assert any("back as it was" in message for message in messages)
+    assert messages[-1] == "Codex MCP logged in (probe-research)."
+
+
 def test_codex_falls_back_to_its_own_login_when_the_shortcut_cannot_apply(monkeypatch, tmp_path):
     """No manifest to read the URL from — registering a guessed URL with a live
     token is worse than the extra approval, so the old path must still run."""

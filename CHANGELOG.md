@@ -28,6 +28,12 @@
   takes the entry back out so an uninstall cannot leave an orphaned credential
   pointing at the hosted server.
 
+  The write is confirmed with Codex itself and reverted byte-for-byte if Codex
+  does not accept it. Valid TOML is not the same as an acceptable config —
+  a `bearer_token` key parses fine and then stops Codex from starting at all —
+  so a status we cannot read is treated as a config we may have broken, and put
+  back before the fallback runs.
+
 - **Global Codex guidance now explicitly searches Research OS before research
   design.** The wizard-managed block in `~/.codex/AGENTS.md` tells Codex to look
   for relevant experiments, decisions, documents, artifacts and captured agent

@@ -688,9 +688,21 @@ def _reuse_approval_for_codex_mcp(notes: list[str]) -> bool:
         return False
 
     try:
-        codex_config.write_mcp_bearer(CODEX_MCP_NAME, url=url, token=token)
+        written = codex_config.write_mcp_bearer(CODEX_MCP_NAME, url=url, token=token)
     except codex_config.ConfigError as exc:
         notes.append(f"! could not reuse your sign-in for the Codex MCP: {exc}")
+        return False
+
+    # Ask Codex, rather than trusting that valid TOML is acceptable TOML --
+    # `bearer_token` is the standing proof those are different things. A status
+    # we cannot read is the same shape as a config Codex cannot load, so the
+    # write goes back rather than being left for the fallback to sit on top of.
+    if plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME) != codex_config.BEARER_STATUS:
+        codex_config.restore(written)
+        notes.append(
+            "! Codex did not accept the credential from your sign-in; "
+            "its config is back as it was."
+        )
         return False
     return True
 
@@ -703,13 +715,7 @@ def apply_codex_mcp_auth() -> list[str]:
 
     notes: list[str] = []
     if _reuse_approval_for_codex_mcp(notes):
-        verified = plugin_cli.codex_mcp_auth_status(CODEX_MCP_NAME)
-        if verified == codex_config.BEARER_STATUS:
-            return [*notes, "Codex MCP authorized from your Probe sign-in."]
-        notes.append(
-            f"! wrote the Codex MCP credential but Codex reports "
-            f"{verified or 'unknown'}; falling back to its own login."
-        )
+        return [*notes, "Codex MCP authorized from your Probe sign-in."]
 
     result = plugin_cli.login_codex_mcp(CODEX_MCP_NAME)
     if not result.ok:

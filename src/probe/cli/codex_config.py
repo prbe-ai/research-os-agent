@@ -53,6 +53,11 @@ class ConfigError(Exception):
 class WriteResult:
     path: Path
     changed: bool
+    #: The file's exact contents before this write, or None when it did not
+    #: exist. Kept so a caller that cannot CONFIRM the result can undo it: a
+    #: config we broke is not something to leave behind and fall back from,
+    #: because "Codex will not start" outlives whatever we were installing.
+    previous: str | None = None
 
 
 def codex_home() -> Path:
@@ -149,10 +154,11 @@ def write_mcp_bearer(name: str, *, url: str, token: str, path: Path | None = Non
     the header, and a leftover `oauth` key would keep Codex asking to log in.
     """
     target = path or config_path()
+    existed = True
     try:
         original = target.read_text(encoding="utf-8")
     except FileNotFoundError:
-        original = ""
+        original, existed = "", False
     except OSError as exc:
         raise ConfigError(f"could not read {target}: {exc}") from exc
 
@@ -168,8 +174,9 @@ def write_mcp_bearer(name: str, *, url: str, token: str, path: Path | None = Non
     )
     span = _table_span(original.splitlines(keepends=True), name)
     updated = _replace_span(original, span, block)
+    previous = original if existed else None
     if updated == original:
-        return WriteResult(path=target, changed=False)
+        return WriteResult(path=target, changed=False, previous=previous)
 
     _validated(updated, what="the updated Codex config")
 
@@ -183,7 +190,25 @@ def write_mcp_bearer(name: str, *, url: str, token: str, path: Path | None = Non
     except OSError as exc:
         temporary.unlink(missing_ok=True)
         raise ConfigError(f"could not write {target}: {exc}") from exc
-    return WriteResult(path=target, changed=True)
+    return WriteResult(path=target, changed=True, previous=previous)
+
+
+def restore(result: WriteResult) -> None:
+    """Undo a `write_mcp_bearer`, byte for byte.
+
+    The verification after a write is not decoration: `codex mcp list` failing
+    is exactly what a config Codex cannot load looks like, and at that point we
+    are one step away from having bricked its CLI. Restoring is unconditional
+    and best-effort -- an exception here would replace a recoverable state with
+    a traceback over the top of it.
+    """
+    try:
+        if result.previous is None:
+            result.path.unlink(missing_ok=True)
+        else:
+            result.path.write_text(result.previous, encoding="utf-8")
+    except OSError:
+        pass
 
 
 def remove_mcp_server(name: str, *, path: Path | None = None) -> WriteResult:

@@ -8,6 +8,10 @@ most are the ones about NOT writing.
 
 from __future__ import annotations
 
+import json
+import os
+import shutil
+import subprocess
 import tomllib
 
 import pytest
@@ -222,3 +226,64 @@ def test_the_url_comes_from_the_installed_plugin_not_a_constant(tmp_path, monkey
 
     missing = codex_config.plugin_mcp_url("absent-plugin", marketplace="research-os-agent")
     assert missing is None
+
+
+@pytest.mark.skipif(shutil.which("codex") is None, reason="codex not installed")
+def test_codex_itself_accepts_what_we_write(tmp_path):
+    """The only check that can catch the failure that matters.
+
+    Every other test here asserts the output parses as TOML, and `bearer_token`
+    is the standing proof that parsing is not acceptance: it is valid TOML that
+    Codex rejects, and the rejection takes down its whole config load rather
+    than one server. A suite that never asks Codex can therefore go green over
+    a file that stops the CLI from starting.
+
+    So this one shells out. It writes the entry the wizard writes, next to
+    config Codex already had, and requires `codex mcp list --json` to still
+    parse AND to report our server as authenticated by the header.
+    """
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        "\n".join(
+            [
+                'model = "gpt-5.6"',
+                "",
+                "[tui]",
+                'theme = "dark"',
+                "",
+                "[mcp_servers.unrelated]",
+                'command = "some-other-mcp"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    codex_config.write_mcp_bearer(
+        "probe-research",
+        url="https://mcp.research.prbe.ai/mcp",
+        token="probe_pat_placeholder",
+        path=home / "config.toml",
+    )
+
+    completed = subprocess.run(
+        [shutil.which("codex"), "mcp", "list", "--json"],
+        env={**os.environ, "CODEX_HOME": str(home)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+
+    # A non-zero exit here is the disaster case: "failed to load bootstrap
+    # configuration" means every codex command is down, not just this server.
+    assert completed.returncode == 0, (
+        f"codex refused the config we wrote: {completed.stderr.strip()}"
+    )
+    servers = json.loads(completed.stdout)
+    ours = [s for s in servers if isinstance(s, dict) and s.get("name") == "probe-research"]
+    assert len(ours) == 1, f"expected exactly one probe-research row, got {ours}"
+    assert ours[0].get("auth_status") == codex_config.BEARER_STATUS
+    # The rest of the user's config survived the edit.
+    assert any(s.get("name") == "unrelated" for s in servers if isinstance(s, dict))
