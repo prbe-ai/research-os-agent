@@ -93,10 +93,11 @@ near-miss of an existing slug rather than warning.)
    probe run set <run> --description "..."
    ```
 
-   A project also has visible, durable Markdown below its live AI summary. Put
-   context that should remain stable across summary refreshes in a file and write
-   it naturally with `probe project set <project> --summary @PROJECT.md`. This is
-   separate from hidden `probe notes`, which remains the agent briefing.
+   A project summary combines a server-maintained AI narrative with a visible,
+   durable Markdown suffix. Put context that should remain stable across summary
+   refreshes in a file and write that suffix naturally with
+   `probe project set <project> --summary @PROJECT.md`. This is separate from
+   hidden `probe notes`, which remains the agent briefing.
 
    Work with no hypothesis does not need an experiment at all: open a
    PROJECT-DIRECT run (`probe run start --project folding`, or

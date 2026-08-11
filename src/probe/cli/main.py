@@ -2292,7 +2292,7 @@ def project_summary_opt() -> Any:
     return typer.Option(
         None,
         "--summary",
-        help="visible Markdown below the AI summary: literal, @file, or - for stdin",
+        help="editable Markdown suffix in the Project Summary: literal, @file, or - for stdin",
     )
 
 

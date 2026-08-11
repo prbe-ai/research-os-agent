@@ -87,7 +87,7 @@ a basis for it.
 curation — it fires when someone is tidying structure, not when work is happening.
 
 `probe project create | list | get | use | set | move | delete`
-`probe project set PROJECT --summary TEXT|@FILE|-` — visible Markdown below the live AI summary
+`probe project set PROJECT --summary TEXT|@FILE|-` — editable suffix in the combined Project Summary
 `probe experiment create | set | delete | edges`
 `probe run set RUN [--name NAME] [--description DESCRIPTION] [--notes TEXT|@FILE|-]`
 `probe group create EXP --name NAME [--kind KIND] [--spec JSON|@FILE] [--notes ...]`

@@ -317,7 +317,7 @@ RUN=$(probe run start --experiment dockq --name run-1 \
         --project folding --source runpod --external-id rp-9931 \
         --description "DockQ baseline at temperature 0.7")
 probe project set folding --name "Protein folding" --description "DockQ studies"
-probe project set folding --summary @PROJECT.md  # visible Markdown below the live AI summary
+probe project set folding --summary @PROJECT.md  # editable suffix in the combined Project Summary
 probe experiment set EXPERIMENT_ID --name "DockQ sweep" --description "Temperature sweep"
 probe run set $RUN --name "DockQ baseline" --description "Stable reference run"
 probe snapshot $RUN
