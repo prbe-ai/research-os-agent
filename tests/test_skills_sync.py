@@ -32,6 +32,7 @@ _SYNCED = (
     "track-research-work",
     "capture-run-inputs",
     "show-research-timeline",
+    "instrument-training-runs",
 )
 
 

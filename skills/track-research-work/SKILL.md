@@ -14,12 +14,19 @@ gets made. Record with the surface the run was opened with.
    |---|---|---|
    | metrics | `run.log({"loss": l}, step=i)` | `probe log RUN loss=0.4 --step 100` |
    | per-device / per-actor | `run.log_hw({"gpu_temp": 88}, device=3)` | `probe log RUN gpu_temp=88 --dim device=3` |
-   | structure | `with run.span("rollout", ...) as s:`, `run.step(i)` | `probe span add RUN --type rollout` |
+   | nested structure | `with run.span("trial", ...) as s:`, `run.step(i)` | `probe span add RUN --type trial` |
    | outputs | `run.log_artifact("ckpt", path=...)` | `probe artifact add RUN PATH --name ckpt` |
    | external ids | `run.link(wandb_run_id="abc")` | `probe link RUN --set wandb_run_id=abc` |
    | sub-runs | `run.child("fold-2")` | `probe run child RUN --name fold-2` |
    | computed metrics | `run.log_derived_series("eval/auc", pts, producer="…")` | `probe log RUN eval/auc=0.9 --step 100 --derived --producer …` |
    | expression views | `run.create_view("loss_ratio", spec)` | `probe views create RUN loss_ratio --spec-file spec.json` |
+
+   Spans are for work that NESTS -- a trial containing agent turns containing a
+   verifier -- where the tree is the finding. A flat training loop is not that
+   shape: step 12 is not inside step 11, and its phases belong in one metric
+   series each (`perf/rollout`, `perf/train`), which plots as a curve instead of
+   thousands of unnested tiles. `spans: 0` on a trainer run is usually correct.
+   See `instrument-training-runs` for the full shape rule.
 
    Prefer the `with` form for spans in live code: it takes both timestamps off one
    clock, nests anything opened inside it, and closes the span as `failed` if the

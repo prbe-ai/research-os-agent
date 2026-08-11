@@ -65,13 +65,14 @@ def test_both_plugins_are_single_source_dual_target_packages() -> None:
         )
 
 
-def test_tracking_skills_are_one_shared_four_skill_tree() -> None:
+def test_tracking_skills_are_one_shared_tree() -> None:
     root = ROOT / "plugins/probe-research"
     assert {path.parent.name for path in (root / "skills").glob("*/SKILL.md")} == {
         "start-research-work",
         "track-research-work",
         "capture-run-inputs",
         "show-research-timeline",
+        "instrument-training-runs",
     }
     assert not (ROOT / "plugins/prbe-codex-tap-plugin").exists()
 
