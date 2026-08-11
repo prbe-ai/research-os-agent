@@ -676,3 +676,70 @@ def test_run_lineage_keeps_the_two_relations_separate(client, app):
     assert data["edges"], "edges are present"
     assert data["run_ancestry"]["ancestors"] == []
     assert data["run_ancestry"]["descendants"] == []
+
+
+# -- a finished walk is complete, even when it overspent ----------------------
+#
+# The report that prompted this: a low-budget metrics walk paginated through
+# every series and its LAST page still said partial, with no next_cursor. A
+# caller following the documented contract ("a partial response has more --
+# pass next_cursor back") is handed a dead end on the one page that is actually
+# the whole answer.
+
+
+def _metrics_walk(service, rid, *, token_budget):
+    """Every page of a metrics walk, in order."""
+    pages, cursor = [], None
+    while True:
+        page = service.get_entity(
+            f"run:{rid}", view="metrics", token_budget=token_budget, cursor=cursor
+        )
+        pages.append(page)
+        cursor = page["next_cursor"]
+        if cursor is None or len(pages) > 50:
+            return pages
+
+
+def test_the_last_page_of_a_metrics_walk_terminates_cleanly(client, app):
+    rid, _, _, _ = _populated(client, app)
+    app.series[rid] = [
+        dict(app.series[rid][0], key=f"loss_{i}") for i in range(7)
+    ]
+
+    pages = _metrics_walk(_service(client), rid, token_budget=120)
+
+    assert len(pages) > 1, "budget too generous to exercise the walk"
+    last = pages[-1]
+    assert last["next_cursor"] is None
+    assert last["completeness"]["state"] == "complete", (
+        "partial with no cursor says data is missing and gives no way to fetch it"
+    )
+    # Still reported: a caller sizing a context window wants to know it overspent.
+    assert "token_budget_exceeded" in last["completeness"]["missing"]
+
+
+def test_the_pages_before_the_last_still_report_partial(client, app):
+    """The signal has to survive where it is TRUE -- rows really were withheld,
+    and the cursor really does fetch them."""
+    rid, _, _, _ = _populated(client, app)
+    app.series[rid] = [dict(app.series[rid][0], key=f"loss_{i}") for i in range(7)]
+
+    pages = _metrics_walk(_service(client), rid, token_budget=120)
+
+    for page in pages[:-1]:
+        assert page["next_cursor"] is not None
+        assert page["completeness"]["state"] == "partial"
+        assert "truncated_by_token_budget" in page["completeness"]["missing"]
+
+
+def test_the_walk_returns_every_series_exactly_once(client, app):
+    """The state fix must not come at the cost of the rows."""
+    rid, _, _, _ = _populated(client, app)
+    app.series[rid] = [dict(app.series[rid][0], key=f"loss_{i}") for i in range(7)]
+
+    seen = [
+        row["key"]
+        for page in _metrics_walk(_service(client), rid, token_budget=120)
+        for row in page["data"]["series"]
+    ]
+    assert sorted(seen) == sorted(f"loss_{i}" for i in range(7))

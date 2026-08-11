@@ -297,6 +297,26 @@ def _file_sha256(path: str) -> tuple[str, int]:
 #: re-store what is already there is not reproducibility, it is duplication.
 DEFAULT_REFERENCE_OVER_BYTES = 100 * 1024 * 1024
 
+#: File ceiling for a NON-GIT capture. Git bounds its own walk by what is
+#: tracked; a bare directory has nothing to bound it, so the walk is whatever
+#: happens to sit under the cwd -- and `probe run start` runs in whatever
+#: directory a person's shell is parked in.
+#:
+#: Measured 2026-08-10 in ~/Documents/GitHub (a directory of ~245 checkouts):
+#: 276,507 entries, 54.6s of walking and sha256, every one classified pending
+#: upload -- and then a 256MB upload cap to fail against at the END. The run
+#: itself was created in well under a second; the whole stall was this.
+#:
+#: A ceiling, not a truncation: a manifest missing files it never mentions is
+#: the thing `skipped` exists to prevent, and half a tree reproduces nothing.
+#: Overflow raises SnapshotTooLarge, which the auto-snapshot hook turns into a
+#: warning -- capture is never a gate (maintainer decision 2026-08-06), so the
+#: run survives uncaptured rather than the command hanging.
+#:
+#: 20k is well above a real project (this repo is ~1.5k files) and well below
+#: a directory that is really somebody's whole workspace.
+DEFAULT_MAX_DIRECTORY_ENTRIES = 20_000
+
 
 def _include_entries(
     cwd: str,
@@ -419,6 +439,7 @@ def capture_directory_manifest(
     *,
     include: list[str] | None = None,
     reference_over_bytes: int = DEFAULT_REFERENCE_OVER_BYTES,
+    max_entries: int = DEFAULT_MAX_DIRECTORY_ENTRIES,
 ) -> dict[str, Any]:
     """Manifest for a directory that is NOT a git repository.
 
@@ -436,6 +457,11 @@ def capture_directory_manifest(
     Everything skipped is REPORTED in ``skipped``, because once a filter exists,
     absence from the manifest stops being informative on its own: a reader has to
     be able to tell "not an input" from "excluded by policy".
+
+    ``max_entries`` bounds the walk (see ``DEFAULT_MAX_DIRECTORY_ENTRIES``) and is
+    checked DURING it, not after: the cost being bounded is the walk itself, so a
+    ceiling enforced on the finished manifest would refuse a tree only after
+    paying the minute it took to build it.
     """
     cwd = os.path.abspath(cwd or os.getcwd())
     if not os.path.isdir(cwd):
@@ -443,6 +469,17 @@ def capture_directory_manifest(
 
     entries: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
+
+    def _guard() -> None:
+        if len(entries) <= max_entries:
+            return
+        raise SnapshotTooLarge(
+            f"{cwd} holds more than {max_entries:,} capturable files and is not a "
+            "git repository, so every one of them would be hashed and uploaded. "
+            "That is a workspace, not a project: start the run from the project "
+            "directory, or pass max_entries= to raise the ceiling deliberately."
+        )
+
     for root, dirnames, filenames in os.walk(cwd):
         for name in sorted(dirnames):
             if name in SKIP_DIRS:
@@ -471,17 +508,22 @@ def capture_directory_manifest(
                     "source": "blob",
                     "symlink_target": target,
                 })
+                _guard()
                 continue
             if not os.path.isfile(full):
                 continue
+            # Counted BEFORE the hash: _file_sha256 reads the whole file, and the
+            # ceiling exists to stop paying exactly that.
+            entries.append({"path": rel})
+            _guard()
             sha, size = _file_sha256(full)
-            entries.append({
+            entries[-1] = {
                 "path": rel,
                 "mode": "100755" if os.access(full, os.X_OK) else "100644",
                 "sha256": sha,
                 "size": size,
                 "source": "blob",
-            })
+            }
 
     if include:
         entries.extend(
@@ -520,6 +562,7 @@ def capture_manifest(
     *,
     include: list[str] | None = None,
     reference_over_bytes: int = DEFAULT_REFERENCE_OVER_BYTES,
+    max_entries: int = DEFAULT_MAX_DIRECTORY_ENTRIES,
 ) -> dict[str, Any]:
     """Classify each captured file as retrievable-from-git or needing upload.
 
@@ -547,10 +590,21 @@ def capture_manifest(
     no blob ids -- so every file is ``source="blob"`` and every file gets uploaded.
     That used to raise, which was defensible only while no uploader existed: the
     directory with NOTHING retrievable anywhere was the one case refused outright.
+    ``max_entries`` bounds that path only -- inside a repo the walk is already
+    bounded by what git tracks.
     """
     cwd = cwd or os.getcwd()
     if not is_git_repo(cwd):
-        return capture_directory_manifest(cwd)
+        # Forwarded, not dropped: this used to call through with the cwd alone, so
+        # an explicitly `include=`d file was silently absent from the manifest of
+        # any non-git tree -- the one place the caller had said out loud that it
+        # mattered.
+        return capture_directory_manifest(
+            cwd,
+            include=include,
+            reference_over_bytes=reference_over_bytes,
+            max_entries=max_entries,
+        )
 
     base, remote = pushed_base(cwd)
     paths = sorted(

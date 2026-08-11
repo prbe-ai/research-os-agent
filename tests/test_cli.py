@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import uuid
 from importlib import metadata
 from pathlib import Path
 
@@ -966,3 +967,131 @@ def test_run_reproduce_export_and_materialize_are_mutually_exclusive(wired, caps
         ["run", "reproduce", rid, "--export", str(tmp_path / "x.json"), "--materialize", str(tmp_path / "d")]
     )
     assert rc == 2  # BadParameter -> click usage exit code
+
+
+# -- a petname is the handle people are handed, so every verb must take one ---
+#
+# `refs.resolve_run` exists because a petname cannot collide with a UUID: the
+# server resolves either form on `GET /v1/runs/{ref}`. Every OTHER run route
+# types its path param as a UUID, so a verb that forwards the ref untouched
+# 422s on the exact spelling `run start` printed. These three did.
+
+
+def _petname(app, rid: str) -> str:
+    return app.runs[rid]["short_id"]
+
+
+def _paths_for(app, needle: str) -> list[str]:
+    return [r.url.path for r in app.requests if needle in r.url.path]
+
+
+def test_span_list_accepts_a_petname(wired, capsys):
+    rid = _start_run(capsys)
+    cli.main(["span", "add", rid, "--type", "rollout", "--name", "r0"])
+    capsys.readouterr()
+
+    assert cli.main(["span", "list", _petname(wired, rid)]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["name"] == "r0"
+    assert f"/v1/runs/{rid}/spans" in _paths_for(wired, "/spans")
+
+
+def test_artifact_list_accepts_a_petname(wired, capsys, tmp_path):
+    rid = _start_run(capsys)
+    payload = tmp_path / "loss.json"
+    payload.write_text('{"loss": 0.3}')
+    cli.main(["artifact", "add", rid, str(payload)])
+    capsys.readouterr()
+
+    assert cli.main(["artifact", "list", _petname(wired, rid)]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["name"] == "loss.json"
+    assert f"/v1/runs/{rid}/artifacts" in _paths_for(wired, "/artifacts")
+
+
+def test_experiment_edges_takes_the_slug_like_every_other_experiment_verb(wired, capsys):
+    rid = _start_run(capsys)
+    capsys.readouterr()
+
+    assert cli.main(["experiment", "edges", "e"]) == 0
+    capsys.readouterr()
+    experiment_id = wired.runs[rid]["experiment_id"]
+    assert f"/v1/experiments/{experiment_id}/edges" in _paths_for(wired, "/edges")
+
+
+def test_experiment_edges_still_reaches_an_id_with_the_id_prefix(wired, capsys):
+    rid = _start_run(capsys)
+    capsys.readouterr()
+    experiment_id = wired.runs[rid]["experiment_id"]
+
+    assert cli.main(["experiment", "edges", f"id:{experiment_id}"]) == 0
+
+
+# -- "pending upload" must mean pending ---------------------------------------
+#
+# manifest.n_pending_upload is a CLASSIFICATION count -- "git cannot supply
+# this, someone must upload it" -- frozen into the execution record at capture,
+# BEFORE the upload it is counting. snapshot-show read it as work-remaining and
+# reported 6 files pending on a run whose code-bytes archive held all six and
+# whose restore verified every one of them.
+
+
+def _captured_run(app, capsys, *, uploaded: bool) -> str:
+    """A run whose manifest classifies two files as needing upload, with or
+    without the code-bytes archive that actually stored them."""
+    rid = _start_run(capsys)
+    app.execution_records["sha-cap"] = {
+        "content_hash": "sha-cap",
+        "code": {
+            "manifest": {
+                "base_commit": None,
+                "remote": None,
+                "tree_sha256": "tree-1",
+                "n_git_referenced": 1,
+                "n_pending_upload": 2,
+                "entries": [
+                    {"path": "README.md", "source": "git", "blob": "b0", "sha256": "s0"},
+                    {"path": "train.py", "source": "blob", "sha256": "s1"},
+                    {"path": "conf.yaml", "source": "blob", "sha256": "s2"},
+                ],
+            }
+        },
+    }
+    app.runs[rid]["env_ref"] = "sha-cap"
+    if uploaded:
+        app.artifacts.setdefault(rid, []).append(
+            {"id": str(uuid.uuid4()), "run_id": rid, "name": "code-bytes",
+             "kind": "code_bytes", "status": "ready", "is_reference": False,
+             "uri": "s3://b/code.tar.gz"}
+        )
+    capsys.readouterr()
+    return rid
+
+
+def test_stored_code_bytes_are_not_reported_as_pending(wired, capsys):
+    rid = _captured_run(wired, capsys, uploaded=True)
+
+    assert cli.main(["snapshot-show", rid]) == 0
+    out = capsys.readouterr().out
+    assert "0 pending upload" in out
+    assert "2 stored in code-bytes" in out
+    assert "needs-upload" not in out
+
+
+def test_pending_only_shows_nothing_when_the_bytes_landed(wired, capsys):
+    rid = _captured_run(wired, capsys, uploaded=True)
+
+    assert cli.main(["snapshot-show", rid, "--pending-only"]) == 0
+    out = capsys.readouterr().out
+    assert "train.py" not in out and "conf.yaml" not in out
+
+
+def test_a_run_whose_upload_never_landed_still_reports_pending(wired, capsys):
+    """The label has to keep working where it is TRUE -- an older SDK, or an
+    upload that genuinely failed, leaves no code-bytes row and those files
+    really are gone."""
+    rid = _captured_run(wired, capsys, uploaded=False)
+
+    assert cli.main(["snapshot-show", rid, "--pending-only"]) == 0
+    out = capsys.readouterr().out
+    assert "train.py" in out and "conf.yaml" in out
+    assert "needs-upload" in out
+    assert "2 pending upload" in out

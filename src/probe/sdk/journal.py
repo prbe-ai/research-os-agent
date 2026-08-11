@@ -198,6 +198,49 @@ def run_ref_for_path(path: str) -> str | None:
     return match.group(1) if match else None
 
 
+def _is_uuid(ref: str) -> bool:
+    try:
+        uuid.UUID(ref)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return True
+
+
+def _resolve_queued_run_ref(
+    client, ref: str | None, cache: dict[str, str]
+) -> tuple[str, str] | None:
+    """``(petname, uuid)`` for a ref a 422 just rejected, or None to re-raise.
+
+    Enqueue deliberately does NOT read the run: ``--async`` exists so a write can
+    be queued with no network, and the CLI's ``_async_run`` builds a handle from
+    the raw ref for exactly that reason. The cost landed here -- every route the
+    drainer replays EXCEPT ``GET /v1/runs/{ref}`` types its path param as a UUID,
+    so a petname (``probe --async log tunneling-sambar-254 ...``, or a manifest
+    row anchored on one) queued cleanly, reported ``failed: 0``, and then
+    dead-lettered on a 422 minutes later in a process nobody was watching.
+
+    Called only AFTER a 422, never before, which is what keeps this free: the
+    happy path pays nothing, a UUID never reaches it, and a genuine body
+    validation error is not turned into an extra lookup that hides it. The retry
+    it enables can only turn a failing op into a delivered one.
+
+    None means "nothing to retry" -- the ref is absent, already a UUID, or the
+    lookup failed. The caller then re-raises the original 422, so the op dead
+    letters on the error the server actually gave rather than on ours.
+
+    Cached per drain, not globally: an id is immutable, but a cache outliving the
+    process would keep answering for a run that has since been deleted.
+    """
+    if not ref or _is_uuid(ref):
+        return None
+    if ref not in cache:
+        try:
+            cache[ref] = str(client.get_run(ref)["id"])
+        except Exception:  # noqa: BLE001 -- the original 422 is the better error
+            return None
+    return (ref, cache[ref]) if cache[ref] != ref else None
+
+
 @dataclass
 class DrainReport:
     delivered: int = 0
@@ -999,13 +1042,15 @@ def drain(
         return report
 
     touched_upload = False
+    # Petname -> uuid, for this drain only. See _resolved_run_id.
+    run_ids: dict[str, str] = {}
     try:
         for path, op in journal.pending():
             if run_ref is not None and op.get("run_ref") != run_ref:
                 continue
             touched_upload = touched_upload or op.get("kind") == "upload"
             try:
-                _execute(journal, client_for(op.get("context")), path, op)
+                _execute(journal, client_for(op.get("context")), path, op, run_ids)
             except Exception as exc:  # noqa: BLE001 -- classified below
                 verdict = classify(exc)
                 if verdict == "idempotent" and int(op.get("attempts", 0)) > 0:
@@ -1073,16 +1118,38 @@ def drain(
     return report
 
 
-def _execute(journal: Journal, client, op_path: Path, op: dict) -> None:
+def _execute(
+    journal: Journal,
+    client,
+    op_path: Path,
+    op: dict,
+    run_ids: dict[str, str] | None = None,
+) -> None:
     """Deliver one op. Raises the transport/client error on failure. Field
     guards raise ValidationError (permanent -> dead letter): a KeyError here
     would classify transient and wedge the FIFO on a malformed op forever."""
+    run_ids = {} if run_ids is None else run_ids
     if op.get("kind") == "http":
         if not op.get("method") or not op.get("path"):
             raise errors.ValidationError(
                 f"op {op.get('op_id')} is missing method/path", status=422
             )
-        client.transport.request(op["method"], op["path"], json_body=op.get("body"))
+        try:
+            client.transport.request(op["method"], op["path"], json_body=op.get("body"))
+        except errors.ValidationError:
+            resolved = _resolve_queued_run_ref(client, run_ref_for_path(op["path"]), run_ids)
+            if resolved is None:
+                raise
+            # Rewritten for THIS attempt only; the op file keeps the ref that was
+            # queued. Persisting the substitution would rewrite history to say
+            # something the caller never wrote, and `run_ref` is the barrier-drain
+            # scoping key -- a queued petname has to keep matching the barrier
+            # armed on the same petname.
+            client.transport.request(
+                op["method"],
+                op["path"].replace(resolved[0], resolved[1], 1),
+                json_body=op.get("body"),
+            )
         return
     if op.get("kind") != "upload":
         raise errors.ValidationError(
@@ -1144,19 +1211,37 @@ def _execute(journal: Journal, client, op_path: Path, op: dict) -> None:
                 fsync_directory(journal.blobs_dir)
             source = hashed
 
-    client.upload_fingerprinted(
-        upload["anchor"],
-        upload["anchor_id"],
-        upload["name"],
-        str(source),
-        digest=digest,
-        size=size,
-        content_type=upload.get("content_type"),
-        kind=upload.get("kind"),
-        meta=upload.get("meta"),
-        # .get, not ["notes"]: a journal written by an older CLI has no such key,
-        # and the drainer must replay those ops rather than KeyError on them.
-        notes=upload.get("notes"),
-        span_id=upload.get("span_id"),
-        step_index=upload.get("step_index"),
-    )
+    def _upload(anchor_id: str | None) -> None:
+        client.upload_fingerprinted(
+            upload["anchor"],
+            anchor_id,
+            upload["name"],
+            str(source),
+            digest=digest,
+            size=size,
+            content_type=upload.get("content_type"),
+            kind=upload.get("kind"),
+            meta=upload.get("meta"),
+            # .get, not ["notes"]: a journal written by an older CLI has no such
+            # key, and the drainer must replay those ops rather than KeyError.
+            notes=upload.get("notes"),
+            span_id=upload.get("span_id"),
+            step_index=upload.get("step_index"),
+        )
+
+    try:
+        _upload(upload["anchor_id"])
+    except errors.ValidationError:
+        # `artifact add --from-manifest` rows anchored on a petname reported
+        # `anchors_resolved: 0` and `failed: 0`, then dead-lettered here. Same
+        # 422-then-resolve retry as the http ops above, and only for the RUN
+        # anchor: project/experiment slugs are resolved at enqueue, and
+        # workspace/shared anchors have ids only.
+        resolved = (
+            _resolve_queued_run_ref(client, upload["anchor_id"], run_ids)
+            if upload["anchor"] == "run"
+            else None
+        )
+        if resolved is None:
+            raise
+        _upload(resolved[1])

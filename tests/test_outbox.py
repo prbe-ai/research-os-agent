@@ -681,3 +681,108 @@ def test_inline_hash_is_taken_from_the_snapshot(tmp_path):
     staged = (journal.blobs_dir / queued["blob"]).read_bytes()
     assert staged == b"original contents"
     assert queued["blob"] == hashlib.sha256(b"original contents").hexdigest()
+
+
+# -- a queued petname reaches a UUID-typed route -----------------------------
+#
+# Enqueue does not read the run on purpose: `--async` exists so a write can be
+# queued with no network. Every route the drainer replays EXCEPT
+# `GET /v1/runs/{ref}` types its path param as a UUID, so
+# `probe --async log tunneling-sambar-254 ...` queued cleanly, reported
+# `failed: 0`, and dead-lettered on a 422 minutes later where nobody saw it.
+
+
+class _PetnameBackend:
+    """Accepts the UUID and 422s the petname, like the real routes."""
+
+    RUN_ID = "0f8e1c26-1c2f-4d2f-9c1f-2b6d5a1e9c00"
+
+    def __init__(self, *, resolvable=True):
+        self.resolvable = resolvable
+        self.paths: list[str] = []
+        self.lookups: list[str] = []
+
+    # -- transport
+    @property
+    def transport(self):
+        return self
+
+    def request(self, method, path, json_body=None):
+        self.paths.append(path)
+        if run_ref_for_path(path) not in (None, self.RUN_ID):
+            raise errors.ValidationError(f"badly formed uuid in {path}", status=422)
+        return {}
+
+    # -- client
+    def get_run(self, ref):
+        self.lookups.append(ref)
+        if not self.resolvable:
+            raise errors.NotFoundError(f"no run {ref}")
+        return {"id": self.RUN_ID, "short_id": ref}
+
+    def close(self):
+        pass
+
+
+def test_a_queued_petname_is_resolved_and_delivered(tmp_path):
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/runs/tunneling-sambar-254/metrics", {"points": []})
+
+    backend = _PetnameBackend()
+    report = drain(journal, client_factory=lambda ctx: backend)
+
+    assert report.delivered == 1
+    assert report.dead_lettered == 0
+    assert backend.paths[-1] == f"/v1/runs/{_PetnameBackend.RUN_ID}/metrics"
+
+
+def test_the_lookup_happens_only_after_the_422(tmp_path):
+    """Not before it: the happy path must not pay a round trip, and a genuine
+    body-validation 422 must not be hidden behind a lookup of our own."""
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", f"/v1/runs/{_PetnameBackend.RUN_ID}/metrics", {"points": []})
+
+    backend = _PetnameBackend()
+    report = drain(journal, client_factory=lambda ctx: backend)
+
+    assert report.delivered == 1
+    assert backend.lookups == [], "a UUID path resolved something it already had"
+
+
+def test_one_lookup_serves_every_op_for_the_same_run(tmp_path):
+    journal = journal_at(tmp_path)
+    for _ in range(4):
+        journal.append_http("POST", "/v1/runs/tunneling-sambar-254/metrics", {"points": []})
+
+    backend = _PetnameBackend()
+    report = drain(journal, client_factory=lambda ctx: backend)
+
+    assert report.delivered == 4
+    assert backend.lookups == ["tunneling-sambar-254"], backend.lookups
+
+
+def test_an_unresolvable_ref_dead_letters_on_the_servers_error(tmp_path):
+    """Not on ours. The 422 the server gave is the better diagnosis, and a
+    swallowed lookup failure would replace it with a 404 about a lookup the
+    caller never asked for."""
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/runs/no-such-petname/metrics", {"points": []})
+
+    backend = _PetnameBackend(resolvable=False)
+    report = drain(journal, client_factory=lambda ctx: backend)
+
+    assert report.dead_lettered == 1
+    assert "badly formed uuid" in report.errors[-1]
+
+
+def test_the_queued_ref_survives_in_the_op_file(tmp_path):
+    """The substitution is per-attempt. `run_ref` is the barrier-drain scoping
+    key, so a queued petname has to keep matching a barrier armed on it."""
+    journal = journal_at(tmp_path)
+    journal.append_http("POST", "/v1/runs/tunneling-sambar-254/metrics", {"points": []})
+
+    backend = _PetnameBackend()
+    # A barrier scoped to the petname must still select the op.
+    report = drain(journal, run_ref="tunneling-sambar-254", client_factory=lambda ctx: backend)
+
+    assert report.delivered == 1

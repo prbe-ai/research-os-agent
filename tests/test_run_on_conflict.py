@@ -114,3 +114,53 @@ def test_supersede_works_for_experiment_attached_runs(client, app):
     assert row["external_id"] == "run-a-r2"
     assert row["experiment_id"] == app.runs[first.id]["experiment_id"]
     assert app.runs[first.id]["tags"] == ["superseded"]
+
+
+# -- the incumbent is picked on the WHOLE key --------------------------------
+#
+# Run identity is (customer_id, source, external_id). The recovery path scanned
+# the first page of list_runs for external_id ALONE, so a run under a different
+# source sharing the id could be resumed or superseded in place of the real
+# incumbent. The 409 already names the right row -- the server resolves it on
+# both halves of the key -- so ask it instead of re-deriving the answer.
+
+
+def test_the_conflicts_existing_id_names_the_incumbent(lab, app):
+    original = _open(lab, source="sdk")
+    app.runs[original.id]["status"] = "failed"
+
+    recovered = _open(lab, source="sdk", on_conflict="resume")
+
+    assert recovered.id == original.id
+
+
+def test_another_sources_run_is_not_mistaken_for_the_incumbent(lab, app):
+    """Same external_id, two sources: the namespace is shared by design (an
+    ingest run and an sdk run may both be 'se-cnn-600-s0').
+
+    The decoy is opened FIRST and left `running`, so a scan matching on
+    external_id alone meets it before the real incumbent and the policy then
+    refuses with "its writer may still be alive" -- stranding a run that was
+    recoverable all along.
+    """
+    decoy = _open(lab, source="ingest")  # left running
+    incumbent = _open(lab, source="sdk")
+    app.runs[incumbent.id]["status"] = "failed"
+
+    recovered = _open(lab, source="sdk", on_conflict="resume")
+
+    assert recovered.id == incumbent.id
+    assert recovered.id != decoy.id
+
+
+def test_supersede_retries_from_the_right_incumbent(lab, app):
+    """The wrong incumbent poisons supersede too: the retry hangs its
+    parent_run_id / retry_of lineage off whichever run was picked."""
+    decoy = _open(lab, source="ingest")
+    incumbent = _open(lab, source="sdk")
+    app.runs[incumbent.id]["status"] = "crashed"
+
+    retry = _open(lab, source="sdk", on_conflict="supersede")
+
+    assert app.runs[retry.id]["parent_run_id"] == incumbent.id
+    assert app.runs[retry.id]["parent_run_id"] != decoy.id

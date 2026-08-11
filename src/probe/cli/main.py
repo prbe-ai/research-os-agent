@@ -3613,7 +3613,11 @@ def span_list(
     with _client() as c:
         _print_json(
             c.run_spans(
-                run,
+                # GET /v1/runs/{run_id}/spans types its path param as a UUID, so a
+                # petname reached it as a 422 -- on the one kind whose petname is
+                # the handle people are handed. `span add` two commands up already
+                # resolves (via _run_handle); this read did not.
+                _ref(c, "run", run).id,
                 span_type=span_type,
                 parent_span_id=parent,
                 step_from=step_from,
@@ -4613,7 +4617,14 @@ def artifact_list(
     with _client() as c:
         if anchor is Anchor.RUN:
             _print_json(
-                c.list_run_artifacts(anchor_id, kind=kind, step_from=step_from, step_to=step_to)
+                c.list_run_artifacts(
+                    # UUID-typed route, same as `span list` -- and the run anchor is
+                    # the one anchor whose ref is normally typed as a petname.
+                    _ref(c, "run", anchor_id).id,
+                    kind=kind,
+                    step_from=step_from,
+                    step_to=step_to,
+                )
             )
             return
         if kind or step_from is not None or step_to is not None:
@@ -5215,23 +5226,63 @@ def snapshot_show(
     """Print a run's captured code manifest, one file per line.
 
     `git` files are retrievable with `git cat-file blob <blob>` from the recorded
-    remote; `blob` files need their bytes fetched from the artifact store.
+    remote; `blob` files are the ones git cannot supply, and are stored in the
+    run's `code-bytes` archive.
+
+    `--pending-only` means GENUINELY UNAVAILABLE, not `source == "blob"`. The
+    manifest's `n_pending_upload` is a CLASSIFICATION count -- "git cannot supply
+    this, someone must upload it" (sdk.snapshot.capture_manifest says so in as
+    many words) -- and it is frozen into the execution record at capture, before
+    the upload it is counting. Reading it as work-remaining is what made this
+    command report 6 files pending on a run whose code-bytes archive held all six
+    and whose restore verified every one of them. What the upload actually did is
+    recorded on the `code-snapshot` artifact, so that is what this reconciles
+    against.
     """
     with _client() as c:
-        record = c.transport.get(f"/v1/execution-records/{_run_handle(c, run).data['env_ref']}")
+        # One read for both: `list_run_artifacts` is UUID-typed, and the handle
+        # already resolved a petname to get here.
+        data = _run_handle(c, run).data
+        record = c.transport.get(f"/v1/execution-records/{data['env_ref']}")
+        # A run captured by an older SDK, or one whose upload genuinely failed,
+        # has no code-bytes row -- and that is exactly the case where "pending"
+        # is the true answer rather than a stale label.
+        stored = bool(_code_bytes_row(c, str(data["id"])))
     manifest = ((record or {}).get("code") or {}).get("manifest") or {}
     entries = manifest.get("entries") or []
     print(f"base_commit {manifest.get('base_commit')}  remote {manifest.get('remote')}")
     print(f"tree_sha256 {manifest.get('tree_sha256')}")
+    classified = 0
     for e in entries:
-        if pending_only and e.get("source") != "blob":
+        is_blob = e.get("source") == "blob"
+        classified += is_blob
+        if pending_only and not (is_blob and not stored):
             continue
-        ref = e.get("blob", "-") if e.get("source") == "git" else "needs-upload"
+        if e.get("source") == "git":
+            ref = e.get("blob", "-")
+        else:
+            ref = "code-bytes" if stored else "needs-upload"
         print(f"  {e.get('source'):<5} {ref:<40} {e.get('sha256', '')[:12]} {e.get('path')}")
     print(
         f"{manifest.get('n_git_referenced', 0)} referenced, "
-        f"{manifest.get('n_pending_upload', 0)} pending upload"
+        + (
+            f"{classified} stored in code-bytes, 0 pending upload"
+            if stored
+            else f"{classified} pending upload"
+        )
     )
+
+
+def _code_bytes_row(c: Client, run_id: str) -> dict | None:
+    """The run's uploaded `code-bytes` archive, or None if its bytes never landed.
+
+    Same read `_restore_captured_tree` does before it can rebuild anything, and
+    the same normalisation: `list_run_artifacts` answers a bare list on some
+    routes and a paged object on others.
+    """
+    rows = c.list_run_artifacts(run_id, kind="code_bytes") or []
+    rows = rows.get("items", rows) if isinstance(rows, dict) else rows
+    return rows[0] if rows else None
 
 
 def _restore_captured_tree(
@@ -5254,13 +5305,12 @@ def _restore_captured_tree(
 
     archive = None
     tmp = None
-    rows = c.list_run_artifacts(run_id, kind="code_bytes") or []
-    rows = rows.get("items", rows) if isinstance(rows, dict) else rows
-    if rows:
+    row = _code_bytes_row(c, run_id)
+    if row:
         tmp = tempfile.NamedTemporaryFile(prefix="probe-code-", suffix=".tar.gz", delete=False)
         tmp.close()
         try:
-            c.download_artifact_to(rows[0]["id"], tmp.name)
+            c.download_artifact_to(row["id"], tmp.name)
             archive = tmp.name
         except Exception as exc:  # noqa: BLE001 -- reported per file by restore_snapshot
             print(f"warning: could not download code-bytes: {exc}", file=sys.stderr)
@@ -5935,10 +5985,16 @@ def experiment_delete(
 
 
 @experiment_app.command("edges")
-def experiment_edges(experiment_id: str = typer.Argument(...)) -> None:
-    """Print every lineage edge under an experiment."""
+def experiment_edges(experiment_id: str = slug_ref("experiment")) -> None:
+    """Print every lineage edge under an experiment.
+
+    Takes the slug, like `experiment get` and every other verb here: this was the
+    one that still demanded a raw UUID, so the handle people are given rejected
+    them on exactly one command. A bare UUID now needs the `id:` spelling the
+    slug-default rule asks for everywhere else (refs.py), and says so.
+    """
     with _client() as c:
-        _print_json(c.experiment_edges(experiment_id))
+        _print_json(c.experiment_edges(_ref(c, "experiment", experiment_id).id))
 
 
 # -- run groups (sweeps / ensembles) ----------------------------------------

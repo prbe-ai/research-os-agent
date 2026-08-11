@@ -877,3 +877,54 @@ def test_the_body_exception_survives_an_unserialisable_attribute(client, app):
                 scoped.attributes["o"] = object()
                 raise ValueError("rollout diverged")
     assert _last_state(app, run, scoped)["status"] == "failed"
+
+
+# -- external_key is an identity, so it decides the id ------------------------
+#
+# The server upserts ON CONFLICT (id) but ALSO holds a partial unique index on
+# (run_id, span_type, external_key). A client minting a fresh uuid per call made
+# the two disagree: `probe span add --external-key k` twice sent a NEW id
+# carrying a key the first call had taken, and the write that reads as an upsert
+# failed the uniqueness constraint instead -- dead-lettering on the async path.
+
+
+def test_the_same_external_key_upserts_one_span(client, app):
+    run = open_run(client, experiment="e", name="r")
+
+    first = run.span("rollout", external_key="episode-7", name="open")
+    second = run.span("rollout", external_key="episode-7", status="completed")
+
+    assert first == second, "a repeat of the same identity minted a second id"
+    assert len({s["id"] for s in app.spans[run.id]}) == 1
+    assert _last_state(app, run, first)["status"] == "completed"
+
+
+def test_the_derived_id_is_scoped_to_its_run_and_type(client, app):
+    """Same key, different run or different type, is a different span -- exactly
+    the shape of the index it is derived to match."""
+    one = open_run(client, experiment="e", name="r1")
+    two = open_run(client, experiment="e", name="r2")
+
+    assert one.span("rollout", external_key="k") != two.span("rollout", external_key="k")
+    assert one.span("rollout", external_key="k") != one.span("eval", external_key="k")
+
+
+def test_the_derivation_matches_the_servers_normalisation(client, app):
+    """The server stores span_type.strip().lower(), so deriving from the raw
+    casing would give `LLM` and `llm` two ids for what it stores as one row."""
+    run = open_run(client, experiment="e", name="r")
+    assert run.span("LLM", external_key="k") == run.span(" llm ", external_key="k")
+
+
+def test_a_span_without_an_external_key_still_gets_a_fresh_id(client, app):
+    """There is no natural key to derive from, so two calls are two spans."""
+    run = open_run(client, experiment="e", name="r")
+    assert run.span("rollout", name="a") != run.span("rollout", name="b")
+
+
+def test_an_explicit_id_still_wins(client, app):
+    """The documented two-call close passes the id back; derivation must not
+    displace it."""
+    run = open_run(client, experiment="e", name="r")
+    chosen = "11111111-2222-3333-4444-555555555555"
+    assert run.span("rollout", id=chosen, external_key="k") == chosen

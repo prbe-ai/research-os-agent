@@ -4,6 +4,52 @@
 
 ### Fixed
 
+- **`probe run start` no longer stalls for a minute in a directory that is not
+  a git repository.** It auto-snapshots in-process, and outside a repo the
+  classifier walked and hashed the WHOLE working directory with no bound —
+  measured at 276,507 files and 54.6s in a folder holding ~245 checkouts, with
+  every one of them classified pending upload and a 256MB upload cap waiting to
+  refuse them at the end. The run itself was created in under a second; the
+  whole wait was capture. The non-git walk now stops at 20,000 files and says
+  so, and because capture is never a gate the run continues uncaptured rather
+  than the command hanging.
+- **A run petname now works on every verb that takes a run.** `span list`,
+  `artifact list` and the async/`--from-manifest` write paths forwarded the ref
+  untouched to routes that type their path param as a UUID, so the exact
+  spelling `run start` prints came back as a 422 — silently, in the async case,
+  as a dead letter minutes later in a process nobody was watching. The reads
+  resolve the ref; the outbox resolves it after a 422 and retries once, so the
+  happy path still costs nothing and a queued write no longer needs the network
+  to be spelled correctly.
+- **`probe experiment edges` takes the experiment slug**, like every other
+  experiment verb. It was the one that still demanded a raw UUID.
+- **`probe span add --external-key` upserts instead of conflicting.** A span's
+  server-side identity is `(run, type, external_key)`, but the upsert is on the
+  id and the client minted a fresh one per call — so repeating a span meant
+  sending a new id carrying a key the first call had already taken, which the
+  uniqueness constraint refused. The id is now derived from the identity when
+  there is one.
+- **`probe snapshot-show` no longer reports stored files as pending.**
+  `n_pending_upload` in the execution record is a classification count ("git
+  cannot supply this") frozen at capture, before the upload it counts. It is now
+  reconciled against the run's `code-bytes` archive, so `--pending-only` means
+  genuinely unavailable — the state it names on a run whose upload really did
+  fail, and nothing on a run whose bytes landed.
+- **Run recovery picks the incumbent on the whole key.** Run identity is
+  `(customer, source, external_id)`, but `on_conflict` resolution scanned one
+  page of runs for the external_id alone, so a run under a different source
+  sharing that id could be resumed or superseded in place of the real one. The
+  409 already names the right row; it is used.
+- **A finished low-budget `get_entity` walk reports `complete`.** The last page
+  carried every remaining row and still said `partial` with no `next_cursor` —
+  telling a caller following the documented contract that data was missing and
+  offering no way to fetch it. Over-budget is still reported; it no longer
+  decides the verdict on a walk that reached its end. Atomic views (`reproduce`)
+  are unchanged.
+- **`capture_manifest(include=...)` reaches the non-git path.** It delegated
+  with the working directory alone, so an explicitly included file was absent
+  from the manifest of any tree without a repo.
+
 - **The test suite no longer spawns a real coding-agent CLI or touches the macOS
   Keychain.** Three tests shelled out to the real binary — `test_backfill_session_id.py`'s
   two `claude -p` checks and `test_codex_config.py`'s `codex mcp list` acceptance

@@ -1778,12 +1778,37 @@ class Client:
         resume continues it, supersede tags it ``superseded``."""
         try:
             return create(run_kw, name)
-        except errors.ConflictError:
+        except errors.ConflictError as conflict:
             base = run_kw.get("external_id")
             if on_conflict == "error" or base is None:
                 raise
-        page = self.list_runs(experiment_id=experiment_id, project_id=project_id)
-        old = next((r for r in page.items if r.get("external_id") == base), None)
+            existing_id = conflict.existing_id
+        old = None
+        if existing_id:
+            # The SERVER already resolved the incumbent, on the real key --
+            # `SELECT id FROM runs WHERE source = $1 AND external_id = $2`, which
+            # is the (customer_id, source, external_id) uniqueness the 409 came
+            # from. Ask it rather than re-deriving the answer from a listing.
+            try:
+                old = self.get_run(existing_id)
+            except errors.NotFoundError:
+                old = None  # raced with a delete; fall through to the scan
+        if old is None:
+            # Older backends send a bare 409. Match on BOTH halves of the key:
+            # external_id alone is not unique -- ingest and sdk runs share the
+            # namespace by design -- so this used to be able to hand back a
+            # different source's run and resume or supersede the wrong one.
+            source = (run_kw.get("source") or "api").strip().lower()
+            page = self.list_runs(experiment_id=experiment_id, project_id=project_id)
+            old = next(
+                (
+                    r
+                    for r in page.items
+                    if r.get("external_id") == base
+                    and str(r.get("source") or "").strip().lower() == source
+                ),
+                None,
+            )
         if old is None:
             # The 409 is real but the incumbent is not on the first page (or
             # belongs to another source). Acting on it blind would resume or

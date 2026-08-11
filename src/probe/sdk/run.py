@@ -31,7 +31,7 @@ import warnings
 import weakref
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from . import errors
 from . import launch as _launch
@@ -165,6 +165,41 @@ def _derived_provenance(
     return DerivedProvenance(
         producer=producer, note=note, inputs=selectors, code_ref=code_ref
     )
+
+
+#: Namespace for :func:`_span_id_for`. Frozen: changing it re-points every
+#: external-keyed span at a new id, which is a data migration, not a refactor.
+_SPAN_NS = uuid5(NAMESPACE_URL, "https://probe.research/span")
+
+
+def _span_id_for(run_id: str, span_type: str, external_key: str | None) -> str:
+    """This span's id: derived from its identity when it has one, else random.
+
+    A span is upserted ``ON CONFLICT (id)``, but the server ALSO holds a partial
+    unique index on ``(run_id, span_type, external_key)`` -- so identity is stated
+    twice, and a client that minted a fresh uuid per call made the two disagree.
+    `probe span add --external-key k` twice was the observable form: the second
+    call sent a NEW id carrying an external_key the first had already taken, and
+    the write that reads as an upsert failed the uniqueness constraint instead
+    (dead-lettered on the async path, where nobody was watching).
+
+    Deriving the id from the natural key makes repeat calls address the SAME row,
+    which is what "upsert one span" has always claimed. Costs no request and
+    holds offline -- it has to, because the async path has no server to ask.
+
+    An `external_key` is what a caller passes when the span has an identity in
+    somebody else's system; without one there is no natural key to derive from
+    and a random id is right. `span_type` is lowercased to match the server,
+    which stores ``span_type.strip().lower()`` -- deriving from the raw casing
+    would give ``LLM`` and ``llm`` two ids for one row.
+
+    Spans written before this (random id + external_key) are NOT addressed by the
+    derived id, so a re-push against one still conflicts. It now fails naming the
+    incumbent: the backend resolves `existing_id` on this constraint too.
+    """
+    if not external_key:
+        return str(uuid4())
+    return str(uuid5(_SPAN_NS, f"{run_id}\0{span_type.strip().lower()}\0{external_key}"))
 
 
 class SpanHandle(str):
@@ -854,7 +889,7 @@ class Run:
         canonicalizes + hashes it (and mirrors it for display) itself. A span's
         coordinate is set-once server-side — a re-push may add one, an empty map
         keeps the existing coordinate, and a different one is a 409."""
-        span_id = id or str(uuid4())
+        span_id = id or _span_id_for(self.id, span_type, external_key)
         UUID(span_id)  # validate shape early
         if parent_span_id is _UNSET:
             enclosing = _current_span.get()
