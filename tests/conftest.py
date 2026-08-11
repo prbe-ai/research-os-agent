@@ -263,22 +263,30 @@ class FakeApp:
             return httpx.Response(200, json=dict(self.wiki))
 
         if path == "/v1/wiki" and method == "PUT":
-            if body.get("version") is None:
-                # 428, not 422. The request is well-formed; it carries no
-                # precondition. Getting this wrong in the fake would let a client
-                # that omits the version pass as a validation error.
-                return httpx.Response(428, json={"detail": "a wiki write must carry a version"})
-            if body["version"] != self.wiki["version"]:
-                return httpx.Response(409, json={"detail": {
-                    "message": (
-                        f"the wiki has moved to version {self.wiki['version']} since "
-                        f"you read version {body['version']}."
-                    ),
-                    "expected_version": body["version"],
-                    "current_version": self.wiki["version"],
-                    "current_body": self.wiki["body"],
-                }})
-            return httpx.Response(200, json=self._wiki_commit(body["body"], body.get("summary")))
+            # 410 GONE. The wiki is pages now and a whole-document write has no
+            # target. Modelled rather than left at 200, because the whole point
+            # of the status is that an OLD CLIENT hits it: a fake that still
+            # accepted the write would let a client that never migrated pass
+            # here and discard a user's document in production.
+            return httpx.Response(410, json={"detail": (
+                "NOTHING WAS WRITTEN. The team wiki is no longer one document. "
+                "Upgrade the CLI and use `probe wiki write <type>/<slug>`."
+            )})
+
+        if path == "/v1/wiki/index" and method == "GET":
+            return httpx.Response(200, json=dict(self.wiki_index))
+
+        if path == "/v1/wiki/pages" and method == "GET":
+            wanted = request.url.params.get("type")
+            rows = [
+                {k: v for k, v in page.items() if k != "body"}
+                for page in self.wiki_pages.values()
+                if wanted is None or page["wiki_type"] == wanted
+            ]
+            return httpx.Response(200, json={"pages": rows, "count": len(rows)})
+
+        if path.startswith("/v1/wiki/pages/"):
+            return self._wiki_page(method, path, body)
 
         if path == "/v1/wiki/versions" and method == "GET":
             params = request.url.params
@@ -308,6 +316,90 @@ class FakeApp:
                 self.wiki_bodies[wanted], f"revert to version {wanted}"
             ))
         return None
+
+    def _wiki_page(self, method: str, path: str, body: dict) -> httpx.Response | None:
+        """`/v1/wiki/pages/{type}/{slug}[/versions|/revert]`.
+
+        The COMPARE-AND-SWAP is modelled, not stubbed, for the same reason the
+        single-document 409 was: every interesting client behaviour is a
+        reaction to it. `version: 0` means "I expect this page not to exist",
+        which is how `probe wiki write` seeds a new page with the same command
+        that edits an old one.
+        """
+        rest = path[len("/v1/wiki/pages/"):]
+        parts = rest.split("/")
+        if len(parts) < 2:
+            return httpx.Response(404, json={"detail": "Not Found"})
+        wiki_type, slug = parts[0], parts[1]
+        key = f"{wiki_type}/{slug}"
+        tail = parts[2] if len(parts) > 2 else ""
+        page = self.wiki_pages.get(key)
+
+        if tail == "versions" and method == "GET":
+            return httpx.Response(200, json={
+                "versions": self.wiki_page_history.get(key, []),
+                "next_before_version": None,
+            })
+
+        if tail == "revert" and method == "POST":
+            if page is None:
+                return httpx.Response(404, json={"detail": "wiki page not found"})
+            return httpx.Response(200, json=self._wiki_page_commit(
+                wiki_type, slug, f"reverted body v{body.get('version')}", page["title"]
+            ))
+
+        if tail:
+            return httpx.Response(404, json={"detail": "Not Found"})
+
+        if method == "GET":
+            if page is None:
+                return httpx.Response(404, json={"detail": "wiki page not found"})
+            return httpx.Response(200, json=page)
+
+        if method == "PUT":
+            if body.get("version") is None:
+                # 428, not 422: the request is well-formed, it carries no
+                # precondition.
+                return httpx.Response(
+                    428, json={"detail": "a wiki page write must carry a version"}
+                )
+            current = page["version"] if page else 0
+            if body["version"] != current:
+                return httpx.Response(409, json={"detail": {
+                    "message": (
+                        f"the page moved to version {current} since you read "
+                        f"version {body['version']}."
+                    ),
+                    "expected_version": body["version"],
+                    "current_version": current,
+                    "current_body": page["body"] if page else "",
+                }})
+            return httpx.Response(200, json=self._wiki_page_commit(
+                wiki_type, slug, body["body"], body.get("title") or slug
+            ))
+        return None
+
+    def _wiki_page_commit(self, wiki_type: str, slug: str, body: str, title: str) -> dict:
+        key = f"{wiki_type}/{slug}"
+        version = (self.wiki_pages.get(key, {}).get("version") or 0) + 1
+        page = {
+            "wiki_type": wiki_type,
+            "slug": slug,
+            "title": title,
+            "body": body,
+            "version": version,
+            "updated_at": self._stamp(),
+            "doc_class": "manual_entry",
+        }
+        self.wiki_pages[key] = page
+        self.wiki_page_history.setdefault(key, []).insert(0, {
+            "version": version,
+            "author": "user:00000000-0000-0000-0000-000000000001",
+            "summary": None,
+            "created_at": page["updated_at"],
+            "size_chars": len(body),
+        })
+        return page
 
     def _wiki_commit(self, body: str, summary: str | None) -> dict:
         """Append a revision and return the new document.
@@ -556,6 +648,19 @@ class FakeApp:
         #: Server-side page ceiling for GET /v1/wiki/versions, so the client's
         #: "there is older history" signal has something real to key on.
         self.wiki_versions_page: int | None = None
+        #: The wiki's FRONT PAGE (GET /v1/wiki/index). Empty body + no entries is
+        #: what a team whose synthesis run has never fired reads back -- a real
+        #: answer, never a 404, for the same reason `wiki` above is.
+        self.wiki_index: dict = {
+            "body": "",
+            "entries": [],
+            "updated_at": None,
+            "version": None,
+        }
+        #: "<type>/<slug>" -> the page dict the page routes serve.
+        self.wiki_pages: dict[str, dict] = {}
+        #: "<type>/<slug>" -> newest-first history rows.
+        self.wiki_page_history: dict[str, list[dict]] = {}
         self.search_404_workspace_ids: set[str] = set()
         self.search_404_once = False
         self.fail_next_uploads = False

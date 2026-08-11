@@ -2002,16 +2002,74 @@ class WideSeriesResult(BaseModel):
     truncated: bool | None = Field(False, title='Truncated')
 
 
-class WikiPageOut(BaseModel):
+class WikiIndexEntryOut(BaseModel):
+    slug: str = Field(..., title='Slug')
+    summary: str | None = Field(None, title='Summary')
+    title: str | None = Field(None, title='Title')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+    version: int = Field(..., title='Version')
+    wiki_type: str = Field(..., title='Wiki Type')
+
+
+class WikiIndexOut(BaseModel):
     """
-    The current document. Returned for a team that has never generated one too
-    -- see `app/wiki/service.read_page`: an empty team gets a well-formed empty
-    document at version 0, never a 404.
+    The wiki's front page: the agent's rendered overview plus the
+    machine-readable list of what it links to.
     """
 
     body: str = Field(..., title='Body')
+    entries: list[WikiIndexEntryOut] = Field(..., title='Entries')
     updated_at: AwareDatetime | None = Field(None, title='Updated At')
+    version: int | None = Field(None, title='Version')
+
+
+class WikiPageDetailOut(BaseModel):
+    """
+    One page, whole.
+    """
+
+    body: str = Field(..., title='Body')
+    doc_class: str = Field(..., title='Doc Class')
+    slug: str = Field(..., title='Slug')
+    title: str | None = Field(None, title='Title')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
     version: int = Field(..., title='Version')
+    wiki_type: str = Field(..., title='Wiki Type')
+
+
+class WikiPageRef(BaseModel):
+    """
+    One row of `probe wiki list`. Carries no body.
+    """
+
+    slug: str = Field(..., title='Slug')
+    title: str | None = Field(None, title='Title')
+    updated_at: AwareDatetime = Field(..., title='Updated At')
+    version: int = Field(..., title='Version')
+    wiki_type: str = Field(..., title='Wiki Type')
+
+
+class Summary(RootModel[str]):
+    root: str = Field(..., max_length=200, title='Summary')
+
+
+class Version(RootModel[int]):
+    root: int = Field(..., ge=0, title='Version')
+
+
+class WikiPageWrite(BaseModel):
+    """
+    A version-checked write to ONE page.
+
+    Same three-status contract as the single-document `WikiWrite` it
+    replaces, per page: equal version wins, stale gets 409 carrying the
+    current body, absent gets 428.
+    """
+
+    body: str = Field(..., max_length=1048576, title='Body')
+    summary: Summary | None = Field(None, title='Summary')
+    title: str = Field(..., max_length=200, min_length=1, title='Title')
+    version: Version | None = Field(None, title='Version')
 
 
 class WikiRegenerateOut(BaseModel):
@@ -2035,6 +2093,20 @@ class WikiRevert(BaseModel):
     """
 
     version: int = Field(..., ge=1, title='Version')
+
+
+class WikiSource(StrEnum):
+    """
+    Which wiki answered `GET /v1/wiki` during the migration to pages.
+
+    A string enum rather than a bool (`is_legacy`) because a third value is
+    already foreseeable -- the fallback disappears when the legacy table
+    does -- and because the field is read by humans in a JSON dump at least
+    as often as by code.
+    """
+
+    engine_index = 'engine_index'
+    legacy_document = 'legacy_document'
 
 
 class WikiVersionOut(BaseModel):
@@ -2073,14 +2145,6 @@ class WikiVersionsOut(BaseModel):
 
     next_before_version: int | None = Field(None, title='Next Before Version')
     versions: list[WikiVersionOut] = Field(..., title='Versions')
-
-
-class Summary(RootModel[str]):
-    root: str = Field(..., max_length=200, title='Summary')
-
-
-class Version(RootModel[int]):
-    root: int = Field(..., ge=0, title='Version')
 
 
 class WikiWrite(BaseModel):
@@ -2640,6 +2704,26 @@ class TeamWikiExcerpt(BaseModel):
     state: TeamWikiState | None = 'ok'
     text: str | None = Field(None, title='Text')
     truncated: bool | None = Field(False, title='Truncated')
+
+
+class WikiPageListOut(BaseModel):
+    count: int = Field(..., title='Count')
+    pages: list[WikiPageRef] = Field(..., title='Pages')
+
+
+class WikiPageOut(BaseModel):
+    """
+    The current document. Returned for a team that has never generated one too
+    -- see `app/wiki/service.read_page`: an empty team gets a well-formed empty
+    document at version 0, never a 404.
+    """
+
+    body: str = Field(..., title='Body')
+    generation_enabled: bool | None = Field(False, title='Generation Enabled')
+    generation_pending: bool | None = Field(False, title='Generation Pending')
+    source: WikiSource | None = 'legacy_document'
+    updated_at: AwareDatetime | None = Field(None, title='Updated At')
+    version: int = Field(..., title='Version')
 
 
 class BrowseResponse(BaseModel):

@@ -413,6 +413,10 @@ class ResearchOSSource:
             )
         return exact[0]
 
+    def list_wiki_pages(self) -> dict:
+        """Every wiki page, for `get_entity(ref="wiki", view="pages")`."""
+        return self.client.list_wiki_pages()
+
     def get(self, ref: str) -> tuple[str, dict]:
         """Resolve ``kind:value`` (or a bare id) to ``(kind, entity)``.
 
@@ -426,21 +430,39 @@ class ResearchOSSource:
         # ref must be a UUID". That error is true and useless: the caller followed
         # the tool description exactly.
         if ref == EntityType.WIKI.value or ref == f"{EntityType.WIKI.value}:":
-            return EntityType.WIKI.value, self.client.get_wiki()
+            # The FRONT PAGE, not the whole wiki -- the wiki is a set of pages
+            # now and no single response is "all of it". The bare ref keeps
+            # answering because it is the orienting read every agent is told to
+            # make first, and the front page is the answer to it; `pages` lists
+            # the rest and `wiki:<type>/<slug>` opens one.
+            index = self.client.get_wiki_index()
+            return EntityType.WIKI.value, {
+                "body": index.get("body") or "",
+                "version": index.get("version"),
+                "updated_at": index.get("updated_at"),
+                "page_count": len(index.get("entries") or []),
+            }
         kind, _, value = ref.partition(":")
         if not value:
             value = kind
             kind = ""
         if kind == EntityType.WIKI.value:
-            # `wiki:<anything>` is refused rather than ignored. One document per
-            # tenant means the value can only ever be a misconception about the
-            # shape of the resource, and silently dropping it would confirm the
-            # misconception by answering successfully.
-            raise errors.ValidationError(
-                f"the team wiki takes no id: use ref=\"wiki\", not {ref!r}. There is "
-                "one wiki per team and your credential already names the team.",
-                status=422,
-            )
+            # `wiki:<type>/<slug>` names ONE PAGE. The wiki stopped being a
+            # singleton when it became a set of pages, so the value is now
+            # meaningful -- but only in that shape. Anything else is still
+            # refused rather than guessed at, because the failure mode of
+            # guessing is answering successfully with the wrong page.
+            wiki_type, sep, slug = value.partition("/")
+            if not sep or not wiki_type or not slug:
+                raise errors.ValidationError(
+                    f"{ref!r} does not name a wiki page. A page is "
+                    'ref="wiki:<type>/<slug>" (for example '
+                    '"wiki:runbook/slack-backfill-stuck"); the bare ref "wiki" '
+                    "is the front page, and its `pages` view lists every page "
+                    "this team has.",
+                    status=422,
+                )
+            return kind, self.client.get_wiki_page(wiki_type, slug)
         getters = {
             EntityType.RUN.value: self.client.get_run,
             EntityType.EXPERIMENT.value: self.client.get_experiment,
