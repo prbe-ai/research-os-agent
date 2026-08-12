@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A dying writer's last operation can no longer strand in the outbox.** If
+  the process was killed between enqueue and drain, the final op sat pending
+  until the next run happened to drain it; the worker now hands off cleanly on
+  teardown. Found by prod smoke. (research-os#476, originally agent#193 by
+  @mahitoburrito)
+
 ## 0.72.0
 
 ## 0.71.0
