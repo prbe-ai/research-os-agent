@@ -774,7 +774,10 @@ class Client:
 
         ``summary_markdown`` is the human/agent-maintained suffix rendered with
         the server-owned AI narrative as one Project Summary. The suffix is
-        replaced wholesale; ``""`` clears it. AI refreshes do not touch it.
+        replaced wholesale and is last-write-wins: read the current project
+        immediately before editing, preserve its existing suffix, and verify the
+        returned value. ``""`` clears it. AI refreshes do not touch it; callers
+        must never copy or attempt to edit that server-owned narrative.
 
         ``tags`` REPLACES the whole list ([] clears); the server normalizes to
         lowercase-kebab (CONTRACT.md "tags").

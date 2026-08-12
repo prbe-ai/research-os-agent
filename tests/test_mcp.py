@@ -746,7 +746,7 @@ def test_browse_annotates_nodes_with_ref_and_available_views(app, client):
     assert node["entity_type"] == "project"
     # Derived, never hand-written. A project used to advertise `card` alone, which
     # made project-anchored artifacts write-only over MCP -- stored and unreadable.
-    assert node["available_views"] == ["artifacts", "card", "notes"]
+    assert node["available_views"] == ["artifacts", "card", "notes", "summary"]
     assert envelope["completeness"]["state"] == "complete"
     # Unexpanded levels stay None -- distinct from [] (expanded, empty).
     assert envelope["data"]["experiments"] is None
@@ -867,6 +867,21 @@ def test_the_view_matrix_in_the_docstring_matches_the_real_one(client):
             f"{kind}: docstring says {sorted(advertised)}, "
             f"_VIEWS says {_supported_views(kind)}"
         )
+
+
+def test_mcp_guidance_distinguishes_visible_summary_from_hidden_notes(client):
+    from probe.mcp.server import MCP_INSTRUCTIONS
+
+    instructions = " ".join(MCP_INSTRUCTIONS.split())
+    docs = " ".join(_tool_docs(client)["get_entity"].split())
+
+    for text in (instructions, docs):
+        assert "server-owned AI narrative" in text
+        assert "summary_markdown" in text
+        assert "hidden" in text and "notes" in text
+        assert "whole-document" in text
+        assert "last-write-wins" in text
+        assert "verify" in text
 
 
 

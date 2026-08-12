@@ -286,6 +286,19 @@ def test_the_rule_requires_prior_knowledge_search_before_design() -> None:
     assert "If that read surface is unavailable, say so" in body
 
 
+def test_the_rule_distinguishes_visible_summary_from_hidden_notes() -> None:
+    """Skill selection is optional, so the always-loaded pointer must preserve
+    the ownership and audience distinction even when no skill body is opened."""
+    body = " ".join(agent_rules.POINTER_BODY.split())
+
+    assert "description as the short identity" in body
+    assert "editable Markdown suffix" in body
+    assert "durable teammate-facing context" in body
+    assert "hidden notes" in body
+    assert "Never edit the server-owned AI portion" in body
+    assert "Read both summary and notes on arrival" in body
+
+
 def test_the_block_names_skills_and_not_commands_that_rot() -> None:
     """Surfaces are stable; procedures are not, and this copy is unreachable.
 

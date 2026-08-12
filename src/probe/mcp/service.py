@@ -518,6 +518,7 @@ _VIEWS: dict[tuple[str, str], str] = {
     (EntityType.EXPERIMENT, View.REPRODUCE): "_view_experiment_reproduce",
     (EntityType.PROJECT, View.CARD): "_view_project_card",
     (EntityType.PROJECT, View.NOTES): "_view_project_notes",
+    (EntityType.PROJECT, View.SUMMARY): "_view_project_summary",
     # A project's only view used to be `card`, so a project-anchored artifact
     # (`probe artifact add --project`, fold #22) was write-only over MCP -- stored
     # and unreadable, which reads as captured and is worse than untracked.
@@ -1449,6 +1450,37 @@ class ResearchReadService:
         read and write, not a record type. Also off the already-fetched row."""
         return _ViewData(payload={"notes": entity.get("notes")})
 
+    def _view_project_summary(self, entity: dict, request: _Req) -> _ViewData:
+        """The agent-owned suffix of the dashboard's combined Project Summary.
+
+        The AI narrative is generated and refreshed elsewhere by research-os; it
+        is deliberately not writable through this field. Returning ownership and
+        replacement semantics beside the text prevents a raw column from looking
+        like either a generated cache or an append-only note.
+        """
+        return _ViewData(
+            payload={
+                "project_summary": {
+                    "summary_markdown": entity.get("summary_markdown") or "",
+                    "rendering": (
+                        "The dashboard renders the server-owned AI narrative first "
+                        "and this editable Markdown suffix immediately after it as "
+                        "one Project Summary."
+                    ),
+                    "ownership": (
+                        "Only summary_markdown is human/agent-maintained; never edit "
+                        "or duplicate the server-owned AI narrative."
+                    ),
+                    "write_semantics": (
+                        "Whole-document, last-write-wins replacement: read immediately "
+                        "before editing, preserve existing sections, write the complete "
+                        "document, then verify."
+                    ),
+                    "write_with": "probe project set PROJECT --summary @PROJECT.md",
+                }
+            }
+        )
+
     def _view_project_artifacts(self, entity: dict, request: _Req) -> _ViewData:
         return _ViewData(
             rows=self.source.project_artifacts(str(entity["id"])), rows_key="artifacts"
@@ -1874,4 +1906,3 @@ class ResearchReadService:
             for dimension in requested
         }
         return self._envelope({"entities": rows, "comparison": comparison})
-

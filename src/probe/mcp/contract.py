@@ -106,6 +106,7 @@ class View(StrEnum):
     LINEAGE = "lineage"
     EVENTS = "events"  # the append-only lifecycle log
     NOTES = "notes"  # a project's free-text markdown notes
+    SUMMARY = "summary"  # a project's dashboard-visible editable Markdown suffix
     GROUPS = "groups"  # sweeps/ensembles under an experiment
     VERSIONS = "versions"  # immutable published manifests
 

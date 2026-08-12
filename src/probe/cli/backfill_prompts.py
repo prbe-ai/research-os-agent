@@ -423,22 +423,21 @@ Answer with JSON on its own line:
 """
 
 
-# -- pass 4: the project's notes ---------------------------------------------
+# -- pass 4: the project's visible summary and hidden notes ------------------
 
 
 def write_notes(*, project: str, root, landed: int, manifests: list[str]) -> str:
-    """One writer, once, at the end, per project.
+    """One project-level writer, once, after every import unit has landed.
 
-    Per-unit writers produced two problems at once: `probe notes write` replaces
-    by default so concurrent units erased each other, and even with that fixed
-    four agents each writing a paragraph produce four paragraphs stapled
-    together rather than a document. One writer that can see the whole import is
-    both safe and better.
+    The writer separates teammate-facing documentation from the hidden agent
+    briefing. It still runs once because a coherent document needs the whole
+    import, while notes append server-side so existing operational context is
+    never replaced.
     """
     refs = "\n".join(f"    {m}" for m in manifests)
     return f"""\
-You are writing the notes for one Probe project, once, now that its import
-has finished.
+You are writing the project-level documentation for one Probe project, once,
+now that its import has finished.
 
 PROJECT: {project}
 FOLDER:  {root}
@@ -448,23 +447,36 @@ The manifests the importing agents produced, which say what each file is:
 
 {refs}
 
-Write the ONE thing no single file explains: what this project is, how the
-pieces relate, what is missing, and what a reader should not trust. Read the
-manifests and the project's artifact list first.
+Read the manifests and the project's artifact list first. Project prose has
+three homes: description is the short identity; the editable Project Summary
+suffix is durable teammate-facing dashboard Markdown; hidden notes are the
+operational agent briefing.
 
-    probe notes write --project {project} <file>
+For the visible suffix, explain what this project is and how the pieces relate.
+The dashboard renders a server-owned AI narrative first and this editable
+Markdown immediately after it as one Project Summary. Never edit or duplicate
+the AI narrative. `summary_markdown` is whole-document and last-write-wins, so
+read it immediately before editing, preserve useful existing sections, replace
+the complete file, and verify what landed:
+
+    probe project get {project} | jq -r '.summary_markdown // ""' > PROJECT.md
+    # Edit PROJECT.md.
+    probe project set {project} --summary @PROJECT.md
+    probe project get {project} | jq -r '.summary_markdown // ""'
+
+Put missing evidence, trust caveats, and operational handoff details in a
+separate file and append them to hidden notes:
+
+    probe notes write --project {project} --append <file>
 
 Be honest about gaps. "The 2024 sweep configs are here but their result tables
-are not" is worth more to the next reader than a confident summary that quietly
-omits it.
-
-You are the only writer for this project, so you do not need --append and you
-will not overwrite anyone. Do not describe individual files -- they already
-carry their own notes. Three paragraphs is plenty.
+are not" is worth more to the next agent than a confident summary that quietly
+omits it. Do not describe individual files -- they already carry their own
+notes. Three visible paragraphs plus concise caveats is plenty.
 
 Finish with JSON on its own line:
 
-{{"project": "{project}", "chars": N, "gaps_noted": N}}
+{{"project": "{project}", "summary_chars": N, "gaps_noted": N}}
 """
 
 

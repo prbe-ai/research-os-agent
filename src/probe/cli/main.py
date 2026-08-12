@@ -2298,7 +2298,10 @@ def project_summary_opt() -> Any:
     return typer.Option(
         None,
         "--summary",
-        help="editable Markdown suffix in the Project Summary: literal, @file, or - for stdin",
+        help=(
+            "whole-document editable Markdown suffix in the Project Summary; "
+            "read first and verify after: literal, @file, or - for stdin"
+        ),
     )
 
 
