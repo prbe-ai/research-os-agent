@@ -1361,7 +1361,26 @@
   unsupported-value handling — it is callable directly from Python, where
   nothing validates on its behalf.
 
-## Unreleased
+## Released between 0.28.0 and 0.44.0 (research-os-agent, pre-monorepo)
+
+<!--
+This block was titled "## Unreleased" until 2026-08-12, which made it the SECOND
+heading by that name in this file — and the one `grep -n '^## Unreleased'` finds
+last, `awk` ranges run past, and a human scrolling from the bottom reaches first.
+Every entry under it had shipped years of releases ago. Reading it as the pending
+section says the next release contains `### Breaking` and `### Added` work when
+it may contain one bug fix, which is a version-number error, not a cosmetic one.
+It caused exactly that misread during the 0.73.1 cut.
+
+Why a range and not per-version headings: these are ~15 releases' worth of
+entries written as they landed in the old research-os-agent repo, whose release
+process never split them, and the fold-in carried the section over verbatim. The
+top entry (`capture-run-inputs`, #151) shipped in 0.44.0; the heading below this
+block is 0.28.0. Splitting the rest would mean attributing each entry to a
+release from commit archaeology, and a wrong attribution here is worse than an
+honest range. Left as one bounded block on purpose — do not retitle it
+"Unreleased".
+-->
 
 ### Added
 
