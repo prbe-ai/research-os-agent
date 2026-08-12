@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.75.0
+
 ### Added
 
 - **`probe metrics plot` draws a run's curves in the terminal.** The coordinate
