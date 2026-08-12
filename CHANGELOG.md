@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe metrics plot` draws a run's curves in the terminal.** The coordinate
+  read surface could already return the step x metric table; nothing could show
+  it, so "is the loss actually moving?" meant piping JSON into a plotting script
+  or leaving for the dashboard. Bare, the verb prints a BOARD — every series the
+  run logged, one sparkline each with last/min/max beside it. `--key` promotes
+  those series to full PANELS drawn in braille (a 2x4 subpixel grid per cell, so
+  an 80x12 block of terminal holds a 160x48 curve), with axis ticks placed on
+  round values rather than on whatever the canvas height divided into.
+  `--overlay` puts several keys on one canvas and therefore ONE y-axis — a
+  second scale would make any two curves cross wherever the author chose — and
+  the footer says when the scales are far enough apart that the smaller curve
+  has flattened against the floor. A second series switches the renderer from
+  braille to per-series glyphs, because color alone does not survive a pipe, a
+  monochrome terminal, or a reader with a color vision deficiency; color rides
+  along as a second encoding and turns itself off when stdout is not a TTY or
+  `NO_COLOR` is set, and braille/box-drawing degrade to ASCII when the stream's
+  encoding cannot carry them.
+
+  A chart is read as the whole truth about a run, so everything the picture
+  cannot show is said in words on stderr before it is drawn: a window the read
+  cut short (`truncated`/`next_step`, which `--max-rows` and the SDK's page cap
+  both produce), a `--key` that matched no series while its siblings drew, a
+  seventh series dropped from an overlay, and any non-finite point that no
+  scale can hold. On the canvas itself a cell more than one curve reached gets
+  its own `%` glyph and a legend entry — coincident curves used to draw as one
+  while the legend went on naming both. A key logged under two `kind`s stays
+  two named series rather than one name printed twice.
+
+  No new dependency. Unlike its siblings in `probe metrics`, it resolves a run
+  ref, so a petname `short_id` works.
+
 ## 0.74.0
 
 ## 0.73.1
