@@ -4,6 +4,19 @@
 
 ### Fixed
 
+- **A gitignored `.env` is now REPORTED as excluded instead of silently
+  vanishing inside a git repo.** The non-git walk has always listed a dropped
+  credential under `skipped`, so a reader could tell "not an input" from
+  "excluded by policy". Inside a repo the same file was excluded more quietly:
+  `ls-files --exclude-standard` never offers it and only lockfiles get a
+  force-add, so absence carried no information at all — a run that depended on a
+  gitignored `.env` looked identical to one that needed nothing. The git path is
+  the common path, which made it the more damaging half of the asymmetry. Both
+  paths now classify with the same `_skip_reason`, and the listing is bounded
+  (`--directory` collapses ignored trees; collapsed directories are dropped
+  rather than guessed at). Exclusion itself is unchanged — auto-uploading a
+  working directory must still not be how a credential leaves the machine.
+
 - **`probe snapshot` no longer records its own packages as the project's.**
   When no virtualenv could be resolved for `--cwd` and the CLI's interpreter
   lived outside it, `strict` raised — but the non-strict path (the CLI's
