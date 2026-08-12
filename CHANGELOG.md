@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`probe snapshot` no longer records its own packages as the project's.**
+  When no virtualenv could be resolved for `--cwd` and the CLI's interpreter
+  lived outside it, `strict` raised — but the non-strict path (the CLI's
+  default) went on to enumerate that interpreter anyway, filing ~40 packages of
+  typer/rich/questionary as the experiment's dependencies. The result was a
+  full, plausible, entirely wrong dependency list, indistinguishable downstream
+  from a correct capture; only the `resolved_via: "unresolved-fallback"` tag
+  buried in artifact meta said otherwise. `capture_env` now records the
+  provenance and nothing else in that case — no `packages`, no `python` — and
+  says so: `Run.snapshot` warns, so `probe exec` (which takes the same
+  `detect_venv=True` path and previously only warned when capture RAISED) is no
+  longer silent, and `probe snapshot` prints a fuller "env: NOT captured" naming
+  the fix (`--venv PATH`, or activate the environment). A missing dependency set
+  is recoverable; a confident wrong one is not. Code capture is unaffected, and
+  a resolvable venv (`project-venv` / `explicit` / `interpreter`) still captures
+  exactly as before.
+
 ## 0.73.0
 
 ## 0.72.1
