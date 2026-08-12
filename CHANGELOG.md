@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The MCP reports which client version it is.** Every backend request from the
+  CLI has carried `X-Probe-Client` / `X-Probe-Client-Version` since the update
+  banner shipped, but the MCP built its transport without them, so `surface=mcp`
+  traffic reached the server anonymous. A user who worked through the MCP and
+  never touched the CLI reported no version at all — invisible to both the
+  update banner and (now that the backend stamps it onto analytics) to
+  client-version adoption tracking.
+
+  The local server sends its own package version, which is the truth under
+  stdio: it ships in the same distribution as the CLI, so its version is what
+  the user installed. The HOSTED server cannot do that — one transport is
+  memoized per token and serves many callers, so a version fixed at
+  construction would report OUR deployed version as every caller's and make the
+  fleet look evenly upgraded. It instead binds the caller's forwarded pair as a
+  per-request override (`client_headers_scope`), reading it the same way the
+  transport already reads `current_tool()` and the agent-session headers.
+  Binding an EMPTY pair is meaningful and distinct from leaving it unset: a
+  caller that reported nothing must reach the backend with nothing, never with
+  ours.
+
 ## 0.75.0
 
 ### Added
