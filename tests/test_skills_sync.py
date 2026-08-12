@@ -147,6 +147,34 @@ def test_user_facing_docs_do_not_advertise_the_retired_surface() -> None:
             )
 
 
+def test_both_workflow_skills_teach_the_project_prose_contract() -> None:
+    """Creation-only guidance is missed once a project already exists.
+
+    Both the start and ongoing tracking entry points must teach storage choice,
+    ownership, and the safe whole-document edit lifecycle.
+    """
+    for skill in ("start-research-work", "track-research-work"):
+        text = (_CANONICAL / skill / "SKILL.md").read_text()
+        assert "description" in text
+        assert "Project Summary" in text
+        assert "summary_markdown" in text
+        assert "hidden" in text and "notes" in text
+        assert "server-owned AI" in text
+        assert "last-write-wins" in text
+        assert "probe project get" in text
+        assert "probe project set" in text
+        assert "verify" in text
+
+
+def test_openai_skill_manifests_surface_dashboard_context() -> None:
+    """The selection prompt is read before the skill body, so it must make this
+    responsibility discoverable rather than describing only run mechanics."""
+    for skill in ("start-research-work", "track-research-work"):
+        text = (_CANONICAL / skill / "agents" / "openai.yaml").read_text()
+        assert "Project Summary" in text
+        assert "hidden" in text and "notes" in text
+
+
 def test_every_skill_description_parses_as_yaml() -> None:
     """A description that does not parse takes the whole skill down, silently.
 

@@ -499,15 +499,28 @@ Step 2 — say what things are.
     both break the moment a sentence is appended to it. --notes is a real field
     on every anchor; use it and leave the name alone.
 
-    For what no single file explains — what this folder is, how the pieces
-    relate, what is missing, what a reader should not trust — write the
-    project's notes, once, at the end:
+    For what no single file explains, use the two project-level documents for
+    their different audiences:
 
-        probe notes write --project <project> <file>     (or '-' for stdin)
+    - Put what this project is and how the pieces relate in the dashboard-visible
+      Project Summary suffix. Preserve an existing suffix before replacing it:
 
-    That is ONE markdown document per project, not a per-file note. It REPLACES
-    by default, so if you split this folder across subagents, they must pass
-    --append or the last one to finish erases the rest.
+        probe project get <project> | jq -r '.summary_markdown // ""' > PROJECT.md
+        # Edit PROJECT.md, retaining useful existing sections.
+        probe project set <project> --summary @PROJECT.md
+        probe project get <project> | jq -r '.summary_markdown // ""'
+
+      The server-owned AI narrative renders immediately before this suffix and
+      keeps refreshing. Never edit or duplicate it. The suffix is a whole-document,
+      last-write-wins field, so the first and last reads are required.
+
+    - Append what is missing, what a reader should not trust, and operational
+      handoff details to the project's hidden notes:
+
+        probe notes write --project <project> --append <file>
+
+      Notes are the agent briefing, not the dashboard documentation. Server-side
+      append keeps concurrent imports from erasing one another.
 
 Step 3 — group into experiments ONLY if the evidence is there.
 

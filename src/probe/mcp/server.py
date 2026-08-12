@@ -356,6 +356,8 @@ REACH FOR THESE TOOLS WHEN:
 
 START WITH THE TEAM WIKI. An unscoped browse_research carries an excerpt of it, and get_entity(ref="wiki") is its FRONT PAGE: what this lab works on, what it has already learned, and what not to repeat. The wiki is a set of PAGES -- get_entity(ref="wiki", view="pages") lists them all (type, slug, title) and get_entity(ref="wiki:<type>/<slug>") opens one. Read the front page before you plan, not after you are stuck -- structure alone (project names, run counts) tells you what exists and nothing about what any of it means. Pages are written by a nightly synthesis run and edited by hand, so they are the team's current best account rather than a permanent record; when you learn something that contradicts one, `probe wiki write <type>/<slug>` is how you correct it.
 
+PROJECT PROSE HAS THREE HOMES. The description is the short identity. The Project Summary's editable `summary_markdown` suffix is durable, teammate-facing context rendered on the dashboard after a server-owned AI narrative; read it with get_entity(ref="project:<id>", view="summary") and never edit or duplicate the AI portion. The hidden project notes are the operational briefing: handoffs, caveats, decisions and things not to repeat. Read both summary and notes when you arrive. The suffix is a whole-document, last-write-wins field, so read it immediately before replacing it, preserve existing sections, and verify the stored value afterwards; notes support server-side append for concurrent updates.
+
 REUSE BEFORE YOU CREATE. Duplicate identities are the most expensive avoidable error in this system: two scorers with the same intent and different behaviour make every result that used either one unreproducible. Before writing any reusable artifact, call get_entity(ref="artifact:<name>", view="versions"). Artifacts resolve by NAME at the shared (lab-wide) level, which is where an official one lives.
 
 DO NOT SKIP THESE. A missed lookup is the default failure mode here, and it is invisible: you get a plausible answer built from nothing. If you are about to write a script, launch a run, or say "here is how I would approach this" without having looked, stop and look.
@@ -582,7 +584,7 @@ def create_server(
           run         card | trajectory | metrics | artifacts | reproduce | handoff | lineage | events
           experiment  card | artifacts | lineage | groups | versions | reproduce
           artifact    card | versions
-          project     card | artifacts | notes
+          project     card | artifacts | notes | summary
           group       card
           wiki        card | versions | pages
 
@@ -610,6 +612,15 @@ def create_server(
         already tried, what not to repeat). An excerpt rides along on the project
         `card`, so you have usually already seen it by the time you would ask; this
         view returns the whole file. Write it with `probe notes write`.
+
+        `summary` is the editable Markdown suffix in the dashboard's combined
+        Project Summary. The server-owned AI narrative renders first and keeps
+        refreshing; people and agents own only `summary_markdown`, which renders
+        directly after it and survives those refreshes. Read it immediately before
+        every edit, preserve useful existing sections, replace the complete document
+        with `probe project set PROJECT --summary @PROJECT.md`, and read it back to
+        verify. It is whole-document and last-write-wins, unlike the server-side
+        append available for hidden notes. Never copy or edit the AI narrative.
 
         `ref="wiki"` is the TEAM's wiki -- the lab-wide sibling of those notes.
         It is a set of PAGES, and the bare ref is its FRONT PAGE (an excerpt

@@ -280,6 +280,20 @@ def test_the_prompt_never_names_a_door_that_does_not_open(tmp_path):
     assert "probe notes write" in prompt
 
 
+def test_backfill_routes_visible_context_and_hidden_caveats_separately(tmp_path):
+    prompt = backfill.build_prompt(
+        folder=tmp_path, census=backfill.Census(files=3, bytes=99)
+    )
+
+    assert "dashboard-visible" in prompt
+    assert "server-owned AI narrative" in prompt
+    assert "summary_markdown" in prompt
+    assert "probe project set <project> --summary @PROJECT.md" in prompt
+    assert "last-write-wins" in prompt
+    assert "probe notes write --project <project> --append" in prompt
+    assert "hidden notes" in prompt
+
+
 def test_the_prompt_demands_a_description_on_what_it_creates(tmp_path):
     """A backfilled project read "Add description" under its title forever.
 

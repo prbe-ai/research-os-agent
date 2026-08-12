@@ -1,6 +1,6 @@
 ---
 name: start-research-work
-description: Start tracked research and keep its notes — create the project and experiment before the work, not after it, and open a run when code is about to execute. Use for reproducible research from design through training, evaluation, sweeps, ablations, data curation and docking. Re-enter it all session, not once at setup — when you choose or reject an approach, the user overrides you, a tool or dataset differs from its documentation, an assumption encoded in code proves false, planned hardware is unavailable and you substitute something else, or before context is compacted or the session ends. A plan-first or approval-gated brief does not defer this — registering entities is not the gated action. Trigger for one-off and exploratory work, when writing a script that will run, while provisioning or failing to provision its machines, and when the user did not ask for tracking. Not for dependency installs, unit tests, or reading that decided nothing.
+description: Start tracked research and maintain its dashboard-visible Project Summary and hidden notes — create the project and experiment before the work, not after it, and open a run when code is about to execute. Use for reproducible research from design through training, evaluation, sweeps, ablations, data curation and docking. Re-enter it all session, not once at setup — when you choose or reject an approach, the user overrides you, a tool or dataset differs from its documentation, an assumption encoded in code proves false, planned hardware is unavailable and you substitute something else, or before context is compacted or the session ends. A plan-first or approval-gated brief does not defer this — registering entities is not the gated action. Trigger for one-off and exploratory work, when writing a script that will run, while provisioning or failing to provision its machines, and when the user did not ask for tracking. Not for dependency installs, unit tests, or reading that decided nothing.
 ---
 
 # Start research work
@@ -21,7 +21,10 @@ near-miss of an existing slug rather than warning.)
    Check what is already RUNNING before you launch anything — `browse_research`
    reports `active_run_count`, and duplicate GPU-hours are the expensive mistake.
 
-   Read the project's notes — `probe notes show`, or the `notes` on its MCP `card`. It is free-text markdown the last session left for you: what was tried,
+   Read the visible Project Summary suffix with `get_entity(..., view="summary")`;
+   it is durable teammate-facing Markdown that should shape the work. Then read
+   the project's hidden notes — `probe notes show`, or the `notes` on its MCP
+   `card`. Notes are free-text markdown the last session left for you: what was tried,
    what was ruled out, what not to repeat. Add to it as you learn things
    (`probe notes write --append`); see `track-research-work`.
 
@@ -93,11 +96,31 @@ near-miss of an existing slug rather than warning.)
    probe run set <run> --description "..."
    ```
 
-   A project summary combines a server-maintained AI narrative with a visible,
-   durable Markdown suffix. Put context that should remain stable across summary
-   refreshes in a file and write that suffix naturally with
-   `probe project set <project> --summary @PROJECT.md`. This is separate from
-   hidden `probe notes`, which remains the agent briefing.
+   **Project prose has three distinct homes:**
+
+   | prose | ownership and destination |
+   |---|---|
+   | short statement of what the project is | `description`, visible beneath the title |
+   | durable context teammates should read on the dashboard | editable Markdown suffix of the Project Summary |
+   | operational handoff, caveats, decisions and things not to repeat | hidden project notes |
+
+   The dashboard renders the server-owned AI narrative followed by the
+   editable suffix as one Project Summary. Never rewrite or imitate the AI
+   portion. AI refreshes do not touch the suffix.
+
+   The suffix is one whole-document, last-write-wins field, so preserve what is
+   already there. Read it immediately before editing, write the complete file,
+   and read it back after the write:
+
+   ```bash
+   probe project get <project> | jq -r '.summary_markdown // ""' > PROJECT.md
+   # Edit PROJECT.md; retain useful existing sections.
+   probe project set <project> --summary @PROJECT.md
+   probe project get <project> | jq -r '.summary_markdown // ""'  # verify
+   ```
+
+   Use `probe notes write --append` for concurrent operational updates; do not
+   move visible project documentation into notes merely because notes can append.
 
    Work with no hypothesis does not need an experiment at all: open a
    PROJECT-DIRECT run (`probe run start --project folding`, or

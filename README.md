@@ -317,7 +317,11 @@ RUN=$(probe run start --experiment dockq --name run-1 \
         --project folding --source runpod --external-id rp-9931 \
         --description "DockQ baseline at temperature 0.7")
 probe project set folding --name "Protein folding" --description "DockQ studies"
-probe project set folding --summary @PROJECT.md  # editable suffix in the combined Project Summary
+probe project get folding | jq -r '.summary_markdown // ""' > PROJECT.md
+# Edit the whole visible suffix, retaining useful existing sections. The server-owned
+# AI narrative renders before it and is not editable through this field.
+probe project set folding --summary @PROJECT.md
+probe project get folding | jq -r '.summary_markdown // ""'  # verify what landed
 probe experiment set EXPERIMENT_ID --name "DockQ sweep" --description "Temperature sweep"
 probe run set $RUN --name "DockQ baseline" --description "Stable reference run"
 probe snapshot $RUN
@@ -332,6 +336,13 @@ probe run check $RUN
 probe run end $RUN --status completed
 probe bundle $RUN            # read: run + series + artifacts
 ```
+
+Project prose has three homes: `description` is the short identity;
+`summary_markdown` is durable teammate-facing Markdown rendered on the dashboard
+after the server-owned AI narrative; and `probe notes` is the hidden operational
+briefing for agents. The editable suffix is whole-document and last-write-wins,
+so use the read-edit-write-read loop above. Hidden notes support `--append` when
+concurrent handoffs must not overwrite one another.
 
 ### Harbor trial capture (`probe trial`)
 

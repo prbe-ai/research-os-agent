@@ -87,12 +87,19 @@ a basis for it.
 curation — it fires when someone is tidying structure, not when work is happening.
 
 `probe project create | list | get | use | set | move | delete`
-`probe project set PROJECT --summary TEXT|@FILE|-` — editable suffix in the combined Project Summary
+`probe project get PROJECT` — includes `summary_markdown`, the editable suffix in the combined Project Summary
+`probe project set PROJECT --summary TEXT|@FILE|-` — whole-document replacement; read first, preserve existing sections, then verify
 `probe experiment create | set | delete | edges`
 `probe run set RUN [--name NAME] [--description DESCRIPTION] [--notes TEXT|@FILE|-]`
 `probe group create EXP --name NAME [--kind KIND] [--spec JSON|@FILE] [--notes ...]`
 `probe group set GROUP [--name NAME] [--spec JSON|@FILE] [--notes TEXT|@FILE|-]`
 `probe notes show | write [FILE] [--append]` — the PROJECT's hidden agent briefing
+
+The server-owned AI narrative and editable `summary_markdown` suffix render as
+one Project Summary. Never edit or duplicate the AI narrative. Description is
+short identity; the suffix is durable teammate-facing dashboard Markdown;
+hidden notes are operational handoff and caveats. Because the suffix is
+last-write-wins, use a read-edit-write-read loop rather than writing a fragment.
 
 `probe project use SLUG` sets the ambient project — MACHINE-globally, shared by every
 process on the box, so prefer `--project` or `PROBE_PROJECT` when another session

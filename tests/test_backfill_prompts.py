@@ -183,13 +183,15 @@ def test_wandb_mapping_carries_the_inventory():
     )
 
 
-# -- notes -------------------------------------------------------------------
+# -- project-level visible summary and hidden notes --------------------------
 
 
-def test_the_notes_writer_is_told_it_is_the_only_writer():
+def test_the_project_writer_uses_visible_summary_and_append_only_hidden_notes():
     text = bp.write_notes(project="p", root=ROOT, landed=10, manifests=["/tmp/a.jsonl"])
-    assert "only writer" in text
-    assert "--append" in text  # says it does not need it
+    assert "dashboard" in text and "Project Summary" in text
+    assert "probe project set p --summary @PROJECT.md" in text
+    assert "probe notes write --project p --append" in text
+    assert "hidden notes" in text
 
 
 def test_the_notes_writer_gets_the_manifests_so_it_knows_what_landed():
@@ -200,12 +202,24 @@ def test_the_notes_writer_gets_the_manifests_so_it_knows_what_landed():
 def test_the_notes_writer_is_asked_for_gaps_not_just_a_summary():
     text = bp.write_notes(project="p", root=ROOT, landed=3, manifests=[])
     assert "Be honest about gaps" in text
-    assert "what a reader should not trust" in text
+    assert "trust caveats" in text
+
+
+def test_visible_summary_edit_is_read_preserve_write_verify():
+    text = bp.write_notes(project="p", root=ROOT, landed=3, manifests=[])
+
+    assert text.count("probe project get p") == 2
+    assert "summary_markdown" in text
+    assert "preserve useful existing sections" in text
+    assert "last-write-wins" in text
+    assert "server-owned AI narrative" in text
+    assert "Never edit or duplicate" in text
 
 
 def test_the_notes_writer_does_not_re_describe_individual_files():
     text = bp.write_notes(project="p", root=ROOT, landed=3, manifests=[])
-    assert "already\ncarry their own notes" in text or "carry their own notes" in text
+    assert "Do not describe individual files" in text
+    assert "they already carry their own" in text and "notes" in text
 
 
 # -- no prompt names a door that does not open -------------------------------

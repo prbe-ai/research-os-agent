@@ -1,6 +1,6 @@
 ---
 name: track-research-work
-description: Record what research produces — per-step metrics, spans, artifacts, asset versions, a run's final status, and the notes that hang off a project, a run or a run group, which are prose and need no run at all. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication. Trigger whenever a run is open, or whenever something worth recording happens without one — including when a tool, dataset or environment the research depends on behaved differently than documented, when you had to substitute infrastructure you could not get, and when a run's number turns out to measure nothing because the harness was broken rather than because the thing under test failed — rather than waiting to be asked.
+description: Record what research produces — dashboard-visible Project Summary Markdown, hidden notes, per-step metrics, spans, artifacts, asset versions and a run's final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication. Trigger whenever a run is open, or whenever something worth recording happens without one — including when a tool, dataset or environment the research depends on behaved differently than documented, when you had to substitute infrastructure you could not get, and when a run's number turns out to measure nothing because the harness was broken rather than because the thing under test failed — rather than waiting to be asked.
 ---
 
 # Track research work
@@ -101,17 +101,24 @@ gets made. Record with the surface the run was opened with.
    every later reader gets the right reduction without having to name one.
 
    A durable claim about the work — why this approach, what you found, what a next
-   session should not repeat — is prose, not a metric key. Prose has three homes, and
+   session should not repeat — is prose, not a metric key. Prose has five homes, and
    picking the wrong one is why findings end up in commit messages instead:
 
    | what you are writing | where it goes |
    |---|---|
-   | anything a person arriving at this project must know | the PROJECT's notes |
+   | a short statement of what this project is | the PROJECT's description |
+   | durable context a teammate should read on the dashboard | the editable Markdown suffix in the PROJECT Summary |
+   | an operational handoff, caveat, decision or thing not to repeat | the PROJECT's hidden notes |
    | why THIS run's number should be distrusted | that RUN's notes |
    | what a sweep or a campaign of runs concluded | that GROUP's notes |
 
    ```
-   probe notes show                       # read it before you start
+   probe project get PROJECT | jq -r '.summary_markdown // ""' > PROJECT.md
+   # Edit the complete file; preserve existing sections.
+   probe project set PROJECT --summary @PROJECT.md
+   probe project get PROJECT | jq -r '.summary_markdown // ""'  # verify
+
+   probe notes show                       # hidden operational briefing
    probe notes write --append <<'EOF'     # add to it, do not clobber
    Harbor has no generic-Kubernetes backend, so DOKS is out. Using GKE.
    EOF
@@ -120,13 +127,23 @@ gets made. Record with the surface the run was opened with.
    probe group set GRP --notes "Every us-central1 zone was out of H100s."
    ```
 
-   The project's is one free-text markdown document, no schema, and an excerpt rides
+   The dashboard Project Summary is one rendering with two owners: the server
+   refreshes the AI narrative, while agents and people replace only
+   `summary_markdown`, the durable suffix. The suffix is whole-document and
+   last-write-wins: read it immediately before every edit, keep useful existing
+   content, write the complete document, and verify the stored value afterwards.
+   Never copy the AI narrative into the suffix or attempt to edit that server-owned AI
+   section.
+
+   The project's hidden notes are one free-text markdown document, no schema, and an excerpt rides
    along on the project's MCP `card` — so the next agent sees it while orienting
    rather than having to know it exists. **That surfacing is why the project's notes
-   are the default.** Run and group notes are read only by someone already looking at
-   that row, so a claim that matters beyond one run belongs in the project's notes
-   even if it was learned inside one. Use `--append` when others may be working the
-   same project: a plain write is last-one-wins.
+   are the default for operational handoff.** Run and group notes are read only by
+   someone already looking at that row, so an operational claim that matters beyond
+   one run belongs in the project's notes even if it was learned inside one. Use
+   `--append` when others may be working the same project: a plain write is
+   last-one-wins. Use the visible suffix instead when the reader is a teammate
+   arriving on the dashboard rather than another agent resuming the work.
 
    Notes are NOT a second description. A description says what the thing IS and is
    written before it runs; notes say what a later reader should distrust, and are

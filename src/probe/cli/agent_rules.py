@@ -36,7 +36,7 @@ END_MARKER = "<!-- probe-research:end -->"
 
 #: Bumped when POINTER_BODY changes, so an older installed block is recognised
 #: as stale and rewritten instead of being left in place or duplicated.
-POINTER_VERSION = 5
+POINTER_VERSION = 6
 
 POINTER_BODY = """## Probe research tracking
 
@@ -53,9 +53,13 @@ and captured coding-agent sessions that could change the plan. Use the installed
 team's complete research history. If that read surface is unavailable, say so
 instead of silently proceeding as though no prior work exists.
 
-Append decisions, findings and reversals to the project's notes as they happen,
-and read them on arrival. A plan-first or approval-gated brief does not defer
-this: registering is not the gated action.
+Project prose has three distinct homes. Keep the description as the short
+identity, maintain durable teammate-facing context in the editable Markdown
+suffix of the dashboard Project Summary, and append operational handoffs,
+caveats, decisions, findings and reversals to the project's hidden notes. Read
+both summary and notes on arrival. Never edit the server-owned AI portion of the
+Project Summary. A plan-first or approval-gated brief does not defer this:
+registering is not the gated action.
 
 Read the team wiki on arrival, alongside the project's notes: one markdown page
 per team saying what this lab works on and what it has already learned. It rides
