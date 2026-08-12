@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.72.1
+
 ### Fixed
 
 - **A dying writer's last operation can no longer strand in the outbox.** If
