@@ -1,5 +1,16 @@
 # probe-research (`probe` SDK/CLI + `probe-research` plugin)
 
+> **License & repo status (2026-08-12).** This project is open source under
+> [Apache-2.0](LICENSE). The source of truth now lives in Probe's monorepo, and
+> this repository is transitioning into a **CI-generated distribution mirror**
+> carrying exactly what installations pull from here: the Claude Code / Codex
+> plugin marketplace (`probe-research`, `probe-research-tap`),
+> `client-version.json`, and the CHANGELOG. Nothing changes for users —
+> installed plugins keep updating from this repo, and the CLI/launcher keep
+> shipping via [PyPI](https://pypi.org/project/probe-research/) and npm
+> (`npx probe-research`). Until the cutover completes, the full source remains
+> here and development continues in this repo.
+
 CLI + SDK client for **Probe Research**, Probe's experiment-tracking platform. It is a
 thin client over the v3 ingestion contract (`CONTRACT.md` in the Probe Research backend).
 Implemented experiment calls map onto real endpoints.
