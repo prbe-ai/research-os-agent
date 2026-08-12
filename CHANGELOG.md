@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.73.1
+
 ### Fixed
 
 - **A gitignored `.env` is now REPORTED as excluded instead of silently
