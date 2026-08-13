@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import logging
+import os
 import signal
 import subprocess
 import sys
@@ -89,9 +90,25 @@ def _read_int_meta(storage: Storage, key: str, *, default: int) -> int:
 
 
 def _install_signal_handlers() -> None:
-    def _handler(_sig: int, _frame: object) -> None:
+    def _handler(sig: int, _frame: object) -> None:
         global _shutdown_requested
         _shutdown_requested = True
+        # The dying side's half of killer-side attribution: `probe`'s
+        # _stop_daemon() journals every SIGTERM it sends (its pid + argv + the
+        # target pid), and this line is the arrival timestamp it correlates
+        # against. A TERM logged here with NO matching stop-daemon journal
+        # entry means something else killed the daemon — which is exactly the
+        # open question this anchor exists to answer. Best-effort: a logging
+        # failure must never disturb shutdown. (Safe in CPython: handlers run
+        # in the main thread between bytecodes, and logging's lock is an RLock,
+        # so re-entering a log call the signal interrupted cannot deadlock.)
+        with contextlib.suppress(Exception):
+            log.info(
+                "signal %s received (unix=%.3f pid=%d); shutting down",
+                signal.Signals(sig).name,
+                time.time(),
+                os.getpid(),
+            )
 
     signal.signal(signal.SIGTERM, _handler)
     signal.signal(signal.SIGINT, _handler)

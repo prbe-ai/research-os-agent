@@ -8,6 +8,7 @@ the daemon on first start rather than by a pairing exchange.
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 
@@ -31,6 +32,41 @@ def _relative(unix_str: str) -> str:
     if delta < 86400:
         return f"{delta // 3600} hours ago"
     return f"{delta // 86400} days ago"
+
+
+def _last_stop_event() -> dict | None:
+    """Newest record in the killer-side stop journal, or None.
+
+    Written by the probe CLI's `_stop_daemon()` (capture off / wizard / doctor
+    flows) into <plugin_dir>/logs/stop-daemon.jsonl — the same state dir both
+    sides resolve, env overrides and codex flavor included. Surfacing it here
+    means a "transcripts missing" report carries its own cause: a daemon that
+    died with no entry here was NOT stopped by the probe CLI.
+    """
+    path = cfg.plugin_dir() / "logs" / "stop-daemon.jsonl"
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    for raw in reversed(lines):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            record = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(record, dict):
+            return record
+    return None
+
+
+def _describe_stop_event(event: dict) -> str:
+    ts = event.get("ts")
+    when = _relative(str(int(ts))) if isinstance(ts, (int, float)) else "unknown time"
+    argv = event.get("argv")
+    cmd = " ".join(str(a) for a in argv) if isinstance(argv, list) and argv else "unknown command"
+    return f"{when} by `{cmd}` (pid {event.get('pid')})"
 
 
 def run() -> int:
@@ -82,6 +118,9 @@ def run() -> int:
             print(f"  interval:      {active_s}s (flat)")
         else:
             print(f"  interval:      {active_s}s active / {idle_s}s idle")
+        stop_event = _last_stop_event()
+        if stop_event is not None:
+            print(f"  last stop:     {_describe_stop_event(stop_event)}")
         return 0
     finally:
         storage.close()
