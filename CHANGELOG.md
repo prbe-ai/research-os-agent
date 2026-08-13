@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Transcript capture reconciler (tap 0.3.0).** Capture no longer depends on a
+  hook firing at exactly the right moment. Every live daemon now periodically
+  sweeps all local transcripts against their stored cursors and drains every due
+  outbox row, so three evidenced losses become delays instead of holes: a
+  resumed session whose SessionStart left no daemon (~4h/1MB lost, root cause
+  never proven — the reconciler makes it not matter), a resume/compaction leg
+  whose transcript materialised after the daemon gave up (2.3MB never captured),
+  and outbox batches stranded nine days because `drain_once` only ever looked at
+  its own `session_id`. Backfill is in-process rather than a re-spawn, so nothing
+  new touches the daemon pid namespace. Eligibility is gated to files the tap
+  already tracks or has a session log for — a naive diff would have uploaded
+  672MB of pre-install history — and bounded by a 48h horizon plus a per-sweep
+  byte budget. Gaps are chunked under the gateway's 2MB body cap (an unchunked
+  backfill would have been 413'd and POISON-dropped) and prioritised by recency,
+  so an active session is not starved behind historical backlog. Design notes and
+  the deliberate no-dedupe decision: `agent/docs/2026-08-12-transcript-capture-reconciler.md`.
+
 ### Added
 
 - **Plugin session funnel telemetry (plugin 0.19.0).** The probe-research

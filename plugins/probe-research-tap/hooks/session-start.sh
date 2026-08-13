@@ -268,4 +268,19 @@ for _ in $(seq 1 40); do
     sleep 0.05
 done
 
+# Spawn-failure diagnostics. A resumed session was observed clearing the stale
+# sentinel (so this script provably ran to at least that point) and then leaving
+# NO pid file, NO process and NO log line — the outage was completely invisible,
+# and piping the same payload in by hand worked first try. Whatever the cause,
+# the next occurrence should say so in the log. Never fatal: the contract is
+# fail-open, and the reconciler recovers the transcript regardless.
+if [ ! -s "$PID_FILE" ]; then
+    echo "[$(date -u +%FT%TZ)] tap: wrapper wrote no pid file within 2s (spawn failed?); \
+session=$SESSION_ID py=$PY root=$PLUGIN_ROOT — transcript will be recovered by the reconciler" \
+        >>"$LOG_FILE"
+elif ! kill -0 "$(cat "$PID_FILE" 2>/dev/null || echo 0)" 2>/dev/null; then
+    echo "[$(date -u +%FT%TZ)] tap: wrapper pid $(cat "$PID_FILE" 2>/dev/null) not alive just \
+after spawn; session=$SESSION_ID — transcript will be recovered by the reconciler" >>"$LOG_FILE"
+fi
+
 printf '{"continue": true}\n'

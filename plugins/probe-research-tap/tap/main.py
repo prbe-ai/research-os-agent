@@ -37,7 +37,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tap import config as cfg
-from tap import killswitch, outbox
+from tap import killswitch, outbox, reconcile
 from tap.outbox import HaltError
 from tap.storage import FileOffset, Storage
 from tap.transcript import read_new, validate_json
@@ -391,6 +391,41 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
         except Exception:
             log.exception("drain raised; will retry next tick")
 
+        # Reconciliation sweep. Every live daemon periodically checks EVERY
+        # local transcript against its stored cursor and drains EVERY due outbox
+        # row, so a session whose daemon never attached (a resume that spawned
+        # nothing, a fork whose file appeared after we gave up) is recovered by
+        # whichever daemon is running next. Runs on the first tick so a single
+        # new session is enough to start recovering, then on a slow cadence.
+        #
+        # A lease keeps concurrent daemons from sweeping at once. Failures are
+        # swallowed by design: this is a safety net, and a net that can stop
+        # capture is worse than no net. HaltError still propagates — a dead
+        # token means the same thing here as anywhere else.
+        if tick_count == 1 or tick_count % reconcile.RECONCILE_EVERY_TICKS == 0:
+            try:
+                res = reconcile.sweep(
+                    storage,
+                    token=c.token,
+                    base_url=base_url,
+                    device_id=device_id,
+                )
+                if res.files_backfilled or res.rows_drained:
+                    log.info(
+                        "reconcile: %d gap(s) found, %d file(s) backfilled (%d bytes, "
+                        "%d batches), %d orphan row(s) drained",
+                        res.gaps_found,
+                        res.files_backfilled,
+                        res.bytes_backfilled,
+                        res.batches_enqueued,
+                        res.rows_drained,
+                    )
+            except HaltError as e:
+                log.error("halt during reconcile: %s", e)
+                return 1
+            except Exception:
+                log.exception("reconcile sweep raised; continuing")
+
         # Orphan-session detection. CC keeps the transcript fd open for the
         # session's lifetime; if no process holds it, the session is gone.
         # Only trips after we've previously observed a reader, so a startup
@@ -451,7 +486,20 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
             final_read = _tick_read(c, storage)
         except FileNotFoundError:
             final_read = None
-            log.info("transcript disappeared before final capture: %s", c.transcript_path)
+            # A fork/compaction leg gets a SessionStart for a NEW session id
+            # whose file CC has not written yet (and may never write, if it
+            # keeps appending to the original). Shutting down here used to be
+            # the end of it — the file would appear afterwards, at megabytes,
+            # with nothing left to notice. It is now recoverable: this daemon's
+            # log file is what marks the session as one capture was live for,
+            # so the reconciler adopts the file whenever it shows up. WARNING,
+            # not INFO, because a run that captured nothing at all should be
+            # visible in the log rather than read as a clean exit.
+            log.warning(
+                "transcript never materialised for this session; leaving it to the "
+                "reconciler to adopt if it appears: %s",
+                c.transcript_path,
+            )
         except Exception:
             final_read = None
             log.exception("final transcript read failed")

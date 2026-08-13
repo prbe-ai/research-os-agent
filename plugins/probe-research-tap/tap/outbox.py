@@ -109,14 +109,33 @@ def enqueue(
     )
 
 
-def drain_once(*, storage: Storage, token: str, base_url: str, session_id: str) -> bool:
-    """Pop the next due batch for session_id and POST it.
+def drain_once(
+    *,
+    storage: Storage,
+    token: str,
+    base_url: str,
+    session_id: str | None,
+    lease_seconds: int = 120,
+) -> bool:
+    """Pop the next due batch and POST it.
+
+    `session_id=None` drains across ALL sessions — the reconciler's global pass,
+    which is the only thing that ever retries a batch whose session never came
+    back. It claims each row with a short lease instead of relying on the
+    session scoping for mutual exclusion; `lease_seconds` is ignored in the
+    session-scoped mode, where one daemon already owns the session's rows.
+
+    Classification is identical either way: SUCCESS deletes, POISON drops, HALT
+    clears + latches and raises.
 
     Returns True if a row was processed (caller may want to drain again),
-    False if this session has nothing due. Raises HaltError on 401.
+    False if there is nothing due. Raises HaltError on 401.
     """
     now = int(time.time())
-    row = storage.next_due_batch(now, session_id)
+    if session_id is None:
+        row = storage.next_due_batch_any(now, lease_seconds=lease_seconds)
+    else:
+        row = storage.next_due_batch(now, session_id)
     if row is None:
         storage.enforce_outbox_cap()
         return False

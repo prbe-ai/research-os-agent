@@ -138,6 +138,7 @@ class Storage:
         Scoping to session_id prevents two concurrent daemons (one per CC
         session) from racing on the same row and double-shipping it. Orphan
         rows from crashed sessions whose ID is never reused stay queued until
+        the reconciler's global drain picks them up (see next_due_batch_any) or
         enforce_outbox_cap reaps them.
         """
         row = self._conn.execute(
@@ -149,6 +150,44 @@ class Storage:
         ).fetchone()
         if row is None:
             return None
+        return OutboxRow(*row)
+
+    def next_due_batch_any(self, now: int, *, lease_seconds: int) -> OutboxRow | None:
+        """Claim the oldest due row across ALL sessions, whoever queued it.
+
+        The session-scoped read above is what stranded batches whose session
+        never came back — nothing else would ever look at them. Dropping the
+        scope reintroduces the race it was defending against, so the claim is a
+        LEASE instead: push next_attempt_at out by lease_seconds inside one
+        IMMEDIATE transaction, which makes the row invisible to other drainers
+        while this one POSTs it.
+
+        attempt_count is deliberately NOT incremented here. It drives the
+        backoff curve and only a real delivery failure should advance it; a
+        lease that expires because the daemon died mid-POST must not look like
+        a failed attempt. mark_failure overwrites next_attempt_at with the true
+        backoff, so the lease never lengthens a retry.
+        """
+        self._conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = self._conn.execute(
+                """SELECT id, session_id, batch_seq, cwd, body_json, created_at,
+                          next_attempt_at, attempt_count, COALESCE(last_error, '')
+                   FROM outbox WHERE next_attempt_at <= ?
+                   ORDER BY id ASC LIMIT 1""",
+                (now,),
+            ).fetchone()
+            if row is None:
+                self._conn.execute("COMMIT")
+                return None
+            self._conn.execute(
+                "UPDATE outbox SET next_attempt_at = ? WHERE id = ?",
+                (now + lease_seconds, row[0]),
+            )
+            self._conn.execute("COMMIT")
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
         return OutboxRow(*row)
 
     def mark_success(self, row_id: int) -> None:
@@ -248,6 +287,29 @@ class Storage:
         except Exception:
             self._conn.execute("ROLLBACK")
             raise
+
+    def try_claim_lease(self, key: str, now: int, lease_seconds: int) -> bool:
+        """Atomically claim a named lease until now+lease_seconds. True if won.
+
+        Several daemons run at once (one per live session) and each would
+        otherwise sweep the same transcripts and double-ship the same backfill.
+        The claim is a single conditional UPDATE, so exactly one wins: the row
+        is seeded first (no-op if present), then updated only while the stored
+        expiry is in the past. A daemon that dies holding the lease blocks
+        nobody past its expiry — there is no unlock step to miss.
+        """
+        self._conn.execute(
+            "INSERT INTO meta(k, v) VALUES(?, '0') ON CONFLICT(k) DO NOTHING", (key,)
+        )
+        cur = self._conn.execute(
+            "UPDATE meta SET v = ? WHERE k = ? AND CAST(v AS INTEGER) <= ?",
+            (str(now + lease_seconds), key, now),
+        )
+        return bool(cur.rowcount)
+
+    def release_lease(self, key: str) -> None:
+        """Expire a lease early so the next sweep isn't blocked by its remainder."""
+        self._conn.execute("UPDATE meta SET v = '0' WHERE k = ?", (key,))
 
     def get_meta(self, k: str) -> str:
         row = self._conn.execute("SELECT v FROM meta WHERE k=?", (k,)).fetchone()

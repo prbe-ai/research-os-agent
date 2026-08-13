@@ -365,6 +365,16 @@ def _read_config_dict() -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def parse_positive_int(value: Any) -> int | None:
+    """Public alias of the positive-int parser, for knobs outside this module."""
+    return _parse_positive_int(value)
+
+
+def read_config_value(key: str) -> Any:
+    """One knob out of the plugin-local .config, or None when absent."""
+    return _read_config_dict().get(key)
+
+
 def intervals() -> tuple[int, int]:
     """Return (active_seconds, idle_seconds).
 
