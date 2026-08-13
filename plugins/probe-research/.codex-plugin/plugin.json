@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.21.0",
+  "version": "0.21.1",
   "description": "Probe Research experiment-tracking, reproducibility, and timeline skills with a read-only OAuth MCP connection.",
   "author": {
     "name": "Probe",
