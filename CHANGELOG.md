@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Codex no longer warns on every session start (plugin 0.21.1).** The
+  probe-research plugin asked for a 5s `SessionEnd` hook timeout; Codex caps
+  that one event at 3s and prints `⚠ clamping SessionEnd hook timeout to 3s` on
+  every session start. The declared timeout is now 3, which is what Codex was
+  enforcing anyway — the hook only parses stdin, updates the funnel state file
+  and spawns the DETACHED sender (measured at 50ms against a 3000ms budget), so
+  no telemetry was ever using the extra 2s. `SessionEnd` is the only event Codex
+  clamps; `PreCompact: 10` and `PostToolUse: 5` pass through untouched.
+  probe-research-tap already shipped 3 for this reason; the two plugins now
+  agree.
+
 ## 0.76.0
 
 ### Added

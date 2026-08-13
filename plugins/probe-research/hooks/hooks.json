@@ -39,7 +39,7 @@
           {
             "type": "command",
             "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/telemetry.py\" session-end'",
-            "timeout": 5
+            "timeout": 3
           }
         ]
       }
