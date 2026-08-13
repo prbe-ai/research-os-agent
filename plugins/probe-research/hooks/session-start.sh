@@ -9,9 +9,10 @@
 # network yet the nudge still renders every session from the cached manifest.
 set -u
 
-# Claude Code sends {session_id, transcript_path, cwd, source} on stdin. We do
-# not need it; drain it so nothing blocks on a full pipe.
-cat >/dev/null 2>&1 || true
+# Claude Code sends {session_id, transcript_path, cwd, source} on stdin. The
+# telemetry observer wants session_id and source; capture it (draining the pipe
+# either way so nothing blocks on a full one).
+HOOK_INPUT="$(cat 2>/dev/null || true)"
 
 PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 
@@ -42,6 +43,12 @@ else
 fi
 # PROBE_BASE_URL (self-host) is honored by version_check.py if exported; otherwise
 # it reads the CLI config, then falls back to the hosted API.
+
+# Funnel telemetry (observability only, PROBE_TELEMETRY=off to disable). The
+# observer parses stdin and hands the event to a detached sender, so this adds
+# one interpreter start and no network to the hook path. After the exports
+# above on purpose: the detached sender inherits PROBE_BIN/PROBE_PLUGIN_JSON.
+printf '%s' "$HOOK_INPUT" | "$PY" "$PLUGIN_ROOT/hooks/telemetry.py" session-start 2>/dev/null || true
 
 out="$("$PY" "$PLUGIN_ROOT/hooks/version_check.py" 2>/dev/null)" || out=""
 if [ -n "$out" ]; then

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Added
+
+- **Plugin session funnel telemetry (plugin 0.19.0).** The probe-research
+  plugin's hooks now emit an anonymous-metadata funnel to PostHog so we can see
+  where research tracking breaks per session: `plugin.session_started` →
+  `plugin.mcp_used` → `plugin.skill_invoked` → `plugin.probe_write`, plus a
+  `plugin.session_summary` with the whole funnel as booleans at SessionEnd.
+  Observability only: hooks never gate, the sender is a detached process with a
+  3s timeout (a PostHog outage costs a session nothing), and properties are
+  ids, versions and whitelisted names — no prompts, commands, paths or file
+  contents. `PROBE_TELEMETRY=off` disables it entirely. Identity is the Probe
+  user UUID via a cached `/v1/me` (merging with dashboard and backend events);
+  unauthenticated installs fall back to a stable machine id that never mints a
+  person profile. The plugin release dispatch now bumps BOTH plugin manifests —
+  `.codex-plugin/plugin.json` was hand-maintained and would have tripped the
+  flavor-parity gate on the next release.
+
 ### Fixed
 
 - **The MCP reports which client version it is.** Every backend request from the

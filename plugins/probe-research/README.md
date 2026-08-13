@@ -56,6 +56,14 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   `mcp_token` — so no shell profile is involved and a dock-launched Claude Code works.
   Self-host: point it at a local `probe-research-mcp` (see `deploy/mcp/`).
 - **Command:** `/probe-research-setup`.
+- **Hooks** (`hooks/`): a SessionStart version nudge, and session-funnel
+  telemetry (`telemetry.py`) that reports which step of the tracking workflow
+  actually happened — session started, MCP used, tracking skill invoked,
+  `probe` CLI write ran — as metadata-only PostHog events (ids, versions,
+  whitelisted names; never prompts, commands, paths or file contents).
+  Observability only: hooks never block, the sender runs detached with a 3s
+  timeout, and every failure is silent. Disable entirely with
+  `PROBE_TELEMETRY=off`.
 
 Skills here are copies of the repo's canonical `skills/` (kept in sync with
 `make sync-plugin-skills`). The two agent-specific manifests are thin packaging
