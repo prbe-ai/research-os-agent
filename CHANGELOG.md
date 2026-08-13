@@ -4,6 +4,16 @@
 
 ### Added
 
+- **`probe import wandb`** — the deterministic W&B mirror whose absence got
+  improvised badly once. `probe import wandb entity/project/run_id --run
+  <probe-run>` writes one W&B run's metric history into an existing probe run
+  with wall clocks backdated to W&B's own timestamps, resumes incrementally
+  above the run's existing max step (a cron re-mirror converges instead of
+  duplicating), merges `wandb_*` foreign keys, and lands an honest status:
+  finished→`completed`, crashed→`crashed`, still-running→`untracked` — never
+  `running`, and never overruling a probe run whose live owner is beating.
+  Requires the `wandb` package (deliberately not a probe-research dependency).
+
 - **`untracked` run status + observer heartbeats (server 0106, release 1 of
   2).** New vocabulary for "this run went silent without a live client ever
   attached" — the state Anthrogen's mirrored W&B runs were mislabeled
