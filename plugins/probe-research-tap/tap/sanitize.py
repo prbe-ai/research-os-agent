@@ -13,13 +13,15 @@ plus a one-line marker for each tool call. Everything else is noise:
     (`promptId`, `entrypoint`, `userType`, `version`, `slug`).
   - Empty `thinking: ""` blocks (assistant turns where the model didn't
     surface any reasoning text — the empty block carries no content).
-  - Full tool_use `input` args (the entire Bash script body, the full
+  - Full tool_use `input` args EXCEPT Bash's `command` (the full
     old_string/new_string of an Edit, the search/replace bodies, …)
   - Full tool_result `content` (file contents, command output, search
     results — usually the single largest chunk of any session payload)
 
 We KEEP enough of each tool block to reconstruct what happened:
-  - tool_use:    type, id, name, summary  (first line of command/path/etc)
+  - tool_use:    type, id, name, summary — the FULL command for Bash
+                 (shell lines are a session's method section; capped at
+                 _COMMAND_MAX_LEN), first line of path/pattern/etc for the rest
   - tool_result: type, tool_use_id, is_error (only when truthy)
 
 `sanitize_event(event)` returns:
@@ -115,6 +117,13 @@ _TOOL_SUMMARY_KEYS: tuple[str, ...] = (
 # minified script jammed onto one line) can't bloat payloads on its own.
 _TOOL_SUMMARY_MAX_LEN = 200
 
+# `command` is the exception to first-line-only (decided 2026-08-13, session
+# digests review): a data-processing session's method IS its shell commands,
+# and heredoc/inline-script bodies were exactly what first-line summaries
+# dropped. The full command ships — outputs still never do — under its own,
+# larger cap so a pathological one-liner can't bloat a batch.
+_COMMAND_MAX_LEN = 4000
+
 
 def sanitize_event(event: Any) -> Any:
     """Trim a transcript event to ship only the conversation, not metadata.
@@ -151,13 +160,18 @@ def sanitize_event(event: Any) -> Any:
 
 
 def _summarize_tool_input(value: Any) -> str:
-    """First line of the most informative input field, capped. Empty string
-    if no recognized key exists."""
+    """The most informative input field, capped. Empty string if no
+    recognized key exists.
+
+    `command` keeps its FULL text (multi-line — provenance for the digest
+    pipeline); every other key is first-line-only as before."""
     if not isinstance(value, dict):
         return ""
     for key in _TOOL_SUMMARY_KEYS:
         candidate = value.get(key)
         if isinstance(candidate, str) and candidate:
+            if key == "command":
+                return candidate[:_COMMAND_MAX_LEN]
             first_line = candidate.splitlines()[0]
             return first_line[:_TOOL_SUMMARY_MAX_LEN]
     return ""

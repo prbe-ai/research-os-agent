@@ -317,9 +317,11 @@ def test_drops_thinking_signature_keeps_thinking_text() -> None:
     assert blocks[1] == {"type": "text", "text": "Here's my answer."}
 
 
-def test_tool_use_keeps_first_line_of_command_drops_full_input() -> None:
-    """tool_use ships {type, id, name, summary} only. Full `input` is dropped —
-    Bash command bodies, Edit old/new strings, etc. are too noisy to ship."""
+def test_tool_use_keeps_full_command_drops_rest_of_input() -> None:
+    """tool_use ships {type, id, name, summary} only, and for Bash the summary
+    is the FULL multi-line command (2026-08-13: shell lines are the session's
+    method section — first-line-only was dropping heredoc/script bodies the
+    digest pipeline needs). Everything else in `input` still never ships."""
     event = {
         "type": "assistant",
         "uuid": "u",
@@ -342,7 +344,7 @@ def test_tool_use_keeps_first_line_of_command_drops_full_input() -> None:
         "type": "tool_use",
         "id": "tool_1",
         "name": "Bash",
-        "summary": "git log --oneline",
+        "summary": "git log --oneline\ngit diff HEAD~1\nrm -rf tmp",
     }
     assert "input" not in block
 
@@ -394,9 +396,10 @@ def test_tool_use_summary_for_grep_uses_pattern() -> None:
     assert block["summary"] == "TODO|FIXME"
 
 
-def test_tool_use_summary_caps_at_max_len() -> None:
-    """A multi-thousand-char single-line command gets clipped."""
-    long_cmd = "echo " + "a" * 1000
+def test_tool_use_command_caps_at_command_max_len() -> None:
+    """A pathological command still gets clipped — at the larger command cap,
+    not the 200-char summary cap."""
+    long_cmd = "echo " + "a" * 5000
     event = {
         "type": "assistant",
         "uuid": "u",
@@ -406,7 +409,22 @@ def test_tool_use_summary_caps_at_max_len() -> None:
         }]},
     }
     block = sanitize_event(event)["message"]["content"][0]
-    assert len(block["summary"]) == 200
+    assert len(block["summary"]) == 4000
+
+
+def test_tool_use_non_command_keys_stay_first_line_capped() -> None:
+    """Only `command` widened: every other summary key keeps the old
+    first-line + 200-char contract."""
+    event = {
+        "type": "assistant",
+        "uuid": "u",
+        "message": {"role": "assistant", "content": [{
+            "type": "tool_use", "id": "t", "name": "Grep",
+            "input": {"pattern": ("x" * 500) + "\nsecond line"},
+        }]},
+    }
+    block = sanitize_event(event)["message"]["content"][0]
+    assert block["summary"] == "x" * 200
 
 
 def test_tool_use_unknown_schema_has_no_summary_key() -> None:
@@ -606,8 +624,8 @@ def test_build_batch_body_strips_thinking_signature_and_usage() -> None:
 
 def test_build_batch_body_drops_tool_io_aggressively() -> None:
     """Realistic shape: an assistant tool_use + the user-side tool_result
-    that follows. Verify the full Bash script body and the multi-KB output
-    are both gone from the wire payload."""
+    that follows. Verify the multi-KB output is gone from the wire payload
+    while the full Bash command (provenance) rides along."""
     big_command = "for i in $(seq 1 100); do echo hello world $i; done\nls -la /tmp"
     big_output = "hello world\n" * 5000  # ~60KB of output
     body = build_batch_body(
@@ -637,18 +655,19 @@ def test_build_batch_body_drops_tool_io_aggressively() -> None:
     )
     assert body is not None
     parsed = json.loads(body)
-    # tool_use kept name + first line summary, dropped command body
+    # tool_use kept name + the FULL command (provenance), dropped the rest of input
     use_block = parsed["events"][0]["raw"]["message"]["content"][0]
     assert use_block["name"] == "Bash"
-    assert use_block["summary"] == "for i in $(seq 1 100); do echo hello world $i; done"
+    assert use_block["summary"] == big_command
     assert "input" not in use_block
     # tool_result has only threading info
     res_block = parsed["events"][1]["raw"]["message"]["content"][0]
     assert res_block == {"type": "tool_result", "tool_use_id": "tool_x"}
-    # The 60KB output reduced to a few hundred bytes total.
+    # The 60KB output reduced to a few hundred bytes total — the command
+    # ships, the OUTPUT never does.
     assert len(body) < 1000, f"expected aggressive shrink, got {len(body)} bytes"
     assert big_output not in body.decode("utf-8")
-    assert big_command not in body.decode("utf-8")
+    assert "bulk run" not in body.decode("utf-8")  # description still dropped
 
 
 if __name__ == "__main__":

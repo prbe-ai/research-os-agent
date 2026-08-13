@@ -110,6 +110,11 @@ _TOOL_SUMMARY_KEYS: tuple[str, ...] = (
 
 _TOOL_SUMMARY_MAX_LEN = 200
 
+# Parity with cc-tap's sanitize.py (2026-08-13): shell commands ship in FULL
+# under their own larger cap — a session's commands are its method section —
+# while every other key stays first-line-only.
+_COMMAND_MAX_LEN = 4000
+
 
 def sanitize_event(event: Any) -> Any:
     """Translate a single Codex rollout JSONL object to a CC-shape event."""
@@ -344,9 +349,9 @@ def _translate_local_shell_call(payload: dict, timestamp: Any) -> dict:
     if isinstance(action, dict):
         cmd = action.get("command")
         if isinstance(cmd, list) and cmd:
-            command_summary = " ".join(str(t) for t in cmd)[:_TOOL_SUMMARY_MAX_LEN]
+            command_summary = " ".join(str(t) for t in cmd)[:_COMMAND_MAX_LEN]
         elif isinstance(cmd, str):
-            command_summary = cmd.splitlines()[0][:_TOOL_SUMMARY_MAX_LEN]
+            command_summary = cmd[:_COMMAND_MAX_LEN]
     block: dict[str, Any] = {"type": "tool_use", "id": call_id, "name": "local_shell"}
     if command_summary:
         block["summary"] = command_summary
@@ -437,7 +442,8 @@ def _system_event(
 
 
 def _summarize_args(value: Any) -> str:
-    """First-line summary of a tool input, capped at 200 chars."""
+    """Summary of a tool input: full text for `command` (capped at
+    _COMMAND_MAX_LEN), first line capped at 200 chars for everything else."""
     if isinstance(value, str):
         # function_call.arguments is a raw JSON string per Codex's protocol.
         # Try to parse and pull a known key; fall back to the first line.
@@ -451,6 +457,8 @@ def _summarize_args(value: Any) -> str:
         for key in _TOOL_SUMMARY_KEYS:
             candidate = value.get(key)
             if isinstance(candidate, str) and candidate:
+                if key == "command":
+                    return candidate[:_COMMAND_MAX_LEN]
                 return candidate.splitlines()[0][:_TOOL_SUMMARY_MAX_LEN]
     return ""
 
