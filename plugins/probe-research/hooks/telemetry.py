@@ -22,8 +22,15 @@ output at all):
   * METADATA ONLY. Event properties are ids, versions, whitelisted skill/entity/
     verb names and booleans. No prompts, no commands, no paths, no contents.
   * KILLSWITCH. PROBE_TELEMETRY=off (or 0/false/no/disabled) disables everything.
+  * HOSTED ONLY. The sender no-ops when the configured base_url is not the
+    hosted service — self-host machines never call the vendor (the client-side
+    extension of tests/selfhost/test_egress.py's promise).
   * STDLIB ONLY. Runs under the system python3; `probe` and `posthog` are not
-    importable here and never will be (see test_plugin_telemetry.py).
+    importable here and never will be (see test_plugin_telemetry.py). The
+    shared contract (key, host, killswitch, identity, batch shape) lives in
+    the VENDORED `_telemetry_core.py` beside this file — a byte-identical copy
+    of src/probe/cli/_telemetry_core.py, refreshed by `make sync-telemetry-core`
+    and pinned by tests/test_telemetry_core_parity.py. Never edit the copy.
 
 Identity: distinct_id is the Probe user's UUID (GET /v1/me, cached 24h, resolved
 only in the detached sender), the same value app/core/analytics.py and the
@@ -31,8 +38,10 @@ dashboard identify with, so plugin events merge with server and browser events.
 Unauthenticated machines fall back to a stable per-machine id with
 $process_person_profile off (the backend's convention for non-person actors) so
 the "installed but never logged in" population stays countable without minting
-fake person profiles. The team group key is the tenant slug (customer_id),
-matching analytics.capture(); it is OMITTED when unknown, never null.
+fake person profiles. The machine id also rides every event as a plain property
+(the cross-surface join key — see _telemetry_core.machine_id). The team group
+key is the tenant slug (customer_id), matching analytics.capture(); it is
+OMITTED when unknown, never null.
 """
 
 from __future__ import annotations
@@ -43,19 +52,41 @@ import re
 import subprocess
 import sys
 import time
-import urllib.request
-import uuid
 
-# The same public write-only ingestion project the dashboard posts to (see
-# dashboard/src/lib/analytics/posthog-config.ts for why embedding is fine; this
-# file is mirrored into the public plugin repo, and that is acceptable for a
-# capture-only key exactly as it is for the browser bundle).
-POSTHOG_HOST = os.environ.get("PROBE_TELEMETRY_HOST") or "https://us.i.posthog.com"
-POSTHOG_KEY = "phc_pCSs24bQtPaxoJ59PaTtTpJDS3dfzymfZeY74XQQ956K"
-SEND_TIMEOUT = 3  # seconds; the sender is detached so this bounds nothing visible
-ME_CACHE_TTL = 24 * 3600
+
+def _load_core():
+    """The vendored contract module, loaded by EXPLICIT sibling path only.
+
+    Never a bare `import _telemetry_core`: sys.path can carry the user's
+    project (session env), and executing a same-named stranger module inside
+    a hook would be arbitrary code execution — fail closed instead. Works
+    under every real loading mode: script run (`python3 telemetry.py …`, how
+    hooks and the detached sender execute) and the test suite's
+    spec_from_file_location (no package, no path entry).
+    """
+    import importlib.util  # noqa: PLC0415
+
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_telemetry_core.py")
+    spec = importlib.util.spec_from_file_location("_telemetry_core", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+try:
+    _core = _load_core()
+except BaseException:  # noqa: BLE001 - a hook contracted to silence must not
+    # traceback at import time: hooks.json execs this file with NO stderr
+    # redirect, so a missing/corrupt/quarantined sibling (plugin-update window,
+    # AV quarantine) would otherwise print + exit 1 on EVERY tool call.
+    sys.exit(0)
+
+POSTHOG_HOST = _core.POSTHOG_HOST
+POSTHOG_KEY = _core.POSTHOG_KEY
+SEND_TIMEOUT = _core.SEND_TIMEOUT
+ME_CACHE_TTL = _core.ME_CACHE_TTL
+DEFAULT_BASE = _core.DEFAULT_BASE
 STATE_DIR = "/tmp/probe-telemetry"  # per-session funnel flags; pruned after 2 days
-DEFAULT_BASE = "https://api.research.prbe.ai"
 
 EVENT_SESSION_STARTED = "plugin.session_started"
 EVENT_MCP_USED = "plugin.mcp_used"
@@ -121,75 +152,21 @@ MAX_WRITE_EVENTS = 20
 
 
 def telemetry_disabled() -> bool:
-    return (os.environ.get("PROBE_TELEMETRY") or "").strip().lower() in {
-        "off",
-        "0",
-        "false",
-        "no",
-        "disabled",
-    }
+    return _core.telemetry_disabled()
 
 
 # ---------------------------------------------------------------------------
-# Config / identity (all read-only, all fail-soft)
+# Config / identity — thin wrappers over the vendored core (kept as module
+# functions so existing callers and tests keep their seams)
 # ---------------------------------------------------------------------------
-
-
-def _config_path() -> str:
-    p = os.environ.get("PROBE_CONFIG_PATH")
-    if p:
-        return p
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    return os.path.join(base, "probe", "config.json")
 
 
 def read_cli_config() -> dict:
-    """The active context of the CLI config: v2 (named contexts) or v1 (flat).
-
-    Mirrors bin/probe-mcp-headers and tap/config.py — reading only v1 silently
-    lost every wizard-produced install once, so both shapes forever.
-    """
-    try:
-        with open(_config_path(), encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, dict):
-            return {}
-        contexts = data.get("contexts")
-        if isinstance(contexts, dict):
-            active = contexts.get(data.get("current_context") or "default")
-            return active if isinstance(active, dict) else {}
-        return data
-    except Exception:
-        return {}
-
-
-def _state_home() -> str:
-    base = os.environ.get("XDG_STATE_HOME") or os.path.join(
-        os.path.expanduser("~"), ".local", "state"
-    )
-    return os.path.join(base, "probe-telemetry")
+    return _core.read_cli_config()
 
 
 def machine_id() -> str:
-    """Stable anonymous fallback id, minted once per machine/user."""
-    path = os.path.join(_state_home(), "machine_id")
-    try:
-        with open(path, encoding="utf-8") as f:
-            mid = f.read().strip()
-        if mid:
-            return mid
-    except Exception:
-        pass
-    mid = uuid.uuid4().hex
-    try:
-        os.makedirs(_state_home(), exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write(mid)
-        os.replace(tmp, path)
-    except Exception:
-        pass  # ephemeral id this session; still countable, just not stable
-    return mid
+    return _core.machine_id()
 
 
 def _tap_customer_id() -> str | None:
@@ -217,82 +194,9 @@ def _tap_customer_id() -> str | None:
 
 
 def resolve_identity(cfg: dict) -> dict:
-    """{distinct_id, customer_id, workspace_id, authenticated} — fail-soft.
-
-    Runs ONLY in the detached sender, so the /v1/me call and its timeout never
-    sit on the hook path. The result is cached for 24h keyed on (base_url,
-    token), so steady state is one network call per machine per day.
-    """
-    token = cfg.get("token") or cfg.get("mcp_token")
-    base_url = (cfg.get("base_url") or DEFAULT_BASE).rstrip("/")
-    ws = cfg.get("workspace")
-    workspace_id = ws.get("id") if isinstance(ws, dict) else None
-
-    fallback = {
-        "distinct_id": f"machine:{machine_id()}",
-        "customer_id": _tap_customer_id(),
-        "workspace_id": workspace_id,
-        "authenticated": False,
-    }
-    if not token or not base_url.startswith(("http://", "https://")):
-        return fallback
-
-    import hashlib
-
-    cache_key = hashlib.sha256(f"{base_url}|{token}".encode()).hexdigest()[:16]
-    cache_path = os.path.join(_state_home(), "identity.json")
-    try:
-        with open(cache_path, encoding="utf-8") as f:
-            cached = json.load(f)
-        if (
-            cached.get("key") == cache_key
-            and time.time() - cached.get("fetched_at", 0) < ME_CACHE_TTL
-            and cached.get("user_id")
-        ):
-            return {
-                "distinct_id": cached["user_id"],
-                "email": cached.get("email"),
-                "customer_id": cached.get("customer_id"),
-                "workspace_id": workspace_id,
-                "authenticated": True,
-            }
-    except Exception:
-        pass
-
-    try:
-        req = urllib.request.Request(
-            base_url + "/v1/me",
-            headers={"Authorization": f"Bearer {token}", "User-Agent": "probe-plugin-telemetry"},
-        )
-        with urllib.request.urlopen(req, timeout=SEND_TIMEOUT) as resp:
-            me = json.load(resp)
-        user_id = me.get("user_id")
-        if not user_id:
-            return fallback
-        record = {
-            "key": cache_key,
-            "fetched_at": time.time(),
-            "user_id": user_id,
-            "email": me.get("email"),
-            "customer_id": me.get("customer_id"),
-        }
-        try:
-            os.makedirs(_state_home(), exist_ok=True)
-            tmp = cache_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(record, f)
-            os.replace(tmp, cache_path)
-        except Exception:
-            pass
-        return {
-            "distinct_id": user_id,
-            "email": me.get("email"),
-            "customer_id": me.get("customer_id"),
-            "workspace_id": workspace_id,
-            "authenticated": True,
-        }
-    except Exception:
-        return fallback
+    """See _telemetry_core.resolve_identity; the tap's tenant slug is the
+    plugin-specific zero-network fallback for the team group."""
+    return _core.resolve_identity(cfg, fallback_customer_id=_tap_customer_id())
 
 
 def plugin_version() -> str | None:
@@ -456,40 +360,18 @@ def spawn_sender(events: list[dict]) -> None:
 
 
 def build_batch(events: list[dict], ident: dict, pv: str | None, cv: str | None) -> list[dict]:
-    """Enrich observed events into PostHog batch entries. Pure; unit-tested.
-
-    Property names match app/core/analytics.py (client_kind, client_version,
-    team group, $process_person_profile) so plugin events share breakdowns and
-    group rollups with the server-side events.
-    """
-    batch = []
-    for e in events:
-        props = dict(e.get("properties") or {})
-        props.setdefault("agent", os.environ.get("PROBE_AGENT") or "claude_code")
-        props["client_kind"] = "plugin"
-        props["client_version"] = pv
-        if cv is not None:
-            props["cli_version"] = cv
-        props["authenticated"] = ident.get("authenticated", False)
-        if not ident.get("authenticated"):
-            props["$process_person_profile"] = False
-        if ident.get("workspace_id"):
-            props["workspace_id"] = ident["workspace_id"]
-        if ident.get("customer_id"):
-            props["team"] = ident["customer_id"]
-            props["$groups"] = {"team": ident["customer_id"]}
-        if ident.get("email"):
-            props["$set"] = {"email": ident["email"]}
-        props["$lib"] = "probe-plugin"
-        props["$lib_version"] = pv or "unknown"
-        batch.append(
-            {
-                "event": e["event"],
-                "distinct_id": ident["distinct_id"],
-                "properties": props,
-            }
-        )
-    return batch
+    """Enrich observed events into PostHog batch entries — via the shared core,
+    so property names can never drift from the CLI's `wizard.*`/`backfill.*`
+    events or app/core/analytics.py."""
+    return _core.build_batch(
+        events,
+        ident,
+        client_kind="plugin",
+        lib="probe-plugin",
+        client_version=pv,
+        cli_version=cv,
+        machine=_core.machine_id(),
+    )
 
 
 def send_from_stdin() -> None:
@@ -498,6 +380,12 @@ def send_from_stdin() -> None:
     if not isinstance(events, list) or not events:
         return
     cfg = read_cli_config()
+    # Hosted-only gate: a self-host base_url means the client never calls the
+    # vendor. effective_base_url honors PROBE_BASE_URL like sdk resolve() —
+    # a self-hoster configured through env must be muted too. Checked here,
+    # off the hook path, where the config is read anyway.
+    if not _core.hosted_base_url(_core.effective_base_url(cfg)):
+        return
     ident = resolve_identity(cfg)
     pv = plugin_version()
     # `probe --version` costs a subprocess; pay it only on the two per-session
@@ -506,14 +394,7 @@ def send_from_stdin() -> None:
         e.get("event") in (EVENT_SESSION_STARTED, EVENT_SESSION_SUMMARY) for e in events
     )
     cv = cli_version() if enrich_cli else None
-
-    payload = json.dumps({"api_key": POSTHOG_KEY, "batch": build_batch(events, ident, pv, cv)})
-    req = urllib.request.Request(
-        POSTHOG_HOST.rstrip("/") + "/batch/",
-        data=payload.encode(),
-        headers={"Content-Type": "application/json"},
-    )
-    urllib.request.urlopen(req, timeout=SEND_TIMEOUT).read()
+    _core.post_batch(build_batch(events, ident, pv, cv))
 
 
 # ---------------------------------------------------------------------------

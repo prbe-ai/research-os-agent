@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **Install + backfill funnel telemetry (CLI; plugin at its next release).** `probe wizard`
+  and backfill now emit the missing front half of the session funnel to
+  PostHog: `wizard.invoked` (pre-bootstrap, so a broken npx→persistent install
+  still enters the funnel) → `wizard.started` → `wizard.action_chosen` →
+  `wizard.configure_started` → `wizard.signed_in` → `wizard.configure_completed`,
+  and `backfill.started/.scanned/.plan_ready/.approved/.summary` with an
+  outcome on every exit path. In-process async emit: one queue + daemon sender
+  thread with a bounded (~1s) exit flush — no subprocesses, nothing ever
+  printed, fail-silent throughout. Events are stamped at emit time
+  (millisecond timestamps, `identity_mode`, funnel facts) so asynchronous
+  delivery can never reorder or misattribute them; `invoked_by` separates
+  humans from the auto-update robot spawns; `machine_id` rides every event as
+  the cross-surface join key. `PROBE_TELEMETRY=off` disables everything, and
+  so does any non-hosted base_url — self-host machines never call the vendor
+  (the client-side extension of the egress contract). The shared contract now
+  lives in `src/probe/cli/_telemetry_core.py`, vendored beside the plugin hook
+  (`make sync-telemetry-core`, byte-parity-tested); the plugin hook imports it
+  and gains the same hosted-only gate at this release.
+
 ### Fixed
 
 - **Transcript capture reconciler (tap 0.3.0).** Capture no longer depends on a

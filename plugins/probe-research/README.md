@@ -63,7 +63,12 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   whitelisted names; never prompts, commands, paths or file contents).
   Observability only: hooks never block, the sender runs detached with a 3s
   timeout, and every failure is silent. Disable entirely with
-  `PROBE_TELEMETRY=off`.
+  `PROBE_TELEMETRY=off`; a non-hosted `base_url` (self-host) also disables it.
+  The shared contract (key, killswitch, hosted gate, identity, batch shape)
+  lives in `hooks/_telemetry_core.py` — a vendored copy of the CLI's
+  `src/probe/cli/_telemetry_core.py`, refreshed by `make sync-telemetry-core`
+  and byte-parity-tested, so plugin events stay joinable with the CLI's
+  `wizard.*`/`backfill.*` install funnel.
 
 Skills here are copies of the repo's canonical `skills/` (kept in sync with
 `make sync-plugin-skills`). The two agent-specific manifests are thin packaging
