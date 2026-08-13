@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.76.0
+
 ### Added
 
 - **Install + backfill funnel telemetry (CLI; plugin at its next release).** `probe wizard`
