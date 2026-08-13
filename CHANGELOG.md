@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.77.0
+
 ### Added
 
 - **`probe import wandb`** — the deterministic W&B mirror whose absence got
