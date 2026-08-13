@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Added
+
+- **`untracked` run status + observer heartbeats (server 0106, release 1 of
+  2).** New vocabulary for "this run went silent without a live client ever
+  attached" — the state Anthrogen's mirrored W&B runs were mislabeled
+  `crashed` with. THIS release teaches every reader the word and adds the
+  liveness plumbing; the reaper still writes `crashed` for all stale rows
+  until the next release flips its verdict (owner-heartbeat-lost → `crashed`,
+  never-owned → `untracked`). SDK: generated models know the new status,
+  `_DEAD_RUN_STATUSES`/`_TERMINAL_STATUSES`/resume treat it like the other
+  reopenable terminals, and `heartbeat_run`/`Run.start_heartbeat` accept
+  `role="observer"` — a beat that asserts "something is watching" without
+  claiming ownership, failing closed against servers too old to know the role
+  (a capability probe checks for the `observer_heartbeat_at` field before the
+  first beat, because an old server would silently record the beat in the
+  ownership column). The miles exporter observer-beats while attached, keeping
+  watched runs out of the reaper's scan. `probe run end --status untracked`
+  closes a run you registered but never attached a logger to. Old CLIs/plugins
+  are served `crashed` for untracked runs via a server-side version gate until
+  they upgrade past this release.
+
 ### Fixed
 
 - **Codex no longer warns on every session start (plugin 0.21.1).** The
