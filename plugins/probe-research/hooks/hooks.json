@@ -10,6 +10,17 @@
         ]
       }
     ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; export PROBE_HOOK_EVENT=precompact; exec \"$ROOT/hooks/session-start.sh\"'",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "^(Bash|Skill|SlashCommand)$|probe[-_]research",

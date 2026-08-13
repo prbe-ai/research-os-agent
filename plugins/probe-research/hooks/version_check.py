@@ -1,10 +1,33 @@
 #!/usr/bin/env python3
-"""Probe Research SessionStart version check.
+"""Probe Research version check. Runs on SessionStart AND on PreCompact.
 
-Prints a Claude Code SessionStart hook JSON to stdout:
+Prints a Claude Code hook JSON to stdout:
   - up to date, or no data        -> {"continue": true}
   - a newer version is available   -> {"systemMessage": ...,
                                        "hookSpecificOutput": {additionalContext}}
+
+WHY PRECOMPACT TOO.
+
+SessionStart was the only trigger, and it fires once per session. That is fine
+for anyone who opens and closes sessions through the day, and useless for the
+researcher this tool is built for: they keep a handful of sessions alive for
+weeks, and their Probe work goes through the HOSTED MCP, which runs no code on
+their machine at all. Such a laptop can sit months behind with a perfectly
+healthy updater that simply never gets an occasion to run.
+
+PreCompact is the occasion. It fires when a session's context is compacted,
+which is a thing that only happens to long-lived sessions -- so it targets
+exactly the population SessionStart misses, and stays quiet for everyone else.
+
+ON PRECOMPACT THIS HOOK IS SILENT, and that is deliberate on two counts. The
+output contract is not the same one (`hookSpecificOutput.hookEventName` is
+`SessionStart` below, and additionalContext is that event's channel), so
+reusing this payload there would be emitting a shape for the wrong event.
+And a nudge injected mid-compaction is noise at the worst possible moment --
+the user did not do anything, the agent is busy, and the same message already
+rendered when the session began. PreCompact exists here to APPLY, not to talk:
+it runs the same gate chain and spawns the same detached upgrade, then prints
+`{"continue": true}` and gets out of the way.
 
 Contract:
   * FAIL-OPEN. Any error prints {"continue": true} and exits 0 — a broken check
@@ -60,6 +83,13 @@ DEFAULT_BASE = version_policy.DEFAULT_BASE
 # command only for CLIs >= this; older ones get the raw commands (which get them
 # to a version that has it). CI keeps this == the released version (see release.yml).
 UPDATE_CMD_MIN_CLI = "0.8.1"
+
+# Which hook event we are running under. hooks.json exports this ONLY for
+# PreCompact, so an unset value means SessionStart -- the reading that preserves
+# the old behaviour, which matters because an older hooks.json can ship alongside
+# a newer copy of this file (the plugin and CLI version independently).
+HOOK_EVENT_ENV = "PROBE_HOOK_EVENT"
+PRECOMPACT = "precompact"
 
 
 def _emit(obj: dict) -> None:
@@ -307,6 +337,14 @@ def main() -> None:
     # nudge below still renders this session, because the upgrade only takes
     # effect on the next one.
     _spawn_autoupdate(os.environ.get("PROBE_BIN") or "probe")
+
+    # PreCompact applies and says nothing. See the module docstring: the payload
+    # below is SessionStart's output contract, and a nudge delivered mid-compaction
+    # interrupts work the user did not start to repeat a message they already saw
+    # when the session opened. The spawn above is the whole reason PreCompact is
+    # wired up, and it has already happened by this line.
+    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
+        _emit({"continue": True})
 
     _emit(
         {
