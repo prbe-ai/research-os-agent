@@ -24,6 +24,22 @@ if [ -z "$PY" ]; then
   exit 0
 fi
 
+# SessionStart's stdin carries `source` (startup|resume|clear|compact).
+# version_check.py turns source=compact into a reconcile-Probe nudge on the
+# additionalContext channel -- the one surface that reaches the model right
+# after a compaction. Skipped under PreCompact (its stdin has no `source` and
+# the event can carry no context anyway), which also saves an interpreter
+# start on that path. Fail-open: unparseable payload = no nudge.
+PROBE_SESSION_SOURCE=""
+if [ "${PROBE_HOOK_EVENT:-}" != "precompact" ]; then
+  PROBE_SESSION_SOURCE="$(printf '%s' "$HOOK_INPUT" | "$PY" -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("source") or "")
+except Exception:
+    print("")' 2>/dev/null || true)"
+fi
+export PROBE_SESSION_SOURCE
+
 # Resolve the `probe` binary without trusting PATH — a dock-launched Claude Code
 # sources no profile, so ~/.local/bin may be absent. Mirrors bin/probe-mcp-headers.
 PROBE_BIN="$(command -v probe 2>/dev/null || true)"

@@ -1,4 +1,4 @@
 interface:
   display_name: "Track Research Work"
   short_description: "Track evidence and maintain dashboard context"
-  default_prompt: "Use $track-research-work to maintain the visible Project Summary and hidden handoff notes, record this run's metrics, artifacts and outcome, and verify what actually landed."
+  default_prompt: "Use $track-research-work to record decisions, data steps, deletions, metrics, artifacts and outcomes at the moment they happen, keep the Project Summary and hidden handoff notes current, and verify what actually landed."

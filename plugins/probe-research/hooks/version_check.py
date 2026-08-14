@@ -56,8 +56,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
+from typing import NoReturn
 
 # pathlib, time and urllib left with the helpers that moved to version_policy.
 # The shared policy: TTL/BACKOFF, the cache and state paths, the cache reader and
@@ -91,15 +93,81 @@ UPDATE_CMD_MIN_CLI = "0.8.1"
 HOOK_EVENT_ENV = "PROBE_HOOK_EVENT"
 PRECOMPACT = "precompact"
 
+# session-start.sh parses SessionStart's stdin and exports the `source` field
+# here. "compact" means this session just lost everything that was not written
+# down -- the one moment a standing instruction can still recover it, because
+# PreCompact has no context channel and no agent turn runs between the event
+# and the summarizer.
+SESSION_SOURCE_ENV = "PROBE_SESSION_SOURCE"
+COMPACT_SOURCE = "compact"
+# The nudge is CONDITIONAL on the domain ("the team's ML work") for the same
+# reason the pointer block is: this hook is user-global, and an unconditional
+# order to do Probe work in a dotfiles session teaches the agent to ignore the
+# block. And it asks only for what the summary STILL SHOWS -- the compacted
+# span itself is gone, and inviting its reconstruction would land invented
+# decisions in team-visible notes as provenance. The event list mirrors the
+# cadence prose in track-research-work's description and the pointer body.
+COMPACT_CONTEXT = (
+    "Context was just compacted. If this session involves the team's ML work, "
+    "reconcile Probe before continuing: append what the summary still shows "
+    "that is not yet recorded -- decisions, data processing steps, deletions, "
+    "config changes, user overrides -- to the project's notes, and re-check "
+    "the state of any open run. Do not reconstruct details the summary no "
+    "longer carries. The probe-research:track-research-work skill has the "
+    "current commands."
+)
 
-def _emit(obj: dict) -> None:
+
+def _emit(obj: dict) -> NoReturn:
     sys.stdout.write(json.dumps(obj))
     sys.exit(0)
+
+
+def _compact_context() -> str | None:
+    """The reconcile nudge, when and only when this is a post-compaction start.
+
+    PreCompact runs this same file (see docstring) and must stay silent there:
+    additionalContext is SessionStart's channel, and mid-compaction there is
+    nobody left to read it.
+    """
+    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
+        return None
+    if os.environ.get(SESSION_SOURCE_ENV) != COMPACT_SOURCE:
+        return None
+    return COMPACT_CONTEXT
+
+
+def _final(obj: dict) -> NoReturn:
+    """Merge the post-compaction nudge into whatever main() was going to say.
+
+    Every exit from main() goes through here so the nudge cannot be lost to an
+    early return (up-to-date, no manifest, malformed cache). An update nudge
+    already occupying additionalContext is appended to, never clobbered.
+    """
+    ctx = _compact_context()
+    if ctx:
+        hso = obj.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
+        prior = hso.get("additionalContext")
+        hso["additionalContext"] = f"{prior}\n\n{ctx}" if prior else ctx
+    _emit(obj)
 
 
 def _ver_str(v: str) -> str:
     """Bare version for display: 'probe 0.7.0' -> '0.7.0'."""
     return str(v).strip().split()[-1] if v and str(v).strip() else str(v)
+
+
+# The manifest is fetched over the network and parts of it are echoed into the
+# session's systemMessage and the model-facing additionalContext. Comparison
+# logic can take the strings as-is, but anything DISPLAYED must be shaped like
+# a version -- a compromised or misconfigured origin must not get free
+# instruction text into every session start.
+_DISPLAY_VER = re.compile(r"[0-9A-Za-z.+~_-]{1,32}")
+
+
+def _safe_ver(v) -> str:
+    s = _ver_str(v)
+    return s if isinstance(s, str) and _DISPLAY_VER.fullmatch(s or "") else "?"
 
 
 def _triplet(v: str):
@@ -265,7 +333,7 @@ def main() -> None:
                 version_policy.release_refresh()
 
     if not isinstance(manifest, dict):
-        _emit({"continue": True})
+        _final({"continue": True})
 
     local = {
         "cli": _local_cli(os.environ.get("PROBE_BIN") or "probe"),
@@ -282,12 +350,12 @@ def main() -> None:
         if not cur or not latest:
             continue
         if _remote_gt_local(cur, latest):
-            nudges.append((label, _ver_str(cur), latest))
+            nudges.append((label, _safe_ver(cur), _safe_ver(latest)))
         if minv and _remote_gt_local(cur, minv):  # cur < min
-            below_min.append((label, _ver_str(cur), minv))
+            below_min.append((label, _safe_ver(cur), _safe_ver(minv)))
 
     if not nudges and not below_min:
-        _emit({"continue": True})
+        _final({"continue": True})
 
     def _fmt(items):  # items: (label, current, target)
         return ", ".join(f"{label} {cur} → {target}" for label, cur, target in items)
@@ -324,7 +392,9 @@ def main() -> None:
 
     sys_msg = f"{head} {cmds} (restart Claude Code to apply)."
     if isinstance(advisory, str) and advisory.strip():
-        sys_msg += f" Note: {advisory}"
+        # Human-facing only, and bounded: one line, capped, so a hostile
+        # manifest cannot paste paragraphs of instructions into the session.
+        sys_msg += f" Note: {' '.join(advisory.split())[:200]}"
 
     ctx = (
         f"The Probe Research client is out of date ({summary}). If the user wants "
@@ -344,9 +414,9 @@ def main() -> None:
     # when the session opened. The spawn above is the whole reason PreCompact is
     # wired up, and it has already happened by this line.
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
-        _emit({"continue": True})
+        _final({"continue": True})
 
-    _emit(
+    _final(
         {
             "systemMessage": sys_msg,
             "hookSpecificOutput": {

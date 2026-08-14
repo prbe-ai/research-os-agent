@@ -167,9 +167,10 @@ Draw it again when a stage flips, before a launch, and at handoff. A redrawn
 timeline is cheaper to read than a paragraph explaining what changed, and it stays
 correct — prose about progress goes stale the moment the next step lands.
 
-Do not draw one for work that is not research. Fixing a data loader bug is not an
-arc; it is a bug. This skill fires for training, evaluation, sweeps, ablations,
-data curation and benchmarks, and the timeline for anything else is decoration.
+Do not draw one for work with no arc. Fixing a data loader bug is not an arc;
+it is a bug. This skill fires for the team's ML work whose stages connect —
+training, evaluation, sweeps, a survey feeding a build, data processing feeding
+a run — and a timeline for a single-step task is decoration.
 
 ## What this is not
 

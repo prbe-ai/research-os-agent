@@ -1,6 +1,6 @@
 ---
 name: start-research-work
-description: Start tracked research and maintain its dashboard-visible Project Summary and hidden notes — create the project and experiment before the work, not after it, and open a run when code is about to execute. Use for reproducible research from design through training, evaluation, sweeps, ablations, data curation and docking. Re-enter it all session, not once at setup — when you choose or reject an approach, the user overrides you, a tool or dataset differs from its documentation, an assumption encoded in code proves false, planned hardware is unavailable and you substitute something else, or before context is compacted or the session ends. A plan-first or approval-gated brief does not defer this — registering entities is not the gated action. Trigger for one-off and exploratory work, when writing a script that will run, while provisioning or failing to provision its machines, and when the user did not ask for tracking. Not for dependency installs, unit tests, or reading that decided nothing.
+description: Start tracked research — create the project and experiment before the work, not after it; open a run when code is about to execute; maintain the dashboard Project Summary and hidden notes. Covers the team's ML work whatever its shape — training, evaluation, sweeps, data processing, a literature or model survey, design decisions on model or pipeline code, provisioning. Re-enter it all session, when you choose or reject an approach, the user overrides you, a tool or dataset behaves differently than documented, an assumption proves false, or before compaction or session end. A plan-first or approval-gated brief does not defer registering. Trigger for exploratory work, when writing a script that will run, and when the user did not ask for tracking. Not for dependency installs or routine version bumps, mechanical edits with no rejected alternative, or reading that produced nothing durable.
 ---
 
 # Start research work
@@ -126,6 +126,17 @@ near-miss of an existing slug rather than warning.)
    PROJECT-DIRECT run (`probe run start --project folding`, or
    `client.run(project="folding")`). That is a better home for it than an
    experiment named after whatever directory you happened to be in.
+
+   **A survey is a project; so is design work.** A literature or model survey,
+   a design investigation on model or pipeline code, a day of dataset
+   processing — these are ML work with no metric in sight, and they are
+   tracked the same way: a project (or a project-direct run inside one), the
+   durable outputs — survey documents, spec files, comparison tables —
+   uploaded as artifacts, and the conclusion in the visible summary or notes.
+   The test is never "did it train anything" but whether a teammate asking
+   "what did you do for X?" would find the answer here. Record the rejected
+   alternatives too — the diff only shows the road taken, and the reasons a
+   design was NOT chosen are exactly what the next session re-litigates.
 
    **Provisioning infrastructure is such a run — open one.** An attempt to get
    hardware has a start, an end, a real terminal status and an environment, so it is

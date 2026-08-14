@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Changed
+
+- **Tracking prose v7 — the gate is the domain, not the activity.** The
+  CLAUDE.md/AGENTS.md pointer (v7), both tracking skill descriptions and the
+  MCP server instructions now cover anything that is part of the team's ML
+  work, whatever its shape — literature and model surveys, design decisions on
+  model or pipeline code, dataset processing, provisioning — with a short
+  decidable exclusion list (dependency installs, mechanical edits with no
+  rejected alternative, reading that produced nothing durable), an
+  at-the-moment cadence rule, and a data-provenance recipe (one project-direct
+  run per script version via deterministic `--external-id`). Third widening of
+  the old noun list proved the list structural, so the list is gone; the new
+  `tests/test_prose_anchors.py` pins the criterion across all four rule
+  surfaces so the paraphrases cannot drift apart.
+
+### Added
+
+- **Post-compaction reconcile nudge.** SessionStart with `source: "compact"`
+  now injects additionalContext telling the agent to reconcile Probe notes
+  with what survived compaction (`version_check.py`); PreCompact stays silent
+  by contract — it has no context channel. Codex has no equivalent event; the
+  gap is recorded in TODOS.md.
+- **`evals/triggering/`** — a small-model trigger-classifier judge (21
+  scenarios including negative controls and deliberate frontier cases) that
+  measures trigger recall AND negative restraint per prose change, cheap
+  enough to run on every wording tweak. Manual, outside pytest.
+
 ## 0.80.0
 
 ## 0.79.0

@@ -1,6 +1,6 @@
 ---
 name: track-research-work
-description: Record what research produces — dashboard-visible Project Summary Markdown, hidden notes, per-step metrics, spans, artifacts, asset versions and a run's final status. Use while a run is in flight, when reading back what was captured, or before handoff, completion or publication. Trigger whenever a run is open, or whenever something worth recording happens without one — including when a tool, dataset or environment the research depends on behaved differently than documented, when you had to substitute infrastructure you could not get, and when a run's number turns out to measure nothing because the harness was broken rather than because the thing under test failed — rather than waiting to be asked.
+description: Record what the team's ML work produces, whatever its shape — Project Summary Markdown, hidden notes, per-step metrics, spans, artifacts, a run's final status. Log at the moment it happens, not at session end — a decision made or reversed, a data processing run, data deleted or kept, a config change, a user override. Trigger unprompted whenever a run is open or something worth recording happens without one — a tool or dataset behaving differently than documented, substituted infrastructure, a number that measures nothing because the harness was broken. Also for reading back what was captured and before handoff or publication.
 ---
 
 # Track research work
@@ -158,6 +158,22 @@ gets made. Record with the surface the run was opened with.
    a seed you did not set, a non-deterministic op you had to allow, a flag you flipped
    to make a run finish. `probe run reproduce` will show a reader WHAT the launch was;
    only a note says why it was odd.
+
+   **Data provenance: processing steps are runs, at script granularity.**
+   When a session processes data — a transform, a filter, a dedupe, a
+   re-scoring — open ONE project-direct run per script or stage VERSION, not
+   per invocation: pass a deterministic `--external-id` (e.g.
+   `clean-structures-v2`). A retried launch of a FAILED step resumes that run
+   instead of minting a sibling; a COMPLETED step refuses the id, which is the
+   system telling you to bump the version suffix — re-running a finished step
+   means something changed. Attach the script as an artifact, link inputs and outputs with
+   lineage edges (`consumes`/`produces`), and record the decision that shaped
+   the step — the threshold chosen, the records deleted or kept, and why — in
+   that run's notes at the moment it happens; conclusions that outlive the
+   step go to the project's notes. Deletions are provenance, not housekeeping:
+   log what was removed and why, or a later reader infers a processing chain
+   that never existed. Done this way, a paper's method section is
+   reconstructable from the chain of runs.
 
    **Never block on delivery: async mode.** Any CLI write above takes `--async`
    (or `PROBE_ASYNC=1` for a whole session): the write is queued in a durable
