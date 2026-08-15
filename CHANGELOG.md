@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A session with tracking off never picked up a new status-line renderer.** The
+  tracking-off gate sat ahead of the SessionStart maintenance, so `sync_renderer()`
+  and `prune()` were skipped for exactly the sessions that most needed them: one
+  that turned tracking off could not learn to display `tracking off`, and kept
+  showing a stale, wrong state indefinitely. Maintenance now runs first — it is
+  housekeeping, not tracking — and the gate still stops the network requests,
+  which is all it was ever meant to stop.
+
+  Found by verifying a real 0.25.0 → 0.27.0 plugin upgrade end to end rather than
+  trusting the unit tests, which all passed.
+
 ## 0.86.0
 
 ### Changed

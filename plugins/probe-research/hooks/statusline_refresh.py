@@ -291,15 +291,23 @@ def main(argv: list[str] | None = None) -> int:
         marker = _load("_session_marker")
         if not marker.valid_session_id(session_id):
             return 0
-        # Tracking was ended for this conversation: stop spending requests on it.
+
+        # MAINTENANCE FIRST, and specifically BEFORE the tracking-off gate.
+        # Refreshing the installed renderer is housekeeping, not tracking, and a
+        # session that turned tracking OFF needs it MORE than one that did not:
+        # gating it behind the switch meant such a session never picked up a new
+        # renderer, so it could not learn to display `tracking off` and showed a
+        # stale, wrong state forever. Pruning is the same shape of chore.
+        if payload.get("hook_event_name") == "SessionStart":
+            marker.prune()
+            sync_renderer()
+
+        # Tracking was ended for this conversation: stop spending REQUESTS on it.
         # The marker is left in place rather than deleted -- turning it back on
         # should restore what was known, not start from nothing.
         if marker.tracking_off(session_id):
             return 0
-        if payload.get("hook_event_name") == "SessionStart":
-            marker.prune()
-            sync_renderer()
-        elif not due(marker, session_id):
+        if payload.get("hook_event_name") != "SessionStart" and not due(marker, session_id):
             return 0
     except BaseException:  # noqa: BLE001 - a hook contracted to silence
         return 0
