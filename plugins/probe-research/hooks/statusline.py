@@ -83,16 +83,16 @@ def segment(payload: dict) -> str:
 
     session_id = resolve_session_id(payload)
     if not session_id:
-        return marker.render(None, configured=True, color=_color())
+        return marker.render(None, configured=True, tracking=False, color=_color())
 
-    off = marker.tracking_off(session_id)
     state = marker.read(session_id)
+    tracking = marker.is_tracking(state, marker.tracking_signal(session_id))
     return marker.render(
         state,
         configured=True,
-        live=(not off) and marker.is_live(state),
+        tracking=tracking,
+        live=tracking and marker.is_live(state),
         color=_color(),
-        off=off,
     )
 
 

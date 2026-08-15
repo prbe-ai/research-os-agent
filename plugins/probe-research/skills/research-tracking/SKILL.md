@@ -82,9 +82,22 @@ which they want.
   capture toggle affects EVERY session on the machine, not just this one.
 - **It does not touch other sessions**, and it does not persist to the next one.
 
-## Who decides what
+## Two states, one signal
 
-Starting is the AGENT's call and stays that way: tracking happens because the
-standing rules make it automatic, not because someone remembered to ask. Stopping
-is the RESEARCHER's call, which is why this skill exists. Do not invert that by
-waiting to be told to track.
+The status line shows exactly two things: `tracking` (with the project once one
+exists) or `not tracking`. There is no third "off" state, because a reader does not
+care WHY nothing is being recorded — only whether anything is.
+
+What decides it is this signal. Explicit on or off wins in both directions; with no
+decision yet, it falls back to what the session has actually recorded, so a session
+that quietly created a project reads as tracking without anyone announcing it.
+
+## Who flips it
+
+**Both of you, through the same surface.** The agent decides — that is what keeps
+tracking from depending on someone remembering to ask, and it should turn tracking
+ON as soon as it judges the work to be research, rather than waiting for the first
+project to land. The researcher decides too, and their decision is the one that
+stands: if they turn it off, it stays off until they say otherwise.
+
+Do not argue with an explicit off. Do not wait to be told to turn it on.

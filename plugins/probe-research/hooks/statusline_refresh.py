@@ -302,10 +302,11 @@ def main(argv: list[str] | None = None) -> int:
             marker.prune()
             sync_renderer()
 
-        # Tracking was ended for this conversation: stop spending REQUESTS on it.
-        # The marker is left in place rather than deleted -- turning it back on
-        # should restore what was known, not start from nothing.
-        if marker.tracking_off(session_id):
+        # Tracking was turned OFF for this conversation: stop spending REQUESTS on
+        # it. Only an explicit `off` stops the refresh -- an UNDECIDED session
+        # still needs the fetch, because what it has recorded is exactly what
+        # decides whether it reads as tracking at all.
+        if marker.tracking_signal(session_id) == "off":
             return 0
         if payload.get("hook_event_name") != "SessionStart" and not due(marker, session_id):
             return 0

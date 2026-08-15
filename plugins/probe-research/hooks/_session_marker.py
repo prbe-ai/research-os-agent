@@ -75,9 +75,9 @@ _GLYPH_WIDTH = 2  # the dot plus its trailing space
 #: The state is spelled OUT, not encoded in the glyph. `● folding` requires the
 #: reader to already know that a filled dot means tracked; `tracked → folding`
 #: does not, and a status line is read by people who did not install it.
-_LABEL_TRACKED = "tracked " + _ARROW + " "
-_LABEL_UNTRACKED = "untracked"
-_LABEL_OFF = "tracking off"
+_LABEL_TRACKED = "tracking " + _ARROW + " "
+_LABEL_TRACKING_BARE = "tracking"
+_LABEL_NOT_TRACKING = "not tracking"
 
 #: A middle dot, NOT a second arrow. `tracked → folding ▸ running` puts two
 #: arrow-shaped glyphs in one short segment, and the eye reads them as a
@@ -89,13 +89,17 @@ _ACCENT_TEXT = " " + _SEPARATOR + " running"
 #: wrapped line reflows every other segment sharing it, which is the one failure
 #: that makes neighbouring output less readable rather than merely longer.
 #:
-#: 50 is measured, not picked. It is the smallest ceiling at which a 26-character
+#: 51 is measured, not picked. It is the smallest ceiling at which a 26-character
 #: name budget survives, and 26 is what this lab's project names actually need:
-#: median 18, longest 29, 27 of 28 whole. Spelling out "tracked → " cost ten
-#: columns, and they were taken from the ceiling rather than from the name --
-#: paying for the label with the project's own name would have defeated the
-#: point of naming it. `test_this_labs_project_names_mostly_fit_whole` pins it.
-MAX_SEGMENT_CHARS = 50
+#: median 18, longest 29, 27 of 28 whole. At 25 that drops to 15 of 20 on the
+#: pinned sample -- one character of label costs four whole names, because real
+#: slugs cluster right at the boundary.
+#:
+#: THE LABEL IS PAID FOR BY THE CEILING, NEVER BY THE NAME. Spelling out
+#: "tracking → " costs eleven columns; taking them from the name would elide the
+#: project the segment exists to identify. When the label changes length, this
+#: number moves with it. `test_this_labs_project_names_mostly_fit_whole` pins it.
+MAX_SEGMENT_CHARS = 51
 
 #: What the name may occupy. DERIVED, and derived against the LIVE width even
 #: when idle, so the name keeps one budget in both states: a name that shrank the
@@ -440,41 +444,80 @@ def config_path() -> Path:
     return Path(base) / "probe" / "config.json"
 
 
-def tracking_off_path(session_id: str) -> Path:
-    """Where "this conversation is not research" is recorded, per session.
+def tracking_signal_path(session_id: str) -> Path:
+    """Where THE DECISION lives: is this conversation being tracked.
 
-    A DECLARATION, unlike everything else in this module, which is observation.
-    The rest answers "did work land"; this answers "should any". They are
-    different facts and a session can hold both -- someone can turn tracking off
-    in a conversation that already created a project, and the honest reading of
-    that is "no more", not "none ever".
+    One file, three readable values -- `on`, `off`, and absent. Absent is not a
+    third STATE, it is the absence of a decision, and `is_tracking` resolves it
+    from what the session has actually recorded. Two states reach the reader;
+    the undecided case just has to pick one of them honestly.
 
     Per session, beside the marker, because the answer is about THIS
-    conversation. A machine-wide off switch would silence a researcher's next
-    session too, which is precisely the surprise nobody wants from a mute button.
+    conversation. A machine-wide switch would decide the next one too.
+    """
+    return sessions_dir() / (session_id + ".tracking")
+
+
+def _legacy_off_path(session_id: str) -> Path:
+    """The 0.27-0.29 spelling: presence of `<sid>.off` meant "not tracking".
+
+    Read, never written. A researcher who turned tracking off before upgrading
+    must not silently come back ON because the file was renamed underneath them
+    -- that is precisely the decision the file exists to remember.
     """
     return sessions_dir() / (session_id + ".off")
 
 
-def tracking_off(session_id: str) -> bool:
-    """Whether this session was explicitly taken out of tracking."""
-    return valid_session_id(session_id) and tracking_off_path(session_id).is_file()
+def tracking_signal(session_id: str) -> str | None:
+    """`"on"`, `"off"`, or None when nobody has decided yet."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        value = tracking_signal_path(session_id).read_text(encoding="utf-8").strip().lower()
+        if value in ("on", "off"):
+            return value
+    except OSError:
+        pass
+    return "off" if _legacy_off_path(session_id).is_file() else None
 
 
-def set_tracking_off(session_id: str, off: bool) -> bool:
-    """Turn tracking off (or back on) for this session. True when it landed."""
+def set_tracking(session_id: str, on: bool) -> bool:
+    """Record the decision. True when it landed.
+
+    Writes the new spelling and clears the legacy one, so an upgraded session
+    that is turned back ON does not keep reading `off` from the old file.
+    """
     if not valid_session_id(session_id):
         return False
-    path = tracking_off_path(session_id)
+    path = tracking_signal_path(session_id)
     try:
-        if off:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text("ended by the researcher\n", encoding="utf-8")
-        else:
-            path.unlink(missing_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("on\n" if on else "off\n", encoding="utf-8")
+        _legacy_off_path(session_id).unlink(missing_ok=True)
         return True
     except OSError:
         return False
+
+
+def is_tracking(state: dict | None, signal: str | None) -> bool:
+    """The one boolean the whole surface renders. TWO STATES, never three.
+
+    An explicit decision wins in both directions -- that is what makes the
+    toggle a toggle. With no decision, the honest answer is what the session has
+    actually done: work filed in Probe means this conversation IS being tracked,
+    whether or not anyone said so out loud, and nothing filed means it is not.
+
+    Deriving rather than defaulting matters because both fixed defaults are
+    wrong. Defaulting ON tells a researcher their shell-debugging session is
+    being recorded when nothing is; defaulting OFF calls a session untracked
+    while its runs are landing.
+    """
+    if signal == "off":
+        return False
+    if signal == "on":
+        return True
+    project = state.get("project") if isinstance(state, dict) else None
+    return bool(isinstance(project, str) and project)
 
 
 def notify_flag_path() -> Path:
@@ -613,57 +656,47 @@ def render(
     state: dict | None,
     *,
     configured: bool,
+    tracking: bool,
     live: bool = False,
     color: bool = True,
-    off: bool = False,
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
-    THE SEGMENT MUST SURVIVE ANY NEIGHBOUR. It shares one line with whatever
-    else the user has chained into `statusLine`, so four properties are load-
-    bearing rather than cosmetic:
+    TWO STATES: tracking, or not. The caller resolves which via `is_tracking`;
+    this only renders it. An earlier version carried a third — "tracking off" as
+    something distinct from "untracked" — and that was a mistake. A reader does
+    not care WHY nothing is being recorded, only whether anything is, and the
+    third state made them decode a distinction that changed nothing they would do.
 
-    * **No newline, ever.** Claude Code splits the command's stdout on newlines
-      and renders each as its own status row; a stray one silently restructures
-      somebody else's status line.
-    * **A two-space indent and a glyph in front.** Output is concatenated with
-      the neighbour's, so without a leading gap `…main● folding` fuses into one
-      unreadable token. The glyph is the anchor that says a new thing started.
-    * **Bounded width.** Overflow wraps the whole line, which reflows every
-      segment on it — the one way this can make other output WORSE rather than
-      just longer. Hence the elision and the ceiling.
+    THE SEGMENT MUST SURVIVE ANY NEIGHBOUR. It shares one line with whatever else
+    is chained into `statusLine`, so four properties are load-bearing:
+
+    * **No newline, ever.** Claude Code splits this command's stdout on newlines
+      and renders each as its own status row.
+    * **A two-space indent and a glyph in front.** Output is concatenated with the
+      neighbour's; without the gap `…main● tracking` fuses into one token.
+    * **Bounded width.** Overflow wraps the line, reflowing every segment on it —
+      the one way this makes other output worse rather than merely longer.
     * **One coloured character, always closed, never counted.** Only the dot is
-      painted (`_paint` is the single place an SGR is emitted, and it closes what
-      it opens — an unterminated run bleeds into whatever prints next). Layout is
-      computed on PLAIN text and colour applied afterwards: measuring a string
-      with escape sequences in it counts bytes nobody can see, and the segment
-      would silently elide a name that fit. `color=False` is for a terminal that
-      cannot take it, and for tests asserting on text.
+      painted (`_paint` is the single place an SGR is emitted), and layout is
+      computed on PLAIN text — measuring a coloured string counts invisible bytes.
 
-    Empty string when Probe is not configured on this machine: someone who does
-    not use it should not spend a single column on being told so.
+    Empty when Probe is not configured on this machine: someone who does not use
+    it should not spend a column being told so.
     """
     if not configured:
         return ""
 
-    if off:
-        # Muted, because it is a state the reader CHOSE. Yellow would nag about
-        # a decision they already made, and silence would be indistinguishable
-        # from the segment being broken.
-        return _INDENT + _paint(_DOT, _DIM, color) + " " + _LABEL_OFF
+    if not tracking:
+        return _INDENT + _paint(_DOT, _YELLOW, color) + " " + _LABEL_NOT_TRACKING
 
-    # THE DOT IS THE ONLY COLOURED THING, in either state. Every word stays the
-    # terminal's default, so the segment reads like its neighbours and the eye
-    # has exactly one place to check. Green means landing, yellow means it is
-    # not -- yellow rather than dim, because untracked is the state worth
-    # noticing, and dim tells the reader to skip precisely when they should look.
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
-        return _INDENT + _paint(_DOT, _YELLOW, color) + " " + _LABEL_UNTRACKED
+        # Tracking is on, nothing filed yet. State it without inventing a name.
+        return _INDENT + _paint(_DOT, _GREEN, color) + " " + _LABEL_TRACKING_BARE
 
-    # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT. `MAX_SLUG_CHARS` reserves
-    # both widths whether or not the accent is showing, so truncation only ever
-    # costs characters of the project name -- eliding "· runn…" or "tracke… →"
-    # would spend the reader's attention on the parts they can already infer.
+    # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT: `MAX_SLUG_CHARS` reserves both
+    # widths whether or not the accent shows, so truncation only ever costs
+    # characters of the project name.
     accent = _ACCENT_TEXT if live else ""
     return _INDENT + _paint(_DOT, _GREEN, color) + " " + _LABEL_TRACKED + _elide(project) + accent

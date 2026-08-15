@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+### Changed
+
+- **Two tracking states, not three, and a signal decides which.** The status line
+  now shows `tracking` (with the project once one exists) or `not tracking` —
+  the third state, `tracking off`, is gone. A reader does not care WHY nothing is
+  being recorded, only whether anything is, and the third state made them decode a
+  distinction that changed nothing they would do.
+
+  `probe session track|untrack` writes the signal; `is_tracking` resolves it.
+  An explicit decision wins in BOTH directions, which is what makes it a toggle.
+  With no decision yet it derives from what the session has actually recorded,
+  because both fixed defaults are wrong: defaulting ON claims a shell-debugging
+  session is recorded when nothing is, and defaulting OFF calls a session
+  untracked while its runs are landing.
+
+  The 0.27–0.29 `<sid>.off` file is still honoured on read, so a researcher who
+  turned tracking off before upgrading does not silently come back on.
+
+- **The wizard now registers the status line**, alongside writing the standing
+  rules — same concern, no extra checkbox. `statusLine` is a key in the
+  researcher's own settings, so no release can put the segment there; left to a
+  documented `probe statusline install`, it is a feature only changelog readers
+  end up with. Chains rather than claims, and reports what it did.
+  `tests/test_statusline_reaches_other_people.py` simulates a fresh machine and
+  asserts on the settings file that results — including executing the registered
+  command to prove it renders.
+
+### Added
+
+- `docs/2026-08-15-tracking-decision-consolidation.md` — the plan to retire
+  `start-research-work` as the place the tracking DECISION lives, moving it to the
+  signal both agents and humans flip, while keeping the how-to content intact.
 ## 0.88.0
 
 ### Added
