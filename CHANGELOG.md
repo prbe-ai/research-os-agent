@@ -2,6 +2,44 @@
 
 ## Unreleased
 
+### Added
+
+- **Tracked/untracked in Claude Code's status line.** A one-line segment under
+  the input box saying whether this session's work is landing in Probe —
+  `○ untracked`, `● <project>`, or `● <project> ▸ running` when a run this
+  session opened is executing on this box. Opt-in: `probe statusline install`
+  (plus `uninstall`, `status`, and `show` for debugging).
+
+  `· running` is answered by TWO sources OR'd together. The server's
+  `GET /v1/runs?foreign_key=<agent>_session_id:<id>&active=true` is the source of
+  truth — it is the only one that can see a run executing on a cluster, since
+  that run holds its lock on the machine running it. The local run locks are a
+  fast path: ground truth for a local process (the kernel releases an flock on
+  SIGKILL and OOM, which no heartbeat can promise) and current between refreshes.
+
+  Three pieces. `probe.sdk.session_marker` is the local cache and the renderer's
+  formatting rules, vendored into the plugin's hooks (`make sync-session-marker`,
+  guarded by `tests/test_session_marker_parity.py`) because the renderer runs
+  under the system python3. `hooks/statusline_refresh.py` keeps that cache warm
+  from `GET /v1/sessions/{id}/work` — the authoritative answer, which covers work
+  created through the SDK, the CLI, the hosted MCP or a training script three
+  processes deep; instrumenting the SDK's create paths instead would have missed
+  whichever path was not ours to hook. `hooks/statusline.py` renders in ~26ms
+  with no network and no credential.
+
+  `probe statusline install` CHAINS rather than claims: the slot is a single
+  global `statusLine` key in the user's settings with no plugin manifest field
+  for it, so the installer keeps whatever was already configured, tees stdin to
+  both sides, backs the file up, and restores the predecessor exactly on
+  uninstall. Two traps are guarded by tests that execute the composed command:
+  a predecessor ending in a shell comment (imsg-device's marker does) silently
+  comments the rest of a `a; b` chain out, and a predecessor doing `input=$(cat)`
+  drains the pipe before we can read `session_id`.
+
+  Off with `PROBE_STATUSLINE=off`. Deliberately NOT gated on `PROBE_TELEMETRY`:
+  that killswitch turns off analytics about the user, and this is a feature the
+  user opted into.
+
 ## 0.81.0
 
 ### Changed

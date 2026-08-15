@@ -70,6 +70,23 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   and byte-parity-tested, so plugin events stay joinable with the CLI's
   `wizard.*`/`backfill.*` install funnel.
 
+- **Status line** (`hooks/statusline.py`, `hooks/statusline_refresh.py`):
+  an opt-in segment under Claude Code's input box saying whether this session's
+  work is landing in Probe — `○ untracked`, `● <project>`, or
+  `● <project> ▸ running`. Turn it on with `probe statusline install`; off with
+  `probe statusline uninstall`, or `PROBE_STATUSLINE=off` to mute the refresh.
+
+  `statusLine` is a single global slot in the user's settings and there is no
+  plugin manifest field for it, so the installer CHAINS: it keeps whatever was
+  already configured, feeds the payload to both sides, and restores the
+  predecessor exactly on uninstall. The refresh hook caches
+  `GET /v1/sessions/{id}/work` — the server's own answer, which covers work
+  created through the SDK, the CLI or the hosted MCP alike — so the renderer
+  needs no network and no credential and finishes in ~26ms.
+  `hooks/_session_marker.py` is a vendored copy of
+  `src/probe/sdk/session_marker.py` (`make sync-session-marker`, byte-parity
+  tested), for the same reason `_telemetry_core.py` is one.
+
 Skills here are copies of the repo's canonical `skills/` (kept in sync with
 `make sync-plugin-skills`). The two agent-specific manifests are thin packaging
 adapters around this one implementation.
