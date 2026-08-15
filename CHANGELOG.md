@@ -2,6 +2,63 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe wizard` → Sign in or switch account.** The wizard managed everything
+  about a device except whose data it writes to. Install could only ever ADD a
+  credential — and skipped the browser entirely once one existed, because
+  `needs_authorization` reads a stored token as "already signed in" — so an
+  install made under the wrong account had no path forward inside the wizard at
+  all. The only thing that CLEARED a credential was Uninstall, which takes the
+  plugins with it. The advice in between was to leave the wizard and run
+  `probe login` / `probe logout`, two commands the wizard names exactly once, in
+  a message printed after removing a plugin.
+
+  The new screen owns all three: sign in (again, if need be), switch to an
+  account already saved on the machine, or sign out. It is a screen rather than
+  a fourth checkbox because the capability menu is about what Probe DOES here,
+  and every row of it is the same answer under a different account.
+
+  Sign-out is the half with the failure modes, so it is defined as a
+  postcondition like the capture off switch it borrows from:
+
+  - it stops SESSION CAPTURE for every selected agent. The capture credential
+    belongs to the account being left, so clearing the CLI token and leaving the
+    uploader running would keep shipping this device's transcripts there —
+    signed out everywhere except where it counts;
+  - it revokes the token server-side. Once the local copy is gone the user has
+    nothing left to revoke it WITH, and a stranded device token stays valid until
+    it expires;
+  - it clears the ACTIVE context only, so signing out of staging does not sign
+    you out of prod;
+  - it NAMES any `PROBE_TOKEN` / `PROBE_MCP_TOKEN` / `PROBE_INGEST_TOKEN` /
+    `PROBE_SERVICE_TOKEN` still exported in the shell. Those outrank the file
+    that was just cleared and no process can unset them for the parent shell, so
+    reporting "signed out" without saying so would be the same lie about the API
+    that `capture.py` exists to prevent about transcripts;
+  - and it leaves the plugins installed. Signing back in is one screen away.
+
+  Signing in re-pairs capture when — and only when — this device already captures
+  from a credential it STORES (an env-var one would shadow whatever we minted),
+  clears the killswitch so a re-pair actually sends, and revokes the credential it
+  replaced, after the mint rather than before it: revoking first would leave a
+  refused approval with no credentials at all.
+
+  `probe wizard --action login` and `--action logout` are the non-interactive
+  spellings; a screen cannot be the contract for CI. `--action account` on a dumb
+  terminal REPORTS the account and changes nothing — minting or clearing a
+  credential unasked is the one thing this action may never do.
+
+### Changed
+
+- **`probe doctor` names the active saved account**, and the wizard's state
+  summary shows the account row even when nobody is signed in. "not logged in" on
+  a machine holding three contexts sent people hunting for a lost credential when
+  the answer was that a different one was active.
+- **`probe wizard --action` help lists actions that exist.** It advertised
+  `remove`, which is not an `Action` — so the flag the help text recommended for
+  an unattended uninstall exited 2.
+
 ## 0.87.0
 
 ### Changed
