@@ -53,6 +53,17 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; FLAG=\"${XDG_STATE_HOME:-$HOME/.local/state}/probe/statusline-notify\"; [ -f \"$FLAG\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/statusline_notify.py\"'",
+            "timeout": 5
+          }
+        ]
+      }
     ]
   }
 }

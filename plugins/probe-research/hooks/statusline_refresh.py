@@ -124,8 +124,17 @@ def installed() -> bool:
     is the only thing that creates it, and `uninstall` is the only thing that
     would have a reason to remove it. An opt-in feature should cost nothing at
     all to the people who did not opt in.
+
+    The notify flag counts too: under Codex the segment can never render, so
+    `install` opts into the on-change notice instead — and that notice reads the
+    same marker, so it needs the same refresh behind it.
     """
-    return os.path.isdir(install_dir())
+    if os.path.isdir(install_dir()):
+        return True
+    try:
+        return bool(_load("_session_marker").notify_enabled())
+    except BaseException:  # noqa: BLE001 - a hook contracted to silence
+        return False
 
 
 def disabled() -> bool:

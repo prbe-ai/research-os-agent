@@ -438,6 +438,87 @@ def config_path() -> Path:
     return Path(base) / "probe" / "config.json"
 
 
+def notify_flag_path() -> Path:
+    """Opt-in marker for the change NOTICE, the Codex-shaped half of this feature.
+
+    Codex has no surface a computed segment can render into — its status line is a
+    picker over built-in items — so the same information is delivered as a message
+    when it CHANGES instead of as a line that is always there. Enabling that is
+    still opt-in, and this file is the opt-in, exactly as the install directory is
+    for the status line.
+
+    In the probe state dir rather than under either agent's config: one flag, read
+    by a hook that both agents load, and it outlives a reinstall of either.
+    """
+    return state_dir() / "statusline-notify"
+
+
+def notify_enabled() -> bool:
+    return notify_flag_path().is_file()
+
+
+def state_key(state: dict | None, *, live: bool) -> str:
+    """What "changed" MEANS, as one comparable string.
+
+    Only the two things the notice actually reports. `updated_at` moves on every
+    refresh and `run_ids` churns as runs come and go, so comparing whole markers
+    would fire a notice several times a minute while nothing a reader cares about
+    had changed.
+    """
+    project = state.get("project") if isinstance(state, dict) else None
+    if not (isinstance(project, str) and project):
+        return "untracked"
+    return f"{project}|{'running' if live else 'idle'}"
+
+
+def message(state: dict | None, *, live: bool = False) -> str:
+    """One line for an agent with no status line to hang a segment on.
+
+    Built from the same labels the segment uses, so the two surfaces cannot drift
+    into describing the same state differently. No colour and no glyph: this is a
+    sentence in a transcript, not a mark on a line.
+    """
+    project = state.get("project") if isinstance(state, dict) else None
+    if not (isinstance(project, str) and project):
+        return "Probe: this session is not tracked yet."
+    text = "Probe: " + _LABEL_TRACKED + project
+    if live:
+        text += _ACCENT_TEXT
+    return text
+
+
+def read_notified(session_id: str) -> str | None:
+    """The state key this session was last told about, or None."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        return (sessions_dir() / (session_id + ".notified")).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+
+
+def write_notified(session_id: str, key: str) -> None:
+    """Record what we just said. Never raises.
+
+    Written AFTER the message is emitted rather than before: a crash between the
+    two costs a repeated notice, which is a great deal better than a silent one
+    the reader never sees.
+    """
+    if not valid_session_id(session_id):
+        return
+    path = sessions_dir() / (session_id + ".notified")
+    tmp = path.parent / (path.name + "." + str(os.getpid()) + ".tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(key, encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def configured() -> bool:
     """Whether this machine has a credential for Probe. Cheap, and fail-soft.
 

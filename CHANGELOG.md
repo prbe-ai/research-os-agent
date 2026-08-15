@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+
+- **An on-change tracking notice, for agents with no status line to render into.**
+  Codex has a status line, but it is a picker over BUILT-IN items (`/statusline` —
+  "Select which items to display"; `tui.status_line` is a sequence and an
+  unrecognised entry is ignored rather than executed), so a computed segment has
+  nowhere to go. The same information is delivered as a message when the state
+  CHANGES — untracked → tracked, a different project, a run starting or finishing:
+
+      Probe: tracked → bird-sql-sft
+      Probe: tracked → bird-sql-sft · running
+      Probe: this session is not tracked yet.
+
+  On change and not on a cadence, because a line every turn saying the same thing
+  is one a reader learns to skip — roughly four lines across a whole session
+  rather than one per turn. `hooks/statusline_notify.py`, wired to `Stop` (the end
+  of an agent turn, and an event both agents support).
+
+  Opt-in like the segment: `probe statusline install` enables it when run under
+  Codex, and also configures the Claude Code segment, so one command does the
+  right thing per agent. `uninstall` clears both; `status` reports both.
+  `PROBE_STATUSLINE=off` silences it.
+
+  Wording comes from the same labels the segment uses, so the two surfaces cannot
+  drift into describing one state differently.
+
 ### Fixed
 
 - **The status-line refresh hook no longer runs for people who never installed

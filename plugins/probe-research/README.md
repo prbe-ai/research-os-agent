@@ -87,10 +87,12 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   `src/probe/sdk/session_marker.py` (`make sync-session-marker`, byte-parity
   tested), for the same reason `_telemetry_core.py` is one.
 
-  **Claude Code only, and it costs nothing to anyone else.** Codex has a status
-  line, but it is a picker over BUILT-IN items (`/statusline`; `tui.status_line`
-  is a sequence and an unrecognised entry is ignored, not executed) — there is no
-  command hook for a plugin to render into. `hooks/hooks.json` is shared by both
+  **Codex gets a notice instead of a segment.** Codex has a status line, but it
+  is a picker over BUILT-IN items (`/statusline`; `tui.status_line` is a sequence
+  and an unrecognised entry is ignored, not executed) — there is no command hook
+  for a plugin to render into. So `hooks/statusline_notify.py` emits the same
+  information as a message when it CHANGES (`Stop` hook, ~4 lines a session), and
+  `probe statusline install` turns that on when run under Codex. `hooks/hooks.json` is shared by both
   flavours, so the refresh hook gates on whether `probe statusline install` was
   ever run: without that it is one `stat` and a return, and it never reaches the
   network for a user who did not opt in.
