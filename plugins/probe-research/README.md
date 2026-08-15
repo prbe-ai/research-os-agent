@@ -72,18 +72,24 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 
 - **Tracking-off contract** (`hooks/version_check.py`, `hooks/tracking_guard.py`):
   the researcher's `probe session untrack` declaration is a file, so hooks can
-  carry it across the one boundary prose cannot survive — a rebuilt context.
-  On a post-compaction or resumed SessionStart of an untracked session, the
-  reconcile-Probe nudge is replaced by one line restating the off contract
-  (record nothing, raise nothing, `/research-tracking on` re-enables). And when
-  a Bash command still WRITES research content through the probe CLI in such a
-  session, a PostToolUse observer hands the model the same contract as
-  additionalContext. Warn, never gate, in both places: hooks own the fact (the
-  declaration exists), the model owns the behaviour, and nothing here can deny
+  own it end to end. The FLIP is deterministic: invoking
+  `/toggle-research-tracking off` (or `on`) writes the session's tracking
+  signal from the PostToolUse hook itself, so the declaration lands even if
+  the model never runs the CLI the skill instructs (the CLI call stays in the
+  skill — idempotent, and it prints the confirmation). The file then carries
+  the declaration across the one boundary prose cannot survive — a rebuilt
+  context: on a post-compaction or resumed SessionStart of an untracked
+  session, the reconcile-Probe nudge is replaced by one line restating the off
+  contract (record nothing, raise nothing, `/toggle-research-tracking on`
+  re-enables). And when a Bash command still WRITES research content through
+  the probe CLI in such a session, the same hook hands the model the contract
+  as additionalContext. Warn, never gate: hooks own the fact (the declaration
+  and its recording), the model owns the behaviour, and nothing here can deny
   a tool call or block a session. Ambiguity leans toward today's behaviour —
-  an absent or unreadable signal reads as tracking on, and the write-parse
-  prefers false negatives (a missed warning) over false positives (a warning
-  on `probe run show`, which teaches the model the layer cries wolf).
+  an absent or unreadable signal reads as tracking on, a direction-less skill
+  invocation (bare, `status`) flips nothing, and the write-parse prefers false
+  negatives (a missed warning) over false positives (a warning on
+  `probe run show`, which teaches the model the layer cries wolf).
 
 - **Status line** (`hooks/statusline.py`, `hooks/statusline_refresh.py`):
   an opt-in segment under Claude Code's input box saying whether this session's

@@ -132,7 +132,7 @@ COMPACT_CONTEXT = (
     "current commands."
 )
 # What replaces the nudge when the researcher untracked this session. The
-# research-tracking skill promises "no more tracking nudges", and before this
+# toggle-research-tracking skill promises "no more tracking nudges", and before this
 # branch existed the plugin itself broke that promise at the worst moment: a
 # compaction rebuilt the model's context without the skill text, then this
 # hook told the fresh context to reconcile Probe. Restating the contract is
@@ -142,11 +142,11 @@ COMPACT_CONTEXT = (
 # surfaces describing one state differently.
 TRACKING_OFF_CONTEXT = (
     "Research tracking is OFF for this conversation -- the researcher declared "
-    "it via /research-tracking (probe session untrack). Do not create Probe "
+    "it via /toggle-research-tracking (probe session untrack). Do not create Probe "
     "projects, experiments or runs, do not write notes or Project Summary "
     "Markdown, and do not raise tracking at all, including as a reminder or a "
     "closing caveat. Reading Probe is still fine, and the actual work continues "
-    "as normal. `/research-tracking on` turns tracking back on."
+    "as normal. `/toggle-research-tracking on` turns tracking back on."
 )
 
 

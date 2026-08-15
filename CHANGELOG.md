@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Changed
+
+- **The tracking switch now flips deterministically on skill activation, and
+  the skill is renamed `toggle-research-tracking`** (was `research-tracking`).
+  Bare `/toggle-research-tracking` is a true toggle: the PostToolUse hook
+  writes the session's tracking signal to the OPPOSITE of the current state —
+  the explicit signal when one exists, else the machine's default posture,
+  resolved by `is_tracking` so the toggle and the statusline cannot disagree
+  about what "current" means. Explicit `off`/`on` (and the skill's synonyms)
+  set that state idempotently; `status` and unrecognised prose write nothing,
+  because a question must never flip the switch. The write is the same one
+  `probe session untrack`/`track` makes, so the researcher's declaration lands
+  even when the model fumbles the CLI step — before this, the flip depended
+  entirely on the model obeying prose, and an activation it dropped left the
+  flag unflipped while the statusline, the compact-contract injection, and the
+  write warning all confidently reported the wrong state. The skill now reads
+  the result back with `probe session status` and reconciles if the hook was
+  absent. The wizard's CLAUDE.md/AGENTS.md pointer block bumps to v10 for the
+  rename.
+
 ### Added
 
 - **The tracking-off declaration now survives compaction.** `probe session

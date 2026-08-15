@@ -99,7 +99,7 @@ EVENT_SESSION_SUMMARY = "plugin.session_summary"
 RESEARCH_SKILLS = {
     "start-research-work",
     "track-research-work",
-    "research-tracking",
+    "toggle-research-tracking",
     "capture-run-inputs",
     "instrument-training-runs",
     "show-research-timeline",
