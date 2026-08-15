@@ -87,6 +87,14 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   `src/probe/sdk/session_marker.py` (`make sync-session-marker`, byte-parity
   tested), for the same reason `_telemetry_core.py` is one.
 
+  **Claude Code only, and it costs nothing to anyone else.** Codex has a status
+  line, but it is a picker over BUILT-IN items (`/statusline`; `tui.status_line`
+  is a sequence and an unrecognised entry is ignored, not executed) — there is no
+  command hook for a plugin to render into. `hooks/hooks.json` is shared by both
+  flavours, so the refresh hook gates on whether `probe statusline install` was
+  ever run: without that it is one `stat` and a return, and it never reaches the
+  network for a user who did not opt in.
+
 Skills here are copies of the repo's canonical `skills/` (kept in sync with
 `make sync-plugin-skills`). The two agent-specific manifests are thin packaging
 adapters around this one implementation.

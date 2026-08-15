@@ -110,6 +110,24 @@ def sync_renderer() -> None:
             continue
 
 
+def installed() -> bool:
+    """Whether `probe statusline install` was ever run. THE GATE FOR ALL OF THIS.
+
+    Nothing here is worth a single request unless something will render the
+    answer. Without this gate every plugin user paid three API calls per refresh
+    for a segment they may never have opted into — and under Codex, which has no
+    status-line surface at all, that spend could never buy anything: its plugin
+    manifest declares skills, mcpServers and interface, and there is nowhere for
+    a rendered line to go.
+
+    The install directory is the right signal because `probe statusline install`
+    is the only thing that creates it, and `uninstall` is the only thing that
+    would have a reason to remove it. An opt-in feature should cost nothing at
+    all to the people who did not opt in.
+    """
+    return os.path.isdir(install_dir())
+
+
 def disabled() -> bool:
     return (os.environ.get("PROBE_STATUSLINE") or "").strip().lower() in {
         "off",
@@ -233,18 +251,22 @@ def spawn(session_id: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
 
-    # Detached child: do the work, then get out.
+    # Detached child: do the work, then get out. Re-checks the gate because it
+    # was spawned some milliseconds ago and an uninstall in between should stop
+    # the request rather than let one last one through.
     if argv[:1] == ["fetch"]:
         session_id = argv[1] if len(argv) > 1 else ""
-        if session_id and not disabled():
+        if session_id and not disabled() and installed():
             try:
                 refresh(session_id)
             except BaseException:  # noqa: BLE001 - detached and silent by contract
                 pass
         return 0
 
-    # Hook: parse, throttle, spawn.
-    if disabled():
+    # Hook: gate, parse, throttle, spawn. The gate comes FIRST — it is one stat,
+    # and it is the common case for anyone who never installed the status line,
+    # so it should cost them nothing beyond that.
+    if disabled() or not installed():
         return 0
     try:
         payload = json.load(sys.stdin)

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The status-line refresh hook no longer runs for people who never installed
+  it.** It is wired into the shared `hooks/hooks.json`, so it fired for every
+  plugin user on SessionStart and every matching PostToolUse — three API calls
+  per refresh for a segment they may not have opted into. It now gates on the
+  install directory, so it costs one `stat` and a return otherwise.
+
+  This matters most under **Codex**, where the spend could never buy anything.
+  Codex has a status line, but it is a picker over BUILT-IN items (`/statusline`
+  — "Select which items to display"; `tui.status_line` is a sequence and an
+  unrecognised entry is ignored rather than executed), so there is no command
+  hook for a plugin to render into. `probe statusline install` now says so
+  plainly when run under Codex — as a note, not a refusal, since configuring
+  Claude Code from a Codex shell is legitimate.
+
 ## 0.83.0
 
 ### Changed
