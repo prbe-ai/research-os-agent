@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.85.0
+
 ### Added
 
 - **`/end-research-tracking` — an off switch for one conversation.** The
