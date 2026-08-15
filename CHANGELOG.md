@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- **`/end-research-tracking` — an off switch for one conversation.** The
+  researcher types it and this session stops being tracked: no further projects,
+  experiments, runs, notes or artifacts, no more tracking nudges, the background
+  refresh stops, and the status line reads `● tracking off` (muted, not yellow —
+  it is a state they chose, and nagging about a decision already made is what the
+  switch exists to end).
+
+  `probe session untrack` / `track` / `status` are the commands under it.
+  Per SESSION, never machine-wide: a mute button that silenced the next
+  conversation too is exactly the surprise nobody wants from one.
+
+  Two things it deliberately does NOT do, both stated in the skill so nobody
+  assumes otherwise. It does not DELETE what was already recorded — that work
+  happened, and removing it would rewrite the research record to match a later
+  mood. And it does not stop TRANSCRIPT CAPTURE: the tap has no per-session off
+  switch, only the machine-wide one in `probe wizard`.
+
+  The skill also explicitly overrides the standing CLAUDE.md/AGENTS.md tracking
+  instructions for that conversation, which is the point — those rules are
+  deliberately broad, and a researcher needs a way to say "not this one" without
+  arguing with them.
+
 ## 0.84.0
 
 ### Added

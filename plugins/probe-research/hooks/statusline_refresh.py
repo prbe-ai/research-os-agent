@@ -291,6 +291,11 @@ def main(argv: list[str] | None = None) -> int:
         marker = _load("_session_marker")
         if not marker.valid_session_id(session_id):
             return 0
+        # Tracking was ended for this conversation: stop spending requests on it.
+        # The marker is left in place rather than deleted -- turning it back on
+        # should restore what was known, not start from nothing.
+        if marker.tracking_off(session_id):
+            return 0
         if payload.get("hook_event_name") == "SessionStart":
             marker.prune()
             sync_renderer()

@@ -3,10 +3,11 @@
 
 Reads the status-line payload on stdin, prints ONE bounded segment, exits 0.
 
-    (nothing)                   Probe is not configured on this machine
-      ○ untracked               configured, and this session has recorded nothing
-      ● bird-sql-sft            this session's work is filed under that project
-      ● bird-sql-sft ▸ running  ...and a run it opened is executing right now
+    (nothing)                           Probe is not configured on this machine
+      ● untracked                       configured; this session has recorded nothing
+      ● tracked → bird-sql-sft          its work is filed under that project
+      ● tracked → bird-sql-sft · running  ...and a run it opened is executing now
+      ● tracking off                    the researcher ended tracking here
 
 CONTRACT — this runs on a RENDER PATH, once per status-line update:
 
@@ -84,12 +85,14 @@ def segment(payload: dict) -> str:
     if not session_id:
         return marker.render(None, configured=True, color=_color())
 
+    off = marker.tracking_off(session_id)
     state = marker.read(session_id)
     return marker.render(
         state,
         configured=True,
-        live=marker.is_live(state),
+        live=(not off) and marker.is_live(state),
         color=_color(),
+        off=off,
     )
 
 

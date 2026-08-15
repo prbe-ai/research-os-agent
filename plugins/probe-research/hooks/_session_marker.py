@@ -77,6 +77,7 @@ _GLYPH_WIDTH = 2  # the dot plus its trailing space
 #: does not, and a status line is read by people who did not install it.
 _LABEL_TRACKED = "tracked " + _ARROW + " "
 _LABEL_UNTRACKED = "untracked"
+_LABEL_OFF = "tracking off"
 
 #: A middle dot, NOT a second arrow. `tracked → folding ▸ running` puts two
 #: arrow-shaped glyphs in one short segment, and the eye reads them as a
@@ -110,8 +111,9 @@ MAX_SLUG_CHARS = (
 # they already chose. Claude Code additionally dims the whole line, so treat
 # these as a hint of hue rather than as emphasis.
 #
-# Two, and only two: they are the two states. A third colour would be a third
-# state nobody defined.
+# Three, and each is a state someone can name: landing, not landing, and
+# deliberately switched off. A fourth colour would be a state nobody defined.
+_DIM = "\033[2m"
 _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
 _RESET = "\033[0m"
@@ -438,6 +440,43 @@ def config_path() -> Path:
     return Path(base) / "probe" / "config.json"
 
 
+def tracking_off_path(session_id: str) -> Path:
+    """Where "this conversation is not research" is recorded, per session.
+
+    A DECLARATION, unlike everything else in this module, which is observation.
+    The rest answers "did work land"; this answers "should any". They are
+    different facts and a session can hold both -- someone can turn tracking off
+    in a conversation that already created a project, and the honest reading of
+    that is "no more", not "none ever".
+
+    Per session, beside the marker, because the answer is about THIS
+    conversation. A machine-wide off switch would silence a researcher's next
+    session too, which is precisely the surprise nobody wants from a mute button.
+    """
+    return sessions_dir() / (session_id + ".off")
+
+
+def tracking_off(session_id: str) -> bool:
+    """Whether this session was explicitly taken out of tracking."""
+    return valid_session_id(session_id) and tracking_off_path(session_id).is_file()
+
+
+def set_tracking_off(session_id: str, off: bool) -> bool:
+    """Turn tracking off (or back on) for this session. True when it landed."""
+    if not valid_session_id(session_id):
+        return False
+    path = tracking_off_path(session_id)
+    try:
+        if off:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("ended by the researcher\n", encoding="utf-8")
+        else:
+            path.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
 def notify_flag_path() -> Path:
     """Opt-in marker for the change NOTICE, the Codex-shaped half of this feature.
 
@@ -570,7 +609,14 @@ def _elide(slug: str, limit: int = MAX_SLUG_CHARS) -> str:
     return slug[: limit - 1] + _ELLIPSIS
 
 
-def render(state: dict | None, *, configured: bool, live: bool = False, color: bool = True) -> str:
+def render(
+    state: dict | None,
+    *,
+    configured: bool,
+    live: bool = False,
+    color: bool = True,
+    off: bool = False,
+) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
     THE SEGMENT MUST SURVIVE ANY NEIGHBOUR. It shares one line with whatever
@@ -599,6 +645,12 @@ def render(state: dict | None, *, configured: bool, live: bool = False, color: b
     """
     if not configured:
         return ""
+
+    if off:
+        # Muted, because it is a state the reader CHOSE. Yellow would nag about
+        # a decision they already made, and silence would be indistinguishable
+        # from the segment being broken.
+        return _INDENT + _paint(_DOT, _DIM, color) + " " + _LABEL_OFF
 
     # THE DOT IS THE ONLY COLOURED THING, in either state. Every word stays the
     # terminal's default, so the segment reads like its neighbours and the eye
