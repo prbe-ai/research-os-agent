@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.92.0
+
 ### Changed
 
 - **The tracking switch now flips deterministically on skill activation, and
