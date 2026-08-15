@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Changed
+
+- **The always-loaded tracking block names the off switch (POINTER_VERSION 8).**
+  The block read as unconditional, so an agent following it had no stated way to
+  honour "stop tracking this" and would argue with the researcher every turn. It
+  now names `probe-research:end-research-tracking` and says the whole block is off
+  for a session once that fires. Naming the SKILL and not the command is the
+  block's own rule — it lives in a home directory no release can reach, so a
+  command written into it is stale the moment the CLI changes.
+
+  Existing installs pick this up on the next `probe wizard`, which is what the
+  version bump is for: an unbumped edit leaves every installed block
+  stale-but-current forever.
+
 ## 0.85.0
 
 ### Added
