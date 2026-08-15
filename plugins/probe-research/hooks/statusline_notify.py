@@ -93,8 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         marker = _load("_session_marker")
         if not marker.notify_enabled() or not marker.valid_session_id(session_id):
             return 0
-        if marker.tracking_signal(session_id) == "off":
-            return 0  # turned off for this conversation: nothing more to announce
+        if not marker.is_tracking(marker.tracking_signal(session_id)):
+            return 0  # not tracking here: nothing to announce
         text = notice(marker, session_id)
     except BaseException:  # noqa: BLE001 - a hook that cannot speak stays silent
         return 0

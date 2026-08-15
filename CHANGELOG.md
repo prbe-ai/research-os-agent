@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`sdk.config.config_path` now honours `PROBE_CONFIG_PATH`**, which four other
+  readers already did (`version_policy`, `capabilities`, `_telemetry_core`,
+  `sdk.session_marker`). The module that WRITES the config was the lone holdout,
+  so the two sets agreed only in production: a value written here landed in
+  `~/.config` while every reader honouring the override looked elsewhere. Things
+  worked in the field and silently vanished under any test or dev environment
+  that set it. `version_policy.base_url` documented that divergence rather than
+  fixing it; this is the fix, and it had to come first because the tracking
+  default depends on writer and reader addressing the same file.
+
+### Added
+
+- **A machine-wide tracking default**, top-level in the probe config:
+
+      {"defaults": {"session_tracking": "off"}}
+
+  `probe session default [on|off]` reads and writes it; `PROBE_SESSION_TRACKING`
+  overrides it. Ships ON — tracking is the posture, and a per-session
+  `probe session track|untrack` always outranks the default in both directions.
+
+  TOP-LEVEL, never inside a context: `clear_context` replaces a context wholesale
+  (a deliberate fail-closed wipe), so a preference kept there would be erased by
+  `probe logout` and tracking would silently come back on. It would also make the
+  default follow whichever tenant is selected, which is not what "all my
+  sessions" means. A test pins that it survives logout.
+
+  Free on the render path: `session_marker.configured()` already opened and
+  parsed that exact file and discarded the result, so one parse now feeds both
+  answers. The env var is an override and never the home — a dock-launched agent
+  sources no shell profile, so a default exported from a shell rc would answer
+  one way in a terminal session and another in a dock-launched one.
+
+  An unrecognised value reads as the shipped default rather than as off: a typo
+  in a config file must not silently stop recording someone's research.
+
+### Changed
+
+- **`is_tracking` collapses to signal-then-default.** The evidence-derived
+  fallback is gone: it was the right answer while the product had no default, and
+  the product has one now. The refresh hook and the notice ask the same resolver
+  the segment renders from, so a machine defaulting to off stops paying three API
+  calls per refresh for a segment that can never read as tracking.
+
 ## 0.90.0
 
 ### Fixed

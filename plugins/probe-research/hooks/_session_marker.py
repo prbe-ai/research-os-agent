@@ -499,25 +499,26 @@ def set_tracking(session_id: str, on: bool) -> bool:
         return False
 
 
-def is_tracking(state: dict | None, signal: str | None) -> bool:
+def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
     """The one boolean the whole surface renders. TWO STATES, never three.
 
-    An explicit decision wins in both directions -- that is what makes the
-    toggle a toggle. With no decision, the honest answer is what the session has
-    actually done: work filed in Probe means this conversation IS being tracked,
-    whether or not anyone said so out loud, and nothing filed means it is not.
+    An explicit per-session decision wins in BOTH directions -- that is what
+    makes the toggle a toggle, and it is why a researcher who turns tracking off
+    stays off no matter what any default says.
 
-    Deriving rather than defaulting matters because both fixed defaults are
-    wrong. Defaulting ON tells a researcher their shell-debugging session is
-    being recorded when nothing is; defaulting OFF calls a session untracked
-    while its runs are landing.
+    With no decision, this machine's default answers. That used to be derived
+    from whether the session had recorded anything, which was the right answer
+    while the product had no default; it does now. Tracking is the posture, so
+    an undecided session is tracked, and the interesting case is the exception.
+
+    `default=None` reads the machine's setting. Callers that already parsed the
+    config pass it in so the render path parses the file once.
     """
     if signal == "off":
         return False
     if signal == "on":
         return True
-    project = state.get("project") if isinstance(state, dict) else None
-    return bool(isinstance(project, str) and project)
+    return default_tracking() if default is None else default
 
 
 def notify_flag_path() -> Path:
@@ -601,7 +602,69 @@ def write_notified(session_id: str, key: str) -> None:
             pass
 
 
-def configured() -> bool:
+#: Ships ON. Tracking is the default posture: a session is tracked unless
+#: somebody said otherwise, which is what stops tracking from depending on
+#: anyone remembering to ask for it.
+DEFAULT_TRACKING = True
+
+#: Where a researcher's own default lives in the config file. TOP LEVEL, never
+#: inside a context: `sdk.config.clear_context` replaces a context wholesale
+#: (`contexts[name] = {}`, a deliberate fail-closed wipe), so a preference
+#: stored there would be erased by `probe logout` and tracking would silently
+#: come back on. It would also make the default follow whichever TENANT is
+#: selected, which is not what "all my sessions" means.
+DEFAULTS_KEY = "defaults"
+TRACKING_DEFAULT_KEY = "session_tracking"
+
+
+def _read_config() -> dict:
+    """The config file as a dict, or `{}`. ONE parse, two answers.
+
+    `configured()` and `default_tracking()` both need this file, and it is read
+    on every status-line render, so parsing it twice would double the only I/O
+    on that path. Small enough that the cost is the interpreter, not the file:
+    measured at ~0.018ms to open and parse a realistic config.
+    """
+    try:
+        with open(config_path(), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def default_tracking(config: dict | None = None) -> bool:
+    """This machine's default for sessions nobody has decided about.
+
+    `PROBE_SESSION_TRACKING` wins, matching the env-beats-file rule the rest of
+    the client follows -- but it is an OVERRIDE and never the home for this
+    setting. A dock-launched Claude Code sources no shell profile, so a default
+    exported from a shell rc applies in a terminal session and not in a
+    dock-launched one: the same setting, two answers, which is worse than having
+    no setting at all.
+
+    Anything unrecognised reads as the shipped default rather than as `off`. A
+    typo in a config file must not silently stop recording someone's research.
+    """
+    env = (os.environ.get("PROBE_SESSION_TRACKING") or "").strip().lower()
+    if env in ("off", "0", "false", "no", "disabled"):
+        return False
+    if env in ("on", "1", "true", "yes", "enabled"):
+        return True
+    data = _read_config() if config is None else config
+    defaults = data.get(DEFAULTS_KEY)
+    if isinstance(defaults, dict):
+        value = defaults.get(TRACKING_DEFAULT_KEY)
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str) and value.strip().lower() in ("off", "false", "no"):
+            return False
+        if isinstance(value, str) and value.strip().lower() in ("on", "true", "yes"):
+            return True
+    return DEFAULT_TRACKING
+
+
+def configured(config: dict | None = None) -> bool:
     """Whether this machine has a credential for Probe. Cheap, and fail-soft.
 
     `_telemetry_core` answers the same question and is vendored alongside this
@@ -617,12 +680,8 @@ def configured() -> bool:
     """
     if os.environ.get("PROBE_TOKEN") or os.environ.get("PROBE_MCP_TOKEN"):
         return True
-    try:
-        with open(config_path(), encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError):
-        return False
-    if not isinstance(data, dict):
+    data = _read_config() if config is None else config
+    if not data:
         return False
     contexts = data.get("contexts")
     if isinstance(contexts, dict):

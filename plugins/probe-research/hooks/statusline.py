@@ -78,15 +78,20 @@ def resolve_session_id(payload: dict) -> str:
 def segment(payload: dict) -> str:
     marker = _load("_session_marker")
 
-    if not marker.configured():
+    # ONE parse of the config file, two answers off it: whether Probe is set up
+    # at all, and this machine's tracking default. Both are needed on every
+    # render and the file is the only I/O here worth counting.
+    config = marker._read_config()
+    if not marker.configured(config):
         return ""
 
+    default = marker.default_tracking(config)
     session_id = resolve_session_id(payload)
     if not session_id:
-        return marker.render(None, configured=True, tracking=False, color=_color())
+        return marker.render(None, configured=True, tracking=default, color=_color())
 
     state = marker.read(session_id)
-    tracking = marker.is_tracking(state, marker.tracking_signal(session_id))
+    tracking = marker.is_tracking(marker.tracking_signal(session_id), default=default)
     return marker.render(
         state,
         configured=True,

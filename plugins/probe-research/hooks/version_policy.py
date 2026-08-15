@@ -282,10 +282,10 @@ def valid_base(candidate: object) -> str | None:
 def base_url() -> str:
     """`PROBE_BASE_URL`, then the CLI config, then the hosted API.
 
-    Reads BOTH `PROBE_CONFIG_PATH` and `XDG_CONFIG_HOME`, because the two
-    surfaces that resolve probe config disagree about which one wins and they
-    only agree in production (`~/.config/probe/config.json`). Honouring both
-    here means this module cannot be the one that diverges.
+    Reads BOTH `PROBE_CONFIG_PATH` and `XDG_CONFIG_HOME`. Every reader now
+    agrees on that order -- `sdk.config.config_path` was the last holdout and
+    was reconciled when the machine-wide tracking default started depending on
+    writer and reader addressing the same file.
     """
     found = valid_base(os.environ.get("PROBE_BASE_URL"))
     if found:

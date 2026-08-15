@@ -302,11 +302,12 @@ def main(argv: list[str] | None = None) -> int:
             marker.prune()
             sync_renderer()
 
-        # Tracking was turned OFF for this conversation: stop spending REQUESTS on
-        # it. Only an explicit `off` stops the refresh -- an UNDECIDED session
-        # still needs the fetch, because what it has recorded is exactly what
-        # decides whether it reads as tracking at all.
-        if marker.tracking_signal(session_id) == "off":
+        # Not tracking: stop spending REQUESTS on it. This asks the SAME resolver
+        # the segment renders from, rather than only checking for an explicit
+        # `off` -- otherwise a machine whose default is off would keep paying
+        # three API calls per refresh for a segment that can never read as
+        # tracking. The two must agree or one of them is lying.
+        if not marker.is_tracking(marker.tracking_signal(session_id)):
             return 0
         if payload.get("hook_event_name") != "SessionStart" and not due(marker, session_id):
             return 0
