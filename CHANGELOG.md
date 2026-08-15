@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- **The status line's untracked dot is filled, not hollow.** `○` is faint at
+  terminal font sizes and reads as a rendering artefact rather than a mark, so
+  both states now use `●` and are told apart by colour (yellow untracked, green
+  tracked). Nothing is lost: the state was already carried by the WORD, which is
+  what freed the glyph from the job — and a new test pins that the two states stay
+  distinguishable with colour off, so colour can never quietly become the only
+  channel.
+
 ## 0.82.0
 
 ### Added

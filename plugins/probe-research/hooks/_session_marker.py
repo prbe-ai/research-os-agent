@@ -59,8 +59,13 @@ SESSIONS_DIRNAME = "sessions"
 MAX_AGE_SECONDS = 30 * 86400
 
 _ELLIPSIS = "…"  # …
-_DOT_FULL = "●"  # ●
-_DOT_HOLLOW = "○"  # ○
+#: ONE glyph for both states, and it is FILLED in both. A hollow ring is faint
+#: at terminal font sizes and reads as a rendering artefact rather than a mark.
+#: Nothing is lost by using the same glyph twice: the state is carried by the
+#: WORD ("untracked" / "tracked →"), which is why the dot could be spared the
+#: job in the first place. Colour distinguishes them for a quick glance; the
+#: word distinguishes them when colour is off, absent, or unseeable.
+_DOT = "●"  # ●
 _ARROW = "→"  # →
 _SEPARATOR = "·"  # ·
 
@@ -521,13 +526,11 @@ def render(state: dict | None, *, configured: bool, live: bool = False, color: b
     # noticing, and dim tells the reader to skip precisely when they should look.
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
-        return _INDENT + _paint(_DOT_HOLLOW, _YELLOW, color) + " " + _LABEL_UNTRACKED
+        return _INDENT + _paint(_DOT, _YELLOW, color) + " " + _LABEL_UNTRACKED
 
     # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT. `MAX_SLUG_CHARS` reserves
     # both widths whether or not the accent is showing, so truncation only ever
     # costs characters of the project name -- eliding "· runn…" or "tracke… →"
     # would spend the reader's attention on the parts they can already infer.
     accent = _ACCENT_TEXT if live else ""
-    return (
-        _INDENT + _paint(_DOT_FULL, _GREEN, color) + " " + _LABEL_TRACKED + _elide(project) + accent
-    )
+    return _INDENT + _paint(_DOT, _GREEN, color) + " " + _LABEL_TRACKED + _elide(project) + accent
