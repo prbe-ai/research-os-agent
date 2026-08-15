@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.87.0
+
 ### Changed
 
 - **`end-research-tracking` is now `research-tracking`, and turns tracking back ON
