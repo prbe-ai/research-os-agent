@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A run launched under a process whose name contains a space no longer reads
+  `incomplete`.** Capturing the parent chain read the parent pid from
+  `/proc/<pid>/stat` by splitting on whitespace, but the `comm` field is
+  unescaped — under `tmux: server` (or any space-bearing parent) the fields
+  shift and the parse raised. The error escaped the chain walk and deleted the
+  whole `process` slot, so `probe run check` reported
+  `missing: [launch_process]` and exited 2 for runs whose argv, cwd, hostname
+  and user had all been captured. Affected Linux only; macOS took a different
+  branch that already handled it. Such runs now read `unverified` with the
+  parent chain recorded.
+- A launch directory unlinked mid-run (`os.getcwd()` failing) no longer costs
+  the whole `process` slot either — it is reported as one field via the
+  non-blocking `launch_errors` advisory, like hostname and user already were.
+
 ## 0.89.0
 
 ### Changed
