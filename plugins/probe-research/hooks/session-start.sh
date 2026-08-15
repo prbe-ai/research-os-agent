@@ -24,21 +24,31 @@ if [ -z "$PY" ]; then
   exit 0
 fi
 
-# SessionStart's stdin carries `source` (startup|resume|clear|compact).
-# version_check.py turns source=compact into a reconcile-Probe nudge on the
-# additionalContext channel -- the one surface that reaches the model right
-# after a compaction. Skipped under PreCompact (its stdin has no `source` and
-# the event can carry no context anyway), which also saves an interpreter
-# start on that path. Fail-open: unparseable payload = no nudge.
+# SessionStart's stdin carries `source` (startup|resume|clear|compact) and
+# `session_id`. version_check.py turns source=compact into a reconcile-Probe
+# nudge on the additionalContext channel -- the one surface that reaches the
+# model right after a compaction -- and needs the session id alongside it: a
+# session the researcher untracked (`probe session untrack`) gets the off
+# contract restated there instead of a nudge to do Probe work. Both fields
+# come from ONE interpreter start; a session id cannot contain a tab (the
+# marker's filename charset), so a tab join is unambiguous. Skipped under
+# PreCompact (its stdin has no `source` and the event can carry no context
+# anyway). Fail-open: unparseable payload = no nudge, and an absent id reads
+# as tracking on -- today's behaviour.
 PROBE_SESSION_SOURCE=""
+PROBE_SESSION_ID=""
 if [ "${PROBE_HOOK_EVENT:-}" != "precompact" ]; then
-  PROBE_SESSION_SOURCE="$(printf '%s' "$HOOK_INPUT" | "$PY" -c 'import json,sys
+  _parsed="$(printf '%s' "$HOOK_INPUT" | "$PY" -c 'import json,sys
 try:
-    print(json.load(sys.stdin).get("source") or "")
+    d = json.load(sys.stdin)
+    print((d.get("source") or "") + "\t" + (d.get("session_id") or ""))
 except Exception:
-    print("")' 2>/dev/null || true)"
+    print("\t")' 2>/dev/null || printf '\t')"
+  _tab=$'\t'
+  PROBE_SESSION_SOURCE="${_parsed%%${_tab}*}"
+  PROBE_SESSION_ID="${_parsed#*${_tab}}"
 fi
-export PROBE_SESSION_SOURCE
+export PROBE_SESSION_SOURCE PROBE_SESSION_ID
 
 # Resolve the `probe` binary without trusting PATH — a dock-launched Claude Code
 # sources no profile, so ~/.local/bin may be absent. Mirrors bin/probe-mcp-headers.

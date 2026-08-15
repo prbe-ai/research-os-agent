@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+### Added
+
+- **The tracking-off declaration now survives compaction.** `probe session
+  untrack` wrote a durable signal, but the only thing carrying "record
+  nothing" in the model's context was skill text the summarizer could drop —
+  and the plugin then injected its reconcile-Probe nudge into the rebuilt
+  context without consulting the signal, breaking the research-tracking
+  skill's "no more tracking nudges" promise at the exact moment the model was
+  most suggestible. SessionStart now reads the session's tracking signal
+  (session-start.sh parses `session_id` alongside `source`): on a
+  post-compaction or resumed start of an explicitly untracked session, the
+  nudge is replaced with one line restating the off contract. A normally
+  tracking session compacts exactly as before, and a tracking resume stays
+  silent. Every doubt — no id, invalid id, unreadable signal — degrades to
+  the old behaviour, never to honouring a declaration nobody made.
+- **A probe write in an untracked session now draws a warning — never a
+  deny.** New `hooks/tracking_guard.py` (PostToolUse on Bash): when the
+  researcher has declared the session untracked and a command still writes
+  research content through the probe CLI, the model gets one line of
+  additionalContext restating the contract and pointing at
+  `/research-tracking on`. It cannot block anything and exits 0 on every
+  path — the SDK, the hosted MCP and remote jobs are out of any hook's reach,
+  so a deny here would cover one path of several and teach the agent the gate
+  is advisory. The command parse leans silent on every ambiguity: reads,
+  `probe session *` (the switch itself), `probe update`/`flush`, unparseable
+  quoting and non-Bash tools all stay quiet.
+
 ## 0.91.0
 
 ### Fixed

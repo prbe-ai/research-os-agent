@@ -75,6 +75,13 @@ from typing import NoReturn
 # `probe doctor` kept reporting it healthy.
 import version_policy
 
+# The vendored session marker (same sibling-import mechanics as version_policy;
+# `make sync-session-marker` keeps it byte-identical to the SDK copy). Imported
+# at module load, where sys.path[0] is guaranteed to be the hooks directory --
+# an import deferred into _tracking_off() would resolve against whatever path
+# the caller happens to have.
+import _session_marker
+
 TTL = version_policy.TTL
 BACKOFF = version_policy.BACKOFF
 TIMEOUT = version_policy.TIMEOUT
@@ -100,6 +107,14 @@ PRECOMPACT = "precompact"
 # and the summarizer.
 SESSION_SOURCE_ENV = "PROBE_SESSION_SOURCE"
 COMPACT_SOURCE = "compact"
+RESUME_SOURCE = "resume"
+# The session id, parsed from the same stdin by session-start.sh. It keys the
+# tracking signal (`probe session untrack` -> sessions/<id>.tracking = off),
+# which is the researcher's DECLARATION that this conversation is not
+# research. The declaration outlives the model's context -- the signal is a
+# file, the skill text that carried it is summarizer fodder -- so the context
+# boundary is exactly where a hook must re-assert it.
+SESSION_ID_ENV = "PROBE_SESSION_ID"
 # The nudge is CONDITIONAL on the domain ("the team's ML work") for the same
 # reason the pointer block is: this hook is user-global, and an unconditional
 # order to do Probe work in a dotfiles session teaches the agent to ignore the
@@ -116,6 +131,23 @@ COMPACT_CONTEXT = (
     "longer carries. The probe-research:track-research-work skill has the "
     "current commands."
 )
+# What replaces the nudge when the researcher untracked this session. The
+# research-tracking skill promises "no more tracking nudges", and before this
+# branch existed the plugin itself broke that promise at the worst moment: a
+# compaction rebuilt the model's context without the skill text, then this
+# hook told the fresh context to reconcile Probe. Restating the contract is
+# the fix in BOTH directions -- the nudge is suppressed, and the off state
+# survives the boundary. Injected on resume too: same marker, same rebuilt
+# context. Wording mirrors the skill; drift between them would have the two
+# surfaces describing one state differently.
+TRACKING_OFF_CONTEXT = (
+    "Research tracking is OFF for this conversation -- the researcher declared "
+    "it via /research-tracking (probe session untrack). Do not create Probe "
+    "projects, experiments or runs, do not write notes or Project Summary "
+    "Markdown, and do not raise tracking at all, including as a reminder or a "
+    "closing caveat. Reading Probe is still fine, and the actual work continues "
+    "as normal. `/research-tracking on` turns tracking back on."
+)
 
 
 def _emit(obj: dict) -> NoReturn:
@@ -123,8 +155,33 @@ def _emit(obj: dict) -> NoReturn:
     sys.exit(0)
 
 
+def _tracking_off() -> bool:
+    """Whether the researcher EXPLICITLY declared this session untracked.
+
+    The explicit signal, not `is_tracking`: that helper derives "not tracking"
+    from a session that merely recorded nothing yet, and restating the off
+    contract there would invent a declaration nobody made. Same reason every
+    doubt -- no id, invalid id, unreadable signal -- reads False: uncertain
+    must degrade to today's behaviour (the nudge), never to honouring a
+    decision that was not taken.
+    """
+    session_id = os.environ.get(SESSION_ID_ENV) or ""
+    if not session_id:
+        return False
+    try:
+        return _session_marker.tracking_signal(session_id) == "off"
+    except Exception:
+        return False
+
+
 def _compact_context() -> str | None:
-    """The reconcile nudge, when and only when this is a post-compaction start.
+    """What to inject at a context boundary, or None.
+
+    Two boundaries, one decision each. On a post-compaction start: the off
+    contract if the researcher untracked this session, else the reconcile
+    nudge. On a resume: the off contract if untracked, else nothing -- a
+    resumed session that is tracking normally needs no nudge, and injecting
+    one would be new nagging, not a fix.
 
     PreCompact runs this same file (see docstring) and must stay silent there:
     additionalContext is SessionStart's channel, and mid-compaction there is
@@ -132,9 +189,12 @@ def _compact_context() -> str | None:
     """
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
         return None
-    if os.environ.get(SESSION_SOURCE_ENV) != COMPACT_SOURCE:
+    source = os.environ.get(SESSION_SOURCE_ENV)
+    if source not in (COMPACT_SOURCE, RESUME_SOURCE):
         return None
-    return COMPACT_CONTEXT
+    if _tracking_off():
+        return TRACKING_OFF_CONTEXT
+    return COMPACT_CONTEXT if source == COMPACT_SOURCE else None
 
 
 def _final(obj: dict) -> NoReturn:
