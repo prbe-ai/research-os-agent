@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Changed
+
+- **`end-research-tracking` is now `research-tracking`, and turns tracking back ON
+  as well as off** (`/research-tracking on|off`, or bare to report the state).
+  The off switch had no user-typed counterpart — resuming meant knowing
+  `probe session track` existed.
+
+  `start-research-work` is deliberately NOT merged into it. The two are not peers:
+  one is a 364-line how-to for creating projects, experiments and runs, the other
+  is a 60-line switch. More importantly they have different owners — STARTING is
+  the agent's call, unprompted (`start-research-work` triggers "when the user did
+  not ask for tracking"), and STOPPING is the researcher's. Merging them would
+  force one description to say both "fire unprompted" and "fire when asked", and a
+  contradictory trigger is how a skill stops firing; it would also make tracking
+  wait to be asked for, which is the exact failure the standing rule was written to
+  fix. `tests/test_prose_anchors.py` now pins that split so the merge cannot happen
+  quietly.
+
+  The standing block names the renamed skill (POINTER_VERSION 9).
+
 ### Fixed
 
 - **A session with tracking off never picked up a new status-line renderer.** The
