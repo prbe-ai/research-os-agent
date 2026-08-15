@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.88.0
+
 ### Added
 
 - **`probe wizard` → Sign in or switch account.** The wizard managed everything
