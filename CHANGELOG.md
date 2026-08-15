@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.83.0
+
 ### Changed
 
 - **The status line's untracked dot is filled, not hollow.** `○` is faint at
