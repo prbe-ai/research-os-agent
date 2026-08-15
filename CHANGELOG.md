@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.91.0
+
 ### Fixed
 
 - **`sdk.config.config_path` now honours `PROBE_CONFIG_PATH`**, which four other
