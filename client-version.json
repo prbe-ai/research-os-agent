@@ -1,5 +1,5 @@
 {
-  "cli": { "latest": "0.89.0", "min": "0.75.0" },
+  "cli": { "latest": "0.90.0", "min": "0.75.0" },
   "plugin": { "latest": "0.30.0", "min": "0.18.0" },
   "tap": { "latest": "0.3.2", "min": "0.1.0" },
   "advisory": "Sessions were only recorded on plugin 0.18.0 and newer. If your Research OS history has gaps, an older plugin is why."
