@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.86.0
+
 ### Changed
 
 - **The always-loaded tracking block names the off switch (POINTER_VERSION 8).**
