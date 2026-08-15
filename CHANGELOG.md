@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.82.0
+
 ### Added
 
 - **Tracked/untracked in Claude Code's status line.** A one-line segment under

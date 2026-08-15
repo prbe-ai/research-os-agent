@@ -1,6 +1,6 @@
 {
-  "cli": { "latest": "0.81.0", "min": "0.6.0" },
-  "plugin": { "latest": "0.23.0", "min": "0.6.0" },
+  "cli": { "latest": "0.82.0", "min": "0.6.0" },
+  "plugin": { "latest": "0.24.0", "min": "0.6.0" },
   "tap": { "latest": "0.3.2", "min": "0.1.0" },
   "advisory": null
 }
