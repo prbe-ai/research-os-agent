@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.84.0
+
 ### Added
 
 - **An on-change tracking notice, for agents with no status line to render into.**
