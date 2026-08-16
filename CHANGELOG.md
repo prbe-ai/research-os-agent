@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.95.1
+
 ### Changed
 
 - **The wizard's screens have air between the question and the first thing you
