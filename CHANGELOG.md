@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- **The wizard's screens have air between the question and the first thing you
+  can press.** questionary renders its rows flush against the question, so the
+  nav band and the first menu heading were sitting one line under the last line
+  of the question — the boundary between what you are being asked and what you
+  can act on had disappeared. Both surfaces get a blank line back. It was
+  trimmed to buy rows on a short terminal, which was the wrong row to buy them
+  with.
+
 ## 0.95.0
 
 ### Added
