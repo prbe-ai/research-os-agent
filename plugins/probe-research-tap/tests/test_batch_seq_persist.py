@@ -128,7 +128,7 @@ def test_run_loop_resumes_from_meta_when_outbox_empty(
 
     def fake_tick_read(_c, _s):
         # Drive one tick with a single line so build_batch_body gets called.
-        return [b'{}'], 0, lambda: None
+        return [b'{}'], 0, lambda _consumed=None: None
 
     try:
         with (
@@ -181,7 +181,7 @@ def test_run_loop_takes_max_of_outbox_and_meta(
         return None
 
     def fake_tick_read(_c, _s):
-        return [b'{}'], 0, lambda: None
+        return [b'{}'], 0, lambda _consumed=None: None
 
     try:
         with (
@@ -221,7 +221,7 @@ def test_run_loop_starts_at_zero_for_unknown_session(
         return None
 
     def fake_tick_read(_c, _s):
-        return [b'{}'], 0, lambda: None
+        return [b'{}'], 0, lambda _consumed=None: None
 
     try:
         with (
@@ -265,9 +265,9 @@ def test_enqueue_path_persists_high_water_mark(
 
     reads = iter(
         [
-            ([b'{}'], 0, lambda: None),
+            ([b'{}'], 0, lambda _consumed=None: None),
             # The final shutdown read starts from the committed cursor.
-            ([], 1, lambda: None),
+            ([], 1, lambda _consumed=None: None),
         ]
     )
 

@@ -172,7 +172,7 @@ def _make_watch_config(tmp_path: Path, *, active: int = 60, idle: int = 300):
     )
 
 
-def _no_op_commit() -> None:
+def _no_op_commit(_consumed_lines: int | None = None) -> None:
     return None
 
 

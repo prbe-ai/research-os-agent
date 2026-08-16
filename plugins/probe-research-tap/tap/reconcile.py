@@ -384,7 +384,7 @@ def backfill_gap(
     # Re-derive the exact byte cursor for the lines we actually consumed, rather
     # than trusting the accumulated estimate: split_lines strips \r and skips
     # blank lines, so summed line lengths are not a file position.
-    new_offset = _byte_offset_after(gap.path, gap.byte_offset, consumed_lines)
+    new_offset = byte_offset_after(gap.path, gap.byte_offset, consumed_lines)
     storage.upsert_offset(
         FileOffset(
             path=str(gap.path),
@@ -400,7 +400,7 @@ def backfill_gap(
     return new_offset - gap.byte_offset, batches
 
 
-def _byte_offset_after(path: Path, start: int, line_count: int) -> int:
+def byte_offset_after(path: Path, start: int, line_count: int) -> int:
     """Byte position just past the Nth newline at or after `start`."""
     seen = 0
     pos = start

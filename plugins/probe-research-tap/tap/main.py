@@ -571,47 +571,77 @@ def _enqueue_read(
     device_id: str,
     seq_meta_key: str,
     batch_seq: int,
-    read: tuple[list[bytes], int, Callable[[], None]],
+    read: tuple[list[bytes], int, Callable[[int | None], None]],
 ) -> int:
-    """Durably enqueue one transcript read and return the next batch sequence."""
-    new_lines, line_no_base, commit_offset = read
-    if not new_lines:
+    """Durably enqueue one transcript read and return the next batch sequence.
+
+    The read is SPLIT into gateway-sized batches. One tick can hold far more
+    than the gateway's 2MB body cap — the first tick against a transcript that
+    already has history, a catch-up after the 300s idle cadence, or a daemon
+    that started late — and an oversized body comes back 413, which
+    `httpclient.classify` calls POISON and the outbox DROPS. That silently lost
+    the whole tick, permanently. `reconcile.chunk_lines` is the same splitter
+    the backfill path has always used against the same cap; the live tail was
+    the one caller that never got it.
+    """
+    raw_lines, line_no_base, commit_offset = read
+    if not raw_lines:
         # No lines this tick — still refresh last_seen_at + inode/size.
-        commit_offset()
+        commit_offset(None)
         return batch_seq
 
-    body = outbox.build_batch_body(
-        device_id=device_id,
-        session_id=c.session_id,
-        batch_seq=batch_seq,
-        cwd=str(c.cwd),
-        base_line_no=line_no_base,
-        lines=new_lines,
-    )
-    if body is None:
-        # Sanitizer dropped every event in this tick. The lines were still
-        # processed, so advance the cursor rather than reading them forever.
-        commit_offset()
-        return batch_seq
+    line_no = line_no_base
+    consumed = 0
+    invalid = 0
 
-    try:
-        outbox.enqueue(
-            storage=storage,
-            session_id=c.session_id,
-            batch_seq=batch_seq,
-            cwd=str(c.cwd),
-            body=body,
-            now=int(time.time()),
-        )
-        # Persist the high-water mark BEFORE incrementing so a crash here does
-        # not reset the counter on restart.
-        storage.set_meta(seq_meta_key, str(batch_seq))
-        commit_offset()
-        return batch_seq + 1
-    except Exception:
-        # Offset NOT advanced; the same lines are re-read by the next daemon.
-        log.exception("enqueue failed; lines will be re-read next tick")
-        return batch_seq
+    for group in reconcile.chunk_lines(raw_lines):
+        valid = [ln for ln in group if validate_json(ln)]
+        invalid += len(group) - len(valid)
+        if valid:
+            body = outbox.build_batch_body(
+                device_id=device_id,
+                session_id=c.session_id,
+                batch_seq=batch_seq,
+                cwd=str(c.cwd),
+                base_line_no=line_no,
+                lines=valid,
+            )
+            # None means the sanitizer dropped every event in this group (a
+            # chunk of pure bookkeeping). The lines were still processed, so
+            # they count as consumed rather than being re-read forever.
+            if body is not None:
+                try:
+                    outbox.enqueue(
+                        storage=storage,
+                        session_id=c.session_id,
+                        batch_seq=batch_seq,
+                        cwd=str(c.cwd),
+                        body=body,
+                        now=int(time.time()),
+                    )
+                except Exception:
+                    # Commit what DID enqueue and leave the rest for next tick.
+                    # Bailing without a partial commit would re-read the whole
+                    # tick and re-ship the already-queued groups under fresh
+                    # sequence numbers — duplicated events, not lost ones.
+                    log.exception(
+                        "enqueue failed after %d line(s); committing those and "
+                        "retrying the rest next tick",
+                        consumed,
+                    )
+                    break
+                # Persist the high-water mark BEFORE incrementing so a crash
+                # here does not reset the counter on restart.
+                storage.set_meta(seq_meta_key, str(batch_seq))
+                batch_seq += 1
+        line_no += len(group)
+        consumed += len(group)
+
+    if invalid:
+        log.warning("dropped %d malformed JSON lines this tick", invalid)
+    if consumed:
+        commit_offset(None if consumed >= len(raw_lines) else consumed)
+    return batch_seq
 
 
 def _enqueue_finalize(
@@ -665,13 +695,22 @@ def _drain_pending(c: cfg.WatchConfig, storage: Storage, base_url: str) -> None:
         drained += 1
 
 
-def _tick_read(c: cfg.WatchConfig, storage: Storage) -> tuple[list[bytes], int, Callable[[], None]]:
-    """Read new lines from the transcript and validate; do NOT persist offset.
+def _tick_read(
+    c: cfg.WatchConfig, storage: Storage
+) -> tuple[list[bytes], int, Callable[[int | None], None]]:
+    """Read new lines from the transcript; do NOT persist offset.
 
-    Returns (validated_lines, base_line_no_for_first_line, commit_fn). The
-    caller invokes commit_fn once it has successfully enqueued a batch (or
-    decided to commit even with no new lines). Until then, the cursor stays
-    where it was so a failed enqueue re-reads the same bytes next tick.
+    Returns (raw_lines, base_line_no_for_first_line, commit_fn).
+
+    Lines come back UNFILTERED. Validation moved to _enqueue_read, per chunk,
+    because the cursor now advances by a COUNT of lines consumed and that count
+    has to address the file: dropping malformed lines here would make "n lines
+    consumed" stop mapping to a byte position, and a partial commit would land
+    the cursor in the wrong place.
+
+    commit_fn(consumed_lines) advances the cursor by that many lines; None means
+    the whole read. Until it is called the cursor stays put, so a failed enqueue
+    re-reads the same bytes next tick.
     """
     path_str = str(c.transcript_path)
     prev = storage.get_offset(path_str)
@@ -680,35 +719,33 @@ def _tick_read(c: cfg.WatchConfig, storage: Storage) -> tuple[list[bytes], int, 
 
     res = read_new(c.transcript_path, prev_byte)
 
-    valid: list[bytes] = []
-    invalid_count = 0
-    for line in res.lines:
-        if validate_json(line):
-            valid.append(line)
+    def commit(consumed_lines: int | None = None) -> None:
+        if consumed_lines is None or consumed_lines >= len(res.lines):
+            byte_offset = res.new_byte_offset
+            line_no = last_line_no + len(res.lines)
         else:
-            invalid_count += 1
-
-    base_line_no = last_line_no
-    new_last_line_no = last_line_no + len(res.lines)
-
-    if invalid_count:
-        log.warning("dropped %d malformed JSON lines this tick", invalid_count)
-
-    def commit() -> None:
+            # Partial: keep the bytes we actually shipped and leave the rest to
+            # be re-read. Re-derived from the file rather than summed from line
+            # lengths — split_lines strips \r and skips blanks, so summed
+            # lengths are not a file position.
+            byte_offset = reconcile.byte_offset_after(
+                c.transcript_path, prev_byte, consumed_lines
+            )
+            line_no = last_line_no + consumed_lines
         storage.upsert_offset(
             FileOffset(
                 path=path_str,
                 session_id=c.session_id,
                 cwd=str(c.cwd),
-                last_line_no=new_last_line_no,
+                last_line_no=line_no,
                 last_seen_at=int(time.time()),
                 inode=res.inode,
                 size=res.file_size,
-                byte_offset=res.new_byte_offset,
+                byte_offset=byte_offset,
             )
         )
 
-    return valid, base_line_no, commit
+    return res.lines, last_line_no, commit
 
 
 if __name__ == "__main__":

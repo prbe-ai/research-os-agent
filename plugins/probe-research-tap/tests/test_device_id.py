@@ -53,7 +53,7 @@ def _drive_one_batch(config, storage) -> str | None:
         return None  # treat as drop-all so the loop exits cleanly
 
     def fake_tick_read(_c, _s):
-        return [b"{}"], 0, lambda: None
+        return [b"{}"], 0, lambda _consumed=None: None
 
     try:
         with (

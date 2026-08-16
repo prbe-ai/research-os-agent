@@ -304,7 +304,7 @@ def test_run_loop_resumes_after_killswitch_releases(_isolated_plugin_dir, tmp_pa
             config.shutdown_sentinel.touch()
             return True, None
 
-    tick_calls = mock.Mock(return_value=([b'{}'], 0, lambda: None))
+    tick_calls = mock.Mock(return_value=([b'{}'], 0, lambda _consumed=None: None))
     enqueue_calls = mock.Mock()
     drain_calls = mock.Mock(return_value=False)
 
