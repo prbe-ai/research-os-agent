@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+
+- **`npx probe-research install` goes straight to the install steps.** The
+  launcher forwards whatever you type after it, and `install` was not a verb
+  the CLI knew, so it reached the argument parser as an unknown command and
+  exited. It is a real command now, and `probe install` works the same way.
+  Plain `npx probe-research` still opens on the action menu, which is the right
+  screen when you do not know what you want yet and the wrong one when you have
+  already decided. Takes the same flags as the wizard, so
+  `npx probe-research install --yes --no-capture` scripts cleanly.
+
+### Changed
+
+- **Back and Next share one row.** They were stacked, both left-aligned, which
+  spent two lines saying what one line says better and hid the one thing the
+  band exists to show: they are a pair, opposite ends of the same axis. Now
+  `‹ Back  ←` sits at the left edge and `→  Next ›` at the right, and every
+  install step gets a row of its own content back.
+
+  Enter also means exactly one thing again. The nav rows used to be selectable,
+  so the key toggled a capability on one row, went back on another and
+  submitted on a third; the band is a label now, the arrows move between steps,
+  and Enter only ever acts on the row you are on. Escape goes back exactly like
+  `←` does, including keeping the boxes you had just ticked — it used to exit
+  without them.
+
 ## 0.94.2
 
 ### Changed
