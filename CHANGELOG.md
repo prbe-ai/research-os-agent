@@ -106,6 +106,45 @@
 
 ### Changed
 
+- **The wizard's install steps have a visible Back and Next, and Back now
+  actually goes back.** Install was three screens that each knew only about
+  themselves: no step number, no way forward except guessing which row ended
+  the list, and no way back except Escape — which was invisible, and which on
+  the capability screen did not go back at all. It `return`ed out of the
+  command, so the key you reach for after ticking the wrong box quit the
+  installer, and correcting a mistake meant starting over.
+
+  Every step now titles itself "Install Probe — step 2 of 3" and opens with a
+  `‹ Back` / `Next ›` band above a labelled rule. `←` and `esc` go back, `→`
+  goes forward, and Back walks the flow properly: updates → capabilities →
+  agents → main menu, carrying your choices with it, so revisiting an earlier
+  screen never silently re-ticks something you turned off. Ctrl-C still
+  abandons, because "I chose wrong" and "get me out" are different intentions.
+
+  Enter now means the same thing on every step — it activates the row under the
+  cursor. The two checkbox screens used to run back to back with opposite
+  meanings for it, so whichever you learned first was wrong on the next screen.
+  Bulk-select keys (`a`, `i`) repaint the boxes they change, so the screen can
+  no longer disagree with what gets applied. The agent step's "choose at least
+  one" is enforced on the Next row itself, which says so. The auto-update step
+  is a two-row pick instead of the one bare `(Y/n)` confirm in the flow.
+
+  Capability descriptions wrap to the terminal instead of being clipped, so on
+  a narrow window the capture row still finishes the sentence naming where the
+  data goes — and the band is kept tight so that on 80x24 every capability, the
+  band and the question are all on screen at once.
+
+  No row is labelled "(recommended)" any more. Everything ships on, so a marker
+  on some rows only implied the unmarked ones were the lesser choice.
+
+- **The wizard's main menu is grouped.** Seven equal rows in one column is a
+  list you read end to end every time, because nothing in it said which rows
+  belonged together. They now sit under headings — `Set up this device`
+  (Install, Uninstall, Update), `Your research`, `Account`, `Help` — with Exit
+  last and outside any group, since it is the way out rather than a category
+  with one member. Costs one row overall: a heading is a stronger break than a
+  blank, so it replaces one rather than adding to it.
+
 - **`is_tracking` collapses to signal-then-default.** The evidence-derived
   fallback is gone: it was the right answer while the product had no default, and
   the product has one now. The refresh hook and the notice ask the same resolver
