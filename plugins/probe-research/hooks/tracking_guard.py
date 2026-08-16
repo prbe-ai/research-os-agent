@@ -2,7 +2,8 @@
 """The deterministic side of the tracking toggle: flip on skill activation,
 warn -- never gate -- on a probe write the flip should have prevented.
 
-PostToolUse on Skill/SlashCommand and Bash, two jobs on one file of state:
+UserPromptSubmit plus PostToolUse on Skill/SlashCommand and Bash, two jobs
+on one file of state:
 
 FLIP. When the toggle-research-tracking skill is invoked, THIS HOOK writes
 the session's tracking signal -- the same write `probe session untrack`
@@ -12,13 +13,16 @@ the machine's default posture (`is_tracking` resolves that, exactly as the
 statusline does -- the two surfaces must not disagree about what "current"
 means). An explicit `off`/`on` (or the skill's synonyms) sets that state,
 idempotently. `status`, or an argument that reads as neither, writes
-nothing. The skill still has the model read the result back with `probe
-session status` and narrate it, but the flip no longer DEPENDS on the model
-obeying prose: a skill activation the model then fumbles would otherwise
-leave the flag unflipped while every reader of it -- the statusline, the
-compact-contract injection, the warn below -- confidently reported the
-wrong state. The declaration is the researcher's; recording it is not a job
-to delegate to compliance.
+nothing. The flip fires on BOTH invocation paths: PostToolUse catches the
+model calling the skill as a tool, and UserPromptSubmit catches the
+researcher TYPING the slash command -- which produces no tool use at all,
+so without it the most common path would depend on the model running the
+CLI from prose. The skill still has the model read the result back with
+`probe session status` and narrate it, but the flip never DEPENDS on the
+model obeying prose: the model's only job is to report, and a state that
+contradicts what the researcher asked for is a hook failure to surface,
+not to quietly repair. The declaration is the researcher's; recording it
+is not a job to delegate to compliance.
 
 WARN. When `probe session untrack` has marked this session off and a Bash
 command still wrote research content through the probe CLI, this hook hands
@@ -140,6 +144,17 @@ STATUS_WORDS = frozenset({"status"})
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\|")
 
+# A typed slash command reaches UserPromptSubmit in one of two shapes,
+# depending on whether the harness expands it before or after the hook: the
+# raw string the researcher typed ("/probe-research:toggle-research-tracking
+# off"), or the expanded command message carrying <command-name> (and the
+# argument in <command-args> or a trailing "ARGUMENTS: ..." line). Parse both;
+# NEVER scan free prose for direction words -- the expanded body is the skill
+# text itself, which says "off" and "on" in every paragraph.
+_COMMAND_NAME_TAG = re.compile(r"<command-name>\s*/?([^<\s]+)\s*</command-name>")
+_COMMAND_ARGS_TAG = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
+_ARGUMENTS_LINE = re.compile(r"^ARGUMENTS:[ \t]*(.+)$", re.MULTILINE)
+
 
 def probe_write(command: str) -> "str | None":
     """The probe invocation that records research content, or None.
@@ -171,6 +186,51 @@ def probe_write(command: str) -> "str | None":
             if verb and verb not in READ_VERBS:
                 return "probe " + head + " " + verb
     return None
+
+
+def _direction_from_words(words: "list[str]") -> "str | None":
+    """Map an argument word list to a direction; None means do not touch the
+    signal. Bare IS the toggle; `status` and unrecognised prose write nothing
+    -- asking a question must never flip a switch."""
+    if not words:
+        return "toggle"
+    if words[0] in OFF_WORDS:
+        return "off"
+    if words[0] in ON_WORDS:
+        return "on"
+    if words[0] in TOGGLE_WORDS:
+        return "toggle"
+    return None
+
+
+def prompt_direction(prompt: object) -> "str | None":
+    """Direction for a TYPED toggle command in a UserPromptSubmit prompt, or
+    None. A typed slash command produces no tool use, so this is the only
+    deterministic surface that path has.
+
+    Lean silent, same as everywhere else: the raw shape must START with the
+    command (a mid-sentence mention like "should I run
+    /toggle-research-tracking?" is a question, not an invocation), and the
+    expanded shape must name the slug in <command-name> exactly.
+    """
+    if not isinstance(prompt, str) or not prompt.strip():
+        return None
+    text = prompt.strip()
+    tag = _COMMAND_NAME_TAG.search(text)
+    if tag:
+        if tag.group(1).split(":")[-1] not in TOGGLE_SKILL_SLUGS:
+            return None
+        args = _COMMAND_ARGS_TAG.search(text)
+        if args is None:
+            args = _ARGUMENTS_LINE.search(text)
+        words = args.group(1).strip().lower().split() if args else []
+        return _direction_from_words(words)
+    if not text.startswith("/"):
+        return None
+    parts = text.splitlines()[0].lstrip("/").split()
+    if not parts or parts[0].split(":")[-1] not in TOGGLE_SKILL_SLUGS:
+        return None
+    return _direction_from_words([w.lower() for w in parts[1:]])
 
 
 def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
@@ -206,16 +266,26 @@ def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
     separate = tool_input.get("args")
     if isinstance(separate, str) and separate.strip():
         inline_args = (inline_args + " " + separate).strip()
-    words = inline_args.lower().split()
-    if not words:
-        return "toggle"
-    if words[0] in OFF_WORDS:
-        return "off"
-    if words[0] in ON_WORDS:
-        return "on"
-    if words[0] in TOGGLE_WORDS:
-        return "toggle"
-    return None
+    return _direction_from_words(inline_args.lower().split())
+
+
+def _apply_direction(direction: str, session_id: str) -> None:
+    """Write the signal a direction asks for. Silent on success and on
+    failure alike: the skill has the model read the result back with `probe
+    session status` and narrate it, and set_tracking already validates the
+    session id."""
+    if direction == "toggle":
+        # The opposite of the CURRENT state: the explicit signal when one
+        # exists, else the machine's default posture -- resolved by
+        # is_tracking so this and the statusline cannot disagree about what
+        # "current" means.
+        current = _session_marker.is_tracking(
+            _session_marker.tracking_signal(session_id)
+        )
+        on = not current
+    else:
+        on = direction == "on"
+    _session_marker.set_tracking(session_id, on)
 
 
 def main() -> None:
@@ -228,25 +298,16 @@ def main() -> None:
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
         return
+    if payload.get("hook_event_name") == "UserPromptSubmit":
+        direction = prompt_direction(payload.get("prompt"))
+        if direction is not None:
+            _apply_direction(direction, session_id)
+        return
     tool_name = payload.get("tool_name")
     if tool_name in ("Skill", "SlashCommand"):
         direction = toggle_direction(tool_name, payload.get("tool_input"))
         if direction is not None:
-            if direction == "toggle":
-                # The opposite of the CURRENT state: the explicit signal when
-                # one exists, else the machine's default posture -- resolved
-                # by is_tracking so this and the statusline cannot disagree
-                # about what "current" means.
-                current = _session_marker.is_tracking(
-                    _session_marker.tracking_signal(session_id)
-                )
-                on = not current
-            else:
-                on = direction == "on"
-            # Silent on success and on failure alike: the skill has the model
-            # read the result back with `probe session status` and narrate it,
-            # and set_tracking already validates the session id.
-            _session_marker.set_tracking(session_id, on)
+            _apply_direction(direction, session_id)
         return
     if tool_name != "Bash":
         return

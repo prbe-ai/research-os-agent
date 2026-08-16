@@ -10,21 +10,23 @@ runs; `track-research-work` records into them. This decides whether either
 should be happening here at all.
 
 **The flip has already happened.** A plugin hook watches this skill's
-activation and writes the session's tracking signal the moment it fires:
-invoked bare, it flips to the OPPOSITE of the current state; invoked with
-`off` or `on` (or "stop"/"disable", "start"/"resume") it sets exactly that
-state; `status` and anything else write nothing. So do not decide the new
-state yourself — read it back:
+activation — a typed command via UserPromptSubmit, a Skill/SlashCommand tool
+call via PostToolUse — and writes the session's tracking signal the moment it
+fires: invoked bare, it flips to the OPPOSITE of the current state; invoked
+with `off` or `on` (or "stop"/"disable", "start"/"resume") it sets exactly
+that state; `status` and anything else write nothing. So do not decide the
+new state yourself — read it back:
 
 ```
 probe session status
 ```
 
-Trust what it prints. If it does not match what the researcher plainly asked
-for (a machine without the hook, an argument the hook read as no direction),
-correct it with ONE command — `probe session toggle` when the ask was the bare
-flip, or `probe session untrack` / `probe session track` when they named a
-state. All three make the same write the hook makes. Per SESSION, not per
+Trust what it prints, and never write the signal yourself — the hook is the
+only writer, and `probe session toggle`/`track`/`untrack` are not this
+skill's tools. If what status prints contradicts what the researcher plainly
+asked for, that is a broken hook: say so in one line and report the state as
+it actually is, rather than repairing it — a quiet model-side fix would keep
+a broken hook invisible on every machine it ships to. Per SESSION, not per
 machine: the next conversation is unaffected.
 
 ## If it landed OFF

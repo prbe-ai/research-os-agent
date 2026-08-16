@@ -1,5 +1,21 @@
 {
   "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/tracking_guard.py\"'",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/statusline_refresh.py\"'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "hooks": [
