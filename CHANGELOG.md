@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.95.0
+
 ### Added
 
 - **`npx probe-research install` goes straight to the install steps.** The
