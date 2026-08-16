@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Changed
+
+- **Section headings are back on the wizard's main menu, above the spacing
+  rather than instead of it.** Two jobs, two things doing them: a blank line
+  separates the groups, and a short `── Set up this device` names the one
+  below it. The heading sits AFTER the gap, which is the whole fix — when it
+  was the separator it landed welded to the description above, so the break
+  showed up a line late and read as a footer for the previous row. Headings no
+  longer rule out to full width either; two dashes say "this names what
+  follows" without four grey bands competing with the text.
+
+- **Back and Next are down to a label and a key.** The band used to spend two
+  lines of prose above every screen — `‹ Back  the previous step  (esc, ←)`
+  and `Next ›  continue with these settings  (→)` — explaining in eleven words
+  what the label already said in one. They now read `‹ Back  ←` and
+  `Next ›  →`. The arrow is the explanation, the symmetry says how the flow
+  moves, and Escape still goes back without needing a line to announce it next
+  to a key that does the same thing.
+
 ## 0.94.1
 
 ## 0.94.0
