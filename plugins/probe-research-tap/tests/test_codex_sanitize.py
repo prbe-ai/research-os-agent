@@ -218,10 +218,14 @@ def test_function_call_output_becomes_tool_result_with_error_flag():
     }
     out = sanitize_event(raw)
     assert out["type"] == "user"
+    # Size rides along, body does not — same compaction the Claude Code
+    # sanitizer applies, deliberately shared so the two agents cannot drift
+    # apart in what they record about a tool call.
     assert out["message"]["content"][0] == {
         "type": "tool_result",
         "tool_use_id": "call_1",
         "is_error": True,
+        "result_bytes": len("permission denied"),
     }
 
 

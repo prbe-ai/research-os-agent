@@ -254,9 +254,11 @@ def test_enqueue_path_persists_high_water_mark(
     storage.set_meta("last_batch_seq:session-persist", "13")  # restart at 14
 
     enqueue_calls = {"n": 0}
+    seqs: list[int] = []
 
     def fake_enqueue(**kwargs):
         enqueue_calls["n"] += 1
+        seqs.append(kwargs["batch_seq"])
         # After the first enqueue, set the shutdown sentinel so the loop
         # exits cleanly on its NEXT iteration.
         config.shutdown_sentinel.touch()
@@ -282,11 +284,17 @@ def test_enqueue_path_persists_high_water_mark(
             mock.patch("tap.main.time.sleep", return_value=None),
         ):
             tapmain._run_loop(config, storage)
-        # We resumed at 14 and shipped one batch.
-        assert enqueue_calls["n"] >= 1
-        # Meta must reflect the highest batch_seq we ENQUEUED (14), not the
-        # next one to be assigned (15).
-        assert storage.get_meta("last_batch_seq:session-persist") == "14"
+        # We resumed at 14 and shipped one batch (14), then the shutdown path
+        # enqueued this session's finalize, which takes the next sequence (15).
+        # The finalize needs one of its own: the outbox is
+        # UNIQUE(session_id, batch_seq), so reusing 14 would raise and lose the
+        # goodbye — and losing it means the session is never marked complete
+        # and never mined for knowledge units.
+        assert enqueue_calls["n"] >= 2
+        assert seqs == [14, 15]
+        # Meta must reflect the highest batch_seq we ENQUEUED (15), not the
+        # next one to be assigned (16).
+        assert storage.get_meta("last_batch_seq:session-persist") == "15"
     finally:
         storage.close()
         try:

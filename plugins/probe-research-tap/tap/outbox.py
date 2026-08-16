@@ -90,6 +90,25 @@ def build_batch_body(
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
 
+def build_finalize_body(*, session_id: str) -> bytes:
+    """Construct the body for the gateway's SessionFinalizeRequest.
+
+    Says "this session is over, mine it now". Until one of these arrives the
+    engine keeps coalescing the session's batches into a live document and
+    never runs the completion path — which is the only thing that produces the
+    extracted knowledge units (qa / code_change / decision / file_ref). A
+    session nobody finalizes is captured but never mined.
+
+    Deliberately minimal. The gateway validates against a model with exactly
+    two fields and rebuilds the forwarded body from them, so anything else here
+    (device_id, cwd, a stray `events` array) is dropped server-side; sending it
+    would just imply a contract that does not exist. Identity is stamped
+    server-side from the ingest token, same as every batch.
+    """
+    body = {"finalize": True, "session_id": session_id}
+    return json.dumps(body, separators=(",", ":")).encode("utf-8")
+
+
 def enqueue(
     *,
     storage: Storage,

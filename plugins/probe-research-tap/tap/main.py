@@ -21,6 +21,14 @@ Exits cleanly on:
     happens when CC is hard-killed (SIGKILL / OS reboot / force-quit) and
     SessionEnd never fires; touches the shutdown sentinel so the wrapper
     exits too instead of respawning a doomed daemon
+
+On the way out (every path except the killswitch, whose contract is "ship
+nothing") the daemon reads one last transcript tail and enqueues a FINALIZE for
+the session. That finalize is what tells the engine the session is over, and
+completion is the only thing that triggers its knowledge-unit extraction —
+qa, code_change, decision, file_ref. Without it a session is captured as a live
+transcript and never mined, until the server-side nightly sweep notices it has
+been quiet for hours.
 """
 
 from __future__ import annotations
@@ -460,7 +468,14 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                 # us into the same dead-session state.
                 with contextlib.suppress(OSError):
                     c.shutdown_sentinel.touch()
-                return 0
+                # BREAK, not return: this is a session that ended WITHOUT a
+                # SessionEnd hook — force-quit, SIGKILL, OS reboot — which is
+                # precisely the case with no other way to say goodbye. Returning
+                # here skipped both the final transcript tail and the finalize,
+                # so a hard-killed session lost its last bytes and waited on the
+                # server-side idle sweep to be mined at all. Falling through to
+                # the shutdown path gives it the same ending a clean exit gets.
+                break
 
         # Adaptive cadence: a tick that produced new lines resets to active;
         # IDLE_THRESHOLD_TICKS empty ticks in a row promotes to idle. We
@@ -522,6 +537,21 @@ def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
             log.exception("final transcript read failed")
         if final_read is not None:
             batch_seq = _enqueue_read(c, storage, device_id, seq_meta_key, batch_seq, final_read)
+
+        # Say goodbye. The engine only runs its knowledge-unit extraction
+        # (qa / code_change / decision / file_ref) on a session marked
+        # COMPLETE, and this is the only signal that says so at the moment the
+        # session actually ends — otherwise the session sits open until the
+        # server-side nightly sweep notices it has gone quiet for hours.
+        #
+        # Enqueued, not POSTed inline: it goes through the same durable outbox
+        # as every batch, so a network blip at shutdown leaves it queued for
+        # the next daemon or the reconciler's global drain instead of losing
+        # the ending. It is enqueued AFTER the final tail so it drains last
+        # (rows are claimed by ascending id) and the engine sees the whole
+        # transcript before it is told the session is over.
+        batch_seq = _enqueue_finalize(c, storage, seq_meta_key, batch_seq)
+
         try:
             _drain_pending(c, storage, base_url)
         except HaltError as exc:
@@ -581,6 +611,45 @@ def _enqueue_read(
     except Exception:
         # Offset NOT advanced; the same lines are re-read by the next daemon.
         log.exception("enqueue failed; lines will be re-read next tick")
+        return batch_seq
+
+
+def _enqueue_finalize(
+    c: cfg.WatchConfig,
+    storage: Storage,
+    seq_meta_key: str,
+    batch_seq: int,
+) -> int:
+    """Durably enqueue this session's finalize and return the next sequence.
+
+    Takes a batch_seq of its own rather than reusing the last one: the outbox
+    is UNIQUE(session_id, batch_seq), so sharing a number with a queued batch
+    would raise and lose the goodbye. The number is otherwise meaningless to
+    the server — the gateway validates a finalize against a two-field model and
+    never reads a sequence off it — it exists here purely to order the row.
+
+    Best-effort by design. A session that fails to enqueue its finalize is
+    exactly the case the server-side nightly sweep exists for, so this must
+    never escalate: shutdown continues, the last batches still drain, and the
+    session gets mined a few hours later instead of immediately.
+    """
+    try:
+        outbox.enqueue(
+            storage=storage,
+            session_id=c.session_id,
+            batch_seq=batch_seq,
+            cwd=str(c.cwd),
+            body=outbox.build_finalize_body(session_id=c.session_id),
+            now=int(time.time()),
+        )
+        storage.set_meta(seq_meta_key, str(batch_seq))
+        log.info("enqueued session finalize (batch_seq=%d)", batch_seq)
+        return batch_seq + 1
+    except Exception:
+        log.exception(
+            "could not enqueue session finalize; the server-side idle sweep "
+            "will finalize this session instead"
+        )
         return batch_seq
 
 

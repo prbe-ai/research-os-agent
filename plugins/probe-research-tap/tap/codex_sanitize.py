@@ -62,6 +62,12 @@ from __future__ import annotations
 import json
 from typing import Any
 
+# Compaction is shared with the Claude Code sanitizer on purpose. The two
+# formats differ; what we choose to RECORD about a tool call should not, or
+# the same session recorded through two agents produces two different
+# stories and neither is comparable to the other.
+from tap.sanitize import _result_size
+
 # Per-message phase from Codex's `MessagePhase` enum. Tracked in extras since
 # CC has no equivalent.
 _PHASES: frozenset[str] = frozenset({"commentary", "final_answer"})
@@ -319,6 +325,12 @@ def _translate_function_call(payload: dict, timestamp: Any) -> dict:
     block: dict[str, Any] = {"type": "tool_use", "id": call_id, "name": name}
     if summary:
         block["summary"] = summary
+    # Codex leans far harder on tools than Claude Code does — a real rollout
+    # rendered 1,248 TOOL_USE lines against 190 lines of human and model text,
+    # and 257 of those tool lines were a bare name with no object at all. The
+    # obvious fix (digest the small scalar args) would ship argument VALUES,
+    # which sanitize.py deliberately refuses to do for unrecognized schemas.
+    # Left as a bare name until that policy is revisited on purpose.
     out: dict[str, Any] = {
         "type": "assistant",
         "timestamp": timestamp,
@@ -335,6 +347,9 @@ def _translate_function_call_output(payload: dict, timestamp: Any) -> dict:
     block: dict[str, Any] = {"type": "tool_result", "tool_use_id": call_id}
     if _output_is_error(payload.get("output")):
         block["is_error"] = True
+    size = _codex_output_size(payload.get("output"))
+    if size is not None:
+        block["result_bytes"] = size
     return {
         "type": "user",
         "timestamp": timestamp,
@@ -468,3 +483,17 @@ def _output_is_error(output: Any) -> bool:
     if isinstance(output, dict):
         return bool(output.get("is_error"))
     return False
+
+
+def _codex_output_size(output: Any) -> int | None:
+    """Character count of a Codex tool output, content never included.
+
+    FunctionCallOutputPayload is a string or a dict carrying the body under
+    `content` / `output`, so unwrap one level before measuring.
+    """
+    if isinstance(output, dict):
+        for key in ("content", "output", "text"):
+            if key in output:
+                return _result_size(output[key])
+        return None
+    return _result_size(output)

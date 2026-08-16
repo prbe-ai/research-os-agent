@@ -8,6 +8,7 @@ Covered:
 
 from __future__ import annotations
 
+import contextlib
 import os
 import subprocess
 import sys
@@ -239,3 +240,141 @@ def test_run_loop_does_not_orphan_exit_when_lsof_unavailable(tmp_path: Path) -> 
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# Session finalize on shutdown
+#
+# The engine only runs its knowledge-unit extraction (qa / code_change /
+# decision / file_ref) on a session marked COMPLETE. Before these paths
+# existed the tap never said so — SessionEnd just SIGTERMed the daemon — and
+# every session stayed open forever, captured but never mined.
+# ---------------------------------------------------------------------------
+
+
+def _queued_bodies(storage) -> list[dict]:
+    """Every body currently sitting in the outbox, oldest first."""
+    import json as _json
+
+    rows = storage._conn.execute(
+        "SELECT body_json FROM outbox ORDER BY id ASC"
+    ).fetchall()
+    return [_json.loads(r[0]) for r in rows]
+
+
+def test_shutdown_enqueues_a_finalize_for_the_session(tmp_path: Path) -> None:
+    """A clean shutdown must leave a finalize in the outbox."""
+    from tap import config as cfg
+    from tap.main import _run_loop
+    from tap.storage import Storage
+
+    config = _make_watch_config(tmp_path, session_id="sess-finalize")
+    storage = Storage(cfg.state_db_path())
+
+    try:
+        with (
+            mock.patch("tap.main._transcript_has_active_reader", return_value=True),
+            # Never drain, so whatever was enqueued is still inspectable.
+            mock.patch("tap.main.outbox.drain_once", return_value=False),
+            mock.patch("tap.main.time.sleep", return_value=None),
+        ):
+            config.shutdown_sentinel.touch()
+            rc = _run_loop(config, storage)
+
+        assert rc == 0
+        bodies = _queued_bodies(storage)
+        finalizes = [b for b in bodies if b.get("finalize") is True]
+        assert len(finalizes) == 1, f"expected exactly one finalize, got: {bodies}"
+        assert finalizes[0]["session_id"] == "sess-finalize"
+        # It must be LAST: the engine has to see the whole transcript before it
+        # is told the session is over.
+        assert bodies[-1] is finalizes[0] or bodies[-1].get("finalize") is True
+    finally:
+        storage.close()
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(config.shutdown_sentinel)
+
+
+def test_orphaned_session_still_gets_a_finalize(tmp_path: Path) -> None:
+    """A hard-killed CC (force-quit / SIGKILL / reboot) fires no SessionEnd.
+
+    That is the case with no other way to say goodbye, so the orphan path must
+    fall through to the shutdown handling rather than returning early — which
+    is what it used to do, losing both the final tail and the finalize.
+    """
+    from tap import config as cfg
+    from tap.main import _run_loop
+    from tap.storage import Storage
+
+    config = _make_watch_config(tmp_path, session_id="sess-orphan")
+    storage = Storage(cfg.state_db_path())
+
+    reader_states = iter([True, False])
+
+    def fake_has_reader(_path):
+        try:
+            return next(reader_states)
+        except StopIteration:
+            return False
+
+    try:
+        with (
+            mock.patch("tap.main.ORPHAN_CHECK_EVERY_TICKS", 1),
+            mock.patch("tap.main._transcript_has_active_reader", side_effect=fake_has_reader),
+            mock.patch("tap.main.outbox.drain_once", return_value=False),
+            mock.patch("tap.main.time.sleep", return_value=None),
+        ):
+            rc = _run_loop(config, storage)
+
+        assert rc == 0
+        assert config.shutdown_sentinel.exists()
+        bodies = _queued_bodies(storage)
+        assert any(b.get("finalize") is True for b in bodies), (
+            f"orphan exit must still finalize the session; queued: {bodies}"
+        )
+    finally:
+        storage.close()
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(config.shutdown_sentinel)
+
+
+def test_killswitch_shutdown_ships_nothing_including_the_finalize(tmp_path: Path) -> None:
+    """The killswitch contract is 'ship nothing' — the finalize is not exempt."""
+    from tap import config as cfg
+    from tap.main import _run_loop
+    from tap.storage import Storage
+
+    config = _make_watch_config(tmp_path, session_id="sess-killswitch")
+    storage = Storage(cfg.state_db_path())
+
+    try:
+        with (
+            mock.patch("tap.main._transcript_has_active_reader", return_value=True),
+            mock.patch("tap.main.cfg.killswitch_active", return_value=True),
+            mock.patch("tap.main.outbox.drain_once", return_value=False),
+            mock.patch("tap.main.time.sleep", return_value=None),
+        ):
+            rc = _run_loop(config, storage)
+
+        assert rc == 0
+        bodies = _queued_bodies(storage)
+        assert not any(b.get("finalize") is True for b in bodies), (
+            f"killswitch must not enqueue a finalize; queued: {bodies}"
+        )
+    finally:
+        storage.close()
+        with contextlib.suppress(FileNotFoundError):
+            os.remove(config.shutdown_sentinel)
+
+
+def test_finalize_body_is_the_two_field_gateway_contract() -> None:
+    """The gateway validates a finalize against a two-field model and rebuilds
+    the forwarded body from it. Sending more implies a contract that does not
+    exist — and an `events` array here would be silently dropped rather than
+    ingested."""
+    import json as _json
+
+    from tap.outbox import build_finalize_body
+
+    body = _json.loads(build_finalize_body(session_id="abc-123"))
+    assert body == {"finalize": True, "session_id": "abc-123"}

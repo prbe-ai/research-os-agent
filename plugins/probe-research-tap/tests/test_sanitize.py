@@ -458,8 +458,17 @@ def test_tool_result_drops_content_keeps_only_threading() -> None:
         }]},
     }
     block = sanitize_event(event)["message"]["content"][0]
-    assert block == {"type": "tool_result", "tool_use_id": "tool_1"}
+    # The body is gone; its SIZE rides along. "ok" alone cannot distinguish a
+    # grep that found nothing from one that found four hundred matches, and
+    # that difference is most of what a result means once the body is dropped.
+    # A count is not a payload.
+    assert block == {
+        "type": "tool_result",
+        "tool_use_id": "tool_1",
+        "result_bytes": len(big_output),
+    }
     assert "content" not in block
+    assert big_output not in json.dumps(block)
     assert "is_error" not in block, "is_error=False is the default; don't ship it"
 
 
@@ -479,8 +488,10 @@ def test_tool_result_keeps_is_error_when_truthy() -> None:
         "type": "tool_result",
         "tool_use_id": "tool_1",
         "is_error": True,
+        "result_bytes": len("Error: file not found"),
     }
     assert "content" not in block
+    assert "file not found" not in json.dumps(block)
 
 
 def test_user_event_with_text_content_kept_intact() -> None:
@@ -662,7 +673,11 @@ def test_build_batch_body_drops_tool_io_aggressively() -> None:
     assert "input" not in use_block
     # tool_result has only threading info
     res_block = parsed["events"][1]["raw"]["message"]["content"][0]
-    assert res_block == {"type": "tool_result", "tool_use_id": "tool_x"}
+    assert res_block == {
+        "type": "tool_result",
+        "tool_use_id": "tool_x",
+        "result_bytes": len(big_output),
+    }
     # The 60KB output reduced to a few hundred bytes total — the command
     # ships, the OUTPUT never does.
     assert len(body) < 1000, f"expected aggressive shrink, got {len(body)} bytes"
@@ -674,3 +689,77 @@ if __name__ == "__main__":
     import sys
     import pytest
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ---------------------------------------------------------------------------
+# Compaction: compute the change instead of deleting it and hoping
+# ---------------------------------------------------------------------------
+def test_tool_result_carries_size_but_never_body() -> None:
+    """'ok' cannot distinguish a grep that found nothing from one that found
+    four hundred matches, and that difference is most of what a result means
+    once the body is gone."""
+    from tap.sanitize import sanitize_event
+
+    ev = {
+        "type": "user",
+        "message": {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "t1",
+                    "content": [{"type": "text", "text": "secret-value-here"}],
+                }
+            ],
+        },
+    }
+    block = sanitize_event(ev)["message"]["content"][0]
+    assert block["result_bytes"] == len("secret-value-here")
+    assert "secret-value-here" not in json.dumps(block)
+
+
+def test_drops_hook_output_attachments() -> None:
+    """`attachment` events are harness plumbing CC injects around the
+    conversation: 12,217 events and 11.5 MB across ten measured sessions, none
+    of which produce a single character of indexed text. hook_success alone is
+    54.7% of those bytes."""
+    from tap.sanitize import sanitize_event
+
+    event = {
+        "type": "attachment",
+        "uuid": "u",
+        "attachment": {
+            "type": "hook_success",
+            "hookName": "SessionStart:startup",
+            "stdout": "{}",
+            "exitCode": 0,
+        },
+    }
+    assert sanitize_event(event) is None
+
+
+def test_keeps_attachments_that_carry_real_content() -> None:
+    """edited_text_file and file carry actual file content — ~11% of attachment
+    bytes and the only part of them worth indexing."""
+    from tap.sanitize import sanitize_event
+
+    for kind in ("edited_text_file", "file", "nested_memory"):
+        event = {
+            "type": "attachment",
+            "uuid": "u",
+            "attachment": {"type": kind, "content": "real content"},
+        }
+        assert sanitize_event(event) is not None, f"{kind} must survive"
+
+
+def test_unknown_attachment_types_fail_open() -> None:
+    """Denylist, not allowlist: an attachment type we have not seen still
+    ships, so a future content-bearing kind is not silently lost."""
+    from tap.sanitize import sanitize_event
+
+    event = {
+        "type": "attachment",
+        "uuid": "u",
+        "attachment": {"type": "some_future_kind", "content": "?"},
+    }
+    assert sanitize_event(event) is not None
