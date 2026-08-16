@@ -22,9 +22,10 @@ probe session status
 
 Trust what it prints. If it does not match what the researcher plainly asked
 for (a machine without the hook, an argument the hook read as no direction),
-correct it with `probe session untrack` or `probe session track` — the same
-write the hook makes. Per SESSION, not per machine: the next conversation is
-unaffected.
+correct it with ONE command — `probe session toggle` when the ask was the bare
+flip, or `probe session untrack` / `probe session track` when they named a
+state. All three make the same write the hook makes. Per SESSION, not per
+machine: the next conversation is unaffected.
 
 ## If it landed OFF
 

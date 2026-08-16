@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe session toggle`** — flip this conversation's tracking to the
+  opposite of its current state, resolving "current" exactly as `probe session
+  status` does (explicit per-session signal first, machine default otherwise),
+  so toggling never disagrees with what the status line was showing. It is the
+  same write the toggle-research-tracking skill's activation hook makes on a
+  bare invocation, exposed for shells and for reconciling a machine where that
+  hook is absent — the skill's reconcile path now names ONE command for the
+  bare ask instead of making the model choose between `track` and `untrack`
+  from its own reading of prior state.
+
 ## 0.92.0
 
 ### Changed
