@@ -141,11 +141,18 @@
 
 - **The wizard's main menu is grouped.** Seven equal rows in one column is a
   list you read end to end every time, because nothing in it said which rows
-  belonged together. They now sit under headings — `Set up this device`
-  (Install, Uninstall, Update), `Your research`, `Account`, `Help` — with Exit
-  last and outside any group, since it is the way out rather than a category
-  with one member. Costs one row overall: a heading is a stronger break than a
-  blank, so it replaces one rather than adding to it.
+  belonged together. Install / Uninstall / Update now sit together, then
+  importing work, then the account, then help, with Exit last.
+
+  The grouping is spacing, not labelled rules: rows inside a group are flush
+  and a blank line separates the groups. Rules were tried first and read worse
+  — a full-width grey line between every group competes with the seven lines
+  of text that are the actual menu, and each one landed welded to the
+  description above it, so the break showed up a line late and looked like a
+  footer for the row above rather than a header for the rows below. Proximity
+  does the same job with no ink, and gives five rows back on a screen that
+  overflows 80x24. The last-update row also lines up with the rest of the
+  status block now instead of sitting a space short.
 
 - **`is_tracking` collapses to signal-then-default.** The evidence-derived
   fallback is gone: it was the right answer while the product had no default, and
