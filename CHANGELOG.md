@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.93.0
+
 ### Added
 
 - **`probe session toggle`** — flip this conversation's tracking to the
