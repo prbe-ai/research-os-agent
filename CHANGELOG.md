@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.94.2
+
 ### Changed
 
 - **Section headings are back on the wizard's main menu, above the spacing
