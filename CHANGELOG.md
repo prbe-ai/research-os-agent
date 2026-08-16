@@ -2,6 +2,60 @@
 
 ## Unreleased
 
+### Added
+
+- **A Settings screen on the wizard's main menu**, between Account and Help:
+  general per-device options, which are not capabilities — the capability menu
+  is about what Probe is *allowed* to do here, and these are about how it
+  behaves once allowed. One option so far: whether sessions are tracked by
+  default, the same setting `probe session default on|off` writes, now with a
+  screen that shows the current state before offering to flip it — and that
+  discloses when a `PROBE_SESSION_TRACKING` env override means flipping it
+  changes nothing visible. Choosing Settings skips the coding-agent question,
+  like Account does: one config file, so the answer has no bearing.
+
+### Changed
+
+- **The wizard's secondary text is warm tan, not grey.** Headings, hints and
+  the `Next ›` half of the nav band now render in `#b56f28` — the amber the
+  dashboard's status dots use, so the two surfaces share a palette — instead
+  of a `#6c6c6c` grey that read as disabled. `‹ Back` keeps the grey on
+  purpose: the way forward should be the warm end of the band, the way
+  backward the quiet one.
+
+- **The nav band sits under the options, not above them.** The way forward
+  used to be on screen before any of the choices it would confirm — on a short
+  terminal you could advance past the capability screen before the capture row
+  had ever been drawn. The heading still leads the step (with 0.95.1's blank
+  line above it, which now separates the question from the heading rather
+  than from the band); the band sits where the reading ends, after the rows
+  it acts on. `←`/`→` work from anywhere, so nothing became harder to reach.
+
+- **The wizard says when it is working.** Collecting device state costs about
+  a second of subprocess calls per detected coding agent, and an update blocks
+  on `uv` and the plugin marketplace — both used to run in silence right after
+  a keypress, which reads as a hang. Those waits now show an animated one-line
+  spinner (`tui.working`), interactive terminals only: pipes and CI get no
+  escape codes, same split the install-phase progress screen already draws.
+  And picking Settings no longer pays for a per-agent collection it never
+  reads — it reuses the snapshot the menu already took, so the screen opens
+  immediately.
+
+### Fixed
+
+- **Writing the tracking default can no longer eat the rest of the config.**
+  `probe session default` (and now the wizard's Settings toggle, which shares
+  the writer) used to read the raw file and save it back outside the config
+  lock. Three losses hid in that: racing a `probe login` could restore a stale
+  snapshot over the fresh token while reporting success; on a v1 flat config
+  the preference sat beside the old keys until the next canonical write
+  migrated it into the context — where nothing reads it, so capture silently
+  came back on; and a file that would not parse was replaced by just this
+  preference. The write now goes through the config lock and the strict
+  migrating loader: concurrent writes serialize, v1 files land in v2 shape
+  with the preference where readers look, and an unreadable file is refused
+  loudly with nothing touched.
+
 ## 0.95.1
 
 ### Changed

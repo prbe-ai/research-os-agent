@@ -616,6 +616,13 @@ DEFAULT_TRACKING = True
 DEFAULTS_KEY = "defaults"
 TRACKING_DEFAULT_KEY = "session_tracking"
 
+#: The spellings `default_tracking` recognizes, exported so the ONE other
+#: surface that reasons about the env override (the wizard's settings screen)
+#: cannot drift from the parser: a value outside both sets is IGNORED, and a
+#: screen that calls it an override anyway misdiagnoses a typo.
+TRACKING_OFF_VALUES = ("off", "0", "false", "no", "disabled")
+TRACKING_ON_VALUES = ("on", "1", "true", "yes", "enabled")
+
 
 def _read_config() -> dict:
     """The config file as a dict, or `{}`. ONE parse, two answers.
@@ -633,6 +640,25 @@ def _read_config() -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def tracking_env_override() -> bool | None:
+    """The RECOGNIZED `PROBE_SESSION_TRACKING` value, or None.
+
+    None covers both "unset" and "unrecognized" -- a typo is ignored, never
+    read as `off` (see `default_tracking`). Split out so a writer can ask
+    "is the env holding this setting down?" without re-implementing the
+    parse: while a recognized override is active, toggling the STORED default
+    from the effective value writes `not env` into the file invisibly, and
+    the stored value can never be set equal to the env's -- the wizard hides
+    its toggle row on this answer instead.
+    """
+    env = (os.environ.get("PROBE_SESSION_TRACKING") or "").strip().lower()
+    if env in TRACKING_OFF_VALUES:
+        return False
+    if env in TRACKING_ON_VALUES:
+        return True
+    return None
+
+
 def default_tracking(config: dict | None = None) -> bool:
     """This machine's default for sessions nobody has decided about.
 
@@ -646,11 +672,9 @@ def default_tracking(config: dict | None = None) -> bool:
     Anything unrecognised reads as the shipped default rather than as `off`. A
     typo in a config file must not silently stop recording someone's research.
     """
-    env = (os.environ.get("PROBE_SESSION_TRACKING") or "").strip().lower()
-    if env in ("off", "0", "false", "no", "disabled"):
-        return False
-    if env in ("on", "1", "true", "yes", "enabled"):
-        return True
+    override = tracking_env_override()
+    if override is not None:
+        return override
     data = _read_config() if config is None else config
     defaults = data.get(DEFAULTS_KEY)
     if isinstance(defaults, dict):
@@ -662,6 +686,51 @@ def default_tracking(config: dict | None = None) -> bool:
         if isinstance(value, str) and value.strip().lower() in ("on", "true", "yes"):
             return True
     return DEFAULT_TRACKING
+
+
+def write_default_tracking(on: bool) -> Path:
+    """Persist this machine's session-tracking default; returns the config path.
+
+    TOP LEVEL, never inside a context -- see DEFAULTS_KEY. Written through the
+    config module's own primitives, and each one guards a real loss:
+
+    * `_config_lock` -- `save_file` alone is atomic but not isolated, so this
+      write racing a `probe login` would restore its stale snapshot over the
+      fresh token and report success doing it.
+    * `load_file(strict=True)` -- the raw file may be a v1 flat blob. A raw
+      read-modify-write leaves `defaults` beside the v1 keys, and the NEXT
+      canonical write migrates every one of those keys into the context --
+      burying the preference where `default_tracking` never looks, so capture
+      silently comes back on. The migrating loader lands the file in v2 shape
+      with `defaults` at the top level, where it stays. Strict also means an
+      unparseable or non-object file RAISES (`ConfigUnreadable`) instead of
+      being replaced by just this preference.
+    * The empty-file seed matches `save_context`'s, so a fresh config is born
+      v2 rather than being mistaken for v1 on its next read.
+
+    Imported lazily: this module renders on the status-line hot path, and
+    vendored copies may not ship the writer at all -- reading the default must
+    keep working there even though setting it cannot.
+    """
+    from probe.sdk.config import (
+        CONFIG_VERSION,
+        DEFAULT_CONTEXT,
+        _config_lock,
+        load_file,
+        save_file,
+    )
+
+    with _config_lock():
+        data = load_file(strict=True) or {
+            "version": CONFIG_VERSION,
+            "current_context": DEFAULT_CONTEXT,
+            "contexts": {},
+        }
+        defaults = data.get(DEFAULTS_KEY)
+        data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
+        data[DEFAULTS_KEY][TRACKING_DEFAULT_KEY] = "on" if on else "off"
+        save_file(data)
+    return config_path()
 
 
 def configured(config: dict | None = None) -> bool:
