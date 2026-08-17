@@ -499,6 +499,69 @@ def set_tracking(session_id: str, on: bool) -> bool:
         return False
 
 
+def set_tracking_if_absent(session_id: str) -> bool:
+    """Record `on` ONLY when nobody has decided yet. True when THIS call decided.
+
+    The auto-mark half of the toggle: a session's first research write turns its
+    signal on, so the statusline and `probe session status` agree with what the
+    backend already shows (a session that visibly records research must not read
+    "untracked" — that mismatch is the bug this exists to close). A DECISION is
+    never touched: an existing file in either direction, and the legacy
+    `<sid>.off` spelling, all block the auto-mark.
+
+    Exclusive by construction, not by check-then-write. The content is written
+    to a UNIQUE temp file and PUBLISHED with os.link, which fails with EEXIST
+    rather than replacing. A researcher typing the toggle to `off` while the
+    first write is in flight keeps their `off`, and a crash between create and
+    publish cannot strand a half-written signal: the target either does not
+    exist or carries complete content.
+
+    The temp name carries pid AND a nanosecond stamp, and is created O_EXCL.
+    Naming it by pid alone lets two THREADS of one process share it, and the
+    loser then truncates a file the winner has already published — a reader
+    sees an empty marker. `tempfile.mkstemp` would say this in one call and
+    costs ~17ms of import (it pulls in shutil/lzma); this module is imported on
+    every status-line render, where that is the whole budget. Hence os.open.
+
+    THE LEGACY SPELLING IS RE-CHECKED AFTER PUBLISHING. `os.link` arbitrates
+    `<sid>.tracking` only, so an old client writing `<sid>.off` between the read
+    and the publish would leave both files on disk with `on` winning the read —
+    automation silently overriding an explicit opt-out, which is the one thing
+    this must never do. Losing that race is repaired by removing what we just
+    published, not by keeping it.
+    """
+    if not valid_session_id(session_id):
+        return False
+    if tracking_signal(session_id) is not None:
+        return False  # a decision exists (including the legacy off spelling)
+    path = tracking_signal_path(session_id)
+    tmp_path = "%s.tmp-%d-%d" % (str(path), os.getpid(), time.time_ns())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write("on\n")
+        try:
+            os.link(tmp_path, path)
+        except OSError:
+            return False  # EEXIST: someone decided between the read and the publish
+        if _legacy_off_path(session_id).is_file():
+            # An opt-out landed in the old spelling while we were publishing.
+            path.unlink(missing_ok=True)
+            return False
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
 def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
     """The one boolean the whole surface renders. TWO STATES, never three.
 

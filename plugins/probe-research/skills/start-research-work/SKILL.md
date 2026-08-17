@@ -16,6 +16,27 @@ CLI the slug is hand-typed on every invocation, which is exactly where that come
 — because there the slug is written once in a file and code-reviewed. It refuses a
 near-miss of an existing slug rather than warning.)
 
+0. **Check the session's tracking state before the first write.** Run
+   `probe session status`. Three answers matter:
+
+   - `"signal": "off"` — the RESEARCHER declared this session off. Stop here:
+     create nothing, record nothing, and surface the conflict in one line —
+     un-deciding is theirs to do (`/toggle-research-tracking on`), not yours.
+     This is the one moment that can stop a write BEFORE it happens; the guard
+     hook only warns after.
+   - tracking `false` with `"signal": null` (an undecided session on a
+     default-off machine) — invoke `toggle-research-tracking` with `on` before
+     the first write, so the statusline is honest from the start. The hook
+     records the flip; NEVER write the signal yourself with `probe session
+     track`. (Current clients also auto-mark the session on its first research
+     write, so this mainly covers a plugin running against an older CLI.)
+   - anything else — tracking is on or defaulted on; just proceed.
+
+   If the command errors or does not exist (an older CLI), say so in one line
+   before proceeding — a status you could not read is not a session you know is
+   tracked, and the researcher is the one who can tell you which it is. Do not
+   let it pass silently.
+
 1. **Orient first.** `browse_research` if you do not know what is in this project;
    `search_knowledge` if you have terms and want prior work on this specific thing.
    Check what is already RUNNING before you launch anything — `browse_research`

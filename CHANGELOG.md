@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Added
+
+- **A session that records research is marked tracked, automatically.** The
+  first successful research write from a coding-agent session (creating a
+  project or experiment, opening a run, logging metrics, appending notes,
+  registering an artifact) now turns the session's tracking signal on — so the
+  status line and `probe session status` agree with what the dashboard already
+  shows, without the model having to remember the toggle. A decision you made
+  stays yours: an explicit `off` (or `on`) is never touched, the flip publishes
+  exclusively (a concurrent `/toggle-research-tracking off` always wins), and
+  nothing is written while `PROBE_SESSION_TRACKING` holds the setting down.
+  Reads and account plumbing never mark anything.
+- **"Track this session" now flips the switch.** The toggle skill's triggers
+  were off-biased — ON existed only as "resume" — so a researcher saying "make
+  sure this is tracked" could get a fully-recorded session whose every local
+  surface said untracked. The skill now names both directions, and
+  `start-research-work` checks `probe session status` before its first write:
+  an explicitly-off session stops and surfaces the conflict instead of
+  recording into it.
+
 ### Changed
 
 - **Settings is a picker now, not a toggle chain.** The screen takes the
