@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.96.0
+
 ### Added
 
 - **A Settings screen on the wizard's main menu**, between Account and Help:
