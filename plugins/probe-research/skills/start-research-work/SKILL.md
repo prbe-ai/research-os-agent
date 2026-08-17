@@ -28,6 +28,31 @@ near-miss of an existing slug rather than warning.)
    what was ruled out, what not to repeat. Add to it as you learn things
    (`probe notes write --append`); see `track-research-work`.
 
+   **If the work is about a codebase, connect its repository.** Put a line
+   containing only `[README](https://github.com/owner/repo)` in the project's
+   Markdown suffix and the dashboard renders that repository's README there —
+   live, refreshed whenever someone pushes a change to it. Do it when the project
+   IS a piece of software (a trainer, a harness, a library, this service) or is
+   organised around one, so a teammate arriving cold gets the repository's own
+   account of itself instead of your paraphrase, and it stays right after you stop
+   updating it.
+
+   Write it once, near the top, and spend your own words on what the README does
+   NOT say: why this project uses that repo, which parts of it matter here, what
+   you changed. Do not restate the README — it is on the page.
+
+   PRIVATE REPOSITORIES WORK, figures included, when the team's GitHub App is
+   installed on that account. If the panel reports that it cannot read the repo,
+   that is a GitHub-side permission for a human to grant; say so plainly rather
+   than removing the line or pasting the README's contents in by hand.
+
+   TWO THINGS THAT ARE EASY TO GET WRONG. The LINK TEXT is what makes it an
+   embed, so an ordinary citation (`[the trainer](https://github.com/owner/repo)`,
+   or a bare URL) stays a plain link and embeds nothing. And the project's `repo`
+   field is DERIVED from that line: writing one connects the repository, removing
+   it disconnects. Never write `[README](...)` for a repository the project is not
+   actually about.
+
    Those reads already carry the whole arc — draw it with `show-research-timeline`
    before the first launch rather than describing it. What comes AFTER the run is
    the part a researcher at a terminal cannot see, and it is what decides whether

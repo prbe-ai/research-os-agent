@@ -135,6 +135,21 @@ gets made. Record with the surface the run was opened with.
    Never copy the AI narrative into the suffix or attempt to edit that server-owned AI
    section.
 
+   **Embedding a repository's README.** A line containing only
+   `[README](https://github.com/owner/repo)` renders that repository's README at
+   that point in the document — a live view, refreshed when someone pushes a
+   change to it, and readable for a PRIVATE repository when the team's GitHub App
+   is installed on that account. Put it where a reader needs the repo's own words
+   rather than restating them; keep your surrounding text for what the README does
+   NOT say (why this project forked it, which parts matter here).
+
+   TWO THINGS FOLLOW FROM THIS, and both matter when writing the suffix:
+   the LINK TEXT is what makes it an embed, so an ordinary citation
+   (`[the trainer](https://github.com/owner/repo)`, or a bare URL) stays a plain
+   link and embeds nothing. And the project's `repo` field is DERIVED from this
+   line — writing one connects the repository, removing it disconnects. Do not
+   write `[README](...)` for a repository the project is not actually about.
+
    The project's hidden notes are one free-text markdown document, no schema, and an excerpt rides
    along on the project's MCP `card` — so the next agent sees it while orienting
    rather than having to know it exists. **That surfacing is why the project's notes
