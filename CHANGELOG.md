@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Changed
+
+- **Settings is a picker now, not a toggle chain.** The screen takes the
+  install panels' shape: checkbox rows grouped under headings (`── Defaults`),
+  ticked means on, and the band's forward half reads `Set settings ›` — the
+  commit. Nothing is written while you toggle; `→` applies the DIFF (unchanged
+  boxes are not rewritten), `←`/Escape leaves with nothing changed, and what
+  changed is reported on the way back to the menu. Extensible on purpose: a
+  new setting is one entry each in `Setting`, `SETTINGS_GROUPS`,
+  `SETTINGS_COPY`, and `read_settings`/`apply_settings` — the screen itself
+  never changes. Under a recognized `PROBE_SESSION_TRACKING` override the
+  tracking row still does not render, and with every row locked away the
+  screen degrades to Back alone rather than offering a commit over an empty
+  picker.
+
+- **`‹ Back` returns to the menu instantly.** Backing out of Settings, the
+  account screen, or the import folder picker used to stop on an empty
+  "Press enter to return to the menu…" page and then silently re-collect per-agent state — about a second
+  per detected agent — before the menu came back. A pure back-out now says
+  "nothing happened" and the wizard loop takes it at its word: no result
+  page, no pause, no re-collection. Actions that do change state still
+  re-read it, behind the spinner. Measured on a pty: `←` to menu in 0.06s.
+
 ## 0.96.0
 
 ### Added
