@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A machine whose default is `off` now actually records nothing.** The
+  default was honoured by exactly one surface. The status line resolved an
+  absent per-session marker against `defaults.session_tracking` and rendered
+  `untracked`; the SessionStart off-contract and the write-warning hook looked
+  only for an EXPLICIT marker, found none, and treated the session as tracking.
+  So a session on a default-off box was told to register its work in Probe,
+  created projects and notes with no warning at any point, and displayed
+  `untracked` the whole time.
+
+  One setting, one file, present from the session's first moment. SessionStart
+  seeds `<sid>.tracking` from `default_tracking()`, so "undecided" is no longer
+  a state each reader resolves for itself, and both readers now resolve through
+  `is_tracking` so a seed that could not be written changes nothing.
+
+  `Transport._auto_mark_tracking` settles the signal at the DEFAULT rather than
+  at `on`. A write is the agent's act, not the researcher's declaration: it may
+  record which value a session started at, never change it. The default is the
+  researcher choosing what a new session starts at — the same setting the
+  toggle flips, not a weaker kind of preference.
+
+
 ### Added
 
 - **A session that records research is marked tracked, automatically.** The

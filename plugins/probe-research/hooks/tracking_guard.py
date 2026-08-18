@@ -117,8 +117,9 @@ READ_VERBS = frozenset(
 )
 
 MESSAGE = (
-    "Research tracking is OFF for this conversation -- the researcher declared "
-    "it via /toggle-research-tracking (probe session untrack) -- but `{matched}` "
+    "Research tracking is OFF for this conversation -- this machine starts "
+    "sessions untracked, or the researcher turned it off with "
+    "/toggle-research-tracking -- but `{matched}` "
     "just wrote to Probe. Honor the declaration: record nothing further. If the "
     "researcher explicitly asked for this write, ask whether tracking should "
     "resume (`/toggle-research-tracking on`); otherwise consider undoing it, and "
@@ -311,10 +312,12 @@ def main() -> None:
         return
     if tool_name != "Bash":
         return
-    # Signal first: tracking on (or undecided) is the overwhelmingly common
-    # case, and it must cost one read, not a parse. The EXPLICIT "off" only --
-    # a session that merely recorded nothing has made no declaration to honour.
-    if _session_marker.tracking_signal(session_id) != "off":
+    # Signal first: tracking on is the overwhelmingly common case, and it must
+    # cost one read, not a parse. Resolved through `is_tracking` so a machine
+    # whose DEFAULT is off warns too -- that default is the researcher choosing
+    # what a new session starts at, and a warn layer that fires only when
+    # someone re-typed it per session is silent exactly where the writes are.
+    if _session_marker.is_tracking(_session_marker.tracking_signal(session_id)):
         return
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None

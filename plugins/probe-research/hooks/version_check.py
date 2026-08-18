@@ -141,8 +141,9 @@ COMPACT_CONTEXT = (
 # context. Wording mirrors the skill; drift between them would have the two
 # surfaces describing one state differently.
 TRACKING_OFF_CONTEXT = (
-    "Research tracking is OFF for this conversation -- the researcher declared "
-    "it via /toggle-research-tracking (probe session untrack). Do not create Probe "
+    "Research tracking is OFF for this conversation -- this machine starts "
+    "sessions untracked, or the researcher turned it off with "
+    "/toggle-research-tracking. Do not create Probe "
     "projects, experiments or runs, do not write notes or Project Summary "
     "Markdown, and do not raise tracking at all, including as a reminder or a "
     "closing caveat. Reading Probe is still fine, and the actual work continues "
@@ -155,21 +156,51 @@ def _emit(obj: dict) -> NoReturn:
     sys.exit(0)
 
 
-def _tracking_off() -> bool:
-    """Whether the researcher EXPLICITLY declared this session untracked.
+def _seed_tracking_signal() -> None:
+    """Give this session its STARTING tracking value, once, at SessionStart.
 
-    The explicit signal, not `is_tracking`: that helper derives "not tracking"
-    from a session that merely recorded nothing yet, and restating the off
-    contract there would invent a declaration nobody made. Same reason every
-    doubt -- no id, invalid id, unreadable signal -- reads False: uncertain
-    must degrade to today's behaviour (the nudge), never to honouring a
-    decision that was not taken.
+    One setting, one file. The signal is written here from the machine default
+    so every reader -- the statusline, `probe session status`, the off contract
+    below, tracking_guard's warn -- resolves the SAME value from the SAME
+    place. Before this, an absent file meant "undecided" and each reader
+    decided for itself what that was worth: the statusline resolved it against
+    the default and rendered `off`, while this hook and the guard looked only
+    for an explicit marker and so read a default-off machine as tracking. That
+    is how a session showing `untracked` filled the dashboard with projects.
+
+    Idempotent and never overrides a decision (`set_tracking_if_absent`), so a
+    resume or post-compact start re-runs it harmlessly. Fail-soft: a seed that
+    cannot be written leaves the file absent, which every reader now resolves
+    against the same default anyway -- the seed makes the state explicit, it is
+    not what makes it correct.
+    """
+    session_id = os.environ.get(SESSION_ID_ENV) or ""
+    if not session_id:
+        return  # PreCompact carries no id; the session was seeded at its start.
+    try:
+        _session_marker.set_tracking_if_absent(
+            session_id, _session_marker.default_tracking()
+        )
+    except Exception:
+        pass
+
+
+def _tracking_off() -> bool:
+    """Whether this session is untracked -- by declaration or by default.
+
+    `is_tracking`, not the raw signal. A machine whose default is `off` HAS
+    made the declaration: the default is the researcher choosing the value a
+    new session starts at, which is the same setting the toggle flips, so
+    honouring it only when someone re-typed it per session is honouring it
+    nowhere. Doubt still reads False -- no id, invalid id, unreadable state --
+    because an uncertain read must degrade to the nudge rather than to silence.
     """
     session_id = os.environ.get(SESSION_ID_ENV) or ""
     if not session_id:
         return False
     try:
-        return _session_marker.tracking_signal(session_id) == "off"
+        signal = _session_marker.tracking_signal(session_id)
+        return not _session_marker.is_tracking(signal)
     except Exception:
         return False
 
@@ -367,6 +398,9 @@ def _spawn_autoupdate(probe_bin: str) -> None:
 
 
 def main() -> None:
+    # Before anything else: a session must know its own tracking value from its
+    # first moment, or the readers that fire earliest race the seed.
+    _seed_tracking_signal()
     manifest, fetched_at, ok = version_policy.read_cache()
     # Reuse a good manifest for TTL; after a failure, wait BACKOFF before retrying.
     #

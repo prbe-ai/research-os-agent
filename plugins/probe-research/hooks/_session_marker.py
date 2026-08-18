@@ -499,15 +499,22 @@ def set_tracking(session_id: str, on: bool) -> bool:
         return False
 
 
-def set_tracking_if_absent(session_id: str) -> bool:
-    """Record `on` ONLY when nobody has decided yet. True when THIS call decided.
+def set_tracking_if_absent(session_id: str, on: bool) -> bool:
+    """Record the session's STARTING value, ONLY when nobody has decided yet.
+    True when THIS call decided.
 
-    The auto-mark half of the toggle: a session's first research write turns its
-    signal on, so the statusline and `probe session status` agree with what the
-    backend already shows (a session that visibly records research must not read
-    "untracked" — that mismatch is the bug this exists to close). A DECISION is
-    never touched: an existing file in either direction, and the legacy
-    `<sid>.off` spelling, all block the auto-mark.
+    The seed half of the toggle. A session starts at this machine's default
+    (`default_tracking()`) and the file exists from SessionStart onward, so
+    "undecided" is not a state any reader has to resolve for itself: one
+    setting, one file, always present.
+
+    THE VALUE IS A PARAMETER, never a literal `on`. Seeding `on` on a machine
+    whose default is `off` would let automation author a declaration the
+    researcher did not make -- the default IS the researcher saying which value
+    a new session starts at, and it is the same setting the toggle flips, not a
+    weaker kind of preference. A DECISION is never touched either: an existing
+    file in either direction, and the legacy `<sid>.off` spelling, all block
+    the seed.
 
     Exclusive by construction, not by check-then-write. The content is written
     to a UNIQUE temp file and PUBLISHED with os.link, which fails with EEXIST
@@ -543,7 +550,7 @@ def set_tracking_if_absent(session_id: str) -> bool:
         return False
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as fh:
-            fh.write("on\n")
+            fh.write("on\n" if on else "off\n")
         try:
             os.link(tmp_path, path)
         except OSError:
@@ -569,10 +576,12 @@ def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
     makes the toggle a toggle, and it is why a researcher who turns tracking off
     stays off no matter what any default says.
 
-    With no decision, this machine's default answers. That used to be derived
-    from whether the session had recorded anything, which was the right answer
-    while the product had no default; it does now. Tracking is the posture, so
-    an undecided session is tracked, and the interesting case is the exception.
+    With no decision, this machine's default answers. Since SessionStart seeds
+    the signal from that default, a missing file now means only that the seed
+    never ran -- a session started before this shipped, or a hook that could
+    not write -- so resolving it against the same default is what keeps those
+    sessions reading the value the researcher chose rather than a third
+    behaviour nobody selected.
 
     `default=None` reads the machine's setting. Callers that already parsed the
     config pass it in so the render path parses the file once.
