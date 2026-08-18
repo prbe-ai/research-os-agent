@@ -30,15 +30,22 @@ the model one line of additionalContext restating the contract it is
 violating. That is the whole mechanism: the write has already happened, the
 hook never denies anything, and exit is 0 on every path.
 
-WHY WARN AND NOT DENY. The off marker is a fact a hook can read, but "stop
-recording" is a contract that spans surfaces no hook can reach -- the SDK
-inside a training script, the hosted MCP, a job on another machine. A deny
-here would cover one path of several and teach the agent the gate is
-advisory, and it would also block legitimate invocations this heuristic
-cannot distinguish (debugging Probe itself is this team's day job). So the
-deterministic layer DETECTS, and the behavioural layer -- the model reading
-the contract -- RESOLVES. This mirrors the lab's standing rule for capture
-completeness: warn at the moment of violation, never gate the work.
+DENY, THEN WARN. PreToolUse refuses a probe write the flip should have
+prevented; PostToolUse still warns on anything that got through. This file
+used to warn only, reasoning that "stop recording" spans surfaces no hook
+can reach -- the SDK inside a training script, the hosted MCP, a job on
+another machine -- so a deny would cover one path of several and teach the
+agent the gate is advisory. What that argument missed is which path is the
+common one: every project this has actually leaked was created by a coding
+agent typing `probe ...` into Bash, the one path a hook DOES cover. A gate
+that stops the observed failure is worth more than the consistency of
+refusing to stop any of it, and the remaining surfaces keep the warn.
+
+The deny is escapable and says how in its own reason: `/toggle-research-tracking
+on`. That matters because this heuristic cannot tell a violation from the
+team's day job (debugging Probe itself) -- so the escape is one command, and
+REMOVAL_VERBS are never gated at all, because "record nothing" is not
+"prevent cleanup".
 
 WHY THE PARSE IS A HEURISTIC, AND WHICH WAY IT LEANS. The command string is
 shell, and this is not a shell parser: segments are split on `&&`/`||`/`;`/
@@ -116,6 +123,17 @@ READ_VERBS = frozenset(
     }
 )
 
+DENY_REASON = (
+    "Research tracking is OFF for this conversation -- this machine starts "
+    "sessions untracked, or the researcher turned it off with "
+    "/toggle-research-tracking -- so `{matched}` was refused before it ran. "
+    "Create no Probe projects, experiments or runs, write no notes or Project "
+    "Summary Markdown. Reading Probe is still fine and the actual work "
+    "continues as normal. If the researcher wants this recorded, they turn "
+    "tracking on (`/toggle-research-tracking on`); do not ask them to approve "
+    "the write itself, and do not route around this."
+)
+
 MESSAGE = (
     "Research tracking is OFF for this conversation -- this machine starts "
     "sessions untracked, or the researcher turned it off with "
@@ -157,6 +175,17 @@ _COMMAND_ARGS_TAG = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
 _ARGUMENTS_LINE = re.compile(r"^ARGUMENTS:[ \t]*(.+)$", re.MULTILINE)
 
 
+#: Verbs inside a write group that REMOVE research rather than record it.
+#: "Record nothing" is not "prevent cleanup" -- the first thing a researcher
+#: does after finding an untracked session's writes on the dashboard is delete
+#: them, and a layer that fought that would make the mess it exists to prevent
+#: permanent. It matters most for the DENY: a blocked cleanup is a wall, not a
+#: warning. The warn skips them for the same reason plus one of its own -- its
+#: line reads "record nothing further ... consider undoing it", which is
+#: nonsense aimed at an undo.
+REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
+
+
 def probe_write(command: str) -> "str | None":
     """The probe invocation that records research content, or None.
 
@@ -184,7 +213,7 @@ def probe_write(command: str) -> "str | None":
             return "probe " + head
         if head in WRITE_GROUPS:
             verb = args[1] if len(args) > 1 else ""
-            if verb and verb not in READ_VERBS:
+            if verb and verb not in READ_VERBS and verb not in REMOVAL_VERBS:
                 return "probe " + head + " " + verb
     return None
 
@@ -289,6 +318,30 @@ def _apply_direction(direction: str, session_id: str) -> None:
     _session_marker.set_tracking(session_id, on)
 
 
+def _offending_write(payload: dict, session_id: str) -> "str | None":
+    """The probe write this untracked session should not be making, or None.
+
+    ONE gate for both events, so the deny and the warn can never disagree about
+    what counts -- a refusal at PreToolUse followed by silence at PostToolUse
+    (or the reverse) would read as the layer being unsure.
+
+    Signal first: tracking on is the overwhelmingly common case and must cost
+    one read, not a parse. Resolved through `is_tracking`, so a machine whose
+    DEFAULT is off is covered -- that default is the researcher choosing what a
+    new session starts at, and a layer that fired only when someone re-typed it
+    per session would be silent exactly where the writes are.
+    """
+    if _session_marker.is_tracking(_session_marker.tracking_signal(session_id)):
+        return None
+    if payload.get("tool_name") != "Bash":
+        return None
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return None
+    return probe_write(command)
+
+
 def main() -> None:
     try:
         payload = json.load(sys.stdin)
@@ -299,10 +352,28 @@ def main() -> None:
     session_id = payload.get("session_id")
     if not isinstance(session_id, str) or not session_id:
         return
-    if payload.get("hook_event_name") == "UserPromptSubmit":
+    hook_event = payload.get("hook_event_name")
+    if hook_event == "UserPromptSubmit":
         direction = prompt_direction(payload.get("prompt"))
         if direction is not None:
             _apply_direction(direction, session_id)
+        return
+    if hook_event == "PreToolUse":
+        matched = _offending_write(payload, session_id)
+        if matched:
+            sys.stdout.write(
+                json.dumps(
+                    {
+                        "hookSpecificOutput": {
+                            "hookEventName": "PreToolUse",
+                            "permissionDecision": "deny",
+                            "permissionDecisionReason": DENY_REASON.format(
+                                matched=matched
+                            ),
+                        }
+                    }
+                )
+            )
         return
     tool_name = payload.get("tool_name")
     if tool_name in ("Skill", "SlashCommand"):
@@ -312,18 +383,7 @@ def main() -> None:
         return
     if tool_name != "Bash":
         return
-    # Signal first: tracking on is the overwhelmingly common case, and it must
-    # cost one read, not a parse. Resolved through `is_tracking` so a machine
-    # whose DEFAULT is off warns too -- that default is the researcher choosing
-    # what a new session starts at, and a warn layer that fires only when
-    # someone re-typed it per session is silent exactly where the writes are.
-    if _session_marker.is_tracking(_session_marker.tracking_signal(session_id)):
-        return
-    tool_input = payload.get("tool_input")
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if not isinstance(command, str):
-        return
-    matched = probe_write(command)
+    matched = _offending_write(payload, session_id)
     if not matched:
         return
     sys.stdout.write(

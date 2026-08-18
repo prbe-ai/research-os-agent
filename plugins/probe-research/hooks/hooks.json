@@ -42,6 +42,18 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "^Bash$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/tracking_guard.py\"'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
     "PostToolUse": [
       {
         "matcher": "^(Bash|Skill|SlashCommand)$|probe[-_]research",

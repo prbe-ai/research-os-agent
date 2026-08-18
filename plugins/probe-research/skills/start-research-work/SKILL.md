@@ -17,20 +17,23 @@ CLI the slug is hand-typed on every invocation, which is exactly where that come
 near-miss of an existing slug rather than warning.)
 
 0. **Check the session's tracking state before the first write.** Run
-   `probe session status`. Three answers matter:
+   `probe session status`. TWO answers matter, because there are two states:
 
-   - `"signal": "off"` — the RESEARCHER declared this session off. Stop here:
-     create nothing, record nothing, and surface the conflict in one line —
-     un-deciding is theirs to do (`/toggle-research-tracking on`), not yours.
-     This is the one moment that can stop a write BEFORE it happens; the guard
-     hook only warns after.
-   - tracking `false` with `"signal": null` (an undecided session on a
-     default-off machine) — invoke `toggle-research-tracking` with `on` before
-     the first write, so the statusline is honest from the start. The hook
-     records the flip; NEVER write the signal yourself with `probe session
-     track`. (Current clients also auto-mark the session on its first research
-     write, so this mainly covers a plugin running against an older CLI.)
-   - anything else — tracking is on or defaulted on; just proceed.
+   - tracking `false` — this session is OFF, whether the researcher turned it
+     off or this machine starts sessions that way. There is no third, weaker
+     kind of off: a default IS the researcher choosing the value a new session
+     starts at, and treating it as merely a display preference is what let an
+     untracked session fill the dashboard with projects. Stop here — create
+     nothing, record nothing — and say so in one line, asking whether they want
+     tracking on for this work. Turning it on is THEIRS
+     (`/toggle-research-tracking on`): never flip it to make your own write
+     legal, and never write the signal directly with `probe session track`.
+   - tracking `true` — proceed.
+
+   This is the one moment that can stop a write by choosing not to make it. The
+   hooks refuse a probe write from an off session at PreToolUse and warn on
+   whatever reaches another surface, but a refusal you walked into is a worse
+   experience for the researcher than a question you asked.
 
    If the command errors or does not exist (an older CLI), say so in one line
    before proceeding — a status you could not read is not a session you know is

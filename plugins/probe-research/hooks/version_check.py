@@ -205,14 +205,22 @@ def _tracking_off() -> bool:
         return False
 
 
-def _compact_context() -> str | None:
-    """What to inject at a context boundary, or None.
+def _start_context() -> str | None:
+    """What to inject at a session start, or None.
 
-    Two boundaries, one decision each. On a post-compaction start: the off
-    contract if the researcher untracked this session, else the reconcile
-    nudge. On a resume: the off contract if untracked, else nothing -- a
-    resumed session that is tracking normally needs no nudge, and injecting
-    one would be new nagging, not a fix.
+    THE OFF CONTRACT GOES IN AT EVERY START, boundary or not. It used to be
+    injected only on compact/resume, on the reasoning that those are where a
+    declaration gets lost -- but a FRESH start was the one that carried nothing
+    at all, and a fresh start is where an agent picks up a global instruction
+    to register its work in Probe. The state was on the status line, which is
+    chrome the model cannot read. So the model's first and only information
+    about tracking was the instruction telling it to record, and it recorded:
+    that is how an untracked session created a project while displaying
+    `untracked`. A session must be TOLD, in the one channel it actually reads.
+
+    Everything else is unchanged. A tracking session still gets the reconcile
+    nudge after a compaction and silence on resume and on a fresh start --
+    injecting a nudge there would be new nagging, not a fix.
 
     PreCompact runs this same file (see docstring) and must stay silent there:
     additionalContext is SessionStart's channel, and mid-compaction there is
@@ -220,11 +228,11 @@ def _compact_context() -> str | None:
     """
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
         return None
+    if _tracking_off():
+        return TRACKING_OFF_CONTEXT
     source = os.environ.get(SESSION_SOURCE_ENV)
     if source not in (COMPACT_SOURCE, RESUME_SOURCE):
         return None
-    if _tracking_off():
-        return TRACKING_OFF_CONTEXT
     return COMPACT_CONTEXT if source == COMPACT_SOURCE else None
 
 
@@ -235,7 +243,7 @@ def _final(obj: dict) -> NoReturn:
     early return (up-to-date, no manifest, malformed cache). An update nudge
     already occupying additionalContext is appended to, never clobbered.
     """
-    ctx = _compact_context()
+    ctx = _start_context()
     if ctx:
         hso = obj.setdefault("hookSpecificOutput", {"hookEventName": "SessionStart"})
         prior = hso.get("additionalContext")

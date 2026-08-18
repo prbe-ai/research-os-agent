@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Added
+
+- **An off session's probe write is now refused, not narrated.** A new
+  PreToolUse gate (Bash only) denies `probe <write>` when tracking is off,
+  with the escape named in the refusal itself: `/toggle-research-tracking on`.
+  The warn layer stays for everything that reaches Probe another way -- the
+  SDK in a training script, the hosted MCP, a job on another machine -- but
+  every project this has actually leaked came from an agent typing `probe`
+  into Bash, which is the one path a hook can stop.
+
+  **Cleanup is never gated.** `delete` / `remove` / `rm` / `prune` / `purge`
+  are exempt from both the deny and the warn: "record nothing" is not "prevent
+  cleanup", and blocking the command a researcher reaches for on finding
+  untracked leftovers would make the mess permanent.
+
+### Fixed
+
+- **A fresh session is now told that tracking is off.** The off contract was
+  injected only on compact and resume -- the boundaries where a declaration
+  gets lost -- so a NEW session carried nothing about tracking at all. Its only
+  information was the global instruction telling it to register work in Probe,
+  and the state lived on the status line, which the model cannot read. Every
+  session start carries the contract now.
+
+- **`start-research-work` step 0 no longer turns tracking on by itself.** It
+  told the agent that an undecided session on a default-off machine should
+  `invoke toggle-research-tracking with on before the first write` -- the prose
+  twin of the auto-mark bug, automation making the researcher's declaration for
+  them. Two states, not three: tracking false means stop and ASK.
+
+
 ## 0.97.0
 
 ### Fixed
