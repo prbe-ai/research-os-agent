@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Changed
+
+- **The tracking-off contract is one sentence.** It is injected at every
+  session start now, not just at a context boundary, which makes it the
+  most-repeated string the plugin owns. The long form spent half its length on
+  things the model does not need at that moment: which of two origins turned
+  tracking off, and how to turn it back on — the latter sitting beside a clause
+  telling it not to raise tracking at all. State, prohibition, and the two
+  reassurances that stop an agent over-reading it (reads are fine, keep
+  working) survive; the rest is gone.
+
+
 ### Added
 
 - **An off session's probe write is now refused, not narrated.** A new

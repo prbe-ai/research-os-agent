@@ -131,6 +131,15 @@ COMPACT_CONTEXT = (
     "longer carries. The probe-research:track-research-work skill has the "
     "current commands."
 )
+# ONE SENTENCE, deliberately. This is injected at EVERY session start now, not
+# just at a boundary, so it is the most-repeated string the plugin owns and the
+# only one a researcher reads over and over. The long form spent three of its
+# four sentences on things the model does not need at this moment: which of two
+# origins turned tracking off, and how to turn it back on -- the second being
+# actively at odds with the "do not raise tracking" clause beside it. What
+# survives is the state, the prohibition, and the two reassurances that stop an
+# agent over-reading it (reads are fine, keep working).
+#
 # What replaces the nudge when the researcher untracked this session. The
 # toggle-research-tracking skill promises "no more tracking nudges", and before this
 # branch existed the plugin itself broke that promise at the worst moment: a
@@ -141,13 +150,10 @@ COMPACT_CONTEXT = (
 # context. Wording mirrors the skill; drift between them would have the two
 # surfaces describing one state differently.
 TRACKING_OFF_CONTEXT = (
-    "Research tracking is OFF for this conversation -- this machine starts "
-    "sessions untracked, or the researcher turned it off with "
-    "/toggle-research-tracking. Do not create Probe "
-    "projects, experiments or runs, do not write notes or Project Summary "
-    "Markdown, and do not raise tracking at all, including as a reminder or a "
-    "closing caveat. Reading Probe is still fine, and the actual work continues "
-    "as normal. `/toggle-research-tracking on` turns tracking back on."
+    "Research tracking is OFF for this conversation: create no Probe projects, "
+    "experiments, runs, notes or Project Summary Markdown, and do not raise "
+    "tracking at all, including as a reminder or a closing caveat -- reading "
+    "Probe and the work itself are unaffected."
 )
 
 
