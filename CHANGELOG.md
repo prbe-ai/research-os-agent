@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.97.0
+
 ### Fixed
 
 - **A machine whose default is `off` now actually records nothing.** The
