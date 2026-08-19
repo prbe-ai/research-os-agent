@@ -70,6 +70,51 @@
 
 ### Fixed
 
+- **A plugin release no longer breaks every Codex session already running.**
+  Codex installs to a version-qualified path
+  (`~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`) and binds
+  `$PLUGIN_ROOT` once, at session start — but installing a new version REPLACES
+  the directory, and the skills root is re-resolved every turn while the hook's
+  is not. So the moment a release landed, every live session's hooks exec'd a
+  path that no longer existed. With the mirror publishing a version bump on
+  nearly every merge, "a session older than the last release" is the normal
+  case, which is why it presented as sessions rotting after a period of
+  inactivity.
+
+  NOT COSMETIC: `PreToolUse` and `UserPromptSubmit` treat a non-zero hook as a
+  VETO, so a pruned directory blocked tool calls and prompts outright
+  (`PreToolUse hook (blocked)`, `tracking_guard.py`, exit 2). `SessionStart` and
+  `PreCompact` merely failed loudly (exit 127). One cause, two error strings:
+  `.sh` targets die in bash, `.py` targets in the interpreter.
+
+  Every hook in both plugins now re-resolves to the installed version when the
+  one it was bound to is gone, and re-exports `$PLUGIN_ROOT` so the scripts
+  downstream (`PROBE_PLUGIN_JSON`, `version_check.py`, and the tap's
+  `$PLUGIN_ROOT/.venv/bin/python3`) follow it rather than the pruned path.
+  Selection globs the exact hook script inside each candidate version, so a
+  half-extracted install cannot be chosen, and takes the most recently installed
+  match — by mtime, NOT `sort -V`, which is a GNU extension whose absence on
+  stock BSD `sort` would have made recovery a silent no-op on every Mac while
+  every Linux test stayed green.
+
+  When nothing runnable resolves the hook is silent and exits 0.
+  `session-start.sh` has always documented itself as fail-open; that contract
+  cannot be honoured from inside a file that is gone, so it now lives in the
+  wrapper that finds the file. One window remains by construction: a prune
+  landing between the check and the `exec` still emits a line, and self-heals on
+  the next event.
+
+  The resolver is inlined per command because it must run before any file in the
+  plugin can be read; there is no shared script to factor it into that would not
+  itself be the missing file. Duplication is the design, and
+  `tests/test_codex_stale_plugin_root.py` is what keeps the copies honest.
+
+  Confined to Codex's versioned cache: gated on `$PLUGIN_ROOT` (which only Codex
+  sets) and only globbing version-shaped siblings. Claude Code installs to an
+  unversioned path and updates it in place, so it never hit this — the one
+  behaviour change there is that a Claude hook whose own plugin directory is
+  missing now exits 0 instead of failing, which is the same fail-open posture.
+
 - **Telemetry can no longer raise into a training loop.** The SDK had no single
   place converting "telemetry failed" into "telemetry stayed quiet", which is
   why the same class of bug reappeared three times. `sdk/diagnostics.py` is
