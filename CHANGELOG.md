@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.98.0
+
 ### Changed
 
 - **MCP browse/search responses got token-lean, and the shapes changed.**
