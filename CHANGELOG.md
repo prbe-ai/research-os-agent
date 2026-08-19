@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Changed
+
+- **SDK data writes are asynchronous by default.** `Client(async_writes=...)`
+  now defaults to on, so `run.log()` and every other write through the `write()`
+  funnel — steps, spans, notes, tags, artifact registration, run PATCHes — is
+  journaled to the local outbox and delivered out of band. A training loop can
+  no longer be blocked, or killed, by the network. Reads, creates and
+  `finish()` are unchanged and still synchronous: creates never travelled
+  through `write()`, and `finish()` remains the delivery barrier.
+
+  Opt back out with `Client(async_writes=False)`, or without touching code via
+  `PROBE_ASYNC=0` — the SDK reads that variable now, not only the CLI. Clients
+  built with an injected transport (the hosted MCP, tests) stay synchronous by
+  default, because the detached outbox worker cannot replay one. The CLI's
+  default is unchanged: `probe log` still writes through, and `--async` /
+  `PROBE_ASYNC=1` is still its opt-in.
+
+### Fixed
+
+- **A metrics POST is retried when the request never reached the server.**
+  Retries were gated on `GET`/`PUT`, so `POST /v1/runs/{id}/metrics` got exactly
+  one attempt and a single transient blip was immediately terminal. Connect-class
+  failures (`ConnectError`, `ConnectTimeout`, `PoolTimeout`) now retry for any
+  method. A `ReadTimeout` still does not retry a write: the request was already
+  on the wire, and replaying it would append the batch twice.
+- **The connect phase is bounded at 5s instead of inheriting the 30s timeout.**
+  An unreachable or black-holing endpoint used to park a caller for the full
+  timeout on every request — in distributed training, long enough for one rank's
+  stalled write to trip a collective. Reads keep the full budget.
+- **`Run.set_status` no longer raises on a transport failure.** It was the one
+  write in the SDK that propagated, and `Run.__exit__` calls it from inside an
+  exception handler — so a network blip while a run was already failing replaced
+  the body's real traceback with a transport one and took the process down. It
+  now fail-opens to the journal like every other write. `finish()` reports
+  `{finish_queued, delivered, remaining}` when the terminal flip is journaled
+  rather than claiming a close it did not make.
+
 ## 0.98.0
 
 ### Changed
