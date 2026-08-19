@@ -4,6 +4,24 @@
 
 ### Changed
 
+- **MCP browse/search responses got token-lean, and the shapes changed.**
+  Browse nodes no longer carry the bare `id` (byte-identical to `uuid`'s
+  tail — `slug`/`uuid` are the two addresses), null-valued keys are omitted
+  (absent means "nothing here"), and `available_views` rides once on the
+  envelope keyed by kind instead of on every node. Nested depth-2 children
+  are annotated the same as top-level nodes. Project and experiment nodes
+  now carry `description` (a 280-char excerpt with `description_truncated`
+  when clipped; backend ≥ 0.202). A semantic search document hit no longer
+  duplicates its address as `id` — `card.doc_id` is the address; `id`
+  appears only on entity-resolved hits.
+- **The CLI grew an output policy.** `_print_json` prints compact JSON on a
+  pipe and pretty on a terminal (whitespace is the only difference), with
+  `ensure_ascii=False` plus re-escaped C1/bidi display controls in both
+  modes. `probe get` / `run get` / `project get` / `project list` /
+  `run list` accept `--fields slug,name,...` — a top-level projection that
+  errors loudly on unknown or empty selections and always preserves
+  `next_cursor`.
+
 - **The tracking-off contract is one sentence.** It is injected at every
   session start now, not just at a context boundary, which makes it the
   most-repeated string the plugin owns. The long form spent half its length on
