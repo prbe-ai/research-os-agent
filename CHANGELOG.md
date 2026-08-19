@@ -94,6 +94,30 @@
 
 ### Fixed
 
+- **Stale-root recovery anchors on the install manifest, not on the hook script.**
+  0.42.0 taught every hook to re-resolve when the version it was bound to is
+  pruned, by globbing the hook script inside each version-shaped sibling and
+  taking the most recent match. Within the hour that shipped, the devbox proved
+  the anchor too weak: when 0.42.0 pruned 0.41.0, another session hand-wrote
+  three compatibility shims INTO the dead directory — `tracking_guard.py`,
+  `telemetry.py`, `statusline_refresh.py`, and nothing else. That directory then
+  carried the exact filenames the resolver globs for and, having been written
+  afterwards, a newer mtime. So it won, and those two hooks resolved to a
+  scratch dir with no `_session_marker` and no `plugin.json`.
+
+  The shims happened to forward to the real install, so nothing broke once they
+  were repaired — but nothing about that was guaranteed. An ImportError there is
+  exit 1, and on `PreToolUse` / `UserPromptSubmit` a non-zero hook is a VETO, so
+  the failure mode is blocked tool calls, which is exactly what the shims caused
+  for three sessions before they were fixed.
+
+  Resolution now globs `.codex-plugin/plugin.json` — the file that makes a
+  directory an INSTALL rather than a pile of hook scripts — and only then checks
+  that the chosen install carries the target. A version-shaped directory without
+  a manifest is not a candidate however new it is. Verified against the real
+  cache: the 0.42.0 resolver picks the scratch `0.41.0` for two of three
+  targets, this one picks the real install for all three.
+
 - **A plugin release no longer breaks every Codex session already running.**
   Codex installs to a version-qualified path
   (`~/.codex/plugins/cache/<marketplace>/<plugin>/<version>/`) and binds
