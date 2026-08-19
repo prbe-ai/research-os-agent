@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A failed close can no longer replace the error that caused it.** `Run.__exit__`
+  runs `finish()` inside an exception handler, so anything it raises displaces the
+  traceback the researcher needs — the mechanism that made 0.98.0 kill training
+  processes. 0.99.0 fixed the transport case and reopened it from another
+  direction: a permanently rejected terminal PATCH (a 422, not a blip) dead-letters,
+  and that raise propagated out of the with-block. A close failure is now a warning
+  when the body already failed; an explicit `run.finish()` still raises.
+- **An artifact upload no longer drains other runs' queues.** The span-ordering
+  barrier added in 0.99.0 called `client.flush()`, a machine-wide drain of every
+  run's queued ops behind the exclusive drain lock — on a path Harbor walks once
+  per file per trial. It is now scoped with `run_ref` to the uploading run, and
+  triggers only when that run has a queued *span*, since a pending metric point
+  says nothing about whether the cited span has landed.
+- **A settled finish no longer strands later writes on an F2 client.** The handoff
+  closed the in-process exporter without clearing it, and `_after_enqueue` never
+  respawns a closed one; on a client with an injected transport the drainer kick is
+  a no-op, so nothing was left to deliver. The handoff now runs only where a
+  detached worker can actually be spawned, and clears the exporter so the next
+  write builds a fresh one.
+
 ## 0.99.0
 
 ### Changed
