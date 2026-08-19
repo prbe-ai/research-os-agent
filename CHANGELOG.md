@@ -19,6 +19,20 @@
   default is unchanged: `probe log` still writes through, and `--async` /
   `PROBE_ASYNC=1` is still its opt-in.
 
+  **`strict=True` now implies synchronous.** It means "fail loudly, never
+  journal", which is a demand for the network, so async mode no longer overrules
+  it. This matters most to `probe.integrations.miles`, which passes `strict=True`
+  and then deletes its own durable queue record once the write returns without
+  raising — a queued write there would have erased the only copy of the data.
+  Writes carrying a server-response check (`set_project_notes`,
+  `append_project_notes`) are synchronous for the same reason: a queued write
+  skips the read-back that catches a backend silently ignoring the field.
+
+  Under async, `run.span()` is journaled while an artifact UPLOAD posts directly,
+  so `log_artifact(path=..., span_id=...)` now delivers the queue first — the
+  server enforces the span foreign key, and the reference must not outrun its
+  referent.
+
 ### Fixed
 
 - **A metrics POST is retried when the request never reached the server.**
