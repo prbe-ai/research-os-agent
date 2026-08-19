@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.99.0
+
 ### Changed
 
 - **SDK data writes are asynchronous by default.** `Client(async_writes=...)`
