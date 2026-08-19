@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.40.0",
+  "version": "0.41.0",
   "description": "Probe Research: tracking for the team's ML work — training runs, evaluations, surveys, design decisions, data processing. Skills for opening a tracked run, for capturing, verifying and closing it, for wiring that capture into a distributed training script so it actually lands, and for drawing the whole research arc as one timeline in the session, wired to a read-only Probe Research MCP server. A SessionStart hook nudges you when the CLI or plugin is out of date. Writes go through the `probe` CLI (installed via /probe-research-setup) or, in-process from training scripts, the Python SDK (`import probe`, PyPI: probe-research).",
   "author": { "name": "Probe", "email": "team@prbe.ai" },
   "homepage": "https://github.com/prbe-ai/research-os-agent",
