@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Every MCP tool answers compactly now, not just two of them.** `_compact` has always
+  existed and has always stripped the envelope bookkeeping an agent cannot act on — but
+  `_envelope`'s `verbose` default was opt-IN, so a tool got the lean shape only if it
+  remembered to ask. `search_knowledge` and `get_entity` asked. `browse_research`,
+  `read_metrics` and the three metric aliases did not, and shipped `schema_version`,
+  `as_of`, `scope` and all seven capability flags (six of them True) ahead of their
+  answer on EVERY call — about 350 characters before the first byte of data, which is
+  what a person watching the tool scroll past actually reads.
+
+  The default is now opt-OUT: the compact shape is the contract and `verbose=true` is
+  the debugging affordance. A tool added later is quiet by default instead of noisy
+  until someone notices. Nothing that carries signal was dropped — `data`,
+  `completeness`, `next_cursor` and any FALSE capability all survive, and the two tools
+  whose schema advertises `verbose` still return the full envelope on request.
+
+- **`next_cursor` is always present in a compact response, null included.** It used to
+  be emitted only when set, which made absence mean both "that was the whole answer"
+  and "this read does not paginate" — so the obvious walk (`cursor =
+  page["next_cursor"]`) ran fine while there was more data and raised `KeyError` on the
+  LAST page. It failed at completion and succeeded mid-walk, the inverse of a useful
+  failure mode, and it is the same reason `capabilities` is always emitted.
+
 ## 0.101.0
 
 ### Changed
