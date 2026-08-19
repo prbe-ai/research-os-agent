@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.101.0
+
 ### Changed
 
 - **The MCP metric tools are one tool.** `get_metrics_grouped`, `get_run_coordinates`
