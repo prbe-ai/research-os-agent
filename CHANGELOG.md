@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.99.1
+
 ### Fixed
 
 - **A failed close can no longer replace the error that caused it.** `Run.__exit__`
