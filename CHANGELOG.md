@@ -2,6 +2,79 @@
 
 ## Unreleased
 
+### Changed
+
+- **`auto_drain=False` no longer means "lose your writes".** It disables the
+  detached worker subprocess, which is all its name ever implied — but once
+  async became the default it also meant every write went to disk with nothing
+  to collect it. A default-transport client now uses the in-process exporter
+  instead, so async is preserved and delivery is guaranteed. It does NOT fall
+  back to synchronous: that would put the network back on the training loop's
+  critical path, which is the failure this whole line of work exists to remove.
+- **Async writes now require a delivery mechanism.** Three configurations used
+  to queue with no drainer at all, silently, because a queued write returns
+  `None` exactly like a delivered one. Where the caller explicitly asked for
+  async with no background drainer — a custom transport, or `auto_drain=False`
+  — it still works and now says so, because `flush()`/`finish()` is a real
+  delivery path and draining by hand is deliberate in the CLI barrier and in
+  tests. Only the silence was ever the defect.
+- **Distributed jobs get one journal per rank.** The outbox defaults under
+  `$HOME`, which on SLURM is shared, so every rank on every node contended on a
+  single `.append.lock` — a cluster-wide mutex on the metric-logging path.
+  Detected from `SLURM_PROCID` / `RANK` / `OMPI_COMM_WORLD_RANK`, or
+  `LOCAL_RANK` qualified by hostname. A single-process run is unchanged, so
+  nothing needs migrating. Deliberately not node-local scratch: `$SLURM_TMPDIR`
+  is reaped at job end, which would destroy an undrained queue.
+- **The outbox has a ceiling.** A byte floor (`PROBE_OUTBOX_MIN_FREE_BYTES`,
+  sampled rather than checked per write) and an op-count backstop
+  (`PROBE_OUTBOX_MAX_PENDING`, default 500k) now apply to every queued write,
+  not just blob staging. A refusal drops the NEW write — evicting an old one
+  races the drain and discards what a barrier is waiting on — and records a
+  numbered capture gap, so the loss reads as a hole in the record.
+- **An auth block expires.** A 401/403 used to suppress every future worker
+  permanently, so a token rotating mid-run left the queue undelivered with no
+  retry and no signal until someone ran `probe outbox retry`. It is a
+  five-minute cooldown now: one re-probe, so a re-issued credential resumes
+  delivery on its own.
+
+### Fixed
+
+- **Telemetry can no longer raise into a training loop.** The SDK had no single
+  place converting "telemetry failed" into "telemetry stayed quiet", which is
+  why the same class of bug reappeared three times. `sdk/diagnostics.py` is
+  that place: a `warn()` that cannot raise whatever the warning filters say.
+  Under `-W error` every `warnings.warn` inside an `except` block was a live
+  exception — one killed a *successful* run at its closing brace, and one sat
+  ahead of the artifact fail-open so the recovery never ran and the run lost
+  the only record of the file.
+- **`SpanHandle.__exit__` had no exception guard at all**, and `with
+  run.span(...)` is the advertised rollout API — the most-travelled unwinding
+  path in the SDK. It also called `str(exc)` on the caller's live exception,
+  which framework exceptions that format lazily can turn into a crash. Both it
+  and `Run.__exit__` now catch `BaseException`: `finish()` sleeps and blocks on
+  I/O, so a Ctrl-C landing in it is the likely case, not an exotic one.
+- **A broken outbox no longer kills the run.** The journal enqueue was
+  unguarded on the default path, so ENOSPC, a read-only `XDG_STATE_HOME`, or an
+  `flock` returning ENOSYS raised a raw `OSError` out of `run.log()`. Fail-open
+  also covered only `RosError`, so a non-JSON 2xx (a CDN interstitial) took the
+  loop down where `Transport.delete` already defended against the same thing.
+- **The enqueue is O(1) again.** `status.json` recounted the queue with a
+  `listdir` on every append, making N writes O(N² log N) — the queue got slower
+  to write exactly as the outage it exists to survive got longer. Measured
+  1.19ms/append at depth 1 rising to 6.50ms at 8k; now flat at ~1.04ms.
+  `_ensure()` also ran 4 mkdir + 4 chmod per write, and `chmod` is a SETATTR
+  round trip on NFS.
+- **Nothing is stranded at close.** `OutboxExporter` returned on its stop flag
+  *before* the final drain, so a clean close discarded up to a whole interval of
+  metrics, and `Client.close()` joined a dead thread and walked away. Both now
+  deliver what they can and hand the rest to the detached worker. The handoff is
+  one method, `Client.hand_off_delivery` — it was copy-pasted into two
+  near-duplicate finish paths, one got fixed, and the other carried the bug
+  through three reviews.
+- **A dead worker is no longer reported as spawned.** `maybe_spawn` returned
+  True when `Popen` succeeded, which says the fork worked, not that a worker
+  runs — a child that cannot `import probe` exited instantly and still armed the
+  caller's kick throttle, so the queue grew with nothing draining it.
 ## 0.100.0
 
 ## 0.99.1
