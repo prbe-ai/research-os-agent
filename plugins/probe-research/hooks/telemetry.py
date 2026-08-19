@@ -123,7 +123,6 @@ PROBE_ENTITIES = {
     "group",
     "version",
     "views",
-    "wiki",
     "outbox",
 }
 WRITE_VERBS = {
