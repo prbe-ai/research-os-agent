@@ -93,7 +93,10 @@ curation — it fires when someone is tidying structure, not when work is happen
 `probe run set RUN [--name NAME] [--description DESCRIPTION] [--notes TEXT|@FILE|-]`
 `probe group create EXP --name NAME [--kind KIND] [--spec JSON|@FILE] [--notes ...]`
 `probe group set GROUP [--name NAME] [--spec JSON|@FILE] [--notes TEXT|@FILE|-]`
-`probe notes show | write [FILE] [--append]` — the PROJECT's hidden agent briefing
+`probe notes show | write [FILE] [--append]` — the PROJECT's operational briefing
+`probe notes append [FILE] [--project|--experiment|--run|--group|--artifact|--team]` — add a paragraph
+`probe notes edit --old TEXT [--new TEXT] [same target flags]` — replace one exact span (`--new` omitted deletes)
+`probe notes team [--brief]` — the team's shared note; `--brief` is the slice every session is briefed with
 
 The server-owned AI narrative and editable `summary_markdown` suffix render as
 one Project Summary. Never edit or duplicate the AI narrative. Description is
@@ -110,6 +113,13 @@ creates anything. `probe experiment set EXP --hypothesis "..."` amends a hypothe
 `probe run set` amends a run's human title, description or notes without changing its
 lifecycle state, metrics, or lineage.
 
-Notes exist on projects, runs and run groups, and NOT on experiments. `--notes ""`
-clears; `--notes @file` and `--notes -` read a file and stdin, since a caveat is
-usually a paragraph. Which of the three to use is `track-research-work` step 1.
+Notes exist on projects, experiments, runs, run groups and artifacts, plus ONE
+shared team note. `--notes ""` clears; `--notes @file` and `--notes -` read a file
+and stdin, since a caveat is usually a paragraph. Which destination to use is
+`track-research-work` step 1.
+
+`append` and `edit` are the agent writes and neither requires reading the document
+first: append extends it (safe when others are writing at the same moment), edit
+replaces one exact span and is refused with a match count when `--old` is not
+unique. `--notes` on the older per-entity verbs still REPLACES the whole value —
+prefer `notes append` unless you mean to overwrite.

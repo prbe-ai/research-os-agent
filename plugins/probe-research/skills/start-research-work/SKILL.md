@@ -45,12 +45,22 @@ near-miss of an existing slug rather than warning.)
    Check what is already RUNNING before you launch anything — `browse_research`
    reports `active_run_count`, and duplicate GPU-hours are the expensive mistake.
 
-   Read the visible Project Summary suffix with `get_entity(..., view="summary")`;
-   it is durable teammate-facing Markdown that should shape the work. Then read
-   the project's hidden notes — `probe notes show`, or the `notes` on its MCP
-   `card`. Notes are free-text markdown the last session left for you: what was tried,
-   what was ruled out, what not to repeat. Add to it as you learn things
-   (`probe notes write --append`); see `track-research-work`.
+   Read the TEAM NOTE first — `probe notes team`, or `get_entity(ref="team-note")`,
+   or the slice an unscoped `browse_research` already handed you. It is one shared
+   markdown document per team: what the lab is working on, what it decided, what it
+   has already tried. Everything in it was written by an agent doing the work or by
+   a person, so it is the team's live memory rather than a summary of one.
+
+   Then read the visible Project Summary suffix with `get_entity(..., view="summary")`;
+   it is durable teammate-facing Markdown that should shape the work. Then the
+   project's own notes — `probe notes show`, or the `notes` on its MCP `card`:
+   free-text markdown the last session left for you about THIS project. Every other
+   entity carries notes too (`view="notes"` on an experiment, run or group), and an
+   excerpt rides on each card, so a caveat reaches you without being asked for.
+
+   Add to all of them as you learn things: `probe notes append` for a new paragraph,
+   `probe notes edit` to correct or compact one. Never rewrite a whole document to
+   change part of it. See `track-research-work` for which destination takes what.
 
    **If the work is about a codebase, connect its repository.** Put a line
    containing only `[README](https://github.com/owner/repo)` in the project's
@@ -168,8 +178,9 @@ near-miss of an existing slug rather than warning.)
    probe project get <project> | jq -r '.summary_markdown // ""'  # verify
    ```
 
-   Use `probe notes write --append` for concurrent operational updates; do not
-   move visible project documentation into notes merely because notes can append.
+   Use `probe notes append` for operational updates and `probe notes edit` to
+   correct one; do not move visible project documentation into notes merely
+   because notes can append.
 
    Work with no hypothesis does not need an experiment at all: open a
    PROJECT-DIRECT run (`probe run start --project folding`, or
@@ -212,11 +223,13 @@ near-miss of an existing slug rather than warning.)
    `promoted_to`/`derived_from`) has no relation meaning "provisioned by", so do not
    force one onto `probe edge`; `foreign_keys` is an open dict and is the right door.
 
-   Write the CONCLUSION in the project's notes, not only in the runs. "Every
-   us-central1 zone was out of H100s for the whole afternoon, so this trains on a
-   single A100 80GB" is one line that an arriving agent reads off the project card
-   without knowing any of those runs exist. The runs are the evidence; the notes are
-   what gets read.
+   Write the CONCLUSION in notes, not only in the runs. "Every us-central1 zone was
+   out of H100s for the whole afternoon, so this trains on a single A100 80GB" is
+   one line that an arriving agent reads off the card without knowing any of those
+   runs exist. The runs are the evidence; the notes are what gets read. Put it on
+   the project when it is about this project, on the experiment when it is that
+   experiment's running record, and in the TEAM note when the next session on any
+   project would want it — that last one is what every session is briefed with.
 
    A campaign of attempts that belong together — three zones, then a fallback, then a
    queued MIG resize — CANNOT share a run group: groups are experiment-anchored, and

@@ -59,9 +59,13 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
+from pathlib import Path
 from typing import NoReturn
 
-# pathlib, time and urllib left with the helpers that moved to version_policy.
+# `time` left with the helpers that moved to version_policy; pathlib and urllib
+# came back for the team-note brief, which reads the CLI's stored credential and
+# makes one short, fail-open request of its own.
 # The shared policy: TTL/BACKOFF, the cache and state paths, the cache reader and
 # writer, and the fetch. `make sync-plugin-policy` copies it here from
 # src/probe/version_policy.py and tests/test_policy_sync.py fails if the copies
@@ -157,6 +161,103 @@ TRACKING_OFF_CONTEXT = (
 )
 
 
+#: How long the brief fetch may take before the session starts without it. Well
+#: under the version manifest's budget: this is one indexed single-row read, and
+#: a session start is a place where every added millisecond is felt.
+def _team_note_timeout() -> float:
+    """Read here rather than through version_policy's private helper: that module
+    is a SYNCED COPY of the SDK's (`make sync-plugin-policy`, pinned by
+    tests/test_policy_sync.py), so reaching into its internals from this file
+    would make an unrelated sync fail on a name it never promised."""
+    try:
+        return float(os.environ.get("PROBE_TEAM_NOTE_TIMEOUT", "") or 2.0)
+    except ValueError:
+        return 2.0
+
+#: What the brief is wrapped in. The label matters: without it the model reads
+#: a wall of prose with no idea who wrote it or how much authority it carries.
+TEAM_NOTE_HEADER = (
+    "The team note -- your team's shared working memory, written by the people and "
+    "agents doing this work. Treat it as current context, and add to it with "
+    "`probe notes append --team` when you learn something the next session needs:"
+)
+
+
+def _team_note_brief() -> str | None:
+    """The bounded team-note slice, or None. NEVER raises, never blocks a start.
+
+    FAIL-OPEN in every direction: no credential, no network, a slow backend, an
+    old backend with no such route, a malformed body -- all mean the session
+    starts without a briefing, which is exactly how sessions started before this
+    existed. An arriving agent that cannot be briefed is a smaller problem than
+    one that cannot start, and `browse_research` carries the same slice for
+    anyone who calls it.
+    """
+    token = os.environ.get("PROBE_TOKEN") or _config_token()
+    if not token:
+        return None
+    base = _base_url()
+    # This is the ONE credentialed request in this file -- the manifest fetch is
+    # anonymous -- so it is the one that has to care where the bytes go.
+    #
+    # Plain http would put a `probe_pat_...` on the wire in clear text. A local
+    # backend is the legitimate reason someone points PROBE_BASE_URL at http, and
+    # the right answer there is to start without a briefing rather than to leak
+    # the PAT: the session still works, `browse_research` still carries the same
+    # slice, and nothing about the failure is silent to anyone reading this.
+    if not base.startswith("https://"):
+        return None
+    try:
+        request = urllib.request.Request(
+            base + "/v1/team-note/brief",
+            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
+        )
+        # NOT the module-level `urlopen`: its default opener follows 30x, and
+        # CPython's HTTPRedirectHandler copies every header except
+        # content-length/content-type onto the redirected request -- so a
+        # compromised or merely misconfigured host could replay the Authorization
+        # header, PAT included, to any origin it names. This opener refuses
+        # redirects outright (a 30x raises and we fail open, same as a timeout).
+        opener = urllib.request.build_opener(_NoRedirect)
+        with opener.open(request, timeout=_team_note_timeout()) as response:  # noqa: S310
+            payload = json.loads(response.read().decode("utf-8"))
+        text = (payload or {}).get("text") or ""
+    except Exception:
+        return None
+    if not text.strip():
+        return None
+    return f"{TEAM_NOTE_HEADER}\n\n{text}"
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Turn every 30x into an error instead of a re-request to a new host."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
+        return None
+
+
+def _config_token() -> str | None:
+    """The CLI's stored PAT, read the same way `probe` reads it.
+
+    `version_policy.config_path()`, NOT a hand-rolled `~/.config/probe`: that
+    helper is where `base_url()` reads the host from, and it honours
+    PROBE_CONFIG_PATH and XDG_CONFIG_HOME. Resolving the path separately here
+    would let the two disagree on a machine that sets either -- and the shape of
+    that disagreement is sending one context's token to another context's server.
+    """
+    try:
+        data = json.loads(Path(version_policy.config_path()).read_text())
+    except Exception:
+        return None
+    contexts = data.get("contexts")
+    if isinstance(contexts, dict):
+        active = contexts.get(data.get("current_context") or "default") or {}
+        token = active.get("token")
+    else:
+        token = data.get("token")
+    return token if isinstance(token, str) and token else None
+
+
 def _emit(obj: dict) -> NoReturn:
     sys.stdout.write(json.dumps(obj))
     sys.exit(0)
@@ -234,12 +335,23 @@ def _start_context() -> str | None:
     """
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
         return None
+    parts: list[str] = []
     if _tracking_off():
-        return TRACKING_OFF_CONTEXT
-    source = os.environ.get(SESSION_SOURCE_ENV)
-    if source not in (COMPACT_SOURCE, RESUME_SOURCE):
-        return None
-    return COMPACT_CONTEXT if source == COMPACT_SOURCE else None
+        parts.append(TRACKING_OFF_CONTEXT)
+    else:
+        source = os.environ.get(SESSION_SOURCE_ENV)
+        if source == COMPACT_SOURCE:
+            parts.append(COMPACT_CONTEXT)
+    # THE TEAM-NOTE BRIEF goes in whatever else this hook is saying, and
+    # regardless of the tracking toggle: the toggle stops RECORDING, and a
+    # briefing is a read. A session told not to write still benefits from
+    # knowing what the team already decided -- and suppressing it would make
+    # "every session arrives briefed" false for exactly the sessions that opted
+    # out of writing, which is not what opting out meant.
+    brief = _team_note_brief()
+    if brief:
+        parts.append(brief)
+    return "\n\n".join(parts) if parts else None
 
 
 def _final(obj: dict) -> NoReturn:

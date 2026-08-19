@@ -108,9 +108,12 @@ gets made. Record with the surface the run was opened with.
    |---|---|
    | a short statement of what this project is | the PROJECT's description |
    | durable context a teammate should read on the dashboard | the editable Markdown suffix in the PROJECT Summary |
-   | an operational handoff, caveat, decision or thing not to repeat | the PROJECT's hidden notes |
+   | something the WHOLE TEAM needs, across projects | the TEAM note |
+   | an operational handoff, caveat, decision or thing not to repeat | the PROJECT's notes |
+   | the running record of one experiment — configs, results, conclusions | that EXPERIMENT's notes |
    | why THIS run's number should be distrusted | that RUN's notes |
    | what a sweep or a campaign of runs concluded | that GROUP's notes |
+   | provenance about one file — where it came from, what is wrong with it | that ARTIFACT's notes |
 
    ```
    probe project get PROJECT | jq -r '.summary_markdown // ""' > PROJECT.md
@@ -118,14 +121,31 @@ gets made. Record with the surface the run was opened with.
    probe project set PROJECT --summary @PROJECT.md
    probe project get PROJECT | jq -r '.summary_markdown // ""'  # verify
 
-   probe notes show                       # hidden operational briefing
-   probe notes write --append <<'EOF'     # add to it, do not clobber
+   probe notes team                       # the team's shared working memory
+   probe notes append --team <<'EOF'      # every session is briefed with this
    Harbor has no generic-Kubernetes backend, so DOKS is out. Using GKE.
    EOF
 
-   probe run set   RUN --notes "Scored 0.0 by a broken verifier; see project notes."
-   probe group set GRP --notes "Every us-central1 zone was out of H100s."
+   probe notes show                       # this project's operational briefing
+   probe notes append <<'EOF'             # add to it, never clobber it
+   The 2026-08 export supersedes the 07 one; rows 400-900 were duplicated.
+   EOF
+
+   probe notes append --experiment EXP --run RUN --group GRP --artifact ID
+   probe notes edit --team --old "DOKS is out" --new "DOKS is out (retest 2027)"
    ```
+
+   TWO WRITES, AND NEITHER IS A REWRITE. `append` adds a paragraph; `edit`
+   replaces one exact span (`--new` omitted deletes it). Both are safe when other
+   agents are writing the same document at the same moment, and neither asks you
+   to hold the document in context. Do NOT read a note, change a line, and write
+   the whole thing back: that is how the parts you did not think to repeat
+   disappear. An `edit` whose `--old` does not match exactly once is refused with
+   the match count — copy more surrounding text and retry, never guess.
+
+   COMPACTING is editing. When a document gets long, fold finished appends up into
+   its sections with `edit` rather than letting the bottom grow forever; the team
+   note tells you how much room is left on every write.
 
    The dashboard Project Summary is one rendering with two owners: the server
    refreshes the AI narrative, while agents and people replace only
@@ -165,8 +185,11 @@ gets made. Record with the surface the run was opened with.
    nearly always learned afterwards. With one field the two compete, and the caveat
    wins by destroying the description. All three take `@file` or `-` for stdin.
 
-   Experiments have no notes field — a claim about an experiment goes in the
-   project's notes, or in `probe experiment set --description`.
+   Experiments have their OWN notes now, and they are the running experiment
+   document: the configs you tried, the numbers they produced, what you concluded,
+   accumulated while the work happens rather than written up afterwards. Claims
+   about one experiment belong there, not in the project's notes — that redirect
+   used to be necessary and mixed every experiment's record into one file.
 
    The launch context capture now records automatically — the exact argv, the seeds,
    the container, the determinism flags — is worth a note the moment it SURPRISES you:

@@ -279,22 +279,34 @@ def valid_base(candidate: object) -> str | None:
     return None
 
 
-def base_url() -> str:
-    """`PROBE_BASE_URL`, then the CLI config, then the hosted API.
+def config_path() -> str:
+    """Where the CLI's config.json lives: `PROBE_CONFIG_PATH`, else under
+    `XDG_CONFIG_HOME` (default `~/.config`).
 
-    Reads BOTH `PROBE_CONFIG_PATH` and `XDG_CONFIG_HOME`. Every reader now
-    agrees on that order -- `sdk.config.config_path` was the last holdout and
-    was reconciled when the machine-wide tracking default started depending on
-    writer and reader addressing the same file.
+    Exported rather than inlined into `base_url` because the file holds the
+    base URL and the TOKEN FOR THAT BASE URL, and a second reader that resolved
+    the path its own way could pair one file's credential with another file's
+    host. The session-start hook is exactly such a reader.
     """
-    found = valid_base(os.environ.get("PROBE_BASE_URL"))
-    if found:
-        return found
-    config = os.environ.get("PROBE_CONFIG_PATH") or os.path.join(
+    return os.environ.get("PROBE_CONFIG_PATH") or os.path.join(
         os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
         "probe",
         "config.json",
     )
+
+
+def base_url() -> str:
+    """`PROBE_BASE_URL`, then the CLI config, then the hosted API.
+
+    Reads BOTH `PROBE_CONFIG_PATH` and `XDG_CONFIG_HOME` (via `config_path`).
+    Every reader now agrees on that order -- `sdk.config.config_path` was the
+    last holdout and was reconciled when the machine-wide tracking default
+    started depending on writer and reader addressing the same file.
+    """
+    found = valid_base(os.environ.get("PROBE_BASE_URL"))
+    if found:
+        return found
+    config = config_path()
     try:
         with open(config) as handle:
             data = json.load(handle)
