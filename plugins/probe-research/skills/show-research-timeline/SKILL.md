@@ -28,11 +28,20 @@ probe notes show                               # what the last session decided
 get_entity(ref="run:<id>", view="handoff")     # series, span_types, artifact_total
 get_entity(ref="run:<id>", view="reproduce")   # env_ref, execution_record, missing
 get_entity(ref="experiment:<id>", view="versions")   # published or not
+read_metrics(run_id="<id>", mode="coordinates")      # the axes it logged on
 ```
 
 `browse_research` alone answers the common case — "this project has four experiments
 and nothing running" is most of a timeline. Only fetch the run views when a run
 exists and its interior matters.
+
+`read_metrics` is the numbers, at whichever of three grains the question needs:
+`mode="coordinates"` enumerates the axes a run logged on, `mode="grouped"` reduces
+one key over those axes and over step buckets, `mode="points"` reads raw points a
+page at a time. A timeline rarely needs more than `coordinates` — `handoff` already
+carries the series names, and a stage is drawn from whether a series EXISTS, not
+from its values. Each mode reads only its own arguments and refuses the rest, so a
+refusal means asking at a different grain rather than dropping the argument.
 
 **Never mark a stage from memory of what you did this session.** What you wrote and
 what landed are different claims, and the timeline is read as evidence. If a write

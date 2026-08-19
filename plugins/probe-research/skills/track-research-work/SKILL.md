@@ -292,10 +292,21 @@ gets made. Record with the surface the run was opened with.
    and you have logged tiles and no graphs. Fix the shape before spending compute
    on more runs. Do this on a 2-instance run, not after 300: the shape is identical
    and the mistake costs two minutes instead of an afternoon. When checking a breakdown pools the way you intended, pass an
-   explicitly large `step_bucket` to `get_metrics_grouped` and confirm the rows
-   come back with `n > 1`: the reduction buckets by step first, so points written
-   at auto-incremented steps return one group per point and the grouping appears
-   to do nothing.
+   explicitly large `step_bucket` to `read_metrics(mode="grouped")` and confirm the
+   rows come back with `n > 1`: the reduction buckets by step first, so points
+   written at auto-incremented steps return one group per point and the grouping
+   appears to do nothing.
+
+   `read_metrics` is ONE tool over three grains, and the grain is the `mode`
+   argument: `grouped` reduces a key over coordinate axes and step buckets,
+   `coordinates` enumerates the axes a run actually logged on (call it first when
+   you are guessing at `by`), and `points` reads raw points losslessly, a page at
+   a time. Each mode reads only its own arguments and REFUSES the others rather
+   than ignoring them — `mode="points"` with `by=[...]` is an error, not an
+   ungrouped answer — so a refusal means re-issuing in the mode that answers the
+   question, not dropping the argument. It replaced `get_metrics_grouped`,
+   `get_run_coordinates` and `export_metric_points`; those names still answer for
+   one release and then stop.
 
 4. **Version reusable outputs; do not copy them.** An asset is an artifact with a
    version chain — upload it (`run.log_artifact` / `probe artifact add`), then pin

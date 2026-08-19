@@ -4,6 +4,35 @@
 
 ### Changed
 
+- **The MCP metric tools are one tool.** `get_metrics_grouped`, `get_run_coordinates`
+  and `export_metric_points` were one question about GRAIN asked three ways, so the
+  question is now the tool and the grain is an argument:
+  `read_metrics(run_id, mode="grouped"|"coordinates"|"points", ...)`. Six tools, four.
+  `browse_research`, `search_knowledge` and `get_entity` are untouched.
+
+  Each call is validated against THE MODE IT CHOSE, not against the union of the
+  three. A merged tool declares every branch's arguments together, so validating
+  against that union only checks that an argument exists somewhere in the tool — an
+  argument meant for another mode then passes, reaches the endpoint, and is dropped
+  without a word, and the 200 that comes back answered a different question.
+  `mode="points"` with `by=[...]` is now an error naming the mode that does read
+  `by`; before the merge it could not be expressed, and in the equivalent backend
+  collapse it returned ungrouped points. `mode` is required for the same reason a
+  wrong-mode argument is refused: a default picks the grain for a caller who did not
+  state one.
+
+- **The three old tool names still answer, for one release.** An MCP tool name is a
+  distributed contract: the tools are served by the server, but the instructions for
+  calling them ship in the installed plugin, and `.mcp.json` pins one url for every
+  plugin version — so a clean rename breaks every installed client the instant the
+  image rolls. Each old name is a fixed-mode delegation to the same dispatch (so the
+  two spellings cannot diverge) and logs at WARNING when called. They are removed in
+  the change that raises plugin `min` past the first version whose skills teach
+  `read_metrics`; plugin `min` is deliberately NOT bumped here.
+
+- The `track-research-work` and `show-research-timeline` skills teach `read_metrics`,
+  including that a wrong-mode argument is refused rather than ignored.
+
 - **`auto_drain=False` no longer means "lose your writes".** It disables the
   detached worker subprocess, which is all its name ever implied — but once
   async became the default it also meant every write went to disk with nothing
