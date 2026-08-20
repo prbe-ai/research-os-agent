@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.102.0
+
 ### Added
 
 - **Artifact byte uploads can be asynchronous.** `run.log_artifact(path=...)`
