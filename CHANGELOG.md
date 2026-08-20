@@ -4,6 +4,27 @@
 
 ### Added
 
+- **`mcp.tool_served` now records which `get_entity` view was served.** One tool name
+  covered two unrelated cost shapes: ROW views (`trajectory`, `metrics`, `artifacts`,
+  `events`) are bounded by `token_budget` and page with a cursor, while ATOMIC views
+  (`card`, `reproduce`, `handoff`) are deliberately unbounded — `service._VIEWS`
+  refuses to truncate a reproduction manifest, because one with fields dropped
+  reproduces nothing, and a team note's card IS the document. Both are right; they are
+  not the same spend, and a single `tool: get_entity` row mixing them could be read but
+  not acted on.
+
+  Prompted by the first day of real data: `get_entity` was 59% of calls and 77% of all
+  bytes served, including a single 106KB response.
+
+  `view` is validated against the closed 14-member `contract.View` enum, so it stays a
+  dimension rather than caller-controlled content, and the tool's default is resolved
+  once at decoration time — a caller that omits `view` still gets `card` served, and
+  reading only the passed kwargs would have filed the majority of traffic under no view
+  at all. No other argument is recorded: `search_knowledge(query=...)` is literally the
+  user's text, and this surface counts, never content.
+
+### Added
+
 - **`probe_procedures`: an agent can now read the team's rules without being asked
   to.** Workflow memory shipped with a CLI and two skills, which means it reached a
   coding agent only when a person drove it. This registers the read half as an MCP
