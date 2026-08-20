@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+### Changed
+
+- **Writes queue by default; `--sync` blocks.** `probe log`, `probe span add` and a
+  RUN-anchored `probe artifact add` now return as soon as the write is durable on
+  local disk, and a background drainer delivers it. A training loop calling
+  `probe log` a few thousand times no longer puts the network on its critical path,
+  and it drops a request per call besides: the synchronous path read the run back
+  before every write, which queueing skips entirely.
+
+  `--sync` restores blocking, and unlike the old `--async` it works on either side
+  of the subcommand — `probe --sync log ...` and `probe log ... --sync` both do what
+  they look like, with the one nearer the verb winning. `--async` keeps working
+  everywhere it worked before, so existing scripts, skills and manifests are
+  untouched. `PROBE_ASYNC=0` is the environment switch; there is deliberately no
+  second variable for it.
+
+  **Two things stay synchronous, on purpose.** `probe run end` is the only command
+  that verifies delivery — it drains the run's queued writes, refuses to close while
+  any of them cannot land, and exits 2 — so ending a job with it means the job
+  cannot report success with data stranded on a machine that is about to disappear.
+  And only RUN-anchored artifacts queue: `--project`, `--experiment`, `--workspace`
+  and `--shared` uploads keep failing loudly at the moment of the write, because
+  `run end` gates by run and would never gate them. An explicit `--async` still opts
+  any of them in.
+
+  Queued writes exit 0, since the op reached the disk rather than the server. Refs
+  are shape-checked locally so a fat-fingered one still fails immediately, and `log`
+  and `artifact add` print a trailing `(queued)` or `(delivered)` so a script can
+  tell the two apart without guessing. `span add` still prints its span id alone —
+  the id is minted locally and is the same in both modes, and callers parse it.
+  A write the outbox could not accept exits 2 instead of claiming it was queued.
+  `probe outbox status` (exit 0 = everything delivered) remains the general gate.
+
+### Fixed
+
+- **A full or read-only outbox can no longer crash an artifact write.** Queueing an
+  upload went straight to the journal, bypassing the guard that already protected
+  every other queued write, so ENOSPC, a read-only `XDG_STATE_HOME`, or an `flock`
+  that returns ENOSYS (Lustre without `-o flock`, some container overlays, several
+  FUSE mounts) surfaced as a raw error out of the command. Telemetry now fails quiet
+  and the write falls back to a direct upload. Ctrl-C still interrupts, which matters
+  because queueing a large checkpoint copies it first.
+
+- **A queued checkpoint can no longer upload the wrong bytes.** When there was not
+  enough room to snapshot a file, the write was queued anyway with a pointer to the
+  original path, and the drainer read that path minutes later — so a rotating
+  training loop could upload step 1100's bytes under step 1000's name, or fail on a
+  file already deleted. That write is now performed directly instead, and nothing is
+  left queued behind it to upload a second time.
+
+- **`--meta` and `--notes` are redacted before they are written to disk.** They were
+  stored verbatim in the outbox and kept indefinitely for a write that failed.
+
 ## 0.102.0
 
 ### Added

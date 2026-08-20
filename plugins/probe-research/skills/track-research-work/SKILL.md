@@ -213,21 +213,31 @@ gets made. Record with the surface the run was opened with.
    that never existed. Done this way, a paper's method section is
    reconstructable from the chain of runs.
 
-   **Never block on delivery: async mode.** Any CLI write above takes `--async`
-   (or `PROBE_ASYNC=1` for a whole session): the write is queued in a durable
-   local outbox and the command returns immediately; a background drainer
-   uploads with retries. Prefer it whenever you do not need the server's
-   response — a stuck network then costs you nothing. Prefer `--reference` over
-   uploading bytes when the file lives on storage the team can already resolve
-   (shared volume, workstation path): it is a single queued record, no staging
-   at all. Three rules keep async honest:
-   - Queued is not delivered. `probe outbox status` (exit 0 = all delivered)
+   **Delivery does not block you: writes queue by default.** `probe log`,
+   `probe span add` and a RUN-anchored `probe artifact add` queue into a durable
+   local outbox and return immediately; a background drainer uploads with
+   retries. A stuck network costs a training loop nothing. `--sync` forces the
+   blocking path when you need the server's answer in hand, and works either
+   before the subcommand or after it. Prefer `--reference` over uploading bytes
+   when the file lives on storage the team can already resolve (shared volume,
+   workstation path): a single queued record, no staging at all.
+
+   Four rules keep this honest:
+   - Queued is not delivered. Run `probe outbox status` (exit 0 = all delivered)
      before treating a missing recent write as absent anywhere, including MCP
-     reads.
-   - `probe run end` (WITHOUT --async) is the barrier: it delivers that run's
-     queued items first and refuses to close the run while any cannot be. With
-     `--async` it instead queues the close BEHIND the run's data — ordering is
-     the barrier, and nothing blocks.
+     reads. A queued write exits 0 because it reached the DISK.
+   - `probe run end` is the barrier and stays synchronous: it delivers that
+     run's queued items first and refuses to close the run while any cannot be,
+     exiting 2 if so. End your runs with it and a job cannot exit successfully
+     with data stranded on a machine about to go away. With `--async` it instead
+     queues the close BEHIND the run's data — ordering is the barrier, nothing
+     blocks — and `--flush-timeout N` bounds the wait for jobs that must not
+     hold hardware on a dead API.
+   - Only RUN-anchored artifacts queue. `probe artifact add --project`,
+     `--experiment`, `--workspace` and `--shared` stay synchronous, because
+     `run end` gates by run and cannot gate them; they keep failing loudly at
+     the moment of the write. `probe outbox status` is their only gate if you
+     opt them in with an explicit `--async`.
    - Failures surface on later commands (a stderr `outbox:` banner) and in
      `probe outbox status` / `probe doctor`; `probe outbox retry` requeues
      dead-lettered items after you fix the cause.

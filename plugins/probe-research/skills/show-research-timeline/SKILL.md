@@ -44,9 +44,11 @@ from its values. Each mode reads only its own arguments and refuses the rest, so
 refusal means asking at a different grain rather than dropping the argument.
 
 **Never mark a stage from memory of what you did this session.** What you wrote and
-what landed are different claims, and the timeline is read as evidence. If a write
-went out with `--async`, `probe outbox status` must be clean before its stage can be
-drawn as done.
+what landed are different claims, and the timeline is read as evidence. Metrics,
+spans and run artifacts QUEUE by default, so a command that exited 0 has reached
+the disk and not necessarily the server: `probe outbox status` must be clean, or
+the run closed through `probe run end` (which delivers or exits 2), before a stage
+can be drawn as done.
 
 ## 2. Where each mark comes from
 
