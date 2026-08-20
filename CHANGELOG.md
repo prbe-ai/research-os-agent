@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.103.0
+
 ### Changed
 
 - **Writes queue by default; `--sync` blocks.** `probe log`, `probe span add` and a
