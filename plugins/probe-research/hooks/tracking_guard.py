@@ -15,9 +15,15 @@ means). An explicit `off`/`on` (or the skill's synonyms) sets that state,
 idempotently. `status`, or an argument that reads as neither, writes
 nothing. The flip fires on BOTH invocation paths: PostToolUse catches the
 model calling the skill as a tool, and UserPromptSubmit catches the
-researcher TYPING the slash command -- which produces no tool use at all,
-so without it the most common path would depend on the model running the
-CLI from prose. The skill still has the model read the result back with
+researcher TYPING the command -- which may produce no tool use at all, so
+without it the most common path would depend on the model running the CLI
+from prose. ONE invocation reaches those paths in up to three shapes,
+though (a raw typed line, the harness's expansion of it, the model's tool
+call), and a relative flip on each sighting cancels itself out -- so a
+sighting whose shape the current invocation has not been seen in yet
+CONVERGES on the target the first sighting resolved, and only a repeat of
+a shape flips again. Both spellings are parsed: Claude Code's "/command"
+plus <command-name>, and Codex's "$command" plus <skill><name>. The skill still has the model read the result back with
 `probe session status` and narrate it, but the flip never DEPENDS on the
 model obeying prose: the model's only job is to report, and a state that
 contradicts what the researcher asked for is a hook failure to surface,
@@ -66,8 +72,10 @@ from __future__ import annotations
 import json
 import os
 import re
+import math
 import shlex
 import sys
+import time
 
 # Sibling import, resolved because sys.path[0] is this script's directory when
 # hooks.json runs `python3 <plugin_root>/hooks/tracking_guard.py`.
@@ -175,8 +183,36 @@ _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\|")
 # NEVER scan free prose for direction words -- the expanded body is the skill
 # text itself, which says "off" and "on" in every paragraph.
 _COMMAND_NAME_TAG = re.compile(r"<command-name>\s*/?([^<\s]+)\s*</command-name>")
+# Codex runs this same hooks.json and spells both shapes differently: the line
+# the researcher types is "$probe-research:toggle-research-tracking", and the
+# expansion is a <skill><name> block rather than <command-name>. A parser that
+# knew only the slash spelling left Codex with NO flip at all -- the researcher
+# types the command, nothing writes the signal, and `probe session status`
+# truthfully reports the state nobody changed.
+_SKILL_NAME_TAG = re.compile(r"<skill>\s*<name>\s*/?([^<\s]+)\s*</name>", re.DOTALL)
+_COMMAND_PREFIXES = ("/", "$")
 _COMMAND_ARGS_TAG = re.compile(r"<command-args>(.*?)</command-args>", re.DOTALL)
 _ARGUMENTS_LINE = re.compile(r"^ARGUMENTS:[ \t]*(.+)$", re.MULTILINE)
+
+#: The three SHAPES one invocation can be seen in. A harness delivers more than
+#: one of them for a single command -- Claude Code expands the typed command
+#: into a prompt AND has the model call the skill as a tool; Codex sends the
+#: raw "$..." line AND a <skill> block -- and a toggle that flipped on every
+#: sighting landed exactly where it started. That is the bug this names: two
+#: flips per invocation read as a switch that does nothing.
+SHAPE_RAW = "raw"
+SHAPE_EXPANDED = "expanded"
+SHAPE_TOOL = "tool"
+
+#: How long one invocation's resolved target stays claimed, so a LATER sighting
+#: of that same invocation converges on it instead of flipping it back. Only a
+#: shape NOT yet seen converges; a repeat of a shape already seen is a second
+#: invocation -- the researcher typing the command again -- and must flip. That
+#: distinction is what lets this bound be generous instead of a race with how
+#: fast someone types: measured, a typed command and the model's tool call for
+#: it land ~2s apart while a person re-invoking takes ~12s, and neither number
+#: has to be trusted here.
+FLIP_CLAIM_TTL_SECONDS = 300.0
 
 
 #: Verbs inside a write group that REMOVE research rather than record it.
@@ -237,34 +273,39 @@ def _direction_from_words(words: "list[str]") -> "str | None":
     return None
 
 
-def prompt_direction(prompt: object) -> "str | None":
-    """Direction for a TYPED toggle command in a UserPromptSubmit prompt, or
-    None. A typed slash command produces no tool use, so this is the only
-    deterministic surface that path has.
+def prompt_direction(prompt: object) -> "tuple[str | None, str]":
+    """(direction, shape) for a TYPED toggle command in a UserPromptSubmit
+    prompt; direction is None when the prompt is not an invocation at all.
+
+    A typed command may produce no tool use, so this is the only deterministic
+    surface that path is guaranteed. The SHAPE comes back with the direction
+    because both harnesses send the same invocation more than once, and
+    telling the sightings apart is what keeps the flip to one -- see
+    `_apply_direction`.
 
     Lean silent, same as everywhere else: the raw shape must START with the
     command (a mid-sentence mention like "should I run
-    /toggle-research-tracking?" is a question, not an invocation), and the
-    expanded shape must name the slug in <command-name> exactly.
+    /toggle-research-tracking?" is a question, not an invocation), and an
+    expanded shape must name the slug in its own tag exactly.
     """
     if not isinstance(prompt, str) or not prompt.strip():
-        return None
+        return None, SHAPE_EXPANDED
     text = prompt.strip()
-    tag = _COMMAND_NAME_TAG.search(text)
+    tag = _COMMAND_NAME_TAG.search(text) or _SKILL_NAME_TAG.search(text)
     if tag:
         if tag.group(1).split(":")[-1] not in TOGGLE_SKILL_SLUGS:
-            return None
+            return None, SHAPE_EXPANDED
         args = _COMMAND_ARGS_TAG.search(text)
         if args is None:
             args = _ARGUMENTS_LINE.search(text)
         words = args.group(1).strip().lower().split() if args else []
-        return _direction_from_words(words)
-    if not text.startswith("/"):
-        return None
-    parts = text.splitlines()[0].lstrip("/").split()
+        return _direction_from_words(words), SHAPE_EXPANDED
+    if not text.startswith(_COMMAND_PREFIXES):
+        return None, SHAPE_RAW
+    parts = text.splitlines()[0].lstrip("/$").split()
     if not parts or parts[0].split(":")[-1] not in TOGGLE_SKILL_SLUGS:
-        return None
-    return _direction_from_words([w.lower() for w in parts[1:]])
+        return None, SHAPE_RAW
+    return _direction_from_words([w.lower() for w in parts[1:]]), SHAPE_RAW
 
 
 def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
@@ -303,22 +344,119 @@ def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
     return _direction_from_words(inline_args.lower().split())
 
 
-def _apply_direction(direction: str, session_id: str) -> None:
-    """Write the signal a direction asks for. Silent on success and on
-    failure alike: the skill has the model read the result back with `probe
-    session status` and narrate it, and set_tracking already validates the
-    session id."""
-    if direction == "toggle":
-        # The opposite of the CURRENT state: the explicit signal when one
-        # exists, else the machine's default posture -- resolved by
-        # is_tracking so this and the statusline cannot disagree about what
-        # "current" means.
-        current = _session_marker.is_tracking(
+def _claim_path(session_id: str):
+    """Beside the signal it explains, named for what it holds."""
+    return _session_marker.sessions_dir() / (session_id + ".flip-claim")
+
+
+def _read_claim(session_id: str) -> "dict | None":
+    """This session's still-fresh claim, or None.
+
+    Unreadable, malformed and stale all read as None. A claim is bookkeeping
+    on top of the signal, never the state itself: losing one costs a flip that
+    lands the same way the researcher asked for anyway, while trusting a
+    broken one would cost the flip they DID ask for.
+    """
+    try:
+        with open(_claim_path(session_id), encoding="utf-8") as handle:
+            claim = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(claim, dict):
+        return None
+    target = claim.get("target")
+    at = claim.get("at")
+    seen = claim.get("seen")
+    if target not in ("on", "off"):
+        return None
+    # `bool` is an `int`, and NaN compares False against every bound -- a claim
+    # carrying either would never expire. A truncated or hand-edited file is
+    # the only way to reach them, and every one of them costs a flip, so each
+    # reads as "no claim" rather than "a claim I cannot evaluate".
+    if isinstance(at, bool) or not isinstance(at, (int, float)) or not math.isfinite(at):
+        return None
+    if not isinstance(seen, list) or not all(isinstance(s, str) for s in seen):
+        return None
+    if not seen:
+        # No shape recorded means every shape reads as unseen, so the next
+        # sighting -- including a repeat, which is a NEW invocation -- would
+        # converge. _write_claim cannot produce this; only a damaged file can.
+        return None
+    if time.time() - at > FLIP_CLAIM_TTL_SECONDS:
+        return None
+    return {"target": target, "seen": seen, "at": at}
+
+
+def _write_claim(session_id: str, on: bool, seen: "list[str]", at=None) -> None:
+    """Fail-soft, like everything else here: a claim that cannot be written
+    costs a duplicate flip, and a hook that raised would cost the session.
+
+    `at` carries the ORIGINAL claim time through a converging rewrite. Stamping
+    a fresh one there would let a chain of sightings renew the window
+    indefinitely, so the bound would describe the last sighting rather than the
+    invocation it belongs to.
+    """
+    record = {
+        "target": "on" if on else "off",
+        "at": time.time() if at is None else at,
+        "seen": seen,
+    }
+    try:
+        path = _claim_path(session_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(record), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _apply_direction(direction: str, session_id: str, shape: str) -> None:
+    """Write the signal a direction asks for, ONCE PER INVOCATION.
+
+    Silent on success and on failure alike: the skill has the model read the
+    result back with `probe session status` and narrate it, and set_tracking
+    already validates the session id.
+
+    An explicit `on`/`off` needs none of the claim below -- setting the same
+    state twice IS setting it once. Only the bare toggle is relative, and only
+    a relative write can cancel itself.
+    """
+    if not _session_marker.valid_session_id(session_id):
+        # The same refusal set_tracking makes, one step earlier, because the
+        # claim is a FILENAME too: validating in only one of the two places is
+        # how a guarded write grows an unguarded sibling, and this one escaped
+        # the sessions directory entirely on a traversal id.
+        return
+    if direction != "toggle":
+        # Clear the claim rather than ignoring it. An explicit setter is
+        # absolute and needs no claim of its own, but LEAVING one behind
+        # outlives the invocation that wrote it: the next bare toggle,
+        # arriving in a shape that claim has not seen, converges on a target
+        # nobody asked for and the switch silently does nothing -- the shipped
+        # bug, back through the door this branch just closed.
+        try:
+            _claim_path(session_id).unlink()
+        except OSError:
+            pass
+        _session_marker.set_tracking(session_id, direction == "on")
+        return
+
+    claim = _read_claim(session_id)
+    if claim is not None and shape not in claim["seen"]:
+        # Another shape of the invocation that wrote this claim: converge on
+        # the target it already resolved, and record the shape so a third
+        # sighting cannot flip either.
+        on = claim["target"] == "on"
+        _write_claim(session_id, on, claim["seen"] + [shape], at=claim["at"])
+    else:
+        # A shape already seen (so: a new invocation), or nothing claimed. Flip
+        # to the opposite of the CURRENT state: the explicit signal when one
+        # exists, else the machine's default posture -- resolved by is_tracking
+        # so this and the statusline cannot disagree about what "current"
+        # means.
+        on = not _session_marker.is_tracking(
             _session_marker.tracking_signal(session_id)
         )
-        on = not current
-    else:
-        on = direction == "on"
+        _write_claim(session_id, on, [shape])
     _session_marker.set_tracking(session_id, on)
 
 
@@ -358,9 +496,9 @@ def main() -> None:
         return
     hook_event = payload.get("hook_event_name")
     if hook_event == "UserPromptSubmit":
-        direction = prompt_direction(payload.get("prompt"))
+        direction, shape = prompt_direction(payload.get("prompt"))
         if direction is not None:
-            _apply_direction(direction, session_id)
+            _apply_direction(direction, session_id, shape)
         return
     if hook_event == "PreToolUse":
         matched = _offending_write(payload, session_id)
@@ -383,7 +521,7 @@ def main() -> None:
     if tool_name in ("Skill", "SlashCommand"):
         direction = toggle_direction(tool_name, payload.get("tool_input"))
         if direction is not None:
-            _apply_direction(direction, session_id)
+            _apply_direction(direction, session_id, SHAPE_TOOL)
         return
     if tool_name != "Bash":
         return
