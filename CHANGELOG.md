@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.105.0
+
 ### Added
 
 - **`mcp.tool_served` now records which `get_entity` view was served.** One tool name
