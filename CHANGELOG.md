@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.104.0
+
 ### Added
 
 - **The hosted MCP measures what it hands an agent.** Every tool call served by
