@@ -353,7 +353,11 @@ def _start_context() -> str | None:
     brief = _team_note_brief()
     if brief:
         parts.append(brief)
-    _spawn_session_maintenance()
+    stale_cli = _spawn_session_maintenance()
+    if stale_cli:
+        parts.append(stale_cli)
+    elif _tracking_off() and _team_note_unsynced():
+        parts.append(TEAM_NOTE_UNSYNCED)
     return "\n\n".join(parts) if parts else None
 
 
@@ -378,11 +382,75 @@ def _start_context() -> str | None:
 #:
 #: `--pull-only` under an untracked session: the toggle stops recording, and a
 #: push records. Reading is unaffected, so the file still refreshes.
-def _spawn_session_maintenance() -> None:
-    """Fire and forget. Never raises, never waits, never blocks a session start."""
+#: The first CLI that has `notes sync` and `agent-rules refresh`. The plugin and
+#: the CLI update on INDEPENDENT schedules -- the plugin through the agent's own
+#: marketplace, the CLI through uv -- so a machine routinely runs a new plugin
+#: against an old CLI. Observed in production the day this shipped: plugin 0.44.0
+#: called both commands against CLI 0.104.0, which had neither, and because the
+#: spawn discards its output the failure was perfectly silent. The file was never
+#: seeded, nothing ever synced, and nothing said so.
+#:
+#: Comparing BEFORE spawning is what turns that into a sentence the researcher
+#: can act on. It is deliberately a version floor rather than a probe of `--help`:
+#: a probe costs an interpreter start on the session-start path, and the floor is
+#: exactly the fact we need.
+TEAM_NOTE_MIN_CLI = "0.105.0"
+
+#: What a too-old CLI is told. Names the upgrade, because the researcher reading
+#: it has no other way to connect "my notes are not syncing" to "my CLI is old".
+TEAM_NOTE_STALE_CLI = (
+    "Your team note is NOT syncing: this Probe plugin needs CLI {needed} or newer "
+    "for the local `probe-team-note.md` file and you are on {have}. Nothing has "
+    "been lost -- edits you make to that file stay on this machine until the CLI "
+    "is upgraded. Tell the researcher to run `uv tool upgrade probe-research`."
+)
+
+
+#: What an untracked session with pending edits is told. The gate itself is
+#: correct -- the toggle stops recording and a push records -- but a file the
+#: agent was told "syncs on its own" that quietly does not is the worse half of
+#: the bargain. Saying it costs one `stat`.
+TEAM_NOTE_UNSYNCED = (
+    "Your local team-note file has edits that have NOT been sent, because "
+    "tracking is off for this session. They are safe on this machine and will "
+    "sync the first time a tracked session starts."
+)
+
+
+def _team_note_unsynced() -> bool:
+    """Did the last pull-only reconcile leave unsent edits behind?"""
+    try:
+        return (version_policy.state_dir() / "team-note-unsynced").exists()
+    except Exception:
+        return False
+
+
+def _team_note_cli_too_old(binary: str) -> str | None:
+    """The warning to show, or None when the CLI can do the work.
+
+    Unknown versions pass. A CLI whose `--version` cannot be parsed is more
+    likely a development checkout than an old release, and refusing to sync on a
+    parse failure would be a worse default than trying and failing quietly.
+    """
+    have = _local_cli(binary)
+    local, needed = _triplet(have or ""), _triplet(TEAM_NOTE_MIN_CLI)
+    if local is None or needed is None or local >= needed:
+        return None
+    return TEAM_NOTE_STALE_CLI.format(needed=TEAM_NOTE_MIN_CLI, have=_safe_ver(have))
+
+
+def _spawn_session_maintenance() -> str | None:
+    """Fire and forget. Never raises, never waits, never blocks a session start.
+
+    Returns a message for `additionalContext` when it did NOT spawn because the
+    CLI is too old -- the one failure here that is invisible otherwise.
+    """
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
-        return
+        return None
     binary = os.environ.get("PROBE_BIN") or "probe"
+    stale = _team_note_cli_too_old(binary)
+    if stale:
+        return stale
     mode = "--pull-only" if _tracking_off() else ""
     command = f'{shlex.quote(binary)} agent-rules refresh; {shlex.quote(binary)} notes sync {mode}'
     try:
@@ -397,7 +465,8 @@ def _spawn_session_maintenance() -> None:
         # A machine with no probe on PATH, a read-only home, a fork that fails:
         # all mean the session starts without a refreshed file, which is exactly
         # how sessions started before this existed.
-        return
+        return None
+    return None
 
 
 def _final(obj: dict) -> NoReturn:

@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.44.0",
+  "version": "0.45.0",
   "description": "Probe Research tracking, reproducibility, and timeline skills for the team's ML work, with a read-only OAuth MCP connection.",
   "author": {
     "name": "Probe",
@@ -10,7 +10,12 @@
   "homepage": "https://github.com/prbe-ai/research-os-agent",
   "repository": "https://github.com/prbe-ai/research-os-agent",
   "license": "MIT",
-  "keywords": ["mlops", "experiment-tracking", "research", "mcp"],
+  "keywords": [
+    "mlops",
+    "experiment-tracking",
+    "research",
+    "mcp"
+  ],
   "skills": "./skills/",
   "mcpServers": {
     "probe-research": {
@@ -25,7 +30,10 @@
     "longDescription": "Open, track, snapshot, verify, and close research runs, then render the research timeline with Probe skills and a read-only OAuth MCP connection.",
     "developerName": "Probe",
     "category": "Developer Tools",
-    "capabilities": ["Skills", "Read-only MCP"],
+    "capabilities": [
+      "Skills",
+      "Read-only MCP"
+    ],
     "websiteURL": "https://research.prbe.ai",
     "defaultPrompt": [
       "Start and track this research run.",
