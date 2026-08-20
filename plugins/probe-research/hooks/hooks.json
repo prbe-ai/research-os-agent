@@ -28,7 +28,8 @@
             "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/statusline_refresh.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/statusline_refresh.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/statusline_refresh.py\"'",
             "timeout": 5
           }
-        ]
+        ],
+        "additionalContextLimit": 9000
       }
     ],
     "PreCompact": [
@@ -94,6 +95,11 @@
             "type": "command",
             "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/statusline_notify.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/statusline_notify.py\" ] || exit 0; FLAG=\"${XDG_STATE_HOME:-$HOME/.local/state}/probe/statusline-notify\"; [ -f \"$FLAG\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/statusline_notify.py\"'",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/team-note-sync.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/team-note-sync.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; exec \"$ROOT/hooks/team-note-sync.sh\"'",
+            "timeout": 15
           }
         ]
       }

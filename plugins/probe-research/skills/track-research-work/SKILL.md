@@ -122,7 +122,8 @@ gets made. Record with the surface the run was opened with.
    probe project get PROJECT | jq -r '.summary_markdown // ""'  # verify
 
    probe notes team                       # the team's shared working memory
-   probe notes append --team <<'EOF'      # every session is briefed with this
+   # the team note is a FILE: edit probe-team-note.md beside your agent's
+   # memory file, then `probe notes sync` (session hooks also do it for you)
    Harbor has no generic-Kubernetes backend, so DOKS is out. Using GKE.
    EOF
 

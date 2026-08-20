@@ -57,6 +57,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import urllib.request
@@ -178,8 +179,9 @@ def _team_note_timeout() -> float:
 #: a wall of prose with no idea who wrote it or how much authority it carries.
 TEAM_NOTE_HEADER = (
     "The team note -- your team's shared working memory, written by the people and "
-    "agents doing this work. Treat it as current context, and add to it with "
-    "`probe notes append --team` when you learn something the next session needs:"
+    "agents doing this work. Treat it as current context. To add to it, edit "
+    "`probe-team-note.md` beside your agent's memory file; it syncs back when this "
+    "session ends:"
 )
 
 
@@ -351,7 +353,51 @@ def _start_context() -> str | None:
     brief = _team_note_brief()
     if brief:
         parts.append(brief)
+    _spawn_session_maintenance()
     return "\n\n".join(parts) if parts else None
+
+
+#: The maintenance a session start owes the machine, DETACHED. Two jobs, one
+#: spawn, run in order:
+#:
+#:   agent-rules refresh   rewrite the managed instruction block when this CLI
+#:                         is newer than what is installed. That file lives in
+#:                         the researcher's home directory and no release can
+#:                         reach it, so this is the only channel that can
+#:                         correct it -- and correcting it matters most right
+#:                         after an upgrade changes what it should say.
+#:   notes sync            reconcile the local team-note file: push anything an
+#:                         earlier session left unsynced, then refresh it.
+#:
+#: DETACHED IS THE WHOLE DESIGN. Session start is on a 2s fail-open budget and
+#: its own comment says every added millisecond is felt; a reconcile is one or
+#: two HTTP calls plus interpreter startup and does not fit. The session is
+#: briefed from the brief either way (that is what `parts` already carries), so
+#: the file arriving a second later costs nothing -- the agent reads the note
+#: from context and only touches the file when it wants to WRITE.
+#:
+#: `--pull-only` under an untracked session: the toggle stops recording, and a
+#: push records. Reading is unaffected, so the file still refreshes.
+def _spawn_session_maintenance() -> None:
+    """Fire and forget. Never raises, never waits, never blocks a session start."""
+    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
+        return
+    binary = os.environ.get("PROBE_BIN") or "probe"
+    mode = "--pull-only" if _tracking_off() else ""
+    command = f'{shlex.quote(binary)} agent-rules refresh; {shlex.quote(binary)} notes sync {mode}'
+    try:
+        subprocess.Popen(  # noqa: S602 -- fixed command, only the resolved binary path varies
+            ["/bin/sh", "-c", command],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+    except Exception:
+        # A machine with no probe on PATH, a read-only home, a fork that fails:
+        # all mean the session starts without a refreshed file, which is exactly
+        # how sessions started before this existed.
+        return
 
 
 def _final(obj: dict) -> NoReturn:

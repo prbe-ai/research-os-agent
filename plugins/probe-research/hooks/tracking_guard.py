@@ -119,6 +119,11 @@ READ_VERBS = frozenset(
         "coordinates",
         "download",
         "help",
+        # `probe notes team` PRINTS the team note. It reached the guard as an
+        # unknown verb in a write group and was refused by a message that says
+        # "Reading Probe is still fine" -- which is exactly the shape of bug the
+        # deny list is supposed to avoid.
+        "team",
     }
 )
 

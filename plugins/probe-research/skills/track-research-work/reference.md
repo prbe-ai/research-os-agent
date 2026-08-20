@@ -94,7 +94,8 @@ curation — it fires when someone is tidying structure, not when work is happen
 `probe group create EXP --name NAME [--kind KIND] [--spec JSON|@FILE] [--notes ...]`
 `probe group set GROUP [--name NAME] [--spec JSON|@FILE] [--notes TEXT|@FILE|-]`
 `probe notes show | write [FILE] [--append]` — the PROJECT's operational briefing
-`probe notes append [FILE] [--project|--experiment|--run|--group|--artifact|--team]` — add a paragraph
+`probe notes append [FILE] [--project|--experiment|--run|--group|--artifact]` — add a paragraph
+`probe notes sync` — reconcile the team note's local file (the session hooks call it)
 `probe notes edit --old TEXT [--new TEXT] [same target flags]` — replace one exact span (`--new` omitted deletes)
 `probe notes team [--brief]` — the team's shared note; `--brief` is the slice every session is briefed with
 
