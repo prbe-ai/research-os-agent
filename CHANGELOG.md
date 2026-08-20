@@ -2,7 +2,81 @@
 
 ## Unreleased
 
+### Added
+
+- **Artifact byte uploads can be asynchronous.** `run.log_artifact(path=...)`
+  ran presign → PUT → confirm on the caller's thread, so a checkpoint upload
+  stalled a training loop on exactly the network the rest of this work moved
+  off that path. The journal has carried an upload op kind all along — the
+  CLI's `--async` path uses it — and the SDK now takes it.
+
+  **Staged-or-synchronous**, and the distinction is the whole design. The queue
+  is used only when the outbox actually snapshots the bytes; when there is no
+  disk headroom the upload happens now instead. `append_upload` would otherwise
+  degrade to an op that merely REFERENCES the live file, which is right at a
+  command line and wrong beside a training loop: checkpoint rotation — write
+  `ckpt-1000`, delete `ckpt-900` — is the normal shape of that workload, and an
+  unstaged op whose source rotated either dead-letters or, above the
+  inline-hash threshold, uploads different bytes under the caller's name.
+
+  Synchronous, always, for `strict=True` (it must raise and return a row),
+  `sync=True`, a non-async client, a non-regular file, and `PROBE_ASYNC_UPLOADS=0`.
+  Harbor's `capture_trial` and the code-snapshot archive are pinned synchronous
+  too: the first confirms bytes landed for its ledger, the second deletes its
+  own tmp archive in a `finally`.
+
+- **A permanently rejected upload records a reference artifact before it
+  dead-letters.** The synchronous path already degraded to an `is_reference`
+  row carrying `meta.upload = "failed"`, which `check_run` counts as a capture
+  gap. The drainer had no equivalent, so a queued upload that was rejected left
+  no artifact row anywhere — a capability regression that would have shipped
+  inside the feature above, so it is closed first.
+
+- **`gc_blobs` collects crash-orphaned staging temporaries.** `snapshot_file`
+  names its temp `.{dst}.{uuid}.tmp`, so staging `.staging-<op>` produced
+  `..staging-<op>.<uuid>.tmp` — a doubled dot that the prefix test missed and
+  the dotfile skip then swallowed. A SIGKILL mid-copy leaked a
+  checkpoint-sized file nothing would ever reclaim, which is precisely the case
+  the grace sweep exists for.
+
 ### Fixed
+
+- **A deferred close no longer reverts queued tags.** `set_tags` replaces the
+  whole list, so a queued one and a server read disagree by construction. A
+  bounded `finish()` read the run over the network for its "draining" beacon,
+  captured that stale list, and stamped it into the terminal PATCH — and FIFO
+  replays the caller's queued tag write FIRST, so the close silently reverted
+  it. The beacon is now skipped while a tag write is in flight; a dashboard
+  loses a hint for the length of the drain, which beats losing the tags.
+- **Miles' terminal record is confirmed before it is deleted.** The `finish`
+  branch of the queue drain called `set_status` with neither `strict` nor
+  `sync`, then `queue.acknowledge()` unlinked the durable record on the
+  strength of not seeing an exception. Safe only by accident — both exporter
+  clients happen to be built `fail_open=False`, which forces sync. It says so
+  at the call site now, like the metrics branch beside it.
+- **Verification that only runs on a returned row is no longer silently
+  dormant.** `set_tags` is synchronous so its pre-0066 backend guard actually
+  fires and `run.tags` reflects the write. `reconcile_artifact` also scans the
+  outbox, because a queued `log_artifact` was invisible to it — the caller
+  re-logged and both landed on drain, producing exactly the duplicate that
+  method exists to prevent. `snapshot`'s `env_ref` probe stays async (finish()
+  deliberately orders its completeness check after the drain) but now says
+  when it could not verify, rather than skipping in silence.
+- **Counters and status fields stop reporting queued as landed.** `None` means
+  both "journaled, will deliver" and "fail-open spooled after a failure";
+  collapsing them made every healthy async Harbor trial record permanent
+  partial capture, and that verdict rides into the published manifest. Harbor
+  now distinguishes `queued` from `spooled`, and its retry gate tests the
+  recorded state rather than the presence of a dict — an unconfirmed reward
+  used to permanently suppress the strict retry built to heal it. The W&B
+  import and `probe wandb import-*` are strict, so their printed counts
+  describe writes that landed. `_supersede_run` is synchronous: its whole-list
+  tag replace would otherwise replay late against the OLD run's ref, which the
+  new run's barrier never covers.
+- **Five CLI modules stopped bypassing the CLI's sync pin.** `doctor.py`,
+  `setup.py` and `client_installation.py` construct `Client` directly rather
+  than through `_new_client`, so they defaulted to async, minted an outbox
+  producer per invocation and tagged CLI traffic as `sdk`.
 
 - **Every MCP tool answers compactly now, not just two of them.** `_compact` has always
   existed and has always stripped the envelope bookkeeping an agent cannot act on — but
