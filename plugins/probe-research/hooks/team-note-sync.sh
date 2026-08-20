@@ -24,8 +24,15 @@ do
 done
 [ -n "$PROBE_BIN" ] || exit 0
 
-# Bounded: a stop hook that hangs holds up the session's exit. The reconcile is
-# one HTTP call; anything slower than this is a network problem, and the file
-# survives to be sent next time.
-timeout 12 "$PROBE_BIN" notes sync --push-only >/dev/null 2>&1 || true
+# DETACHED, because the two harnesses give this hook wildly different budgets.
+# Claude Code fires it on Stop with room to spare; Codex has no Stop event at all
+# and its SessionEnd is capped at 3 seconds, which is not a round trip. Spawning
+# and returning means the cap bounds the SPAWN and the sync finishes on its own.
+# `setsid` so it survives the session's process group going away, which is the
+# whole point of running at session end.
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$PROBE_BIN" notes sync --push-only >/dev/null 2>&1 &
+else
+  "$PROBE_BIN" notes sync --push-only >/dev/null 2>&1 &
+fi
 exit 0
