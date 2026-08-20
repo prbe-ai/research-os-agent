@@ -149,6 +149,45 @@
   parsed to `""`, which is falsy, so it skipped upstream verification entirely and fell
   through to whatever server-side credential the process had.
 
+
+- **The outbox reports whether it is draining.** Two client-telemetry events,
+  `outbox.drained` and `outbox.stuck`, so a queue that stops delivering is visible
+  to the fleet instead of only to whoever reads the banner on their own terminal.
+
+  They come from two processes because neither one sees both halves. The detached
+  drainer reports every episode as it exits — `drained` / `auth_blocked` / `paused`
+  / `stalled`, with what it delivered and dead-lettered — including the healthy
+  case, since without that baseline a quiet fleet and a fleet whose workers all
+  died look identical. But the states someone has to act on are exactly the ones
+  where no drainer is running: `maybe_spawn` refuses to fork while a journal is
+  paused or inside its auth-block cooldown, so a credential that expired mid-run
+  produced a growing queue and total silence. The every-command banner reports
+  that one, rate-limited to once per six hours so a training loop shelling out
+  thousands of times still costs a single event.
+
+  Metadata only, matching the plugin hook's contract: counts, booleans, ages and a
+  bounded outcome vocabulary. The journal's `last_error` is a formatted exception
+  message and is deliberately not sent — only its exception type, validated to be a
+  bare identifier. Both events honor `PROBE_TELEMETRY=off` and the self-host egress
+  gate, so a self-hosted install still never calls the vendor.
+
+  Both gates read the backend the CALLER is using, not the CLI config file: the
+  banner runs under a possible `probe --base-url ...` that never reaches the
+  config, and the drainer delivers each op to the base_url pinned on that op. An
+  unprovable backend reports nothing rather than guessing hosted.
+
+- **Swallowed exceptions stop deleting the evidence.**
+  `diagnostics.capture_swallowed` reports an exception that was caught and
+  deliberately not re-raised, wired at the three delivery-path sites where the
+  swallow costs data: a dropped write, a dropped upload, and lease renewal, which
+  is how a live run silently becomes `untracked`. `report_crash` gains `handled=`,
+  so a recovery lands at warning level and never mixes with a crash in triage.
+
+  Throttled by a stamp file on the journal dir rather than an in-memory counter,
+  because the workload it has to survive is a training loop shelling out to
+  `probe log` per step -- every process-local budget resets on each one, so N
+  commands would have meant N reports.
+
 ## 0.103.1
 
 ## 0.103.0
