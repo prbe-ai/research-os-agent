@@ -2,6 +2,76 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe_procedures`: an agent can now read the team's rules without being asked
+  to.** Workflow memory shipped with a CLI and two skills, which means it reached a
+  coding agent only when a person drove it. This registers the read half as an MCP
+  tool, so an agent about to deploy, migrate, or work somewhere unfamiliar can ask
+  what this team has already decided — and get the rule bodies back, not a pointer to
+  them. Writing stays off this surface: the MCP server is read-only, and `probe rule
+  declare` / `/set-rule` is still where a rule is captured.
+
+  **The empty answer is the part that took the work.** Four unrelated conditions
+  return zero rules — no knowledge engine on the deployment, the workspace never
+  opted in, nobody seeded the situation vocabulary, and the honest "the team has not
+  written one down yet" — and on the wire they were identical. Three of those are
+  somebody's bug; one is an answer. An agent that reads a misconfiguration as "this
+  team has no rules" stops asking, and nothing downstream ever notices it happened.
+  Each now names itself in `completeness.missing`, and only the honest one is
+  `state: "complete"`. A classifier that declined to guess the situation is
+  `no_match`, which is correct behaviour rather than a failure — serving a
+  workspace-wide rule into a situation nobody could identify is exactly what that
+  refusal exists to prevent.
+
+  Every card carries a `weight` sentence saying how much law it is, because `status`
+  is the store's vocabulary and not the reader's. Only the four statuses a human
+  personally stood behind phrase it as an instruction; an `observed_convention` says
+  "consider", and an unrecognised status from a newer store says "verify" rather than
+  defaulting to something that sounds like law. A rule one person published on their
+  own authority carries `shared_by`, `human_backers: 1` and a caveat saying so —
+  otherwise the force-publish escape hatch would quietly defeat the two-human guard
+  it was built beside.
+
+  It deliberately does NOT take a session id. Every response that returns clauses
+  writes an append-only serve-ledger row, that ledger is what taint-exclusion joins
+  against forever, and an agent inside a tool call does not know its own session. A
+  guessed value would be permanently wrong; a missing one is merely less precise. Use
+  `probe rule list --session` when you have the id in hand.
+
+### Fixed
+
+- **`probe rule declare` no longer files a classified rule under nothing.** `preview`
+  classifies the prose and prints the situation; `declare` had no way to receive it
+  short of a human hand-copying the UUID across. When nobody did, the write
+  SUCCEEDED — a real clause id, a clean exit, and a rule attached to no situation.
+  It shows up in an unfiltered `probe rule list`, so the store looks populated, and
+  it is invisible to every situation-scoped read, which is the only read the feature
+  exists to serve. Found on the first rule ever declared in production, by asking for
+  the situation it was obviously about and getting nothing back.
+
+  `declare` already accepted a whole `preview` response so the two could be piped
+  together; it now reads the classification out of it. An explicit `--situation-id`
+  still wins, since that flag is the correction for a classification the human
+  disagreed with. An `unknown` outcome still files the rule under nothing, on
+  purpose: a rule that arrives in the wrong situation is worse than an unfiled one.
+
+  And when a clause does land without a situation, the command SAYS SO on stderr.
+  Warn, never gate — the write is not wrong, it is unreachable, and nothing else in
+  the output distinguished those.
+
+### Changed
+
+- **The always-loaded instruction block names the rule store (POINTER_VERSION 14).**
+  Both directions, because a read-only mention would leave the store permanently
+  one-sided: pull what applies BEFORE an irreversible step, and capture what the
+  researcher declares mid-session instead of only obeying it for one conversation.
+  Rules are named as surfaces (`pull-rules`, `set-rule`, `probe_procedures`) and
+  never as commands, for the reason that file's docstring has always given — it
+  cannot be reached by a release, so anything version-specific in it is stale
+  forever. The block also states the precedence explicitly: a stored rule never
+  outranks the researcher in the room.
+
 ## 0.104.0
 
 ### Added

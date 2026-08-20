@@ -22,7 +22,15 @@ one command and the answer is usually short.
 
 ## Reading
 
-Ask for what applies to the situation you are actually in:
+Two doors onto the same read. Both return the same rules.
+
+**`probe_procedures`**, the MCP tool, if the Probe Research MCP is connected.
+Describe what you are about to do in a sentence — `probe_procedures(query: "about
+to kick off a training run")` — or name the situation with `situation:`. No shell,
+no session plumbing, and it is the one an agent should reach for by default.
+
+**`probe rule list`**, the CLI, when there is no MCP or when you know the session
+id. That last part is the only real difference between them, and it matters:
 
 ```
 probe rule list --query "about to kick off a training run" --session <session id>
@@ -42,7 +50,11 @@ probe rule list --limit 50
 
 Pass `--session` when you have one. It records which rules were put in front of this
 session, which is what later lets the system tell an independent opinion from an echo
-of something it was already shown.
+of something it was already shown. `probe_procedures` deliberately sends no session
+id — an agent inside a tool call does not know its own, and that record is
+append-only, so a guessed value would be permanently wrong where a missing one is
+merely less precise. So: reach for the MCP tool by default, and prefer the CLI on the
+reads where you actually have the session id in hand.
 
 ## Reading the answer honestly
 
@@ -56,24 +68,37 @@ authority; it is a real instruction from a named colleague, but nobody has
 corroborated it. Both are worth following. Only the first is worth calling "the
 team's practice" when you tell the researcher about it.
 
-**`status`.** `declared`, `documented` and `expert_confirmed` are safe to follow
-without asking. `contested` means somebody disputed it and `stale` means it has
-rotted — surface those, do not silently act on them.
+**`status`, and the `weight` line beside it.** `declared`, `documented`,
+`expert_confirmed` and `intervention_validated` are safe to follow without asking.
+`contested` means somebody disputed it and `stale` means it has rotted — surface
+those, do not silently act on them. `observed_convention` and `success_associated`
+are habits nobody ratified: mention them, do not obey them. `probe_procedures`
+spells this out per card in `weight`, and only the four a human stood behind phrase
+it as an instruction, so read that line rather than inferring from the status name.
 
 **Conflicts.** If two rules contradict each other, both are returned. Do not pick
 one. Show the researcher both and ask, because the disagreement is the finding.
 
-**An empty result is not nothing.** Read which empty it is:
+**An empty result is not nothing.** Four different things return zero rules and
+only one of them means the store is empty. The CLI field is on the left, what
+`probe_procedures` puts in `completeness` on the right:
 
-- `no_situations_configured: true` — this workspace's rule vocabulary was never set
-  up, so nothing can ever match. Tell the researcher; it is a five-minute admin fix
-  and until somebody does it the feature is silently dead.
-- `classification.outcome: "unknown"` — the classifier could not tell which
-  situation you are in, so it served nothing rather than guessing. Retry with a
-  clearer description of what you are doing, or name the situation with
-  `--situation`. It did not fail; guessing would have been the failure.
-- Genuinely no rules — the team has not captured one for this yet. If the researcher
-  then tells you how it should be done, that is `/set-rule`.
+- `available: false` / `missing: ["procedure_store"]` — this deployment has no
+  knowledge engine wired at all. Nothing has been checked, so do not report that
+  the team has no rules.
+- `capability.enabled: false` / `missing: ["procedure_capability"]` — the
+  workspace has not turned workflow memory on. An admin decision, not an answer.
+- `no_situations_configured: true` / `missing: ["situation_vocabulary"]` — this
+  workspace's rule vocabulary was never set up, so nothing can ever match. Tell
+  the researcher; it is a five-minute admin fix and until somebody does it the
+  feature is silently dead.
+- `classification.outcome: "unknown"` / `state: "no_match"` — the classifier could
+  not tell which situation you are in, so it served nothing rather than guessing.
+  Retry with a clearer description of what you are doing, or name the situation
+  directly. It did not fail; guessing would have been the failure.
+- Genuinely no rules (`state: "complete"`, empty list) — the team has not captured
+  one for this yet. If the researcher then tells you how it should be done, that
+  is `/set-rule`.
 
 ## Using what you get
 

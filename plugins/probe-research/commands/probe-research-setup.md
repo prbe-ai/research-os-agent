@@ -159,13 +159,19 @@ with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
   source the token came from (a shell export shadows the stored one), whether the API
   still accepts it, and whether a stale literal copy is pinned somewhere that outranks it.
 - `claude mcp list` shows `probe-research` as `✓ Connected` (if registered via the CLI).
-- The `probe-research` MCP tools (`browse_research`, `search_knowledge`, `get_entity`) are
+- The `probe-research` MCP tools (`browse_research`, `search_knowledge`, `get_entity`,
+  `read_metrics`, `probe_procedures`) are
   available **in a fresh session** — remind the user to restart if they were just added.
   The old five names (`research_context`, `research_search`, `research_get`,
   `research_compare`, `research_resolve`) were deprecated aliases and have now been
-  REMOVED -- they fail as unknown tools; point people at the three.
+  REMOVED -- they fail as unknown tools; point people at the five above.
 - The `start-research-work` and `track-research-work` skills are ready
   (plugin installs only).
+- `probe_procedures` needs workflow memory turned on for the workspace, which is
+  separate from being signed in. Until it is, the tool answers with
+  `completeness.missing: ["procedure_capability"]` rather than an empty list — say
+  that out loud if it comes back, because an empty list would read as "this team has
+  no rules" and nobody would chase it.
 
 ## Keeping it updated
 

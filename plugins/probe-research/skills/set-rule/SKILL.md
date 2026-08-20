@@ -79,12 +79,23 @@ rather than asking twenty times.
 
 ## 4. Write
 
+Pass the WHOLE `probe rule preview` response back in, not just the `draft` half:
+
 ```
-probe rule declare '<the confirmed draft as JSON>' \
-  --situation-id <id from the classification> \
+probe rule declare '<the full preview response, draft edited if they corrected it>' \
   --session <this session's id> \
   [--publish]
 ```
+
+The envelope carries the classification, which is how the rule gets filed under the
+situation it fires in. Hand over only the inner draft and it is stored under
+NOTHING — a clean exit, a real clause id, and a rule that shows up in an unfiltered
+listing while being invisible to every "what applies to what I am doing now" query.
+That is the one read the store exists for. The command warns when it happens; do not
+ignore the warning.
+
+Pass `--situation-id <uuid>` only to OVERRIDE a classification the researcher
+disagreed with. It beats the one in the envelope, which is the point of it.
 
 For a duplicate they chose to merge:
 
