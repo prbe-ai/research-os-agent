@@ -65,12 +65,70 @@ if [ -r "$PLUGIN_JSON" ]; then
   esac
 fi
 
+# Which coding agent is on the other end, and which of its conversations. The hosted
+# MCP cannot learn either any other way: it is stateless and multi-tenant, and all it
+# otherwise receives is a bearer token. With them it can join a tool call back to the
+# captured transcript, whose graph id is agent_session:{agent}:{session_id} -- so the
+# PAIR is the key and a lone session id resolves to nothing.
+#
+# MIRRORS src/probe/sdk/agent_session.py (AGENTS order, _SESSION_RE, the codex pairing
+# check). Only agents whose transcripts actually reach Research OS are named: Cursor is
+# detectable but uncaptured, so it gets no headers rather than a link nobody can follow.
+#
+# THE CHARSET CHECK IS NOT COSMETIC. This value is interpolated into the JSON on
+# stdout, and a failure here is not degraded telemetry -- it is an unauthenticated
+# request, a WWW-Authenticate challenge, and a user bounced into OAuth to re-authorize
+# a device the installer already authorized. The case glob rejects anything outside
+# [A-Za-z0-9._:-], which includes the quote, backslash and newline that could break the
+# document. A glob is used rather than grep -E because grep matches per LINE, so an
+# embedded newline could satisfy an anchored pattern; a glob sees the whole string.
+AGENT_LABEL=""
+AGENT_SESSION=""
+if [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]; then
+  AGENT_LABEL="claude_code"
+  AGENT_SESSION="${CLAUDE_CODE_SESSION_ID:-}"
+elif [ -n "${CURSOR_TRACE_ID:-}" ]; then
+  AGENT_LABEL=""            # detectable, deliberately uncaptured
+elif [ -n "${CODEX_SANDBOX:-}" ] || [ -n "${CODEX_THREAD_ID:-}" ]; then
+  # Codex is reported only when its tap holds a credential: that is the durable
+  # evidence this device completed pairing. Merely running under Codex must not create
+  # a transcript link that can never resolve. Presence only -- the secret is never read.
+  CODEX_TAP_DIR="${PRBE_CODEX_TAP_PLUGIN_DIR:-}"
+  if [ -z "$CODEX_TAP_DIR" ]; then
+    if [ -e "$HOME/.codex/state/prbe-codex-tap-plugin" ] &&
+       [ ! -e "$HOME/.codex/state/probe-research-tap" ]; then
+      CODEX_TAP_DIR="$HOME/.codex/state/prbe-codex-tap-plugin"
+    else
+      CODEX_TAP_DIR="$HOME/.codex/state/probe-research-tap"
+    fi
+  fi
+  if [ -n "${PRBE_CODEX_TAP_TOKEN:-}" ] || [ -s "$CODEX_TAP_DIR/.token" ]; then
+    AGENT_LABEL="codex"
+    AGENT_SESSION="${CODEX_THREAD_ID:-}"
+  fi
+fi
+
+case "$AGENT_SESSION" in
+  *[!A-Za-z0-9._:-]*) AGENT_SESSION="" ;;
+esac
+if [ "${#AGENT_SESSION}" -lt 8 ] || [ "${#AGENT_SESSION}" -gt 200 ]; then
+  AGENT_SESSION=""
+fi
+
+# A leading-comma fragment so both emit branches stay single printf calls. Empty when
+# there is nothing to say -- never a blank header.
+AGENT_HEADERS=""
+if [ -n "$AGENT_LABEL" ] && [ -n "$AGENT_SESSION" ]; then
+  AGENT_HEADERS=$(printf ', "X-Probe-Agent": "%s", "X-Probe-Agent-Session": "%s"' \
+    "$AGENT_LABEL" "$AGENT_SESSION")
+fi
+
 emit() {
   if [ -n "$PLUGIN_VERSION" ]; then
-    printf '{"Authorization": "Bearer %s", "X-Probe-Client": "plugin", "X-Probe-Client-Version": "%s"}\n' \
-      "$1" "$PLUGIN_VERSION"
+    printf '{"Authorization": "Bearer %s", "X-Probe-Client": "plugin", "X-Probe-Client-Version": "%s"%s}\n' \
+      "$1" "$PLUGIN_VERSION" "$AGENT_HEADERS"
   else
-    printf '{"Authorization": "Bearer %s"}\n' "$1"
+    printf '{"Authorization": "Bearer %s"%s}\n' "$1" "$AGENT_HEADERS"
   fi
   exit 0
 }

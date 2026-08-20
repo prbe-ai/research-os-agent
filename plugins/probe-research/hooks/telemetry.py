@@ -29,7 +29,7 @@ output at all):
     importable here and never will be (see test_plugin_telemetry.py). The
     shared contract (key, host, killswitch, identity, batch shape) lives in
     the VENDORED `_telemetry_core.py` beside this file — a byte-identical copy
-    of src/probe/cli/_telemetry_core.py, refreshed by `make sync-telemetry-core`
+    of src/probe/sdk/_telemetry_core.py, refreshed by `make sync-telemetry-core`
     and pinned by tests/test_telemetry_core_parity.py. Never edit the copy.
 
 Identity: distinct_id is the Probe user's UUID (GET /v1/me, cached 24h, resolved

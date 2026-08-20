@@ -2,6 +2,81 @@
 
 ## Unreleased
 
+### Added
+
+- **The hosted MCP measures what it hands an agent.** Every tool call served by
+  `mcp.research.prbe.ai` now emits one `mcp.tool_served` event carrying
+  `response_bytes` — the size of the response body as it leaves the server — plus the
+  tool, the calling agent, and that agent's session id. This is the first answer to
+  "how much of a customer's context is Probe?"
+
+  Counted at the ASGI boundary rather than at the API, because `_fit`/`_fit_sections`
+  trim payloads inside the MCP process: the API's bytes are pre-trim and always an
+  over-estimate. Hosted only; a locally-run stdio MCP is not instrumented.
+
+  BYTES, not characters, and the property name says so — ASGI hands us encoded bytes
+  and a character is 1-4 of them. No token estimate is stored anywhere: tokens depend
+  on the model doing the tokenizing, which is why `agent` rides along, so the division
+  happens downstream where that is known.
+
+  Only tool responses are counted. `initialize` and `tools/list` traffic is excluded
+  deliberately (see TODOS.md).
+
+  Emission is an explicit opt-in (`PROBE_MCP_ANALYTICS=1`), set only in our own
+  Deployment. `probe-research-mcp-http` is a published console script, so a self-hosted
+  copy stays silent unless its operator turns it on — the emitter fails closed. It
+  deliberately does NOT reuse the client-side `hosted_base_url` gate: this pod reaches
+  the API over an in-cluster Service to avoid a load-balancer hairpin, which that gate
+  correctly reads as "not the vendor", and keying off it would have silenced the whole
+  feature in production with every unit test still green.
+
+- **The plugin tells the hosted MCP which conversation it is serving.**
+  `probe-mcp-headers` now sends `X-Probe-Agent` and `X-Probe-Agent-Session` alongside
+  the credential, so a tool call can be joined back to its captured transcript
+  (`agent_session:{agent}:{session_id}` — the pair is the key; a lone session id
+  resolves to nothing). Claude Code and a paired Codex only; Cursor is detectable but
+  uncaptured, so it reports neither rather than a link nobody can follow.
+
+  The session id is charset- and length-bounded before it reaches the JSON on stdout.
+  A broken document there is not degraded telemetry, it is an unauthenticated request.
+
+### Changed
+
+- **Client telemetry stops calling everyone Claude Code.** `agent` came from
+  `PROBE_AGENT` or a hardcoded `claude_code` fallback, so every Cursor and Codex user
+  who had not set the variable landed in the Claude Code bucket — poisoning the exact
+  breakdown the property exists for. It is now detected from the environment, and
+  absent when nothing is detectable rather than guessed. `client_kind` is likewise
+  passed through instead of hardcoded to `cli`.
+
+- **`_telemetry_core` moved from `cli/` to `sdk/`.** The hosted MCP needs it, and
+  `deploy-mcp.yml` deliberately excludes `cli/` from the MCP's rebuild filter: a
+  module-level import would fail `test_deploy_scope.py`, and a lazy one would pass
+  while leaving the deployed service running stale telemetry code. `sdk/` is already
+  covered, and its lazy `__init__` means the import no longer drags in `httpx`.
+
+- **The hosted MCP stops re-verifying a healthy token on every call.** `/v1/me` ran in
+  front of every tool call on a fresh connection each time — a TCP+TLS handshake plus
+  an API round trip before any work. The client is now shared per event loop, and
+  acceptances are cached for 15s (rejections keep their 60s). The bound is deliberate:
+  a revoked token keeps working for up to that window, and the 401 that prompts a
+  client to re-run its headers helper is delayed by the same amount. It is not data
+  access — the API authenticates every backend call behind this check.
+
+  That call's response body was already being discarded; it now supplies the caller
+  identity the accounting event needs — read once at verification time rather than at
+  emit time, so a tool call slower than the cache TTL is still attributed.
+
+  Only a 2xx is cached. A 404/429/5xx still fails open (a blip must not disconnect
+  every client) but is NOT remembered, so an upstream fault cannot become fifteen
+  seconds of "everyone is authenticated". Overflow evicts the oldest entry rather than
+  clearing the map, and the client carries explicit pool limits with a short pool
+  timeout so saturation sheds instead of stalling into the fail-open path.
+
+- **An empty bearer now takes the 401 path.** `Authorization: Bearer ` (no value)
+  parsed to `""`, which is falsy, so it skipped upstream verification entirely and fell
+  through to whatever server-side credential the process had.
+
 ## 0.103.1
 
 ## 0.103.0

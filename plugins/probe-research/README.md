@@ -66,7 +66,7 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   `PROBE_TELEMETRY=off`; a non-hosted `base_url` (self-host) also disables it.
   The shared contract (key, killswitch, hosted gate, identity, batch shape)
   lives in `hooks/_telemetry_core.py` — a vendored copy of the CLI's
-  `src/probe/cli/_telemetry_core.py`, refreshed by `make sync-telemetry-core`
+  `src/probe/sdk/_telemetry_core.py`, refreshed by `make sync-telemetry-core`
   and byte-parity-tested, so plugin events stay joinable with the CLI's
   `wizard.*`/`backfill.*` install funnel.
 

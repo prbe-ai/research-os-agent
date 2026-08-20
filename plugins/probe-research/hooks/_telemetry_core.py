@@ -8,7 +8,7 @@ property names (which also match app/core/analytics.py and the dashboard).
 
 TWO COPIES OF THIS FILE EXIST ON PURPOSE, and they must stay byte-identical:
 
-    src/probe/cli/_telemetry_core.py                     (canonical — edit here)
+    src/probe/sdk/_telemetry_core.py                     (canonical — edit here)
     plugins/probe-research/hooks/_telemetry_core.py      (vendored — never edit)
 
 The plugin hook runs under the SYSTEM python3 with no `probe` package
@@ -41,6 +41,20 @@ POSTHOG_KEY = "phc_pCSs24bQtPaxoJ59PaTtTpJDS3dfzymfZeY74XQQ956K"
 SEND_TIMEOUT = 3  # seconds; senders are detached/daemonized so this bounds nothing visible
 ME_CACHE_TTL = 24 * 3600
 DEFAULT_BASE = "https://api.research.prbe.ai"
+
+#: Which coding agent is driving this process, by environment marker. MIRRORS the
+#: ``detect_env`` column of ``probe.sdk.agent_session.AGENTS`` and must stay in the
+#: same ORDER (first match wins), which tests/test_agent_label_parity.py enforces.
+#:
+#: Duplicated rather than imported for the reason this whole file is duplicated: the
+#: plugin hook runs under the SYSTEM python3 with no ``probe`` package importable, so
+#: it cannot reach agent_session. Detection is pure environment reading, so the mirror
+#: is a table of strings rather than a second implementation of any logic.
+AGENT_DETECT_ENV: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("claude_code", ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")),
+    ("cursor", ("CURSOR_TRACE_ID",)),
+    ("codex", ("CODEX_SANDBOX", "CODEX_THREAD_ID")),
+)
 
 
 def telemetry_disabled() -> bool:
@@ -317,6 +331,35 @@ def resolve_identity(
 # ---------------------------------------------------------------------------
 
 
+def detect_agent_label(env: "dict[str, str] | None" = None) -> str | None:
+    """Which coding agent is driving this process, or None.
+
+    ``PROBE_AGENT`` wins: it is an explicit operator override, and the wrappers that
+    set it (CI harnesses, the Codex tap) know better than the environment does.
+
+    Returns None rather than a guess. The previous behaviour defaulted to
+    ``claude_code`` whenever ``PROBE_AGENT`` was unset, which silently recorded every
+    Cursor and Codex user as Claude Code -- and the per-agent breakdown exists
+    precisely to tell those apart, so a confident wrong answer was worse than none.
+    """
+    values = os.environ if env is None else env
+    override = (values.get("PROBE_AGENT") or "").strip()
+    if override:
+        return override
+    for label, markers in AGENT_DETECT_ENV:
+        if any(values.get(marker) for marker in markers):
+            return label
+    return None
+
+
+#: Sentinel for `build_batch(agent=...)`. Distinguishes "the caller did not say, so
+#: detect from this process" from "the caller said explicitly, even if the answer was
+#: None". A plain None default could not tell those apart, and the difference is the
+#: whole point on a SERVER: detecting there reads the POD's environment and stamps our
+#: own label onto somebody else's call.
+_DETECT = object()
+
+
 def build_batch(
     events: list[dict],
     ident: dict,
@@ -326,11 +369,14 @@ def build_batch(
     client_version: str | None,
     cli_version: str | None = None,
     machine: str | None = None,
+    agent: object = _DETECT,
 ) -> list[dict]:
     """Enrich observed events into PostHog batch entries.
 
-    Deterministic given its args EXCEPT the `agent` default, which falls back
-    to the PROBE_AGENT environment variable when the event did not stamp one.
+    Deterministic given its args EXCEPT the `agent` default, which falls back to
+    `detect_agent_label()` -- PROBE_AGENT override, else environment-marker detection,
+    else the property is omitted entirely. Pass `agent=` explicitly (including None) to
+    suppress that: a SERVER must, since detection there reads the POD's environment.
     Property names match app/core/analytics.py (client_kind, client_version,
     team group, $process_person_profile) so client events share breakdowns and
     group rollups with the server-side events. An event carrying a `timestamp`
@@ -340,7 +386,17 @@ def build_batch(
     batch = []
     for e in events:
         props = dict(e.get("properties") or {})
-        props.setdefault("agent", os.environ.get("PROBE_AGENT") or "claude_code")
+        # Absent when nothing is detectable, never a placeholder: an event with no
+        # `agent` is honestly unattributed, whereas the old `claude_code` fallback
+        # made every Cursor and unset-Codex user indistinguishable from Claude Code.
+        #
+        # Detection reads THIS process's environment, which is only ever the right
+        # answer on a client. A server passes `agent=` explicitly -- including
+        # `agent=None` -- because detecting there would attribute every caller who
+        # sent no agent header to whatever the POD happens to look like.
+        detected = detect_agent_label() if agent is _DETECT else agent
+        if detected is not None:
+            props.setdefault("agent", detected)
         props["client_kind"] = client_kind
         props["client_version"] = client_version
         if cli_version is not None:
