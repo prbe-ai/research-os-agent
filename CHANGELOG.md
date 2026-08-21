@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.107.0
+
 ### Changed
 
 - **Code artifact references are retired: a snapshot now uploads the bytes.**
