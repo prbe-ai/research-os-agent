@@ -22,15 +22,15 @@ have shell aliases (e.g. `claude` aliased) that break bare invocations.
   interpolated from 2.1.195 on. On an older build it is passed through literally, the
   helper never runs, and you get `✘ Failed to connect` with nothing explaining it. There
   is no manifest field that enforces this. Tell the user to run `claude update`, or use
-  the non-plugin path in Step 4 with a static header.
+  the non-plugin path in Step 5 with a static header.
 - If the repo is private, confirm git can read it: `gh auth status` (or a configured git
   credential helper). If neither, stop and have the user run `gh auth login`.
 - Do **not** run `claude plugin …` from a shell/`Bash` tool. Those are **interactive
   Claude Code REPL commands**; run headless they launch the TUI and crash with
   `Raw mode is not supported`. Install the CLI with `uv` (Step 1); do the plugin/skills
-  install interactively (Step 1, "Skills") only if the user is in an interactive session.
+  install interactively (Step 4) only if the user is in an interactive session.
 
-## 1. Install the CLI + MCP servers
+## 1. Install the CLI
 
 **Primary path (works for every agent, headless-safe):**
 
@@ -51,16 +51,10 @@ command -v probe && probe --version
 - If `probe` isn't found after install, `~/.local/bin` isn't on this shell's PATH — re-run
   `uv tool update-shell` or `export PATH="$HOME/.local/bin:$PATH"`.
 
-**Skills (interactive Claude Code only, optional):** to get the `track-work`
-and `show-research-status` skills plus the auto-wired `.mcp.json`,
-the user types these **in the Claude Code prompt** (not via an agent shell):
-
-```
-/plugin marketplace add prbe-ai/research-os-agent
-/plugin install probe-research@research-os-agent
-```
-
-Skip this block entirely in a headless/agent session — Steps 2–4 don't need it.
+The plugin comes LAST, in Step 4 — **do not install it here.** It ships an `.mcp.json`
+pointing at the hosted MCP, so installing it before Step 3 has minted a credential leaves
+the server on disk with nothing behind it. See Step 4 for why that is unrecoverable
+without a manual repair.
 
 ## 2. Log in (write token)
 
@@ -114,7 +108,44 @@ here**, and it cannot self-heal: the helper keeps re-emitting the exported value
 `probe mcp status` reports the token came from the environment, delete that line from the
 profile and open a new shell.
 
-## 4. Connect the MCP server
+**Confirm the token is actually stored before moving on.** Everything after this assumes
+it is:
+
+```bash
+probe mcp status        # must report a stored token the API accepts
+```
+
+## 4. Install the plugin (interactive Claude Code only, optional)
+
+**Order matters, and this is the step people get wrong.** To get the `track-work` and
+`show-research-status` skills plus the auto-wired `.mcp.json`, the user types these
+**in the Claude Code prompt** (not via an agent shell):
+
+```
+/plugin marketplace add prbe-ai/research-os-agent
+/plugin install probe-research@research-os-agent
+```
+
+Skip this block entirely in a headless/agent session — Steps 2, 3 and 5 don't need it.
+
+**Do not run this before Step 3 has minted the token.** The plugin ships an `.mcp.json`
+for the hosted MCP whose helper resolves the credential at connect time. Install it while
+`~/.config/probe/config.json` still has no `mcp_token` and the server connects with no
+`Authorization` header at all; the edge answers 401 with a `WWW-Authenticate` challenge,
+Claude Code discovers an authorization server from it and **pins the connection to OAuth**.
+The install then finishes, says "done", and sends the user to `/mcp` to authenticate a
+device this wizard already authorized — and minting the token afterwards does not undo it,
+because the pin outlives the credential that was missing.
+
+If someone has already landed in that state: `/mcp` → `probe-research` →
+**Clear authentication**, then restart Claude Code so the helper resolves the stored token.
+Verify with `probe mcp status` that the identity is the one you configured in Step 2 — an
+OAuth sign-in can have pinned a *different* account than the token you pasted.
+
+**After installing, restart Claude Code.** A live session does not re-read a server it has
+already loaded, so the plugin's MCP stays unconnected until the next session.
+
+## 5. Connect the MCP server
 
 **If installed as a plugin:** the bundled `.mcp.json` connects on its own — its helper
 reads the token at connect time. If the session is already running, restart it or
@@ -152,7 +183,7 @@ for i in 1 2 3; do curl -fsS https://mcp.research.prbe.ai/healthz | grep -q '"st
 (`uvx --from "git+https://github.com/prbe-ai/research-os-agent@main" probe-research-mcp`
 with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
 
-## 5. Confirm
+## 6. Confirm
 
 - `probe whoami` prints the signed-in identity.
 - `probe mcp status` — the one to reach for when the MCP misbehaves. It reports which

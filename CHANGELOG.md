@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Fixed
+
+- **`/probe-research-setup` no longer installs the plugin before there is a
+  credential to serve.** #165 closed this window for `probe wizard` and could not
+  see the slash command, which kept installing the plugin two steps ahead of
+  `probe mcp token set` — so the path a Claude Code user actually takes still had
+  the bug the CLI path was fixed for. A fresh install finished, said "done", and
+  sent the user to `/mcp` to authenticate a device the wizard had just authorized.
+
+  The plugin ships an `.mcp.json` for the hosted MCP. Installed with no
+  `mcp_token` stored, it connects with no `Authorization` header; the edge answers
+  401 with a `WWW-Authenticate` challenge, and Claude Code discovers an
+  authorization server from it and **pins the connection to OAuth**. Minting the
+  token afterwards does not undo the pin, which is why "re-run the wizard" was
+  never the repair. The plugin install is now its own step after the token exists,
+  and it carries the manual repair for anyone already pinned (`/mcp` →
+  `probe-research` → Clear authentication, then restart) plus the warning that an
+  OAuth sign-in can have pinned a different account than the token that was pasted.
+
+  Guarded by `tests/test_skills_sync.py`, on the order of the two commands inside
+  the document's fenced blocks rather than on step numbers — so renumbering cannot
+  satisfy it, and the prose stays free to name the command it is warning about. The
+  CLI's equivalent assertion lives in `tests/test_setup_wizard.py` and cannot see
+  this file, which is exactly how the two drifted apart.
+
 ## 0.111.0
 
 
