@@ -175,14 +175,51 @@ def _team_note_timeout() -> float:
     except ValueError:
         return 2.0
 
+#: The document's filename. Kept in step with `probe.cli.team_note_file`, which
+#: is what actually writes it -- this module only has to NAME the same file.
+DOCUMENT_NAME = "probe-team-note.md"
+
+
+def _document_path() -> str:
+    """Absolute path of the synced document, resolved the way the CLI resolves it.
+
+    Deliberately duplicates `probe.cli.agent_rules.memory_path` rather than
+    importing it: this file is a hook, run by a bare `python3` against whatever
+    interpreter the harness has, with no guarantee the `probe` package is
+    importable. Nine lines of duplication beat a briefing that disappears
+    whenever the CLI is installed somewhere this interpreter cannot see.
+
+    The two must agree, and `test_team_note_brief_names_the_real_path` pins them
+    against each other so a change to one fails on the other.
+    """
+    if (os.environ.get("PROBE_AGENT") or "").strip().lower() == "codex":
+        configured = os.environ.get("CODEX_HOME")
+        root = configured or os.path.join(os.path.expanduser("~"), ".codex")
+        return os.path.join(os.path.expanduser(root), DOCUMENT_NAME)
+    configured = os.environ.get("CLAUDE_CONFIG_DIR")
+    root = configured or os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.join(os.path.expanduser(root), DOCUMENT_NAME)
+
+
 #: What the brief is wrapped in. The label matters: without it the model reads
 #: a wall of prose with no idea who wrote it or how much authority it carries.
-TEAM_NOTE_HEADER = (
+#:
+#: NAMES THE PATH rather than describing where it sits. The description used to
+#: read "beside your agent's memory file", which was unambiguous when it was
+#: written and is not now: Claude Code grew a separate `memory/` directory, so an
+#: agent following those words lands in the wrong place, creates a
+#: `probe-team-note.md` nothing syncs, and believes it has written to the team
+#: note. A resolved absolute path cannot be misread that way.
+TEAM_NOTE_HEADER_TEMPLATE = (
     "The team note -- your team's shared working memory, written by the people and "
     "agents doing this work. Treat it as current context. To add to it, edit "
-    "`probe-team-note.md` beside your agent's memory file; it syncs back when this "
-    "session ends:"
+    "`{path}` (that exact file -- NOT any other memory file); it syncs back when "
+    "this session ends:"
 )
+
+
+def _team_note_header() -> str:
+    return TEAM_NOTE_HEADER_TEMPLATE.format(path=_document_path())
 
 
 def _team_note_brief() -> str | None:
@@ -228,7 +265,7 @@ def _team_note_brief() -> str | None:
         return None
     if not text.strip():
         return None
-    return f"{TEAM_NOTE_HEADER}\n\n{text}"
+    return f"{_team_note_header()}\n\n{text}"
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):

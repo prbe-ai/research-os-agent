@@ -118,8 +118,9 @@ should distrust, learned afterwards.
 Write entity notes with `probe notes append` (a new paragraph, concurrency-safe)
 or `probe notes edit` (replace one exact span; `--new` omitted deletes). Never
 read-modify-rewrite a whole document — that is how the parts you did not think
-to repeat disappear. The TEAM note is a synced FILE (`probe-team-note.md`
-beside your agent's memory file): edit it directly, it syncs itself. The
+to repeat disappear. The TEAM note is a synced FILE
+(`~/.claude/probe-team-note.md`, or `~/.codex/probe-team-note.md` on Codex --
+that exact path, NOT a `memory/` directory): edit it directly, it syncs itself. The
 Summary suffix is whole-document last-write-wins: read immediately before
 editing, preserve existing sections, verify after (commands in `reference.md`,
 including the `[README](https://github.com/owner/repo)` embed line and its two
