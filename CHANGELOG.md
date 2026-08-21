@@ -28,6 +28,37 @@
   with no slug (written by an older plugin) still converges, so an upgrade
   landing mid-window cannot flip twice.
 
+### Fixed
+
+- **The team note syncs on every occasion a session offers, and the tracking
+  toggle no longer withholds it.** Two gaps, one cause: the toggle was being
+  read as if the shared document were a record of the session.
+
+  The session-start reconcile used to send `--pull-only` when tracking was off,
+  on the reasoning that the toggle stops recording and a push records. It was
+  half a gate and the wrong half — the `Stop` hook has never consulted the
+  toggle and pushes at the end of every turn regardless — so the only thing it
+  achieved was to leave an untracked session's edits unsent until some later
+  session pushed them, while the instruction block told the agent the file
+  "syncs on its own". The toggle governs what Probe records ABOUT THE WORK:
+  projects, runs, experiments, entity notes. The team note is the lab's shared
+  document, not a record of this session, and an agent has no business writing
+  to it unless what it wrote belongs to the team either way. So the reconcile
+  now runs in full, always.
+
+- **PreCompact reconciles the team note.** It was already wired up and already
+  ran the updater, but `_spawn_session_maintenance` returned early on that
+  event, so the note was never pushed there. That matters for exactly one
+  population and it is the one this hook exists for: `Stop` covers a session
+  that ends, but a session alive for weeks may not reach `SessionEnd` for weeks
+  and cannot re-run the start hook it already ran. Compaction is the only
+  recurring occasion such a session offers. The hook stays SILENT there — the
+  spawn moved above the silence check, not the message.
+
+  The CLI version floor still blocks the spawn: a CLI without `notes sync`
+  fails invisibly, which is what the floor is for. Its warning is still
+  discarded mid-compaction.
+
 ## 0.108.0
 
 ## 0.107.0

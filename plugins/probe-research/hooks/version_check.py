@@ -26,8 +26,14 @@ reusing this payload there would be emitting a shape for the wrong event.
 And a nudge injected mid-compaction is noise at the worst possible moment --
 the user did not do anything, the agent is busy, and the same message already
 rendered when the session began. PreCompact exists here to APPLY, not to talk:
-it runs the same gate chain and spawns the same detached upgrade, then prints
-`{"continue": true}` and gets out of the way.
+it runs the same gate chain, spawns the same detached upgrade AND the same
+team-note reconcile, then prints `{"continue": true}` and gets out of the way.
+
+THE TEAM-NOTE RECONCILE IS THE SECOND REASON PRECOMPACT EARNS ITS PLACE. `Stop`
+pushes the local file at the end of every turn, so a session that ends normally
+never needs this. A session alive for weeks is the one that does: it may not
+reach `SessionEnd` for weeks, and the start hook it ran once cannot help it
+again. Compaction is the only recurring occasion such a session offers.
 
 Contract:
   * FAIL-OPEN. Any error prints {"continue": true} and exits 0 — a broken check
@@ -368,10 +374,21 @@ def _start_context() -> str | None:
     nudge after a compaction and silence on resume and on a fresh start --
     injecting a nudge there would be new nagging, not a fix.
 
-    PreCompact runs this same file (see docstring) and must stay silent there:
+    PreCompact runs this same file (see docstring) and must stay SILENT there:
     additionalContext is SessionStart's channel, and mid-compaction there is
-    nobody left to read it.
+    nobody left to read it. Silent is not the same as idle, which is why the
+    maintenance spawn sits ABOVE the PreCompact return below -- see there.
     """
+    # THE MAINTENANCE RUNS ON EVERY EVENT THIS HOOK FIRES FOR, PreCompact
+    # included, which is why it is spawned before the silence check rather than
+    # after it. A compaction only ever happens to a LONG-LIVED session, and a
+    # long-lived session is exactly the one whose team-note edits have nowhere
+    # else to go: `Stop` pushes at the end of each turn, but a session that runs
+    # for weeks may not reach `SessionEnd` for weeks, and a start hook it already
+    # ran once cannot help it. Compaction is the one recurring occasion such a
+    # session offers, and it costs nothing here -- the spawn is detached and its
+    # return value is only ever a MESSAGE, which PreCompact then discards.
+    stale_cli = _spawn_session_maintenance()
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
         return None
     parts: list[str] = []
@@ -390,16 +407,13 @@ def _start_context() -> str | None:
     brief = _team_note_brief()
     if brief:
         parts.append(brief)
-    stale_cli = _spawn_session_maintenance()
     if stale_cli:
         parts.append(stale_cli)
-    elif _tracking_off() and _team_note_unsynced():
-        parts.append(TEAM_NOTE_UNSYNCED)
     return "\n\n".join(parts) if parts else None
 
 
-#: The maintenance a session start owes the machine, DETACHED. Two jobs, one
-#: spawn, run in order:
+#: The maintenance a session start -- OR A COMPACTION -- owes the machine,
+#: DETACHED. Two jobs, one spawn, run in order:
 #:
 #:   agent-rules refresh   rewrite the managed instruction block when this CLI
 #:                         is newer than what is installed. That file lives in
@@ -417,8 +431,6 @@ def _start_context() -> str | None:
 #: the file arriving a second later costs nothing -- the agent reads the note
 #: from context and only touches the file when it wants to WRITE.
 #:
-#: `--pull-only` under an untracked session: the toggle stops recording, and a
-#: push records. Reading is unaffected, so the file still refreshes.
 #: The first CLI that has `notes sync` and `agent-rules refresh`. The plugin and
 #: the CLI update on INDEPENDENT schedules -- the plugin through the agent's own
 #: marketplace, the CLI through uv -- so a machine routinely runs a new plugin
@@ -443,24 +455,6 @@ TEAM_NOTE_STALE_CLI = (
 )
 
 
-#: What an untracked session with pending edits is told. The gate itself is
-#: correct -- the toggle stops recording and a push records -- but a file the
-#: agent was told "syncs on its own" that quietly does not is the worse half of
-#: the bargain. Saying it costs one `stat`.
-TEAM_NOTE_UNSYNCED = (
-    "Your local team-note file has edits that have NOT been sent, because "
-    "tracking is off for this session. They are safe on this machine and will "
-    "sync the first time a tracked session starts."
-)
-
-
-def _team_note_unsynced() -> bool:
-    """Did the last pull-only reconcile leave unsent edits behind?"""
-    try:
-        return (version_policy.state_dir() / "team-note-unsynced").exists()
-    except Exception:
-        return False
-
 
 def _team_note_cli_too_old(binary: str) -> str | None:
     """The warning to show, or None when the CLI can do the work.
@@ -482,14 +476,25 @@ def _spawn_session_maintenance() -> str | None:
     Returns a message for `additionalContext` when it did NOT spawn because the
     CLI is too old -- the one failure here that is invisible otherwise.
     """
-    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
-        return None
     binary = os.environ.get("PROBE_BIN") or "probe"
     stale = _team_note_cli_too_old(binary)
     if stale:
         return stale
-    mode = "--pull-only" if _tracking_off() else ""
-    command = f'{shlex.quote(binary)} agent-rules refresh; {shlex.quote(binary)} notes sync {mode}'
+    # A FULL RECONCILE REGARDLESS OF THE TRACKING TOGGLE. This used to send
+    # `--pull-only` when tracking was off, reasoning that the toggle stops
+    # recording and a push records. That was half a gate and the wrong half: the
+    # `Stop` hook has never consulted the toggle and pushes at the end of every
+    # turn anyway, so the only thing withholding the push here achieved was to
+    # make a session's edits sit unsent until some LATER session pushed them --
+    # while telling the agent, in the same breath, that the file "syncs on its
+    # own".
+    #
+    # The toggle governs what Probe RECORDS ABOUT THE WORK: projects, runs,
+    # experiments, entity notes. The team note is not a record of this session;
+    # it is the lab's shared document, and an agent has no business writing to
+    # it unless what it wrote belongs to the team either way. So an edit that
+    # exists is an edit that should land, and the toggle has no opinion about it.
+    command = f'{shlex.quote(binary)} agent-rules refresh; {shlex.quote(binary)} notes sync'
     try:
         subprocess.Popen(  # noqa: S602 -- fixed command, only the resolved binary path varies
             ["/bin/sh", "-c", command],
