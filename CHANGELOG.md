@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.106.0
+
 ### Changed
 
 - **The tracking doctrine now records everything, and routes files.** The
