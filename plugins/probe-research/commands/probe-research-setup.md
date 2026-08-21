@@ -51,8 +51,8 @@ command -v probe && probe --version
 - If `probe` isn't found after install, `~/.local/bin` isn't on this shell's PATH — re-run
   `uv tool update-shell` or `export PATH="$HOME/.local/bin:$PATH"`.
 
-**Skills (interactive Claude Code only, optional):** to get the `start-research-work`
-and `track-research-work` skills plus the auto-wired `.mcp.json`,
+**Skills (interactive Claude Code only, optional):** to get the `track-work`
+and `show-research-status` skills plus the auto-wired `.mcp.json`,
 the user types these **in the Claude Code prompt** (not via an agent shell):
 
 ```
@@ -165,7 +165,7 @@ with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
   The old five names (`research_context`, `research_search`, `research_get`,
   `research_compare`, `research_resolve`) were deprecated aliases and have now been
   REMOVED -- they fail as unknown tools; point people at the five above.
-- The `start-research-work` and `track-research-work` skills are ready
+- The `track-work` and `show-research-status` skills are ready
   (plugin installs only).
 - `probe_procedures` needs workflow memory turned on for the workspace, which is
   separate from being signed in. Until it is, the tool answers with

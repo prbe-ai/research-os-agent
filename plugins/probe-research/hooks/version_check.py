@@ -126,14 +126,14 @@ SESSION_ID_ENV = "PROBE_SESSION_ID"
 # block. And it asks only for what the summary STILL SHOWS -- the compacted
 # span itself is gone, and inviting its reconstruction would land invented
 # decisions in team-visible notes as provenance. The event list mirrors the
-# cadence prose in track-research-work's description and the pointer body.
+# cadence prose in track-work's description and the pointer body.
 COMPACT_CONTEXT = (
     "Context was just compacted. If this session involves the team's ML work, "
     "reconcile Probe before continuing: append what the summary still shows "
     "that is not yet recorded -- decisions, data processing steps, deletions, "
     "config changes, user overrides -- to the project's notes, and re-check "
     "the state of any open run. Do not reconstruct details the summary no "
-    "longer carries. The probe-research:track-research-work skill has the "
+    "longer carries. The probe-research:track-work skill has the "
     "current commands."
 )
 # ONE SENTENCE, deliberately. This is injected at EVERY session start now, not
@@ -146,7 +146,7 @@ COMPACT_CONTEXT = (
 # agent over-reading it (reads are fine, keep working).
 #
 # What replaces the nudge when the researcher untracked this session. The
-# toggle-research-tracking skill promises "no more tracking nudges", and before this
+# tracking switch (track-work off) promises "no more tracking nudges", and before this
 # branch existed the plugin itself broke that promise at the worst moment: a
 # compaction rebuilt the model's context without the skill text, then this
 # hook told the fresh context to reconcile Probe. Restating the contract is

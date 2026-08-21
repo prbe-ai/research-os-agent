@@ -5,8 +5,8 @@ description: Wire tracking into a training or evaluation script so what it recor
 
 # Instrument training runs
 
-`start-research-work` decides WHEN to open a project, experiment and run.
-`track-research-work` decides WHAT to record. This skill is WHERE the capture
+`track-work` decides WHEN to open a project, experiment and run, and WHAT to
+record into them. This skill is WHERE the capture
 code must live so the recording survives the process boundaries a real
 training job is made of.
 

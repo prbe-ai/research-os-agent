@@ -5,10 +5,14 @@ warn -- never gate -- on a probe write the flip should have prevented.
 UserPromptSubmit plus PostToolUse on Skill/SlashCommand and Bash, two jobs
 on one file of state:
 
-FLIP. When the toggle-research-tracking skill is invoked, THIS HOOK writes
+FLIP. When the tracking switch (track-work, or its legacy toggle names) is
+invoked with an explicit direction, THIS HOOK writes
 the session's tracking signal -- the same write `probe session untrack`
-makes. Bare invocation is a TOGGLE: it flips to the opposite of the current
-state, where "current" is the explicit signal if one exists and otherwise
+makes. Bare invocation is per-slug: on the legacy toggle names it flips to
+the opposite of the current state (that is what a toggle is), while on
+track-work -- which is also the how-to manual -- bare writes NOTHING, so an
+agent reading its own guidance cannot move the switch. "Current" for a
+flip is the explicit signal if one exists and otherwise
 the machine's default posture (`is_tracking` resolves that, exactly as the
 statusline does -- the two surfaces must not disagree about what "current"
 means). An explicit `off`/`on` (or the skill's synonyms) sets that state,
@@ -47,8 +51,8 @@ agent typing `probe ...` into Bash, the one path a hook DOES cover. A gate
 that stops the observed failure is worth more than the consistency of
 refusing to stop any of it, and the remaining surfaces keep the warn.
 
-The deny is escapable and says how in its own reason: `/toggle-research-tracking
-on`. That matters because this heuristic cannot tell a violation from the
+The deny is escapable and says how in its own reason: `/track-work on`.
+That matters because this heuristic cannot tell a violation from the
 team's day job (debugging Probe itself) -- so the escape is one command, and
 REMOVAL_VERBS are never gated at all, because "record nothing" is not
 "prevent cleanup".
@@ -138,35 +142,43 @@ READ_VERBS = frozenset(
 DENY_REASON = (
     "Research tracking is OFF for this conversation -- this machine starts "
     "sessions untracked, or the researcher turned it off with "
-    "/toggle-research-tracking -- so `{matched}` was refused before it ran. "
+    "/track-work off -- so `{matched}` was refused before it ran. "
     "Create no Probe projects, experiments or runs, write no notes or Project "
     "Summary Markdown. Reading Probe is still fine and the actual work "
     "continues as normal. If the researcher wants this recorded, they turn "
-    "tracking on (`/toggle-research-tracking on`); do not ask them to approve "
+    "tracking on (`/track-work on`); do not ask them to approve "
     "the write itself, and do not route around this."
 )
 
 MESSAGE = (
     "Research tracking is OFF for this conversation -- this machine starts "
     "sessions untracked, or the researcher turned it off with "
-    "/toggle-research-tracking -- but `{matched}` "
+    "/track-work off -- but `{matched}` "
     "just wrote to Probe. Honor the declaration: record nothing further. If the "
     "researcher explicitly asked for this write, ask whether tracking should "
-    "resume (`/toggle-research-tracking on`); otherwise consider undoing it, and "
+    "resume (`/track-work on`); otherwise consider undoing it, and "
     "continue the actual work without recording."
 )
 
-# The toggle skill, by trailing slug -- both spellings, because a machine mid-
-# upgrade can carry a transcript that invoked the old name while this newer
-# hook file handles the event. Matching a name that no longer resolves costs
-# nothing; missing one that did costs the flip.
-TOGGLE_SKILL_SLUGS = frozenset({"toggle-research-tracking", "research-tracking"})
+# The switch, by trailing slug -- in TWO classes with different bare-invocation
+# semantics. The legacy names were a dedicated toggle, so invoking one bare
+# flips: that is what a toggle is, and a resumed transcript from before the
+# consolidation must keep meaning what it meant. `track-work` is ALSO the
+# how-to manual, and an agent loads a manual bare just to read it -- so bare
+# there writes NOTHING, and only an explicit direction word flips. Without
+# that split, an agent consulting its own guidance would silently switch
+# tracking off, which is the exact silent-stop this hook exists to prevent.
+# Old slugs stay matched forever: matching a name that no longer resolves
+# costs nothing; missing one that did costs the flip.
+BARE_FLIP_SLUGS = frozenset({"toggle-research-tracking", "research-tracking"})
+GUIDANCE_SLUGS = frozenset({"track-work"})
+TOGGLE_SKILL_SLUGS = BARE_FLIP_SLUGS | GUIDANCE_SLUGS
 
 # Direction words, mirroring the skill's own reading of its argument ("off",
-# "stop", "disable" / "on", "start", "resume"). A BARE invocation (or a
-# literal "toggle") flips to the opposite of the current state -- that is
-# what a toggle is. `status` and unrecognised prose write nothing: asking a
-# question must never flip the switch.
+# "stop", "disable" / "on", "start", "resume"). "toggle"/"flip" is a relative
+# flip and lives only on the legacy slugs, like bare invocation. `status` and
+# unrecognised prose write nothing: asking a question must never flip the
+# switch.
 OFF_WORDS = frozenset({"off", "stop", "disable", "end"})
 ON_WORDS = frozenset({"on", "start", "resume"})
 TOGGLE_WORDS = frozenset({"toggle", "flip"})
@@ -258,18 +270,26 @@ def probe_write(command: str) -> "str | None":
     return None
 
 
-def _direction_from_words(words: "list[str]") -> "str | None":
+def _direction_from_words(words: "list[str]", *, bare_flips: bool) -> "str | None":
     """Map an argument word list to a direction; None means do not touch the
-    signal. Bare IS the toggle; `status` and unrecognised prose write nothing
-    -- asking a question must never flip a switch."""
+    signal. Bare flips only on the legacy toggle slugs (`bare_flips`) -- on
+    `track-work` a bare invocation is an agent reading the manual, and reading
+    the manual must never flip the switch. `status` and unrecognised prose
+    write nothing -- asking a question must never flip a switch."""
     if not words:
-        return "toggle"
+        return "toggle" if bare_flips else None
     if words[0] in OFF_WORDS:
         return "off"
     if words[0] in ON_WORDS:
         return "on"
     if words[0] in TOGGLE_WORDS:
-        return "toggle"
+        # A relative flip is only meaningful on a slug whose bare form is one.
+        # On track-work the researcher's vocabulary is absolute off/on; keeping
+        # "toggle" alive there would reopen the flip-by-ambient-text channel the
+        # guidance class exists to close.
+        return "toggle" if bare_flips else None
+    if words[0] in STATUS_WORDS:
+        return None  # a question, and questions never flip switches
     return None
 
 
@@ -291,31 +311,46 @@ def prompt_direction(prompt: object) -> "tuple[str | None, str]":
     if not isinstance(prompt, str) or not prompt.strip():
         return None, SHAPE_EXPANDED
     text = prompt.strip()
-    tag = _COMMAND_NAME_TAG.search(text) or _SKILL_NAME_TAG.search(text)
+    # The expanded shape is only credited when the prompt IS an expansion --
+    # harness-built messages open with the command/skill block. Matching a tag
+    # anywhere would let PASTED text (an issue body, documentation of this very
+    # hook) flip tracking with no invocation at all, and an ARGUMENTS line
+    # elsewhere in the paste would defeat the bare-never-flips guarantee.
+    tag = None
+    if text.startswith(("<command-message>", "<command-name>", "<skill>")):
+        candidates = [m for m in (_COMMAND_NAME_TAG.search(text), _SKILL_NAME_TAG.search(text)) if m]
+        # Earliest tag wins: the leading block is the invocation; a later tag is
+        # quoted content inside the expanded body.
+        tag = min(candidates, key=lambda m: m.start(), default=None)
     if tag:
-        if tag.group(1).split(":")[-1] not in TOGGLE_SKILL_SLUGS:
+        slug = tag.group(1).split(":")[-1]
+        if slug not in TOGGLE_SKILL_SLUGS:
             return None, SHAPE_EXPANDED
         args = _COMMAND_ARGS_TAG.search(text)
         if args is None:
             args = _ARGUMENTS_LINE.search(text)
         words = args.group(1).strip().lower().split() if args else []
-        return _direction_from_words(words), SHAPE_EXPANDED
+        return _direction_from_words(words, bare_flips=slug in BARE_FLIP_SLUGS), SHAPE_EXPANDED
     if not text.startswith(_COMMAND_PREFIXES):
         return None, SHAPE_RAW
     parts = text.splitlines()[0].lstrip("/$").split()
-    if not parts or parts[0].split(":")[-1] not in TOGGLE_SKILL_SLUGS:
+    slug = parts[0].split(":")[-1] if parts else ""
+    if slug not in TOGGLE_SKILL_SLUGS:
         return None, SHAPE_RAW
-    return _direction_from_words([w.lower() for w in parts[1:]]), SHAPE_RAW
+    return (
+        _direction_from_words([w.lower() for w in parts[1:]], bare_flips=slug in BARE_FLIP_SLUGS),
+        SHAPE_RAW,
+    )
 
 
 def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
     """`"on"`, `"off"`, `"toggle"`, or None (do not touch the signal).
 
-    Bare invocation IS the toggle -- the researcher typed the command and the
-    command's name says what it does. Only two things read as "not a
-    direction": `status` (a question, and questions must not flip switches)
-    and prose the word lists do not recognise, where guessing would flip on a
-    sentence like "what is going on?".
+    On the legacy toggle slugs a bare invocation IS the toggle -- the
+    researcher typed the command and its name says what it does. On
+    `track-work` bare is a manual read and writes nothing; only an explicit
+    direction word flips. `status` and unrecognised prose never touch the
+    signal -- guessing would flip on a sentence like "what is going on?".
 
     Field names mirror telemetry.match_skill: a Skill call carries the slug in
     `skill` with the argument in `args`; a SlashCommand carries one `command`
@@ -325,23 +360,25 @@ def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
     if tool_name not in ("Skill", "SlashCommand") or not isinstance(tool_input, dict):
         return None
     inline_args = ""
-    matched = False
+    matched_slug = None
     for field in ("skill", "command", "skill_name", "name"):
         value = tool_input.get(field)
         if not (isinstance(value, str) and value.strip()):
             continue
         parts = value.strip().lstrip("/").split(None, 1)
         if parts[0].split(":")[-1] in TOGGLE_SKILL_SLUGS:
-            matched = True
+            matched_slug = parts[0].split(":")[-1]
             if len(parts) > 1:
                 inline_args = parts[1]
             break
-    if not matched:
+    if matched_slug is None:
         return None
     separate = tool_input.get("args")
     if isinstance(separate, str) and separate.strip():
         inline_args = (inline_args + " " + separate).strip()
-    return _direction_from_words(inline_args.lower().split())
+    return _direction_from_words(
+        inline_args.lower().split(), bare_flips=matched_slug in BARE_FLIP_SLUGS
+    )
 
 
 def _claim_path(session_id: str):

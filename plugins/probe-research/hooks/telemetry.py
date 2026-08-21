@@ -94,16 +94,23 @@ EVENT_SKILL_INVOKED = "plugin.skill_invoked"
 EVENT_WRITE = "plugin.probe_write"
 EVENT_SESSION_SUMMARY = "plugin.session_summary"
 
-# Our skills, by slug. Skill invocations arrive as "start-research-work" or
-# namespaced "probe-research:start-research-work"; match the trailing slug.
+# Our skills, by slug. Skill invocations arrive as "track-work" or namespaced
+# "probe-research:track-work"; match the trailing slug. The pre-consolidation
+# names stay listed forever: a resumed transcript can invoke one against this
+# newer hook file, and an unlisted slug silently stops counting.
 RESEARCH_SKILLS = {
+    "track-work",
+    "show-research-status",
+    "instrument-training-runs",
+    "set-rule",
+    "pull-rules",
+    "probe-research-setup",
+    # pre-consolidation names (kept for resumed transcripts)
     "start-research-work",
     "track-research-work",
     "toggle-research-tracking",
     "capture-run-inputs",
-    "instrument-training-runs",
     "show-research-timeline",
-    "probe-research-setup",
 }
 
 MCP_TOOL_RE = re.compile(r"^mcp__.*probe[-_]research")
@@ -294,7 +301,7 @@ def match_skill(tool_name: str, tool_input: dict) -> str | None:
                 candidates.append(v)
     for cand in candidates:
         slug = cand.strip().lstrip("/").split()[0] if cand.strip() else ""
-        slug = slug.split(":")[-1]  # "probe-research:start-research-work" -> slug
+        slug = slug.split(":")[-1]  # "probe-research:track-work" -> slug
         if slug in RESEARCH_SKILLS:
             return slug
     return None

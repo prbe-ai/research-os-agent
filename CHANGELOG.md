@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Changed
+
+- **The tracking doctrine now records everything, and routes files.** The
+  measured failure: a tenant's agents wrote 140k characters of notes and
+  uploaded zero files, because every destination the prompts enumerated was
+  prose. Pointer block v15 (with the skip list REMOVED — recording is consent,
+  not curation; the per-conversation toggle is the researcher's only opt-out)
+  routes by what is in your hand: files -> artifacts on the lowest entity they
+  apply to (run -> experiment -> project -> workspace -> Shared folder), with
+  a mechanical safety boundary (never secrets; multi-GB by `--reference`;
+  temp/cache excluded), mandatory producer-lineage on cross-anchor files, a
+  registry-version rule, and a catch-all so nothing is dropped for want of a
+  matching row.
+- **The doctrine is written once.** `probe/doctrine.py` composes the shared
+  sentences into both Python prompt surfaces (`POINTER_BODY`,
+  `MCP_INSTRUCTIONS`), so those copies can no longer drift; the skill markdown
+  is held to the same vocabulary by `tests/test_doctrine_sync.py`, whose
+  feature census also fails when any platform write surface loses its prompt
+  phrase (the fence-shape rule: an unprompted feature is unreachable).
+- **Five skills instead of eight.** `track-work` merges
+  `start-research-work` + `track-research-work` + `toggle-research-tracking`
+  and absorbs `capture-run-inputs`; `show-research-status` replaces
+  `show-research-timeline`, adding a state summary (what is tracked, what is
+  missing, the sharpest caveat) above the arc. Hard cutover, no stubs — a v14
+  block naming a deleted skill fails loudly and the skills listing carries the
+  recovery; `client-version.json` bumps close the skew window via the
+  existing version nag.
+- **Bare `track-work` never flips tracking.** The switch rides the merged
+  skill: explicit `off`/`on` flip (hook-recorded, all three sighting shapes,
+  both harness spellings), while bare invocation only loads guidance — an
+  agent reading its own manual cannot silently stop recording. The legacy
+  toggle slugs keep bare-flip forever for resumed transcripts, and stay in
+  telemetry's skill set so their invocations keep counting.
+- **Eval specs follow the doctrine.** Triggering cases retarget to the merged
+  skill and gain the incident shapes (generated documents must upload; an
+  untracked dataset must reach the snapshot; a status question routes to
+  show-research-status); the two frontier cases that encoded the deleted skip
+  list (`torch-bump`, `ci-flake-fix`) flip to expect tracking. The
+  instructions runner now verifies the DIRECTION word on an expected switch
+  invocation, since a bare invocation deliberately writes nothing.
+
 ## 0.105.2
 
 ### Fixed

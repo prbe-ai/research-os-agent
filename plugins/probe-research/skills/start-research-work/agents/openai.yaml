@@ -1,4 +1,0 @@
-interface:
-  display_name: "Start Research Work"
-  short_description: "Open tracked ML work and maintain dashboard context"
-  default_prompt: "Use $start-research-work to register any shape of the team's ML work — surveys and design work included — with prior context, the right project home, a hypothesis only when there is one, and the right Project Summary versus hidden-notes destination."

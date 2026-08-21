@@ -40,9 +40,9 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 
 ## What's inside
 
-- **Skills:** `start-research-work` (open a tracked project, experiment and run),
-  `track-research-work` (capture, verify and close it), `capture-run-inputs`
-  (record reproducibility inputs), and `show-research-timeline` (render the
+- **Skills:** `track-work` (the tracking switch, plus everything recorded
+  while it is on — registering work, files to artifacts, metrics, notes,
+  snapshot inputs), and `show-research-status` (render the state and the
   research arc in-session). Claude Code and Codex load this same directory.
 - **Requires Claude Code ≥ 2.1.195.** The MCP passes its credential through a headers
   helper addressed as `${CLAUDE_PLUGIN_ROOT}/bin/probe-mcp-headers`; that placeholder is
@@ -73,14 +73,14 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 - **Tracking-off contract** (`hooks/version_check.py`, `hooks/tracking_guard.py`):
   the researcher's `probe session untrack` declaration is a file, so hooks can
   own it end to end. The FLIP is deterministic: invoking
-  `/toggle-research-tracking off` (or `on`) writes the session's tracking
+  `/track-work off` (or `on`) writes the session's tracking
   signal from the PostToolUse hook itself, so the declaration lands even if
   the model never runs the CLI the skill instructs (the CLI call stays in the
   skill — idempotent, and it prints the confirmation). The file then carries
   the declaration across the one boundary prose cannot survive — a rebuilt
   context: on a post-compaction or resumed SessionStart of an untracked
   session, the reconcile-Probe nudge is replaced by one line restating the off
-  contract (record nothing, raise nothing, `/toggle-research-tracking on`
+  contract (record nothing, raise nothing, `/track-work on`
   re-enables). And when a Bash command still WRITES research content through
   the probe CLI in such a session, the same hook hands the model the contract
   as additionalContext. Warn, never gate: hooks own the fact (the declaration
