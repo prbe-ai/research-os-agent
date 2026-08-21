@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+
 ### Added
 
 - **`probe notes status`: how full every notes document in the team is.** The
@@ -62,6 +63,40 @@
   the dashboard shows a REQUIRED banner. `advisory` now describes that data loss;
   it previously described the pre-0.18.0 plugin's session gaps, which the plugin's
   own unchanged `min` still nudges for.
+
+- **Fewer round trips per tool call.** Every answer the MCP returns carries who
+  you are, and it used to re-ask the server that on every single call. It now
+  remembers for a minute, so a long session makes one identity request instead
+  of dozens.
+
+- **A search that cannot be answered now says so instead of quietly answering
+  something else.** There used to be a keyword fallback for servers too old to
+  have the search endpoint, and the MCP never talks to one of those. Its real
+  effect was that a search scoped to a project you do not have came back empty
+  rather than telling you the project was not there, which reads as "this
+  project has nothing in it." You now get a clear error in both cases.
+
+- **An identity blip no longer takes every tool down with it.** If the server
+  briefly cannot say who you are, reads carry on with the answer it gave a
+  moment ago rather than failing outright.
+
+### Fixed
+
+- **Starting an MCP session no longer spends one of your memory actions.**
+  Before doing anything you asked for, the MCP used to run a real search for the
+  phrase "capability probe" just to find out whether the server it was talking
+  to supported search at all. That search was billed like any other: one recall
+  action off your plan, every session, plus a hit on the retrieval engine. It
+  also showed up in your own analytics as a search you never ran, which is why a
+  teammate who had only opened their editor could appear in an activity feed as
+  having searched. Both are gone. Capability answers cost nothing now, and if a
+  feature genuinely is not available you find out when you use it, with a clear
+  error, instead of being told up front.
+
+- **`project_scoped_search` is reported.** It had been declared since
+  server-side project scoping shipped and never actually sent, so anything
+  reading the capability list saw a feature you have as missing.
+
 ## 0.110.0
 
 ## 0.109.0
