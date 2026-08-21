@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.105.2
+
 ### Fixed
 
 - **A notes write the server refused is no longer reported as written.** A notes
