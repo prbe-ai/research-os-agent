@@ -1,7 +1,7 @@
 {
   "cli": {
     "latest": "0.110.0",
-    "min": "0.75.0"
+    "min": "0.105.2"
   },
   "plugin": {
     "latest": "0.50.0",
@@ -11,5 +11,5 @@
     "latest": "0.4.1",
     "min": "0.1.0"
   },
-  "advisory": "Sessions were only recorded on plugin 0.18.0 and newer. If your Research OS history has gaps, an older plugin is why."
+  "advisory": "A CLI below 0.105.2 reported notes writes the server had refused: once a notes document hit its cap, every further append exited 0 and stored nothing."
 }

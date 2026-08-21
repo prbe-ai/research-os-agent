@@ -2,6 +2,66 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe notes status`: how full every notes document in the team is.** The
+  fullness sweep, and the reason the catalog row grew a length. Answering "which
+  documents are close to refusing writes?" used to mean one API fetch per entity,
+  which is why nobody asked — and why a project sat at 99,992 of 100,000
+  characters, refusing every append, for a day. One page of `GET /v1/notes` now
+  carries `chars` and `limit_chars` per row, so the sweep is one request.
+
+  Deliberately TENANT-WIDE, with none of the `--project`/`--run`/`--artifact`
+  flags the other `notes` verbs take: a single entity's headroom already rides on
+  that entity's own read, so the question only this command can answer is the
+  cross-entity one. Documents are listed fullest first, and a sweep that stops at
+  its page bound says so rather than letting "nothing is near full" stand for
+  pages it never opened.
+
+- **`notes append` and `notes edit` warn as a document fills up.** At or above 80%
+  of the cap, both print how full the document is and what to do about it. 80% is
+  not a fresh number: it is the figure the notes-first-class design already
+  settled on for the team note ("compact when `remaining_chars` drops below
+  20,000"), reused so every carrier says "getting full" at the same point on the
+  same scale. A FRACTION rather than an absolute, because the caps differ 25x and
+  so does the right response — at 100,000 the answer is compaction, which needs
+  runway to keep working while it happens; at 4,000 it is that the prose belongs
+  on the experiment or project, which is a one-time move.
+
+  The advice follows the CARRIER, not the size of its cap. Keying it on the cap
+  would put the caps back in a client, which is what `notes_limit_chars` exists to
+  remove.
+
+### Changed
+
+- **`Client.append_notes` and `Client.edit_notes` return the write response, and
+  warn when the room is nearly gone.** Both returned `None`. They now hand back
+  the PATCH response — `notes_remaining_chars` and `notes_limit_chars` — or `None`
+  when the write was journaled rather than sent, which is the same `None`
+  `Client.write` already returns and means "no server has seen this yet", never
+  "the document is fine". The warning lives in the SDK rather than the CLI
+  because the CLI is not the only writer: a training script appending in a loop is
+  exactly the caller that fills a document without ever reading it back. It goes
+  through `safe_warn`, so `filterwarnings("error")` cannot turn a note about
+  headroom into the thing that ends a run. `warn=False` suppresses it for a caller
+  that renders the same fact better — the CLI, which knows the project slug or run
+  petname the SDK does not — and suppresses the message, never the check.
+
+- **A backend too old to publish the fields produces NO warning**, rather than one
+  computed against a cap the client made up. A fullness the server never asserted
+  is the same class of confident wrong answer as "appended" for a write that was
+  refused.
+
+- **`client-version.json` floors the CLI at 0.105.2.** Below that, a notes write
+  the server REFUSED was reported as written: the fail-open path swallowed the
+  422, the CLI printed "appended to <kind> notes" and exited 0, and the paragraph
+  went to the outbox to be dead-lettered. No server change reaches such an
+  install — the swallowing happens on the client — so the manifest floor is the
+  only lever, and `min` is what it is for. It is a nudge, not a gate: the
+  SessionStart hook says "below the minimum supported version" and continues, and
+  the dashboard shows a REQUIRED banner. `advisory` now describes that data loss;
+  it previously described the pre-0.18.0 plugin's session gaps, which the plugin's
+  own unchanged `min` still nudges for.
 ## 0.110.0
 
 ## 0.109.0
