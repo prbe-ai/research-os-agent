@@ -7,18 +7,18 @@
 - **A bare `track-work` the researcher TYPED is a toggle again.** 0.106.0 made
   bare inert on this slug to protect the merge — the skill is the how-to
   manual, and an agent loading a manual bare must not stop the recording. That
-  protection was attached to the slug when it belongs to the SURFACE: the
-  carve-out is now the tool shape only, so `/track-work` typed with no argument
-  flips to the opposite of the current state (as `probe session toggle` and the
-  legacy slugs always have), while a bare invocation the AGENT made still
-  writes nothing. The line is drawn at shapes that are PROOF OF A PERSON — a
-  raw typed line, or Claude Code's `<command-name>` expansion of one, which the
-  harness builds only from a typed command. Withheld from the tool call AND
-  from Codex's `<skill>` activation block, which the model sends too; a Codex
-  researcher loses nothing, since their typed `$slug` line arrives as the raw
-  shape first. `toggle`/`flip` ride the same permission as bare — the same
-  request, spelled out. Explicit `off`/`on` are unchanged: absolute,
-  idempotent, and honoured on every surface.
+  protection was attached to the slug when it belongs to the SHAPE, so
+  `/track-work` typed with no argument flips to the opposite of the current
+  state (as `probe session toggle` and the legacy slugs always have), while a
+  bare invocation the AGENT made still writes nothing. The line is drawn at
+  shapes that are PROOF OF A PERSON — a raw typed line, or Claude Code's
+  `<command-name>` expansion of one, which the harness builds only from a typed
+  command. Withheld from the tool call AND from Codex's `<skill>` activation
+  block, which the model sends too; a Codex researcher loses nothing, since
+  their typed `$slug` line arrives as the raw shape first. `toggle`/`flip` ride
+  the same permission as bare — the same request, spelled out. Explicit
+  `off`/`on` are unchanged: absolute, idempotent, and honoured on every
+  surface.
 - **A flip claim now records its slug.** One invocation is (slug, shape), not
   shape alone: a typed bare `/track-work` followed inside the 300s window by a
   bare legacy toggle used to converge on the first one's target, so the second
