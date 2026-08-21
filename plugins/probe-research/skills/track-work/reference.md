@@ -173,7 +173,7 @@ probe snapshot-restore RUN --verify-only # can it be rebuilt: want "0 unavailabl
 ```
 
 A glob matching nothing is an error; a path outside the snapshot root is
-refused; naming a file git already supplies adds no duplicate. Size is handled
+refused; naming a file already in the manifest adds no duplicate. Size is handled
 (`--reference-over-mb`, default 100). A non-git directory is captured whole,
 skipping lockfile-rebuilt trees and credential-shaped names.
 

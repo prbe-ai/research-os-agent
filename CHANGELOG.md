@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+### Changed
+
+- **Code artifact references are retired: a snapshot now uploads the bytes.**
+  `capture_manifest` used to classify a tracked file byte-identical to a PUSHED
+  commit as `source="git"` — record the blob id, skip the upload — and let the
+  remote stand in for the bytes. That pointer resolves only while the remote
+  does. A force-push, a deleted fork, a private repo the person rebuilding
+  cannot read, or simply the box being rebuilt all break it silently, and
+  nothing downstream can tell a dead reference from a live one without going
+  and looking. `Client.check_run` had grown a network probe
+  (`unresolvable_code_reference`) purely to tell them apart.
+
+  Every file in the manifest is now `source="blob"` and travels in the run's
+  `code-bytes` archive. `n_git_referenced` is structurally `0` and stays in the
+  manifest shape, because `restore`, `snapshot-show` and every already-captured
+  run's `code_snapshot` meta read the key.
+
+  - The one exclusion left is SIZE. Over `--reference-over-mb` (100 by default)
+    a file is recorded as a FILE-PATH reference — path, host, sha256 — never a
+    git one. That rule now applies to a repo's tracked files as well as to
+    `--include`d ones and to the non-git directory walk, so one big tracked
+    binary records where it lives instead of pushing the archive past the upload
+    ceiling and losing every other file with it.
+  - `base_commit` and `remote` are still captured, as PROVENANCE that no byte
+    depends on.
+  - `check_run(verify=True)` returns `complete` for a self-contained capture
+    (`n_git_referenced == 0`, nothing pending) without any network call, and
+    never reports `unresolvable_code_reference` for one. A stale commit no
+    longer fails a run whose bytes are in R2. The probe remains for runs
+    captured while the old classifier was live.
+  - `snapshot-restore` keeps its git path for exactly those legacy manifests.
+  - `snapshot-show` no longer labels a size reference `code-bytes`, which
+    claimed Probe held bytes it has never held.
+
+- **`probe artifact add --kind code` (also `script`/`source`/`code_bytes`/
+  `code_snapshot`) always uploads.** Passing `--reference` with one of those
+  uploads the bytes and says so on stderr; when they cannot be read from this
+  host — `--allow-missing`, or a path that is not there — it is a usage error
+  rather than a pointer. Enforced per manifest row as well as on the command
+  line, and `--from-manifest`'s size promotion no longer hands a large code row
+  straight back to a reference through the other door. `--uri file://...` is
+  refused for a code kind for the same reason — it is the second door to the same
+  machine-local pointer. Bucket URIs (`s3://`, `r2://`, `https://`) are untouched
+  for every kind, and `--reference` is unchanged for every other kind: a 16GB
+  checkpoint on a shared volume is still recorded, not copied.
+
+- **An offsite reference does not disqualify a capture from `complete`.** A file
+  over `--reference-over-mb` has its bytes off-platform, so `complete` is not a
+  claim that the run rebuilds from Probe alone — it is the judgment
+  `capture-run-inputs` already states to agents: a deliberate size reference is
+  part of a complete capture, not a gap in one. Recorded here because the two
+  branches of `check_run` used to disagree about it, granting `complete` to a run
+  with a resolvable git commit and withholding it from an otherwise identical run
+  without one.
+
 ## 0.106.0
 
 ### Changed

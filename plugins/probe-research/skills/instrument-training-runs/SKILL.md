@@ -113,7 +113,9 @@ If the series count approaches the point count, something high-cardinality
 became a dimension. Fix the shape before spending more compute.
 
 Same for artifacts: a reference pointing at a path on a machine you are about
-to destroy resolves nowhere afterwards.
+to destroy resolves nowhere afterwards. Code never has this problem — a code
+artifact is always uploaded, and `--reference` on one is refused rather than
+recorded — but a `--reference` checkpoint or dataset on an ephemeral box does.
 
 Print which outcome occurred — drained, written but unpublished, nothing
 written. It is often the only reason a loss is caught while the machine is
