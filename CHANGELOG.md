@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A notes write the server refused is no longer reported as written.** A notes
+  document at `MAX_DOCUMENT_NOTES` (100,000 characters) refuses every further
+  append with a 422 naming the cap — permanently, since no replay can make a full
+  document accept anything. `Client.write`'s fail-open path treated it like a
+  network blip: it swallowed the refusal, queued the op, and returned, so
+  `probe notes append` printed `appended to <kind> notes (…)`, exited 0, and the
+  paragraph was never stored. The drainer then dead-lettered it. An agent kept
+  appending to a document that had stopped accepting anything, one silent success
+  at a time, and read its own dead letters afterwards as a broken outbox — the
+  outbox was the only part working as designed.
+
+  `write(raise_permanent=True)` now re-raises a failure the drainer would classify
+  `permanent` instead of queueing it, and every notes door passes it. Transient
+  failures and auth blocks still journal, which is what fail-open is for. The
+  metric rail is unchanged and still queues everything: it must not raise into a
+  training loop over one refused point.
+
 ## 0.105.1
 
 ## 0.105.0
