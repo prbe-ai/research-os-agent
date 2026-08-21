@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.109.0
+
 ### Changed
 
 - **A bare `track-work` the researcher TYPED is a toggle again.** 0.106.0 made
