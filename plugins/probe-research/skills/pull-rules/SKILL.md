@@ -100,6 +100,13 @@ only one of them means the store is empty. The CLI field is on the left, what
   one for this yet. If the researcher then tells you how it should be done, that
   is `/set-rule`.
 
+**`from_fallback` cards are not an answer to your question.** When a situation has
+no rules of its own, the response is topped up from the `misc` bucket — rules
+nobody could file anywhere. They are marked, and their `weight` line says so. Read
+them, mention one if it genuinely applies, and never tell the researcher "the team's
+rule for this is X" when X came out of the bucket. `probe rule list --situation misc`
+is how you read the bucket deliberately.
+
 ## Using what you get
 
 Follow the rules that apply and say which one you are following, by name, when you

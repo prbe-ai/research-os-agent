@@ -88,11 +88,14 @@ probe rule declare '<the full preview response, draft edited if they corrected i
 ```
 
 The envelope carries the classification, which is how the rule gets filed under the
-situation it fires in. Hand over only the inner draft and it is stored under
-NOTHING — a clean exit, a real clause id, and a rule that shows up in an unfiltered
-listing while being invisible to every "what applies to what I am doing now" query.
-That is the one read the store exists for. The command warns when it happens; do not
-ignore the warning.
+situation it fires in. Hand over only the inner draft and there is nothing to file
+it by, so it lands in the `misc` bucket instead: reachable, but only surfaced when
+some situation has no rules of its own, and always hedged when it is. The command
+says so on stderr — treat that as "this needs a situation", not as noise.
+
+If the classifier returned `unknown` and the researcher knows which situation it
+belongs to, ask them and pass `--situation-id`. A rule in the right situation is
+worth much more than one in the bucket, and they are the only person who can say.
 
 Pass `--situation-id <uuid>` only to OVERRIDE a classification the researcher
 disagreed with. It beats the one in the envelope, which is the point of it.

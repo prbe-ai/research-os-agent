@@ -45,6 +45,29 @@
   instructions runner now verifies the DIRECTION word on an expected switch
   invocation, since a bare invocation deliberately writes nothing.
 
+### Added
+
+- **`misc`: somewhere for a rule nothing could classify.** A declaration the
+  classifier could not place used to be stored with no situation at all -- a
+  clean exit, a real clause id, visible in an unfiltered `probe rule list`, and
+  invisible to every situation-scoped read, which is the only read the store
+  exists to serve. Those rules now land in a `misc` bucket (engine side:
+  prbe-knowledge 0118), and the surfaces say so rather than pretending nothing
+  happened.
+
+  `probe rule declare` prints a note when a rule lands in the bucket, distinct
+  from the older warning for a rule that could not be filed at all -- one is
+  "reachable but nobody chose", the other is "unreachable". Both warn, neither
+  gates.
+
+  `probe_procedures` marks bucket cards `from_fallback` AND rewrites their
+  `weight` line to say the rule is probably not about what you are doing. The
+  boolean alone was not enough: `weight` is the field the tool contract tells an
+  agent to obey, and a card reading "Follow this. Someone on this team stated it
+  as a rule." is a lie about relevance even though every word is true about the
+  rule. The status gloss survives in parentheses, because how much law a rule is
+  stays true; only its relevance is in question.
+
 ## 0.105.2
 
 ### Fixed
