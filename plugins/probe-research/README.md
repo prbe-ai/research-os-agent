@@ -86,9 +86,13 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   as additionalContext. Warn, never gate: hooks own the fact (the declaration
   and its recording), the model owns the behaviour, and nothing here can deny
   a tool call or block a session. Ambiguity leans toward today's behaviour —
-  an absent or unreadable signal reads as tracking on, a direction-less skill
-  invocation (bare, `status`) flips nothing, and the write-parse prefers false
-  negatives (a missed warning) over false positives (a warning on
+  an absent or unreadable signal reads as tracking on, `status` flips nothing,
+  a bare invocation on `track-work` flips only in a shape that is PROOF OF A
+  PERSON — a typed line or Claude Code's expansion of one, never a tool call
+  or a Codex activation block, either of which the model can produce and both
+  of which are how it reads the manual (the legacy toggle slugs, having no
+  manual, keep their bare flip on every shape) — and the write-parse prefers
+  false negatives (a missed warning) over false positives (a warning on
   `probe run show`, which teaches the model the layer cries wolf).
 
 - **Status line** (`hooks/statusline.py`, `hooks/statusline_refresh.py`):

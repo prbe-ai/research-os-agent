@@ -8,11 +8,18 @@ on one file of state:
 FLIP. When the tracking switch (track-work, or its legacy toggle names) is
 invoked with an explicit direction, THIS HOOK writes
 the session's tracking signal -- the same write `probe session untrack`
-makes. Bare invocation is per-slug: on the legacy toggle names it flips to
-the opposite of the current state (that is what a toggle is), while on
-track-work -- which is also the how-to manual -- bare writes NOTHING, so an
-agent reading its own guidance cannot move the switch. "Current" for a
-flip is the explicit signal if one exists and otherwise
+makes. Bare invocation flips to the opposite of the current state (that is
+what a toggle is) -- but on track-work, which is ALSO the how-to manual,
+only in a shape that is PROOF OF A PERSON. Typing `/track-work` is someone
+reaching for the switch; the model activating the skill with no argument is
+an agent opening its own manual mid-task, and that must never move the
+switch. So the bare flip is granted to the raw typed line and to Claude
+Code's <command-name> expansion of one, and withheld from the tool call and
+from Codex's <skill> activation block -- both of which the MODEL can send.
+A Codex researcher loses nothing: their typed `$slug` line arrives as the
+raw shape first. The legacy toggle names, whose whole identity was the
+switch and which have no manual to read, flip bare in every shape.
+"Current" for a flip is the explicit signal if one exists and otherwise
 the machine's default posture (`is_tracking` resolves that, exactly as the
 statusline does -- the two surfaces must not disagree about what "current"
 means). An explicit `off`/`on` (or the skill's synonyms) sets that state,
@@ -160,23 +167,23 @@ MESSAGE = (
     "continue the actual work without recording."
 )
 
-# The switch, by trailing slug -- in TWO classes with different bare-invocation
-# semantics. The legacy names were a dedicated toggle, so invoking one bare
-# flips: that is what a toggle is, and a resumed transcript from before the
-# consolidation must keep meaning what it meant. `track-work` is ALSO the
-# how-to manual, and an agent loads a manual bare just to read it -- so bare
-# there writes NOTHING, and only an explicit direction word flips. Without
-# that split, an agent consulting its own guidance would silently switch
-# tracking off, which is the exact silent-stop this hook exists to prevent.
-# Old slugs stay matched forever: matching a name that no longer resolves
-# costs nothing; missing one that did costs the flip.
+# The switch, by trailing slug -- in TWO classes, which differ ONLY in whether
+# a bare invocation flips on the TOOL surface. The legacy names were a
+# dedicated toggle and nothing else, so invoking one bare flips wherever it is
+# seen; a resumed transcript from before the consolidation must keep meaning
+# what it meant. `track-work` is ALSO the how-to manual, and an agent loads a
+# manual bare dozens of times a session -- so there the bare flip is granted to
+# the TYPED surface only (see `_bare_flips`). Old slugs stay matched forever:
+# matching a name that no longer resolves costs nothing; missing one that did
+# costs the flip.
 BARE_FLIP_SLUGS = frozenset({"toggle-research-tracking", "research-tracking"})
 GUIDANCE_SLUGS = frozenset({"track-work"})
 TOGGLE_SKILL_SLUGS = BARE_FLIP_SLUGS | GUIDANCE_SLUGS
 
 # Direction words, mirroring the skill's own reading of its argument ("off",
 # "stop", "disable" / "on", "start", "resume"). "toggle"/"flip" is a relative
-# flip and lives only on the legacy slugs, like bare invocation. `status` and
+# flip and rides the same permission as bare invocation -- it is the same
+# request, spelled out -- so it is granted wherever bare is. `status` and
 # unrecognised prose write nothing: asking a question must never flip the
 # switch.
 OFF_WORDS = frozenset({"off", "stop", "disable", "end"})
@@ -215,6 +222,15 @@ _ARGUMENTS_LINE = re.compile(r"^ARGUMENTS:[ \t]*(.+)$", re.MULTILINE)
 SHAPE_RAW = "raw"
 SHAPE_EXPANDED = "expanded"
 SHAPE_TOOL = "tool"
+#: Codex's `<skill><name>` block. A FOURTH shape rather than a spelling of
+#: SHAPE_EXPANDED, because the two differ in the one property the bare flip
+#: rests on: WHO can produce them. Claude Code builds a <command-name> block
+#: only by expanding a command the researcher typed, and this plugin ships no
+#: `commands/track-work.md` for the model to invoke into one. Codex emits this
+#: block for a skill ACTIVATION, and the model activates skills too -- so on
+#: its own it is not evidence of a person. A typed Codex invocation also sends
+#: the raw `$slug` line, and that is the sighting the bare flip rides there.
+SHAPE_SKILL_BLOCK = "skill-block"
 
 #: How long one invocation's resolved target stays claimed, so a LATER sighting
 #: of that same invocation converges on it instead of flipping it back. Only a
@@ -270,12 +286,43 @@ def probe_write(command: str) -> "str | None":
     return None
 
 
+#: The shapes only a RESEARCHER can produce. An ALLOWLIST, and deliberately so:
+#: everywhere else in this file ambiguity resolves toward silence, and a
+#: denylist would resolve the next shape somebody adds -- a subagent shape, a
+#: resumed-transcript shape, a typo at a call site -- toward WRITING the
+#: signal. Unknown must mean "not proof of a person".
+RESEARCHER_SHAPES = frozenset({SHAPE_RAW, SHAPE_EXPANDED})
+
+
+def _bare_flips(slug: str, shape: str) -> bool:
+    """May a direction-less invocation of `slug`, seen in `shape`, flip?
+
+    THE ONE RULE THIS FILE TURNS ON. A bare invocation is a toggle -- the
+    researcher reached for the switch and its name says what it does -- with a
+    single carve-out: on `track-work`, which is the how-to manual as well as
+    the switch, a shape the MODEL can produce is not a researcher at all. It is
+    the model loading its own guidance, unprompted, mid-task, dozens of times a
+    session, exactly when the switch must not move; a flip there would silently
+    stop the recording this whole plugin exists to make automatic.
+
+    So the SHAPE decides, not the intent we would have to guess at. Two shapes
+    are proof of a person and flip on every slug (`RESEARCHER_SHAPES`); every
+    other shape -- the tool call, Codex's activation block, anything added
+    later -- flips only on the legacy slugs, which were a dedicated switch with
+    no manual to read. A researcher on Codex still gets the flip: their typed
+    `$slug` line arrives as SHAPE_RAW, which the model has no way to send.
+    """
+    if shape in RESEARCHER_SHAPES:
+        return slug in TOGGLE_SKILL_SLUGS
+    return slug in BARE_FLIP_SLUGS
+
+
 def _direction_from_words(words: "list[str]", *, bare_flips: bool) -> "str | None":
     """Map an argument word list to a direction; None means do not touch the
-    signal. Bare flips only on the legacy toggle slugs (`bare_flips`) -- on
-    `track-work` a bare invocation is an agent reading the manual, and reading
-    the manual must never flip the switch. `status` and unrecognised prose
-    write nothing -- asking a question must never flip a switch."""
+    signal. `bare_flips` is the caller's answer to "may a direction-less
+    invocation flip here?" -- see `_bare_flips`, which is where the slug class
+    and the surface are weighed. `status` and unrecognised prose write nothing
+    -- asking a question must never flip a switch."""
     if not words:
         return "toggle" if bare_flips else None
     if words[0] in OFF_WORDS:
@@ -283,19 +330,20 @@ def _direction_from_words(words: "list[str]", *, bare_flips: bool) -> "str | Non
     if words[0] in ON_WORDS:
         return "on"
     if words[0] in TOGGLE_WORDS:
-        # A relative flip is only meaningful on a slug whose bare form is one.
-        # On track-work the researcher's vocabulary is absolute off/on; keeping
-        # "toggle" alive there would reopen the flip-by-ambient-text channel the
-        # guidance class exists to close.
+        # A relative flip is only meaningful where the bare form is one:
+        # `/track-work toggle` and `/track-work` are the same request, and a
+        # surface that honours one while ignoring the other reads as a switch
+        # that works only if you guess its vocabulary.
         return "toggle" if bare_flips else None
     if words[0] in STATUS_WORDS:
         return None  # a question, and questions never flip switches
     return None
 
 
-def prompt_direction(prompt: object) -> "tuple[str | None, str]":
-    """(direction, shape) for a TYPED toggle command in a UserPromptSubmit
-    prompt; direction is None when the prompt is not an invocation at all.
+def prompt_direction(prompt: object) -> "tuple[str | None, str, str]":
+    """(direction, shape, slug) for a TYPED toggle command in a
+    UserPromptSubmit prompt; direction is None when the prompt is not an
+    invocation at all.
 
     A typed command may produce no tool use, so this is the only deterministic
     surface that path is guaranteed. The SHAPE comes back with the direction
@@ -303,13 +351,21 @@ def prompt_direction(prompt: object) -> "tuple[str | None, str]":
     telling the sightings apart is what keeps the flip to one -- see
     `_apply_direction`.
 
+    THREE shapes reach this one function, and they do NOT agree about who
+    could have sent them (`_bare_flips`): a raw typed line and Claude Code's
+    <command-name> expansion are proof of a person, while Codex's <skill>
+    block is an ACTIVATION -- which the model does too -- and is reported as
+    SHAPE_SKILL_BLOCK so a bare one cannot flip the guidance slug.
+
     Lean silent, same as everywhere else: the raw shape must START with the
     command (a mid-sentence mention like "should I run
     /toggle-research-tracking?" is a question, not an invocation), and an
-    expanded shape must name the slug in its own tag exactly.
+    expanded shape must name the slug in its own tag exactly. Those two
+    guards are what keep the bare flip from being reachable by PASTED
+    expansion-shaped text, now that bare flips here at all.
     """
     if not isinstance(prompt, str) or not prompt.strip():
-        return None, SHAPE_EXPANDED
+        return None, SHAPE_EXPANDED, ""
     text = prompt.strip()
     # The expanded shape is only credited when the prompt IS an expansion --
     # harness-built messages open with the command/skill block. Matching a tag
@@ -318,39 +374,52 @@ def prompt_direction(prompt: object) -> "tuple[str | None, str]":
     # elsewhere in the paste would defeat the bare-never-flips guarantee.
     tag = None
     if text.startswith(("<command-message>", "<command-name>", "<skill>")):
-        candidates = [m for m in (_COMMAND_NAME_TAG.search(text), _SKILL_NAME_TAG.search(text)) if m]
+        command_tag = _COMMAND_NAME_TAG.search(text)
+        skill_tag = _SKILL_NAME_TAG.search(text)
+        candidates = [m for m in (command_tag, skill_tag) if m]
         # Earliest tag wins: the leading block is the invocation; a later tag is
         # quoted content inside the expanded body.
         tag = min(candidates, key=lambda m: m.start(), default=None)
+        # WHICH tag matched is what says who could have sent it -- see
+        # SHAPE_SKILL_BLOCK. Same block, same parse, different provenance.
+        shape = SHAPE_SKILL_BLOCK if tag is skill_tag else SHAPE_EXPANDED
     if tag:
         slug = tag.group(1).split(":")[-1]
         if slug not in TOGGLE_SKILL_SLUGS:
-            return None, SHAPE_EXPANDED
+            return None, shape, slug
         args = _COMMAND_ARGS_TAG.search(text)
         if args is None:
             args = _ARGUMENTS_LINE.search(text)
         words = args.group(1).strip().lower().split() if args else []
-        return _direction_from_words(words, bare_flips=slug in BARE_FLIP_SLUGS), SHAPE_EXPANDED
+        return (
+            _direction_from_words(words, bare_flips=_bare_flips(slug, shape)),
+            shape,
+            slug,
+        )
     if not text.startswith(_COMMAND_PREFIXES):
-        return None, SHAPE_RAW
+        return None, SHAPE_RAW, ""
     parts = text.splitlines()[0].lstrip("/$").split()
     slug = parts[0].split(":")[-1] if parts else ""
     if slug not in TOGGLE_SKILL_SLUGS:
-        return None, SHAPE_RAW
+        return None, SHAPE_RAW, slug
     return (
-        _direction_from_words([w.lower() for w in parts[1:]], bare_flips=slug in BARE_FLIP_SLUGS),
+        _direction_from_words(
+            [w.lower() for w in parts[1:]], bare_flips=_bare_flips(slug, SHAPE_RAW)
+        ),
         SHAPE_RAW,
+        slug,
     )
 
 
-def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
-    """`"on"`, `"off"`, `"toggle"`, or None (do not touch the signal).
+def toggle_direction(tool_name: str, tool_input: object) -> "tuple[str | None, str]":
+    """(direction, slug); direction is `"on"`, `"off"`, `"toggle"`, or None
+    (do not touch the signal).
 
-    On the legacy toggle slugs a bare invocation IS the toggle -- the
-    researcher typed the command and its name says what it does. On
-    `track-work` bare is a manual read and writes nothing; only an explicit
-    direction word flips. `status` and unrecognised prose never touch the
-    signal -- guessing would flip on a sentence like "what is going on?".
+    THE TOOL SHAPE, so `track-work` bare is a manual read and writes nothing
+    (`_bare_flips`); only an explicit direction word flips it here. The legacy
+    slugs keep their bare flip, having never been a manual. `status` and
+    unrecognised prose never touch the signal -- guessing would flip on a
+    sentence like "what is going on?".
 
     Field names mirror telemetry.match_skill: a Skill call carries the slug in
     `skill` with the argument in `args`; a SlashCommand carries one `command`
@@ -358,7 +427,7 @@ def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
     leading slash are stripped the same way there too.
     """
     if tool_name not in ("Skill", "SlashCommand") or not isinstance(tool_input, dict):
-        return None
+        return None, ""
     inline_args = ""
     matched_slug = None
     for field in ("skill", "command", "skill_name", "name"):
@@ -372,12 +441,15 @@ def toggle_direction(tool_name: str, tool_input: object) -> "str | None":
                 inline_args = parts[1]
             break
     if matched_slug is None:
-        return None
+        return None, ""
     separate = tool_input.get("args")
     if isinstance(separate, str) and separate.strip():
         inline_args = (inline_args + " " + separate).strip()
-    return _direction_from_words(
-        inline_args.lower().split(), bare_flips=matched_slug in BARE_FLIP_SLUGS
+    return (
+        _direction_from_words(
+            inline_args.lower().split(), bare_flips=_bare_flips(matched_slug, SHAPE_TOOL)
+        ),
+        matched_slug,
     )
 
 
@@ -404,6 +476,13 @@ def _read_claim(session_id: str) -> "dict | None":
     target = claim.get("target")
     at = claim.get("at")
     seen = claim.get("seen")
+    # ABSENT is not a mismatch. A claim written by a plugin version that did
+    # not record the slug can only be compared the old way -- converging it is
+    # what that version meant -- and treating absence as "a different slug"
+    # would flip twice across an upgrade that lands mid-window.
+    slug = claim.get("slug")
+    if slug is not None and not isinstance(slug, str):
+        return None
     if target not in ("on", "off"):
         return None
     # `bool` is an `int`, and NaN compares False against every bound -- a claim
@@ -421,10 +500,12 @@ def _read_claim(session_id: str) -> "dict | None":
         return None
     if time.time() - at > FLIP_CLAIM_TTL_SECONDS:
         return None
-    return {"target": target, "seen": seen, "at": at}
+    return {"target": target, "seen": seen, "at": at, "slug": slug}
 
 
-def _write_claim(session_id: str, on: bool, seen: "list[str]", at=None) -> None:
+def _write_claim(
+    session_id: str, on: bool, seen: "list[str]", slug: str, at=None
+) -> None:
     """Fail-soft, like everything else here: a claim that cannot be written
     costs a duplicate flip, and a hook that raised would cost the session.
 
@@ -437,6 +518,7 @@ def _write_claim(session_id: str, on: bool, seen: "list[str]", at=None) -> None:
         "target": "on" if on else "off",
         "at": time.time() if at is None else at,
         "seen": seen,
+        "slug": slug,
     }
     try:
         path = _claim_path(session_id)
@@ -446,7 +528,7 @@ def _write_claim(session_id: str, on: bool, seen: "list[str]", at=None) -> None:
         pass
 
 
-def _apply_direction(direction: str, session_id: str, shape: str) -> None:
+def _apply_direction(direction: str, session_id: str, shape: str, slug: str) -> None:
     """Write the signal a direction asks for, ONCE PER INVOCATION.
 
     Silent on success and on failure alike: the skill has the model read the
@@ -456,6 +538,13 @@ def _apply_direction(direction: str, session_id: str, shape: str) -> None:
     An explicit `on`/`off` needs none of the claim below -- setting the same
     state twice IS setting it once. Only the bare toggle is relative, and only
     a relative write can cancel itself.
+
+    ONE INVOCATION is (slug, shape-not-yet-seen). The SLUG half matters
+    because two different switch names in one window are two invocations
+    however their shapes line up: a typed bare `/track-work` followed by a
+    bare legacy toggle converged on the first one's target and the second
+    silently did nothing -- a switch that does nothing being the exact
+    symptom the claim was added to fix.
     """
     if not _session_marker.valid_session_id(session_id):
         # The same refusal set_tracking makes, one step earlier, because the
@@ -478,14 +567,16 @@ def _apply_direction(direction: str, session_id: str, shape: str) -> None:
         return
 
     claim = _read_claim(session_id)
-    if claim is not None and shape not in claim["seen"]:
+    same_invocation = claim is not None and claim["slug"] in (slug, None)
+    if same_invocation and shape not in claim["seen"]:
         # Another shape of the invocation that wrote this claim: converge on
         # the target it already resolved, and record the shape so a third
         # sighting cannot flip either.
         on = claim["target"] == "on"
-        _write_claim(session_id, on, claim["seen"] + [shape], at=claim["at"])
+        _write_claim(session_id, on, claim["seen"] + [shape], slug, at=claim["at"])
     else:
-        # A shape already seen (so: a new invocation), or nothing claimed. Flip
+        # A shape already seen, a DIFFERENT slug, or nothing claimed -- each of
+        # them a new invocation, and a new invocation always flips. Flip
         # to the opposite of the CURRENT state: the explicit signal when one
         # exists, else the machine's default posture -- resolved by is_tracking
         # so this and the statusline cannot disagree about what "current"
@@ -493,7 +584,7 @@ def _apply_direction(direction: str, session_id: str, shape: str) -> None:
         on = not _session_marker.is_tracking(
             _session_marker.tracking_signal(session_id)
         )
-        _write_claim(session_id, on, [shape])
+        _write_claim(session_id, on, [shape], slug)
     _session_marker.set_tracking(session_id, on)
 
 
@@ -533,9 +624,9 @@ def main() -> None:
         return
     hook_event = payload.get("hook_event_name")
     if hook_event == "UserPromptSubmit":
-        direction, shape = prompt_direction(payload.get("prompt"))
+        direction, shape, slug = prompt_direction(payload.get("prompt"))
         if direction is not None:
-            _apply_direction(direction, session_id, shape)
+            _apply_direction(direction, session_id, shape, slug)
         return
     if hook_event == "PreToolUse":
         matched = _offending_write(payload, session_id)
@@ -556,9 +647,9 @@ def main() -> None:
         return
     tool_name = payload.get("tool_name")
     if tool_name in ("Skill", "SlashCommand"):
-        direction = toggle_direction(tool_name, payload.get("tool_input"))
+        direction, slug = toggle_direction(tool_name, payload.get("tool_input"))
         if direction is not None:
-            _apply_direction(direction, session_id, SHAPE_TOOL)
+            _apply_direction(direction, session_id, SHAPE_TOOL, slug)
         return
     if tool_name != "Bash":
         return

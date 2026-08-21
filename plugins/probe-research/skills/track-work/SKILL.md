@@ -1,6 +1,6 @@
 ---
 name: track-work
-description: Register and record the team's ML work, whatever its shape — training, evaluation, sweeps, data processing, a literature or model survey, design decisions on model or pipeline code, provisioning. Create the project BEFORE designing or scaffolding, an experiment when there is a hypothesis to test, a run when code is about to execute; then record everything the work produces at the moment it happens, not at session end — files to artifacts, numbers to metrics, decisions and caveats to notes, inputs into the run snapshot. Tracking on means everything is recorded. Trigger unprompted for exploratory work, when writing a script that will run, when the user did not ask for tracking, and whenever something worth recording happens — a choice made or reversed, a tool behaving differently than documented, an assumption proving false. Also the tracking switch for THIS conversation — when the researcher says to stop tracking or that this session is not research, that is this skill with `off`; `on` resumes; invoked bare it only loads this guidance and NEVER flips the state.
+description: Register and record the team's ML work, whatever its shape — training, evaluation, sweeps, data processing, a literature or model survey, design decisions on model or pipeline code, provisioning. Create the project BEFORE designing or scaffolding, an experiment when there is a hypothesis to test, a run when code is about to execute; then record everything the work produces at the moment it happens, not at session end — files to artifacts, numbers to metrics, decisions and caveats to notes, inputs into the run snapshot. Tracking on means everything is recorded. Trigger unprompted for exploratory work, when writing a script that will run, when the user did not ask for tracking, and whenever something worth recording happens — a choice made or reversed, a tool behaving differently than documented, an assumption proving false. Also the tracking switch for THIS conversation — when the researcher says to stop tracking or that this session is not research, that is this skill with `off`; `on` resumes; typed bare by the researcher it TOGGLES, while an agent loading it bare as a tool only reads this guidance and NEVER flips the state.
 ---
 
 # Track work
@@ -13,12 +13,21 @@ opt-out is the researcher flipping the switch.
 ## The switch
 
 A plugin hook watches this skill's activation and writes the session's tracking
-signal the moment an explicit direction fires: `off` (or "stop"/"disable") turns
-tracking off for THIS conversation, `on` (or "start"/"resume") turns it on,
-`status` and a bare invocation write NOTHING — bare is how an agent loads this
-guidance, and reading the manual must never flip the switch. Do not decide the
-new state yourself — read it back with `probe session status` and trust what it
-prints. Never write the signal yourself (`probe session track`/`untrack`/
+signal: `off` (or "stop"/"disable") turns tracking off for THIS conversation,
+`on` (or "start"/"resume") turns it on, and `status` writes NOTHING — a question
+never flips a switch.
+
+A BARE invocation depends on who made it. Typed by the researcher
+(`/track-work`, `$track-work`, or `toggle`/`flip` spelled out) it is a TOGGLE:
+it flips to the opposite of the state the session is in now. Invoked by an
+AGENT with no argument — a tool call, a skill activation — it writes nothing at
+all: that is how this guidance gets loaded, mid-task and unprompted, and
+reading the manual must never flip the switch. So when you need the state
+changed, pass the direction word; bare is the researcher's spelling, not
+yours.
+
+Do not decide the new state yourself — read it back with `probe session status`
+and trust what it prints. Never write the signal yourself (`probe session track`/`untrack`/
 `toggle` are not this skill's tools); if status contradicts what the researcher
 plainly asked for, that is a broken hook — say so in one line and report the
 state as it is, rather than quietly repairing it.
