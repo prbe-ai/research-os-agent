@@ -2,6 +2,100 @@
 
 ## Unreleased
 
+### Removed
+
+- **Notes are no longer writable through the SDK.** `Client.append_notes`,
+  `edit_notes`, `append_project_notes` and `set_project_notes` are gone from the
+  public surface. **Breaking** for any caller using them; `probe notes append` /
+  `probe notes edit` are the supported writers and always were the intended ones.
+
+  The door could not deliver on its own contract. `Client.write` enqueues under
+  the SDK's async DEFAULT and returns None before any request, so `raise_permanent`
+  never fired: an over-cap append was queued and dead-lettered rather than refused
+  — the exact silent-success failure 0.105.2 was released to end, reachable again
+  through the other door. The 0.111.0 warning could not fire there either, for the
+  same reason. Warning from behind a door that swallows writes is worse than
+  closing it, and `append_project_notes` had already been forcing `sync=True` for
+  years to work around the same thing.
+
+  Reads are untouched: `get_project_notes`, `list_notes`, and `notes` on every
+  entity read. Knowing what a note says was never the problem. `notes=` on
+  create/update calls is also untouched — that is entity metadata at creation,
+  not the notes-writing workflow.
+
+### Changed
+
+- **The advice starts at 60% full, not 80%.** The warning is the ONLY place the
+  per-carrier remedy appears on a succeeding write, so it has to start early
+  enough to leave room to act in: 60% of a 4,000-character run note leaves 1,600
+  characters — several more appends of runway rather than one.
+
+- **A document AT its cap now says it is closed, not that it is 99% full.** Two
+  changes, because the state is different in kind rather than degree:
+
+  - the success path (an `edit` can land exactly on the cap) says
+    `is FULL (4,000 of 4,000 characters). Nothing further will be stored here
+    until it is compacted — <per-carrier remedy>`;
+  - the REFUSAL path says it at all, which it did not before. The 422 arrives by
+    exception, so it skipped the success-path advice entirely — the wall was the
+    least informative state in the feature. `probe notes append` now prints the
+    remedy under the error.
+
+  The server's 422 also stopped naming only the limit: `appending would exceed
+  the N-character notes limit; nothing further can be stored until this document
+  is compacted`. A message naming only a limit reads like "send less", which is
+  the one remedy that does not work — a caller that trims its paragraph and
+  retries fails identically.
+
+### Fixed
+
+- **The "move this prose up" warning now names the ORDER, which is the part that
+  can lose the prose.** A run, group or artifact note approaching its 4,000-character
+  cap is told to move up to the experiment or project, and that is two writes
+  against two entities with nothing making them atomic. Appending to the parent
+  first means a failed second write leaves the prose DUPLICATED; the other order
+  leaves it GONE. The warning named the action and not the order, so a reader
+  following it had even odds of picking the destructive one — on a document
+  already at its limit, which is exactly when there is no slack to recover. It
+  now says "append there FIRST, then delete it here", and a test pins the
+  ordering because it is one clause in a string and a later tightening would
+  drop it without noticing what it carried.
+
+  Document carriers (project, experiment) are unchanged and get no ordering
+  caveat: compaction is one `edit` against one row, so the clause would be
+  noise, and noise in a warning is what teaches a reader to skim the next one.
+  The team note is a document carrier too but takes no `append`/`edit` verb at
+  all — it is a synced file — so it never reaches this warning.
+
+  The destination is "**a** project or experiment notes document", not "**the**
+  experiment or project": an artifact has five anchors and two of them
+  (workspace, shared folder) have neither, which the notes catalog has an
+  explicit parentless branch for. `headroom_warning` is given only the carrier
+  KIND, so it cannot name the right parent — the definite article was advice
+  pointing at a row that need not exist.
+
+  Both action clauses are now named constants pinned by EQUALITY in the tests.
+  Two structural assertions were tried first and both passed on delete-first
+  prose — `"FIRST" in m` with `m.index("append") < m.index("delete")`, and the
+  regex `append.*FIRST.*then delete`, which matches "stop **append**ing here —
+  FIRST … then delete it here, and append it to the project afterwards".
+  Substring order is not operation order. The clause is prose whose wording IS
+  the safety property, so a reword has to fail a test and be re-read.
+
+### Added
+
+- **The notes skills say that notes are capped, and name `probe notes status`.**
+  The warning has fired from 80% full since 0.111.0 and the sweep has existed
+  just as long, but no skill mentioned either, so nothing ever told an agent the
+  command was there or what to do when the warning appeared. `track-work` now
+  carries the two caps, that `notes append`/`edit` REFUSE an over-cap write
+  rather than truncating it (while the batched ingest door clamps), that the
+  refusal at the cap names the limit and nothing else so the warning is the
+  thing to act on, that a shrinking `edit` is accepted AT the cap but must land
+  under it when the document is already OVER, that the SDK's async default
+  warns nothing, and the per-carrier action — compact in place for a document,
+  move up (parent first) for a row annotation, and neither for a workspace or
+  shared-folder artifact, which has no research parent.
 ### Added
 
 - **The MCP can read the open web: `search_web`, `find_papers`, `read_page`.**

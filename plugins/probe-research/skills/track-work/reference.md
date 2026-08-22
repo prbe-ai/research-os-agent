@@ -231,6 +231,7 @@ The 2026-08 export supersedes the 07 one; rows 400-900 were duplicated.
 EOF
 probe notes append --experiment EXP --run RUN --group GRP --artifact ID
 probe notes edit --old "DOKS is out" --new "DOKS is out (retest 2027)"
+probe notes status [--above 80]        # how full every note in the team is
 probe notes team [--brief]             # the team note; it is a FILE, edit that
 ```
 
@@ -239,9 +240,46 @@ non-unique `--old` is refused with the match count — copy more surrounding
 text, never guess). Neither asks you to hold the document in context.
 COMPACTING is editing: fold finished appends into sections rather than letting
 the bottom grow. `--notes` on the older per-entity verbs REPLACES the whole
-value — prefer `notes append`. The project's notes are the default operational
-handoff because an excerpt rides on the project's MCP card; run and group
-notes are read only by someone already at that row.
+value — prefer `notes append`.
+
+NOTES ARE CAPPED: 100,000 characters on a project, experiment or the team note;
+4,000 on a run, group or artifact. Through `notes append`/`notes edit` an
+over-cap write is REFUSED, not truncated — the batched `/ingest/v1/runs` machine
+door clamps instead, so a note pushed inside a run body can come back shorter
+than you sent it.
+
+`probe notes append`/`edit` print the room left and start advising at 60% full.
+Act then, not at the wall: at the cap the write is REFUSED, so the paragraph you
+just wrote is the one that does not land, and trimming it and retrying fails
+again — the document is closed until it is compacted, and the refusal says so.
+
+The CLI is the ONLY writer. Notes are not writable through the SDK: under its
+async default a write queued and returned None, so an over-cap append was
+dead-lettered instead of refused. From a script, shell out to `probe notes
+append`.
+
+A shrinking `edit` is accepted AT the cap, so a full document is never stuck. On
+one already OVER its cap — a lowered cap, or a legacy row — the guard is on the
+RESULT, so a single edit has to land under the cap: shrink further rather than
+retrying the same span. What to do differs by carrier:
+
+  * project / experiment — COMPACT in place: fold the appends at the bottom up
+    into the sections above with `notes edit`.
+  * the TEAM note — same 100,000 cap, but it takes no `append`/`edit` verb at
+    all: compact it by editing the synced FILE, the way you write it.
+  * run / group / artifact — the prose has outgrown a row annotation, so MOVE IT
+    UP into a project or experiment notes document. Append there FIRST, then
+    delete it here: that is two writes on two entities and nothing makes them
+    atomic, so this order duplicates the prose if the second write fails and the
+    other order loses it. A workspace or shared-folder artifact has no research
+    parent at all — move its prose to the project that owns the work.
+
+`notes status` is the tenant-wide view, fullest first — run it when you arrive
+somewhere unfamiliar, or before dumping a long document into a note.
+
+The project's notes are the default operational handoff because an excerpt
+rides on the project's MCP card; run and group notes are read only by someone
+already at that row.
 
 ## Display copy — names, descriptions, hypotheses
 

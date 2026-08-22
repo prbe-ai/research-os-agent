@@ -127,7 +127,13 @@ should distrust, learned afterwards.
 Write entity notes with `probe notes append` (a new paragraph, concurrency-safe)
 or `probe notes edit` (replace one exact span; `--new` omitted deletes). Never
 read-modify-rewrite a whole document — that is how the parts you did not think
-to repeat disappear. The TEAM note is a synced FILE
+to repeat disappear. Notes are CAPPED and `notes append`/`edit` refuse an
+over-cap write rather than truncating it; both advise from 60% full, and
+`probe notes status` shows every note in the team fullest first. Act when the
+advice appears — at the cap the document is closed until it is compacted. The
+CLI is the only writer; the SDK cannot write notes. See `reference.md` for what
+to do, which differs for a 4,000-character run/group/artifact note and a
+100,000-character project or experiment document. The TEAM note is a synced FILE
 (`~/.claude/probe-team-note.md`, or `~/.codex/probe-team-note.md` on Codex --
 that exact path, NOT a `memory/` directory): edit it directly, it syncs itself. The
 Summary suffix is whole-document last-write-wins: read immediately before
