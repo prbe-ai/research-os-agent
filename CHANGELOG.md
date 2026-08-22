@@ -2,6 +2,87 @@
 
 ## Unreleased
 
+### Added
+
+- **The MCP can read the open web: `search_web`, `find_papers`, `read_page`.**
+  A proxy onto `POST /v1/web/*`, which the backend has served from one Firecrawl
+  key since the assistant got these three tools. The assistant could look
+  something up; the coding agent actually doing the research could not, and the
+  gap showed as the same failure every time — a direction proposed from memory,
+  confident, with no citation and no idea whether the field had already reported
+  the failure mode it was about to rediscover.
+
+  The lab's own record and the literature are two halves of one question, and
+  `search_knowledge` only ever held the first. `find_papers` searches 40M+
+  abstracts across arXiv, PubMed, bioRxiv and medRxiv and reads what it finds —
+  `mode="read"` with a query returns the PASSAGES answering it, which is how a
+  claim gets checked against its source instead of paraphrased from an abstract.
+  `search_web` is for documentation, error messages, and model or dataset cards;
+  `read_page` opens one URL, because a search snippet is a fragment a search
+  engine chose and never enough to quote from.
+
+  NO NEW SECRET AND NO SECOND PROVIDER PATH. The MCP calls the backend with the
+  caller's own token and the backend calls Firecrawl, so the narrowing that was
+  already there — raw HTML, screenshots and link graphs dropped, page text
+  capped, `recency` spelled server-side rather than passed through from a model
+  — applies to this surface unchanged. The MCP pod holds no Firecrawl
+  credential.
+
+  The ways to get no results are told apart, which is most of the work here. A
+  provider that ran the query and matched nothing answers
+  `completeness.state="no_match"`; a door that did not answer at all answers
+  `"partial"` with a `web_search` marker, the backend's own sentence in
+  `data.reason` (the only thing separating "no key on this deployment" from
+  "over quota, try later"), and NO `results` key — an outage must not be
+  readable as an empty result set. A query the provider refused raises, because
+  that one the caller can fix. A page cut at a ceiling is `partial`, and says
+  which ceiling: `text_truncated` is the deployment's per-page cap,
+  `truncated` is ours across the whole response.
+
+  "The door did not answer" covers more than a status. A `TransportError`
+  carries none at all, and it is the likeliest web failure there is — the SDK
+  allows 30s for the round trip while the backend allows Firecrawl 25s of it,
+  so a rollout, a reset connection, or an operator raising
+  `FIRECRAWL_TIMEOUT_SECONDS` past ~29 all land there. A 404 on the two SEARCH
+  routes is in scope too, because on those it can only mean this backend does
+  not serve `/v1/web/*`; on `read_page` a 404 stays what it looks like, a dead
+  link. An unrecognised `state` is never reported complete: a malformed body
+  read as "searched fine, found nothing" is the exact wrong answer this family
+  exists to prevent.
+
+  TWO CEILINGS THE BACKEND CANNOT SEE, because both are properties of a
+  response rather than of a page. Prose across all rows is trimmed to 100k
+  characters, matching the `MAX_TOOL_RESULT_CHARS` the assistant enforces on
+  the same routes — without it, `firecrawl_max_results` x
+  `firecrawl_max_page_chars` is ~200k in one result, i.e. the MCP door twice as
+  wide as the assistant's onto the same provider. And `data.reason` is capped
+  at 300 characters: it is documented as the backend's sentence, but the SDK
+  falls back to the whole response body on a non-JSON 5xx, so an ingress error
+  page would otherwise ship its entire HTML into an agent's context.
+
+  THE WEB TOOLS HOLD A BOUNDED SHARE OF THE WORKER POOL — a quarter by default,
+  `PROBE_MCP_WEB_CAPACITY` to override. They are the first tools whose expected
+  duration exceeds the pool's 20s shed timeout, so without a sub-quota one
+  agent told "read these 16 links" takes the whole pool for half a minute and
+  every other tenant's `get_entity` sheds with "server overloaded" instead of
+  queueing. Admission has no per-tenant fairness; this bounds the blast radius
+  until there is a measurement to size it properly.
+
+  The three POSTs are deliberately NOT marked idempotent, unlike every other
+  POST-for-read on this client. `transport._RETRYABLE` is {502, 503, 504},
+  which is exactly what the router maps a provider failure onto — so the retry
+  fired on precisely the wrong cases: a 503 IS "over quota, try later", and a
+  502 or 504 can follow a Firecrawl call that already completed and was already
+  billed. Connect errors still retry; those never reached the server.
+
+  Every payload carries `provenance: "open-web"`. The assistant answers the
+  untrusted-text problem behaviourally — a turn that has read the web loses
+  unprompted writes — and this surface has no turn to spend, so it says so
+  instead, in the tool descriptions and again on each result where a compacted
+  session can still see it. `credits_used` rides the search response: an agent
+  loop is where a browsing habit gets expensive, and this is the only place that
+  cost is visible.
+
 ### Fixed
 
 - **`/probe-research-setup` no longer installs the plugin before there is a
