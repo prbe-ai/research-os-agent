@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.112.0
+
 ### Removed
 
 - **Notes are no longer writable through the SDK.** `Client.append_notes`,
