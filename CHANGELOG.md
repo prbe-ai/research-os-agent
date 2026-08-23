@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The instruction-file lock is keyed on the file, not the credential.**
+  `Paths.lock` is keyed on origin+identity, which is right for the sync's
+  per-credential base copy and wrong for `~/.claude/CLAUDE.md`: that path is the
+  same whatever credential resolves, so two contexts on one machine took two
+  different locks and wrote the same file.
+- **The 32 KiB budget is measured in bytes.** `project_doc_max_bytes` is a byte
+  budget and the team note is full of em-dashes and middots, so measuring
+  `len(str)` under-counted every non-ASCII character -- in the direction that
+  overruns the cap.
+- **A pointer block upgrades back to the full note when space frees up.** The
+  rendered form is now part of the block's identity, so a pointer no longer
+  reports itself current against the full note's hash.
+- **An undecodable instruction file is recorded, not raised.**
+  `UnicodeDecodeError` is a `ValueError`, not an `OSError`, so one latin-1 byte
+  in a researcher's own `CLAUDE.md` escaped the handler and left the other
+  harness unrendered.
+- **A status file that is valid JSON but not an object fails open.** A bare list
+  made `.get` raise `AttributeError` in the one path whose job is to fail open.
+- The "already current" check moved inside the lock; it was a time-of-check race
+  against another process replacing the block.
+
+
 ## 0.114.0
 
 ### Changed
