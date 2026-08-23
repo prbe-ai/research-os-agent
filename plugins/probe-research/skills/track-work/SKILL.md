@@ -124,6 +124,19 @@ say what to do next time. Notes are NOT a second description: a description
 says what the thing IS, written before it runs; notes say what a later reader
 should distrust, learned afterwards.
 
+When a conclusion you recorded stops being true — a metric was wrong, a run is
+now `invalid` — SUPERSEDE it in place. Never delete or overwrite it: the old
+reading is why the team believed what it did, and only the marker stops search
+returning it as current. Edit the claim into this exact shape (the strike and
+the `> **SUPERSEDED**` line opening a blockquote are what the parser reads):
+
+    > **SUPERSEDED** 2026-08-21 · metric definition was wrong
+    > ~~SFT improved BIRD EX by 12.5 points over baseline.~~
+
+    The eval counted 3/8 where the harness scores 2/8 — a regression.
+
+Everything else is versioned automatically; this is the one thing you must do.
+
 Write entity notes with `probe notes append` (a new paragraph, concurrency-safe)
 or `probe notes edit` (replace one exact span; `--new` omitted deletes). Never
 read-modify-rewrite a whole document — that is how the parts you did not think
@@ -303,8 +316,8 @@ The metric/span/artifact call table, shape rules and delivery semantics are in
   completed|failed|crashed|canceled` (`with run:` records `failed` on an
   exception). Status is LIFECYCLE only — a run whose verifier was broken ran
   fine and is honestly `completed`; mark the MEANING with `probe run tag RUN
-  invalid` plus a note saying what to believe instead, the moment the harness
-  bug is found. At publication, freeze the experiment: `probe experiment
+  invalid` plus a SUPERSEDED marker over the claim it invalidates, the
+  moment the harness bug is found. At publication, freeze the experiment: `probe experiment
   freeze EXP --label L` pins the manifest forever.
 - A session that opened no run still ends: append what you would do next and
   what is unresolved to the project's notes, or planning work ends silently.
