@@ -87,7 +87,7 @@
           },
           {
             "type": "command",
-            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/team-note-sync.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/team-note-sync.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; exec \"$ROOT/hooks/team-note-sync.sh\"'",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/team-note-sync.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/team-note-sync.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; export PROBE_HOOK_EVENT=sessionend; exec \"$ROOT/hooks/team-note-sync.sh\"'",
             "timeout": 3
           }
         ]
@@ -103,7 +103,7 @@
           },
           {
             "type": "command",
-            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/team-note-sync.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/team-note-sync.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; exec \"$ROOT/hooks/team-note-sync.sh\"'",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/team-note-sync.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/team-note-sync.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; export PROBE_HOOK_EVENT=stop; exec \"$ROOT/hooks/team-note-sync.sh\"'",
             "timeout": 15
           }
         ]
