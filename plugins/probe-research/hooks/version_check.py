@@ -392,12 +392,20 @@ def _start_context() -> str | None:
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
         return None
     parts: list[str] = []
-    if _tracking_off():
+    tracking_off = _tracking_off()
+    if tracking_off:
         parts.append(TRACKING_OFF_CONTEXT)
     else:
         source = os.environ.get(SESSION_SOURCE_ENV)
         if source == COMPACT_SOURCE:
             parts.append(COMPACT_CONTEXT)
+    # BEFORE the brief on purpose: additionalContext has a budget (hooks.json
+    # caps it at 9000) and the team-note brief is the one part that can occupy
+    # most of it, so whatever follows the brief is what truncation eats first.
+    # This is an action item; the brief is background reading.
+    outbox = _outbox_context(tracking_off)
+    if outbox:
+        parts.append(outbox)
     # THE TEAM-NOTE BRIEF goes in whatever else this hook is saying, and
     # regardless of the tracking toggle: the toggle stops RECORDING, and a
     # briefing is a read. A session told not to write still benefits from
@@ -454,6 +462,139 @@ TEAM_NOTE_STALE_CLI = (
     "is upgraded. Tell the researcher to run `uv tool upgrade probe-research`."
 )
 
+
+
+_OUTBOX_SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
+
+_OUTBOX_GLOBAL_RANK_VARS = ("SLURM_PROCID", "RANK", "OMPI_COMM_WORLD_RANK")
+
+
+def _outbox_safe_component(value: str) -> str:
+    return _OUTBOX_SAFE_COMPONENT.sub("_", value)[:120] or "producer"
+
+
+def _outbox_rank_suffix() -> str | None:
+    """probe.sdk.journal._rank_suffix, copied -- see _outbox_dir for why."""
+    for var in _OUTBOX_GLOBAL_RANK_VARS:
+        raw = (os.environ.get(var) or "").strip()
+        if raw:
+            return f"rank-{_outbox_safe_component(raw)}"
+    local = (os.environ.get("LOCAL_RANK") or "").strip()
+    if local:
+        import socket
+
+        return f"rank-{_outbox_safe_component(socket.gethostname())}-{_outbox_safe_component(local)}"
+    return None
+
+
+def _outbox_dir() -> Path:
+    """The CLI's durable write outbox, resolved EXACTLY as the CLI resolves it.
+
+    A copy of probe.sdk.journal.default_dir (rank suffix included), not an
+    import: the system python3 this hook runs on has no probe package. Copy
+    fidelity is load-bearing -- review of the first draft found that omitting
+    the rank suffix made any session inside a SLURM/torchrun allocation (RANK
+    is exported there) count an empty parent directory and stay silent while
+    dead letters sat in rank-0/, and a training box is exactly where an outbox
+    backs up. Reads the directory rather than shelling out to `probe outbox
+    status` because a session start cannot afford an interpreter launch to
+    learn "nothing is stuck", which is the answer almost every time.
+    (PROBE_OUTBOX_DIR may point at shared storage; a hung mount there hangs
+    every probe command on the machine, not just this count.)
+    """
+    configured = os.environ.get("PROBE_OUTBOX_DIR")
+    if configured:
+        return Path(configured).expanduser()
+    base = os.environ.get("XDG_STATE_HOME")
+    root = Path(base) if base else Path.home() / ".local" / "state"
+    outbox = root / "probe" / "outbox"
+    suffix = _outbox_rank_suffix()
+    return outbox / suffix if suffix else outbox
+
+
+def _outbox_dead_letters() -> int:
+    """Dead-lettered op files, 0 on any doubt.
+
+    failed/ ONLY, deliberately. Queued ops need no help from this hook: every
+    CLI invocation already kicks the GUARDED background drainer for them
+    (main._outbox_notice -> outbox_worker.maybe_spawn, which checks pending,
+    paused, auth-block freshness and the lease), and the maintenance spawn
+    above runs two CLI invocations on every session start. Dead letters are
+    the one state nothing retries on its own. Fail-open to zero: an unreadable
+    state dir must degrade to "nothing to say", never to a repair prompt about
+    ops that may not exist.
+    """
+    try:
+        return sum(1 for _ in (_outbox_dir() / "failed").glob("*.json"))
+    except Exception:
+        return 0
+
+
+#: Why the maintenance spawn carries NO `outbox retry`/`outbox drain`, though
+#: the first draft had both and they look like the obvious automation
+#: (adversarial review, findings 1/2/6/7):
+#:   * `outbox retry` clears the auth block -- correctly, for a HUMAN typing
+#:     it, which asserts the credential was dealt with. A hook typing it every
+#:     session start turns the drainer's deliberate 300s post-401 cooldown
+#:     into a steady failure loop and restamps auth_blocked_since, erasing the
+#:     "blocked since Tuesday" signal an operator diagnoses from.
+#:   * A requeued dead letter keeps its (old, therefore FRONT) FIFO position,
+#:     where one unroutable op parks the drain and blocks every fresh op
+#:     behind it -- undoing the head-of-line reasoning that dead-lettered it.
+#:   * `outbox drain` holds the drain lock across network I/O with none of
+#:     maybe_spawn's guards, and is redundant besides: the spawn's own CLI
+#:     invocations kick the guarded drainer.
+#:   * Both ignore `probe outbox pause`, which promises "nothing drains".
+#: Dead letters need ATTENTION, not plumbing -- so the plumbing stays
+#: untouched and the attention is delegated to the agent as a prompt. The
+#: retry in step 2 below is the same command, but issued per-op by an agent
+#: that has just read `status --verbose` -- the judgment call the CLI's own
+#: comment assumes. "VERBATIM" in step 3 is the policy half: a later agent
+#: trimming an earlier agent's recorded findings is how information quietly
+#: disappears, so repair means re-homing content, never editing it.
+OUTBOX_REPAIR_CONTEXT = (
+    "The Probe outbox on this machine holds {failed} dead-lettered write(s) "
+    "that will not deliver on their own. Take a look and fix them before "
+    "other work:\n"
+    "1. `probe outbox status --verbose` lists the stuck ops. If it shows the "
+    "outbox paused or auth-blocked, an operator set that state on purpose: "
+    "leave it alone and report instead.\n"
+    "2. Transient failure (network blip, a cap someone has since freed): "
+    "`probe outbox retry <op_id>` requeues that one op.\n"
+    "3. Deterministic rejection (e.g. a note append larger than its target's "
+    "remaining characters): retrying can never work, and trimming loses "
+    "content. Move the payload VERBATIM to an artifact anchored on the same "
+    "target, append a short pointer note, then `probe outbox discard <op_id>`. "
+    "The payload is in the op JSON in the outbox's failed/ directory (note "
+    "text under body.notes_append).\n"
+    "4. If an op targets another researcher's project or run, report it to "
+    "the user instead of writing into their records.\n"
+    "Then tell the user what was stuck and what you did about it."
+)
+
+#: The untracked-session variant. The toggle stops RECORDING, and repairing a
+#: dead letter CREATES an artifact and a note -- recording. An untracked
+#: session is still told what is stuck (the writes it carries were recorded
+#: while tracking was on; silence would strand them), but is directed to a
+#: read and a report, not a write. A separate template rather than a clause:
+#: the first draft buried "unless tracking is off" mid-list and the imperative
+#: steps above it won.
+OUTBOX_REPORT_ONLY_CONTEXT = (
+    "The Probe outbox on this machine holds {failed} dead-lettered write(s) "
+    "that will not deliver on their own. This session's tracking is OFF, so "
+    "do not write to Probe: run `probe outbox status --verbose` (a read) and "
+    "report what is stuck to the researcher, who can retry, re-home, or "
+    "discard it."
+)
+
+
+def _outbox_context(tracking_off: bool) -> str | None:
+    """The repair prompt, the report-only variant, or None when nothing is stuck."""
+    failed = _outbox_dead_letters()
+    if not failed:
+        return None
+    template = OUTBOX_REPORT_ONLY_CONTEXT if tracking_off else OUTBOX_REPAIR_CONTEXT
+    return template.format(failed=failed)
 
 
 def _team_note_cli_too_old(binary: str) -> str | None:

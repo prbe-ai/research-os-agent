@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Added
+
+- **A session start with dead letters tells the agent to repair them.** An
+  async write that dead-letters does so after the session that made it has
+  moved on, and until now the failed op sat in `failed/` until a human
+  happened to run `probe outbox status` — observed in production: a note
+  append dead-lettered on 19 Aug was found by hand days later. Now the
+  plugin's session-start hook counts the outbox's `failed/` (resolved exactly
+  as the CLI resolves the journal, rank suffix included) and, when it is
+  non-empty, injects a repair prompt into the session's context: read
+  `status --verbose` first — and leave a paused or auth-blocked outbox alone;
+  requeue a transient failure per-op; re-home a deterministic rejection's
+  payload VERBATIM to an artifact plus a pointer note, then discard — never
+  trim; and hand an op targeting another researcher's work to the user. An
+  untracked session gets a report-only variant: told what is stuck, directed
+  to a read and a report, never to Probe writes.
+
+  Deliberately PROMPT-ONLY — adversarial review rejected the draft that also
+  auto-ran `outbox retry; outbox drain` from the maintenance spawn: `retry`
+  clears the auth block (designed as a human's assertion that credentials
+  were fixed) and re-queues dead letters at the FIFO head where one
+  unroutable op blocks fresh work; `drain` holds the drain lock across
+  network I/O with none of `maybe_spawn`'s guards; both ignore
+  `probe outbox pause`. Queued-but-undelivered ops need none of this: every
+  CLI invocation — including the maintenance spawn's own — already kicks the
+  guarded background drainer. Complements 0.112.0's removal of the SDK notes
+  door: that closed the largest source of new dead letters; this gives the
+  ones that still occur an agent's attention within one session.
+
 ## 0.112.0
 
 ### Removed
