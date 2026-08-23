@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The team-note block is now re-rendered at session end**, so an edit reaches
+  the next session rather than the one after it. `team-note-sync.sh` is
+  registered on Stop and SessionEnd and ran `--push-only` on both; the render
+  only runs on text it just fetched, and `--push-only` fetches nothing, so the
+  render never fired from either hook. Stop stays `--push-only` because it fires
+  every turn and must not carry a network pull.
+- Both hook registrations state their mode explicitly. `PROBE_HOOK_EVENT` is
+  inherited, so marking only SessionEnd would have let an ambient `sessionend`
+  put a network pull and an instruction-file rewrite on every turn.
+
+
 ## 0.115.0
 
 ### Added
