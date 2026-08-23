@@ -2,6 +2,41 @@
 
 ## Unreleased
 
+### Changed
+
+- **The team note is rendered into `CLAUDE.md` and `AGENTS.md`, not injected by
+  the session-start hook.** The hook declared a 9,000-CHARACTER
+  `additionalContextLimit` while the backend built a brief up to 32,000; 32k
+  characters is ~8k tokens and 9,000 reads as tokens-plus-headroom, but the field
+  counts characters. The backend answered `truncated: false` — correct by its own
+  budget — and the harness spilled the injection to a temp file and showed the
+  model a 2 KB preview. `probe notes sync` now renders the note into a managed
+  block in the instruction file, which the harness reads whole and before any
+  hook runs.
+- **The note block has its own marker pair.** `probe-research:begin/end` already
+  delimits the operational pointer block; rendering the note there would delete
+  it. `BlockSpec` lets both live in one file with separate lifecycles.
+- **One sync renders both harnesses.** Each harness's local copy previously
+  refreshed only when that harness ran, so the two drifted apart with neither
+  agent able to tell.
+- **`probe wizard` seeds the block at install**, which is what covers a machine
+  that has never synced.
+- The hook no longer carries the note. It reports when a render failed — the one
+  thing a background job cannot say for itself.
+
+### Fixed
+
+- A stray `@path` in the team note no longer becomes a live import once the note
+  is inside `CLAUDE.md`. Email addresses, @mentions and backticked text are left
+  alone.
+- A note containing our own markers is refused rather than mangled, and a damaged
+  or unwritable block is left untouched rather than auto-repaired.
+- Over budget writes a pointer to the real file instead of a truncated note:
+  Codex's 32 KiB `project_doc_max_bytes` covers its whole instruction chain and
+  it stops adding files at the cap.
+- `skills/track-work/SKILL.md` was left behind by #865, which edited only the
+  plugin copy.
+
 ## 0.113.0
 
 ### Changed
