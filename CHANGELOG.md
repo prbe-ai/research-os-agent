@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+### Changed
+
+- **`probe_procedures` is advertised only to callers the workflow-memory flag
+  allows.** The hosted MCP now computes its tool list PER REQUEST rather than
+  once at startup: `/v1/me` reports the per-user verdict as
+  `features.procedures`, and a caller the flag denies is not shown the tool.
+  Tools are registered once per process and this server is multi-tenant and
+  `stateless_http`, so registration-time gating was not available; the filter
+  reads the request's own token through the contextvar `with_auth_and_health`
+  already sets, and the identity it looks up is the `/v1/me` body the server was
+  fetching and caching anyway — so the gate costs no extra round trip and the
+  MCP needs no PostHog client. Fail-closed on every unknown, including an API
+  too old to publish `features`: the skew window hides the tool rather than
+  revealing it. STDIO IS UNGATED — there the server is a child of one person's
+  agent on their own machine and the API still enforces the flag on every call.
+- **Two passages naming the rule store were removed from `MCP_INSTRUCTIONS`,
+  and one from the always-loaded agent block** (`POINTER_VERSION` 17 -> 18, so
+  installed blocks refresh). Those strings ship to every tenant and cannot vary
+  per user, so they could not keep instructing agents to call a tool most of
+  them no longer have. Internal users keep the tool and its full docstring.
+- **`set-rule` and `pull-rules` are no longer shipped in the plugin.** Plugin
+  content is not per-user either, and two skill descriptions in every customer's
+  context buy them nothing the flag will let them use. The canonical copies stay
+  under `skills/`; `tests/test_skills_sync.py` asserts they stay unshipped so
+  `make sync-plugin-skills` cannot quietly re-add them.
+- **`probe rule` maps a gated 404 onto the "not available here" path** instead
+  of a traceback, reusing the shape `_rule_unavailable` already understood. The
+  command group stays registered on purpose: hiding it would take a network
+  round trip at CLI startup, and this CLI runs inside training loops.
+
 ### Added
 
 - **A session start with dead letters tells the agent to repair them.** An
