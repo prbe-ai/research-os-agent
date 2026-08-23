@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.115.0
+
 ### Added
 
 - **A project's attached GitHub repositories are now first-class from the
