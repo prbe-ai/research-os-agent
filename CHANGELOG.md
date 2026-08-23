@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.114.0
+
 ### Changed
 
 - **The team note is rendered into `CLAUDE.md` and `AGENTS.md`, not injected by
