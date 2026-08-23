@@ -325,10 +325,12 @@ def _start_context() -> str | None:
         source = os.environ.get(SESSION_SOURCE_ENV)
         if source == COMPACT_SOURCE:
             parts.append(COMPACT_CONTEXT)
-    # BEFORE the brief on purpose: additionalContext has a budget (hooks.json
-    # caps it at 9000) and the team-note brief is the one part that can occupy
-    # most of it, so whatever follows the brief is what truncation eats first.
-    # This is an action item; the brief is background reading.
+    # ORDER IS BY URGENCY, not by budget. This used to read "before the brief on
+    # purpose", because the team-note brief travelled this channel and could
+    # occupy most of a 9000-character cap, so whatever followed it was eaten
+    # first. The note left this channel: it renders into the instruction file
+    # now, and what remains here is a few hundred characters of nudges. The
+    # ordering survives because an action item still belongs above background.
     outbox = _outbox_context(tracking_off)
     if outbox:
         parts.append(outbox)
