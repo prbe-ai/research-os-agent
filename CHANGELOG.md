@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.113.0
+
 ### Changed
 
 - **`probe_procedures` is advertised only to callers the workflow-memory flag
