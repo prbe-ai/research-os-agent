@@ -66,11 +66,10 @@ import re
 import shlex
 import subprocess
 import sys
-import urllib.request
 from pathlib import Path
 from typing import NoReturn
 
-# `time` left with the helpers that moved to version_policy; pathlib and urllib
+# `time` left with the helpers that moved to version_policy; pathlib
 # came back for the team-note brief, which reads the CLI's stored credential and
 # makes one short, fail-open request of its own.
 # The shared policy: TTL/BACKOFF, the cache and state paths, the cache reader and
@@ -168,22 +167,43 @@ TRACKING_OFF_CONTEXT = (
 )
 
 
-#: How long the brief fetch may take before the session starts without it. Well
-#: under the version manifest's budget: this is one indexed single-row read, and
-#: a session start is a place where every added millisecond is felt.
-def _team_note_timeout() -> float:
-    """Read here rather than through version_policy's private helper: that module
-    is a SYNCED COPY of the SDK's (`make sync-plugin-policy`, pinned by
-    tests/test_policy_sync.py), so reaching into its internals from this file
-    would make an unrelated sync fail on a name it never promised."""
-    try:
-        return float(os.environ.get("PROBE_TEAM_NOTE_TIMEOUT", "") or 2.0)
-    except ValueError:
-        return 2.0
-
 #: The document's filename. Kept in step with `probe.cli.team_note_file`, which
 #: is what actually writes it -- this module only has to NAME the same file.
 DOCUMENT_NAME = "probe-team-note.md"
+
+
+#: Mirrors `probe.cli.team_note_file.RENDER_FAILURE_FILE` under
+#: `probe.version_policy.state_dir()`. Duplicated rather than imported for the
+#: same reason `_document_path` duplicates the CLI's path resolution: this file
+#: is a hook, run by whatever bare python3 the harness has, with no guarantee
+#: `probe` is importable. `test_render_failure_path_matches_the_cli` pins them.
+STATE_DIRNAME = "probe"
+RENDER_FAILURE_FILE = "render-failures.json"
+
+RENDER_FAILURE_CONTEXT = (
+    "The team note could not be written into this session's instruction file, so "
+    "what you can see of it may be stale or absent:\n{detail}\n"
+    "Reading the note directly still works: open `{document}`."
+)
+
+
+def _render_failures() -> list[str]:
+    """What the last background render could not do. NEVER raises.
+
+    A hook that cannot read a status file must not become the reason a session
+    fails to start, so every error here degrades to "nothing to report" -- the
+    same fail-open contract the version check runs under.
+    """
+    xdg = os.environ.get("XDG_STATE_HOME")
+    base = xdg if xdg else os.path.join(os.path.expanduser("~"), ".local", "state")
+    path = os.path.join(base, STATE_DIRNAME, "team-note", RENDER_FAILURE_FILE)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except (OSError, ValueError):
+        return []
+    found = payload.get("failures") if isinstance(payload, dict) else None
+    return [str(item) for item in found][:5] if isinstance(found, list) else []
 
 
 def _document_path() -> str:
@@ -207,100 +227,6 @@ def _document_path() -> str:
     return os.path.join(os.path.expanduser(root), DOCUMENT_NAME)
 
 
-#: What the brief is wrapped in. The label matters: without it the model reads
-#: a wall of prose with no idea who wrote it or how much authority it carries.
-#:
-#: NAMES THE PATH rather than describing where it sits. The description used to
-#: read "beside your agent's memory file", which was unambiguous when it was
-#: written and is not now: Claude Code grew a separate `memory/` directory, so an
-#: agent following those words lands in the wrong place, creates a
-#: `probe-team-note.md` nothing syncs, and believes it has written to the team
-#: note. A resolved absolute path cannot be misread that way.
-TEAM_NOTE_HEADER_TEMPLATE = (
-    "The team note -- your team's shared working memory, written by the people and "
-    "agents doing this work. Treat it as current context. To add to it, edit "
-    "`{path}` (that exact file -- NOT any other memory file); it syncs back when "
-    "this session ends:"
-)
-
-
-def _team_note_header() -> str:
-    return TEAM_NOTE_HEADER_TEMPLATE.format(path=_document_path())
-
-
-def _team_note_brief() -> str | None:
-    """The bounded team-note slice, or None. NEVER raises, never blocks a start.
-
-    FAIL-OPEN in every direction: no credential, no network, a slow backend, an
-    old backend with no such route, a malformed body -- all mean the session
-    starts without a briefing, which is exactly how sessions started before this
-    existed. An arriving agent that cannot be briefed is a smaller problem than
-    one that cannot start, and `browse_research` carries the same slice for
-    anyone who calls it.
-    """
-    token = os.environ.get("PROBE_TOKEN") or _config_token()
-    if not token:
-        return None
-    base = _base_url()
-    # This is the ONE credentialed request in this file -- the manifest fetch is
-    # anonymous -- so it is the one that has to care where the bytes go.
-    #
-    # Plain http would put a `probe_pat_...` on the wire in clear text. A local
-    # backend is the legitimate reason someone points PROBE_BASE_URL at http, and
-    # the right answer there is to start without a briefing rather than to leak
-    # the PAT: the session still works, `browse_research` still carries the same
-    # slice, and nothing about the failure is silent to anyone reading this.
-    if not base.startswith("https://"):
-        return None
-    try:
-        request = urllib.request.Request(
-            base + "/v1/team-note/brief",
-            headers={"Accept": "application/json", "Authorization": f"Bearer {token}"},
-        )
-        # NOT the module-level `urlopen`: its default opener follows 30x, and
-        # CPython's HTTPRedirectHandler copies every header except
-        # content-length/content-type onto the redirected request -- so a
-        # compromised or merely misconfigured host could replay the Authorization
-        # header, PAT included, to any origin it names. This opener refuses
-        # redirects outright (a 30x raises and we fail open, same as a timeout).
-        opener = urllib.request.build_opener(_NoRedirect)
-        with opener.open(request, timeout=_team_note_timeout()) as response:  # noqa: S310
-            payload = json.loads(response.read().decode("utf-8"))
-        text = (payload or {}).get("text") or ""
-    except Exception:
-        return None
-    if not text.strip():
-        return None
-    return f"{_team_note_header()}\n\n{text}"
-
-
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    """Turn every 30x into an error instead of a re-request to a new host."""
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: D102
-        return None
-
-
-def _config_token() -> str | None:
-    """The CLI's stored PAT, read the same way `probe` reads it.
-
-    `version_policy.config_path()`, NOT a hand-rolled `~/.config/probe`: that
-    helper is where `base_url()` reads the host from, and it honours
-    PROBE_CONFIG_PATH and XDG_CONFIG_HOME. Resolving the path separately here
-    would let the two disagree on a machine that sets either -- and the shape of
-    that disagreement is sending one context's token to another context's server.
-    """
-    try:
-        data = json.loads(Path(version_policy.config_path()).read_text())
-    except Exception:
-        return None
-    contexts = data.get("contexts")
-    if isinstance(contexts, dict):
-        active = contexts.get(data.get("current_context") or "default") or {}
-        token = active.get("token")
-    else:
-        token = data.get("token")
-    return token if isinstance(token, str) and token else None
 
 
 def _emit(obj: dict) -> NoReturn:
@@ -406,17 +332,28 @@ def _start_context() -> str | None:
     outbox = _outbox_context(tracking_off)
     if outbox:
         parts.append(outbox)
-    # THE TEAM-NOTE BRIEF goes in whatever else this hook is saying, and
-    # regardless of the tracking toggle: the toggle stops RECORDING, and a
-    # briefing is a read. A session told not to write still benefits from
-    # knowing what the team already decided -- and suppressing it would make
-    # "every session arrives briefed" false for exactly the sessions that opted
-    # out of writing, which is not what opting out meant.
-    brief = _team_note_brief()
-    if brief:
-        parts.append(brief)
+    # EVERY ACTION ITEM GOES BEFORE THE BRIEF, stale_cli included. It used to be
+    # appended after, where -- by the reasoning three lines up -- it was first in
+    # line to be eaten, and what it says is that the team note is not syncing at
+    # all. A warning about the briefing mechanism cannot be the thing the
+    # briefing mechanism drops.
     if stale_cli:
         parts.append(stale_cli)
+    # THE TEAM NOTE NO LONGER TRAVELS THIS CHANNEL, and that is the point of the
+    # change this comment survives. It is rendered into a managed block in
+    # CLAUDE.md / AGENTS.md, which the harness reads whole and before any hook of
+    # ours runs -- so the note stopped being something this hook has to size
+    # against a character budget it kept getting wrong.
+    #
+    # What the hook still owes a session is the report when that render FAILED.
+    # The render happens during a background sync with no channel to the model at
+    # the moment it runs, so this is where "fail loudly" actually becomes loud;
+    # without it the loud failure is silent in practice, which is precisely the
+    # bug the whole change exists to stop.
+    failures = _render_failures()
+    if failures:
+        detail = "\n".join(f"- {item}" for item in failures)
+        parts.append(RENDER_FAILURE_CONTEXT.format(detail=detail, document=_document_path()))
     return "\n\n".join(parts) if parts else None
 
 
@@ -461,7 +398,6 @@ TEAM_NOTE_STALE_CLI = (
     "been lost -- edits you make to that file stay on this machine until the CLI "
     "is upgraded. Tell the researcher to run `uv tool upgrade probe-research`."
 )
-
 
 
 _OUTBOX_SAFE_COMPONENT = re.compile(r"[^A-Za-z0-9._-]+")
