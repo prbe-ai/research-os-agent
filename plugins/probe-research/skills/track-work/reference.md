@@ -221,15 +221,15 @@ ordinary citation or bare URL embeds nothing), and the project's read-only
 removing it disconnects. Never write it for a repo the project is not about.
 Spend your own words on what the README does NOT say.
 
-Notes commands (projects, experiments, runs, groups, artifacts, plus ONE team
-note):
+Notes commands (projects, experiments, runs, trials, groups, artifacts, plus ONE
+team note):
 
 ```
 probe notes show                       # this project's operational briefing
 probe notes append <<'EOF'             # add a paragraph, concurrency-safe
 The 2026-08 export supersedes the 07 one; rows 400-900 were duplicated.
 EOF
-probe notes append --experiment EXP --run RUN --group GRP --artifact ID
+probe notes append --experiment EXP --run RUN --trial TRIAL --group GRP --artifact ID
 probe notes edit --old "DOKS is out" --new "DOKS is out (retest 2027)"
 probe notes status [--above 80]        # how full every note in the team is
 probe notes team [--brief]             # the team note; it is a FILE, edit that
@@ -243,7 +243,7 @@ the bottom grow. `--notes` on the older per-entity verbs REPLACES the whole
 value — prefer `notes append`.
 
 NOTES ARE CAPPED: 100,000 characters on a project, experiment or the team note;
-4,000 on a run, group or artifact. Through `notes append`/`notes edit` an
+4,000 on a run, trial, group or artifact. Through `notes append`/`notes edit` an
 over-cap write is REFUSED, not truncated — the batched `/ingest/v1/runs` machine
 door clamps instead, so a note pushed inside a run body can come back shorter
 than you sent it.

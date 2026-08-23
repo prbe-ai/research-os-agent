@@ -149,7 +149,7 @@ over-cap write rather than truncating it; both advise from 60% full, and
 `probe notes status` shows every note in the team fullest first. Act when the
 advice appears — at the cap the document is closed until it is compacted. The
 CLI is the only writer; the SDK cannot write notes. See `reference.md` for what
-to do, which differs for a 4,000-character run/group/artifact note and a
+to do, which differs for a 4,000-character run/trial/group/artifact note and a
 100,000-character project or experiment document. The TEAM note is a synced FILE
 (`~/.claude/probe-team-note.md`, or `~/.codex/probe-team-note.md` on Codex --
 that exact path, NOT a `memory/` directory): edit it directly, it syncs itself. The
