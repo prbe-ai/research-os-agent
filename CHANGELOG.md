@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Added
+
+- **A project's attached GitHub repositories are now first-class from the
+  agent.** New SDK methods attach/detach/confirm code sources, page a project's
+  commit timeline (`list_project_commits`), open one commit
+  (`get_project_commit`), and read a run's resolved code (`get_run_code`); the
+  matching CLI lives under `probe project code` (`attach` / `list` / `detach` /
+  `confirm`) plus `probe commits <project>` for the timeline. Attribution is
+  server-stamped, so an agent attach is recorded as an agent action.
+- **`get_entity(project, view="code")`** (MCP) reads the commit timeline of a
+  project's attached repo, with `filters={"commit": sha}` to open one commit and
+  `filters={"source": id}` to pick a repo when several are attached; the project
+  card gains a `code` block naming the connected repositories.
+- **The wizard import hands the agent a `git-history.md` digest** so it can order
+  the work it is reconstructing in time — and read a captured run's base commit
+  as what the run was *based on* (the nearest pushed commit), never as the exact
+  tree it ran.
+
 ## 0.114.1
 
 ### Fixed
