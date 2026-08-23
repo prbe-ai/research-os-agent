@@ -41,6 +41,7 @@ Render this first — it is the part a timeline cannot carry:
 STATUS  ·  <project name> — <one-line description>
   tracking   on · this session files under <project> · run <slug> live
   tracked    4 experiments · 31 runs (2 active) · 18 files · notes 6d ago
+  code       Acme-Lab/Train@odyssey3 · 1,2k-commit timeline · 1 suggested repo
   missing    2 experiments have no summary · last run has no snapshot ⚠
   attention  <the single most important caveat from the notes, verbatim-short>
 ```
@@ -54,6 +55,11 @@ Four lines, each from a read, none from recall:
 - **tracked** — counts from `browse_research` and the project card: experiments,
   runs (active), files (artifact counts across anchors), how fresh the notes
   are. What EXISTS.
+- **code** — which GitHub repository/branch the project's code lives in, from
+  the project card's `code` block (`get_entity(view="code")` has the commit
+  timeline itself). Include a suggested repo when one is waiting for a
+  confirm — a run captured code from it and nobody has said yes yet. Omit the
+  line when the project has no code sources; never guess a repo from prose.
 - **missing** — the gaps a reader would want flagged: experiments without a
   hypothesis or summary, a running run with no snapshot, `outbox` undelivered,
   a project with no description. What SHOULD exist and does not. Derive only

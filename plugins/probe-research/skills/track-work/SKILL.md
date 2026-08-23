@@ -189,7 +189,11 @@ then the project's Summary (`view="summary"`) and its notes (`probe notes
 show`) — every entity carries notes and an excerpt rides on its card.
 `browse_research` for what exists and what is RUNNING (`active_run_count` —
 duplicate GPU-hours are the expensive mistake); `search_knowledge` for prior
-work on this specific thing. Before writing any reusable script, scorer,
+work on this specific thing. A project with code sources also has
+`view="code"`: the commit timeline of its attached GitHub repo — read it
+before describing the project's progression, cite commits as
+`owner/repo@shortsha`, and read a run's sha as what the run was BASED ON
+(the nearest pushed commit), never as the exact tree it ran. Before writing any reusable script, scorer,
 dataset, config or image: the versions reuse check (routing table above).
 
 Then the OTHER half, which this lab's own record cannot hold: `find_papers`
