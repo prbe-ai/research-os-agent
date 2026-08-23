@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.114.1
+
 ### Fixed
 
 - **The instruction-file lock is keyed on the file, not the credential.**
