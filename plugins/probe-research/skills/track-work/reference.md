@@ -221,15 +221,15 @@ ordinary citation or bare URL embeds nothing), and the project's read-only
 removing it disconnects. Never write it for a repo the project is not about.
 Spend your own words on what the README does NOT say.
 
-Notes commands (projects, experiments, runs, trials, groups, artifacts, plus ONE
-team note):
+Notes commands (projects, experiments, runs, groups, artifacts, plus ONE team
+note — a TRIAL has no notes document at all, see the trial section below):
 
 ```
 probe notes show                       # this project's operational briefing
 probe notes append <<'EOF'             # add a paragraph, concurrency-safe
 The 2026-08 export supersedes the 07 one; rows 400-900 were duplicated.
 EOF
-probe notes append --experiment EXP --run RUN --trial TRIAL --group GRP --artifact ID
+probe notes append --experiment EXP --run RUN --group GRP --artifact ID
 probe notes edit --old "DOKS is out" --new "DOKS is out (retest 2027)"
 probe notes status [--above 80]        # how full every note in the team is
 probe notes team [--brief]             # the team note; it is a FILE, edit that
@@ -243,7 +243,7 @@ the bottom grow. `--notes` on the older per-entity verbs REPLACES the whole
 value — prefer `notes append`.
 
 NOTES ARE CAPPED: 100,000 characters on a project, experiment or the team note;
-4,000 on a run, trial, group or artifact. Through `notes append`/`notes edit` an
+4,000 on a run, group or artifact. Through `notes append`/`notes edit` an
 over-cap write is REFUSED, not truncated — the batched `/ingest/v1/runs` machine
 door clamps instead, so a note pushed inside a run body can come back shorter
 than you sent it.
@@ -362,6 +362,7 @@ breath as the finding it qualifies.
 `probe run set RUN [--name] [--description] [--notes TEXT|@FILE|-]`
 `probe group create EXP --name NAME [--kind] [--spec JSON|@FILE] [--notes ...]`
 `probe group set GROUP [--name] [--spec] [--notes ...]`
+`probe trial list RUN | get TRIAL | set TRIAL [--name] [--description]`
 
 `probe project use` sets the ambient project MACHINE-globally — prefer
 `--project` or `PROBE_PROJECT` whenever another session might be running.
@@ -369,3 +370,28 @@ breath as the finding it qualifies.
 longer files anything. `probe experiment set EXP --hypothesis "..."` amends a
 hypothesis (first-write-wins at creation; reopening never rewrites it).
 `--notes ""` clears; `@file` and `-` read a file or stdin.
+
+A TRIAL is one rollout, addressed by its ROLLOUT SPAN id — the last segment of a
+dashboard `/runs/<run>/trials/<id>` link, so a pasted URL works unedited.
+`probe trial list RUN` is the authored inventory, and it is NOT the same read as
+`probe span list --type rollout`: the span is what the producer emitted, the
+trial is the row beside it, and a trial stays listed when its rollout falls
+outside a bounded span slice.
+
+**Its NAME resolves through a chain**, and only the first link is authored:
+`trials.name` (a generated title, or your `trial set`) -> the rollout span's
+generated description -> the span name the training script passed
+(`HIPS__autograd.ac044f0d.lm_rewrite__probe-1cd50cf5`, usually) -> `Unnamed
+trial`. Nothing renames it at WRITE time; the generated title lands once the run
+goes terminal, and it is written from the span's `attributes`. So the lever at
+instrumentation time is a meaningful `name=` and populated `attributes`;
+`trial set` fixes one after the fact, and a name you set is sticky — generation
+skips any trial whose `name_customized` is true, and the producer keeps writing
+its own on retries without overwriting yours.
+
+**A trial has NO notes document** — the only research entity that does not, and
+`trial set` takes no `--notes` because there is nothing to write to. A rollout
+ran once and is immutable afterwards, so `--description` holds everything a later
+reader needs about it. Anything about the harness — a broken verifier, a bad
+config — is a fact about the RUN and belongs once on its notes, not copied across
+every rollout it produced.

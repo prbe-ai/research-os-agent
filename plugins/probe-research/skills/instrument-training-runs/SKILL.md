@@ -76,6 +76,21 @@ already timing metrics before building anything.
 Spans have no heartbeat and no reaper, so one opened before the work leaks on
 every path that raises. Record it AFTER, with real start and end timestamps.
 
+A `rollout` span is special: each one materializes an addressable TRIAL beside
+it, keyed by that span's id, with its own page a teammate can open and annotate.
+So `span_type="rollout"` is the type to reach for when a nested unit is one
+attempt at a task — nothing else you emit becomes an entity of its own.
+
+**Pass a `name=` and `attributes` that mean something.** The span name you write
+here is the trial's name until something better exists — a harness that passes
+its own join key gives you a page titled
+`HIPS__autograd.ac044f0d.lm_rewrite__probe-1cd50cf5`. A generated title does
+fill the sidecar in later, but only once the run reaches a terminal status, and
+it is written FROM what you logged: `attributes` is the field that says what the
+rollout attempted. Sparse attributes give a vague title. Neither costs more than
+one argument at the call site, and together they are the difference between a
+readable trial list and 500 opaque rows.
+
 ## Don't duplicate, don't block
 
 Read what the trainer's integration already emits — phase timings, throughput,

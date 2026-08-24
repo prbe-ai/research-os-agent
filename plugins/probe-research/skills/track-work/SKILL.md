@@ -66,6 +66,14 @@ the team Shared folder / team note (the team's, across projects). Unsure
 between two levels -> pick the lower. A helper written during project work
 belongs to the project; promote it later if it outgrows one.
 
+**The ladder stops at the run, and a TRIAL is below it on purpose.** One
+rollout of an RL run is a real entity — readable, with a title and description
+you can author (`probe trial list|get|set`) — but it carries **no notes document
+at all**, the only research entity that does not. A rollout ran once and is
+immutable afterwards, so its description holds what a later reader needs.
+"The verifier timed out" is a fact about the run's verifier: write it once on
+the RUN, not across the five hundred rollouts it produced.
+
 ### Files -> artifacts. Always.
 
 Surveys, specs, reports, figures, comparison tables, datasets, checkpoints,
@@ -112,7 +120,7 @@ Two rules that keep files meaningful later:
 | what you are testing and what result confirms it | the EXPERIMENT's hypothesis, at creation |
 | a caveat, decision, reversal, deletion or handoff | hidden notes on the lowest entity it applies to |
 | the running record of one experiment — configs, results, conclusions | that EXPERIMENT's notes |
-| why THIS run's number should be distrusted | that RUN's notes |
+| why THIS run's number should be distrusted | that RUN's notes — including anything you learned from one rollout |
 | what a sweep or campaign concluded | that GROUP's notes |
 | where a file came from, what is wrong with it | that ARTIFACT's notes |
 | the whole team must know it, across projects | the TEAM note |
