@@ -4,6 +4,25 @@
 
 ### Added
 
+- **Titled sub-notes, addressable from the CLI.** Every note-bearing entity
+  can carry up to 20 titled sub-note documents beside its main note
+  (research-os 0.231.0.0+). `probe notes list` shows an entity's sub-notes;
+  `append`/`edit`/`show` take `--note "<title>"` to address one; `create`,
+  `rename` and `delete` manage them. Title-addressed writes travel WITH the
+  title and resolve on the server at apply time — exactly once or refused
+  with the count — so they queue through the outbox like every other notes
+  write. The MCP's `view="notes"` now surfaces each sub-note as a bounded
+  excerpt, and the dashboard assistant can list and open them
+  (`read_entity(kind=sub_note)`).
+
+  Duplicate titles are legal (tabs key on id), so every `--note` also takes
+  `id:<uuid>` — the escape hatch the ambiguity refusal names, since the
+  advised repair (`probe notes rename`) would otherwise be refused by the
+  same ambiguity. `create` is strict (a replayed create is a second tab, not
+  a retry, so it never queues), and an interactive `delete` re-reads the
+  sub-note after the prompt so a confirm given for one title cannot destroy
+  a document renamed while the prompt sat open.
+
 - **`probe backfill` imports the agent conversations already on this
   machine.** Claude Code transcripts and Codex rollouts, discovered
   device-wide, behind their own approval gate that names the session count,

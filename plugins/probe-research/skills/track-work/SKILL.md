@@ -155,7 +155,16 @@ read-modify-rewrite a whole document — that is how the parts you did not think
 to repeat disappear. Notes are CAPPED and `notes append`/`edit` refuse an
 over-cap write rather than truncating it; both advise from 60% full, and
 `probe notes status` shows every note in the team fullest first. Act when the
-advice appears — at the cap the document is closed until it is compacted. The
+advice appears — at the cap the document is closed until it is compacted.
+
+An entity can also carry titled SUB-NOTES — separate documents behind the same
+Notes tab, each with its own cap and history. `probe notes list --run <ref>`
+shows them; add `--note "<title>"` to `append`/`edit`/`show` to address one,
+and `probe notes create --title` starts one (run `list` first — duplicate
+titles are legal but make title addressing refuse until a rename). Use a
+sub-note when a distinct topic ("Caveats", "Eval methodology", a handoff)
+would otherwise crowd the main note; the main note stays the running
+commentary. The
 CLI is the only writer; the SDK cannot write notes. See `reference.md` for what
 to do, which differs for a 4,000-character run/trial/group/artifact note and a
 100,000-character project or experiment document. The TEAM note is a synced FILE
