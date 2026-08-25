@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.116.0
+
 ### Changed
 
 - **`probe install` is now a guided install, and the install is always
