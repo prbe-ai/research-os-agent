@@ -226,12 +226,17 @@ SDK's `client.run(project=..., experiment=..., hypothesis=...)` creates on
 demand because there the slug is written once and code-reviewed.
 
 ```
-probe project create antibody-folding \
+probe project create antibody-folding --kind training \
     --description "Improve antibody structure predictions for the biologics program."
 probe experiment create lower-sampling-temperature --project antibody-folding \
     --hypothesis "A lower sampling temperature will improve structure accuracy on held-out complexes." \
     --description "Compare two sampling settings before the next model-selection decision."
 ```
+
+- **Pass `--kind`** (required): training|evaluation|data|survey|design|engineering|general —
+  what the project is FOR; the dashboard structures its page around it.
+- **A phase of a bigger effort is a SUBPROJECT**: `--parent <project>` files it
+  under the program it belongs to (`probe project move` re-files later).
 
 - **Always pass `--description`** — what the thing is, 1-2 sentences for a
   teammate, not the execution log. Names are 2-6 familiar words, never a
