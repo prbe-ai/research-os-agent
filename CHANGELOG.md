@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.118.0
+
 ### Added
 
 - **Titled sub-notes, addressable from the CLI.** Every note-bearing entity
