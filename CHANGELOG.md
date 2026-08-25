@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Changed
+
+- **`probe install` is now a guided install, and the install is always
+  complete.** `npx probe-research install` (and the menu's "Install Probe" row)
+  walks straight through: pick the coding agents only when both are on the
+  machine, review one screen naming everything the install turns on — the
+  Session capture disclosure included — then one browser approval and the
+  apply. The interactive capability picker and the separate auto-update step
+  are gone: an interactive Install enables everything, a killswitched capture
+  included, with the disclosure on screen before the confirming keystroke.
+  Scripted paths are untouched — an omitted flag on a re-run still preserves,
+  so `probe wizard --yes` in CI can never re-enable something you turned off,
+  and `--no-capture` still declines capture headlessly.
+- **Settings now owns the capability switches.** `probe wizard` › Settings
+  gained a "What Probe does here" group — CLI + MCP, Session capture, the
+  global rules, automatic updates — with the boxes reading what the device
+  does across both coding agents (a mixed state names the split per agent).
+  Turning a capability on runs the same authorization and verification as an
+  install; turning capture off goes through the same verified shutdown it
+  always had. Per-agent control stays on the flags
+  (`probe wizard --agent codex --no-capture`).
+
 ### Fixed
 
 - **The team-note block is now re-rendered at session end**, so an edit reaches
