@@ -9,12 +9,12 @@ see tap.sanitize for what gets dropped. Bookkeeping-only system events
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 import time
 
 from tap import config as cfg
 from tap import httpclient
+from tap import transcript as _transcript
 from tap.storage import Storage
 
 log = logging.getLogger("probe-research-tap.outbox")
@@ -34,6 +34,22 @@ def token_fingerprint(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _sanitizer():
+    """The sanitizer for the agent THIS daemon is tailing.
+
+    The daemon is pinned to one agent for its whole life, so reading the source
+    from config here is correct and keeps every existing caller unchanged. The
+    shared builder takes the function as a parameter instead of looking it up,
+    because an importer processing both agents' history in one pass cannot have
+    a single ambient answer — see tap_core/transcript.build_batch_body.
+    """
+    if cfg.capture_source() == "codex":
+        from tap.codex_sanitize import sanitize_event
+    else:
+        from tap.sanitize import sanitize_event
+    return sanitize_event
+
+
 def build_batch_body(
     *,
     device_id: str,
@@ -43,70 +59,24 @@ def build_batch_body(
     base_line_no: int,
     lines: list[bytes],
 ) -> bytes | None:
-    """Construct the JSON body for /ingest/v1/sessions/claude-code.
+    """The wire body for /ingest/v1/sessions/{claude-code,codex}.
 
-    Identity is injected server-side from the ingest token — no employee
-    fields here. The backend passes device_id through to the engine, which
-    uses it as the device external id.
-
-    Each line is parsed JSON, then run through `sanitize_event` to strip
-    Anthropic API metadata (usage, iterations, cache_creation, thinking
-    signatures, …) and drop CC-internal bookkeeping events
-    (`stop_hook_summary`, `turn_duration`). Lines whose JSON fails to parse
-    are kept as raw strings — same lenient fallback as before.
-
-    Returns None if every event was dropped by the sanitizer (e.g. a tick
-    that only saw stop_hook_summary + turn_duration). Caller should treat
-    None as "nothing to ship, but advance the offset."
+    Thin wrapper over the shared builder, binding this daemon's sanitizer.
+    Returns None when every event was dropped: "nothing to ship, but advance
+    the offset."
     """
-    # TODO: split oversized batches client-side so a legitimately large tick
-    # isn't dropped. Today a body over the gateway's 2MB cap comes back 413 and
-    # is classified POISON (dropped) — see httpclient.classify — because the tap
-    # has no batch-splitting. Splitting here would let a big tick ship in parts
-    # instead of being lost.
-    events = []
-    for i, line in enumerate(lines):
-        try:
-            raw = json.loads(line)
-        except (ValueError, UnicodeDecodeError):
-            raw = line.decode("utf-8", errors="replace")
-        if cfg.capture_source() == "codex":
-            from tap.codex_sanitize import sanitize_event
-        else:
-            from tap.sanitize import sanitize_event
-        sanitized = sanitize_event(raw)
-        if sanitized is None:
-            continue
-        events.append({"line_no": base_line_no + i, "raw": sanitized})
-    if not events:
-        return None
-    body = {
-        "device_id": device_id,
-        "session_id": session_id,
-        "batch_seq": batch_seq,
-        "cwd": cwd,
-        "events": events,
-    }
-    return json.dumps(body, separators=(",", ":")).encode("utf-8")
+    return _transcript.build_batch_body(
+        device_id=device_id,
+        session_id=session_id,
+        batch_seq=batch_seq,
+        cwd=cwd,
+        base_line_no=base_line_no,
+        lines=lines,
+        sanitize=_sanitizer(),
+    )
 
 
-def build_finalize_body(*, session_id: str) -> bytes:
-    """Construct the body for the gateway's SessionFinalizeRequest.
-
-    Says "this session is over, mine it now". Until one of these arrives the
-    engine keeps coalescing the session's batches into a live document and
-    never runs the completion path — which is the only thing that produces the
-    extracted knowledge units (qa / code_change / decision / file_ref). A
-    session nobody finalizes is captured but never mined.
-
-    Deliberately minimal. The gateway validates against a model with exactly
-    two fields and rebuilds the forwarded body from them, so anything else here
-    (device_id, cwd, a stray `events` array) is dropped server-side; sending it
-    would just imply a contract that does not exist. Identity is stamped
-    server-side from the ingest token, same as every batch.
-    """
-    body = {"finalize": True, "session_id": session_id}
-    return json.dumps(body, separators=(",", ":")).encode("utf-8")
+build_finalize_body = _transcript.build_finalize_body
 
 
 def enqueue(

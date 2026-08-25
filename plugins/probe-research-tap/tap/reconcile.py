@@ -58,8 +58,9 @@ from pathlib import Path
 
 from tap import config as cfg
 from tap import outbox
+from tap import transcript as _transcript
 from tap.storage import FileOffset, Storage
-from tap.transcript import read_new, validate_json
+from tap.transcript import byte_offset_after, read_new, validate_json
 
 log = logging.getLogger("probe-research-tap.reconcile")
 
@@ -84,9 +85,11 @@ MAX_BACKFILL_FILES_PER_SWEEP = 4
 # Target size for one enqueued batch body. The ingest gateway caps bodies at 2MB
 # and `httpclient.classify` maps the resulting 413 to POISON — a silent drop. A
 # backfill is precisely where oversized ticks show up (a 2MB gap is one batch if
-# nothing splits it), so the reconciler chunks. Budgeted against RAW line bytes,
-# which over-estimates: sanitization only ever removes bytes.
-MAX_BATCH_BYTES = 1024 * 1024
+# nothing splits it), so the reconciler chunks. The value and the splitter live
+# canonically in tap/transcript.py (synced from src/probe/tap_core); this module
+# keeps its own NAME for the budget so tests can patch reconcile.MAX_BATCH_BYTES
+# and the call-time resolution in chunk_lines below still honours the patch.
+MAX_BATCH_BYTES = _transcript.MAX_BATCH_BYTES
 
 # How long one daemon holds the right to sweep. Several sessions can be live at
 # once and a duplicated sweep would double-ship; the lease makes it one at a
@@ -266,30 +269,14 @@ def find_gaps(storage: Storage, *, now: int, horizon_s: int | None = None) -> li
 def chunk_lines(lines: list[bytes], max_bytes: int | None = None) -> list[list[bytes]]:
     """Split lines into groups that will serialise under the gateway's body cap.
 
-    A single line larger than the budget becomes its own group — it cannot be
-    split without destroying the event, and shipping one oversized body that may
-    be 413'd beats dropping the event outright.
-
-    The budget is resolved at CALL time, not bound as a default argument: a
-    default would freeze MAX_BATCH_BYTES at import and silently ignore any later
-    change to it.
+    Thin delegate to `tap.transcript.chunk_lines` (the canonical splitter). The
+    budget is resolved at CALL time, not bound as a default argument: a default
+    would freeze MAX_BATCH_BYTES at import and silently ignore any later change
+    to it — including a test's monkeypatch of reconcile.MAX_BATCH_BYTES.
     """
-    if max_bytes is None:
-        max_bytes = MAX_BATCH_BYTES
-    groups: list[list[bytes]] = []
-    current: list[bytes] = []
-    size = 0
-    for line in lines:
-        n = len(line)
-        if current and size + n > max_bytes:
-            groups.append(current)
-            current = []
-            size = 0
-        current.append(line)
-        size += n
-    if current:
-        groups.append(current)
-    return groups
+    return _transcript.chunk_lines(
+        lines, MAX_BATCH_BYTES if max_bytes is None else max_bytes
+    )
 
 
 def _next_batch_seq(storage: Storage, session_id: str) -> int:
@@ -398,26 +385,6 @@ def backfill_gap(
         )
     )
     return new_offset - gap.byte_offset, batches
-
-
-def byte_offset_after(path: Path, start: int, line_count: int) -> int:
-    """Byte position just past the Nth newline at or after `start`."""
-    seen = 0
-    pos = start
-    with path.open("rb") as f:
-        f.seek(start)
-        while seen < line_count:
-            chunk = f.readline()
-            if not chunk:
-                break
-            pos += len(chunk)
-            if chunk.endswith(b"\n"):
-                if chunk.strip():
-                    seen += 1
-            else:
-                pos -= len(chunk)  # partial trailing line: do not consume
-                break
-    return pos
 
 
 def drain_all_due(

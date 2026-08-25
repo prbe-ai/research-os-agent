@@ -8,7 +8,7 @@
     "min": "0.18.0"
   },
   "tap": {
-    "latest": "0.4.1",
+    "latest": "0.4.2",
     "min": "0.1.0"
   },
   "advisory": "A CLI below 0.105.2 reported notes writes the server had refused: once a notes document hit its cap, every further append exited 0 and stored nothing."

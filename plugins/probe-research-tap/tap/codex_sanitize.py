@@ -55,6 +55,11 @@ Translation rules:
   - None  → drop the event entirely (turn-boundary, duplicates, pure metadata)
   - dict  → translated CC-shape event including `_codex_extras` if any
   - non-dict input → returned as-is (defensive)
+
+CANONICAL: src/probe/tap_core/codex_sanitize.py — the copy under
+plugins/probe-research-tap/tap/ is vendored by `make sync-tap-core` and must
+stay byte-identical (tests/test_tap_core_sync.py guards it). Edit the
+canonical file, never the plugin copy.
 """
 
 from __future__ import annotations
@@ -66,7 +71,11 @@ from typing import Any
 # formats differ; what we choose to RECORD about a tool call should not, or
 # the same session recorded through two agents produces two different
 # stories and neither is comparable to the other.
-from tap.sanitize import _result_size
+#
+# RELATIVE import, deliberately: this file is byte-identical in its two homes
+# (canonical src/probe/tap_core/, vendored plugins/probe-research-tap/tap/),
+# and `.sanitize` resolves correctly inside both packages.
+from .sanitize import _result_size
 
 # Per-message phase from Codex's `MessagePhase` enum. Tracked in extras since
 # CC has no equivalent.

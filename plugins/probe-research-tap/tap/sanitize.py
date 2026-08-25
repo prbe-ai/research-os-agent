@@ -29,6 +29,11 @@ We KEEP enough of each tool block to reconstruct what happened:
   - dict        → trimmed copy with the noise fields removed
   - input as-is → if the input isn't a dict (defensive — non-JSON lines
                   shouldn't reach here, but if they do we don't mangle them)
+
+CANONICAL: src/probe/tap_core/sanitize.py — the copy under
+plugins/probe-research-tap/tap/ is vendored by `make sync-tap-core` and must
+stay byte-identical (tests/test_tap_core_sync.py guards it). Edit the
+canonical file, never the plugin copy.
 """
 
 from __future__ import annotations

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe backfill` imports the agent conversations already on this
+  machine.** Claude Code transcripts and Codex rollouts, discovered
+  device-wide, behind their own approval gate that names the session count,
+  the byte total, the date range and how many will link to a project.
+  Sanitized locally before upload; summarized by your own agent rather than
+  queued behind a server model call; resumable per session, and it asks the
+  server before re-uploading anything it might already hold. New flags:
+  `--transcripts/--no-transcripts`, `--transcripts-only`,
+  `--transcripts-budget-mb`.
+
+### Changed
+
+- The tap plugin's sanitizers and transcript mechanics are now canonical in
+  `probe.tap_core` and vendored into the plugin by `make sync-tap-core`, so
+  the importer and the live tap cannot drift into producing different wire
+  shapes for the same session. Tap plugin 0.4.2.
+
 ## 0.117.0
 
 ## 0.116.0
