@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Importing a research folder no longer crashes on the classification step.**
+  Anything past roughly 154 sampled files failed with "argument list too long",
+  including on the chunked route that exists for folders too big for one
+  prompt: the prompt was a command-line argument, and Linux caps one argument
+  at 128KB while the prompt was sized against the model's context window. Both
+  agents read it from a pipe now. Verified at 290KB.
+- **Credential files are never imported.** `.env`, `.ssh/id_rsa`,
+  `.aws/credentials`, `.netrc`, `.git-credentials` and private-key suffixes are
+  refused by name and by suffix, and API keys are stripped from every file
+  excerpt a model is shown. `<vendor>_api_key` values are recognised by key
+  name, which is the only signal available: a Weights & Biases key is 40 hex
+  characters, the same shape as an ordinary content hash.
+- **A folder that gained one file and lost another is no longer reported as
+  unchanged.** The already-imported check compared file counts and total bytes,
+  so a net-zero change announced "nothing has changed on disk" and the new file
+  was never imported.
+
+### Added
+
+- **Dotfiles are imported.** `.hydra/config.yaml` holds the config that names a
+  Hydra experiment and was being dropped before anything could read it.
+  Machine-written dot-directories are still skipped, now by name.
+- **The wizard says what an import will cost before it starts**, in agent
+  turns, counting both limits that bound a unit rather than only the file
+  count.
+- **Re-importing a folder imports only the difference.** The walk is
+  remembered between runs, so an unchanged folder does nothing and a changed
+  one reports what is new, what changed and what is gone. Nothing is retired
+  for being absent — an unmounted drive is the likelier explanation.
+- **When files go missing, the run writes the list.** It used to print a count.
+
+### Changed
+
+- **Checkpoints, shards and weights no longer cost an agent turn.** They carry
+  nothing that identifies a project and their project was already resolved
+  without a model, but every 400 of them still took one turn. A 200k-file
+  checkpoint folder drops from around 500 turns to tens.
+
 ## 0.119.0
 
 ### Changed
