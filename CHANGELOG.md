@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- **The wizard's steps continue on Enter.** `‹ Back` / `Next ›` was a printed
+  label driven only by `←` / `→`; it is a row the cursor can hold now, and every
+  step opens on it with `Next ›` boxed, so accepting a screen is one keystroke
+  and reaching the options is a deliberate `↑`. `↓` crosses to `‹ Back` on the
+  same line. Space and Enter both toggle an option; `←` / `→` and Escape are
+  unchanged. The row under the cursor is drawn inside a rectangle — on the band
+  that is what says which end Enter will fire.
+
 ## 0.120.0
 
 ### Added
