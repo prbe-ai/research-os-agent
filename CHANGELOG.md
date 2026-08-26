@@ -16,6 +16,27 @@
 
 ## 0.120.0
 
+### Fixed
+
+- **The research-tracking block in `CLAUDE.md` / `AGENTS.md` now updates
+  itself.** It is written once by `probe wizard` into a file no release can
+  reach, and `agent-rules refresh` — whose docstring claimed the session-start
+  hook called it — was never wired to any hook in any shipped plugin. So
+  bumping `POINTER_VERSION` corrected nothing: every machine kept instructing
+  its agent with whatever the wizard installed, and guidance added in one
+  release was still missing from live sessions days later. The refresh now
+  rides `notes sync`, which already fires on every `Stop`, already resolves
+  every configured harness, and already holds each instruction file's lock —
+  so it lands with the CLI rather than needing a plugin release and a session
+  restart. It refreshes an existing block only: a file without one opted out,
+  and a background sync must not opt it back in. A block from a newer CLI is
+  left alone so two installs cannot rewrite each other every turn, and a
+  damaged block is now reported as the research-tracking block rather than
+  mislabelled as the team-note one.
+- **`agent-rules refresh` takes the same per-file lock as the note sync.** The
+  two writers of one file were serialising against different locks, which is no
+  lock at all for a whole-file read-modify-write.
+
 ### Added
 
 - **`probe wizard` › `Import past coding sessions`.** The transcript import now
