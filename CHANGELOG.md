@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe project list --parent <project>`** lists a project's DIRECT
+  subprojects. The CLI could build a tree (`create --parent`, `move --parent`,
+  `delete --recursive`) and could see that a project *had* a parent
+  (`project get` returns `parent_project_id`, `ancestors`, `subproject_count`),
+  but had no way to ask "what is under this project?" — the read side of 0148
+  was reachable from the dashboard and the MCP and not from the CLI. The SDK's
+  `list_projects` gains a matching `parent_id`, guarded like the tags filter: a
+  pre-0148 backend ignores `parent_id=` and returns every project in the tenant,
+  so the client refuses that page rather than presenting it as one project's
+  children.
+
 ## 0.123.0
 
 ### Fixed
