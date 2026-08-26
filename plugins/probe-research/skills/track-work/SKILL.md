@@ -157,14 +157,13 @@ over-cap write rather than truncating it; both advise from 60% full, and
 `probe notes status` shows every note in the team fullest first. Act when the
 advice appears — at the cap the document is closed until it is compacted.
 
-An entity can also carry titled SUB-NOTES — separate documents behind the same
-Notes tab, each with its own cap and history. `probe notes list --run <ref>`
-shows them; add `--note "<title>"` to `append`/`edit`/`show` to address one,
-and `probe notes create --title` starts one (run `list` first — duplicate
-titles are legal but make title addressing refuse until a rename). Use a
-sub-note when a distinct topic ("Caveats", "Eval methodology", a handoff)
-would otherwise crowd the main note; the main note stays the running
-commentary. The
+An entity can also carry titled SUB-NOTES — separate documents, each with its
+own cap and history. Start one when a distinct topic ("Caveats", a handoff)
+would crowd the main note; the main note stays the running commentary.
+`probe notes list` shows them, `create`/`rename`/`delete` manage them, and
+`--note "<title>"` on `append`/`edit`/`show` addresses one. Duplicate titles
+are legal and make a title ambiguous — `list` before creating, and address a
+duplicate as `--note id:<uuid>`. The
 CLI is the only writer; the SDK cannot write notes. See `reference.md` for what
 to do, which differs for a 4,000-character run/trial/group/artifact note and a
 100,000-character project or experiment document. The TEAM note is a synced FILE

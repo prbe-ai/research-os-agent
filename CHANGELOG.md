@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Changed
+
+- **The track-work skill's sub-note paragraph names every verb.** It advised
+  renaming a duplicate title without naming `probe notes rename`, and never
+  mentioned `--note id:<uuid>` — the escape hatch the ambiguity refusal points
+  at, which is the one way out when the advised repair is itself refused as
+  ambiguous. `delete` was missing too. Now covered in 12 words FEWER than
+  before, by dropping dashboard detail a CLI writer cannot act on.
+  `reference.md` gains the sub-note cap rule (a sub-note gets its carrier's
+  cap as its own budget, 20 per entity), which the skill already pointed there
+  for and it did not carry.
+
 ### Fixed
 
 - **Importing a research folder no longer crashes on the classification step.**

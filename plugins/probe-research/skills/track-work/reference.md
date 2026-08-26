@@ -248,6 +248,11 @@ over-cap write is REFUSED, not truncated — the batched `/ingest/v1/runs` machi
 door clamps instead, so a note pushed inside a run body can come back shorter
 than you sent it.
 
+A SUB-NOTE gets its CARRIER's cap, and its own budget: twenty 4,000-character
+sub-notes on a run are twenty separate documents, not 80,000 characters of run
+note. Moving a finished topic into one is therefore a way to compact a full
+main note without losing it. Up to 20 per entity; the 21st is refused.
+
 `probe notes append`/`edit` print the room left and start advising at 60% full.
 Act then, not at the wall: at the cap the write is REFUSED, so the paragraph you
 just wrote is the one that does not land, and trimming it and retrying fails
