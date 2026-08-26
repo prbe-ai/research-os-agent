@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.125.0
+
 ### Added
 
 - **Transcript discovery finds relocated Claude Code and Codex directories.**
