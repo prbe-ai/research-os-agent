@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Added
+
+- **`probe wizard` › `Import past coding sessions`.** The transcript import now
+  has its own menu row under `Your research`, beside `Import existing work`.
+  It was previously reachable only via `probe backfill --transcripts-only` or
+  the offer shown once at the end of a guided install. Also
+  `probe wizard --action transcripts`.
+
 ### Changed
 
 - **The track-work skill's sub-note paragraph names every verb.** It advised
