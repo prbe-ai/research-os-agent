@@ -40,10 +40,13 @@ file_offsets" would have uploaded all of it. A file qualifies only when:
 Everything else is pre-install history or a subagent sidechain transcript
 (`agent-*.jsonl`, which never gets a SessionStart of its own and which the tap
 has never captured). Adopting those would be a scope change — new categories of
-data shipped without the user asking — not a reliability fix. A recency horizon
-bounds it further, and a per-sweep byte budget keeps a first sweep on a busy
-machine from stampeding the backend. Measured on the same box: 672MB → 60MB at
-the 48h default, spread over several sweeps.
+data shipped without the user asking — not a reliability fix; the CLI's
+transcript import lane (`probe wizard` → Import existing work → past sessions)
+owns that consent, and it ships exactly the COMPLEMENT of this eligibility
+rule, so the two can never both claim one session. A recency horizon bounds
+what a sweep will newly adopt, and a per-sweep byte budget keeps a first sweep
+on a busy machine from stampeding the backend. Measured on the same box:
+672MB → 60MB at the 48h default, spread over several sweeps.
 """
 
 from __future__ import annotations
@@ -228,15 +231,35 @@ def find_gaps(storage: Storage, *, now: int, horizon_s: int | None = None) -> li
             continue
         if not st.st_size:
             continue
-        if now - int(st.st_mtime) > horizon:
-            continue
         session_id = session_id_for(path)
         if not session_id:
             continue
         prev = storage.get_offset(str(path))
-        if prev is None and session_id not in logged:
-            # Never ours: pre-install history, or a session that ran while
-            # capture was disabled. See the module docstring.
+        if prev is None:
+            # The horizon gates ADOPTION only. A file we already hold a cursor
+            # for is ours whatever its age — gating tracked files on mtime
+            # silently stranded any gap older than the window (a machine off
+            # for a week never recovered).
+            if now - int(st.st_mtime) > horizon:
+                continue
+            if session_id not in logged:
+                # Never ours: pre-install history, or a session that ran while
+                # capture was disabled. See the module docstring.
+                continue
+        elif (
+            prev.inode
+            and st.st_ino
+            and st.st_ino != prev.inode
+            and now - int(st.st_mtime) > horizon
+        ):
+            # The path changed identity under our cursor — a restore, a
+            # rotation, or a replacement. Inside the window this is exactly
+            # the drift the tap has always tolerated; what must NOT ride the
+            # new horizon exemption is an OLD file wearing a tracked path,
+            # read from the old offset — unrelated bytes shipped under the
+            # old session, forever. The pair of conditions restores precisely
+            # the bound the horizon used to provide.
+            log.warning("reconcile: %s changed identity under its cursor; skipping", path.name)
             continue
         byte_offset = prev.byte_offset if prev else 0
         if st.st_size <= byte_offset:

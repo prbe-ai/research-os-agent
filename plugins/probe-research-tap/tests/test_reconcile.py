@@ -581,3 +581,85 @@ def test_has_live_daemon_false_for_a_stale_pid_file(tmp_path):
 
 def test_has_live_daemon_false_when_no_pid_file():
     assert reconcile.has_live_daemon("no-such-session-at-all") is False
+
+
+# --- the horizon gates adoption, not tracked files ---------------------------
+
+
+def _old(path: Path, *, days: int = 30) -> None:
+    """Age a transcript far past the reconcile horizon."""
+    stamp = time.time() - days * 86400
+    os.utime(path, (stamp, stamp))
+
+
+def test_a_tracked_gap_older_than_the_horizon_still_uploads(projects, storage):
+    """THE HORIZON FIX. The window gates ADOPTION, not files we already hold a
+    cursor for: a machine off for a week used to strand its tracked gaps
+    forever."""
+    old_file = write_transcript(projects, "gap-6666", 5)
+    _old(old_file, days=7)
+    storage.upsert_offset(
+        FileOffset(
+            path=str(old_file),
+            session_id="gap-6666",
+            cwd=str(old_file.parent),
+            last_line_no=1,
+            last_seen_at=1,
+            inode=0,
+            size=1,
+            byte_offset=1,
+        )
+    )
+
+    gaps = reconcile.find_gaps(storage, now=int(time.time()))
+
+    assert [g.session_id for g in gaps] == ["gap-6666"]
+
+    # ...while an UNTRACKED old file with a session log stays outside the
+    # window: the horizon still bounds what an ordinary sweep newly adopts.
+    untracked = write_transcript(projects, "gap-7777", 5)
+    _old(untracked, days=7)
+    plugin_dir = Path(os.environ["PROBE_RESEARCH_TAP_PLUGIN_DIR"])
+    mark_session_logged(plugin_dir, "gap-7777")
+    gaps = reconcile.find_gaps(storage, now=int(time.time()))
+    assert [g.session_id for g in gaps] == ["gap-6666"]
+
+
+def test_a_cursor_whose_file_changed_identity_is_skipped_not_misread(projects, storage):
+    """With tracked files horizon-exempt, the inode is the guard against a
+    path that changed identity under its cursor — reading a DIFFERENT file
+    from the old offset ships unrelated bytes under the old session."""
+    path = write_transcript(projects, "swap-8888", 5)
+    _old(path, days=7)  # past the horizon: the exact case the window used to bound
+    real_inode = path.stat().st_ino
+    storage.upsert_offset(
+        FileOffset(
+            path=str(path),
+            session_id="swap-8888",
+            cwd=str(path.parent),
+            last_line_no=1,
+            last_seen_at=1,
+            inode=real_inode + 1,  # the cursor remembers a different file
+            size=1,
+            byte_offset=1,
+        )
+    )
+
+    assert reconcile.find_gaps(storage, now=int(time.time())) == []
+
+    # The matching inode is still an ordinary gap.
+    storage.upsert_offset(
+        FileOffset(
+            path=str(path),
+            session_id="swap-8888",
+            cwd=str(path.parent),
+            last_line_no=1,
+            last_seen_at=1,
+            inode=real_inode,
+            size=1,
+            byte_offset=1,
+        )
+    )
+    assert [g.session_id for g in reconcile.find_gaps(storage, now=int(time.time()))] == [
+        "swap-8888"
+    ]

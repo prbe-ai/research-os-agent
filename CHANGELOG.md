@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+### Changed
+
+- **The interactive install always confirms in the browser.** `probe install`
+  (and the menu's Install row) now runs the browser approval on every
+  interactive run — the full grant set, whatever the device already holds. The
+  approval page shows which account the device is being set up for, warns when
+  that would SWITCH it from a previous account, and offers "use a different
+  account" right there. The token the new approval replaces is revoked after
+  the mint, so re-runs stop leaving live credentials behind. Scripted paths
+  (`--yes`, flags, non-TTY) keep the credential skip — CI has no browser.
+- **The install closes by offering to import what already exists.** One
+  checkbox screen after the apply: import this machine's past coding sessions
+  (the transcript import lane — it shows what it found and asks before
+  anything uploads, resumes if interrupted, and skips sessions capture
+  already ships) and/or a folder of project work (the existing folder
+  import). Skipping is a real answer, and `probe wizard` offers both again
+  later.
+
+### Fixed
+
+- **A tracked capture gap older than the reconcile horizon uploads again.**
+  The 48h window was gating files the tap already held a cursor for, so a
+  machine that sat off for a week never recovered its gap. The horizon now
+  bounds only what a sweep newly adopts — with one carve-out kept from the
+  old behavior: a tracked path whose file changed identity (inode) beyond
+  the window is skipped, not misread from the stale offset.
+- **A re-mint also revokes the replaced read-only MCP token**, not just the
+  API token, and a credential mint that cannot be saved to disk reports the
+  failure (naming the cleanup) instead of dying in a traceback with a live
+  unstored token orphaned server-side.
+
+Self-hosted note: the browser-confirm install requires a backend with
+device-authorization `client_context` (research-os ≥ 0.242.0.0) for the
+account warning and completion handoff; older backends still work but show
+the plain approval page. A two-agent install needs a backend new enough to
+mint per-agent capture credentials (`capture_sources`).
+
 ## 0.118.0
 
 ### Added
