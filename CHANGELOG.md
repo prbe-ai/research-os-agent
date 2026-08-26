@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.119.0
+
 ### Changed
 
 - **The interactive install always confirms in the browser.** `probe install`
