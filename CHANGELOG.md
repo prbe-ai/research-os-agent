@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.124.0
+
 ### Added
 
 - **`probe project list --parent <project>`** lists a project's DIRECT
