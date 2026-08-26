@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Added
+
+- **Transcript discovery finds relocated Claude Code and Codex directories.**
+  `probe backfill` works down a ladder — explicit override, directories
+  capture has actually seen transcripts in, `CLAUDE_CONFIG_DIR` / `CODEX_HOME`,
+  then the default — walks every one that exists rather than only the first,
+  and names the directories it searched when it finds nothing.
+- **The import says how many sessions left no transcript**, cross-checked
+  against Claude Code's prompt history and bounded to recent sessions so
+  retention-deleted transcripts are not reported as never written.
+
 ### Changed
 
 - **The track-work skill names the subproject READ.** `probe project list
