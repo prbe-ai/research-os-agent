@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.120.0
+
 ### Added
 
 - **`probe wizard` › `Import past coding sessions`.** The transcript import now
