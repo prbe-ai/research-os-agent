@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.122.0
+
 ### Changed
 
 - **Agents are told that projects nest.** The always-loaded anchoring rule
