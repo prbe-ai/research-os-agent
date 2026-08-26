@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.123.0
+
 ### Fixed
 
 - **A failed install no longer reports itself as finished.** The wizard
