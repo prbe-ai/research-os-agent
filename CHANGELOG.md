@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- **The track-work skill names the subproject READ.** `probe project list
+  --parent` shipped with no prompt phrase anywhere, so no agent would have
+  typed it -- the same fence-shape failure that left `--parent` unused for
+  days. Added to the line that already teaches the write, not as a new bullet.
+
 ## 0.124.0
 
 ### Added

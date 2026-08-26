@@ -244,7 +244,8 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
 - **Pass `--kind`** (required): training|evaluation|data|survey|design|engineering|general —
   what the project is FOR; the dashboard structures its page around it.
 - **A phase of a bigger effort is a SUBPROJECT**: `--parent <project>` files it
-  under the program it belongs to (`probe project move` re-files later).
+  under the program it belongs to (`probe project move` re-files later;
+  `probe project list --parent` reads them back).
 
 - **Always pass `--description`** — what the thing is, 1-2 sentences for a
   teammate, not the execution log. Names are 2-6 familiar words, never a
