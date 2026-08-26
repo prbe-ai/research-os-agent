@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.121.0
+
 ### Changed
 
 - **The wizard's steps continue on Enter.** `‹ Back` / `Next ›` was a printed
