@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+
+- **Agents are told that projects nest.** The always-loaded anchoring rule
+  read `run -> experiment -> project -> your workspace`, stopping one level
+  too high, and the registration trigger said "new line of work -> register a
+  project" with no prompt to ask whether the work is a phase of something
+  already registered. Measured cost: four Odyssey-3 phase projects were
+  registered as flat top-level siblings by an agent whose CLI already had
+  `--parent`, on the day the feature shipped -- `--parent` lived only in the
+  track-work skill body, which is read after a skill is SELECTED, while the
+  new-project-or-phase decision is made from the always-loaded block. The
+  chain is now `project -> parent project -> your workspace`, registration
+  names the subproject case explicitly, and the closed kind vocabulary is
+  spelled out where the project is created. Both the `CLAUDE.md` / `AGENTS.md`
+  block and the MCP instruction sheet compose these fragments, so neither can
+  drift from the other. `POINTER_VERSION` 19.
+
 ## 0.121.0
 
 ### Changed
