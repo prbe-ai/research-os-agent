@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A failed install no longer reports itself as finished.** The wizard
+  registers what it set up, and the dashboard waits on that registration to
+  decide an install completed — it is what advances the onboarding install step
+  and what turns the browser approval page into "Installed". A guided install
+  that FAILED registered too, on its way out, so a terminal that had just
+  printed `Not finished — these plugins did not install` still moved onboarding
+  to the next step and still told the approval page the install was done. An
+  unfinished run now reports `unknown` for the plugin fields, and both surfaces
+  wait for a settled answer.
+
+  Deliberately not a check that the plugins are present: installing with
+  tracking off is a real, successful outcome that leaves them `absent`, and
+  waiting for `installed` would strand those users on a page that promised to
+  move on by itself. The registration itself still happens on the failure path
+  — it is also what adopts a legacy MCP credential.
+
 ## 0.122.0
 
 ### Changed
