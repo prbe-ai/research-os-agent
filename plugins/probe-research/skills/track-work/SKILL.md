@@ -259,6 +259,20 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
   - `general` — miscellaneous: data processing, infra, anything else. A real
     choice, not a fallback; it is also what the machine creation paths (W&B
     import, ingest) use forever.
+- **Record the PAPERS a review read**, on a `research` project:
+  `probe paper add <project> "<title>" --url ... --repo ... --summary ...
+  --discrepancies ...`. Do it DURING the review, one call per paper as you
+  finish it, and again at the end for anything you skimmed past — papers read
+  en route to an idea are the half of the reasoning the conclusion cannot
+  reconstruct, and a review whose Papers tab is empty reads as a review that
+  captured nothing. `--discrepancies` is the field nothing else holds: what
+  the released repo does that the paper does not say (censored code, a missing
+  ablation, a contradicted hyperparameter). The comparison table and the
+  conclusion still go in the project's Summary Markdown — papers are the
+  structured record beside it, not a replacement for it. `probe paper list`
+  reads them back; `probe paper update` amends one. There is no dedupe: two
+  adds of the same URL make two rows, so list first if you might be repeating
+  yourself.
 - **A phase of a bigger effort is a SUBPROJECT**: `--parent <project>` files it
   under the program it belongs to (`probe project move` re-files later;
   `probe project list --parent` reads them back).
