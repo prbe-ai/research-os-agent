@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.128.0
+
 ### Fixed
 
 - **An uploaded file keeps its extension.** `--name` replaces the file's
