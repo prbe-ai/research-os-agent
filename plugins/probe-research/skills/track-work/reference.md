@@ -198,11 +198,11 @@ probe artifact add RUN inputs-decision.json --kind inputs_decision
 }
 ```
 
-## Project Summary and notes — the write loops
+## Visible Markdown and notes — the write loops
 
-The Summary is one rendering with two owners: the server refreshes the
-server-owned AI narrative — never edit or imitate it; agents and people
-replace only `summary_markdown`, the durable suffix. Whole-document,
+Projects, experiments and runs each have a standalone visible Markdown tab.
+Agents and people replace `summary_markdown` as one complete document; it is
+independent of generated Overview prose and private Notes. Whole-document,
 last-write-wins — read, edit, write, verify:
 
 ```
@@ -212,13 +212,25 @@ probe project set PROJECT --summary @PROJECT.md
 probe project get PROJECT | jq -r '.summary_markdown // ""'  # verify
 ```
 
+Use the same loop at the lowest entity the context applies to:
+
+```
+probe experiment get EXPERIMENT | jq -r '.summary_markdown // ""' > EXPERIMENT.md
+probe experiment set EXPERIMENT --summary @EXPERIMENT.md
+probe experiment get EXPERIMENT | jq -r '.summary_markdown // ""'
+
+probe run get RUN | jq -r '.summary_markdown // ""' > RUN.md
+probe run set RUN --summary @RUN.md
+probe run get RUN | jq -r '.summary_markdown // ""'
+```
+
 **Embedding a repository's README:** a line containing only
 `[README](https://github.com/owner/repo)` renders that repo's README at that
 point — live, refreshed on push, private repos included when the team's GitHub
 App is installed. Two traps: the LINK TEXT is what makes it an embed (an
-ordinary citation or bare URL embeds nothing), and the project's read-only
+ordinary citation or bare URL embeds nothing), and the entity's read-only
 `repo` field is DERIVED from the line — writing one connects the repository,
-removing it disconnects. Never write it for a repo the project is not about.
+removing it disconnects. Never write it for a repo the entity is not about.
 Spend your own words on what the README does NOT say.
 
 Notes commands (projects, experiments, runs, groups, artifacts, plus ONE team

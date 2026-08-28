@@ -161,7 +161,7 @@ COMPACT_CONTEXT = (
 # surfaces describing one state differently.
 TRACKING_OFF_CONTEXT = (
     "Research tracking is OFF for this conversation: create no Probe projects, "
-    "experiments, runs, notes or Project Summary Markdown, and do not raise "
+    "experiments, runs, notes or visible entity Markdown, and do not raise "
     "tracking at all, including as a reminder or a closing caveat -- reading "
     "Probe and the work itself are unaffected."
 )

@@ -33,7 +33,7 @@ plainly asked for, that is a broken hook — say so in one line and report the
 state as it is, rather than quietly repairing it.
 
 **If it landed OFF**, for the rest of this conversation: create no projects,
-experiments or runs; write no notes, artifacts or Project Summary Markdown; and
+experiments or runs; write no notes, artifacts or visible entity Markdown; and
 do not raise tracking again — not as a reminder, not as a closing caveat. Keep
 doing the actual work. This overrides the standing CLAUDE.md/AGENTS.md rules
 for this conversation; that is the point of the switch. Say once what it did:
@@ -116,7 +116,7 @@ Two rules that keep files meaningful later:
 | what it is | where it goes |
 |---|---|
 | what this project is, why it exists | the PROJECT's description |
-| durable teammate-facing context — design rationale, architecture decisions, the record of the work | the editable Markdown suffix of the Project Summary; edit deliberately, never append blindly |
+| durable teammate-facing context — design rationale, architecture decisions, the record of the work | the visible Markdown tab on the lowest PROJECT, EXPERIMENT or RUN it applies to; edit deliberately, never append blindly |
 | what you are testing and what result confirms it | the EXPERIMENT's hypothesis, at creation |
 | a caveat, decision, reversal, deletion or handoff | hidden notes on the lowest entity it applies to |
 | the running record of one experiment — configs, results, conclusions | that EXPERIMENT's notes |
@@ -126,8 +126,8 @@ Two rules that keep files meaningful later:
 | the whole team must know it, across projects | the TEAM note |
 | how to act from now on — a standing practice the researcher declared | `probe-research:set-rule`, not a note |
 
-Default for prose is notes: notes are the append-safe log, the Summary is the
-curated page. The notes/rules split is tense — notes say what happened, rules
+Default for prose is notes: notes are the append-safe log, visible Markdown is
+the curated page. The notes/rules split is tense — notes say what happened, rules
 say what to do next time. Notes are NOT a second description: a description
 says what the thing IS, written before it runs; notes say what a later reader
 should distrust, learned afterwards.
@@ -169,7 +169,7 @@ to do, which differs for a 4,000-character run/trial/group/artifact note and a
 100,000-character project or experiment document. The TEAM note is a synced FILE
 (`~/.claude/probe-team-note.md`, or `~/.codex/probe-team-note.md` on Codex --
 that exact path, NOT a `memory/` directory): edit it directly, it syncs itself. The
-Summary suffix is whole-document last-write-wins: read immediately before
+visible Markdown document is whole-document last-write-wins: read immediately before
 editing, preserve existing sections, verify after (commands in `reference.md`,
 including the `[README](https://github.com/owner/repo)` embed line and its two
 traps).
@@ -205,8 +205,9 @@ Never drop anything because it matched no row.
 ## 2. Orient before you create
 
 Read the TEAM note first (`probe notes team`, or `get_entity(ref="team-note")`),
-then the project's Summary (`view="summary"`) and its notes (`probe notes
-show`) — every entity carries notes and an excerpt rides on its card.
+then the project's visible Markdown (`view="summary"`) and its notes (`probe
+notes show`) — project, experiment and run Markdown uses the same view, and
+every entity carries notes with an excerpt on its card.
 `browse_research` for what exists and what is RUNNING (`active_run_count` —
 duplicate GPU-hours are the expensive mistake); `search_knowledge` for prior
 work on this specific thing. A project with code sources also has

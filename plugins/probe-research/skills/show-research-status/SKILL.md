@@ -20,7 +20,7 @@ soon as the picture is decided:
 probe session status                           # tracking on/off, active project, live run
 browse_research(scope="project:<id>")          # experiments, run_count, active_run_count
 probe notes show                               # what the last session decided
-get_entity(ref="project:<id>", view="summary") # the visible Summary suffix
+get_entity(ref="project:<id>", view="summary") # the visible Markdown tab
 get_entity(ref="run:<id>", view="handoff")     # series, span_types, artifact_total
 get_entity(ref="run:<id>", view="reproduce")   # env_ref, execution_record, missing
 get_entity(ref="experiment:<id>", view="versions")   # published or not
