@@ -259,6 +259,11 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
 - **A phase of a bigger effort is a SUBPROJECT**: `--parent <project>` files it
   under the program it belongs to (`probe project move` re-files later;
   `probe project list --parent` reads them back).
+- **Related but NOT part of it is a REFERENCE**:
+  `probe project reference add <project> --to <other>`. A review that informed
+  a training run, or two efforts sharing a method, are peers — nesting one
+  inside the other claims containment that is not true. Directed and
+  idempotent; cycles are fine. Both projects show the link.
 
 - **Always pass `--description`** — what the thing is, 1-2 sentences for a
   teammate, not the execution log. Names are 2-6 familiar words, never a
