@@ -217,10 +217,22 @@ def _document_path() -> str:
 
     The two must agree, and `test_team_note_brief_names_the_real_path` pins them
     against each other so a change to one fails on the other.
+
+    This hook only ships inside the Claude Code/Codex `probe-research` plugin
+    -- pi's own extension briefs its session directly (see
+    `probe-research-pi/src/teamNote.ts`) and never runs this file -- but
+    `PROBE_AGENT=pi` can still reach here if it leaks in from an ambient shell
+    profile, and the two-way version of this check used to answer that with
+    Claude Code's path, silently, rather than pi's.
     """
-    if (os.environ.get("PROBE_AGENT") or "").strip().lower() == "codex":
+    selected = (os.environ.get("PROBE_AGENT") or "").strip().lower()
+    if selected == "codex":
         configured = os.environ.get("CODEX_HOME")
         root = configured or os.path.join(os.path.expanduser("~"), ".codex")
+        return os.path.join(os.path.expanduser(root), DOCUMENT_NAME)
+    if selected == "pi":
+        configured = os.environ.get("PI_CODING_AGENT_DIR")
+        root = configured or os.path.join(os.path.expanduser("~"), ".pi", "agent")
         return os.path.join(os.path.expanduser(root), DOCUMENT_NAME)
     configured = os.environ.get("CLAUDE_CONFIG_DIR")
     root = configured or os.path.join(os.path.expanduser("~"), ".claude")

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sqlite3
 import time
 from pathlib import Path
@@ -548,6 +549,110 @@ def test_codex_gap_detection_uses_date_partitioned_rollouts(monkeypatch, tmp_pat
         s.close()
 
     assert [g.session_id for g in gaps] == [sid]
+
+
+# ---------------------------------------------------------------------------
+# transcript_root / session_id_for — registry-driven across all three sources
+# ---------------------------------------------------------------------------
+
+_PI_FIXTURES_DIR = Path(__file__).parent / "fixtures" / "pi"
+
+
+def test_transcript_root_resolves_the_default_session_root_for_all_three_sources(
+    monkeypatch,
+):
+    """No override set: each source's un-overridden root comes from
+    default_session_root on its registry row (tap/sources.py), not a literal
+    path duplicated in reconcile.py."""
+    monkeypatch.delenv("PROBE_RESEARCH_TAP_PROJECTS_DIR", raising=False)
+    monkeypatch.delenv("PRBE_CODEX_SESSIONS_DIR", raising=False)
+
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "claude_code")
+    assert reconcile.transcript_root() == Path.home() / ".claude" / "projects"
+
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "codex")
+    assert reconcile.transcript_root() == Path.home() / ".codex" / "sessions"
+
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "pi")
+    assert reconcile.transcript_root() == Path.home() / ".pi" / "agent" / "sessions"
+
+
+def test_claude_code_session_id_is_the_whole_stem(monkeypatch):
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "claude_code")
+    p = Path("/x/.claude/projects/-Users-me-proj/"
+             "d51e3272-689c-42fc-b345-f3cad9b2693e.jsonl")
+    assert reconcile.session_id_for(p) == "d51e3272-689c-42fc-b345-f3cad9b2693e"
+
+
+def test_codex_session_id_extracts_the_uuid_suffix(monkeypatch):
+    # Same assertion as test_codex_session_id_comes_off_the_rollout_filename
+    # above, kept here too so the three-source comparison lives in one place.
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "codex")
+    p = Path("/x/2026/08/12/rollout-2026-08-12T21-18-40-"
+             "d51e3272-689c-42fc-b345-f3cad9b2693e.jsonl")
+    assert reconcile.session_id_for(p) == "d51e3272-689c-42fc-b345-f3cad9b2693e"
+
+
+def test_pi_session_id_extracts_the_uuid_suffix_of_real_fixture_filenames(monkeypatch):
+    """pi's filenames are <timestamp>_<uuid>.jsonl — like Codex's
+    rollout-<ts>-<uuid>.jsonl, a longer stem with the uuid only at the tail,
+    unlike Claude Code's <session_id>.jsonl. Checked against real fixture
+    files (tests/fixtures/pi/), not synthetic ones: each file's own header
+    `id` is asserted to match what session_id_for() recovers from its name.
+    """
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "pi")
+    fixtures = sorted(_PI_FIXTURES_DIR.glob("*.jsonl"))
+    assert fixtures, f"no pi fixtures found under {_PI_FIXTURES_DIR}"
+    for path in fixtures:
+        header = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+        assert reconcile.session_id_for(path) == header["id"]
+
+
+def test_pi_gap_detection_uses_shape_based_discovery(monkeypatch, tmp_path):
+    """find_gaps() for the pi source goes through pi_discovery, not a raw
+    root.rglob("*.jsonl") — proven two ways: (1) a session living under a
+    configured PROBE_PI_SESSION_ROOTS root (not the hardcoded default) is
+    still found, and (2) a decoy file that LOOKS like a pi session by
+    filename (a valid <timestamp>_<uuid>.jsonl name, so session_id_for()
+    would happily extract a session id from it) but is NOT one by content is
+    excluded — something filename/glob-based enumeration cannot do.
+    """
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "pi")
+    state = tmp_path / "pi-state"
+    (state / "logs").mkdir(parents=True)
+    monkeypatch.setenv("PROBE_PI_TAP_PLUGIN_DIR", str(state))
+    sessions_root = tmp_path / "custom-pi-root"
+    sessions_root.mkdir()
+    monkeypatch.setenv("PROBE_PI_SESSION_ROOTS", str(sessions_root))
+
+    fixture = sorted(_PI_FIXTURES_DIR.glob("*.jsonl"))[0]
+    real_session = sessions_root / fixture.name
+    shutil.copy(fixture, real_session)
+    header = json.loads(real_session.read_text(encoding="utf-8").splitlines()[0])
+    real_sid = header["id"]
+    (state / "logs" / f"{real_sid}.log").write_text("x", encoding="utf-8")
+
+    # Same filename SHAPE as a pi session (<timestamp>_<uuid>.jsonl, uuid
+    # trailing) but a Codex-style header — session_id_for() extracts a
+    # session id from the name alone, so this only gets excluded if
+    # find_gaps() actually verifies file content via pi_discovery.
+    decoy_sid = "22222222-2222-4222-8222-222222222222"
+    decoy = sessions_root / f"2026-01-01T00-00-00-000Z_{decoy_sid}.jsonl"
+    decoy.write_text(
+        json.dumps({"timestamp": "t", "type": "session_meta",
+                    "payload": {"id": decoy_sid}}) + "\n",
+        encoding="utf-8",
+    )
+    (state / "logs" / f"{decoy_sid}.log").write_text("x", encoding="utf-8")
+    assert reconcile.session_id_for(decoy) == decoy_sid  # would be eligible by name alone
+
+    s = Storage(state / "state.db")
+    try:
+        gaps = reconcile.find_gaps(s, now=int(time.time()))
+    finally:
+        s.close()
+
+    assert [g.session_id for g in gaps] == [real_sid]
 
 
 # ---------------------------------------------------------------------------

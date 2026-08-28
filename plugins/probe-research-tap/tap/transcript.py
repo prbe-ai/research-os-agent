@@ -157,6 +157,15 @@ def build_batch_body(
     processing both kinds in one pass — an importer walking a machine's Claude
     Code AND Codex history would translate one of them with the other's
     sanitizer, and the failure is silent because both return plausible dicts.
+
+    A sanitizer may return a LIST instead of a single event — pi's
+    bashExecution entries do, translating one JSONL line into a synthetic
+    tool_use/tool_result pair, because pi records a `!command` escape's call
+    and output on one entry while CC's shape puts the call on the assistant
+    and the result on the user. Each item in the list becomes its own event,
+    all sharing that line's `line_no`. Two events legitimately sharing a
+    line_no is safe: the server keys batches on (session_id, batch_seq) and
+    treats line_no as ordering, not identity.
     """
     events = []
     for i, line in enumerate(lines):
@@ -167,7 +176,8 @@ def build_batch_body(
         sanitized = sanitize(raw)
         if sanitized is None:
             continue
-        events.append({"line_no": base_line_no + i, "raw": sanitized})
+        for one in (sanitized if isinstance(sanitized, list) else [sanitized]):
+            events.append({"line_no": base_line_no + i, "raw": one})
     if not events:
         return None
     body = {

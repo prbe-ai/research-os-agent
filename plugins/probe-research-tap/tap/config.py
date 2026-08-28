@@ -39,22 +39,28 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from tap import sources
+
+log = logging.getLogger("probe-research-tap.config")
+
 PLUGIN_NAME = "probe-research-tap"
 CODEX_LEGACY_PLUGIN_NAME = "prbe-codex-tap-plugin"
 SOURCE_ENV = "PROBE_TAP_SOURCE"
-CODEX_TOKEN_ENV = "PRBE_CODEX_TAP_TOKEN"
-CODEX_PLUGIN_DIR_ENV = "PRBE_CODEX_TAP_PLUGIN_DIR"
 
 DEFAULT_ACTIVE_INTERVAL_SECONDS = 60
 DEFAULT_IDLE_INTERVAL_SECONDS = 300
 
-WEBHOOK_PATH = "/ingest/v1/sessions/claude-code"
+# Alias, not a duplicate literal: kept for existing callers/tests, but the
+# value itself lives on the registry row (tap/sources.py) so it cannot drift
+# from what claude_code's Source actually carries.
+WEBHOOK_PATH = sources.SOURCES["claude_code"].webhook_path
 PAIR_PATH = "/agent-tap/pair"
 REVOKE_PATH = "/agent-tap/revoke"
 
@@ -83,20 +89,18 @@ ALLOWED_HOST_SUFFIX = ".prbe.ai"
 
 
 def plugin_dir() -> Path:
-    if capture_source() == "codex":
-        env = os.environ.get(CODEX_PLUGIN_DIR_ENV)
-        if env:
-            return Path(env)
-        state = Path.home() / ".codex" / "state"
-        current = state / PLUGIN_NAME
-        legacy = state / CODEX_LEGACY_PLUGIN_NAME
-        # Preserve a standalone tap's durable state during the merge, while
-        # giving clean installs the unified plugin name.
-        return legacy if legacy.exists() and not current.exists() else current
-    env = os.environ.get("PROBE_RESEARCH_TAP_PLUGIN_DIR")
+    source = current_source()
+    env = os.environ.get(source.plugin_dir_env)
     if env:
         return Path(env)
-    return Path.home() / ".claude" / "plugins" / PLUGIN_NAME
+    current = sources.plugin_state_dir(source, PLUGIN_NAME)
+    if source.source_id == "codex":
+        # Preserve a standalone tap's durable state during the merge, while
+        # giving clean installs the unified plugin name.
+        legacy = current.parent / CODEX_LEGACY_PLUGIN_NAME
+        if legacy.exists() and not current.exists():
+            return legacy
+    return current
 
 
 def config_file() -> Path:
@@ -134,11 +138,50 @@ def shutdown_sentinel(session_id: str) -> Path:
 
 
 def capture_source() -> str:
-    return "codex" if os.environ.get(SOURCE_ENV, "").strip().lower() == "codex" else "claude_code"
+    """The source this daemon is capturing for.
+
+    Two cases collapse into the same fallback, but only one is silent:
+      - unset/empty (after stripping) -> claude_code, quietly. An unset env
+        is the Claude Code install and always has been.
+      - a non-empty value not in `sources.SOURCES` (a typo, a stale
+        integration, a future harness) -> claude_code too, but with a
+        warning naming the offending value first. This daemon runs inside a
+        researcher's live session; breaking capture outright is worse than
+        capturing it under a wrong label, so it must not raise -- it just
+        must not do so *silently*.
+
+    This is the deliberate opposite of `probe.cli.capabilities.agent_source()`,
+    which backs the wizard/CLI/config path and RAISES on the same "non-empty
+    and unrecognized" case: that path can afford to stop and ask, a live
+    capture daemon mid-session cannot. Do not "fix" the two into agreement --
+    the split is the point, not an inconsistency.
+
+    `sources.get()` makes a third, stricter choice on top of this one: by the
+    time a row is looked up there, the id has already been normalized here,
+    so a caller reaching `sources.get()` with something unrecognized is a bug
+    in THIS function, not user input -- and it raises KeyError accordingly.
+    """
+    raw = os.environ.get(SOURCE_ENV, "")
+    normalized = raw.strip().lower()
+    if normalized in sources.SOURCES:
+        return normalized
+    if normalized:
+        log.warning(
+            "%s=%r is not a recognized capture source (accepted: %s); falling back to %s",
+            SOURCE_ENV,
+            raw,
+            ", ".join(sorted(sources.SOURCES)),
+            sources.DEFAULT_SOURCE_ID,
+        )
+    return sources.DEFAULT_SOURCE_ID
+
+
+def current_source() -> sources.Source:
+    return sources.get(capture_source())
 
 
 def webhook_path() -> str:
-    return "/ingest/v1/sessions/codex" if capture_source() == "codex" else WEBHOOK_PATH
+    return current_source().webhook_path
 
 
 class APIBaseURLUnset(RuntimeError):
@@ -321,7 +364,7 @@ def load_token() -> str | None:
                 return t
         except OSError:
             pass
-    token_env = CODEX_TOKEN_ENV if capture_source() == "codex" else ENV_INGEST_TOKEN
+    token_env = current_source().token_env
     env = os.environ.get(token_env, "").strip()
     if env:
         return env

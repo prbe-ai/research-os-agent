@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from importlib import import_module
 
 from tap import config as cfg
 from tap import httpclient
@@ -26,6 +27,20 @@ class HaltError(Exception):
     `probe login`, NOT by any pairing step (there is none)."""
 
 
+class SanitizerNotAvailable(RuntimeError):
+    """The current source's registry row names a sanitizer module that has
+    not shipped yet.
+
+    A source can be registered in tap.sources (so pairing, config resolution
+    and the webhook route all work) before its sanitizer module exists —
+    that gap is deliberate, see tap/sources.py. Without this, hitting that
+    gap mid-tick would surface as a bare ModuleNotFoundError with no
+    indication of what's actually wrong; this names it instead. Mirrors
+    config.APIBaseURLUnset: fail loudly with a specific reason rather than
+    letting a stdlib import error stand in for it.
+    """
+
+
 def token_fingerprint(token: str) -> str:
     """Stable fingerprint of the ingest token, for the 401-halt latch.
 
@@ -34,20 +49,43 @@ def token_fingerprint(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def _sanitizer():
-    """The sanitizer for the agent THIS daemon is tailing.
+def sanitizer_for_current_source():
+    """The `sanitize_event` callable for whichever source this daemon serves.
 
-    The daemon is pinned to one agent for its whole life, so reading the source
-    from config here is correct and keeps every existing caller unchanged. The
-    shared builder takes the function as a parameter instead of looking it up,
-    because an importer processing both agents' history in one pass cannot have
-    a single ambient answer — see tap_core/transcript.build_batch_body.
+    Resolved through the source registry (tap.sources) rather than a
+    per-source ternary, so a new harness needs a new row there, not a new
+    branch here. The daemon is pinned to one agent for its whole life, so
+    reading the source from config here is correct and keeps every existing
+    caller unchanged. The shared builder takes the function as a parameter
+    instead of looking it up, because an importer processing both agents'
+    history in one pass cannot have a single ambient answer — see
+    tap_core/transcript.build_batch_body.
+
+    Resolved ONCE per batch (build_batch_body below), not per line — a
+    5,000-line tick should do one import-cache lookup, not 5,000.
+
+    Raises SanitizerNotAvailable (not a bare ModuleNotFoundError) when the
+    current source's row names a module that isn't installed yet.
     """
-    if cfg.capture_source() == "codex":
-        from tap.codex_sanitize import sanitize_event
-    else:
-        from tap.sanitize import sanitize_event
-    return sanitize_event
+    source = cfg.current_source()
+    try:
+        module = import_module(source.sanitizer_module)
+    except ModuleNotFoundError as e:
+        # e.name is the module that was actually missing. When it matches the
+        # sanitizer module itself, that module has not shipped — the case
+        # this exists to name. When it names something else, the sanitizer
+        # module exists but one of ITS OWN imports is broken; that is a real
+        # bug in shipped code, not a not-yet-shipped source, and relabelling
+        # it here would bury the traceback that says what's actually broken.
+        if e.name != source.sanitizer_module:
+            raise
+        raise SanitizerNotAvailable(
+            f"{source.source_id!r} is a registered capture source but its "
+            f"sanitizer module ({source.sanitizer_module}) has not shipped "
+            "yet — PROBE_TAP_SOURCE is pointed at a harness whose capture "
+            "path isn't built in this install."
+        ) from e
+    return module.sanitize_event
 
 
 def build_batch_body(
@@ -59,9 +97,10 @@ def build_batch_body(
     base_line_no: int,
     lines: list[bytes],
 ) -> bytes | None:
-    """The wire body for /ingest/v1/sessions/{claude-code,codex}.
+    """The wire body for this daemon's /ingest/v1/sessions/{source} route.
 
-    Thin wrapper over the shared builder, binding this daemon's sanitizer.
+    Thin wrapper over the shared builder, binding this daemon's sanitizer —
+    whichever source's row (tap.sources) this process is configured for.
     Returns None when every event was dropped: "nothing to ship, but advance
     the offset."
     """
@@ -72,7 +111,7 @@ def build_batch_body(
         cwd=cwd,
         base_line_no=base_line_no,
         lines=lines,
-        sanitize=_sanitizer(),
+        sanitize=sanitizer_for_current_source(),
     )
 
 

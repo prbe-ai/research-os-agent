@@ -60,7 +60,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from tap import config as cfg
-from tap import outbox
+from tap import outbox, pi_discovery, sources
 from tap import transcript as _transcript
 from tap.storage import FileOffset, Storage
 from tap.transcript import byte_offset_after, read_new, validate_json
@@ -159,26 +159,74 @@ def transcript_root() -> Path:
     date-partitioned rollouts under ~/.codex/sessions, which session-start.sh
     passes as --transcript-dir; PRBE_CODEX_SESSIONS_DIR overrides both there and
     here so the two always agree on the tree.
+
+    The un-overridden default for each source is `default_session_root` off
+    the source registry row (tap/sources.py) rather than a literal path
+    duplicated here — one place for the fact. Before this, the un-overridden
+    branch below was an unconditional "else", which meant an unrecognized
+    or not-yet-special-cased source (pi, before this change) silently
+    inherited Claude Code's root instead of its own.
+
+    pi has no env override HERE — its lookup is not a single overridable root
+    at all. `find_gaps` no longer calls this function directly for ANY
+    source; it goes through `_candidate_transcripts` below, which calls back
+    into this function for claude_code/codex but routes pi through
+    `pi_discovery` instead. This function still returns pi's upstream
+    default for callers that want "the one canonical path" (tests, status
+    output), which is why it is not deleted outright.
     """
-    if cfg.capture_source() == "codex":
+    source = cfg.current_source()
+    if source.source_id == "codex":
         env = os.environ.get("PRBE_CODEX_SESSIONS_DIR")
-        return Path(env) if env else Path.home() / ".codex" / "sessions"
-    env = os.environ.get("PROBE_RESEARCH_TAP_PROJECTS_DIR")
-    return Path(env) if env else Path.home() / ".claude" / "projects"
+        return Path(env) if env else Path.home() / source.default_session_root
+    if source.source_id == "claude_code":
+        env = os.environ.get("PROBE_RESEARCH_TAP_PROJECTS_DIR")
+        return Path(env) if env else Path.home() / source.default_session_root
+    return Path.home() / source.default_session_root
+
+
+def _candidate_transcripts() -> list[Path]:
+    """Every `.jsonl` worth checking for a gap, for the CURRENT source.
+
+    pi is different from the other two sources in kind, not just in root
+    path: `transcript_root()` returns one hardcoded-per-source directory,
+    which is right for Claude Code and Codex (each writes to exactly one
+    place we can name) and wrong for pi, whose `SessionManager` is a
+    published library an embedder points wherever it likes — see
+    `tap/pi_discovery.py`'s module docstring. So pi does not glob a root at
+    all here; it asks `pi_discovery.discover_session_files()`, which scans
+    every configured root (`PROBE_PI_SESSION_ROOTS`, os.pathsep-separated)
+    and keeps only files whose FIRST LINE is a pi session header — a shape
+    check that also protects a configured root containing unrelated
+    `.jsonl` files (a project's own logs, a fork's other state) from being
+    treated as candidate sessions.
+    """
+    if cfg.current_source().source_id == "pi":
+        return pi_discovery.discover_session_files()
+    root = transcript_root()
+    if not root.is_dir():
+        return []
+    return list(root.rglob("*.jsonl"))
 
 
 def session_id_for(path: Path) -> str | None:
     """Recover the session id a transcript belongs to, or None if it isn't one.
 
-    Claude Code names the file for the session. Codex prefixes a timestamp, so
-    the uuid is taken off the end. `agent-*.jsonl` is a subagent sidechain: it
-    never gets a SessionStart, the tap has never captured one, and picking them
-    up here would silently widen what the plugin ships.
+    Dispatches on the current source's `session_id_strategy` (tap/sources.py)
+    rather than a per-source ternary: Claude Code names the file for the
+    session, so the whole stem IS the id. Codex and pi both prefix a longer
+    stem (a timestamp) before the uuid, so only the trailing uuid is
+    trustworthy — same strategy, two different filename shapes
+    (rollout-<ts>-<uuid>.jsonl vs <ts>_<uuid>.jsonl), which is why this
+    dispatches on the strategy rather than on source_id directly. `agent-*.jsonl`
+    is a subagent sidechain: it never gets a SessionStart, the tap has never
+    captured one, and picking them up here would silently widen what the
+    plugin ships.
     """
     stem = path.stem
     if stem.startswith("agent-"):
         return None
-    if cfg.capture_source() == "codex":
+    if cfg.current_source().session_id_strategy == sources.SESSION_ID_UUID_SUFFIX:
         m = _UUID_RE.search(stem)
         return m.group(1) if m else None
     return stem or None
@@ -219,12 +267,12 @@ def _logged_sessions() -> set[str]:
 def find_gaps(storage: Storage, *, now: int, horizon_s: int | None = None) -> list[Gap]:
     """Every eligible transcript whose bytes ran past our cursor, biggest first."""
     horizon = horizon_seconds() if horizon_s is None else horizon_s
-    root = transcript_root()
-    if not root.is_dir():
+    candidates = _candidate_transcripts()
+    if not candidates:
         return []
     logged = _logged_sessions()
     gaps: list[Gap] = []
-    for path in root.rglob("*.jsonl"):
+    for path in candidates:
         try:
             st = path.stat()
         except OSError:
