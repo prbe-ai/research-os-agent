@@ -298,12 +298,12 @@ The project's notes are the default operational handoff because an excerpt
 rides on the project's MCP card; run and group notes are read only by someone
 already at that row.
 
-## Display copy — names, descriptions, hypotheses
+## Display copy — names, descriptions, questions
 
 Written for a teammate, not the execution log. Names: 2-6 familiar words,
 hyphenated when the CLI needs a ref — never a command, ticket number,
 timestamp, petname or parameter pile. Descriptions: 1-2 sentences, ≤40 words —
-what the work is, why it exists, which decision it supports. Hypotheses: one
+what the work is, why it exists, which decision it supports. Questions: one
 plain testable sentence, ≤30 words, naming the expected outcome and the change
 expected to cause it; preserve uncertainty. Explain acronyms; ground wording in
 real product or milestone context only when supplied — never invent company
@@ -340,7 +340,7 @@ published record is an immutable **experiment version** — a manifest of the
 experiment's runs — plus reusable results pinned as artifact versions. No
 run-level "official" flag exists; never encode one in a filename or metadata.
 
-1. `get_entity(view="reproduce")` on each candidate run: verify hypothesis and
+1. `get_entity(view="reproduce")` on each candidate run: verify question and
    config, that `env_ref` resolves (`missing: ["execution_record"]` = no
    snapshot, not reproducible), and `code.manifest.n_pending_upload` is zero.
 2. `get_entity(view="versions")` on the experiment: if a version already
@@ -384,8 +384,8 @@ breath as the finding it qualifies.
 `probe project use` sets the ambient project MACHINE-globally — prefer
 `--project` or `PROBE_PROJECT` whenever another session might be running.
 `run start` uses the ambient value only to CHECK the experiment's home; it no
-longer files anything. `probe experiment set EXP --hypothesis "..."` amends a
-hypothesis (first-write-wins at creation; reopening never rewrites it).
+longer files anything. `probe experiment set EXP --question "..."` amends a
+question (first-write-wins at creation; reopening never rewrites it).
 `--notes ""` clears; `@file` and `-` read a file or stdin.
 
 A TRIAL is one rollout, addressed by its ROLLOUT SPAN id — the last segment of a

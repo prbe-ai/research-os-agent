@@ -61,7 +61,7 @@ Four lines, each from a read, none from recall:
   confirm — a run captured code from it and nobody has said yes yet. Omit the
   line when the project has no code sources; never guess a repo from prose.
 - **missing** — the gaps a reader would want flagged: experiments without a
-  hypothesis or summary, a running run with no snapshot, `outbox` undelivered,
+  question or summary, a running run with no snapshot, `outbox` undelivered,
   a project with no description. What SHOULD exist and does not. Derive only
   from reads; an empty line is fine.
 - **attention** — the sharpest live caveat from the project's notes, one line.
@@ -69,7 +69,7 @@ Four lines, each from a read, none from recall:
 
 ## 3. The arc — one timeline, not two
 
-The science (curate, train, evaluate, ablate) and the tracking (hypothesis,
+The science (curate, train, evaluate, ablate) and the tracking (question,
 snapshot, close, publish) interleave in real time — a snapshot that happens
 after the run started is a missed snapshot. One track, in the order things
 actually have to occur.
@@ -79,7 +79,7 @@ Where each mark comes from — do not guess at any row, read it:
 | stage | done when | read it from |
 | --- | --- | --- |
 | project | it resolves | `browse_research`, or the project card |
-| hypothesis | `hypothesis` is non-null | experiment card, or a run's `reproduce` |
+| question | `question` is non-null | experiment card, or a run's `reproduce` |
 | reuse check | the name resolves at the shared level | `get_entity(ref="artifact:<name>", view="versions")` |
 | snapshot | `env_ref` set **and** the record resolves | `reproduce` — `execution_record` in `missing` means NOT done |
 | inputs captured | `0 unavailable` | `probe snapshot-restore RUN --verify-only` |
@@ -116,7 +116,7 @@ cell; under each marker its label, under that ONE evidence token — each up to
 12 characters, blank where there is nothing. Then a focus line for the current
 stage. Solid `━` behind the work, light `─` ahead, so progress registers
 before a single label is read. Spend the 12 characters on the real word
-(`hypothesis`, not `hypoth`).
+(`question`, not `hypoth`).
 
 ```
 STATUS  ·  bird-sql-agentic-rl — RL fine-tuning for SQL agents
@@ -127,7 +127,7 @@ STATUS  ·  bird-sql-agentic-rl — RL fine-tuning for SQL agents
 RESEARCH ARC  ·  bird-sql-agentic-rl / grpo-kl-sweep                     4 of 8 done
 ────────────────────────────────────────────────────────────────────────────────────
  ✓━━━━━━━━━━━━✓━━━━━━━━━━━━✓━━━━━━━━━━━━✓━━━━━━━━━━━━▶────────────○────────────?────────────○
- curate data  SFT baseline hypothesis   snapshot     RL — GRPO    close run    eval         publish
+ curate data  SFT baseline question   snapshot     RL — GRPO    close run    eval         publish
  12,481 rows  exec-acc 65  kl .02 v .04 verified     step 4,120                no eval/*
 ────────────────────────────────────────────────────────────────────────────────────
  ▶ GRPO · tunneling-sambar-254 · step 4,120 · reward + kl_div · 312 rollout spans

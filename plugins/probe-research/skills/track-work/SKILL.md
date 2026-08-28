@@ -1,6 +1,6 @@
 ---
 name: track-work
-description: Register and record the team's ML work, whatever its shape — training runs, inference-time sweeps and evaluations, literature reviews and design work, data processing, provisioning. Create the project BEFORE designing or scaffolding, an experiment when there is a hypothesis to test, a run when code is about to execute; then record everything the work produces at the moment it happens, not at session end — files to artifacts, numbers to metrics, decisions and caveats to notes, inputs into the run snapshot. Tracking on means everything is recorded. Trigger unprompted for exploratory work, when writing a script that will run, when the user did not ask for tracking, and whenever something worth recording happens — a choice made or reversed, a tool behaving differently than documented, an assumption proving false. Also the tracking switch for THIS conversation — when the researcher says to stop tracking or that this session is not research, that is this skill with `off`; `on` resumes; typed bare by the researcher it TOGGLES, while an agent loading it bare as a tool only reads this guidance and NEVER flips the state.
+description: Register and record the team's ML work, whatever its shape — training runs, inference-time sweeps and evaluations, literature reviews and design work, data processing, provisioning. Create the project BEFORE designing or scaffolding, an experiment when there is a question to answer, a run when code is about to execute; then record everything the work produces at the moment it happens, not at session end — files to artifacts, numbers to metrics, decisions and caveats to notes, inputs into the run snapshot. Tracking on means everything is recorded. Trigger unprompted for exploratory work, when writing a script that will run, when the user did not ask for tracking, and whenever something worth recording happens — a choice made or reversed, a tool behaving differently than documented, an assumption proving false. Also the tracking switch for THIS conversation — when the researcher says to stop tracking or that this session is not research, that is this skill with `off`; `on` resumes; typed bare by the researcher it TOGGLES, while an agent loading it bare as a tool only reads this guidance and NEVER flips the state.
 ---
 
 # Track work
@@ -117,7 +117,7 @@ Two rules that keep files meaningful later:
 |---|---|
 | what this project is, why it exists | the PROJECT's description |
 | durable teammate-facing context — design rationale, architecture decisions, the record of the work | the authored Markdown below AI Summary in the lowest PROJECT, EXPERIMENT or RUN Overview it applies to; edit deliberately, never append blindly |
-| what you are testing and what result confirms it | the EXPERIMENT's hypothesis, at creation |
+| what you are trying to find out | the EXPERIMENT's question, at creation |
 | a caveat, decision, reversal, deletion or handoff | hidden notes on the lowest entity it applies to |
 | the running record of one experiment — configs, results, conclusions | that EXPERIMENT's notes |
 | why THIS run's number should be distrusted | that RUN's notes — including anything you learned from one rollout |
@@ -231,14 +231,14 @@ and cite what you use.
 Create the project and experiment FIRST, before the scaffold. From the CLI,
 creation is always its own explicit step — `probe run start` opens and never
 creates; a typo'd slug minting a second identity is the expensive failure. The
-SDK's `client.run(project=..., experiment=..., hypothesis=...)` creates on
+SDK's `client.run(project=..., experiment=..., question=...)` creates on
 demand because there the slug is written once and code-reviewed.
 
 ```
 probe project create antibody-folding --kind training \
     --description "Improve antibody structure predictions for the biologics program."
 probe experiment create lower-sampling-temperature --project antibody-folding \
-    --hypothesis "A lower sampling temperature will improve structure accuracy on held-out complexes." \
+    --question "Does a lower sampling temperature improve structure accuracy on held-out complexes?" \
     --description "Compare two sampling settings before the next model-selection decision."
 ```
 
@@ -267,11 +267,14 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
 
 - **Always pass `--description`** — what the thing is, 1-2 sentences for a
   teammate, not the execution log. Names are 2-6 familiar words, never a
-  command, timestamp or parameter pile. The hypothesis is one plain testable
-  sentence, required at experiment creation and never synthesised; exact
+  command, timestamp or parameter pile. The question is ONE plain question of
+  at most 30 words, required at experiment creation and never synthesised. Ask
+  what the work is trying to find out; do NOT state the outcome you expect. An
+  experiment that already knows its answer has nothing to run, and the field
+  used to be called `hypothesis` precisely because that framing crept in. Exact
   checkpoints, paths and parameter lists go in config, metadata or notes.
   Amend later with `probe project|experiment|run set ... --description`.
-- **Work with no hypothesis needs no experiment**: open a PROJECT-DIRECT run.
+- **Work with no question needs no experiment**: open a PROJECT-DIRECT run.
   A literature review IS a project (`--kind research`); so is design work,
   and so is provisioning (`--kind general`) — the durable
   outputs upload as artifacts (routing above), the conclusion goes in the
