@@ -243,36 +243,19 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
 ```
 
 - **Pass `--kind`** (required): `training|inference|research|general` — what
-  the project is FOR; the dashboard structures its page around it. Four
-  offered types, and the tie-break when two look close:
-  - `training` — model weights MOVE: pretraining, SFT, RL. Ordinary
-    experiments and runs; step metrics, checkpoints, eval-during-training.
-  - `inference` — weights do NOT move: ablation and hyperparameter sweeps
-    (Optuna-style search), evaluation runs, one config or many. **A sweep is
-    not a project — it is an EXPERIMENT inside an inference project**,
-    grouping its config-point runs (one run per config, several metrics
-    each).
-  - `research` — document-shaped investigation: literature reviews, design
-    projects, theory/method development. Substance is papers, documents and
-    sessions, near-zero runs. A review that feeds a training effort is its
-    own project BESIDE it, referenced — not a subproject inside it.
-  - `general` — miscellaneous: data processing, infra, anything else. A real
-    choice, not a fallback; it is also what the machine creation paths (W&B
-    import, ingest) use forever.
+  the project is FOR; the dashboard structures its page around it.
+  - `training` — weights MOVE: pretraining, SFT, RL.
+  - `inference` — weights do NOT move: sweeps, ablations, evals. **A sweep is
+    an EXPERIMENT inside an inference project, not a project.**
+  - `research` — document-shaped: lit reviews, design, theory. A review
+    feeding a training effort is its own project BESIDE it, not inside it.
+  - `general` — everything else; also what W&B import and ingest use forever.
 - **Record the PAPERS a review read**, on a `research` project:
-  `probe paper add <project> "<title>" --url ... --repo ... --summary ...
-  --discrepancies ...`. Do it DURING the review, one call per paper as you
-  finish it, and again at the end for anything you skimmed past — papers read
-  en route to an idea are the half of the reasoning the conclusion cannot
-  reconstruct, and a review whose Papers tab is empty reads as a review that
-  captured nothing. `--discrepancies` is the field nothing else holds: what
-  the released repo does that the paper does not say (censored code, a missing
-  ablation, a contradicted hyperparameter). The comparison table and the
-  conclusion still go in the project's Summary Markdown — papers are the
-  structured record beside it, not a replacement for it. `probe paper list`
-  reads them back; `probe paper update` amends one. There is no dedupe: two
-  adds of the same URL make two rows, so list first if you might be repeating
-  yourself.
+  `probe paper add <project> "<title>" --url --repo --summary --discrepancies`.
+  One call per paper as you finish it, and again at the end — an empty Papers
+  tab reads as a review that captured nothing. `--discrepancies` is what the
+  released repo does that the paper does not say. Conclusions still go in the
+  project Markdown. No dedupe, so `paper list` first; `paper update` amends.
 - **A phase of a bigger effort is a SUBPROJECT**: `--parent <project>` files it
   under the program it belongs to (`probe project move` re-files later;
   `probe project list --parent` reads them back).
