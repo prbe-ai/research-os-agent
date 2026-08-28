@@ -1,6 +1,6 @@
 ---
 name: track-work
-description: Register and record the team's ML work, whatever its shape — training, evaluation, sweeps, data processing, a literature or model survey, design decisions on model or pipeline code, provisioning. Create the project BEFORE designing or scaffolding, an experiment when there is a hypothesis to test, a run when code is about to execute; then record everything the work produces at the moment it happens, not at session end — files to artifacts, numbers to metrics, decisions and caveats to notes, inputs into the run snapshot. Tracking on means everything is recorded. Trigger unprompted for exploratory work, when writing a script that will run, when the user did not ask for tracking, and whenever something worth recording happens — a choice made or reversed, a tool behaving differently than documented, an assumption proving false. Also the tracking switch for THIS conversation — when the researcher says to stop tracking or that this session is not research, that is this skill with `off`; `on` resumes; typed bare by the researcher it TOGGLES, while an agent loading it bare as a tool only reads this guidance and NEVER flips the state.
+description: Register and record the team's ML work, whatever its shape — training runs, inference-time sweeps and evaluations, literature reviews and design work, data processing, provisioning. Create the project BEFORE designing or scaffolding, an experiment when there is a hypothesis to test, a run when code is about to execute; then record everything the work produces at the moment it happens, not at session end — files to artifacts, numbers to metrics, decisions and caveats to notes, inputs into the run snapshot. Tracking on means everything is recorded. Trigger unprompted for exploratory work, when writing a script that will run, when the user did not ask for tracking, and whenever something worth recording happens — a choice made or reversed, a tool behaving differently than documented, an assumption proving false. Also the tracking switch for THIS conversation — when the researcher says to stop tracking or that this session is not research, that is this skill with `off`; `on` resumes; typed bare by the researcher it TOGGLES, while an agent loading it bare as a tool only reads this guidance and NEVER flips the state.
 ---
 
 # Track work
@@ -242,8 +242,23 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
     --description "Compare two sampling settings before the next model-selection decision."
 ```
 
-- **Pass `--kind`** (required): training|evaluation|data|survey|design|engineering|general —
-  what the project is FOR; the dashboard structures its page around it.
+- **Pass `--kind`** (required): `training|inference|research|general` — what
+  the project is FOR; the dashboard structures its page around it. Four
+  offered types, and the tie-break when two look close:
+  - `training` — model weights MOVE: pretraining, SFT, RL. Ordinary
+    experiments and runs; step metrics, checkpoints, eval-during-training.
+  - `inference` — weights do NOT move: ablation and hyperparameter sweeps
+    (Optuna-style search), evaluation runs, one config or many. **A sweep is
+    not a project — it is an EXPERIMENT inside an inference project**,
+    grouping its config-point runs (one run per config, several metrics
+    each).
+  - `research` — document-shaped investigation: literature reviews, design
+    projects, theory/method development. Substance is papers, documents and
+    sessions, near-zero runs. A review that feeds a training effort is its
+    own project BESIDE it, referenced — not a subproject inside it.
+  - `general` — miscellaneous: data processing, infra, anything else. A real
+    choice, not a fallback; it is also what the machine creation paths (W&B
+    import, ingest) use forever.
 - **A phase of a bigger effort is a SUBPROJECT**: `--parent <project>` files it
   under the program it belongs to (`probe project move` re-files later;
   `probe project list --parent` reads them back).
@@ -255,7 +270,8 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
   checkpoints, paths and parameter lists go in config, metadata or notes.
   Amend later with `probe project|experiment|run set ... --description`.
 - **Work with no hypothesis needs no experiment**: open a PROJECT-DIRECT run.
-  A survey IS a project; so is design work and provisioning — the durable
+  A literature review IS a project (`--kind research`); so is design work,
+  and so is provisioning (`--kind general`) — the durable
   outputs upload as artifacts (routing above), the conclusion goes in the
   Summary or notes, and the rejected alternatives get recorded too: the diff
   only shows the road taken.
