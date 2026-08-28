@@ -116,7 +116,7 @@ Two rules that keep files meaningful later:
 | what it is | where it goes |
 |---|---|
 | what this project is, why it exists | the PROJECT's description |
-| durable teammate-facing context — design rationale, architecture decisions, the record of the work | the visible Markdown tab on the lowest PROJECT, EXPERIMENT or RUN it applies to; edit deliberately, never append blindly |
+| durable teammate-facing context — design rationale, architecture decisions, the record of the work | the authored Markdown below AI Summary in the lowest PROJECT, EXPERIMENT or RUN Overview it applies to; edit deliberately, never append blindly |
 | what you are testing and what result confirms it | the EXPERIMENT's hypothesis, at creation |
 | a caveat, decision, reversal, deletion or handoff | hidden notes on the lowest entity it applies to |
 | the running record of one experiment — configs, results, conclusions | that EXPERIMENT's notes |

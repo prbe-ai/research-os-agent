@@ -200,9 +200,9 @@ probe artifact add RUN inputs-decision.json --kind inputs_decision
 
 ## Visible Markdown and notes — the write loops
 
-Projects, experiments and runs each have a standalone visible Markdown tab.
-Agents and people replace `summary_markdown` as one complete document; it is
-independent of generated Overview prose and private Notes. Whole-document,
+Projects, experiments and runs each show authored Markdown immediately below
+AI Summary in Overview. Agents and people replace `summary_markdown` as one
+complete, independently stored document; private Notes remain separate. Whole-document,
 last-write-wins — read, edit, write, verify:
 
 ```
