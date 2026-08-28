@@ -151,6 +151,13 @@ is pinned from an uploaded artifact; versions are never edited in place.
 `probe artifact add` streams to storage, so multi-GB files upload without being
 read into memory; `--uri` records a reference only.
 
+`--name` is the artifact's relative path, so the file's EXTENSION is kept whatever
+you pass: `--name ckpt` on `ckpt-4000.pt` stores `ckpt.pt`. That is what lets the
+dashboard preview it — a name with no extension and no MIME type reads as an
+unknown binary and shows "Preview unavailable" over perfectly good markdown. Pass an
+extension yourself and it is left alone. Say what the file IS in `--notes`, never in
+`--name`.
+
 What the reuse check (`get_entity(ref="artifact:<name>", view="versions")`)
 resolved to decides the next command:
 

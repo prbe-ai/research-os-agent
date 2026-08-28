@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Fixed
+
+- **An uploaded file keeps its extension.** `--name` replaces the file's
+  basename, and an artifact's name IS its relative path server-side — so
+  `probe artifact add spec.md --name "atomworks-study-README"` stored a file the
+  dashboard could not identify and refused to preview, on 91% of one tenant's
+  artifacts, all of a 25-file sample plain text. The extension is now restored
+  from the path the bytes came from, at every door that names an upload
+  (`artifact add` sync, async and `--from-manifest`, `shared add`,
+  `Client.upload_file`, `Run.log_artifact`). Additive only: a name that already
+  carries an extension is untouched, so `--name report.txt` still means that.
+
 ## 0.127.0
 
 ## 0.126.0
