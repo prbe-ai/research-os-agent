@@ -1,15 +1,15 @@
 {
   "cli": {
     "latest": "0.128.0",
-    "min": "0.105.2"
+    "min": "0.127.0"
   },
   "plugin": {
     "latest": "0.64.0",
-    "min": "0.18.0"
+    "min": "0.63.0"
   },
   "tap": {
     "latest": "0.4.3",
     "min": "0.1.0"
   },
-  "advisory": "A CLI below 0.105.2 reported notes writes the server had refused: once a notes document hit its cap, every further append exited 0 and stored nothing."
+  "advisory": "A CLI below 0.127.0 (plugin below 0.63.0) predates the hypothesis -> question rename: creating or amending an experiment returns 422, and reads of the renamed field come back carrying an upgrade notice instead of the text. This floor also subsumes the earlier one at 0.105.2, where a notes append past the document cap exited 0 and stored nothing."
 }
