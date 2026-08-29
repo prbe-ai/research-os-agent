@@ -252,7 +252,9 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
     feeding a training effort is its own project BESIDE it, not inside it.
   - `general` — everything else; also what W&B import and ingest use forever.
 - **Record the PAPERS a review read**, on a `research` project:
-  `probe paper add <project> "<title>" --url --repo --summary --discrepancies`.
+  `probe paper add <project> "<title>" --source <path-or-url> --repo --summary --discrepancies`.
+  `--source` is required (`--url` remains an alias) and provider metadata is
+  captured separately without replacing the title or authored summary.
   One call per paper as you finish it, and again at the end — an empty Papers
   tab reads as a review that captured nothing. `--discrepancies` is what the
   released repo does that the paper does not say. Conclusions still go in the
