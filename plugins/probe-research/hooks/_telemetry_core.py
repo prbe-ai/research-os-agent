@@ -54,6 +54,11 @@ AGENT_DETECT_ENV: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("claude_code", ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")),
     ("cursor", ("CURSOR_TRACE_ID",)),
     ("codex", ("CODEX_SANDBOX", "CODEX_THREAD_ID")),
+    # PI_CODING_AGENT only, NOT the generic AI_AGENT pi also sets: detection
+    # here is presence-based, and a variable named for "any AI agent" is the
+    # one the next harness will export too -- same reasoning as
+    # sdk/agent_session.py's AGENTS table.
+    ("pi", ("PI_CODING_AGENT",)),
 )
 
 

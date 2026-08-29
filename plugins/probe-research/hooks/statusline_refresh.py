@@ -164,7 +164,7 @@ def due(marker, session_id: str) -> bool:
 #: Agents whose session id the server records on `runs.foreign_keys`. Must track
 #: `app.runs.agent_session.CAPTURED_AGENTS` and the SDK's capability table; an
 #: agent named here that the server does not record simply returns no rows.
-AGENT_KEYS = ("claude_code", "codex")
+AGENT_KEYS = ("claude_code", "codex", "pi")
 
 
 def _get(base_url: str, token: str, path: str, params: dict | None = None):
@@ -206,7 +206,8 @@ def fetch_active_run_ids(base_url: str, token: str, session_id: str, marker) -> 
     this is precisely "runs this conversation opened".
 
     One request per captured agent, because a session id alone does not say which
-    agent issued it. Two agents, two cheap indexed lookups, off the render path.
+    agent issued it. One cheap indexed lookup per captured agent, off the
+    render path.
     """
     ids = []
     for agent in AGENT_KEYS:
