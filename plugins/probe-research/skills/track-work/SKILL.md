@@ -105,6 +105,15 @@ Two rules that keep files meaningful later:
   produces`): the anchor says what it is ABOUT, the edge says what MADE it,
   and cross-anchor files are exactly the ones someone later asks "which run
   produced this?" about.
+- **A run that came from another run records it too, and WHICH WAY decides how.**
+  Another attempt at the same thing — a relaunch after a crash, a resume, a fork —
+  is PARENTAGE: `probe run child PARENT --name attempt-2 --relation retry`
+  (fork|resume|retry|branch), or `run.child("attempt-2", relation="retry")` in the
+  SDK. A run that CONSUMED another's output — an eval of its checkpoint, training
+  on its rollouts — is an EDGE, not parentage:
+  `probe edge add --from run:CHILD --to run:PARENT --relation consumes`
+  (or `evaluates_on` / `derived_from`). Never put either in `foreign_keys`: it is
+  free text no lineage query can follow, and the field names are refused there.
 - **Changing a file that has a registry name is a new VERSION of that name,
   never a new artifact** — `probe artifact version-add`, after checking
   `get_entity(ref="artifact:<name>", view="versions")`. Two scorers with the

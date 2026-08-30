@@ -14,7 +14,7 @@ Record with the surface the run was opened with:
 | nested structure | `with run.span("trial", ...) as s:`, `run.step(i)` | `probe span add RUN --type trial` |
 | outputs | `run.log_artifact("ckpt", path=...)` | `probe artifact add RUN PATH --name ckpt` |
 | external ids | `run.link(wandb_run_id="abc")` | `probe link RUN --set wandb_run_id=abc` |
-| sub-runs | `run.child("fold-2")` | `probe run child RUN --name fold-2` |
+| a run FROM a run | `run.child("attempt-2", relation="retry")` | `probe run child RUN --name attempt-2 --relation retry` |
 | computed metrics | `run.log_derived_series("eval/auc", pts, producer="…")` | `probe log RUN eval/auc=0.9 --step 100 --derived --producer …` |
 | expression views | `run.create_view("loss_ratio", spec)` | `probe views create RUN loss_ratio --spec-file spec.json` |
 
@@ -333,8 +333,16 @@ probe run end $RUN --status failed
 it against the training run; the training run points back with
 `probe link $TRAIN --set provisioned_by=$INFRA_RUN` — the lineage vocabulary
 (`consumes`/`produces`/`evaluates_on`/`forked_from`/`resumed_from`/
-`promoted_to`/`derived_from`) has no "provisioned by", so `foreign_keys` is
-the door. A campaign of attempts CANNOT share a run group (groups are
+`retried_from`/`branched_from`/`promoted_to`/`derived_from`) has no
+"provisioned by", so `foreign_keys` is the door.
+
+**`foreign_keys` is the door for what the vocabulary cannot say, and ONLY that.**
+A relaunch after a crash IS in the vocabulary — record it with
+`probe run child --relation retry`, never as a `foreign_keys` entry. Six runs
+learned this the hard way: they wrote a `parent_run_id` KEY into `foreign_keys`
+and left the real field empty, so their lineage is a string no query traverses.
+`parent_run_id` and `parent_relation` are now refused as key names for exactly
+that reason. A campaign of attempts CANNOT share a run group (groups are
 experiment-anchored; the backend 422s a `group_id` on a project-direct run) —
 use a shared `foreign_keys` key (`--set campaign=h100-hunt`) plus one
 paragraph in the project's notes. Write the CONCLUSION in notes: the runs are
