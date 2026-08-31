@@ -261,7 +261,7 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
     feeding a training effort is its own project BESIDE it, not inside it.
   - `general` — everything else; also what W&B import and ingest use forever.
 - **Record the PAPERS a review read**, on a `research` project:
-  `probe paper add <project> "<title>" --source <path-or-url> --repo --summary --discrepancies --tag`.
+  `probe paper add <project> "<title>" --source <path-or-url> --repo --summary --discrepancies --tag --via`.
   `--source` is required (`--url` remains an alias) and provider metadata is
   captured separately without replacing the title or authored summary.
   **`--tag` is the CONCEPTS the paper is about**, repeatable, in the same
@@ -274,6 +274,28 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
   tab reads as a review that captured nothing. `--discrepancies` is what the
   released repo does that the paper does not say. Conclusions still go in the
   project Markdown. No dedupe, so `paper list` first; `paper update` amends.
+- **ALWAYS PASS `--via`. It is how the chain gets recorded, and it has THREE
+  answers, not two.** A review's value is which paper led to which, and nothing
+  can reconstruct that later: the search you ran leaves no trace the server can
+  join against, so if you do not say it here, it is gone.
+  - `--via <paper id> --via-provenance <how>` — you followed that paper to this
+    one. Use `observed_call` when a tool call handed it to you (a
+    `find_papers(mode="similar", expand="references"|"citers")` already knew the
+    source paper — the edge is an argument to a call you already made, not a
+    judgment), `provider_citation` for a reference list, `human` when someone
+    told you, `inferred` when you worked it out afterwards. Add `--via-reason`
+    with one sentence.
+  - `--via none` — you came to this paper directly: a bare search, or a person
+    handed you the link. A real answer, not a shrug.
+  - **Omit it only when you genuinely cannot say.** That records "unknown",
+    which renders differently and honestly.
+  - **NEVER pass the paper you happened to add last.** Read order is not
+    derivation. A chain that encodes it renders every review as a straight line
+    that is quietly false, which is worse than no chain at all.
+  - Answer WHILE YOU STILL KNOW. At `paper add` time "how I got here" is two
+    turns back in your own context. Ten papers and one compaction later it is a
+    guess, and a guessed edge is indistinguishable from an observed one once
+    stored.
 - **A phase of a bigger effort is a SUBPROJECT**: `--parent <project>` files it
   under the program it belongs to (`probe project move` re-files later;
   `probe project list --parent` reads them back).
