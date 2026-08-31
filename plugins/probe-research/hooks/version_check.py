@@ -66,6 +66,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import NoReturn
 
@@ -673,6 +674,36 @@ _base_url = version_policy.base_url
 _fetch = version_policy.fetch
 
 
+#: Cap on the advisory echoed into a session. The bound is the point -- the
+#: manifest is fetched over the network, so an untrusted origin must not be able
+#: to paste paragraphs of instructions into every session start.
+_ADVISORY_CAP = 200
+#: Where the full text lives. A truncated warning with no route to the rest is
+#: how the 347-character advisory in production came to end mid-word, at
+#: "...come back carrying an upgrade notic", with nothing telling the reader
+#: there was more of the sentence.
+_ADVISORY_MORE = "/install"
+
+
+def _clip_advisory(text: str) -> str:
+    """Cap the advisory on a WORD boundary, and say where the rest is.
+
+    Slicing at a fixed index cuts mid-word, which reads as a broken tool rather
+    than a truncated message -- and the reader cannot tell whether the missing
+    half mattered. Cutting at the last space keeps the cap honest and appends a
+    pointer, so the bound stays a bound and the reader keeps a route to the rest.
+    """
+    if len(text) <= _ADVISORY_CAP:
+        return text
+    head = text[:_ADVISORY_CAP]
+    cut = head.rsplit(" ", 1)[0]
+    # A single unbroken token longer than the cap has no space to cut at; the
+    # hard slice is then the only bound available, and it still gets the pointer.
+    if not cut:
+        cut = head
+    return f"{cut.rstrip(',;:.')}… (full note: {_ADVISORY_MORE})"
+
+
 def _local_cli(probe_bin: str):
     try:
         out = subprocess.run([probe_bin, "--version"], capture_output=True, text=True, timeout=5)
@@ -771,6 +802,54 @@ def _spawn_autoupdate(probe_bin: str) -> None:
         pass  # fail-open: a broken auto-update must never block a session
 
 
+#: A cached manifest older than this means fetches have been FAILING, not merely
+#: that none was due: it is far past both the 15m TTL and the 1h failure backoff.
+#: Until this notice existed, that state was indistinguishable from a healthy
+#: machine -- both printed `{"continue": true}` -- so a laptop that had not
+#: reached the version endpoint in six weeks looked exactly like one checked
+#: minutes ago. That ambiguity is the whole bug: silence has to mean one thing.
+_STALE_MANIFEST_S = 86400
+#: How often the notice above may repeat. A version check that speaks every
+#: session stops being read, and then a real warning goes past unread with it.
+_STALE_NOTICE_EVERY_S = 86400
+
+
+def _stale_notice_path():
+    return version_policy.cache_path().parent / "version-stale-notice.json"
+
+
+def _stale_manifest_notice(fetched_at, now=None) -> str | None:
+    """One line when the manifest cannot be refreshed, at most daily. Else None.
+
+    Returns None -- stays SILENT -- whenever the cache is fresh. A current machine
+    must print nothing at all; the affirmative "you are up to date" answer belongs
+    to `probe doctor`, which a person runs deliberately, not to a hook that fires
+    on every session and would become wallpaper.
+    """
+    now = time.time() if now is None else now
+    age = now - (fetched_at or 0)
+    if fetched_at and age <= _STALE_MANIFEST_S:
+        return None
+    path = _stale_notice_path()
+    try:
+        last = json.loads(path.read_text()).get("at") or 0
+    except Exception:
+        last = 0
+    if now - last < _STALE_NOTICE_EVERY_S:
+        return None
+    if not version_policy.atomic_write_json(path, {"at": int(now)}):
+        # Could not record that we spoke, so speaking again next session is the
+        # likely outcome. Staying quiet is the safer failure: an unwritable state
+        # dir must not turn one notice into one per session, forever.
+        return None
+    when = "never" if not fetched_at else f"{int(age // 86400)}d ago"
+    return (
+        "Probe Research could not confirm your client version "
+        f"(last successful check: {when}). Your install may be out of date. "
+        "Run `probe doctor` to compare, or `probe update` to upgrade."
+    )
+
+
 def main() -> None:
     # Before anything else: a session must know its own tracking value from its
     # first moment, or the readers that fire earliest race the seed.
@@ -800,8 +879,23 @@ def main() -> None:
             finally:
                 version_policy.release_refresh()
 
+    # NOT on PreCompact. That event's contract is to APPLY and say nothing (see
+    # the module docstring): its output shape is not SessionStart's, and a message
+    # injected mid-compaction interrupts work the user did not start. Gated before
+    # the call rather than after, because the notice RECORDS that it spoke --
+    # computing it here would spend the once-a-day budget on an event that cannot
+    # deliver it, and silence the next real session start.
+    stale_notice = (
+        None
+        if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT
+        else _stale_manifest_notice(fetched_at)
+    )
+
     if not isinstance(manifest, dict):
-        _final({"continue": True})
+        # No manifest at all: nothing can be compared. Say so if it has been
+        # failing long enough to matter, rather than returning the same silence
+        # a perfectly current machine returns.
+        _final({"systemMessage": stale_notice} if stale_notice else {"continue": True})
 
     local = {
         "cli": _local_cli(os.environ.get("PROBE_BIN") or "probe"),
@@ -823,7 +917,10 @@ def main() -> None:
             below_min.append((label, _safe_ver(cur), _safe_ver(minv)))
 
     if not nudges and not below_min:
-        _final({"continue": True})
+        # Everything comparable is current. Silent BY DESIGN -- but only when the
+        # manifest it was compared against is itself fresh. A "current" verdict
+        # graded against a six-week-old manifest is not a verdict.
+        _final({"systemMessage": stale_notice} if stale_notice else {"continue": True})
 
     def _fmt(items):  # items: (label, current, target)
         return ", ".join(f"{label} {cur} → {target}" for label, cur, target in items)
@@ -862,7 +959,7 @@ def main() -> None:
     if isinstance(advisory, str) and advisory.strip():
         # Human-facing only, and bounded: one line, capped, so a hostile
         # manifest cannot paste paragraphs of instructions into the session.
-        sys_msg += f" Note: {' '.join(advisory.split())[:200]}"
+        sys_msg += f" Note: {_clip_advisory(' '.join(advisory.split()))}"
 
     ctx = (
         f"The Probe Research client is out of date ({summary}). If the user wants "
