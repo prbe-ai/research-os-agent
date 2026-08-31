@@ -261,9 +261,15 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
     feeding a training effort is its own project BESIDE it, not inside it.
   - `general` — everything else; also what W&B import and ingest use forever.
 - **Record the PAPERS a review read**, on a `research` project:
-  `probe paper add <project> "<title>" --source <path-or-url> --repo --summary --discrepancies`.
+  `probe paper add <project> "<title>" --source <path-or-url> --repo --summary --discrepancies --tag`.
   `--source` is required (`--url` remains an alias) and provider metadata is
   captured separately without replacing the title or authored summary.
+  **`--tag` is the CONCEPTS the paper is about**, repeatable, in the same
+  vocabulary you tag projects and runs with — it is what makes a forty-paper
+  reading list groupable, and the one label the provider cannot supply (its own
+  categories arrive on their own). `probe paper tag <id> <concept>` amends
+  later, and `probe paper list --tag <concept>` reads them back. No author tag:
+  the byline is already on the paper.
   One call per paper as you finish it, and again at the end — an empty Papers
   tab reads as a review that captured nothing. `--discrepancies` is what the
   released repo does that the paper does not say. Conclusions still go in the
