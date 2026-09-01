@@ -21,6 +21,7 @@ import { disabledFile, extensionLogFile, teamNoteDocumentPath } from "./paths.js
 import { checkPairing } from "./pairing.js";
 import { buildStatusReport } from "./status.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./tapRuntime.js";
+import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./trackingSwitch.js";
 import { readTeamNote, renderTeamNoteForPrompt, spawnTeamNoteSync, type TeamNoteSyncDeps } from "./teamNote.js";
 
 // Module-scope, NOT inside registerExtension: pi tears down and rebuilds the
@@ -66,6 +67,10 @@ function isExecutable(path: string): boolean {
 
 const realSpawn: SpawnFn = (command, args, options) =>
   spawn(command, args, options) as unknown as { pid: number | undefined; unref: () => void };
+
+/** Same call, kept separate because the switch WAITS on its child. */
+const realSwitchSpawn: SwitchSpawnFn = (command, args, options) =>
+  spawn(command, args, options) as unknown as SwitchChild;
 
 function logLine(message: string): void {
   try {
@@ -287,6 +292,55 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   // module docstring for why this is a full sync, detached, and fail-open.
   pi.on("agent_settled", async () => {
     spawnTeamNoteSync(realTeamNoteSyncDeps());
+  });
+
+  // THE TRACKING SWITCH. `input` fires on the RAW line, before pi expands
+  // `/skill:<name>` — which is what lets a `/track-work` typed out of Claude
+  // Code habit be rewritten to pi's own spelling instead of reaching the model
+  // as prose pi ignored. See trackingSwitch.ts for why this is so much smaller
+  // than the Python guard it brings to parity.
+  pi.on("input", async (event, ctx) => {
+    // Cheap gate FIRST: this handler is on the path of every message the
+    // researcher sends, and on all but a handful it must cost one string
+    // compare and return.
+    const intent = parseSwitchIntent(event.text);
+    if (!intent) return { action: "continue" };
+
+    // THE CONSENT RULE, as a field rather than an inference. "interactive" is
+    // typed by a person; "rpc" and "extension" are not, and an agent that can
+    // flip this switch can turn tracking back on to make its own writes legal,
+    // which is the entire thing the switch exists to prevent. An agent
+    // invocation still gets the guidance — it just moves nothing.
+    if (event.source !== "interactive") {
+      logLine(`tracking switch ignored: source=${event.source}`);
+      return { action: "transform", text: intent.canonicalText };
+    }
+
+    let applied = false;
+    if (intent.direction !== null) {
+      const sessionId = ctx.sessionManager.getSessionId();
+      if (sessionId) {
+        applied = await applyTrackingSwitch(intent.direction, sessionId, {
+          spawn: realSwitchSpawn,
+          existsSync: fs.existsSync,
+          isExecutable,
+          env: process.env,
+          log: logLine,
+        });
+      } else {
+        logLine("tracking switch skipped: no session id");
+      }
+    }
+    // Transform, never "handled": the researcher asked for the skill, and the
+    // model still needs the manual — not least to READ THE STATE BACK and say
+    // what the switch actually did.
+    return {
+      action: "transform",
+      text:
+        applied && intent.direction !== null
+          ? intent.canonicalText + switchAppliedNotice(intent.direction)
+          : intent.canonicalText,
+    };
   });
 
   pi.registerCommand("probe-status", {

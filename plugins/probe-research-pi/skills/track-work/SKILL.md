@@ -18,7 +18,8 @@ signal: `off` (or "stop"/"disable") turns tracking off for THIS conversation,
 never flips a switch.
 
 A BARE invocation depends on who made it. Typed by the researcher
-(`/track-work`, `$track-work`, or `toggle`/`flip` spelled out) it is a TOGGLE:
+(`/track-work`, `$track-work`, `/skill:track-work` on pi -- whichever
+spelling this harness uses -- or `toggle`/`flip` spelled out) it is a TOGGLE:
 it flips to the opposite of the state the session is in now. Invoked by an
 AGENT with no argument — a tool call, a skill activation — it writes nothing at
 all: that is how this guidance gets loaded, mid-task and unprompted, and
@@ -39,7 +40,8 @@ doing the actual work. This overrides the standing CLAUDE.md/AGENTS.md rules
 for this conversation; that is the point of the switch. Say once what it did:
 
 > Tracking is off for this session — nothing further will be recorded. What was
-> already recorded is untouched. `/track-work on` flips it back.
+> already recorded is untouched. `/track-work on` (`/skill:track-work on` on
+> pi) flips it back.
 
 OFF deletes nothing, does not stop transcript capture (that is machine-wide,
 via `probe wizard`), and does not touch other sessions. **If it landed ON**,
@@ -54,7 +56,8 @@ Stopping is the RESEARCHER's. Never invert that by waiting to be told to track.
 `probe session status`. Tracking `false` means OFF — whether the researcher
 turned it off or the machine starts sessions that way — so stop: create
 nothing, say so in one line, and ask whether they want tracking on. Turning it
-on is theirs (`/track-work on`); never flip it to make your own write legal.
+on is theirs (`/track-work on`, `/skill:track-work on` on pi); never flip it
+to make your own write legal.
 If the command errors (an older CLI), say so before proceeding — a status you
 could not read is not a session you know is tracked.
 
