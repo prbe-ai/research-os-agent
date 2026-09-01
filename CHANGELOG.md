@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A search no longer hands you your own conversation.** An agent that searched
+  the lab while it was working could get its own live transcript as the top
+  result -- re-indexed seconds earlier, matching its own wording -- and read its
+  own answer from minutes ago as evidence from the team. `search_knowledge` now
+  takes `exclude_session`; most agents never need it, because the id arrives on
+  a header. Pass it where the header cannot reach: under Codex, read
+  `CODEX_THREAD_ID` from your shell.
+- **One conversation counts once.** A transcript and the digest written from it
+  are the same session rendered twice, and both were taking a result slot. The
+  transcript wins, so the result is one you can actually open.
+- **An answer emptied by your own exclusion says so.** New
+  `all_results_were_own_session` marker: a stop, not a degradation, because
+  rewording cannot produce a different corpus. And if the server is too old to
+  apply the exclusion at all, `self_exclusion_unsupported` says that rather than
+  quietly returning your own session anyway.
+- **The managed `AGENTS.md` / `CLAUDE.md` block names no tool or skill.** Blocks
+  written months ago name skills that no longer exist, and no release can reach
+  the file to correct it -- it lives in your home directory. An agent handed a
+  name it cannot invoke goes hunting through files for it instead. The block now
+  describes the work and lets whatever you have installed introduce itself. Run
+  `probe wizard` to regenerate (v27).
+- **Turning tracking off stops writing, not reading.** The block said "this
+  whole block is off" and then gave two examples that were both about writing,
+  so agents read the search mandate as still standing. It now says which half
+  the switch governs.
+- **Codex identifies which conversation an MCP call belongs to.** The Codex MCP
+  table gains the agent-session headers, so self-exclusion works there. Installs
+  written before this update are migrated even when their token has not rotated.
+
 ## 0.128.0
 
 ### Fixed
