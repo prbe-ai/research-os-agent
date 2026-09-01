@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.131.0
+
 ### Fixed
 
 - **The wizard stops offering to install things while it removes them.** On a
