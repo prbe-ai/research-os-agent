@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Fixed
+
+- **The wizard stops offering to install things while it removes them.** On a
+  machine with more than one coding agent, every agent-scoped action opens the
+  same picker first -- and it was written as if only Install could reach it. So
+  picking **Uninstall Probe** opened a screen headed `Install Probe — step 1 of
+  2`, asking "Which coding agents should Probe connect?" over rows reading
+  "Install plugins and pair source-bound capture.", one keypress before the only
+  destructive action in the product. The picker now says what the action it was
+  opened for actually does -- uninstall, update, diagnose and the manual
+  instructions each get their own title, lede and per-agent rows -- and only
+  Install carries a step number, because only Install has a second step to
+  count towards.
+
 ## 0.130.0
 
 ## 0.129.0
