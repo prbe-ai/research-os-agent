@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "probe": {
+      "url": "https://mcp.research.prbe.ai/mcp",
+      "auth": "oauth",
+      "oauth": {
+        "scope": "research:read",
+        "clientName": "probe-research-pi (via pi-mcp-adapter)"
+      }
+    }
+  }
+}

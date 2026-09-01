@@ -1,0 +1,23 @@
+{
+  "name": "probe-research-pi",
+  "version": "0.0.0",
+  "description": "pi package for Probe Research, loaded from the public mirror repo's root. Named probe-research-pi (not research-os-agent) so pi-mcp-adapter's \"<package>__<server>\" tool prefix stays probe-research-pi__probe.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "pi": {
+    "extensions": [
+      "plugins/probe-research-pi/index.ts"
+    ],
+    "skills": [
+      "plugins/probe-research-pi/skills/track-work",
+      "plugins/probe-research-pi/skills/show-research-status",
+      "plugins/probe-research-pi/skills/instrument-training-runs"
+    ],
+    "mcp": "./plugins/probe-research-pi/mcp.json"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "typebox": "1.3.7"
+  }
+}
