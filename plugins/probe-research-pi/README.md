@@ -121,7 +121,7 @@ one pointing at this package (`pi_config.migrate_legacy_symlink`) — leaving
 both in place would make pi load the extension twice. Use this route only if
 you specifically cannot run Route A or B.
 
-`pi install github:prbe-ai/research-os-agent` writes this same kind of
+`pi install git:github.com/prbe-ai/research-os-agent` writes this same kind of
 `packages` entry, and is what the wizard now writes on any machine without a
 research-os checkout. That repo is the PUBLIC MIRROR — the one Claude and
 Codex already install their plugins from — and the `package.json` rendered to
@@ -518,7 +518,7 @@ registry from scratch on reload — verified against `loader.js`).
 ## Known limitation
 
 **The `probe-research-tap` location is solved for the mirror install, not in
-general.** A mirror install (`github:prbe-ai/research-os-agent`) clones the
+general.** A mirror install (`git:github.com/prbe-ai/research-os-agent`) clones the
 whole repo, and the mirror renders `plugins/probe-research-tap/` as a sibling
 of this package — so step 2 resolves there the same way it does inside this
 monorepo, which is what closed the old "no packaging step ships a Python
