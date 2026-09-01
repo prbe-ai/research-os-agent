@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.129.0
+
 ### Fixed
 
 - **A search no longer hands you your own conversation.** An agent that searched
