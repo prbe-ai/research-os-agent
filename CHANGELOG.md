@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.133.0
+
 ### Added
 
 - **New sessions can inherit their tracking default from a folder.** Use
