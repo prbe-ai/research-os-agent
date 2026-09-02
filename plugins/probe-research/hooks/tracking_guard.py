@@ -20,9 +20,9 @@ A Codex researcher loses nothing: their typed `$slug` line arrives as the
 raw shape first. The legacy toggle names, whose whole identity was the
 switch and which have no manual to read, flip bare in every shape.
 "Current" for a flip is the explicit signal if one exists and otherwise
-the machine's default posture (`is_tracking` resolves that, exactly as the
-statusline does -- the two surfaces must not disagree about what "current"
-means). An explicit `off`/`on` (or the skill's synonyms) sets that state,
+the payload cwd's effective default posture (the shared resolver answers that,
+exactly as the statusline does -- the two surfaces must not disagree about what
+"current" means). An explicit `off`/`on` (or the skill's synonyms) sets that state,
 idempotently. `status`, or an argument that reads as neither, writes
 nothing. The flip fires on BOTH invocation paths: PostToolUse catches the
 model calling the skill as a tool, and UserPromptSubmit catches the
@@ -528,7 +528,27 @@ def _write_claim(
         pass
 
 
-def _apply_direction(direction: str, session_id: str, shape: str, slug: str) -> None:
+def _payload_cwd(payload: dict) -> "str | None":
+    cwd = payload.get("cwd")
+    return cwd if isinstance(cwd, str) and cwd else None
+
+
+def _is_tracking(session_id: str, cwd: "str | None" = None) -> bool:
+    """Signal first; resolve folders only for the absent-signal fallback."""
+    signal = _session_marker.tracking_signal(session_id)
+    if signal is not None:
+        return _session_marker.is_tracking(signal)
+    on, _source = _session_marker.resolve_tracking_default(cwd)
+    return on
+
+
+def _apply_direction(
+    direction: str,
+    session_id: str,
+    shape: str,
+    slug: str,
+    cwd: "str | None" = None,
+) -> None:
     """Write the signal a direction asks for, ONCE PER INVOCATION.
 
     Silent on success and on failure alike: the skill has the model read the
@@ -578,12 +598,10 @@ def _apply_direction(direction: str, session_id: str, shape: str, slug: str) -> 
         # A shape already seen, a DIFFERENT slug, or nothing claimed -- each of
         # them a new invocation, and a new invocation always flips. Flip
         # to the opposite of the CURRENT state: the explicit signal when one
-        # exists, else the machine's default posture -- resolved by is_tracking
+        # exists, else the payload cwd's effective default posture
         # so this and the statusline cannot disagree about what "current"
         # means.
-        on = not _session_marker.is_tracking(
-            _session_marker.tracking_signal(session_id)
-        )
+        on = not _is_tracking(session_id, cwd)
         _write_claim(session_id, on, [shape], slug)
     _session_marker.set_tracking(session_id, on)
 
@@ -601,7 +619,7 @@ def _offending_write(payload: dict, session_id: str) -> "str | None":
     new session starts at, and a layer that fired only when someone re-typed it
     per session would be silent exactly where the writes are.
     """
-    if _session_marker.is_tracking(_session_marker.tracking_signal(session_id)):
+    if _is_tracking(session_id, _payload_cwd(payload)):
         return None
     if payload.get("tool_name") != "Bash":
         return None
@@ -626,7 +644,7 @@ def main() -> None:
     if hook_event == "UserPromptSubmit":
         direction, shape, slug = prompt_direction(payload.get("prompt"))
         if direction is not None:
-            _apply_direction(direction, session_id, shape, slug)
+            _apply_direction(direction, session_id, shape, slug, _payload_cwd(payload))
         return
     if hook_event == "PreToolUse":
         matched = _offending_write(payload, session_id)
@@ -649,7 +667,9 @@ def main() -> None:
     if tool_name in ("Skill", "SlashCommand"):
         direction, slug = toggle_direction(tool_name, payload.get("tool_input"))
         if direction is not None:
-            _apply_direction(direction, session_id, SHAPE_TOOL, slug)
+            _apply_direction(
+                direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload)
+            )
         return
     if tool_name != "Bash":
         return

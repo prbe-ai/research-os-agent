@@ -7,7 +7,7 @@
  * and to pi's event bus. `index.ts` calls `registerExtension(pi, __dirname)`.
  */
 
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import * as fs from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import { dirname } from "node:path";
@@ -22,6 +22,7 @@ import { checkPairing } from "./pairing.js";
 import { buildStatusReport } from "./status.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./tapRuntime.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./trackingSwitch.js";
+import { initializeTrackingState, trackingStatusText, type TrackingExecFileFn } from "./trackingState.js";
 import { readTeamNote, renderTeamNoteForPrompt, spawnTeamNoteSync, type TeamNoteSyncDeps } from "./teamNote.js";
 
 // Module-scope, NOT inside registerExtension: pi tears down and rebuilds the
@@ -72,6 +73,12 @@ const realSpawn: SpawnFn = (command, args, options) =>
 const realSwitchSpawn: SwitchSpawnFn = (command, args, options) =>
   spawn(command, args, options) as unknown as SwitchChild;
 
+const realTrackingExecFile: TrackingExecFileFn = (command, args, options, callback) => {
+  return execFile(command, args, options, (error, stdout, stderr) => {
+    callback(error, String(stdout), String(stderr));
+  });
+};
+
 function logLine(message: string): void {
   try {
     fs.mkdirSync(dirname(extensionLogFile()), { recursive: true });
@@ -105,6 +112,45 @@ function realTeamNoteSyncDeps(): TeamNoteSyncDeps {
   };
 }
 
+async function refreshTrackingStatus(
+  ctx: { hasUI: boolean; ui: { setStatus: (key: string, value: string | undefined) => void } },
+  sessionId: string,
+  cwd: string,
+): Promise<boolean> {
+  const state = await initializeTrackingState(sessionId, cwd, {
+    execFile: realTrackingExecFile,
+    existsSync: fs.existsSync,
+    isExecutable,
+    env: process.env,
+    log: logLine,
+  });
+  if (!state) {
+    if (ctx.hasUI) {
+      try {
+        // Never leave a previous authoritative-looking value visible when
+        // the current state could not be read back.
+        ctx.ui.setStatus("probe-tracking", undefined);
+      } catch (err) {
+        logLine(
+          `tracking footer clear failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return false;
+  }
+  if (ctx.hasUI) {
+    try {
+      ctx.ui.setStatus("probe-tracking", trackingStatusText(state.tracking));
+    } catch (err) {
+      logLine(
+        `tracking footer refresh failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return false;
+    }
+  }
+  return true;
+}
+
 /** One clear message, on stderr (never stdout — `--mode json` reserves stdout for structured
  * output) plus the extension log, plus a UI toast when a UI exists to show one. */
 function announce(ctx: { hasUI: boolean; ui: { notify: (msg: string, level?: "info" | "warning" | "error") => void } }, message: string, level: "info" | "warning" | "error" = "warning"): void {
@@ -125,6 +171,12 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
 
     const sessionId = ctx.sessionManager.getSessionId();
     const transcriptPath = ctx.sessionManager.getSessionFile();
+
+    // Seed the ONE durable session signal before any capture-specific early
+    // return, then render that same answer in Pi's persistent footer. Reloads
+    // are safe: the hidden initializer uses set-if-absent and returns the
+    // existing signal rather than resolving the folder again.
+    await refreshTrackingStatus(ctx, sessionId, ctx.cwd);
 
     // Probe MCP read tools: entirely independent of the capture daemon below
     // (a separate credential — mcp_token, never the tap's ingest/device
@@ -327,6 +379,11 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
           env: process.env,
           log: logLine,
         });
+        if (applied) {
+          // Read back through the same atomic host bridge instead of deriving
+          // the result from the requested direction (especially `toggle`).
+          await refreshTrackingStatus(ctx, sessionId, ctx.cwd);
+        }
       } else {
         logLine("tracking switch skipped: no session id");
       }

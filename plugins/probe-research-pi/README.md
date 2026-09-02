@@ -1,6 +1,6 @@
 # probe-research-pi
 
-A [pi](https://github.com/earendil-works/pi) extension with three independent
+A [pi](https://github.com/earendil-works/pi) extension with four independent
 capabilities: it spawns the `probe-research-tap` daemon to ship sanitized pi
 session transcripts to Research OS (the pi equivalent of what
 `probe-research-tap`'s `hooks/session-start.sh` / `hooks/session-end.sh` do
@@ -10,6 +10,8 @@ since it never talks to the tap package), and it bridges Probe Research's
 read-only MCP server into pi as native tools (see "Probe MCP read tools"
 below — pi has no MCP client of its own, so this extension is one; see
 "pi-mcp-adapter" for when that bridge stands down in favor of a shared one).
+It also initializes the per-session research-tracking switch from the initial
+working directory and keeps its state visible in Pi's persistent footer.
 Runtime code is loaded directly by pi's own extension loader (jiti), no build
 step; capture and the team note are dependency-free, the MCP bridge is the
 one part of this package with real npm dependencies
@@ -193,6 +195,28 @@ Code and Codex (`skills/track-work/SKILL.md` is the single canonical copy —
 see the top of this section), so shortening it is a cross-harness content
 decision, not something this package should do unilaterally to satisfy pi's
 cap; flagged here for whoever makes that call.
+
+## Tracking defaults and footer
+
+On every `session_start`, the extension passes Pi's session id and initial cwd
+to Probe's hidden atomic initializer. That command resolves the nearest
+ancestor `.probe/config.json`, falls back to the machine default, and publishes
+the existing per-session tracking signal only when it is absent. Reloading an
+extension therefore reads the settled signal instead of changing the session
+because a config file changed later.
+
+Interactive `/track-work`, `/skill:track-work`, and `$track-work` requests use
+the existing per-session switch. After the write lands, Pi reads the resulting
+signal back and refreshes the persistent footer as `● tracking` or
+`○ not tracking`; it never guesses the result of a toggle.
+
+If the Probe CLI is missing, times out, or returns an invalid state, startup
+continues and the tracking footer is left absent (or cleared after a switch)
+rather than showing a stale answer. This failure path does not gate transcript
+capture or the MCP bridge.
+
+This controls structured research tracking only. Transcript capture remains a
+separate machine capability with its own credential and killswitches.
 
 ## Prerequisite: `probe-research-tap` must be reachable
 

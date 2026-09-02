@@ -66,7 +66,7 @@
 
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, isAbsolute, join } from "node:path";
 
 import { teamNoteDocumentPath, type PathEnv } from "./paths.js";
 
@@ -148,7 +148,11 @@ function fallbackProbePaths(env: PathEnv): string[] {
 
 function findOnPath(name: string, deps: ProbeBinaryDeps): string | null {
   const pathVar = deps.env.PATH ?? "";
-  for (const dir of pathVar.split(delimiter).filter(Boolean)) {
+  // A relative PATH entry (especially `.`) makes a repository-controlled
+  // executable part of this extension's startup trust boundary. Only accept
+  // absolute install directories; the documented HOME fallbacks below cover
+  // the common user-local installs when PATH has no trusted answer.
+  for (const dir of pathVar.split(delimiter).filter((entry) => isAbsolute(entry))) {
     const candidate = join(dir, name);
     if (deps.existsSync(candidate) && deps.isExecutable(candidate)) return candidate;
   }
@@ -156,8 +160,10 @@ function findOnPath(name: string, deps: ProbeBinaryDeps): string | null {
 }
 
 /**
- * Resolve the `probe` CLI exactly the way `hooks/team-note-sync.sh` does:
- * `PATH` first, then the two documented fallback install locations. A
+ * Resolve the `probe` CLI with the same order as `hooks/team-note-sync.sh`:
+ * absolute `PATH` entries first, then the two documented fallback install
+ * locations. Relative entries are intentionally ignored here because this
+ * extension invokes the result automatically during startup. A
  * SEPARATE, smaller lookup from `tapRuntime.ts`'s `findOnPath` (that one
  * resolves a Python interpreter under `PROBE_PI_TAP_ROOT`'s own override
  * chain, for a different package entirely — see its own docstring) — same

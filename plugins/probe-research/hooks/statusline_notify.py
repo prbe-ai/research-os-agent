@@ -93,7 +93,14 @@ def main(argv: list[str] | None = None) -> int:
         marker = _load("_session_marker")
         if not marker.notify_enabled() or not marker.valid_session_id(session_id):
             return 0
-        if not marker.is_tracking(marker.tracking_signal(session_id)):
+        signal = marker.tracking_signal(session_id)
+        if signal is not None:
+            tracking = marker.is_tracking(signal)
+        else:
+            cwd = payload.get("cwd")
+            cwd = cwd if isinstance(cwd, str) and cwd else None
+            tracking, _source = marker.resolve_tracking_default(cwd)
+        if not tracking:
             return 0  # not tracking here: nothing to announce
         text = notice(marker, session_id)
     except BaseException:  # noqa: BLE001 - a hook that cannot speak stays silent

@@ -25,9 +25,36 @@ const spawnMock = vi.fn(
   }),
 );
 
+const execFileMock = vi.fn(
+  (
+    _command: string,
+    args: string[],
+    _options: { env: Record<string, string | undefined> },
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ) => {
+    callback(
+      null,
+      JSON.stringify({
+        session_id: args[args.indexOf("--session") + 1],
+        tracking: true,
+        signal: "on",
+        seeded: true,
+        source: "shipped",
+      }),
+      "",
+    );
+  },
+);
+
 vi.mock("node:child_process", () => ({
   spawn: (command: string, args: string[], options: { detached: boolean; stdio: string; env: Record<string, string | undefined> }) =>
     spawnMock(command, args, options),
+  execFile: (
+    command: string,
+    args: string[],
+    options: { env: Record<string, string | undefined> },
+    callback: (error: Error | null, stdout: string, stderr: string) => void,
+  ) => execFileMock(command, args, options, callback),
 }));
 
 // Imported AFTER the mock is registered (vitest hoists vi.mock, but the
@@ -53,17 +80,19 @@ function fakeExtensionAPI() {
   return { api, handlers, commands };
 }
 
-function fakeContext(overrides: { sessionId: string; sessionFile?: string; cwd?: string }) {
+function fakeContext(overrides: { sessionId: string; sessionFile?: string; cwd?: string; hasUI?: boolean }) {
   const notify = vi.fn();
+  const setStatus = vi.fn();
   return {
-    hasUI: false,
-    ui: { notify },
+    hasUI: overrides.hasUI ?? false,
+    ui: { notify, setStatus },
     cwd: overrides.cwd ?? "/repo/project",
     sessionManager: {
       getSessionId: () => overrides.sessionId,
       getSessionFile: () => overrides.sessionFile,
     },
     notify,
+    setStatus,
   };
 }
 
@@ -137,6 +166,7 @@ beforeEach(() => {
   for (const key of ENV_KEYS) originalEnv[key] = process.env[key];
 
   spawnMock.mockClear();
+  execFileMock.mockClear();
 
   // Isolate state dir + probe CLI config from the real machine.
   process.env.PROBE_PI_TAP_PLUGIN_DIR = join(tmp, "state");
@@ -182,7 +212,83 @@ function pair(): void {
   writeFileSync(join(stateDir, ".token"), "paired-device-token");
 }
 
+function installProbeCli(): string {
+  const binDir = join(tmp, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const bin = join(binDir, "probe");
+  writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+  chmodSync(bin, 0o755);
+  process.env.PATH = `${binDir}${delimiter}${process.env.PATH ?? ""}`;
+  return bin;
+}
+
 describe("registerExtension — session_start", () => {
+  it("initializes tracking from the session cwd and renders the persistent footer", async () => {
+    const bin = installProbeCli();
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({
+          session_id: "pi-folder-session",
+          tracking: false,
+          signal: "off",
+          seeded: true,
+          source: "/repo/.probe/config.json",
+        }),
+        "",
+      );
+    });
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({
+      sessionId: "pi-folder-session",
+      sessionFile: undefined,
+      cwd: "/repo/packages/app",
+      hasUI: true,
+    });
+
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+    expect(execFileMock).toHaveBeenCalledWith(
+      bin,
+      [
+        "session",
+        "initialize",
+        "--session",
+        "pi-folder-session",
+        "--cwd",
+        "/repo/packages/app",
+      ],
+      expect.any(Object),
+      expect.any(Function),
+    );
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ not tracking");
+  });
+
+  it("continues session startup when the footer renderer throws", async () => {
+    pair();
+    installProbeCli();
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({
+      sessionId: "pi-footer-failure",
+      sessionFile: "/tmp/pi-footer-failure.jsonl",
+      cwd: "/repo",
+      hasUI: true,
+    });
+    ctx.setStatus.mockImplementation(() => {
+      throw new Error("renderer unavailable");
+    });
+
+    await expect(invokeSessionStart(
+      handlers.get("session_start")!,
+      { reason: "startup" },
+      ctx,
+    )).resolves.toBeUndefined();
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● tracking");
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("does not spawn when the device is unpaired, and says so on stderr", async () => {
     const { api, handlers } = fakeExtensionAPI();
     registerExtension(api as never, tmp);
@@ -261,6 +367,86 @@ describe("registerExtension — session_start", () => {
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("registerExtension — tracking switch footer", () => {
+  it("refreshes the persistent footer after an interactive switch lands", async () => {
+    installProbeCli();
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({
+      sessionId: "pi-switch-session",
+      sessionFile: undefined,
+      cwd: "/repo",
+      hasUI: true,
+    });
+
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "● tracking");
+    ctx.setStatus.mockClear();
+    execFileMock.mockClear();
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({
+          session_id: "pi-switch-session",
+          tracking: false,
+          signal: "off",
+          seeded: false,
+          source: "session",
+        }),
+        "",
+      );
+    });
+    spawnMock.mockImplementationOnce(() => ({
+      pid: 4242,
+      unref: vi.fn(),
+      on: (event: string, callback: (value: unknown) => void) => {
+        if (event === "exit") queueMicrotask(() => callback(0));
+      },
+    }));
+
+    await handlers.get("input")!(
+      { text: "/track-work off", source: "interactive" },
+      ctx,
+    );
+
+    expect(execFileMock).toHaveBeenCalledTimes(1);
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ not tracking");
+  });
+
+  it("clears the old footer when a landed switch cannot be read back", async () => {
+    installProbeCli();
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({
+      sessionId: "pi-switch-readback-failure",
+      sessionFile: undefined,
+      cwd: "/repo",
+      hasUI: true,
+    });
+
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(ctx.setStatus).toHaveBeenLastCalledWith("probe-tracking", "● tracking");
+    ctx.setStatus.mockClear();
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(new Error("initializer unavailable"), "", "");
+    });
+    spawnMock.mockImplementationOnce(() => ({
+      pid: 4242,
+      unref: vi.fn(),
+      on: (event: string, callback: (value: unknown) => void) => {
+        if (event === "exit") queueMicrotask(() => callback(0));
+      },
+    }));
+
+    await handlers.get("input")!(
+      { text: "/track-work off", source: "interactive" },
+      ctx,
+    );
+
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", undefined);
   });
 });
 

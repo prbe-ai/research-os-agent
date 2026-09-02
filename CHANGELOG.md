@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **New sessions can inherit their tracking default from a folder.** Use
+  `probe session default on|off --folder PATH` to set an override,
+  `probe session default --folder PATH` to inspect its effective inherited
+  value and source, or `inherit` to remove the exact folder's override. Existing
+  sessions keep their already-seeded tracking state. Repository folder configs
+  must be regular files no larger than 64 KiB; unsafe entries are ignored during
+  inheritance and refused unchanged by the setter. Pi now seeds that default on
+  `session_start`, shows it in a persistent footer, and refreshes the footer after
+  an interactive tracking switch.
+
 ## 0.132.0
 
 ## 0.131.1

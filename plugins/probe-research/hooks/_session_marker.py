@@ -44,6 +44,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import time
 from pathlib import Path
 
@@ -503,13 +504,13 @@ def set_tracking_if_absent(session_id: str, on: bool) -> bool:
     """Record the session's STARTING value, ONLY when nobody has decided yet.
     True when THIS call decided.
 
-    The seed half of the toggle. A session starts at this machine's default
-    (`default_tracking()`) and the file exists from SessionStart onward, so
-    "undecided" is not a state any reader has to resolve for itself: one
-    setting, one file, always present.
+    The seed half of the toggle. A session starts at the effective default for
+    its INITIAL cwd (`resolve_tracking_default(initial_cwd)`) and the file exists
+    from SessionStart onward, so "undecided" is not a state any reader has to
+    resolve for itself: one setting, one file, always present.
 
     THE VALUE IS A PARAMETER, never a literal `on`. Seeding `on` on a machine
-    whose default is `off` would let automation author a declaration the
+    whose initial-cwd default is `off` would let automation author a declaration the
     researcher did not make -- the default IS the researcher saying which value
     a new session starts at, and it is the same setting the toggle flips, not a
     weaker kind of preference. A DECISION is never touched either: an existing
@@ -695,6 +696,59 @@ TRACKING_DEFAULT_KEY = "session_tracking"
 TRACKING_OFF_VALUES = ("off", "0", "false", "no", "disabled")
 TRACKING_ON_VALUES = ("on", "1", "true", "yes", "enabled")
 
+# Folder configs are repository-controlled settings, never data blobs. Their bound
+# protects startup/status paths from devices and giant files before JSON parsing can
+# fail soft. Machine configs remain size-unbounded for backwards compatibility.
+FOLDER_CONFIG_MAX_BYTES = 64 * 1024
+
+
+def _parse_tracking_value(value: object) -> bool | None:
+    """A recognized stored/env tracking value, or None when it is unknown."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in TRACKING_OFF_VALUES:
+            return False
+        if normalized in TRACKING_ON_VALUES:
+            return True
+    return None
+
+
+def _read_config_text(
+    path: Path,
+    *,
+    require_regular: bool = False,
+    max_bytes: int | None = None,
+) -> str:
+    """Read a machine config normally or a folder config through a validated fd."""
+    if not require_regular:
+        return path.read_text(encoding="utf-8")
+
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    fd = os.open(path, flags)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"{path} is not a regular file")
+        if max_bytes is not None and info.st_size > max_bytes:
+            raise ValueError(f"{path} exceeds the {max_bytes}-byte size limit")
+        chunks: list[bytes] = []
+        remaining = None if max_bytes is None else max_bytes + 1
+        while remaining is None or remaining:
+            chunk = os.read(fd, 16 * 1024 if remaining is None else min(16 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if remaining is not None:
+                remaining -= len(chunk)
+        raw = b"".join(chunks)
+        if max_bytes is not None and len(raw) > max_bytes:
+            raise ValueError(f"{path} exceeds the {max_bytes}-byte size limit")
+        return raw.decode("utf-8")
+    finally:
+        os.close(fd)
+
 
 def _read_config() -> dict:
     """The config file as a dict, or `{}`. ONE parse, two answers.
@@ -705,8 +759,7 @@ def _read_config() -> dict:
     measured at ~0.018ms to open and parse a realistic config.
     """
     try:
-        with open(config_path(), encoding="utf-8") as handle:
-            data = json.load(handle)
+        data = json.loads(_read_config_text(config_path()))
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -723,12 +776,14 @@ def tracking_env_override() -> bool | None:
     the stored value can never be set equal to the env's -- the wizard hides
     its toggle row on this answer instead.
     """
-    env = (os.environ.get("PROBE_SESSION_TRACKING") or "").strip().lower()
-    if env in TRACKING_OFF_VALUES:
-        return False
-    if env in TRACKING_ON_VALUES:
-        return True
-    return None
+    return _parse_tracking_value(os.environ.get("PROBE_SESSION_TRACKING"))
+
+
+def _tracking_value(data: dict) -> bool | None:
+    defaults = data.get(DEFAULTS_KEY)
+    if not isinstance(defaults, dict):
+        return None
+    return _parse_tracking_value(defaults.get(TRACKING_DEFAULT_KEY))
 
 
 def default_tracking(config: dict | None = None) -> bool:
@@ -748,16 +803,141 @@ def default_tracking(config: dict | None = None) -> bool:
     if override is not None:
         return override
     data = _read_config() if config is None else config
-    defaults = data.get(DEFAULTS_KEY)
-    if isinstance(defaults, dict):
-        value = defaults.get(TRACKING_DEFAULT_KEY)
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str) and value.strip().lower() in ("off", "false", "no"):
-            return False
-        if isinstance(value, str) and value.strip().lower() in ("on", "true", "yes"):
-            return True
-    return DEFAULT_TRACKING
+    value = _tracking_value(data)
+    return DEFAULT_TRACKING if value is None else value
+
+
+def folder_config_path(folder: str | os.PathLike[str]) -> Path:
+    """The absolute config path owned by exactly ``folder``."""
+    return Path(os.path.abspath(os.fspath(folder))) / ".probe" / "config.json"
+
+
+def _append_config_error(errors: list[str] | None, message: str) -> None:
+    if errors is not None and message not in errors:
+        errors.append(message)
+
+
+def _folder_tracking_override(path: Path, errors: list[str] | None = None) -> bool | None:
+    try:
+        raw = _read_config_text(
+            path,
+            require_regular=True,
+            max_bytes=FOLDER_CONFIG_MAX_BYTES,
+        )
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        _append_config_error(errors, f"{path}: could not be read ({exc})")
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        _append_config_error(errors, f"{path}: malformed JSON ({exc})")
+        return None
+    if not isinstance(data, dict):
+        _append_config_error(errors, f"{path}: config is not a JSON object")
+        return None
+    if DEFAULTS_KEY not in data:
+        return None
+    defaults = data[DEFAULTS_KEY]
+    if not isinstance(defaults, dict):
+        _append_config_error(errors, f"{path}: defaults is not a JSON object")
+        return None
+    if TRACKING_DEFAULT_KEY not in defaults:
+        return None
+    value = _parse_tracking_value(defaults.get(TRACKING_DEFAULT_KEY))
+    if value is None:
+        _append_config_error(errors, f"{path}: invalid defaults.{TRACKING_DEFAULT_KEY} value")
+    return value
+
+
+def folder_tracking_override(
+    folder: str | os.PathLike[str], *, errors: list[str] | None = None
+) -> bool | None:
+    """The override stored by exactly ``folder``, without inheritance."""
+    return _folder_tracking_override(folder_config_path(folder), errors)
+
+
+def resolve_tracking_default(
+    cwd: str | os.PathLike[str] | None,
+    config: dict | None = None,
+    *,
+    errors: list[str] | None = None,
+) -> tuple[bool, str]:
+    """The effective new-session default and its diagnostic source."""
+    override = tracking_env_override()
+    if override is not None:
+        return override, "environment"
+
+    try:
+        current = Path(os.path.abspath(os.getcwd() if cwd is None else os.fspath(cwd)))
+    except (OSError, TypeError, ValueError) as exc:
+        _append_config_error(errors, f"{cwd}: could not resolve working directory ({exc})")
+        current = None
+
+    while current is not None:
+        path = current / ".probe" / "config.json"
+        value = _folder_tracking_override(path, errors)
+        if value is not None:
+            return value, str(path)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    data = _read_config() if config is None else config
+    value = default_tracking(data)
+    if _tracking_value(data) is None:
+        return value, "shipped"
+    machine_path = Path(os.path.abspath(os.fspath(config_path())))
+    return value, str(machine_path)
+
+
+def write_folder_tracking_default(
+    folder: str | os.PathLike[str], on: bool | None
+) -> Path:
+    """Set this exact folder's default; None removes the override to inherit."""
+    from probe.sdk.config import (
+        ConfigUnreadable,
+        _config_lock,
+        _load_json_file,
+        _save_json_file,
+        _write_target,
+    )
+
+    path = folder_config_path(folder)
+    target = _write_target(path)
+    with _config_lock(target, _resolved=True):
+        data = _load_json_file(
+            target,
+            strict=True,
+            migrate=False,
+            require_regular=True,
+            max_bytes=FOLDER_CONFIG_MAX_BYTES,
+        )
+        defaults = data.get(DEFAULTS_KEY)
+        if DEFAULTS_KEY in data and not isinstance(defaults, dict):
+            raise ConfigUnreadable(
+                f"{path} has a non-object {DEFAULTS_KEY}. Refusing to overwrite it."
+            )
+        if on is None:
+            if isinstance(defaults, dict):
+                defaults.pop(TRACKING_DEFAULT_KEY, None)
+                if not defaults:
+                    data.pop(DEFAULTS_KEY, None)
+        else:
+            if not isinstance(defaults, dict):
+                defaults = {}
+                data[DEFAULTS_KEY] = defaults
+            defaults[TRACKING_DEFAULT_KEY] = "on" if on else "off"
+        _save_json_file(
+            target,
+            data,
+            private=False,
+            _resolved=True,
+            max_bytes=FOLDER_CONFIG_MAX_BYTES,
+        )
+    return path
 
 
 def write_default_tracking(on: bool) -> Path:
@@ -788,12 +968,15 @@ def write_default_tracking(on: bool) -> Path:
         CONFIG_VERSION,
         DEFAULT_CONTEXT,
         _config_lock,
-        load_file,
-        save_file,
+        _load_json_file,
+        _save_json_file,
+        _write_target,
     )
 
-    with _config_lock():
-        data = load_file(strict=True) or {
+    path = config_path()
+    target = _write_target(path)
+    with _config_lock(target, _resolved=True):
+        data = _load_json_file(target, strict=True, migrate=True) or {
             "version": CONFIG_VERSION,
             "current_context": DEFAULT_CONTEXT,
             "contexts": {},
@@ -801,8 +984,8 @@ def write_default_tracking(on: bool) -> Path:
         defaults = data.get(DEFAULTS_KEY)
         data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
         data[DEFAULTS_KEY][TRACKING_DEFAULT_KEY] = "on" if on else "off"
-        save_file(data)
-    return config_path()
+        _save_json_file(target, data, private=True, _resolved=True)
+    return path
 
 
 def configured(config: dict | None = None) -> bool:

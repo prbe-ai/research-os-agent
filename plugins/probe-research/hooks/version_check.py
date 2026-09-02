@@ -126,6 +126,10 @@ RESUME_SOURCE = "resume"
 # file, the skill text that carried it is summarizer fodder -- so the context
 # boundary is exactly where a hook must re-assert it.
 SESSION_ID_ENV = "PROBE_SESSION_ID"
+# The initial working directory, parsed from the same SessionStart JSON as the
+# id. It is immutable session provenance: later `cd`s do not change the default
+# a session was seeded with.
+SESSION_CWD_ENV = "PROBE_SESSION_CWD"
 # The nudge is CONDITIONAL on the domain ("the team's ML work") for the same
 # reason the pointer block is: this hook is user-global, and an unconditional
 # order to do Probe work in a dotfiles session teaches the agent to ignore the
@@ -250,8 +254,9 @@ def _emit(obj: dict) -> NoReturn:
 def _seed_tracking_signal() -> None:
     """Give this session its STARTING tracking value, once, at SessionStart.
 
-    One setting, one file. The signal is written here from the machine default
-    so every reader -- the statusline, `probe session status`, the off contract
+    One setting, one file. The signal is written here from the effective
+    initial-cwd default, so every reader -- the statusline, `probe session
+    status`, the off contract
     below, tracking_guard's warn -- resolves the SAME value from the SAME
     place. Before this, an absent file meant "undecided" and each reader
     decided for itself what that was worth: the statusline resolved it against
@@ -269,9 +274,14 @@ def _seed_tracking_signal() -> None:
     if not session_id:
         return  # PreCompact carries no id; the session was seeded at its start.
     try:
-        _session_marker.set_tracking_if_absent(
-            session_id, _session_marker.default_tracking()
-        )
+        # The signal is the live state. Once present, even discovering the cwd
+        # default is both wasted ancestor I/O and a risk of live-reloading a
+        # config edit into a session that already decided.
+        if _session_marker.tracking_signal(session_id) is not None:
+            return
+        cwd = os.environ.get(SESSION_CWD_ENV) or None
+        on, _source = _session_marker.resolve_tracking_default(cwd)
+        _session_marker.set_tracking_if_absent(session_id, on)
     except Exception:
         pass
 
@@ -279,7 +289,7 @@ def _seed_tracking_signal() -> None:
 def _tracking_off() -> bool:
     """Whether this session is untracked -- by declaration or by default.
 
-    `is_tracking`, not the raw signal. A machine whose default is `off` HAS
+    `is_tracking`, not the raw signal. A folder or machine default of `off` HAS
     made the declaration: the default is the researcher choosing the value a
     new session starts at, which is the same setting the toggle flips, so
     honouring it only when someone re-typed it per session is honouring it
@@ -291,7 +301,11 @@ def _tracking_off() -> bool:
         return False
     try:
         signal = _session_marker.tracking_signal(session_id)
-        return not _session_marker.is_tracking(signal)
+        if signal is not None:
+            return not _session_marker.is_tracking(signal)
+        cwd = os.environ.get(SESSION_CWD_ENV) or None
+        on, _source = _session_marker.resolve_tracking_default(cwd)
+        return not on
     except Exception:
         return False
 

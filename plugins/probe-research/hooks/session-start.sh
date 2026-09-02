@@ -29,26 +29,33 @@ fi
 # nudge on the additionalContext channel -- the one surface that reaches the
 # model right after a compaction -- and needs the session id alongside it: a
 # session the researcher untracked (`probe session untrack`) gets the off
-# contract restated there instead of a nudge to do Probe work. Both fields
-# come from ONE interpreter start; a session id cannot contain a tab (the
-# marker's filename charset), so a tab join is unambiguous. Skipped under
-# PreCompact (its stdin has no `source` and the event can carry no context
-# anyway). Fail-open: unparseable payload = no nudge, and an absent id reads
+# contract restated there instead of a nudge to do Probe work. The initial cwd
+# seeds the folder-aware tracking default. All three fields come from ONE JSON
+# parse and travel over NUL-delimited records: unlike tabs/newlines, NUL cannot
+# occur in a filesystem path, and no shell text is ever evaluated. Skipped
+# under PreCompact (its stdin has no `source` and the event can carry no context
+# anyway). Fail-open: unparseable payload = empty fields, and an absent id reads
 # as tracking on -- today's behaviour.
 PROBE_SESSION_SOURCE=""
 PROBE_SESSION_ID=""
+PROBE_SESSION_CWD=""
 if [ "${PROBE_HOOK_EVENT:-}" != "precompact" ]; then
-  _parsed="$(printf '%s' "$HOOK_INPUT" | "$PY" -c 'import json,sys
+  exec 3< <(printf '%s' "$HOOK_INPUT" | "$PY" -c 'import json,sys
 try:
     d = json.load(sys.stdin)
-    print((d.get("source") or "") + "\t" + (d.get("session_id") or ""))
 except Exception:
-    print("\t")' 2>/dev/null || printf '\t')"
-  _tab=$'\t'
-  PROBE_SESSION_SOURCE="${_parsed%%${_tab}*}"
-  PROBE_SESSION_ID="${_parsed#*${_tab}}"
+    d = {}
+def field(value):
+    return value if isinstance(value, str) else ""
+fields = (d.get("source"), d.get("session_id"), d.get("cwd")) if isinstance(d, dict) else ("", "", "")
+for value in fields:
+    sys.stdout.buffer.write(field(value).encode("utf-8", "surrogatepass") + b"\0")' 2>/dev/null)
+  IFS= read -r -d '' PROBE_SESSION_SOURCE <&3 || PROBE_SESSION_SOURCE=""
+  IFS= read -r -d '' PROBE_SESSION_ID <&3 || PROBE_SESSION_ID=""
+  IFS= read -r -d '' PROBE_SESSION_CWD <&3 || PROBE_SESSION_CWD=""
+  exec 3<&-
 fi
-export PROBE_SESSION_SOURCE PROBE_SESSION_ID
+export PROBE_SESSION_SOURCE PROBE_SESSION_ID PROBE_SESSION_CWD
 
 # Resolve the `probe` binary without trusting PATH — a dock-launched Claude Code
 # sources no profile, so ~/.local/bin may be absent. Mirrors bin/probe-mcp-headers.

@@ -94,6 +94,17 @@ describe("findProbeBinary", () => {
     expect(findProbeBinary(deps)).toBe(onPath);
   });
 
+  it("ignores relative PATH entries that could execute a repository-owned probe", () => {
+    const fallback = join("/home/x", ".local", "bin", "probe");
+    const deps = fakeProbeDeps(
+      new Set(["probe", join("repo-bin", "probe"), fallback]),
+      new Set(["probe", join("repo-bin", "probe"), fallback]),
+      { PATH: [".", "repo-bin"].join(":"), HOME: "/home/x" },
+    );
+
+    expect(findProbeBinary(deps)).toBe(fallback);
+  });
+
   it("falls back to ~/.local/bin/probe when PATH has nothing", () => {
     const fallback = join("/home/x", ".local", "bin", "probe");
     const deps = fakeProbeDeps(new Set([fallback]), new Set([fallback]), { PATH: "/usr/local/bin", HOME: "/home/x" });

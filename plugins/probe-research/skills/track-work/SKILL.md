@@ -51,6 +51,23 @@ project just to prove the switch worked.
 Starting is the AGENT's call — the standing rules make tracking automatic.
 Stopping is the RESEARCHER's. Never invert that by waiting to be told to track.
 
+## Defaults for future sessions
+
+When the researcher asks for a tracking **default**, target the folder they
+named and use the CLI as the only persistence surface:
+
+| intent | target / action |
+|---|---|
+| “this repo” | Resolve `git rev-parse --show-toplevel` from the current directory and use that absolute root. If it fails, ask which folder to use; do not substitute the cwd. |
+| “this folder” or a named folder | Use that exact directory as an absolute path. |
+| default on or off | `probe session default on|off --folder PATH` |
+| remove the folder override / inherit | `probe session default inherit --folder PATH` |
+| inspect the default | `probe session default --folder PATH` |
+
+Show the CLI's JSON result after every action so the researcher sees both the
+exact folder override and the effective inherited default. Never edit
+`.probe/config.json` directly.
+
 ## 0. Check the session state before the first write
 
 `probe session status`. Tracking `false` means OFF — whether the researcher

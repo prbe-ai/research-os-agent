@@ -85,13 +85,21 @@ def segment(payload: dict) -> str:
     if not marker.configured(config):
         return ""
 
-    default = marker.default_tracking(config)
     session_id = resolve_session_id(payload)
+    cwd = payload.get("cwd")
+    cwd = cwd if isinstance(cwd, str) and cwd else None
     if not session_id:
+        default, _source = marker.resolve_tracking_default(cwd, config)
         return marker.render(None, configured=True, tracking=default, color=_color())
 
     state = marker.read(session_id)
-    tracking = marker.is_tracking(marker.tracking_signal(session_id), default=default)
+    signal = marker.tracking_signal(session_id)
+    if signal is not None:
+        # The normal path: SessionStart already settled the state, so rendering
+        # costs no ancestor walk and a later config edit cannot live-reload it.
+        tracking = marker.is_tracking(signal)
+    else:
+        tracking, _source = marker.resolve_tracking_default(cwd, config)
     return marker.render(
         state,
         configured=True,

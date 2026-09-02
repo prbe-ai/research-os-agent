@@ -308,7 +308,14 @@ def main(argv: list[str] | None = None) -> int:
         # `off` -- otherwise a machine whose default is off would keep paying
         # three API calls per refresh for a segment that can never read as
         # tracking. The two must agree or one of them is lying.
-        if not marker.is_tracking(marker.tracking_signal(session_id)):
+        signal = marker.tracking_signal(session_id)
+        if signal is not None:
+            tracking = marker.is_tracking(signal)
+        else:
+            cwd = payload.get("cwd")
+            cwd = cwd if isinstance(cwd, str) and cwd else None
+            tracking, _source = marker.resolve_tracking_default(cwd)
+        if not tracking:
             return 0
         if payload.get("hook_event_name") != "SessionStart" and not due(marker, session_id):
             return 0
