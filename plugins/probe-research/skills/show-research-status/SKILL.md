@@ -18,16 +18,16 @@ soon as the picture is decided:
 
 ```
 probe session status                           # tracking on/off, active project, live run
-browse_research(scope="project:<id>")          # experiments, run_count, active_run_count
+browse(scope="project:<id>")          # experiments, run_count, active_run_count
 probe notes show                               # what the last session decided
-get_entity(ref="project:<id>", view="summary") # authored Markdown below AI Summary
-get_entity(ref="run:<id>", view="handoff")     # series, span_types, artifact_total
-get_entity(ref="run:<id>", view="reproduce")   # env_ref, execution_record, missing
-get_entity(ref="experiment:<id>", view="versions")   # published or not
+entity(ref="project:<id>", view="summary") # authored Markdown below AI Summary
+entity(ref="run:<id>", view="handoff")     # series, span_types, artifact_total
+entity(ref="run:<id>", view="reproduce")   # env_ref, execution_record, missing
+entity(ref="experiment:<id>", view="versions")   # published or not
 probe outbox status                            # queued vs delivered
 ```
 
-`browse_research` alone answers the common case; fetch the run views only when
+`browse` alone answers the common case; fetch the run views only when
 a run exists and its interior matters. **Never mark anything from memory of
 what you did this session** — what you wrote and what landed are different
 claims, and writes queue: `probe outbox status` must be clean, or the run
@@ -52,11 +52,11 @@ Four lines, each from a read, none from recall:
   files under, whether one of its runs is live. If tracking is OFF, say so
   here and render the rest anyway — the state is still real, this session is
   just not adding to it.
-- **tracked** — counts from `browse_research` and the project card: experiments,
+- **tracked** — counts from `browse` and the project card: experiments,
   runs (active), files (artifact counts across anchors), how fresh the notes
   are. What EXISTS.
 - **code** — which GitHub repository/branch the project's code lives in, from
-  the project card's `code` block (`get_entity(view="code")` has the commit
+  the project card's `code` block (`entity(view="code")` has the commit
   timeline itself). Include a suggested repo when one is waiting for a
   confirm — a run captured code from it and nobody has said yes yet. Omit the
   line when the project has no code sources; never guess a repo from prose.
@@ -78,9 +78,9 @@ Where each mark comes from — do not guess at any row, read it:
 
 | stage | done when | read it from |
 | --- | --- | --- |
-| project | it resolves | `browse_research`, or the project card |
+| project | it resolves | `browse`, or the project card |
 | question | `question` is non-null | experiment card, or a run's `reproduce` |
-| reuse check | the name resolves at the shared level | `get_entity(ref="artifact:<name>", view="versions")` |
+| reuse check | the name resolves at the shared level | `entity(ref="artifact:<name>", view="versions")` |
 | snapshot | `env_ref` set **and** the record resolves | `reproduce` — `execution_record` in `missing` means NOT done |
 | inputs captured | `0 unavailable` | `probe snapshot-restore RUN --verify-only` |
 | run open | status `running` | run card |

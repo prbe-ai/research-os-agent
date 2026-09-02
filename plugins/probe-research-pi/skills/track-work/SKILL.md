@@ -136,7 +136,7 @@ Two rules that keep files meaningful later:
   free text no lineage query can follow, and the field names are refused there.
 - **Changing a file that has a registry name is a new VERSION of that name,
   never a new artifact** — `probe artifact version-add`, after checking
-  `get_entity(ref="artifact:<name>", view="versions")`. Two scorers with the
+  `entity(ref="artifact:<name>", view="versions")`. Two scorers with the
   same intent and different behaviour make every result that used either one
   unreproducible; the reuse check is what prevents the second identity.
 
@@ -234,11 +234,11 @@ Never drop anything because it matched no row.
 
 ## 2. Orient before you create
 
-Read the TEAM note first (`probe notes team`, or `get_entity(ref="team-note")`),
+Read the TEAM note first (`probe notes team`, or `entity(ref="team-note")`),
 then the project's visible Markdown (`view="summary"`) and its notes (`probe
 notes show`) — project, experiment and run Markdown uses the same view, and
 every entity carries notes with an excerpt on its card.
-`browse_research` for what exists and what is RUNNING (`active_run_count` —
+`browse` for what exists and what is RUNNING (`active_run_count` —
 duplicate GPU-hours are the expensive mistake); `search_knowledge` for prior
 work on this specific thing. A project with code sources also has
 `view="code"`: the commit timeline of its attached GitHub repo — read it

@@ -86,9 +86,9 @@ Both assertions: they fail on opposite mistakes, and the half-fix that moves an
 identifier from `dimensions` to `labels` trips the second while making the
 first look repaired. Do this on a 2-instance run, not after 300. When checking
 a breakdown, pass an explicitly large `step_bucket` to
-`read_metrics(mode="grouped")` and confirm rows come back with `n > 1`.
+`metrics(mode="grouped")` and confirm rows come back with `n > 1`.
 
-`read_metrics` is one tool over three grains: `grouped` reduces a key,
+`metrics` is one tool over three grains: `grouped` reduces a key,
 `coordinates` enumerates the axes a run logged on (call it first when guessing
 at `by`), `points` reads raw points a page at a time. Each mode REFUSES the
 other modes' arguments — a refusal means re-issuing in the right mode.
@@ -158,7 +158,7 @@ unknown binary and shows "Preview unavailable" over perfectly good markdown. Pas
 extension yourself and it is left alone. Say what the file IS in `--notes`, never in
 `--name`.
 
-What the reuse check (`get_entity(ref="artifact:<name>", view="versions")`)
+What the reuse check (`entity(ref="artifact:<name>", view="versions")`)
 resolved to decides the next command:
 
 - **exact compatible version exists** → download it; record consumption, do
@@ -355,10 +355,10 @@ published record is an immutable **experiment version** — a manifest of the
 experiment's runs — plus reusable results pinned as artifact versions. No
 run-level "official" flag exists; never encode one in a filename or metadata.
 
-1. `get_entity(view="reproduce")` on each candidate run: verify question and
+1. `entity(view="reproduce")` on each candidate run: verify question and
    config, that `env_ref` resolves (`missing: ["execution_record"]` = no
    snapshot, not reproducible), and `code.manifest.n_pending_upload` is zero.
-2. `get_entity(view="versions")` on the experiment: if a version already
+2. `entity(view="versions")` on the experiment: if a version already
    covers this set, do not mint a second.
 3. Present the exact experiment + asset versions and obtain explicit approval
    for that set. Metrics and exit status are not approval.
@@ -373,13 +373,13 @@ approval.
 
 `search_knowledge` with the path, URI, artifact id or content hash as the
 query — the exact channel matches artifacts directly. Then follow
-`get_entity(view="lineage")` on the run that owns the hit. There is no
+`entity(view="lineage")` on the run that owns the hit. There is no
 trace-file tool, deliberately: if you cannot establish provenance, say so —
 never infer absence from an empty result.
 
 ## Choosing a read view
 
-`get_entity` carries the full view matrix in its own description, and `card`
+`entity` carries the full view matrix in its own description, and `card`
 returns `available_views` — ask the tool, do not memorise a table that can go
 stale. Ask for the narrowest view that answers the question; narrow with
 `filters` (server-side); `handoff`'s `span_types` counts say whether a
