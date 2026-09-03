@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A laptop no longer becomes a new machine when it joins a new network.** The
+  witness that decides whether this machine may claim its own device identity
+  was `<hostname>:<$HOME>`, and a hostname is not a property of the machine --
+  it follows the DHCP lease. Joining a captive WiFi renamed a MacBook to
+  `visitor-10-59-125-182`, it stopped recognising its own device file, and it
+  minted a second identity and a second row under Connected Clients. The witness
+  is now a stable machine id (`/etc/machine-id` on Linux, the hardware UUID on
+  macOS), so a rename is a rename. Existing machines are adopted on the old
+  comparison and stamped with the new one, so nothing splits on upgrade; a
+  machine that has ALREADY forked settles on one identity and stops
+  accumulating, leaving the stale row to be retired by hand.
+- **A machine is named what it is called, not what the network called it
+  today.** `probe login` labelled the client from the transient hostname, so the
+  dashboard showed `visitor-10-59-125-182` where a computer's name belongs.
+  `scutil --get LocalHostName` and `/etc/hostname` are preferred; the transient
+  name stays as the fallback.
+
 ## 0.133.0
 
 ### Added
