@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.65.0",
+  "version": "0.66.0",
   "description": "Probe Research tracking: the track-work skill (the per-conversation switch, plus everything recorded while it is on -- registering work, files to artifacts, metrics, notes, snapshot inputs), show-research-status (state summary + the research arc), training-run instrumentation, the team rules store, and a read-only MCP.",
   "author": {
     "name": "Probe",
