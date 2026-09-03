@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+
+- **A struck claim stops costing context the moment it is struck.** The team
+  note rendered into `CLAUDE.md` / `AGENTS.md` is now the COLLAPSED form:
+  a `> **SUPERSEDED**` region keeps its marker line (that a claim fell, when
+  and why) and drops the retracted text. The editable `probe-team-note.md`
+  file keeps its verbatim bytes — edits round-trip against the file, never
+  the block.
+- **The team note now asks to be audited.** Session start reports when the
+  note is overdue (`<!-- audited YYYY-MM-DD -->` stamp older than 7 days, or
+  the rendered block measured at 80%+ of its instruction-file budget), and
+  the new `notes-audit` skill runs the cleanup out of the user's way (a
+  background subagent on Claude Code; inline-first on Codex, whose sandbox
+  reaps detached processes): strike
+  claims the evidence contradicts, remove only expired strikes and lapsed
+  expiries, shrink only under size pressure. A 24-hour floor caps the cadence;
+  every edit stays recoverable through note version history. Tune with
+  `PROBE_NOTES_AUDIT_INTERVAL_DAYS` and `PROBE_NOTES_AUDIT_HORIZON_DAYS`
+  (horizon `0` = strike-only, delete nothing).
+- **Agents are told to keep notes true in the moment, not just append.**
+  track-work now says: when what you are reading is contradicted by evidence
+  in front of you, fix or strike it there and then; when the researcher says
+  something is deprecated, strike it in the Probe note rather than only
+  dropping it from your own context; prefer correcting a team-note line over
+  adding one, and record shipped work as one line plus its PR number.
+
 ## 0.135.0
 
 ## 0.134.0

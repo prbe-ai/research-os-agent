@@ -10,7 +10,8 @@
     "skills": [
       "skills/track-work",
       "skills/show-research-status",
-      "skills/instrument-training-runs"
+      "skills/instrument-training-runs",
+      "skills/notes-audit"
     ],
     "mcp": "./mcp.json"
   },

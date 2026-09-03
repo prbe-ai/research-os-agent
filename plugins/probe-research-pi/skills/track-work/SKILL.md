@@ -178,6 +178,13 @@ readers are rather than only in history:
 The `> **SUPERSEDED**` line opening a blockquote is what the parser reads; a
 marked claim stops ranking as current in search.
 
+Corrections are not only for claims you wrote. Whenever you READ a note — this
+project's, a run's, the team's — and evidence in front of you contradicts a
+claim in it, fix or strike it then, while you hold the proof. And when the
+researcher says something is deprecated or no longer true, strike it in the
+Probe note it lives in: dropping it from your own context fixes one session,
+while the note keeps misleading every next reader.
+
 Write entity notes with `probe notes append` (a new paragraph, concurrency-safe)
 or `probe notes edit` (replace one exact span; `--new` omitted deletes). Never
 read-modify-rewrite a whole document — that is how the parts you did not think
@@ -203,6 +210,15 @@ visible Markdown document is whole-document last-write-wins: read immediately be
 editing, preserve existing sections, verify after (commands in `reference.md`,
 including the `[README](https://github.com/owner/repo)` embed line and its two
 traps).
+
+Keep the team note TRUE, not just current: add a team-wide fact the moment you
+learn it (a compacted session keeps only what was written down), prefer
+correcting an existing line over adding a new one, and record shipped work as
+one line plus its PR number. When session start reports the team-note audit
+due, dispatch it the way the trigger line says: on Claude Code a BACKGROUND
+subagent told to follow the `notes-audit` skill, never inline; on Codex the
+sandbox reaps detached processes, so run the audit yourself first — it is one
+small file and quick — then take up the user's work.
 
 ### Numbers
 

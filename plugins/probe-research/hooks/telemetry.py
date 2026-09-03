@@ -102,6 +102,7 @@ RESEARCH_SKILLS = {
     "track-work",
     "show-research-status",
     "instrument-training-runs",
+    "notes-audit",
     "set-rule",
     "pull-rules",
     "probe-research-setup",
