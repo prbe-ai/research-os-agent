@@ -8,7 +8,7 @@
     "min": "0.63.0"
   },
   "tap": {
-    "latest": "0.4.3",
+    "latest": "0.4.4",
     "min": "0.1.0"
   },
   "advisory": "A CLI below 0.127.0 (plugin below 0.63.0) predates the hypothesis -> question rename: creating or amending an experiment returns 422, and reads of the renamed field come back carrying an upgrade notice instead of the text. This floor also subsumes the earlier one at 0.105.2, where a notes append past the document cap exited 0 and stored nothing."

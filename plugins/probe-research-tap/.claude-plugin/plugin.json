@@ -1,5 +1,5 @@
 {
   "name": "probe-research-tap",
   "description": "Ships sanitized per-session Claude Code or Codex transcripts to your Research OS knowledgebase",
-  "version": "0.4.3"
+  "version": "0.4.4"
 }

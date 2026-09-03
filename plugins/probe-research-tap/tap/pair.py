@@ -17,8 +17,10 @@ from __future__ import annotations
 import json
 import platform
 import socket
+import subprocess
 import sys
 import time
+from pathlib import Path
 
 from tap import config as cfg
 from tap import httpclient
@@ -30,6 +32,56 @@ def _os_label() -> str:
     if p == "darwin":
         return "macos"
     return p
+
+
+def _hostname() -> str:
+    """The name this machine was GIVEN, not the one the network is using today.
+
+    MIRRORS `probe.sdk.device.hostname()`. It is duplicated rather than imported
+    because the tap is a separate plugin package living in the agent's plugin
+    cache -- it cannot import the CLI, the same reason `tap/config.py::load_token`
+    is mirrored by `capabilities.capture_token_sources`. Any change there must
+    change here; `tests/test_pair_hostname.py` asserts the two agree.
+
+    `socket.gethostname()` returns the TRANSIENT name, which on macOS follows the
+    DHCP lease. A laptop that joined a captive WiFi paired as
+    `visitor-10-59-125-182`, and that is the name its capture row wore in the
+    dashboard from then on -- unrecognisable, and different again on the next
+    network. The CLI stopped doing this in 0.134.0; the capture surface is the
+    other half of the same machine.
+    """
+    for candidate in _configured_hostnames():
+        name = candidate.split(".")[0].strip()
+        if name and name.lower() != "not set":
+            return name
+    try:
+        name = socket.gethostname().split(".")[0].strip()
+    except OSError:
+        name = ""
+    return name or "unknown-host"
+
+
+def _configured_hostnames() -> list[str]:
+    """Stable machine names this platform can offer, best first."""
+    if sys.platform == "darwin":
+        try:
+            done = subprocess.run(
+                ["/usr/sbin/scutil", "--get", "LocalHostName"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return []
+        return [done.stdout.strip()] if done.returncode == 0 else []
+    try:
+        # ValueError as well as OSError: a `/etc/hostname` that is not valid
+        # UTF-8 raises UnicodeDecodeError, and letting it escape would fail the
+        # pairing rather than fall back to the transient name.
+        return [Path("/etc/hostname").read_text(encoding="utf-8").strip()]
+    except (OSError, ValueError):
+        return []
 
 
 def _revoke_old_pairing(bearer: str) -> None:
@@ -78,7 +130,7 @@ def run(pairing_token: str) -> int:
     body = json.dumps({
         "pairing_token": pairing_token,
         "os": _os_label(),
-        "hostname": socket.gethostname(),
+        "hostname": _hostname(),
     }).encode("utf-8")
 
     url = base + cfg.PAIR_PATH
