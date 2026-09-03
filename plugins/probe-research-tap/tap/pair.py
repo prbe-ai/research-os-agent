@@ -94,7 +94,8 @@ def _revoke_old_pairing(bearer: str) -> None:
         the new pairing is unaffected.
     """
     url = cfg.api_base_url() + cfg.REVOKE_PATH
-    resp = httpclient.post_json(url, json.dumps({}).encode("utf-8"), bearer=bearer)
+    body = json.dumps({"reason": cfg.REVOKE_REASON_REPAIR}).encode("utf-8")
+    resp = httpclient.post_json(url, body, bearer=bearer)
     if resp.classification == httpclient.Classification.SUCCESS:
         print("Revoked previous pairing on this device.")
         return

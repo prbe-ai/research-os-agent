@@ -63,6 +63,13 @@ DEFAULT_IDLE_INTERVAL_SECONDS = 300
 WEBHOOK_PATH = sources.SOURCES["claude_code"].webhook_path
 PAIR_PATH = "/agent-tap/pair"
 REVOKE_PATH = "/agent-tap/revoke"
+# Why we are revoking. The server cannot tell these apart on its own -- both
+# flows post to the same path with the same bearer -- and it counts the
+# uninstall as churn, so calling a re-pair one would report a departure by a
+# user who just fixed their setup. An older tap posts no reason at all and the
+# server reads that as "unknown", never as an uninstall.
+REVOKE_REASON_UNINSTALL = "uninstall"
+REVOKE_REASON_REPAIR = "repair"
 
 # Env overrides for the credential pair. There is deliberately NO hardcoded
 # base-URL fallback: a baked-in default is exactly what silently broke the

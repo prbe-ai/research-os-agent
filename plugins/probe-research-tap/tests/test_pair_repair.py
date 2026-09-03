@@ -321,6 +321,43 @@ def test_revoke_wipes_local_when_base_url_unset(_isolated_plugin_dir: Path, monk
     assert not cfg.token_file().exists()
 
 
+def test_repair_and_uninstall_say_which_one_they_are(_isolated_plugin_dir: Path) -> None:
+    """Both flows POST the same revoke endpoint with the same shape of bearer,
+    and they mean OPPOSITE things: an uninstall is someone leaving, a re-pair is
+    someone whose setup now works. The server counts the first as churn, so it
+    can only tell them apart if we say which is which.
+
+    Asserted on the wire body, not on a call count: dropping the reason leaves
+    every existing assertion in this file green while quietly filing every
+    repaired laptop as a departure.
+    """
+    import json
+
+    from tap import config as cfg
+    from tap.pair import run
+    from tap.revoke import run as revoke_run
+
+    cfg.write_token("old-token")
+    bodies: list[bytes] = []
+
+    def fake_post(url: str, body: bytes, *, bearer: str | None = None, timeout: float = 30.0):
+        if url.endswith("/agent-tap/pair"):
+            return _success_response(_pair_body(token="brand-new"))
+        if url.endswith("/agent-tap/revoke"):
+            bodies.append(body)
+            return _success_response(b'{"ok":true}')
+        raise AssertionError(f"unexpected URL: {url}")
+
+    with mock.patch("tap.pair.httpclient.post_json", side_effect=fake_post):
+        assert run("fresh-pairing-token") == 0
+    assert json.loads(bodies[-1])["reason"] == cfg.REVOKE_REASON_REPAIR
+
+    with mock.patch("tap.revoke.httpclient.post_json", side_effect=fake_post):
+        assert revoke_run() == 0
+    assert json.loads(bodies[-1])["reason"] == cfg.REVOKE_REASON_UNINSTALL
+    assert len(bodies) == 2
+
+
 if __name__ == "__main__":
     import sys
     sys.exit(pytest.main([__file__, "-v"]))

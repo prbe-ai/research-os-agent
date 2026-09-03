@@ -37,7 +37,8 @@ def run() -> int:
             # Can't reach the server, but uninstall must still wipe locally.
             server_err = str(exc)
         else:
-            resp = httpclient.post_json(url, json.dumps({}).encode("utf-8"), bearer=token)
+            body = json.dumps({"reason": cfg.REVOKE_REASON_UNINSTALL}).encode("utf-8")
+            resp = httpclient.post_json(url, body, bearer=token)
             if resp.classification != httpclient.Classification.SUCCESS:
                 server_err = resp.error or f"status {resp.status}"
 
