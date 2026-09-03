@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.64.0",
+  "version": "0.65.0",
   "description": "Probe Research tracking, reproducibility, and status skills for the team's ML work, with a read-only OAuth MCP connection.",
   "author": {
     "name": "Probe",
