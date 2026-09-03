@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.134.0
+
 ### Fixed
 
 - **A laptop no longer becomes a new machine when it joins a new network.** The
