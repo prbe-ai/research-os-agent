@@ -135,3 +135,29 @@ recorded — but a `--reference` checkpoint or dataset on an ephemeral box does.
 Print which outcome occurred — drained, written but unpublished, nothing
 written. It is often the only reason a loss is caught while the machine is
 still alive to fix it.
+
+## Relaunching a run: resume, rewind, fork, or supersede
+
+Reusing an `external_id` conflicts with the incumbent run, and `on_conflict`
+says what the relaunch MEANS. Pick by intent, not by whichever unblocks:
+
+* **Continuing past a crash** (checkpoint at the crash point) → the default
+  `"auto"` resumes a dead incumbent in place: same run, same curve, steps at
+  or below the resume point refused.
+* **Restarting from an EARLIER checkpoint, old tail discarded** →
+  `on_conflict=probe.Rewind(step=400_000)`. The server deletes the record
+  from that step onward in the reopen transaction, so the relaunch REWRITES
+  it (the step itself included, W&B-style). This is the only policy that also
+  reopens a `completed` run — a deliberate stop-then-rewind ends cleanly
+  first. Destructive on purpose; without the flag nothing is ever deleted.
+  CLI: `probe run start --external-id job --rewind-to-step 400000`.
+* **Keeping BOTH curves** → `client.fork_run(source, step=400_000)` (CLI:
+  `probe run fork <run> --step 400000`): a NEW run continues from the
+  checkpoint under its own identity; the source is untouched and unmarked.
+* **Repeating from scratch** → `"supersede"`: a fresh `external_id-rN` retry
+  row; a dead incumbent is tagged `superseded`.
+
+Rewind needs a server that declares it — the SDK preflights
+`GET /v1/server/features` and refuses loudly (nothing changed server-side)
+when the deployment predates it. Never work around that error by deleting and
+re-uploading the run; upgrade the server or fork instead.
