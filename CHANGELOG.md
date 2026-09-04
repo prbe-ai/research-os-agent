@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.138.0
+
 ### Added
 
 - **The wizard now reports whether session capture is on.** The capability
