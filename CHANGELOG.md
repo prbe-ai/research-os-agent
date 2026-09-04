@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.137.0
+
 ### Changed
 
 - **The settings screen's tracking row now says what turning it OFF actually
