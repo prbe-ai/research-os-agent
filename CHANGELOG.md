@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **The wizard now reports whether session capture is on.** The capability
+  snapshot carried auto-update and the tracking plugin and nothing else, so the
+  setting the consent story rests on was invisible to the server -- nobody could
+  tell whether a machine turned session tracking on at install, off later, or
+  back on. Schema v2 adds `capture`, and reports what actually RUNS
+  (`capture_on`): a killswitched plugin, or one with no credential, ships
+  nothing and is reported `absent` rather than `installed`.
+- **`mcp` and `skills` collapse into one `tracking` field.** They were always one
+  fact wearing two names -- both were written from a single boolean and could
+  never disagree. Older clients keep sending v1 and the server keeps accepting
+  it; their silence about capture reads as `unknown`, never `absent`.
+
 ## 0.137.0
 
 ### Changed
@@ -16,6 +30,17 @@
   are turned off and it is not this screen.
 
 ### Fixed
+
+- **Turning capture off in the wizard now tells the server, not just your
+  laptop.** `probe setup` cleared local credentials, stopped the daemon and
+  removed the plugin, and sent nothing -- so the device stayed live in your
+  dashboard's Devices list and its capture credential stayed valid on a token
+  nobody held any more. It could not be repaired afterwards either: the teardown
+  deleted the very `.token` a revoke authenticates with, so a later
+  `python -m tap revoke` found nothing and skipped the server too. The revoke now
+  runs FIRST, while that credential exists, and says it is an uninstall rather
+  than a re-pair. Off is still a promise about your machine: an unreachable
+  server does not block the teardown, it just warns that the device may linger.
 
 - **A setup driven from a coding agent could not see the approval it was waiting
   for.** The wizard's piped-output path printed unflushed, and the browser
