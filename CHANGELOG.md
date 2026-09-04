@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Fixed
+
+- **An unnamed run is named by the server again, instead of a fabricated
+  timestamp.** `probe run start` without `--name` had the SDK invent
+  `run-<YYYYMMDD-HHMMSS>` and send it. The server reads any supplied name as
+  human-chosen, so every such run was stamped `name_customized` and frozen out of
+  generated titles permanently — measured fleet-wide, that was 620 of 620 runs,
+  meaning the title generator had never once fired since it shipped. The SDK now
+  omits the field, which is what lets the server name the run after your `--slug`
+  (or a petname when you gave none) and leave the flag False so a generated title
+  may replace it later. Passing `--name` still marks the run yours and is still
+  never overwritten.
+
 ### Added
 
 - **Per-file code capture, opt-in: `PROBE_CODE_STORAGE=artifacts`.** A run's
