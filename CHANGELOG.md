@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Signing in now re-points Codex at the read token it just minted.** Claude
+  Code builds its `Authorization` header at connect time and always reads the
+  current token; Codex has no credential-helper hook, so its token is a static
+  copy in `~/.codex/config.toml`. Signing in wrote a new token and RELEASED the
+  old one, and nothing updated that copy -- so the credential Codex kept was
+  not stale, it was dead, and every Codex call 401'd. The repair existed but was
+  wired only into `probe mcp token set`, which is not the command anyone runs.
+  It now runs wherever credentials are minted, so the wizard's sign-in and the
+  guided install both fix it. Still a repair and never an install: a machine
+  with no Codex entry is left exactly as it was.
+- **`probe doctor` can now see that drift.** The check sat behind "is Codex the
+  selected agent", and a machine with both agents installed reports only one --
+  so on exactly the machines most likely to drift, the one local signal was
+  unreachable and doctor printed `CLI + MCP: ok` over a dead token. Codex's own
+  `mcp list` is no substitute: it reports `bearer_token` for any header at all,
+  valid or not.
+- **And `probe wizard` can now fix what doctor reports.** Doctor's remedy named
+  the wizard while every gate on that screen closed in exactly the state being
+  reported: a signed-in device never re-enters the authorization path (`mcp` is
+  folded into "already held" once `api` is), and the Codex step waits on an
+  "unauthenticated" answer that a dead header never gives. The repair is now
+  scheduled on its own evidence -- the token Codex holds versus the token this
+  device holds -- so the command doctor points at is the command that fixes it.
+- **Signing out no longer leaves a live read token on the machine.** Only the
+  API token was released; `mcp_token` was wiped locally while staying VALID
+  server-side, and Codex kept its own copy in `~/.codex/config.toml`. A machine
+  someone had signed out of therefore kept working read access to the team's
+  research. Sign-out now releases the read token the way it always released the
+  API one, and drops the Codex entry holding it.
+
+### Security
+
+- **The read token is no longer written across deployments.** The sync pairs the
+  token this device holds with a URL read from the installed plugin's manifest,
+  and nothing checked that the two described the same deployment -- so a machine
+  signed in to one Probe with a Codex entry pointing at another would hand a
+  live read credential to the wrong server on every connect. Now checked, and
+  the write is skipped with a message when they disagree. The check is pinned to
+  the shipped defaults rather than to matching hostnames, because production
+  deliberately splits the API and the MCP across `api.` and `mcp.`.
+
 ## 0.138.0
 
 ### Added
