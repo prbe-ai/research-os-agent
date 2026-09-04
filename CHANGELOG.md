@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.139.0
+
 ### Fixed
 
 - **Signing in now re-points Codex at the read token it just minted.** Claude
