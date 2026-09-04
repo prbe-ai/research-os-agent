@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A code snapshot no longer claims files its archive does not hold.** The
+  `code-bytes` archive is the copy of every file git cannot supply, and its
+  record said how many files it held before now the count came from the plan,
+  not the archive: a file that vanished or changed between the manifest walk
+  and the archive pass was skipped in silence and still counted. One run
+  recorded 7,689 files and held 316. Every member is now verified as it enters
+  the archive (hashed before and while it streams, size checked on the open
+  descriptor); what no longer matches is left out **and named** -- in
+  `n_pending_upload`, on the artifact's `drifted` list, in the capture-time
+  warning and in `probe snapshot`'s report. A file that grew keeps its recorded
+  prefix; one that shrank or changed under the stream is rebuilt once, then
+  reported. `probe snapshot-show` reads the archive's own list, so it stops
+  reporting every file as stored the moment any archive exists, and a storage
+  failure at capture time no longer reads as a complete capture.
+- **Captures and restores are hardened against a moving or hostile tree.**
+  Recorded files are opened `O_NOFOLLOW|O_NONBLOCK` and re-checked on the
+  descriptor, so a symlink or FIFO swapped in mid-capture is refused, never
+  followed or blocked on. Git path listings are NUL-delimited: a name with a
+  quote, a backslash or an accent is captured instead of quoted out of the
+  manifest, a directory named `x<U+2028>..` can no longer become a `../` path
+  out of the tree, and a non-UTF-8 name is listed under `manifest.skipped` with
+  a reason. `probe snapshot-restore` validates the manifest before touching
+  disk, refuses any path outside the destination, never writes through a
+  symlinked directory, and bounds each member read to its recorded size.
+- **Archives build 2.5x faster** (gzip level 6 instead of 9, measured on a
+  7,902-file tree; 0.3% larger output).
+
 ## 0.139.0
 
 ### Fixed
