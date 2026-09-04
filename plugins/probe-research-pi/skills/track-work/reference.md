@@ -142,6 +142,7 @@ is pinned from an uploaded artifact; versions are never edited in place.
 | upload an output | `probe artifact add RUN PATH --name N --kind KIND --step N` |
 | upload to a non-run anchor | `probe artifact add --project P \| --experiment E \| --workspace W \| --shared PATH --name N` |
 | list a run's outputs | `probe artifact list RUN` |
+| browse a run's artifacts one folder at a time | `probe artifact tree RUN --prefix P --limit N` |
 | download a pinned version | `probe artifact download ARTIFACT_ID --version N --to PATH` |
 | read the version chain | `probe artifact versions ARTIFACT_ID` |
 | pin a new version | `probe artifact version-add ARTIFACT_ID --from-artifact SOURCE_ID --label L` |
@@ -182,7 +183,10 @@ probe snapshot-restore RUN --verify-only # can it be rebuilt: want "0 unavailabl
 A glob matching nothing is an error; a path outside the snapshot root is
 refused; naming a file already in the manifest adds no duplicate. Size is handled
 (`--reference-over-mb`, default 100). A non-git directory is captured whole,
-skipping lockfile-rebuilt trees and credential-shaped names.
+skipping lockfile-rebuilt trees and credential-shaped names. Files git cannot
+supply are stored as the run's `code-bytes` archive, or one artifact row per file
+with `PROBE_CODE_STORAGE=artifacts` (`snapshot-show` labels those `captured`;
+restore reads both).
 
 The decision record is an artifact on the run:
 

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Added
+
+- **Per-file code capture, opt-in: `PROBE_CODE_STORAGE=artifacts`.** A run's
+  captured code is stored as one artifact row per file instead of one
+  `code-bytes` archive: every captured file shows in the run's artifact
+  explorer, and a file that did not change between runs, users or artifact
+  kinds is uploaded and stored once. Files go up in windows of 256 (presign,
+  16 parallel checksum-pinned PUTs, confirm, one retry with fresh URLs); every
+  byte is verified against the manifest on the open descriptor before it
+  leaves the machine, so a file that drifted since the manifest is named as
+  unstored, never sent. The snapshot records `storage`, `n_uploaded`,
+  `n_deduped` and every unstored path with its reason; `--max-upload-mb`
+  applies exactly as it does to the archive. A server without the batch doors
+  (a lagging deploy) gets the archive as before, with one warning. The default
+  stays `archive` this release.
+- **`probe artifact tree RUN [--prefix P] [--limit N]`**: one folder level of a
+  run's artifacts, with `truncated` when a level was cut -- what the explorer
+  fetches on expand.
+- **`probe snapshot-restore` and `probe snapshot-show` understand capture
+  rows.** Restore takes each file from the run's complete capture rows first
+  and the `code-bytes` archive second, fetching lazily in batches of 256 so a
+  4,600-file tree costs one batch of memory at a time, and names the server's
+  reason (`download refused: ...`, `download failed`) per file it could not
+  get. `snapshot-show` labels files stored as rows `captured` and summarises
+  `N stored as files` / `N as files, M in code-bytes`.
+
 ### Fixed
 
 - **A code snapshot no longer claims files its archive does not hold.** The
