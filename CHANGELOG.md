@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A setup driven from a coding agent could not see the approval it was waiting
+  for.** The wizard's piped-output path printed unflushed, and the browser
+  approval URL and code are printed immediately before the run blocks on a human
+  -- so the one instruction the caller had to act on was the one guaranteed to
+  sit in the buffer. Measured: six seconds after the write, a piped reader had
+  received nothing. `probe login`, `probe token` and `probe mcp` shared the bug
+  through `_show_device_prompt`. Both flush now.
+- **A headless install configured Claude Code whatever was on the machine.** A
+  run with a terminal selected every coding agent it detected; a run without one
+  was pinned to `claude_code`, so the same command on the same machine did
+  different things depending on whether stdout was a pipe -- and a Codex user
+  driving the installer from a tool call got a green report for an agent they do
+  not use. Both paths now configure what is actually installed, and a headless
+  run that chooses implicitly says which agents it chose. Scripts wanting one
+  agent name it with `--agent`.
+- **Bare `npx probe-research` with no terminal installed everything unasked.**
+  The action menu and the confirmation screen -- which is where the session
+  capture disclosure is drawn -- are both gated on an interactive terminal, and
+  the action defaults to `configure`, so a bare launch from an agent's shell tool
+  ran a complete install with capture enabled, showed nobody the disclosure, and
+  reported success. It now exits 2 and changes nothing. `--yes`, `--action`,
+  `--agent` and any capability flag are all stated intent and are unaffected, so
+  `probe install` and auto-update's detached re-run keep working.
+
 ## 0.136.0
 
 ### Added
