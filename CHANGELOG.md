@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- **The settings screen's tracking row now says what turning it OFF actually
+  does.** It read "Applies to sessions on creation" whether the box was ticked
+  or not, leaving anyone emptying it to guess which half of Probe stopped --
+  and the guess that costs them is the one where they believe reads stopped
+  too. Ticked, it says sessions are tracked through your coding agent.
+  Unticked, it says write commands will be blocked and reads through MCP still
+  work, with a footnote pointing at the MCP server, since that is where reads
+  are turned off and it is not this screen.
+
 ### Fixed
 
 - **A setup driven from a coding agent could not see the approval it was waiting
