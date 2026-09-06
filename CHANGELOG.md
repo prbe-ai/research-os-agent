@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- **Complete run artifact inventories across backend pages.** SDK run-artifact
+  reads now follow server-advertised pagination, so SDK listings and restore
+  inventories retain files beyond the first 1,000 artifacts. Legacy backends
+  without pagination support keep their existing unpaginated read behavior.
+
 ## 0.141.0
 
 ### Added
@@ -15,7 +22,7 @@
   full source records and selected fields. Large documents and browse trees remain
   reachable through opaque cursors, with explicit restart errors when source content
   changes. Browse defaults to `limit=10` per source list. Ordinary SDK/CLI read
-  responses remain unchanged. See [the MCP reference](README.md#read-only-mcp-server)
+  responses remain unchanged. See [the MCP reference](https://pypi.org/project/probe-research/0.141.0/)
   for fragment reconstruction, document consistency, and field-selection examples.
 
 ### Fixed
