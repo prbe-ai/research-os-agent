@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+### Fixed
+
+- **A first-time install left no `probe` on the machine.** `npx probe-research
+  install` runs the CLI through `uv tool run`, which unpacks it into uv's cache
+  and puts that cache's `bin` on PATH -- so the bootstrap's `shutil.which
+  ("probe")` found a `probe` on a machine with nothing installed: THIS process.
+  The version matched, the check concluded a real install was already present,
+  and the persistent install it exists to perform was skipped silently. The
+  wizard then reported success while leaving nothing behind, and every
+  instruction that follows (`probe doctor`, the plugin's SessionStart hook
+  resolving `PROBE_BIN`, the MCP headers helper) had no binary to run.
+  Measured on a fresh container: `which("probe")` returned
+  `~/.cache/uv/archive-v0/<hash>/bin/probe`, `~/.local/share/uv/tools` was
+  empty afterwards, and nothing was printed about it.
+
+  A launcher's cache is now recognised and skipped, so a from-zero run finds
+  nothing and installs for real. Tested on the LOCATION rather than `realpath`
+  or `sys.prefix`, because both look identical for a healthy install --
+  `~/.local/bin/probe` is a symlink into the uv tools directory, which is also
+  that process's own prefix -- and judging by either would reinstall on every
+  run. Only from-zero was affected: a machine that already had `probe` answered
+  correctly, which is why no laptop and no test showed it. The bootstrap tests
+  all stubbed the predicate and asserted what happened GIVEN its answer, so the
+  one broken part was never executed; it is now driven directly.
+
 ## 0.140.0
 
 ### Fixed
