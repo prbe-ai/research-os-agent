@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.141.1
+
 ### Fixed
 
 - **Complete run artifact inventories across backend pages.** SDK run-artifact
