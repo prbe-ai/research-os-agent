@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.142.0
+
 ### Changed
 
 - **Per-file code capture is now the default.** `run.snapshot()` / `probe
