@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+### Added
+
+- **Bounded MCP reads with complete continuation.** All eight read tools share
+  one response-wide budget, including batches, errors, verbose output, and full
+  documents: 2,000 reference tokens by default, configurable from 512 to 8,000,
+  with a UTF-8 byte ceiling of eight times the token budget. The frozen tokenizer
+  ships in the package for offline use, and responses use one compact text channel.
+  Cards retain useful facts and authored caveats; `entity(view="record")` exposes
+  full source records and selected fields. Large documents and browse trees remain
+  reachable through opaque cursors, with explicit restart errors when source content
+  changes. Browse defaults to `limit=10` per source list. Ordinary SDK/CLI read
+  responses remain unchanged. See [the MCP reference](README.md#read-only-mcp-server)
+  for fragment reconstruction, document consistency, and field-selection examples.
+
 ### Fixed
 
 - **A first-time install left no `probe` on the machine.** `npx probe-research
