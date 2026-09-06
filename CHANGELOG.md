@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.141.0
+
 ### Added
 
 - **Bounded MCP reads with complete continuation.** All eight read tools share
