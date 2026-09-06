@@ -184,9 +184,9 @@ A glob matching nothing is an error; a path outside the snapshot root is
 refused; naming a file already in the manifest adds no duplicate. Size is handled
 (`--reference-over-mb`, default 100). A non-git directory is captured whole,
 skipping lockfile-rebuilt trees and credential-shaped names. Files git cannot
-supply are stored as the run's `code-bytes` archive, or one artifact row per file
-with `PROBE_CODE_STORAGE=artifacts` (`snapshot-show` labels those `captured`;
-restore reads both).
+supply are stored one artifact row per file (`snapshot-show` labels those
+`captured`), or as the run's `code-bytes` archive with
+`PROBE_CODE_STORAGE=archive`; restore reads both.
 
 The decision record is an artifact on the run:
 

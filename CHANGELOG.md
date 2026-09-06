@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- **Per-file code capture is now the default.** `run.snapshot()` / `probe
+  snapshot` store every file git cannot supply as its own artifact row (the
+  opt-in `PROBE_CODE_STORAGE=artifacts` path shipped in 0.140.0), so a run's
+  code shows in the artifact explorer and unchanged files are stored once
+  across runs. Set `PROBE_CODE_STORAGE=archive` to keep the one-`code-bytes`
+  archive-per-run behaviour; a server without the batch doors still gets the
+  archive automatically, with one warning.
+
 ## 0.141.1
 
 ### Fixed
