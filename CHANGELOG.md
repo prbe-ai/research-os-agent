@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.143.0
+
 ### Changed
 
 - Remove `search_web` and `read_page` from the shipped MCP tool catalog. Research
