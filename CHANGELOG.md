@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- Remove `search_web` and `read_page` from the shipped MCP tool catalog. Research
+  paper search, reading, and related-paper expansion remain available through
+  `find_papers`. General browsing uses the host agent's web tools; the backend,
+  assistant, and Python SDK retain their web APIs.
+
 ## 0.142.0
 
 ### Changed

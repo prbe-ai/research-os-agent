@@ -190,16 +190,16 @@ with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
   source the token came from (a shell export shadows the stored one), whether the API
   still accepts it, and whether a stale literal copy is pinned somewhere that outranks it.
 - `claude mcp list` shows `probe-research` as `✓ Connected` (if registered via the CLI).
-- The `probe-research` MCP tools (`browse_research`, `search_knowledge`, `get_entity`,
-  `read_metrics`, `search_web`, `find_papers`, `read_page`) are
+- The `probe-research` MCP tools (`browse`, `search_knowledge`, `entity`,
+  `metrics`, `find_papers`) are
   available **in a fresh session** — remind the user to restart if they were just added.
   The old five names (`research_context`, `research_search`, `research_get`,
   `research_compare`, `research_resolve`) were deprecated aliases and have now been
-  REMOVED -- they fail as unknown tools; point people at the seven above.
-  The last three read the OPEN WEB (search, the research literature, one page) and need
-  no extra setup here — the backend holds the provider key. They are unavailable only on
-  a deployment with no Firecrawl account, where they report that in `completeness`
-  rather than failing silently.
+  REMOVED -- they fail as unknown tools; point people at the five above.
+  `find_papers` searches, reads, and expands the research literature and needs
+  no extra setup here — the backend holds the provider key. On a deployment
+  with no Firecrawl account it reports that in `completeness`.
+  General web searches and opening URLs use the host agent's web tools.
 - The `track-work` and `show-research-status` skills are ready
   (plugin installs only).
 - `probe_procedures` (workflow memory) is NOT in that list on purpose. It is behind a
