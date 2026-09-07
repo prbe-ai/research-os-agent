@@ -3,8 +3,7 @@
     "probe-research": {
       "type": "http",
       "url": "https://mcp.research.prbe.ai/mcp",
-      "headersHelper": "${CLAUDE_PLUGIN_ROOT}/bin/probe-mcp-headers",
-      "alwaysLoad": true
+      "headersHelper": "${CLAUDE_PLUGIN_ROOT}/bin/probe-mcp-headers"
     }
   }
 }
