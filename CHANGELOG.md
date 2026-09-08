@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.145.0
+
 ### Fixed
 
 - Local backfill now verifies each reviewed file against durable delivery receipts,
