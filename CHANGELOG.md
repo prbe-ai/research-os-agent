@@ -11,6 +11,15 @@
   separate from verified file delivery; metrics continue to be read from W&B.
 - SDK methods for project W&B attachments, live-sync settings, and history jobs.
 
+### Changed
+
+- Browser sign-in routes new accounts through website onboarding before CLI setup.
+  The final website step supplies a short-lived, single-use 10-character sign-in
+  code that the CLI exchanges for saved credentials.
+- `npx probe-research [CODE]` opens the main menu after sign-in;
+  `npx probe-research install [CODE]` starts guided installation. The main menu
+  offers sign out in place of switch account.
+
 ## 0.146.0
 
 ### Added
