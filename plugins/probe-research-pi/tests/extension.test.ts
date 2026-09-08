@@ -22,8 +22,22 @@ const spawnMock = vi.fn(
   (_command: string, _args: string[], _options: { detached: boolean; stdio: string; env: Record<string, string | undefined> }) => ({
     pid: 4242,
     unref: vi.fn(),
+    // `session_start` WAITS for its `probe notes sync` child before reading the
+    // note (a cold read after a credential switch briefs the session from the
+    // previous tenant's file). Exiting immediately here keeps these tests about
+    // the daemon, instead of parking each one on the 2s sync timeout.
+    once: (event: string, callback: (value: unknown) => void) => {
+      if (event === "exit") queueMicrotask(() => callback(0));
+    },
   }),
 );
+
+/** Daemon spawns only — `session_start` also spawns the team-note sync, which
+ * is deliberately independent of pairing, the killswitch and the dedup guard
+ * (the note is the team's document, not this session's capture). Assertions
+ * about "did we spawn the daemon" have to say which spawn they mean. */
+const daemonSpawns = () =>
+  spawnMock.mock.calls.filter(([, args]) => !(args[0] === "notes" && args[1] === "sync"));
 
 const execFileMock = vi.fn(
   (
@@ -106,6 +120,11 @@ const ENV_KEYS = [
   "PROBE_PI_TAP_ROOT",
   "PATH",
   "PI_CODING_AGENT_DIR",
+  // The team-note DOCUMENT lives in the state directory now, one per machine,
+  // so `XDG_STATE_HOME` is what isolates it -- `PI_CODING_AGENT_DIR` no longer
+  // does. Without this a "no note file exists" test reads the REAL note off
+  // the developer's machine and passes or fails on its contents.
+  "XDG_STATE_HOME",
   // session_start now also attempts a Probe MCP connect (mcpBridge.ts) —
   // PROBE_MCP_TOKEN must be isolated exactly like PROBE_PI_TAP_TOKEN, or a
   // real one exported in the shell running this suite would make these
@@ -178,6 +197,8 @@ beforeEach(() => {
   // mcpOAuthStateFile() (paths.ts), so the MCP bridge's "any stored OAuth
   // tokens?" check below reads nothing real either.
   process.env.PI_CODING_AGENT_DIR = join(tmp, "pi-agent-dir");
+  // The document itself: `<XDG_STATE_HOME>/probe/team-note/probe-team-note.md`.
+  process.env.XDG_STATE_HOME = join(tmp, "state");
   // session_start now also attempts a Probe MCP connect — with no bearer
   // token AND no stored OAuth tokens (both isolated above), it degrades
   // immediately with zero network calls (see mcpBridge.ts's
@@ -286,7 +307,7 @@ describe("registerExtension — session_start", () => {
       ctx,
     )).resolves.toBeUndefined();
     expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● tracking");
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(daemonSpawns()).toHaveLength(1);
   });
 
   it("does not spawn when the device is unpaired, and says so on stderr", async () => {
@@ -297,7 +318,7 @@ describe("registerExtension — session_start", () => {
 
     const chunks = await captureStderr(() => handlers.get("session_start")!({ reason: "startup" }, ctx) as Promise<void>);
 
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(daemonSpawns()).toHaveLength(0);
     expect(chunks.length).toBeGreaterThan(0);
     expect(chunks.join("\n")).toContain("not paired");
   });
@@ -312,8 +333,8 @@ describe("registerExtension — session_start", () => {
 
     await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
 
-    expect(spawnMock).toHaveBeenCalledTimes(1);
-    const [, , options] = spawnMock.mock.calls[0];
+    expect(daemonSpawns()).toHaveLength(1);
+    const [, , options] = daemonSpawns()[0];
     expect(options.env.PROBE_TAP_SOURCE).toBe("pi");
 
     // Cleanup: don't leave a shutdown-sentinel-free pidfile lying around for
@@ -335,7 +356,7 @@ describe("registerExtension — session_start", () => {
     // real timers are fine for this second call.
     await handlers.get("session_start")!({ reason: "reload" }, ctx);
 
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(daemonSpawns()).toHaveLength(1);
 
     rmSync(pidFile(sessionId), { force: true });
     rmSync(shutdownSentinelFile(sessionId), { force: true });
@@ -350,7 +371,7 @@ describe("registerExtension — session_start", () => {
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(daemonSpawns()).toHaveLength(0);
   });
 
   it("refuses to spawn when the .disabled killswitch is present, even when paired", async () => {
@@ -366,7 +387,7 @@ describe("registerExtension — session_start", () => {
 
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
-    expect(spawnMock).not.toHaveBeenCalled();
+    expect(daemonSpawns()).toHaveLength(0);
   });
 });
 
@@ -405,6 +426,9 @@ describe("registerExtension — tracking switch footer", () => {
       on: (event: string, callback: (value: unknown) => void) => {
         if (event === "exit") queueMicrotask(() => callback(0));
       },
+      once: (event: string, callback: (value: unknown) => void) => {
+        if (event === "exit") queueMicrotask(() => callback(0));
+      },
     }));
 
     await handlers.get("input")!(
@@ -437,6 +461,9 @@ describe("registerExtension — tracking switch footer", () => {
       pid: 4242,
       unref: vi.fn(),
       on: (event: string, callback: (value: unknown) => void) => {
+        if (event === "exit") queueMicrotask(() => callback(0));
+      },
+      once: (event: string, callback: (value: unknown) => void) => {
         if (event === "exit") queueMicrotask(() => callback(0));
       },
     }));
@@ -482,7 +509,7 @@ describe("registerExtension — D6 MCP bridge stand-down", () => {
 
     // Capture itself is untouched by the stand-down -- it's an independent
     // subsystem (see extension.ts's own comment on the split).
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(daemonSpawns()).toHaveLength(1);
 
     rmSync(pidFile(sessionId), { force: true });
     rmSync(shutdownSentinelFile(sessionId), { force: true });
@@ -525,7 +552,7 @@ describe("registerExtension — session_shutdown", () => {
     const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
 
     await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
-    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(daemonSpawns()).toHaveLength(1);
 
     await handlers.get("session_shutdown")!({ reason: "reload" }, ctx);
     // No shutdown sentinel should appear — the daemon was deliberately left running.
@@ -687,7 +714,7 @@ describe("registerExtension — team note", () => {
       spawnMock.mockClear();
 
       await expect(handlers.get("agent_settled")!({}, {})).resolves.not.toThrow();
-      expect(spawnMock).not.toHaveBeenCalled();
+      expect(daemonSpawns()).toHaveLength(0);
     } finally {
       process.env.PATH = previousPath;
       process.env.HOME = previousHome;

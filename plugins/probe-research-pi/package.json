@@ -1,6 +1,6 @@
 {
   "name": "probe-research-pi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "pi extension: captures sanitized pi session transcripts for Research OS, briefs sessions with the team note, and bridges Probe Research's read-only MCP server into pi as native tools",
   "private": true,
   "type": "module",

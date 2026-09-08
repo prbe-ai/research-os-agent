@@ -12,6 +12,77 @@
   automatic refresh edits the agent's page rather than replacing it. SDK:
   `Client.write_overview(kind, entity_id, html=, blurb=, plan=, series=)`.
 
+## 0.144.0
+
+### Fixed
+
+- **The team note stops rewriting itself.** On a machine running more than one
+  coding agent, the note's history could flip between two byte-identical bodies
+  every few minutes with nobody editing anything -- whole sections appearing and
+  disappearing depending on which agent synced last. Each agent kept its own copy
+  of the document (`~/.claude/`, `~/.codex/`, `~/.pi/agent/`) while sharing one
+  record of what the server had, so each one read the others' copy as unsent work
+  and pushed a whole document over it. There is now ONE document per machine, at
+  `~/.local/state/probe/team-note/probe-team-note.md` (under `$XDG_STATE_HOME` if
+  you set one), and every agent on the machine edits that same file. The managed
+  block in `CLAUDE.md` / `AGENTS.md` re-points itself on the first sync after
+  upgrade.
+- **A teammate's paragraph can no longer be deleted by your next sync.** When the
+  server merged your edit with someone else's while you kept typing, the merged
+  result never reached your file -- and your following sync sent your copy, which
+  the server accepted as a deletion of their text. The sync now merges locally
+  (the same three-way merge the server runs) and rebases in that case, so both
+  sides survive.
+- **A sync that could not send no longer leaves you reading a stale note.** A
+  file with unsent edits used to refuse to refresh at all. It now merges the
+  server's version in, with conflict markers only where the two genuinely
+  disagree.
+
+### Changed
+
+- Documents that are not yours to send are PARKED, never deleted and never
+  uploaded: a leftover per-agent copy from the old layout, and a copy written
+  under a different login. They are renamed to `probe-team-note.md.unsynced-<when>`
+  beside where they were found, listed by `probe doctor` with whose they are, and
+  named at session start. Your own parked copy is picked back up automatically the
+  next time you are signed in as that user, and syncs from there.
+- `probe notes sync` reconciles in git's order: fetch, merge locally, push what
+  came out.
+
+### Fixed (found in review)
+
+- A local merge that could not be written no longer advances the record of what
+  the server holds. It did, which meant the next sync sent the file as if it
+  already contained the server's text and the server accepted the difference as
+  a deletion.
+- The sync lock is keyed on the document, not on the login. One document per
+  machine behind a per-login lock meant two logins' sessions could interleave a
+  read, a park and a write over the same file.
+- The check for "is this file mine" is re-taken at the moment of writing, not
+  only before the network call it is separated from.
+- Parked copies no longer accumulate: an identical copy is not parked twice, and
+  a session picks its own work back up instead of parking the other login's
+  copy on every sync forever.
+- The conflict file the server hands back is written private (0600) like every
+  other write of the note.
+- `probe doctor` no longer calls an unstamped copy another team's; it says the
+  owner is unknown. The session-start notice lists the newest copies rather than
+  the oldest, and never names one written under a different login.
+
+### For contributors
+
+- `merge3` now lives in the agent package (`probe.sdk.merge3`) so the client can
+  run the same algorithm as the server; `app/team_notes/merge.py` is a
+  byte-identical copy until the backend's pinned `probe-research` moves, guarded
+  by `tests/unit/test_merge3_parity.py`.
+- The document path is resolved in four places that cannot import each other
+  (CLI, two plugin hooks, the pi extension). They are pinned to one another by
+  `agent/tests/fixtures/team-note-document-path.json`.
+- A base copy is now fetched with `GET /v1/team-note` whenever it will be merged
+  against, rather than taken from the brief: the brief is `body.strip()`, and a
+  base off by one trailing newline turned two non-overlapping edits into a
+  conflict.
+
 ## 0.143.0
 
 ### Changed

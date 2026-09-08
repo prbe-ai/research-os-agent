@@ -119,6 +119,11 @@ export function renderTeamNoteForPrompt(note: string, documentPath: string): str
 export interface ChildLike {
   pid: number | undefined;
   unref: () => void;
+  /** OPTIONAL, because only `syncTeamNoteThenRead` waits on a child and every
+   * other caller fires and forgets. A fake that omits it makes that waiter
+   * resolve on its timeout, which is the same answer a real child that never
+   * exits would give -- so a test can leave it out and still be honest. */
+  once?: (event: string, listener: (payload?: unknown) => void) => unknown;
 }
 
 export type SpawnFn = (
@@ -217,4 +222,76 @@ export function spawnTeamNoteSync(deps: TeamNoteSyncDeps): void {
   } catch (err) {
     deps.log(`team-note sync spawn failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+/** How long `session_start` waits for its own sync before reading the file. */
+export const SYNC_BEFORE_READ_TIMEOUT_MS = 2_000;
+
+/**
+ * Run the sync and WAIT for it, briefly, before the session reads the note.
+ *
+ * WHY WAIT AT ALL. The document is one file per machine, shared by every
+ * harness and written by whichever credential last synced. Reading it before
+ * this session's own sync has run means briefing the model from whatever was
+ * left there -- and after a `probe context use` / `probe login`, what was left
+ * there is the PREVIOUS credential's note. The sync is what parks that copy and
+ * installs this credential's; doing it first turns a possible cross-tenant read
+ * into an ordinary one.
+ *
+ * WHY BRIEFLY. pi imposes no timeout on an extension's event handlers (see the
+ * module docstring), which means a hung network call here would hang the
+ * session start -- the one place a hang is most visible and least forgivable.
+ * On timeout the child is left running, unref'd, exactly as before: it still
+ * finishes, and its result reaches the NEXT session's read. The note this
+ * session shows is then the one already on disk, which is the pre-existing
+ * behaviour rather than a new failure.
+ *
+ * NEVER THROWS, like everything else on this path.
+ */
+export function syncTeamNoteThenRead(
+  deps: TeamNoteSyncDeps,
+  timeoutMs: number = SYNC_BEFORE_READ_TIMEOUT_MS,
+): Promise<"synced" | "timeout" | "skipped"> {
+  const binary = findProbeBinary(deps);
+  if (!binary) {
+    deps.log("team-note sync skipped: no probe CLI found on PATH or in the documented fallback locations");
+    return Promise.resolve("skipped");
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (outcome: "synced" | "timeout" | "skipped") => {
+      if (settled) return;
+      settled = true;
+      resolve(outcome);
+    };
+    let child;
+    try {
+      child = deps.spawn(binary, ["notes", "sync"], {
+        detached: true,
+        stdio: "ignore",
+        env: { ...deps.env, PROBE_AGENT: "pi" },
+      });
+    } catch (err) {
+      deps.log(`team-note sync spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+      return finish("skipped");
+    }
+    const timer = setTimeout(() => {
+      deps.log(`team-note sync still running after ${timeoutMs}ms; reading the file as it stands`);
+      finish("timeout");
+    }, timeoutMs);
+    if (typeof timer === "object" && timer && "unref" in timer) {
+      (timer as { unref: () => void }).unref();
+    }
+    const done = () => {
+      clearTimeout(timer as never);
+      finish("synced");
+    };
+    child.once?.("exit", done);
+    child.once?.("error", (err: unknown) => {
+      deps.log(`team-note sync failed: ${err instanceof Error ? err.message : String(err)}`);
+      clearTimeout(timer as never);
+      finish("skipped");
+    });
+    child.unref();
+  });
 }

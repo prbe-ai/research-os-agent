@@ -191,6 +191,19 @@ RENDER_FAILURE_CONTEXT = (
     "Reading the note directly still works: open `{document}`."
 )
 
+#: Says WHOSE text each parked copy is, because the answer changes the action.
+#: A copy this machine's current credential wrote is unsent work to fold back
+#: in; a copy another credential wrote is a different team's private prose, and
+#: folding that in would move one tenant's note into another's.
+PARKED_COPIES_CONTEXT = (
+    "Team-note copies are sitting on this machine unsynced. They are NOT being sent, and "
+    "nothing will send them:\n{detail}\n"
+    "A copy written under the credential this machine is using now is unsent work: read it, "
+    "fold anything still true into `{document}` (which does sync), and delete it. A copy "
+    "written under a DIFFERENT credential belongs to another team -- do not fold it in; leave "
+    "it or hand it to them. `probe doctor` names the owner of each."
+)
+
 
 def _render_failures() -> list[str]:
     """What the last background render could not do. NEVER raises.
@@ -211,37 +224,94 @@ def _render_failures() -> list[str]:
     return [str(item) for item in found][:5] if isinstance(found, list) else []
 
 
+def _team_note_dir() -> str:
+    """`state_dir()/team-note`, resolved the way `probe.version_policy` resolves it.
+
+    Deliberately duplicates the CLI rather than importing it: this file is a
+    hook, run by a bare `python3` against whatever interpreter the harness has,
+    with no guarantee the `probe` package is importable. Three lines of
+    duplication beat a briefing that disappears whenever the CLI is installed
+    somewhere this interpreter cannot see.
+    """
+    xdg = os.environ.get("XDG_STATE_HOME")
+    # NO expanduser ON THE XDG VALUE, because `probe.version_policy.state_dir`
+    # does not do one either (`Path(xdg)`), and this file's whole job is to
+    # name the same path the CLI writes. Expanding here would send the hook
+    # somewhere the CLI never looks the moment anyone exports `~/...`.
+    base = xdg if xdg else os.path.join(os.path.expanduser("~"), ".local", "state")
+    return os.path.join(base, "probe", "team-note")
+
+
 def _document_path() -> str:
     """Absolute path of the synced document, resolved the way the CLI resolves it.
 
-    Deliberately duplicates `probe.cli.agent_rules.memory_path` rather than
-    importing it: this file is a hook, run by a bare `python3` against whatever
-    interpreter the harness has, with no guarantee the `probe` package is
-    importable. Nine lines of duplication beat a briefing that disappears
-    whenever the CLI is installed somewhere this interpreter cannot see.
+    ONE DOCUMENT PER MACHINE, and the harness must not reach this path. It used
+    to sit beside each harness's instruction file, which -- with a base copy
+    keyed on the credential alone -- gave three harnesses one merge base and
+    made every session start push a whole document over the last one
+    (2026-09-07, v765-v770). `PROBE_AGENT` still picks which INSTRUCTION FILE
+    gets the managed block; it no longer picks a document.
 
-    The two must agree, and `test_team_note_brief_names_the_real_path` pins them
-    against each other so a change to one fails on the other.
-
-    This hook only ships inside the Claude Code/Codex `probe-research` plugin
-    -- pi's own extension briefs its session directly (see
-    `probe-research-pi/src/teamNote.ts`) and never runs this file -- but
-    `PROBE_AGENT=pi` can still reach here if it leaks in from an ambient shell
-    profile, and the two-way version of this check used to answer that with
-    Claude Code's path, silently, rather than pi's.
+    `test_team_note_brief_names_the_real_path` pins this against
+    `team_note_file.paths().document` across the whole env matrix, so a change
+    to one fails on the other.
     """
-    selected = (os.environ.get("PROBE_AGENT") or "").strip().lower()
-    if selected == "codex":
-        configured = os.environ.get("CODEX_HOME")
-        root = configured or os.path.join(os.path.expanduser("~"), ".codex")
-        return os.path.join(os.path.expanduser(root), DOCUMENT_NAME)
-    if selected == "pi":
-        configured = os.environ.get("PI_CODING_AGENT_DIR")
-        root = configured or os.path.join(os.path.expanduser("~"), ".pi", "agent")
-        return os.path.join(os.path.expanduser(root), DOCUMENT_NAME)
-    configured = os.environ.get("CLAUDE_CONFIG_DIR")
-    root = configured or os.path.join(os.path.expanduser("~"), ".claude")
-    return os.path.join(os.path.expanduser(root), DOCUMENT_NAME)
+    return os.path.join(_team_note_dir(), DOCUMENT_NAME)
+
+
+def _parked_copies() -> list:
+    """Documents on disk that are NOT being synced, newest first, each with
+    whether it belongs to the credential this machine is using now.
+
+    A parked copy is text somebody wrote that this machine will not send: a
+    leftover per-harness document from the old layout, or one written under a
+    different credential. The CLI parks them rather than deleting them, and this
+    is the only channel that tells anyone they are there -- `notes sync` runs
+    from the session-start hook with its output sent to DEVNULL, so a notice it
+    printed would reach nobody.
+    """
+    roots = [_team_note_dir()]
+    for env_name, default in (
+        ("CLAUDE_CONFIG_DIR", os.path.join("~", ".claude")),
+        ("CODEX_HOME", os.path.join("~", ".codex")),
+        ("PI_CODING_AGENT_DIR", os.path.join("~", ".pi", "agent")),
+    ):
+        roots.append(os.path.expanduser(os.environ.get(env_name) or default))
+    # WHOSE THE LIVE DOCUMENT IS, read straight off disk. This hook has no
+    # credential and cannot compute an owner key, but it does not need one: the
+    # question is only "same hand as the file being synced right now", and both
+    # answers are sitting in `.owner` sidecars.
+    try:
+        with open(os.path.join(_team_note_dir(), DOCUMENT_NAME + ".owner"), encoding="utf-8") as fh:
+            live_owner = fh.read().strip()
+    except OSError:
+        live_owner = None
+    found = []
+    for root in dict.fromkeys(roots):
+        try:
+            names = sorted(os.listdir(root), reverse=True)
+        except OSError:
+            continue
+        for name in names:
+            # Sidecars travel with a parked copy (its owner stamp, the base it
+            # derives from, that base's version) and are not copies themselves.
+            if name.endswith((".owner", ".base", ".meta")):
+                continue
+            if not any(name.startswith(f"{DOCUMENT_NAME}.{kind}-") for kind in ("unsynced", "legacy")):
+                continue
+            path = os.path.join(root, name)
+            try:
+                with open(path + ".owner", encoding="utf-8") as fh:
+                    owner = fh.read().strip()
+            except OSError:
+                owner = None
+            if owner is not None and live_owner is not None and owner != live_owner:
+                # ANOTHER CREDENTIAL'S NOTE. Naming it here would send an agent
+                # to open a different team's private prose to find out whose it
+                # is -- and that reading lands in this session's transcript.
+                continue
+            found.append(path)
+    return found
 
 
 
@@ -383,6 +453,18 @@ def _start_context() -> str | None:
     if failures:
         detail = "\n".join(f"- {item}" for item in failures)
         parts.append(RENDER_FAILURE_CONTEXT.format(detail=detail, document=_document_path()))
+    # PARKED COPIES ARE TEXT NOBODY IS SENDING, and this is the only channel
+    # that says so. The CLI parks a leftover per-harness document, or one
+    # written under another credential, rather than deleting it -- and the sync
+    # that does the parking runs detached with stdout and stderr on DEVNULL, so
+    # anything it printed reached nobody.
+    parked = _parked_copies()
+    if parked:
+        detail = "\n".join(f"- {item}" for item in parked[:5])
+        more = f"\n- ...and {len(parked) - 5} more" if len(parked) > 5 else ""
+        parts.append(
+            PARKED_COPIES_CONTEXT.format(detail=detail + more, document=_document_path())
+        )
     return "\n\n".join(parts) if parts else None
 
 
@@ -417,7 +499,7 @@ def _start_context() -> str | None:
 #: can act on. It is deliberately a version floor rather than a probe of `--help`:
 #: a probe costs an interpreter start on the session-start path, and the floor is
 #: exactly the fact we need.
-TEAM_NOTE_MIN_CLI = "0.105.0"
+TEAM_NOTE_MIN_CLI = "0.144.0"
 
 #: What a too-old CLI is told. Names the upgrade, because the researcher reading
 #: it has no other way to connect "my notes are not syncing" to "my CLI is old".

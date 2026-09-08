@@ -23,7 +23,13 @@ import { buildStatusReport } from "./status.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./tapRuntime.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./trackingSwitch.js";
 import { initializeTrackingState, trackingStatusText, type TrackingExecFileFn } from "./trackingState.js";
-import { readTeamNote, renderTeamNoteForPrompt, spawnTeamNoteSync, type TeamNoteSyncDeps } from "./teamNote.js";
+import {
+  readTeamNote,
+  renderTeamNoteForPrompt,
+  spawnTeamNoteSync,
+  syncTeamNoteThenRead,
+  type TeamNoteSyncDeps,
+} from "./teamNote.js";
 
 // Module-scope, NOT inside registerExtension: pi tears down and rebuilds the
 // extension runtime on /reload and on session switches (new/resume/fork),
@@ -67,7 +73,11 @@ function isExecutable(path: string): boolean {
 }
 
 const realSpawn: SpawnFn = (command, args, options) =>
-  spawn(command, args, options) as unknown as { pid: number | undefined; unref: () => void };
+  spawn(command, args, options) as unknown as {
+    pid: number | undefined;
+    unref: () => void;
+    once: (event: string, listener: (payload?: unknown) => void) => unknown;
+  };
 
 /** Same call, kept separate because the switch WAITS on its child. */
 const realSwitchSpawn: SwitchSpawnFn = (command, args, options) =>
@@ -161,12 +171,17 @@ function announce(ctx: { hasUI: boolean; ui: { notify: (msg: string, level?: "in
 
 export function registerExtension(pi: ExtensionAPI, extensionDir: string): void {
   pi.on("session_start", async (event, ctx) => {
-    // Team note: refreshes the cache for EVERY session_start reason,
-    // including "reload" — a sync since the last read may have refreshed the
-    // file on disk, and this is cheap (one local file read, never a network
-    // call). Independent of the capture-daemon logic below on purpose: a
-    // session with no transcript file, no pairing, or the killswitch active
-    // should still see the team note. readTeamNote() never throws.
+    // Team note: SYNC FIRST, then refresh the cache, for EVERY session_start
+    // reason including "reload". The document is one file per machine, written
+    // by whichever credential last synced — so reading it cold briefs this
+    // session from whatever was left there, which after a credential switch is
+    // the previous tenant's note. The sync is what parks that copy and installs
+    // ours; waiting for it (bounded, never longer than
+    // SYNC_BEFORE_READ_TIMEOUT_MS, child left running on timeout) makes the
+    // read an ordinary one. Independent of the capture-daemon logic below on
+    // purpose: a session with no transcript file, no pairing, or the killswitch
+    // active should still see the team note. Neither call ever throws.
+    await syncTeamNoteThenRead(realTeamNoteSyncDeps());
     cachedTeamNote = readTeamNote(process.env);
 
     const sessionId = ctx.sessionManager.getSessionId();

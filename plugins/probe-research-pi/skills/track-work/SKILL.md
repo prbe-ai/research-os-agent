@@ -203,9 +203,9 @@ duplicate as `--note id:<uuid>`. The
 CLI is the only writer; the SDK cannot write notes. See `reference.md` for what
 to do, which differs for a 4,000-character run/trial/group/artifact note and a
 100,000-character project or experiment document. The TEAM note is a synced FILE
-(`~/.claude/probe-team-note.md`, `~/.codex/probe-team-note.md` on Codex, or
-`~/.pi/agent/probe-team-note.md` on pi -- that exact path, NOT a `memory/`
-directory): edit it directly, it syncs itself. The
+(`~/.local/state/probe/team-note/probe-team-note.md` -- ONE file per machine,
+whatever agent you are, NOT a `memory/` directory): edit it directly, it syncs
+itself. The
 visible Markdown document is whole-document last-write-wins: read immediately before
 editing, preserve existing sections, verify after (commands in `reference.md`,
 including the `[README](https://github.com/owner/repo)` embed line and its two

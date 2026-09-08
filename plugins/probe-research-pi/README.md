@@ -297,9 +297,12 @@ independently if ever started another way.
 
 Independent of the capture daemon above — this works whether or not a device
 is paired, because it never talks to the tap package at all. The team note is
-the lab's shared memory: one markdown file, `~/.pi/agent/probe-team-note.md`
-by default, that every agent (Claude Code, Codex, and now pi) reads from and
-writes to.
+the lab's shared memory: ONE markdown file per machine,
+`~/.local/state/probe/team-note/probe-team-note.md` by default (under
+`$XDG_STATE_HOME` if that is set), that every agent (Claude Code, Codex, and
+pi) reads from and writes to. It used to be one file per harness beside each
+one's instruction file, which is what let two harnesses push a whole document
+over each other at every session start.
 
 **Inject, don't render.** Claude Code and Codex get the note by having a
 managed block rewritten into their global instruction file
@@ -310,9 +313,13 @@ to a file the researcher owns, and it can never collide with
 
 **What happens, and when:**
 
-1. `session_start` (every reason, including `reload`) reads
-   `~/.pi/agent/probe-team-note.md` — or `$PI_CODING_AGENT_DIR/probe-team-note.md`
-   if that env var is set — into an in-memory cache. Absent, empty, or
+1. `session_start` (every reason, including `reload`) fires `probe notes sync`
+   and waits up to 2s for it, then reads
+   `~/.local/state/probe/team-note/probe-team-note.md` into an in-memory cache.
+   Syncing first matters because the file is shared: read cold, right after a
+   `probe login`/`probe context use`, it would still hold the PREVIOUS
+   credential's note. On timeout the sync is left running (its result reaches
+   the next session) and the file is read as it stands. Absent, empty, or
    unreadable all just mean "nothing to brief this session with"; nothing
    throws.
 2. `before_agent_start` (every turn) appends the cached note, unchanged, to

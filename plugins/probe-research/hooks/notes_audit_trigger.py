@@ -64,14 +64,22 @@ def _int_env(name: str, default: int, floor: int) -> int:
 
 
 def note_path() -> Path:
-    """The synced team-note file for the harness this hook runs under."""
-    if os.environ.get("PROBE_AGENT", "") == "codex":
-        configured = os.environ.get("CODEX_HOME")
-        root = Path(configured).expanduser() if configured else Path.home() / ".codex"
-    else:
-        configured = os.environ.get("CLAUDE_CONFIG_DIR")
-        root = Path(configured).expanduser() if configured else Path.home() / ".claude"
-    return root / "probe-team-note.md"
+    """The synced team-note file. ONE per machine, whatever harness runs this.
+
+    It used to be resolved per harness (`~/.claude`, `~/.codex`), which is the
+    layout that let two harnesses push a whole document over each other at every
+    session start (2026-09-07, v765-v770). The document now lives in the state
+    directory beside the sync's own bookkeeping; `PROBE_AGENT` still selects an
+    instruction FILE elsewhere, never this path.
+
+    Duplicated from `probe.version_policy.state_dir` rather than imported: this
+    is a hook, run by whatever bare `python3` the harness has, with no guarantee
+    the `probe` package is importable. `test_the_hooks_and_the_cli_agree_on_the
+    _document` pins the two together.
+    """
+    xdg = os.environ.get("XDG_STATE_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".local" / "state"
+    return base / "probe" / "team-note" / "probe-team-note.md"
 
 
 def stamp_age_days(body: str, today: _dt.date) -> int | None:

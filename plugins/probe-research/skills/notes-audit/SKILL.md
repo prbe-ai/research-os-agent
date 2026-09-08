@@ -13,8 +13,9 @@ session doing the user's actual work; running inline (Codex, whose sandbox
 reaps detached processes), finish this audit before taking up the user's
 request — it is one small file.
 
-Work on the team-note FILE at its synced path (`~/.claude/probe-team-note.md`;
-`~/.codex/probe-team-note.md` on Codex; `~/.pi/agent/probe-team-note.md` on pi).
+Work on the team-note FILE at its synced path
+(`~/.local/state/probe/team-note/probe-team-note.md` -- one per machine, shared
+by every agent on it).
 Never edit the rendered block inside CLAUDE.md / AGENTS.md — it is overwritten
 on every sync and reaches nobody. Every edit is versioned server-side, so a
 wrong strike or removal is recoverable; that is the safety net this procedure

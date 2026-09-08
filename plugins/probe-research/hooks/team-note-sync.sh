@@ -2,6 +2,9 @@
 # Session-stop reconcile for the team note.
 #
 # The agent has been editing `probe-team-note.md` all session; this sends it.
+# ONE file per machine (`<state>/team-note/probe-team-note.md`), shared by every
+# harness on it -- PROBE_AGENT below picks the instruction FILE to re-render, not
+# the document.
 # SessionStart already pushed whatever an earlier session left behind, so by the
 # time this runs the only unsynced text is this session's own work.
 #

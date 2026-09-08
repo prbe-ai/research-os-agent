@@ -5,37 +5,78 @@
  * `~/.pi` on the machine running the suite.
  */
 
+import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
 import { piAgentDir, teamNoteDocumentPath } from "../src/paths.js";
-import { findProbeBinary, readTeamNote, renderTeamNoteForPrompt, spawnTeamNoteSync, type ProbeBinaryDeps, type TeamNoteSyncDeps } from "../src/teamNote.js";
+import { findProbeBinary, readTeamNote, renderTeamNoteForPrompt, spawnTeamNoteSync, syncTeamNoteThenRead, type ProbeBinaryDeps, type TeamNoteSyncDeps } from "../src/teamNote.js";
 
 describe("piAgentDir / teamNoteDocumentPath", () => {
-  it("defaults to ~/.pi/agent, and the document sits beside it", () => {
-    const env = {};
-    expect(piAgentDir(env)).toMatch(/\.pi[\\/]agent$/);
-    expect(teamNoteDocumentPath(env)).toBe(join(piAgentDir(env), "probe-team-note.md"));
-  });
-
   it("PI_CODING_AGENT_DIR relocates the agent dir directly -- nothing appended", () => {
     const env = { PI_CODING_AGENT_DIR: "/custom/pi-dir" };
     expect(piAgentDir(env)).toBe("/custom/pi-dir");
-    expect(teamNoteDocumentPath(env)).toBe(join("/custom/pi-dir", "probe-team-note.md"));
   });
 
   it("ignores a blank override the same way the Python side does", () => {
     const env = { PI_CODING_AGENT_DIR: "   " };
     expect(piAgentDir(env)).toMatch(/\.pi[\\/]agent$/);
   });
+
+  it("puts the document where the CLI puts it, for every case in the shared fixture", () => {
+    // THE CONTRACT WITH THE PYTHON SIDE. This extension cannot import the CLI,
+    // and it briefs a pi session from whatever path this returns -- so a drift
+    // here means an agent reads a file nothing syncs, silently. The same
+    // fixture is asserted against `team_note_file.paths().document` by
+    // `agent/tests/test_agent_rules.py`, so neither side can move alone.
+    const fixture = JSON.parse(
+      readFileSync(
+        join(
+          fileURLToPath(new URL("../../../tests/fixtures/", import.meta.url)),
+          "team-note-document-path.json",
+        ),
+        "utf-8",
+      ),
+    ) as { cases: { why: string; env: Record<string, string>; path: string }[] };
+
+    expect(fixture.cases.length).toBeGreaterThan(0);
+    for (const testCase of fixture.cases) {
+      const expected = testCase.path.startsWith("~")
+        ? join(homedir(), testCase.path.slice(2))
+        : testCase.path;
+      expect(teamNoteDocumentPath(testCase.env), testCase.why).toBe(expected);
+    }
+  });
+
+  it("never resolves under a harness home, whatever the harness says", () => {
+    // The ping-pong, as an assertion: three harness documents behind one merge
+    // base is what made every session start push a whole document over the
+    // last one (2026-09-07, v765-v770).
+    const env = {
+      XDG_STATE_HOME: "/tmp/state",
+      PI_CODING_AGENT_DIR: "/custom/pi-dir",
+      CODEX_HOME: "/custom/codex",
+      CLAUDE_CONFIG_DIR: "/custom/claude",
+    };
+    expect(teamNoteDocumentPath(env)).toBe(
+      join("/tmp/state", "probe", "team-note", "probe-team-note.md"),
+    );
+  });
 });
 
 describe("readTeamNote", () => {
   it("returns the file's text when present and non-empty", () => {
     const note = readTeamNote(
-      { PI_CODING_AGENT_DIR: "/agent-dir" },
-      { readFileSync: (p) => (p === join("/agent-dir", "probe-team-note.md") ? "# Team note\ncontent\n" : "") },
+      { XDG_STATE_HOME: "/state-dir" },
+      {
+        readFileSync: (p) =>
+          p === join("/state-dir", "probe", "team-note", "probe-team-note.md")
+            ? "# Team note\ncontent\n"
+            : "",
+      },
     );
     expect(note).toBe("# Team note\ncontent\n");
   });
@@ -72,9 +113,9 @@ describe("readTeamNote", () => {
 
 describe("renderTeamNoteForPrompt", () => {
   it("names the real file path and carries the note body", () => {
-    const rendered = renderTeamNoteForPrompt("Some team note text.", "/home/x/.pi/agent/probe-team-note.md");
+    const rendered = renderTeamNoteForPrompt("Some team note text.", "/home/x/.local/state/probe/team-note/probe-team-note.md");
     expect(rendered).toContain("Some team note text.");
-    expect(rendered).toContain("/home/x/.pi/agent/probe-team-note.md");
+    expect(rendered).toContain("/home/x/.local/state/probe/team-note/probe-team-note.md");
     expect(rendered).toContain("## Probe team note");
   });
 });
@@ -188,5 +229,83 @@ describe("spawnTeamNoteSync", () => {
 
     expect(() => spawnTeamNoteSync(deps)).not.toThrow();
     expect(logMock).toHaveBeenCalledWith(expect.stringContaining("spawn failed"));
+  });
+});
+
+describe("syncTeamNoteThenRead", () => {
+  // WHY THESE EXIST: session_start awaits this before reading the note, so its
+  // outcomes decide whether a pi session briefs from a fresh file, a stale one,
+  // or hangs. A hang here is the worst of the three and the least visible.
+  const deps = (over: Partial<TeamNoteSyncDeps> = {}): TeamNoteSyncDeps => ({
+    spawn: () => ({ pid: 1, unref: () => {} }),
+    existsSync: () => true,
+    isExecutable: () => true,
+    env: { PATH: "/usr/bin" },
+    log: () => {},
+    ...over,
+  });
+
+  it("resolves 'synced' when the child exits", async () => {
+    const outcome = await syncTeamNoteThenRead(
+      deps({
+        spawn: () => ({
+          pid: 1,
+          unref: () => {},
+          once: (event: string, cb: (v?: unknown) => void) => {
+            if (event === "exit") queueMicrotask(() => cb(0));
+          },
+        }),
+      }),
+      50,
+    );
+    expect(outcome).toBe("synced");
+  });
+
+  it("resolves 'timeout' and leaves the child running when the sync is slow", async () => {
+    let unrefs = 0;
+    const outcome = await syncTeamNoteThenRead(
+      deps({ spawn: () => ({ pid: 1, unref: () => { unrefs += 1; } }) }),
+      10,
+    );
+    expect(outcome).toBe("timeout");
+    // Unref'd, not killed: it still finishes, and its result reaches the NEXT
+    // session's read. Killing it would make a slow network mean no sync at all.
+    expect(unrefs).toBe(1);
+  });
+
+  it("resolves 'skipped' when the child errors", async () => {
+    const outcome = await syncTeamNoteThenRead(
+      deps({
+        spawn: () => ({
+          pid: 1,
+          unref: () => {},
+          once: (event: string, cb: (v?: unknown) => void) => {
+            if (event === "error") queueMicrotask(() => cb(new Error("boom")));
+          },
+        }),
+      }),
+      50,
+    );
+    expect(outcome).toBe("skipped");
+  });
+
+  it("resolves 'skipped' when spawning throws, and never rejects", async () => {
+    const outcome = await syncTeamNoteThenRead(
+      deps({
+        spawn: () => {
+          throw new Error("ENOENT");
+        },
+      }),
+      50,
+    );
+    expect(outcome).toBe("skipped");
+  });
+
+  it("resolves 'skipped' when no probe binary can be found", async () => {
+    const outcome = await syncTeamNoteThenRead(
+      deps({ existsSync: () => false, isExecutable: () => false, env: {} }),
+      50,
+    );
+    expect(outcome).toBe("skipped");
   });
 });

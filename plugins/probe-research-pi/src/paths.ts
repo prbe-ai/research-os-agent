@@ -74,11 +74,10 @@ export function pluginDir(env: PathEnv = process.env): string {
  *
  * Mirrors `agent_rules.memory_path`'s `"pi"` branch in the Python CLI
  * (`agent/src/probe/cli/agent_rules.py`) exactly -- see that function's own
- * docstring for the same sourcing note. The two must agree: this extension
- * reads `teamNoteDocumentPath()` for its OWN cache, and `probe notes sync`
- * (invoked with `PROBE_AGENT=pi`, see `teamNote.ts`) writes through the
- * Python resolution. A drift here is silent -- this extension would cache
- * one file while the CLI syncs a different one.
+ * docstring for the same sourcing note. The two must agree about pi's own
+ * `AGENTS.md`, which is what this resolves. It no longer decides where the
+ * TEAM NOTE lives: that is one file per machine in the state directory
+ * (`teamNoteDocumentPath` below), reached by no harness path at all.
  */
 export const PI_AGENT_DIR_ENV = "PI_CODING_AGENT_DIR";
 
@@ -114,17 +113,39 @@ export function piProjectSettingsPath(cwd: string): string {
 }
 
 /**
- * Where the team note document lives for a pi session -- the file this
- * extension reads to brief a session, and the file `probe notes sync
- * --agent pi` (via `PROBE_AGENT=pi`) reads and writes. Mirrors
- * `team_note_file.paths(source="pi").document` in the Python CLI, which is
- * `agent_rules.memory_path("pi").parent / "probe-team-note.md"` --
- * `~/.pi/agent/probe-team-note.md` by default, right beside where pi's own
- * `AGENTS.md` lives, exactly like `~/.claude/probe-team-note.md` sits beside
- * `~/.claude/CLAUDE.md` for Claude Code.
+ * Probe's state directory: `$XDG_STATE_HOME/probe`, else `~/.local/state/probe`.
+ * Mirrors `probe.version_policy.state_dir` in the Python CLI. Duplicated rather
+ * than shelled out for, because this runs on pi's session-start path where a
+ * subprocess is a latency budget we do not have.
+ */
+export function probeStateDir(env: PathEnv = process.env): string {
+  const xdg = env.XDG_STATE_HOME;
+  const base = xdg && xdg.trim() ? xdg : join(homedir(), ".local", "state");
+  return join(base, "probe");
+}
+
+/**
+ * Where the team note document lives -- ONE per machine, whatever harness is
+ * running. This extension reads it to brief a session, and `probe notes sync`
+ * (invoked with `PROBE_AGENT=pi`, see `teamNote.ts`) reads and writes it.
+ * Mirrors `team_note_file.paths().document` in the Python CLI, which is
+ * `state_dir() / "team-note" / "probe-team-note.md"`.
+ *
+ * IT USED TO BE PER HARNESS -- `~/.pi/agent/probe-team-note.md` beside pi's own
+ * `AGENTS.md`, with Claude Code and Codex each keeping their own beside theirs.
+ * The sync's base copy was keyed on the credential alone, so one base served
+ * three documents: each harness read the others' file as unsynced work and
+ * pushed a whole document over it at every session start, and nothing ever
+ * converged them. Measured on 2026-09-07: server versions v765-v770, two
+ * byte-identical bodies alternating every ~20 minutes, three whole sections
+ * appearing and disappearing. `PROBE_AGENT` still selects an instruction FILE;
+ * it must never again select a document.
+ *
+ * `tests/teamNote.test.ts` pins this against the same fixture the Python
+ * suite reads, so the two implementations cannot drift apart silently.
  */
 export function teamNoteDocumentPath(env: PathEnv = process.env): string {
-  return join(piAgentDir(env), "probe-team-note.md");
+  return join(probeStateDir(env), "team-note", "probe-team-note.md");
 }
 
 export function tokenFile(env: PathEnv = process.env): string {
@@ -162,8 +183,8 @@ export function probeConfigPath(env: PathEnv = process.env): string {
  * inside `pluginDir()`: that directory's name and contents are a contract
  * shared with the Python tap daemon (see the file-level comment above), and
  * this state has nothing to do with capture — it is this extension's own
- * MCP client credential cache, scoped under pi's own agent directory like
- * the team-note document is.
+ * MCP client credential cache, scoped under pi's own agent directory. (The
+ * team-note document is NOT: it is one file per machine in the state dir.)
  */
 export function mcpOAuthStateFile(env: PathEnv = process.env): string {
   return join(piAgentDir(env), "state", "probe-research-mcp", "oauth.json");
