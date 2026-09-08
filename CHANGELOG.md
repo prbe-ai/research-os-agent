@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `probe overview write <file> --project|--experiment <ref> --blurb "..." [--plan] [--series]`:
+  write the first version of a project's or experiment's overview page -- the
+  self-contained HTML page the dashboard shows as that entity's summary on
+  teams admitted to the overview lane. The server applies the same checks to an
+  agent's page as to its own and answers 422 naming the fault; every later
+  automatic refresh edits the agent's page rather than replacing it. SDK:
+  `Client.write_overview(kind, entity_id, html=, blurb=, plan=, series=)`.
+
 ## 0.143.0
 
 ### Changed
