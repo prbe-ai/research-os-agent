@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.147.1
+
 ### Changed
 
 - Sign out is the last option in the wizard's main menu, below Exit.
