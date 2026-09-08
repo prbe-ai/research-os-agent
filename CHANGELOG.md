@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.144.0
+
 ### Added
 
 - `probe overview write <file> --project|--experiment <ref> --blurb "..." [--plan] [--series]`:
