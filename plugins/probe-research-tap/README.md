@@ -6,9 +6,10 @@ durable outbox, retries, HTTP transport, lifecycle management, storage, status,
 and revocation. Only transcript discovery and event normalization are
 agent-specific.
 
-Identity is injected server-side from a source-bound device token. The plugin
-never sends employee fields, and the gateway validates tenant and source before
-forwarding the client-sanitized batch. Runtime code is Python 3.11+ stdlib only.
+Uploader identity is injected server-side from a source-bound device token.
+Authentication does not prove the original author of a historical conversation.
+The gateway validates tenant and source before forwarding the client-sanitized
+batch. Runtime code is Python 3.11+ stdlib only.
 
 ## Install and authorize
 
@@ -52,17 +53,18 @@ to the Codex route. Re-running setup rotates the device credential. Use
 ```text
 agent SessionStart hook
   -> detached, session-scoped tap daemon
+  -> verify native session identity and negotiate protocol-2 receipts
   -> tail transcript/rollout JSONL from the supplied transcript_path
   -> normalize the agent event shape and remove unsupported payloads
-  -> enqueue a durable batch in sqlite
+  -> persist immutable batch bytes and source/event cursors in shared SQLite
   -> POST /ingest/v1/sessions/{claude-code|codex}
-       2xx                 mark delivered
-       401                 halt and clear the outbox
-       400/403/404         drop rejected/poison batch and continue
-       retryable failure   exponential-backoff retry
+       matching receipt   advance the acknowledged cursor
+       lost response      replay identical bytes and sequence
+       auth/unavailable   retain pending bytes for retry
+       conflict           retain evidence for reconciliation
 agent SessionEnd hook
   -> signal the daemon and leave a shutdown sentinel
-  -> daemon tails and durably enqueues the final transcript bytes before exit
+  -> pin a complete source prefix and send its finalization receipt
 ```
 
 Codex can supply a null `transcript_path` at session start, so the adapter can
@@ -71,10 +73,17 @@ format is not a stable public interface; `tap/codex_sanitize.py` and its real
 rollout fixture are therefore a deliberately thin, separately tested adapter.
 Claude Code normalization lives in `tap/sanitize.py`.
 
-The batch body is `{device_id, session_id, batch_seq, cwd, events:[{line_no,
-raw}]}`. The backend supplies tenant/user identity and forwards the normalized
-batch to the matching engine connector. Session completion is backend-owned;
-the plugin sends no finalize message.
+Protocol 2 adds stream identity, source byte/line bounds, emitted-event bounds,
+prefix hashes and optional snapshot/finalization evidence to each batch. The
+engine accepts a sequence once, returns the same receipt for an identical retry,
+and rejects changed content at that sequence. Old producers cannot overwrite a
+claimed protocol-2 stream. An unavailable protocol never triggers a downgrade.
+
+After a daemon crash, another running local daemon can recover a quiet source
+once its process ownership ends. Completion certifies that pinned prefix; a later
+append reopens the stream with subsequent sequence numbers. Each source's saved
+working directory is checked against current capture settings before staging
+and delivery. This metadata never creates a session-to-project association.
 
 ## State and compatibility
 
@@ -95,8 +104,14 @@ compatible `PRBE_CODEX_TAP_PLUGIN_DIR` for Codex.
 | `.config` | Backend origin and optional cadence overrides |
 | `.disabled` | Local all-session killswitch |
 | `.disabled_paths` | Newline-separated cwd prefixes to skip |
-| `state.db` | File offsets, durable outbox, device metadata, batch sequence |
+| `state.db` | Legacy file offsets/outbox and device metadata, retained for compatibility |
 | `logs/<session_id>.log` | Session daemon log |
+
+Protocol-2 ownership, source snapshots and immutable pending batches live under
+`~/.probe/transcripts-v2/`, scoped by backend, tenant and producer. The historical
+importer uses this same journal. Set `PROBE_TRANSCRIPT_STATE_DIR` for isolated
+tests. Keep this state when upgrading or rolling back; deleting it is not a
+conflict-recovery procedure.
 
 The daemon uses a 60-second active cadence and moves to 300 seconds after two
 empty ticks. Configure `active_interval_seconds` and `idle_interval_seconds`
@@ -118,6 +133,7 @@ Common overrides:
 |---|---|
 | `PROBE_BASE_URL` | Backend origin override |
 | `PROBE_CONFIG_PATH` | Probe CLI config path override (tests/dev) |
+| `PROBE_TRANSCRIPT_STATE_DIR` | Shared protocol-2 journal root (tests/dev) |
 | `PROBE_RESEARCH_TAP_ACTIVE_INTERVAL_SECONDS` | Active interval |
 | `PROBE_RESEARCH_TAP_IDLE_INTERVAL_SECONDS` | Idle interval |
 | `PROBE_RESEARCH_TAP_INTERVAL_SECONDS` | Legacy fixed interval |

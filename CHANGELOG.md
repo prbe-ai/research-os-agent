@@ -2,8 +2,38 @@
 
 ## Unreleased
 
+### Fixed
+
+- Local backfill now verifies each reviewed file against durable delivery receipts,
+  retains interrupted work, and reconciles earlier imports by downloaded bytes.
+  References remain identified separately from stored file contents.
+- Backfill agent helpers use the importer's own CLI package even when an older
+  `probe` is installed elsewhere on PATH, preserving standalone attribution.
+- Interrupted batches recover when their saved Claude conversation was never
+  created. Other launch failures retain their original error alongside file
+  coverage errors.
+- Reconstruction drafts prioritize project overviews and current status, retain
+  bounded sections from long documents, and distinguish upstream history from
+  the local work. Invalid drafts retain their diagnostics and original output
+  with one bounded repair attempt. Claude project reconstruction uses Sonnet
+  to reconcile documents; transcript digests keep their existing model.
+- Backfill refresh status follows the active Overview lane, preserves published
+  draft identity on restart, and avoids retries based on an unrelated legacy queue.
+  New optional refreshes require successful reviewed publication. Finished
+  generation is labeled for separate review, independently of verified files.
+- Historical transcripts import as standalone sessions, with native session
+  identity checks and immutable retries shared with tap 0.4.5. Backfill creates
+  no transcript-to-project or other entity associations.
+- Tap 0.4.5 respects each source folder's capture settings during shared recovery
+  and recovers completed prefixes after a daemon crash. It requires a server
+  supporting protocol-2 receipts before staging new batches.
+
 ### Added
 
+- Detect local GitHub repositories and use authorized history from the existing
+  integration during backfill; reuse or attach Code sources after placement review.
+- Save file/Git reconstruction drafts for review, append approved drafts without
+  overwriting Overview prose, and report optional AI generation separately.
 - `write-overview` skill: write the first version of a project's or
   experiment's Overview page through the agent door (`probe overview write`)
   -- an artifact someone else reads to understand what is going on, opening

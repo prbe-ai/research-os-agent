@@ -27,17 +27,19 @@ nothing") the daemon reads one last transcript tail and enqueues a FINALIZE for
 the session. That finalize is what tells the engine the session is over, and
 completion is the only thing that triggers its knowledge-unit extraction —
 qa, code_change, decision, file_ref. Without it a session is captured as a live
-transcript and never mined, until the server-side nightly sweep notices it has
-been quiet for hours.
+transcript and never mined. Protocol 2 requires a pinned client completion;
+another local daemon recovers quiet orphans after their process ownership ends.
 """
 
 from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import logging
 import os
 import signal
+import sqlite3
 import subprocess
 import sys
 import time
@@ -48,6 +50,8 @@ from pathlib import Path
 from tap import config as cfg
 from tap import killswitch, outbox, reconcile
 from tap.outbox import HaltError
+from tap.session_identity import validate_identity
+from tap.session_journal import DeliveryPending, Journal, ReconciliationRequired, Wire
 from tap.storage import FileOffset, Storage
 from tap.transcript import read_new, validate_json
 
@@ -70,6 +74,10 @@ ORPHAN_CHECK_EVERY_TICKS = 12
 # Hard cap on how long we'll wait for lsof to return; if it hangs, we'd
 # rather assume "alive" and skip than block the tick.
 ORPHAN_LSOF_TIMEOUT_S = 5
+
+# Missing daemons recover through a frozen, quiet source prefix. Completion
+# attests that prefix only; it never claims the producer cannot append again.
+ORPHAN_QUIET_SECONDS = 10 * 60
 
 # After a 401 halt, a daemon start older than this cooldown clears the latch and
 # re-probes instead of staying wedged forever. A transient 401 (member removed
@@ -263,56 +271,202 @@ def main(argv: list[str] | None = None) -> int:
 
     storage = Storage(cfg.state_db_path())
 
-    # 401-halt latch. There is no pairing step to clear it, so a daemon start
-    # decides whether the halt still holds. It clears (and resumes) in ANY of
-    # three cases, so a halt is never held longer than it can be justified:
-    #   (a) the configured ingest token differs from the one the server rejected
-    #       (user ran `probe login` or changed PROBE_INGEST_TOKEN) — the fix;
-    #   (b) the halt is older than HALT_RETRY_AFTER_SECONDS — a periodic re-probe
-    #       that self-heals a transient 401 (e.g. member removed then re-added
-    #       with the SAME still-valid token, which leaves no fingerprint change);
-    #   (c) no rejected-token fingerprint was recorded — a crash could split the
-    #       timestamp from the fingerprint (now written atomically, but an old
-    #       split state may persist), and we do not hold a halt we can't justify.
-    if storage.get_meta("last_401_at"):
-        rejected_fp = storage.get_meta("last_401_token_sha256")
-        last_401_at = _read_int_meta(storage, "last_401_at", default=0)
-        now = int(time.time())
-        token_changed = bool(rejected_fp) and rejected_fp != outbox.token_fingerprint(token)
-        cooldown_expired = last_401_at > 0 and (now - last_401_at) > HALT_RETRY_AFTER_SECONDS
-        no_fingerprint = not rejected_fp
-        if token_changed or cooldown_expired or no_fingerprint:
-            reason = (
-                "ingest token changed since last 401"
-                if token_changed
-                else "halt cooldown expired; re-probing"
-                if cooldown_expired
-                else "no rejected-token fingerprint recorded"
-            )
-            log.info("clearing 401 halt (%s) and resuming", reason)
-            storage.delete_meta("last_401_at")
-            storage.delete_meta("last_401_token_sha256")
-        else:
-            log.warning(
-                "halted: last_401_at set — fix PROBE_INGEST_TOKEN or run "
-                "`probe login` with a valid ingest token to resume"
-            )
-            storage.close()
-            return 1
-
-    log.info(
-        "tap starting session=%s transcript=%s cwd=%s active=%ds idle=%ds",
-        config.session_id,
-        config.transcript_path,
-        config.cwd,
-        config.active_interval_s,
-        config.idle_interval_s,
-    )
     try:
-        return _run_loop(config, storage)
+        return _run_durable_loop(config, storage)
     finally:
         storage.close()
         log.info("tap exited")
+
+
+def _reservation_cwd(journal: Journal, state: dict, storage: Storage) -> Path:
+    """Recover eligibility metadata from source evidence, never its disk layout."""
+    cwd = state.get("cwd")
+    pending = journal.pending(state["session_id"])
+    pending_cwd = json.loads(pending).get("cwd") if pending else None
+    if cwd and pending_cwd and cwd != pending_cwd:
+        raise ReconciliationRequired("pending source folder differs from its reservation")
+    if not cwd:
+        cwd = pending_cwd
+    if not cwd:
+        previous = storage.get_offset(state["path"])
+        if previous and previous.session_id == state["session_id"]:
+            cwd = previous.cwd
+    if not cwd:
+        cwd = validate_identity(Path(state["path"]), journal.source, state["session_id"]).get(
+            "source_cwd"
+        )
+    if not isinstance(cwd, str) or not Path(cwd).is_absolute():
+        raise DeliveryPending("source working directory is unverified; capture retained")
+    if not state.get("cwd"):
+        journal.update(state["session_id"], cwd=cwd)
+    return Path(cwd)
+
+
+def _require_capture_eligible(cwd: Path) -> None:
+    if cfg.killswitch_active() or cfg.cwd_disabled(cwd):
+        raise DeliveryPending("capture disabled for this source folder; pending bytes retained")
+
+
+def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
+    """Protocol negotiation precedes source reservation. No legacy downgrade.
+
+    The old outbox is a different namespace. Old processes cannot clear or
+    evict durable pending bytes; the server fences their writes to v2 streams.
+    Every compatible producer uses the same atomic session reservation.
+    """
+    wire = Wire(cfg.api_base_url(), c.token, cfg.capture_source())
+    journal = None
+    tick = 0
+    seen_reader = False
+    empty_ticks = 0
+    try:
+        while True:
+            stopping = _shutdown_observed(c)
+            if cfg.killswitch_active() or cfg.cwd_disabled(c.cwd):
+                return 0
+            enabled, _reason = killswitch.is_ingestion_enabled(
+                token=c.token, base_url=wire.base_url
+            )
+            if not enabled:
+                if stopping:
+                    return 0
+                time.sleep(min(c.active_interval_s, 60))
+                continue
+            try:
+                sent_bytes = 0
+                if journal is None or journal.get(c.session_id) is None:
+                    provenance = validate_identity(c.transcript_path, wire.source, c.session_id)
+                    remote = wire.receipts(c.session_id)
+                    journal = journal or Journal(wire.base_url, remote["customer_id"], wire.source)
+                    if not journal.claim_live(c.session_id):
+                        return 0  # another compatible daemon owns this session
+                    journal.ensure(
+                        c.session_id,
+                        c.transcript_path,
+                        remote,
+                        historical=False,
+                        provenance=provenance,
+                        cwd=str(c.cwd),
+                    )
+                if stopping:
+                    journal.ensure(
+                        c.session_id,
+                        c.transcript_path,
+                        wire.receipts(c.session_id),
+                        historical=True,
+                        cwd=str(c.cwd),
+                        complete_lines_only=True,
+                    )
+                    journal.update(c.session_id, finalize_requested=True)
+                # Recover only sessions with durable consent/capture ownership.
+                states = journal.sessions()
+                current = [state for state in states if state["session_id"] == c.session_id]
+                others = [state for state in states if state["session_id"] != c.session_id]
+                start = (tick * (MAX_DRAIN_PER_TICK - 1)) % len(others) if others else 0
+                states = current + others[start:] + others[:start]
+                for state in states[:MAX_DRAIN_PER_TICK]:
+                    if sent_bytes >= reconcile.MAX_BACKFILL_BYTES_PER_SWEEP:
+                        break
+                    try:
+                        source_cwd = _reservation_cwd(journal, state, storage)
+                        _require_capture_eligible(source_cwd)
+                        if (
+                            state["session_id"] != c.session_id
+                            and state.get("live_enabled")
+                            and not reconcile.has_live_daemon(state["session_id"])
+                        ):
+                            source_stat = Path(state["path"]).stat()
+                            if time.time() - source_stat.st_mtime >= ORPHAN_QUIET_SECONDS and (
+                                not state["finalized"]
+                                or source_stat.st_size > state["source_byte_end"]
+                            ):
+                                journal.pin_orphan(
+                                    state["session_id"], wire.receipts(state["session_id"])
+                                )
+                        for _ in range(4):
+                            _require_capture_eligible(source_cwd)
+                            body = journal.stage(
+                                state["session_id"],
+                                cwd=str(source_cwd),
+                                finalize=bool(state.get("finalize_requested")),
+                                historical_only=not state.get("live_enabled", False),
+                            )
+                            if body is None:
+                                break
+                            _require_capture_eligible(source_cwd)
+                            journal.deliver(state["session_id"], wire)
+                            sent_bytes += len(body)
+                        journal.release_snapshot(state["session_id"])
+                    except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
+                        journal.update(state["session_id"], error=str(exc))
+                        log.warning("session %s retained for retry: %s", state["session_id"], exc)
+                # Existing eligibility remains authoritative for late files: the
+                # session has a daemon log or old cursor, never just a directory.
+                if tick % reconcile.RECONCILE_EVERY_TICKS == 0 and not stopping:
+                    gaps = [
+                        gap
+                        for gap in reconcile.find_gaps(storage, now=int(time.time()))
+                        if journal.get(gap.session_id) is None
+                    ]
+                    limit = reconcile.MAX_BACKFILL_FILES_PER_SWEEP
+                    start = (
+                        (tick // reconcile.RECONCILE_EVERY_TICKS * limit) % len(gaps) if gaps else 0
+                    )
+                    for gap in (gaps[start:] + gaps[:start])[:limit]:
+                        try:
+                            provenance = validate_identity(gap.path, wire.source, gap.session_id)
+                            previous = storage.get_offset(str(gap.path))
+                            source_cwd = (
+                                previous.cwd
+                                if previous and previous.session_id == gap.session_id
+                                else provenance.get("source_cwd")
+                            )
+                            if not source_cwd or not Path(source_cwd).is_absolute():
+                                raise DeliveryPending(
+                                    "source working directory is unverified; capture retained"
+                                )
+                            _require_capture_eligible(Path(source_cwd))
+                            journal.ensure(
+                                gap.session_id,
+                                gap.path,
+                                wire.receipts(gap.session_id),
+                                historical=False,
+                                provenance=provenance,
+                                cwd=source_cwd,
+                            )
+                        except (
+                            DeliveryPending,
+                            ReconciliationRequired,
+                            OSError,
+                            sqlite3.Error,
+                        ) as exc:
+                            log.warning("reconcile %s pending: %s", gap.session_id, exc)
+            except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
+                log.warning("capture pending; source and queue retained: %s", exc)
+            if stopping:
+                return 0
+            tick += 1
+            if tick % ORPHAN_CHECK_EVERY_TICKS == 0:
+                reader = _transcript_has_active_reader(c.transcript_path)
+                if reader:
+                    seen_reader = True
+                elif reader is False and (
+                    seen_reader
+                    or time.time() - c.transcript_path.stat().st_mtime >= ORPHAN_QUIET_SECONDS
+                ):
+                    c.shutdown_sentinel.touch()
+                    continue
+            empty_ticks = 0 if sent_bytes else empty_ticks + 1
+            cadence = (
+                c.idle_interval_s if empty_ticks >= IDLE_THRESHOLD_TICKS else c.active_interval_s
+            )
+            slept = 0
+            while slept < cadence and not _shutdown_observed(c):
+                time.sleep(1)
+                slept += 1
+    finally:
+        if journal is not None:
+            journal.close()
 
 
 def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:
@@ -733,9 +887,7 @@ def _tick_read(
             # be re-read. Re-derived from the file rather than summed from line
             # lengths — split_lines strips \r and skips blanks, so summed
             # lengths are not a file position.
-            byte_offset = reconcile.byte_offset_after(
-                c.transcript_path, prev_byte, consumed_lines
-            )
+            byte_offset = reconcile.byte_offset_after(c.transcript_path, prev_byte, consumed_lines)
             line_no = last_line_no + consumed_lines
         storage.upsert_offset(
             FileOffset(
