@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Added
+
+- Guided and regular installs show a progress bar above the content. Step counts
+  omit skipped agent selection, and progress continues across all selected coding agents.
+
 ## 0.145.0
 
 ### Fixed
