@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Local project backfill can attach an existing W&B source and start historical
+  run discovery after the destination is reviewed. It reuses the project's
+  source identities and saves admission keys before requests, so restarts and
+  lost responses do not create duplicate jobs or runs. History status remains
+  separate from verified file delivery; metrics continue to be read from W&B.
+- SDK methods for project W&B attachments, live-sync settings, and history jobs.
+
 ## 0.146.0
 
 ### Added
