@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Changed
+
+- Sign out is the last option in the wizard's main menu, below Exit.
+
+## 0.147.0
+
 ### Added
 
 - Local project backfill can attach an existing W&B source and start historical
