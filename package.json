@@ -12,7 +12,9 @@
     "skills": [
       "plugins/probe-research-pi/skills/track-work",
       "plugins/probe-research-pi/skills/show-research-status",
-      "plugins/probe-research-pi/skills/instrument-training-runs"
+      "plugins/probe-research-pi/skills/instrument-training-runs",
+      "plugins/probe-research-pi/skills/notes-audit",
+      "plugins/probe-research-pi/skills/write-overview"
     ],
     "mcp": "./plugins/probe-research-pi/mcp.json"
   },

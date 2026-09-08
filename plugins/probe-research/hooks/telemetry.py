@@ -112,6 +112,7 @@ RESEARCH_SKILLS = {
     "toggle-research-tracking",
     "capture-run-inputs",
     "show-research-timeline",
+    "write-overview",
 }
 
 MCP_TOOL_RE = re.compile(r"^mcp__.*probe[-_]research")

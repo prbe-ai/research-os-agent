@@ -60,6 +60,7 @@ const EXPECTED_SKILLS = [
   "show-research-status",
   "instrument-training-runs",
   "notes-audit",
+  "write-overview",
 ].sort();
 
 let scratchHome: string;

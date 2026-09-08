@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+
+- `write-overview` skill: write the first version of a project's or
+  experiment's Overview page through the agent door (`probe overview write`)
+  -- an artifact someone else reads to understand what is going on, opening
+  with the explanation (what this is, why, what was done, what came of it,
+  where it stands) under the same contract the dashboard's own lane obeys and
+  keeps current afterwards. Registered in both plugin mirrors and the pi
+  manifest.
+
 ## 0.144.0
 
 ### Added
