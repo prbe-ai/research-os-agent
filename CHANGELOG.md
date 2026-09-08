@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.146.0
+
 ### Added
 
 - Guided and regular installs show a progress bar above the content. Step counts
