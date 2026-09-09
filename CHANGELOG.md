@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.150.1
+
 ### Fixed
 
 - Installing from the wizard reuses the device's saved authorization instead of
