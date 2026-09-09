@@ -39,6 +39,14 @@ DELETE, outright and completely, every existing `> **SUPERSEDED**` blockquote
 region you find, marker line and struck lines together. Those are already-
 retracted claims; this lane does not keep them.
 
+ONE EXCEPTION, and it is the guard below applied to a marker: a region that
+records a DECISION someone made and then reversed. The retracted claim is dead,
+but "we chose this, then un-chose it, and here is why" is not a stale claim --
+it is the thing that stops the same proposal coming back. Recognise it by the
+prose around it arguing for its own preservation, or by the struck line being a
+numbered decision rather than a fact. Leave those exactly as they are; a note
+that says "keep this reversal" has already told you the answer.
+
 An entry that declares its own end and is past it is disproved by the calendar:
 "expires 2026-09-07", "temp cap until Oct 1". Delete it. A bare date is NOT an
 expiry — incident dates, deadlines met and historical results stay.
@@ -48,7 +56,8 @@ commercial facts, legal status, incident history, decisions someone made — is
 left exactly as written; "disproved" means checked and false, never unfamiliar.
 And you may compress or reword, but never change what someone asserted.
 
-**If the trigger line says deletion is disabled, delete NOTHING in this section.**
+**If the line that sent you here says deletion is disabled, delete NOTHING in
+this section.**
 Correct a disproved claim by editing it to say what is true, leave every
 superseded region where it is, and say in your report what you would have
 removed. That switch exists so the destructive half can be stopped in production

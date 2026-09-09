@@ -227,8 +227,9 @@ traps).
 Keep the team note TRUE, not just current: add a team-wide fact the moment you
 learn it (a compacted session keeps only what was written down), prefer
 correcting an existing line over adding a new one, and record shipped work as
-one line plus its PR number. When session start reports the team-note audit
-due, dispatch it the way the trigger line says: on Claude Code a BACKGROUND
+one line plus its PR number. **When the rendered team-note block itself says the
+audit is due**, dispatch it exactly as that line says — it is written per
+harness, so it already knows what yours can do: on Claude Code a BACKGROUND
 subagent told to follow the `notes-audit` skill, never inline; on Codex the
 sandbox reaps detached processes, so run the audit yourself first — it is one
 small file and quick — then take up the user's work.
