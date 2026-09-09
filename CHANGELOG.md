@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- The wizard shows only the timestamp and success/fail status for the last update attempt.
+- Sign out appears immediately above Exit in the main menu.
+
 ## 0.147.2
 
 ### Changed
