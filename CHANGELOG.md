@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.147.2
+
 ### Changed
 
 - Install progress uses a shorter bar with a solid fill, a lightly shaded remaining
