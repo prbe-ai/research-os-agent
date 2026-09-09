@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.151.1
+
 ## 0.151.0
 
 ### Changed
