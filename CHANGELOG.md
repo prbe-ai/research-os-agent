@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.151.2
+
 ### Changed
 
 - Guided installation offers imports after setup finishes, with both import
