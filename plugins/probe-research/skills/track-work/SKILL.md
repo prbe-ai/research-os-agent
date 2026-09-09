@@ -161,34 +161,47 @@ say what to do next time. Notes are NOT a second description: a description
 says what the thing IS, written before it runs; notes say what a later reader
 should distrust, learned afterwards.
 
-When a conclusion you recorded stops being true, usually just FIX IT — edit the
-claim to say what is true instead. Every version is kept automatically, so the
-old reading stays recoverable and nothing is lost by correcting it cleanly.
+When a conclusion you recorded stops being true, FIX IT — edit the claim to say
+what is true instead. Every version is kept automatically, so the old reading
+stays recoverable and nothing is lost by correcting it cleanly. Do not mark it
+struck, and do not leave a note about the edit: the document says what is true
+now, and its history says what it used to say.
 
-Mark it SUPERSEDED instead when the wrong claim has LEFT this note — it is cited
-somewhere, so a reader will arrive looking for it — or when WHY it was wrong is
-itself the lesson (a harness bug that can recur). Then the strike stays where
-readers are rather than only in history:
+Corrections are not only for claims you wrote. **Whenever you READ a note — this
+project's, a run's, the team's — and evidence in front of you contradicts a claim
+in it, correct it THEN, while you hold the proof.** That is the whole mechanism.
+A finding you report to the researcher and do not write down dies with your
+session, and the note goes on misleading every next reader. When the researcher
+says something is deprecated or no longer true, delete it from the Probe note it
+lives in — dropping it from your own context fixes one session only.
 
-    > **SUPERSEDED** 2026-08-21 · metric definition was wrong
-    > ~~SFT improved BIRD EX by 12.5 points over baseline.~~
+The rules for what may be deleted, what must be left alone, and how to tighten a
+note that has grown are the `notes-audit` skill's §1-§4. They are the same rules
+on every note; read them there rather than improvising. Two things about WHERE
+the work runs:
 
-    The eval counted 3/8 where the harness scores 2/8 — a regression.
-
-The `> **SUPERSEDED**` line opening a blockquote is what the parser reads; a
-marked claim stops ranking as current in search.
-
-Corrections are not only for claims you wrote. Whenever you READ a note — this
-project's, a run's, the team's — and evidence in front of you contradicts a
-claim in it, fix or strike it then, while you hold the proof. And when the
-researcher says something is deprecated or no longer true, strike it in the
-Probe note it lives in: dropping it from your own context fixes one session,
-while the note keeps misleading every next reader.
+- **Correcting is inline.** It needs the evidence you are holding, it is one
+  span, and it is quick.
+- **Tightening a bloated note is not.** Compacting a 90k-character document in
+  the session someone is waiting on is the cost this design exists to avoid —
+  spawn a BACKGROUND agent for it and carry on.
+- **On Codex there is no background agent to spawn.** Its sandbox reaps detached
+  children at command teardown, and a nested `codex exec` cannot start inside it
+  either (`failed to initialize in-process app-server client: Read-only file
+  system`, probed 2026-09-09 on codex-cli 0.153.4). So there: always correct
+  inline, and tighten inline ONLY when the advisory beside the note reports it
+  past 60% full. Below that a Codex session leaves the tightening for a harness
+  that can afford it — spending the researcher's own context compacting a note
+  nobody is struggling to read is the wrong trade.
 
 Write entity notes with `probe notes append` (a new paragraph, concurrency-safe)
 or `probe notes edit` (replace one exact span; `--new` omitted deletes). Never
 read-modify-rewrite a whole document — that is how the parts you did not think
-to repeat disappear. Notes are CAPPED and `notes append`/`edit` refuse an
+to repeat disappear. **A 409 from `notes edit` is not a failure, it is the merge
+affordance**: someone wrote while you were thinking, and the error carries
+`match_count` plus `current_notes`, the whole current document. Re-derive your
+edit against that body and retry — do not re-read, and do not abandon the
+correction. Notes are CAPPED and `notes append`/`edit` refuse an
 over-cap write rather than truncating it; both advise from 60% full, and
 `probe notes status` shows every note in the team fullest first. Act when the
 advice appears — at the cap the document is closed until it is compacted.
@@ -444,8 +457,8 @@ The metric/span/artifact call table, shape rules and delivery semantics are in
   completed|failed|crashed|canceled` (`with run:` records `failed` on an
   exception). Status is LIFECYCLE only — a run whose verifier was broken ran
   fine and is honestly `completed`; mark the MEANING with `probe run tag RUN
-  invalid` plus a note saying what to believe instead — SUPERSEDED if the
-  wrong number already circulated — the moment the harness bug is found. At publication, freeze the experiment: `probe experiment
+  invalid` plus a note saying what to believe instead, the moment the harness
+  bug is found. At publication, freeze the experiment: `probe experiment
   freeze EXP --label L` pins the manifest forever.
 - A session that opened no run still ends: append what you would do next and
   what is unresolved to the project's notes, or planning work ends silently.

@@ -27,14 +27,19 @@ could buy would be a missed or extra audit, never a broken session.
 
 Knobs (environment, invalid values fall back silently):
   PROBE_NOTES_AUDIT_INTERVAL_DAYS  audit cadence, default 7, min 1
-  PROBE_NOTES_AUDIT_HORIZON_DAYS   strike-removal age the trigger line
-                                   advertises to the auditor, default 7, min 0
-                                   (0 = strike-only: the audit removes nothing)
+  PROBE_NOTES_AUDIT_HORIZON_DAYS   the DELETION KILL SWITCH, default 7, min 0.
+                                   0 disarms the destructive half (correct in
+                                   place, delete nothing); any other value
+                                   leaves deletion on. It used to gate how old
+                                   a strike had to be before removal; nothing
+                                   is struck any more, and a knob that controls
+                                   nothing is worse than one that was retired.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import os
 import re
@@ -100,8 +105,8 @@ def stamp_age_days(body: str, today: _dt.date) -> int | None:
     return age if age >= 0 else None
 
 
-def worst_health_pct() -> float | None:
-    """The worst measured block/budget fraction from the last render, if any."""
+def _health() -> dict:
+    """The last render's measurements, or {} when there is nothing to read."""
     try:
         import version_policy  # the plugin's synced copy, beside this file
 
@@ -109,8 +114,13 @@ def worst_health_pct() -> float | None:
             (version_policy.state_dir() / "team-note" / "health.json").read_text(encoding="utf-8")
         )
     except Exception:  # noqa: BLE001 - advisory input; any surprise means "no data"
-        return None
-    sources = payload.get("sources") if isinstance(payload, dict) else None
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def worst_health_pct(payload: dict | None = None) -> float | None:
+    """The worst measured block/budget fraction from the last render, if any."""
+    sources = (payload if payload is not None else _health()).get("sources")
     if not isinstance(sources, dict):
         return None
     pcts = [
@@ -119,6 +129,39 @@ def worst_health_pct() -> float | None:
         if isinstance(entry, dict) and isinstance(entry.get("pct"), (int, float))
     ]
     return max(pcts) if pcts else None
+
+
+def untouched_since_audit(body: str, payload: dict | None = None) -> bool:
+    """Has NOBODY written since the audit that produced this text?
+
+    The churn guard, and it gates TIGHTENING only -- never the truth pass. A
+    document nobody has edited can still have gone stale, because the world
+    moves underneath it; but it cannot have grown, and re-compacting prose that
+    has not changed is how carefully-worded text gets sanded down a little every
+    cycle for no gain.
+
+    The render records `{stamp, content_sha256}` and refreshes the hash only
+    when the STAMP moves, so the recorded hash is the last audit's OUTPUT rather
+    than the last render's input (`team_note_file._audit_baseline`). Equal hash
+    AND equal stamp therefore means "identical to how the last audit left it".
+
+    Any missing or unparseable half answers False: the guard may only ever
+    SUPPRESS work it is certain is redundant.
+    """
+    audit = (payload if payload is not None else _health()).get("audit")
+    if not isinstance(audit, dict):
+        return False
+    recorded, stamp = audit.get("content_sha256"), audit.get("stamp")
+    if not isinstance(recorded, str) or not isinstance(stamp, str):
+        return False
+    match = STAMP_RE.search(body)
+    if match is None or match.group(1) != stamp:
+        return False
+    # STRIPPED, matching `team_note_file.render_blocks`, which strips before it
+    # renders and therefore before it hashes. `_topped_up` guarantees a trailing
+    # newline on every paragraph write, so comparing raw bytes here would differ
+    # forever on any tenant that has ever used that door.
+    return hashlib.sha256(body.strip().encode("utf-8")).hexdigest() == recorded
 
 
 def decide(
@@ -143,14 +186,32 @@ def main() -> str:
         return ""
     interval = _int_env("PROBE_NOTES_AUDIT_INTERVAL_DAYS", DEFAULT_INTERVAL_DAYS, 1)
     horizon = _int_env("PROBE_NOTES_AUDIT_HORIZON_DAYS", DEFAULT_HORIZON_DAYS, 0)
+    health = _health()
+    pct = worst_health_pct(health)
     age = stamp_age_days(body, _dt.date.today())
-    due, reason = decide(age, worst_health_pct(), interval)
+    due, reason = decide(age, pct, interval)
     if not due:
         return ""
+    # The knob USED to gate how old a strike had to be before it could be
+    # deleted. Nothing is struck any more -- the audit deletes in place -- so it
+    # would have become a documented setting that controls nothing. It is now
+    # the deletion kill switch, which is the one job left that it can still do:
+    # a way to disarm the destructive half in production without shipping a
+    # plugin release.
     removal = (
-        f"Strikes older than {horizon} days may be removed."
+        "Delete what the evidence disproves."
         if horizon > 0
-        else "Removal is disabled: strike only, delete nothing."
+        else "Deletion is DISABLED: correct claims in place, delete nothing."
+    )
+    # Tightening is skipped only when the document is provably identical to the
+    # last audit's output AND not near its budget. The truth pass always runs:
+    # an unchanged note can still have gone stale underneath.
+    size_fired = pct is not None and pct >= SIZE_TRIGGER_PCT
+    tighten = size_fired or not untouched_since_audit(body, health)
+    shrink = (
+        "Tighten what stays (§3)."
+        if tighten
+        else "Nothing has been written since the last audit: run the truth pass, SKIP §3."
     )
     # Lane-accurate dispatch, authored HERE so it can never contradict the
     # harness it runs under: Claude Code has background subagents; Codex's
@@ -172,7 +233,8 @@ def main() -> str:
     return (
         f"Probe: the team note is due for its periodic audit ({reason}). "
         f"Per the track-work skill's audit dispatch: {dispatch}. "
-        f"{removal} If research tracking is off for this session, skip this."
+        f"{removal} {shrink} "
+        f"If research tracking is off for this session, skip this."
     )
 
 
