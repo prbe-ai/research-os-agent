@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+### Changed
+
+- Uninstall signs this device out. It used to remove the plugins and leave the
+  account: both tokens stayed live on the server, the config kept its copy, and
+  the next `probe wizard` skipped the browser entirely because a stored token
+  reads as "already signed in" — so a machine somebody had deliberately removed
+  Probe from was still signed into it, and could not be reinstalled under
+  anyone else without a detour through `probe logout`. The removal now releases
+  the API token and the read-only MCP token, drops the Codex MCP entry holding
+  a copy of the latter, and clears the active account only — signing out of
+  staging still leaves prod alone. It runs once for the device, after the last
+  selected coding agent has published its emptied state, because that
+  registration authenticates with the token being released. Declining at the
+  confirmation signs nobody out.
+- A removed device reads as fresh again, so reinstalling offers the defaults
+  rather than "everything currently off". The killswitch marker the teardown
+  writes is cleared once the plugin is gone and no credential resolves anywhere
+  (an exported `PROBE_INGEST_TOKEN` included — where one survives, the marker
+  stays), and the auto-update record is dropped rather than merely switched off.
+
 ## 0.148.1
 
 ### Changed
