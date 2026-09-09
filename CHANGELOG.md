@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Changed
+
+- The session-start update notice is three short lines -- what is stale, the
+  current→latest pairs, and the command -- instead of one paragraph the
+  terminal soft-wrapped wherever the window ended.
+
+### Added
+
+- A third update tier, "update needed", driven by a new optional `recommended`
+  version in each `client-version.json` pair. Below it the notice says *some
+  features may not work correctly until you update* and carries the advisory
+  and the restart note; at or above it, the routine one-liner. It is a version
+  rather than a flag so a machine stops being warned the moment it passes the
+  threshold, with no second publish, and so the advisory reaches the installs
+  it actually describes -- ungated it went to everyone, including machines
+  many releases past the breakage it warned about. A manifest without the
+  field behaves exactly as before.
+
 ## 0.147.1
 
 ### Changed

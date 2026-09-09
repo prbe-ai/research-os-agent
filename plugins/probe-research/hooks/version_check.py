@@ -999,20 +999,41 @@ def main() -> None:
         "tap": _local_tap(),
     }
 
-    nudges, below_min = [], []
+    # Three buckets, graded independently per component, because a machine can be
+    # in different tiers for different components -- a current CLI beside a plugin
+    # that predates a breaking change is the ordinary case, not an edge one.
+    #
+    #   nudges       cur < latest        something newer exists
+    #   needs_update cur < recommended   something newer exists AND we know what
+    #                                    breaks without it (the server flag)
+    #   below_min    cur < min           past the floor the server supports
+    #
+    # A component in `needs_update` is always in `nudges` too when the manifest is
+    # sane (recommended <= latest). That overlap is deliberate: the buckets answer
+    # "what is stale" and "how urgent is it" separately, so a manifest with the
+    # thresholds crossed degrades into an over-warning rather than into a
+    # component that is urgent and invisible.
+    nudges, needs_update, below_min = [], [], []
     for key, label in (("cli", "CLI"), ("plugin", "plugin"), ("tap", "transcript tap")):
         info = manifest.get(key)
         if not isinstance(info, dict):  # a malformed field disables only that key
             continue
         latest, minv, cur = info.get("latest"), info.get("min"), local.get(key)
+        rec = info.get("recommended")
         if not cur or not latest:
             continue
         if _remote_gt_local(cur, latest):
             nudges.append((label, _safe_ver(cur), _safe_ver(latest)))
+        # THE PAIR SHOWN IS cur → latest, NOT cur → recommended. `recommended` is
+        # the threshold that decides how loudly to speak; the version to go to is
+        # still the newest one, and naming an intermediate release as the target
+        # would send people to a version that is itself already behind.
+        if rec and _remote_gt_local(cur, rec):  # cur < recommended
+            needs_update.append((label, _safe_ver(cur), _safe_ver(latest)))
         if minv and _remote_gt_local(cur, minv):  # cur < min
             below_min.append((label, _safe_ver(cur), _safe_ver(minv)))
 
-    if not nudges and not below_min:
+    if not nudges and not needs_update and not below_min:
         # Everything comparable is current. Silent BY DESIGN -- but only when the
         # manifest it was compared against is itself fresh. A "current" verdict
         # graded against a six-week-old manifest is not a verdict.
@@ -1028,7 +1049,7 @@ def main() -> None:
     # The raw sequence updates the tap too when that is what is stale —
     # otherwise the nudge names a component and then hands over commands that
     # cannot fix it. `probe update` covers all three itself.
-    tap_stale = any(label == "transcript tap" for label, _, _ in nudges + below_min)
+    tap_stale = any(label == "transcript tap" for label, _, _ in nudges + needs_update + below_min)
     cmds = (
         "probe update"
         if has_update_cmd
@@ -1041,28 +1062,89 @@ def main() -> None:
     )
     advisory = manifest.get("advisory")
 
+    # THE ROUTINE NUDGE IS WHAT CHANGED AND WHAT TO RUN, AND NOTHING ELSE. It
+    # used to append the restart parenthetical and a 200-character advisory on
+    # top of that, which made a piece of routine housekeeping three wrapped lines
+    # of terminal at every session start. A notice that long is a notice that
+    # stops being read, and then a real warning goes past unread with it.
+    #
+    # THE VERSION PAIRS STAY. They are the content of the message -- "something
+    # is stale" without saying what, or how far behind, is a notification the
+    # reader cannot act on or judge the urgency of. What went is the packaging
+    # around them.
+    # WHICH TIER IS SPEAKING. Worst wins, and each tier is a strict superset of
+    # the seriousness below it, so the message never has to describe two states
+    # at once. `summary` names the components in the WORST bucket, not every
+    # stale one: a below-minimum CLI beside a merely-behind tap is a message
+    # about the CLI, and listing the tap next to it flattens the difference the
+    # tier exists to draw.
+    urgent = bool(below_min or needs_update)
+    summary = _fmt(below_min or needs_update or nudges)
+
+    # ONE FACT PER LINE: the headline, what is stale, what to run. Run together
+    # into a paragraph these read as one long sentence that the terminal then
+    # soft-wraps wherever the window happens to end, so the command -- the only
+    # part anyone retypes -- lands mid-line in the middle of a version list.
+    # Explicit newlines put the break where the meaning breaks.
     if below_min:
+        head = "⚠ Probe Research is below the minimum supported version"
+    elif needs_update:
+        # SAY WHAT IT COSTS TO WAIT, not how the server feels about it. "Update
+        # recommended" or "important update" grade the release; a person reading
+        # a hook at session start needs to know what happens to THEM if they
+        # skip it, and "some features may not work correctly" is the smallest
+        # true sentence that says so. The advisory two lines down carries the
+        # specifics when the publisher wrote any.
         head = (
-            "⚠ Probe Research is below the minimum supported version "
-            f"({_fmt(below_min)}). Update now:"
+            "⚠ Probe Research update needed — "
+            "some features may not work correctly until you update"
         )
-        summary = _fmt(below_min)
     else:
-        head = f"⚠ Probe Research update available — {_fmt(nudges)}. Update:"
-        summary = _fmt(nudges)
+        head = "⚠ Probe Research update available"
+    lines = [head, summary]
 
-    sys_msg = f"{head} {cmds} (restart Claude Code to apply)."
-    if isinstance(advisory, str) and advisory.strip():
-        # Human-facing only, and bounded: one line, capped, so a hostile
-        # manifest cannot paste paragraphs of instructions into the session.
-        sys_msg += f" Note: {_clip_advisory(' '.join(advisory.split()))}"
+    # THE RESTART NOTE AND THE ADVISORY RIDE THE URGENT TIERS ONLY. Both are
+    # packaging on a routine nudge -- the thing that turned a one-line notice
+    # into three wrapped lines at every single session start -- and both are the
+    # message itself once something is actually broken.
+    #
+    # The advisory in particular is one manifest-wide string echoed to every
+    # install, so ungated it is shown mostly to people it does not describe: a
+    # note about what a CLI below 0.127.0 breaks reached a machine running
+    # 0.144.0. `recommended` is what makes it addressable -- an install the
+    # advisory applies to is now a tier the server can name, so the note reaches
+    # that machine and stays off everyone else's screen.
+    if urgent:
+        lines.append(f"Run: {cmds} (restart Claude Code to apply)")
+        if isinstance(advisory, str) and advisory.strip():
+            # Human-facing only, and bounded: one line, capped, so a hostile
+            # manifest cannot paste paragraphs of instructions into the session.
+            # It stays OUT of additionalContext for that same reason -- that
+            # channel is read as instructions.
+            lines.append(f"Note: {_clip_advisory(' '.join(advisory.split()))}")
+    else:
+        lines.append(f"Run: {cmds}")
+    sys_msg = "\n".join(lines)
 
-    ctx = (
-        f"The Probe Research client is out of date ({summary}). If the user wants "
-        "to update, tell them to run `uv tool upgrade probe-research` and "
-        "`claude plugin update probe-research@research-os-agent`, then restart "
-        "Claude Code. Do not nag; only act if they ask."
-    )
+    # THE AGENT IS TOLD THE TIER TOO, because its standing instruction is not to
+    # nag -- correct for housekeeping, wrong when a known breakage is in front of
+    # the user. Without this the model reads every tier as the same routine
+    # notice and stays quiet through the one that mattered.
+    if urgent:
+        ctx = (
+            f"The Probe Research client is out of date ({summary}) and known to "
+            "misbehave at that version: features may fail until it is updated. "
+            f"Tell the user to run `{cmds}` and restart Claude Code, and say so "
+            "again if they hit an error that could be explained by the stale "
+            "client. This one is worth raising unprompted; do not repeat it more "
+            "than once unless something fails."
+        )
+    else:
+        ctx = (
+            f"The Probe Research client is out of date ({summary}). If the user wants "
+            f"to update, tell them to run `{cmds}`, then restart Claude Code. "
+            "Do not nag; only act if they ask."
+        )
 
     # An update exists. If the user opted in, apply it in the background; the
     # nudge below still renders this session, because the upgrade only takes
