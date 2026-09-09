@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.148.2
+
 ### Changed
 
 - Uninstall signs this device out. It used to remove the plugins and leave the
