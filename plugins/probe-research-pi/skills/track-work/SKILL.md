@@ -184,7 +184,21 @@ the work runs:
   span, and it is quick.
 - **Tightening a bloated note is not.** Compacting a 90k-character document in
   the session someone is waiting on is the cost this design exists to avoid —
-  spawn a BACKGROUND agent for it and carry on.
+  spawn a BACKGROUND agent for it and carry on. **What you put in its prompt is
+  the whole job**, because a spawned agent inherits none of your context:
+
+  - the entity it works on, exactly as `probe notes edit` takes it
+    (`--project <slug>`, `--run <slug>`, `--note "<title>"` for a sub-note);
+  - the instruction to load the `notes-audit` skill and follow its §1-§4 —
+    naming the skill is what makes the rules arrive, and without it the agent
+    improvises a compaction with no idea what it may not delete;
+  - the fullness figure from the advisory, so it knows how much to cut;
+  - that it reads the note ITSELF with `probe notes show`. **Never paste the
+    document into the prompt.** It would then edit against a copy, and every
+    exact-span edit it composes would miss the stored bytes.
+
+  Tell it to report one line to you and nothing to the user: this is
+  maintenance, and the researcher asked for something else.
 - **On Codex there is no background agent to spawn.** Its sandbox reaps detached
   children at command teardown, and a nested `codex exec` cannot start inside it
   either (`failed to initialize in-process app-server client: Read-only file
