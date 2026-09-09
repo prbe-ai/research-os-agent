@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Changed
+
+- Backfill reviews now use the wizard's shared menus, with scrollable plan details,
+  explicit import and revision actions, and consistent keyboard navigation. Source
+  recovery, changed files, W&B history, and conversation imports use the same controls.
+  Agent and upload progress share one display, including on narrow terminals.
+
 ## 0.150.3
 
 ## 0.150.2
