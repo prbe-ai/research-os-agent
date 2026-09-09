@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.148.1
+
 ### Changed
 
 - Center the install progress bar horizontally and add space between the title and bar.
