@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- Installing from the wizard reuses the device's saved authorization instead of
+  opening another browser approval. The initial wizard sign-in prepares capture
+  credentials with capture disabled until installation is confirmed. Missing or
+  rejected credentials still require authorization.
+
 ## 0.150.0
 
 ## 0.149.0
@@ -27,13 +34,6 @@
   writes is cleared once the plugin is gone and no credential resolves anywhere
   (an exported `PROBE_INGEST_TOKEN` included — where one survives, the marker
   stays), and the auto-update record is dropped rather than merely switched off.
-
-### Fixed
-
-- Installing from the wizard reuses the device's saved authorization instead of
-  opening another browser approval. The initial wizard sign-in prepares capture
-  credentials with capture disabled until installation is confirmed. Missing or
-  rejected credentials still require authorization.
 
 ## 0.148.1
 
