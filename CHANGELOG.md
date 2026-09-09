@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Changed
+
+- Guided installation offers imports after setup finishes, with both import
+  options selected by default and no introductory sentence above the choices.
+
 ## 0.151.1
 
 ## 0.151.0
