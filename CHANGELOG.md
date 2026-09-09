@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Changed
+
+- Center the install progress bar horizontally and add space between the title and bar.
+
 ## 0.148.0
 
 ### Added
