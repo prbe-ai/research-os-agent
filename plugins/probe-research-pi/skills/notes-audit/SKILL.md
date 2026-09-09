@@ -47,6 +47,12 @@ prose around it arguing for its own preservation, or by the struck line being a
 numbered decision rather than a fact. Leave those exactly as they are; a note
 that says "keep this reversal" has already told you the answer.
 
+**A completed instruction is not a dead section.** When a note says "X is broken,
+so always do Y" and X is now fixed, the instruction is spent but the reason it
+existed usually is not. Delete the part the evidence disproves and keep the
+mechanism -- the same rule §3 applies when it tightens. Deleting the whole
+passage throws away why anyone cared.
+
 An entry that declares its own end and is past it is disproved by the calendar:
 "expires 2026-09-07", "temp cap until Oct 1". Delete it. A bare date is NOT an
 expiry — incident dates, deadlines met and historical results stay.
@@ -66,7 +72,9 @@ lie.
 
 ## 3. Tighten what stays
 
-Every cycle, not only when the note is large.
+This is why you were dispatched: on the team note an audit is triggered by SIZE
+and nothing else. On an entity note, tighten when the advisory beside it reports
+the document filling up.
 
 Shipped work becomes one line plus its PR number. Sections that say the same
 thing merge. Detail that lives in a PR, a repo file, a dashboard or version
@@ -77,8 +85,8 @@ What survives: every trap's mechanism and trigger, every "never do X" with its
 reason, and exact identifiers — paths, PR numbers, commands, config keys,
 version numbers, cluster names, URLs. Those are what people copy.
 
-Do not remove more than about a third of a document's live prose in one pass. If
-it needs more, cut what you confidently can and say so.
+Do not remove more than about a third of the document's BYTES in one pass. If it
+needs more, cut what you confidently can and say so.
 
 ## 4. How you edit
 
@@ -122,10 +130,23 @@ The stamp is a dated comment on the first line, in exactly this shape:
 
     <!-- audited 2026-09-03 -->
 
-If it is today's or yesterday's date, another session already took this cycle —
-STOP, change nothing. Otherwise set it to today's date (adding the line if
-missing), save, and continue. Writing the stamp first means a crashed audit
-costs one skipped cycle, never a double audit.
+If it is TODAY's date, another session already took this cycle — STOP, change
+nothing. Otherwise set it to today's date (adding the line if missing), save,
+and continue. Writing the stamp first means a crashed audit costs one skipped
+cycle, never a double audit.
+
+TODAY'S ONLY, and the exact boundary matters: the line that dispatches you stays
+silent on a note stamped today and fires from a stamp one day old. This guard
+was once a day wider than that, so a note stamped the previous day dispatched an
+auditor that then read this section and refused to work. Found by running a real
+audit, which stopped and asked instead. The two must agree, and it is the
+dispatcher that holds the rest of the picture.
+
+The stamp is a RATE LIMIT, not a schedule. Nothing here runs on a calendar: an
+audit is dispatched because the note has outgrown its render budget, and for no
+other reason. A note that has gone stale without growing is corrected by whoever
+next reads a claim their evidence contradicts — this note is injected into every
+session on every machine, so that is a great many readers.
 
 This is a best-effort cadence, not a lock: two sessions can read the same expired
 stamp before either writes, and separate machines hold separate copies. That is
