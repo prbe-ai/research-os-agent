@@ -4,6 +4,8 @@
 
 ### Changed
 
+- Install progress uses a shorter bar with a solid fill, a lightly shaded remaining
+  track, and more space before the page content.
 - The session-start update notice is three short lines -- what is stale, the
   current→latest pairs, and the command -- instead of one paragraph the
   terminal soft-wrapped wherever the window ended.
