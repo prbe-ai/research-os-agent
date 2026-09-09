@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The wizard's main menu adds one blank line between options within each section,
+  keeping titles and descriptions together and preserving section spacing.
+
 ## 0.150.1
 
 ### Fixed
