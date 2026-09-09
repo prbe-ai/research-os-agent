@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.150.3
+
 ## 0.150.2
 
 - The wizard's main menu adds one blank line between options within each section,
