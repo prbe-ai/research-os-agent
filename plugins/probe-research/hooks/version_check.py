@@ -770,9 +770,10 @@ _base_url = version_policy.base_url
 _fetch = version_policy.fetch
 
 
-#: Cap on the advisory echoed into a session. The bound is the point -- the
-#: manifest is fetched over the network, so an untrusted origin must not be able
-#: to paste paragraphs of instructions into every session start.
+#: Cap on manifest prose echoed into a session -- the advisory, and the per-pair
+#: `message`. The bound is the point -- the manifest is fetched over the network,
+#: so an untrusted origin must not be able to paste paragraphs of instructions
+#: into every session start.
 _ADVISORY_CAP = 200
 #: Where the full text lives. A truncated warning with no route to the rest is
 #: how the 347-character advisory in production came to end mid-word, at
@@ -798,6 +799,34 @@ def _clip_advisory(text: str) -> str:
     if not cut:
         cut = head
     return f"{cut.rstrip(',;:.')}… (full note: {_ADVISORY_MORE})"
+
+
+#: What the notice says when a pair is urgent and publishes no `message` of its
+#: own. Deliberately the smallest TRUE sentence: it says what happens to the
+#: reader if they wait, rather than grading the release ("important update"),
+#: which tells them nothing they can act on.
+DEFAULT_URGENT_MESSAGE = "some features may not work correctly until you update"
+
+
+def _pair_message(info: dict) -> str | None:
+    """The server's own sentence for this component, bounded, or None.
+
+    WHY THE MANIFEST GETS TO WRITE THIS. The tier is the same shape every time --
+    "you are below a threshold we published" -- but what it COSTS the reader is
+    different for every breaking change, and only the release that introduced it
+    knows. A client that hardcodes one sentence can say a change is urgent and
+    never say why, which is precisely the notice a person learns to dismiss.
+
+    Bounded and whitespace-flattened for the same reason the advisory is: this
+    text arrives over the network, so a compromised or fat-fingered manifest must
+    not be able to paste paragraphs, or a newline, into every session start. It
+    is displayed to a PERSON and never enters additionalContext, which the model
+    reads as instructions.
+    """
+    text = info.get("message")
+    if not isinstance(text, str) or not text.strip():
+        return None
+    return _clip_advisory(" ".join(text.split()))
 
 
 def _local_cli(probe_bin: str):
@@ -1014,6 +1043,10 @@ def main() -> None:
     # thresholds crossed degrades into an over-warning rather than into a
     # component that is urgent and invisible.
     nudges, needs_update, below_min = [], [], []
+    # What the SERVER wants said about the components that are actually urgent,
+    # in manifest order and de-duplicated. See `_pair_message`: the canned
+    # sentence is only the fallback for a pair that ships no `message`.
+    messages: list[str] = []
     for key, label in (("cli", "CLI"), ("plugin", "plugin"), ("tap", "transcript tap")):
         info = manifest.get(key)
         if not isinstance(info, dict):  # a malformed field disables only that key
@@ -1022,6 +1055,7 @@ def main() -> None:
         rec = info.get("recommended")
         if not cur or not latest:
             continue
+        urgent = False
         if _remote_gt_local(cur, latest):
             nudges.append((label, _safe_ver(cur), _safe_ver(latest)))
         # THE PAIR SHOWN IS cur → latest, NOT cur → recommended. `recommended` is
@@ -1030,8 +1064,18 @@ def main() -> None:
         # would send people to a version that is itself already behind.
         if rec and _remote_gt_local(cur, rec):  # cur < recommended
             needs_update.append((label, _safe_ver(cur), _safe_ver(latest)))
+            urgent = True
         if minv and _remote_gt_local(cur, minv):  # cur < min
             below_min.append((label, _safe_ver(cur), _safe_ver(minv)))
+            urgent = True
+        # ONLY THE URGENT COMPONENTS CONTRIBUTE A MESSAGE. A pair may carry one
+        # permanently -- it describes what that component breaks, not a release
+        # -- so reading it for a component that is merely behind would put a
+        # breakage warning on a machine nothing is wrong with.
+        if urgent:
+            text = _pair_message(info)
+            if text and text not in messages:
+                messages.append(text)
 
     if not nudges and not needs_update and not below_min:
         # Everything comparable is current. Silent BY DESIGN -- but only when the
@@ -1086,22 +1130,38 @@ def main() -> None:
     # soft-wraps wherever the window happens to end, so the command -- the only
     # part anyone retypes -- lands mid-line in the middle of a version list.
     # Explicit newlines put the break where the meaning breaks.
+    #
+    # SAY WHAT IT COSTS TO WAIT, not how the server feels about it. "Update
+    # recommended" or "important update" grade the release and tell the reader
+    # nothing they can act on. The publisher writes that sentence per component
+    # in the manifest, because the shape of the tier is always the same and what
+    # it BREAKS is different every time -- only the release that introduced the
+    # break knows. `DEFAULT_URGENT_MESSAGE` covers a pair that publishes none.
+    #
+    # ONE MESSAGE GOES IN THE HEADLINE; SEVERAL GET THEIR OWN LINES. Two urgent
+    # components with different sentences cannot share a headline without
+    # becoming the run-on the three-line shape exists to prevent, and the common
+    # case by far is one.
+    #
+    # THE DEFAULT IS FOR `needs_update` ONLY. "Below the minimum supported
+    # version" already says the worst of it, and pinning the softer generic
+    # sentence onto that headline would make the louder tier read as the quieter
+    # one. A published `message` still lands there -- that is the whole point of
+    # letting the server write it -- but nothing is invented to fill the space.
+    extra_messages: list[str] = []
+    head_note = messages[0] if messages else (None if below_min else DEFAULT_URGENT_MESSAGE)
+    if messages:
+        extra_messages = messages[1:]
     if below_min:
         head = "⚠ Probe Research is below the minimum supported version"
+        if head_note:
+            head += f" — {head_note}"
     elif needs_update:
-        # SAY WHAT IT COSTS TO WAIT, not how the server feels about it. "Update
-        # recommended" or "important update" grade the release; a person reading
-        # a hook at session start needs to know what happens to THEM if they
-        # skip it, and "some features may not work correctly" is the smallest
-        # true sentence that says so. The advisory two lines down carries the
-        # specifics when the publisher wrote any.
-        head = (
-            "⚠ Probe Research update needed — "
-            "some features may not work correctly until you update"
-        )
+        head = f"⚠ Probe Research update needed — {head_note}"
     else:
         head = "⚠ Probe Research update available"
     lines = [head, summary]
+    lines.extend(extra_messages)
 
     # THE RESTART NOTE AND THE ADVISORY RIDE THE URGENT TIERS ONLY. Both are
     # packaging on a routine nudge -- the thing that turned a one-line notice

@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+
+- The "update needed" tier says what the publisher wrote. Each
+  `client-version.json` pair takes an optional `message` — the sentence shown
+  when that component is urgent — because the tier is always the same shape and
+  what a breaking change costs the reader is different every time. It appears in
+  the session-start headline and in the `probe doctor` row, replacing the built-in
+  "some features may not work correctly", which is now only the fallback. A
+  message is read only for a component that is actually urgent, so one left in
+  the manifest after a fix cannot resurface on a healthy install. Two urgent
+  components with different messages get a line each; the same message on both is
+  printed once.
+
 ### Changed
 
 - The wizard shows only the timestamp and success/fail status for the last update attempt.
