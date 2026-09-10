@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.155.1
+
 ### Fixed
 
 - The install confirmation uses the same navigation row as the earlier step:
