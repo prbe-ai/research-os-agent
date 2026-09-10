@@ -1,6 +1,6 @@
 ---
 name: instrument-training-runs
-description: Wire tracking into a training or evaluation script so what it records actually lands — where the capture code must live in a distributed job, which run it writes to, and whether a thing is a metric or a span. Use when writing or modifying a script that trains, evaluates, sweeps or serves and should be tracked; when choosing between run.log, spans, artifacts and labeled points; when adding Probe to a trainer that already has its own integration (miles, trl, verl, Ray); and when a run finished green but recorded nothing, recorded less than expected, or recorded onto the wrong run. Trigger before the first paid GPU hour, not after — every failure here is silent, and a run that captures nothing looks exactly like a run that captures fine until someone reads it back.
+description: Wire tracking into a training or evaluation script so what it records actually lands — where the capture code must live in a distributed job, which run it writes to, and whether a thing is a metric or a span. Use when writing or modifying a script that trains, evaluates, sweeps or serves and should be tracked; when launching such a job on a machine other than the one you are on (Modal, Slurm, Ray, a container image you build), where the capture code has to travel with the job or nothing reports back; when choosing between run.log, spans, artifacts and labeled points; when adding Probe to a trainer that already has its own integration (miles, trl, verl, Ray); and when a run finished green but recorded nothing, recorded less than expected, or recorded onto the wrong run. Trigger before the first paid GPU hour, not after — every failure here is silent, and a run that captures nothing looks exactly like a run that captures fine until someone reads it back.
 ---
 
 # Instrument training runs
@@ -45,6 +45,15 @@ Fixes, in order:
    `runtime_env["env_vars"]`, since Ray workers do NOT inherit the submitter's
    environment.
 3. Assert it landed where it is READ, not where you set it.
+
+**And it must be able to import the SDK at all.** `import probe` needs
+`probe-research` installed in THAT process's environment (`uv add
+probe-research` / `pip install probe-research`). The wizard's CLI install is
+isolated and is NOT importable from your venv, and `probe` / `probe-agent` on
+PyPI are unrelated packages. On another machine the dependency travels with the
+job — the container image you build, Ray's `runtime_env["pip"]`, the Slurm venv
+— never your laptop's. An `import probe` added to a remote entrypoint whose
+image lacks the package fails the job at import, on paid GPU.
 
 ## Which run are you writing to?
 

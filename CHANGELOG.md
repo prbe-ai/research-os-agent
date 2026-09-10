@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Changed
+
+- `track-work` now chooses the run surface by whether the process doing the
+  work reports back, not by whether the agent happens to be editing the script.
+  Work launched on another machine (Modal, Slurm, Ray, a container) routes to
+  the SDK INSIDE that job; a run opened from the machine you launched FROM owns
+  nothing and captures nothing. The CLI branch now states its cost — a detached
+  run silent for 15 minutes is reaped to `untracked` — and points at
+  `instrument-training-runs`, which it had never referenced.
+- `instrument-training-runs` also triggers when a training or evaluation job is
+  launched on another machine, and states that `probe-research` must be
+  installed in the emitting process's own environment (the CLI install is
+  isolated and not importable) — guidance lost when the skills were
+  consolidated, and load-bearing now that agents are routed to instrument
+  remote jobs.
+
 ## 0.154.4
 
 ### Fixed

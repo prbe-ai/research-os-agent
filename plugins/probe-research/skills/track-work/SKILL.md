@@ -395,13 +395,22 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
   status; machine identity goes on `foreign_keys` via `probe link`, and the
   training run points back with `provisioned_by=` (worked example in
   `reference.md`).
-- **Open the run with the surface the code runs in.** Editing the script ->
-  the SDK in-process (`client.run(...)`, heartbeats itself, `step=` curves
-  work); wrapping a script you are not editing -> the CLI (`probe run start`,
-  detached, no heartbeat — never bolt one on, and never `probe log` from
-  inside its loop). Step-level curves require the SDK; when the script truly
-  cannot be edited, a wrapper calling `run.execute([...])` still gets the
-  snapshot and real exit status.
+- **Open the run with the surface the code runs in.** The question is not
+  "am I editing this script right now?" but "will the process that does the
+  work report back?" Runs here and yours to edit -> the SDK in-process
+  (`client.run(...)`, heartbeats itself, `step=` curves work). Runs on
+  another machine (Modal, Slurm, Ray, a container you launch) -> the SDK
+  INSIDE that job; a run opened from the machine you launched FROM owns
+  nothing and captures nothing, however correct its title. Only a script you
+  genuinely cannot edit -> the CLI (`probe run start`, detached, no heartbeat
+  — never bolt one on, and never `probe log` from inside its loop), and then
+  keep writing to it or close it with `probe run end`: a detached run silent
+  for 15 minutes is reaped to `untracked`, which is what a researcher reads
+  as "you did not track my run". Step-level curves require the SDK; when the
+  script truly cannot be edited, a wrapper calling `run.execute([...])` still
+  gets the snapshot and real exit status. Once the SDK is the answer,
+  `instrument-training-runs` is WHERE the capture code has to live — read it
+  before the first paid GPU hour, not after.
 - **Name the project on every write.** `probe project use` is MACHINE-global
   and silently retargets every concurrent session's next create — it has
   moved experiments into the wrong project, and experiments cannot be moved
