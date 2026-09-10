@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- The install confirmation uses the same navigation row as the earlier step:
+  Back on the left and a matching-width Install button on the right. The browser
+  approval explanation now sits in the content above the buttons.
+- Device checks and other between-screen waits show one centered, animated
+  status message, keep it centered on resize, and hide the terminal cursor.
+
 ## 0.155.0
 
 ### Changed
