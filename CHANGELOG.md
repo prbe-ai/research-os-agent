@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Fixed
+
+- The main menu is one continuous page, with room for the complete menu before
+  scrolling. It preserves top clearance and uses spare bottom space, tightening
+  empty gaps on smaller screens. Separate content and options panes remain in
+  installation steps; on short terminals, the main menu moves as a whole.
+
 ## 0.154.3
 
 ### Fixed
