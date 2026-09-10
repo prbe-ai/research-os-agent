@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Fixed
+
+- Installer pages with no explanatory content keep the heading, choices and
+  navigation together instead of expanding an empty pane. Empty panes no longer
+  capture keyboard focus or advertise reading shortcuts.
+- After starting a session import, a live status page lets you continue setup
+  immediately or stay to watch it finish, and reports the latest saved state.
+- The folder picker explains what will be imported and reviewed. Enter opens
+  folders, including the `../` parent row; Left and Right leave the folder list
+  unchanged, Escape consistently leaves the picker, and Ctrl-C exits the installer.
+
 ## 0.155.2
 
 ## 0.155.1
