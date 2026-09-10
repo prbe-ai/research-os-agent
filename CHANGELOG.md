@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.154.2
+
 ### Fixed
 
 - Added shared top and bottom padding around the entire installer, including
