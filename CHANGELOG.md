@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.154.3
+
 ### Fixed
 
 - Increased shared top and bottom padding to seven rows on tall terminals and
