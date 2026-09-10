@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixed
+
+- Installer sections now fit their content: short status summaries leave room
+  for the menu, and actions and keyboard help follow the content without large
+  empty panels. Folder lists also shrink to the number of available folders.
+- Removed visible scrollbars and the terminal text cursor from menu selections
+  and read-only content. Keyboard scrolling and cursors in editable fields remain.
+
 ## 0.154.0
 
 ### Changed
