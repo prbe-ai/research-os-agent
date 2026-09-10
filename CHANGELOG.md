@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.155.3
+
 ### Fixed
 
 - Installer pages with no explanatory content keep the heading, choices and
