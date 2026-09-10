@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Added shared top and bottom padding around the entire installer, including
+  progress headers, the main menu, folder selection, sign-in, and live status.
+  Padding adapts to terminal height, and long status output stays inside it.
+
 ## 0.154.1
 
 ### Fixed
