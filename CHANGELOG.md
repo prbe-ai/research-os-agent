@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Fixed
+
+- Increased shared top and bottom padding to seven rows on tall terminals and
+  eight on larger screens, leaving visible space below Warp's command bar.
+  Compact terminal layouts keep their existing padding.
+
 ## 0.154.2
 
 ### Fixed
