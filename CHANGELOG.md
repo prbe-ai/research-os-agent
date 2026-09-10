@@ -16,6 +16,13 @@
 
 ### Changed
 
+- `find_papers` and `search_knowledge` now state the SAME thing about what a
+  query should look like, from one shared string: a bag of keywords and
+  identifiers, never a sentence. They used to contradict each other in writing
+  — find_papers asked for a sentence — and the guidance moves from the tool
+  docstring, which a client slices at 2,048 chars, onto the `query` argument,
+  which is passed verbatim. `categories` now says it is an AND across a paper's
+  cross-listings: name one, because a mixed set returns nothing.
 - `track-work` now chooses the run surface by whether the process doing the
   work reports back, not by whether the agent happens to be editing the script.
   Work launched on another machine (Modal, Slurm, Ray, a container) routes to
