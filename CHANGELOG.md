@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.154.4
+
 ### Fixed
 
 - The main menu is one continuous page, with room for the complete menu before
