@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.154.0
+
 ### Changed
 
 - Installer screens and the main menu share a thin progress bar, fixed content
