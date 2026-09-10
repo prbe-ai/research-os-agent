@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.154.1
+
 ### Fixed
 
 - Installer sections now fit their content: short status summaries leave room
