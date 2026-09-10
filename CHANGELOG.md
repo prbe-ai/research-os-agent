@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Changed
+
+- Installer screens and the main menu share a thin progress bar, fixed content
+  and action areas, spaced choices, and keyboard hints below the actions.
+- Conversation imports detect available agent histories and let you choose any
+  combination, with all detected sources selected by default.
+- Reviewed conversation and data imports run in the background with durable
+  checkpoints and automatic connection retries. Monitor both at the end of
+  onboarding or reopen Existing imports from the main menu.
+- Tap 0.4.6 shares the import journal's delivery status reporting.
+
 ## 0.153.0
 
 ## 0.152.0

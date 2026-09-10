@@ -8,11 +8,14 @@ Pending bodies are never evicted on capacity pressure, authorization or poison.
 
 from __future__ import annotations
 
+import errno
 import fcntl
 import hashlib
 import json
 import os
+import socket
 import sqlite3
+import ssl
 import tempfile
 import urllib.error
 import urllib.request
@@ -59,7 +62,28 @@ class ReconciliationRequired(RuntimeError):
 
 
 class DeliveryPending(RuntimeError):
-    pass
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
+
+
+def _retryable_status(code: int) -> bool:
+    return code in (408, 429) or 500 <= code < 600
+
+
+def _network_interruption(exc: Exception) -> bool:
+    """Only connectivity failures; malformed responses and local files stay errors."""
+    if isinstance(exc, urllib.error.URLError) and isinstance(exc.reason, Exception):
+        return _network_interruption(exc.reason)
+    if isinstance(exc, ssl.SSLError):
+        return False
+    if isinstance(exc, (TimeoutError, ConnectionError, socket.gaierror)):
+        return True
+    return isinstance(exc, OSError) and exc.errno in {
+        errno.ENETDOWN, errno.ENETUNREACH, errno.EHOSTDOWN, errno.EHOSTUNREACH,
+        errno.ECONNABORTED, errno.ECONNREFUSED, errno.ECONNRESET, errno.ETIMEDOUT,
+        errno.EPIPE,
+    }
 
 
 def canonical_payload(payload: dict) -> bytes:
@@ -114,8 +138,10 @@ class Wire:
         self.token = token
         self.source = source
         self.timeout = timeout
+        self.last_request_retryable = False
 
     def _request(self, path: str, body: bytes | None = None) -> tuple[int, dict]:
+        self.last_request_retryable = False
         request = urllib.request.Request(
             self.base_url + path,
             data=body,
@@ -132,18 +158,21 @@ class Wire:
                     raise ValueError("transcript endpoint returned a non-object response")
                 return response.status, body
         except urllib.error.HTTPError as exc:
+            self.last_request_retryable = _retryable_status(exc.code)
             try:
                 return exc.code, json.loads(exc.read(8192))
             except ValueError:
                 return exc.code, {"detail": "invalid error response"}
         except (OSError, ValueError) as exc:
+            self.last_request_retryable = _network_interruption(exc)
             return 0, {"detail": str(exc)}
 
     def receipts(self, session_id: str) -> dict:
         code, body = self._request(f"/ingest/v1/sessions/{self.source}/{session_id}/receipts")
         if code != 200 or body.get("protocol_version") != 2:
             raise DeliveryPending(
-                f"protocol 2 receipts unavailable (http {code}); nothing newly staged"
+                f"protocol 2 receipts unavailable (http {code}); nothing newly staged",
+                retryable=_retryable_status(code) or (code == 0 and self.last_request_retryable),
             )
         if (
             body.get("session_id") != session_id
@@ -652,7 +681,12 @@ class Journal:
             self.update(session_id, error=message)
             if code in (409, 422):
                 raise ReconciliationRequired(message)
-            raise DeliveryPending(message)
+            raise DeliveryPending(
+                message,
+                retryable=_retryable_status(code) or (
+                    code == 0 and getattr(wire, "last_request_retryable", False)
+                ),
+            )
         self.acknowledge(session_id, result, sent_body=body)
         return True
 
