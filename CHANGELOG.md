@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Session-import retries recognize hash-verified history already finalized in Probe, including when live capture advanced beyond an older approved copy. They preserve later pending capture and never upload beyond the approved history.
+- Raw transcript snapshots no longer share the 100 MiB sanitized upload-queue limit. Large sessions use available disk space with a safety reserve; completed copies are reclaimed, incomplete snapshots and pending uploads are retained, and retries do not recreate completed snapshots. Missing incomplete copies retain their original history boundary. Tap 0.4.7 carries the same journal fixes.
+
 ## 0.158.2
 
 ## 0.158.1

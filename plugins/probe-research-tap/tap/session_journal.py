@@ -13,6 +13,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import socket
 import sqlite3
 import ssl
@@ -30,6 +31,9 @@ EMPTY_HASH = hashlib.sha256(b"").hexdigest()
 MAX_BODY_BYTES = 1024 * 1024
 MAX_SOURCE_LINE = 64 * 1024 * 1024
 DEFAULT_CAP_BYTES = 100 * 1024 * 1024
+# Raw history can be much larger than its sanitized pending delivery. Its
+# immutable disk copy needs space for the source, not the upload queue limit.
+SNAPSHOT_FREE_RESERVE_BYTES = 100 * 1024 * 1024
 _FIELDS = (
     "session_id",
     "batch_seq",
@@ -361,7 +365,13 @@ class Journal:
         with self.transaction():
             # A process may die between snapshot fsync and the SQLite commit.
             # The write lock proves no other producer is still creating these.
-            referenced = {item.get("snapshot_path") for item in self.sessions()}
+            states = self.sessions()
+            for item in states:
+                if item.get("historical_complete") and not self.pending(item["session_id"]):
+                    snapshot_path = item.get("snapshot_path")
+                    if snapshot_path:
+                        Path(snapshot_path).unlink(missing_ok=True)
+            referenced = {item.get("snapshot_path") for item in states}
             for orphan in self.directory.glob("*.snapshot.jsonl"):
                 if str(orphan) not in referenced:
                     orphan.unlink(missing_ok=True)
@@ -440,14 +450,34 @@ class Journal:
                 and state.get("historical_complete")
                 and path.stat().st_size > state.get("historical_end", 0)
             )
+            pinned_end = (
+                state.get("historical_end")
+                if not state.get("historical_complete") else None
+            )
+            if remote_snapshot is not None and pinned_end is not None and (
+                remote_snapshot != pinned_end
+                or remote_stream.get("snapshot_sha256") != state.get("historical_hash")
+            ):
+                raise ReconciliationRequired(
+                    "remote historical snapshot differs from the local pinned prefix"
+                )
             if freeze_history and (
                 not state.get("snapshot_path")
                 or not Path(state["snapshot_path"]).exists()
                 or extended
             ):
                 before = path.stat()
-                snapshot_end = remote_snapshot if remote_snapshot is not None else before.st_size
-                if complete_lines_only and remote_snapshot is None:
+                # Losing a copy (for example after a crash) must not silently
+                # extend the previously pinned history to a later live tail.
+                snapshot_end = (
+                    remote_snapshot if remote_snapshot is not None
+                    else pinned_end if pinned_end is not None else before.st_size
+                )
+                expected_snapshot_hash = (
+                    remote_stream.get("snapshot_sha256") if remote_snapshot is not None
+                    else state.get("historical_hash") if pinned_end is not None else None
+                )
+                if complete_lines_only and remote_snapshot is None and pinned_end is None:
                     # A killed producer may leave half a JSONL record. Freeze
                     # only complete records, so the original partial tail can
                     # be completed and consumed after this prefix is finalized.
@@ -458,9 +488,33 @@ class Journal:
                         raise ReconciliationRequired(
                             "complete source prefix ends before an acknowledged or pending cursor"
                         )
-                occupied = sum(p.stat().st_size for p in self.directory.glob("*.snapshot.jsonl"))
-                if occupied + snapshot_end + MAX_BODY_BYTES > self.cap_bytes:
-                    raise DeliveryPending("transcript snapshot capacity reached; source retained")
+                if (
+                    state["finalized"]
+                    and state["source_byte_end"] >= snapshot_end
+                    and not self.pending(session_id)
+                ):
+                    # Receipt/source validation above already proved coverage.
+                    # A completed retry needs no second copy of its raw history.
+                    snapshot_hash = prefix_hash(path, snapshot_end)
+                    if expected_snapshot_hash and snapshot_hash != expected_snapshot_hash:
+                        raise ReconciliationRequired(
+                            "source differs from the pinned historical snapshot"
+                        )
+                    state.update(
+                        historical_end=snapshot_end,
+                        historical_hash=snapshot_hash,
+                        historical_complete=True,
+                    )
+                    self._save(state)
+                    return state
+                if (
+                    shutil.disk_usage(self.directory).free
+                    < snapshot_end + SNAPSHOT_FREE_RESERVE_BYTES
+                ):
+                    raise DeliveryPending(
+                        "not enough free disk space for the transcript snapshot; "
+                        "source and pending uploads retained. Free disk space, then resume"
+                    )
                 snapshot = (
                     self.directory / f"{state['stream_id']}-{uuid.uuid4().hex}.snapshot.jsonl"
                 )
@@ -488,11 +542,9 @@ class Journal:
                             "transcript changed while freezing its historical prefix"
                         )
                     snapshot_hash = prefix_hash(Path(temporary), snapshot_end)
-                    if remote_snapshot is not None and snapshot_hash != remote_stream.get(
-                        "snapshot_sha256"
-                    ):
+                    if expected_snapshot_hash and snapshot_hash != expected_snapshot_hash:
                         raise ReconciliationRequired(
-                            "copied source differs from the remote historical snapshot"
+                            "copied source differs from the pinned historical snapshot"
                         )
                     os.replace(temporary, snapshot)
                     directory_fd = os.open(self.directory, os.O_RDONLY)
@@ -729,7 +781,10 @@ class Journal:
         """Retain source proof, not another permanent raw transcript archive."""
         with self.transaction():
             state = self.get(session_id)
-            if state and state.get("historical_complete") and state.get("snapshot_path"):
+            if (
+                state and state.get("historical_complete") and state.get("snapshot_path")
+                and not self.pending(session_id)
+            ):
                 Path(state["snapshot_path"]).unlink(missing_ok=True)
 
     def sessions(self) -> list[dict]:
