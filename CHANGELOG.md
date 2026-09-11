@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.158.5
+
 - Multi-agent installation reports completion only after all selected agents finish, so browser onboarding waits until the **Import research work** step. Import status pages now label their continuation **Continue setup (import continues)**.
 ## 0.158.4
 
