@@ -6,6 +6,13 @@
 
 ### Changed
 
+- `find_papers` no longer inherits `search_knowledge`'s keyword-bag query
+  guidance: it asks for a natural-language description naming the specific
+  model, method, dataset or benchmark and the relation being asked about. The
+  two tools run on different engines — an exact channel that matches names
+  literally, and a dense abstract ranker — and a measured A/B put the bag last
+  on every question-shaped paper search. `_PAPER_QUERY_DOC` is shared and
+  parity-pinned like its siblings; the filter guidance is unchanged.
 - Folder imports default to scanning and plan review in the installer. An
   explicit Scan and import in background option automatically approves the
   proposal and runs scanning and delivery as one durable job. Progress
