@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Changed
+
+- The generated client schema now carries `DELETE /v1/integrations/wandb/accounts/{connection_id}/record`,
+  a route the server has had since the W&B mirror lane (#1506) that the last
+  regeneration predated. It is recorded as pending in the parity ledger; no
+  command reaches it yet.
+
+### Removed
+
+- Importing this machine's conversations no longer writes summaries locally with
+  your own coding agent, and `--no-digest` is gone from `probe backfill` and
+  `probe wizard`. The lane that received those summaries was retired on the
+  server. Conversations still upload, and the import report still says what
+  landed. `--agent` now offers claude and codex only; pi was listed for
+  summaries and no lane accepts it.
+
 ## 0.155.3
 
 ### Fixed
