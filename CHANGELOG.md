@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.156.2
+
 - A byte-limited import that ends with unfinished items shows Partially complete and its verified count, rather than a full completion bar.
 
 - Import progress now has exactly two completion bars: Session imports and File imports. Queued jobs share their category, overlapping session snapshots are counted once, and failed or completed file imports stay visible. Remaining-time estimates use observed delivery progress; scanning and preparation do not fill the completion bars.
