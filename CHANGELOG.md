@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.156.0
+
 ### Changed
 
 - Folder imports default to scanning and plan review in the installer. An
