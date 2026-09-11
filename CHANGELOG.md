@@ -4,6 +4,13 @@
 
 ### Changed
 
+- Every `find_papers` filter — `categories`, `authors`, `published_from`,
+  `published_to` — and `search_knowledge`'s `search_in` now state that they are
+  ANDed and strictly narrow, from one shared string. The bag guidance added in
+  0.155.2 applies to `query` alone; applied to the filters it is what produced
+  empty searches. `categories` also drops the claim that a mixed set always
+  returns nothing: it is an intersection with the QUERY, so the same set can
+  return papers on one search and none on another.
 - The generated client schema now carries `DELETE /v1/integrations/wandb/accounts/{connection_id}/record`,
   a route the server has had since the W&B mirror lane (#1506) that the last
   regeneration predated. It is recorded as pending in the parity ledger; no
