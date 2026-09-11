@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Changed
+
+- Folder imports default to scanning and plan review in the installer. An
+  explicit Scan and import in background option automatically approves the
+  proposal and runs scanning and delivery as one durable job. Progress
+  distinguishes analysis phases and completed steps. Two independent survey slices can run concurrently, and
+  completed reads are cached for retry. Approved background imports continue to
+  share regular backfill's coverage and delivery receipts.
+- Import status shows colored live progress above the continue/wait and return
+  guidance. Session and folder pickers include Skip actions, and the folder
+  picker provides Ctrl+B Back, Ctrl+N Import, and Ctrl+S Skip shortcuts.
+- The import monitor shows session bars above folder backfill and keeps verbose
+  plans and queue messages behind Details. The main menu shows the same active
+  progress bars directly below the device status, updating without a keypress.
+- Picker sections have more space when the terminal allows it. Session choices
+  adapt on resize while keeping their selection borders and navigation visible.
+
 ## 0.155.4
 
 ### Changed
