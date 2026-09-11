@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.158.2
+
 ## 0.158.1
 
 - The main menu's **Import research work** opens the same session/folder multi-select as onboarding, with both selected by default. **Existing imports** remains the monitor. Its actions show details first and Return to main menu last, with no separate Exit action; press `c` on an import's details to copy its complete log path.
