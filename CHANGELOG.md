@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.155.4
+
 ### Changed
 
 - Every `find_papers` filter — `categories`, `authors`, `published_from`,
