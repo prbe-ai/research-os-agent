@@ -55,6 +55,28 @@ job — the container image you build, Ray's `runtime_env["pip"]`, the Slurm ven
 — never your laptop's. An `import probe` added to a remote entrypoint whose
 image lacks the package fails the job at import, on paid GPU.
 
+## The id has to travel with the job
+
+`probe exec` exports `PROBE_RUN_ID` and `PROBE_RUN_EPOCH` into its child, and
+`probe.init()` reads them and attaches. Across a machine boundary the export
+does not survive on its own -- same rule as the one above, applied to identity
+instead of configuration:
+
+| Launcher | How both variables reach the job |
+|---|---|
+| Modal | `secrets=[modal.Secret.from_dict({"PROBE_RUN_ID": ..., "PROBE_RUN_EPOCH": ..., "PROBE_API_KEY": ...})]` -- Modal does not forward local env |
+| Ray | `runtime_env={"env_vars": {...}}` -- workers do not inherit the submitter's env |
+| Slurm | `sbatch --export=ALL,PROBE_RUN_ID=...,PROBE_RUN_EPOCH=...` |
+| Docker / k8s | `-e PROBE_RUN_ID=...` / `env:` on the pod |
+
+The EPOCH is not optional decoration. A run id names a row, not an execution
+attempt: without the epoch a stale process still holding an old id attaches to a
+row a newer attempt already reopened and inherits its write authority. With it,
+the server fences the old attempt at the door.
+
+Several ranks reading the same id is fine and expected -- the first to arrive
+reopens the run if it needs reopening, and the rest join the live row.
+
 ## Which run are you writing to?
 
 A trainer integration may mint its OWN run from its own config and ignore the

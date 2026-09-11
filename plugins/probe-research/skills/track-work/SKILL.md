@@ -395,22 +395,39 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
   status; machine identity goes on `foreign_keys` via `probe link`, and the
   training run points back with `provisioned_by=` (worked example in
   `reference.md`).
-- **Open the run with the surface the code runs in.** The question is not
-  "am I editing this script right now?" but "will the process that does the
-  work report back?" Runs here and yours to edit -> the SDK in-process
-  (`client.run(...)`, heartbeats itself, `step=` curves work). Runs on
-  another machine (Modal, Slurm, Ray, a container you launch) -> the SDK
-  INSIDE that job; a run opened from the machine you launched FROM owns
-  nothing and captures nothing, however correct its title. Only a script you
-  genuinely cannot edit -> the CLI (`probe run start`, detached, no heartbeat
-  — never bolt one on, and never `probe log` from inside its loop), and then
-  keep writing to it or close it with `probe run end`: a detached run silent
-  for 15 minutes is reaped to `untracked`, which is what a researcher reads
-  as "you did not track my run". Step-level curves require the SDK; when the
-  script truly cannot be edited, a wrapper calling `run.execute([...])` still
-  gets the snapshot and real exit status. Once the SDK is the answer,
-  `instrument-training-runs` is WHERE the capture code has to live — read it
-  before the first paid GPU hour, not after.
+- **Open the run with the surface the code runs in. There is no fourth way.**
+  A run cannot exist without something that owns its liveness, and the server
+  derives which from what it can see -- not from what you tell it.
+
+  ```
+  probe exec --project P --experiment E -- python train.py   # you run it here
+  probe.init()                          # inside the script; joins THAT run
+  connect W&B in the dashboard          # a connector owns the row
+  ```
+
+  `probe exec` opens the run, beats for as long as the child lives, exports
+  `PROBE_RUN_ID` + `PROBE_RUN_EPOCH`, and closes the run from the child's real
+  exit code. `probe.init()` inside the job reads those and attaches to the SAME
+  run -- it does NOT create a second one -- so the launcher owns start and exit
+  status while the job owns heartbeats and curves. Pass no arguments to
+  `init()` when the env is set: naming an experiment there contradicts the run
+  the launcher already chose, and it raises rather than guessing.
+
+  **A launcher that SUBMITS and returns is not a wrapper.** `sbatch`, `ray job
+  submit`, `modal deploy` hand the work to a scheduler; their exit code is the
+  scheduler's answer, not the job's. `probe exec` detects those and opens the
+  run AWAITING ATTACH instead -- it lands `created`, owned by nobody, and the
+  job's own `init()` becomes the owner when it starts. Use `--detached-launcher`
+  for anything it does not recognise.
+
+  **The id has to travel.** Modal does not forward local env, Ray workers do not
+  inherit the submitter's, Slurm needs `--export`. `probe exec` prints the exact
+  line for the launcher it sees; forward both variables or the job reports
+  nothing. `instrument-training-runs` is WHERE the capture code lives once the
+  job is yours to edit -- read it before the first paid GPU hour, not after.
+
+  `probe run start` still exists and still opens a run nothing owns. It warns,
+  and the next release refuses it.
 - **Name the project on every write.** `probe project use` is MACHINE-global
   and silently retargets every concurrent session's next create — it has
   moved experiments into the wrong project, and experiments cannot be moved

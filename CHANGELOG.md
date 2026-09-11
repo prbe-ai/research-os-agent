@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+### Added
+
+- `probe exec` can open the run itself (`--project`, `--experiment`, `--slug`,
+  `--name`, `--description`, `--tag`, `--external-id`, `--config`), holds it with
+  a heartbeat for as long as the child lives, hands the child `PROBE_RUN_ID` and
+  `PROBE_RUN_EPOCH`, and closes the run from the child's real exit code. It
+  detects submit-and-return launchers (`sbatch`, `ray`, `modal deploy`,
+  `kubectl` — through `python -m`, `uv run` and `uvx` wrappers) and opens the run
+  awaiting attach instead of pretending to own it; `--launcher` and
+  `--detached-launcher` override the detection. The exact forwarding line for the
+  launcher it sees is printed, because the id does not cross a machine boundary
+  on its own.
+- `probe.init()` reads `PROBE_RUN_ID` and joins that run instead of creating a
+  new one. Passing `experiment=`, `project=`, `name=` or `slug=` alongside it
+  raises rather than guessing which side wins. `Client.attach_run(...,
+  attached=True, reopen_if_dead=True)` is the same path for callers driving the
+  SDK directly: it reopens a run that was swept while a job was queued, joins one
+  another rank already reopened, and refuses a `failed` or `canceled` run, or one
+  that ended over 24h ago, so a stale id in a `.env` cannot resurrect last week's
+  work.
+- A run whose beats failed through an API outage long enough for the server to
+  declare it crashed puts itself back on the first beat that lands again —
+  same process, same writer epoch, never a newer attempt's run.
+
 ## 0.156.2
 
 - A byte-limited import that ends with unfinished items shows Partially complete and its verified count, rather than a full completion bar.
@@ -39,6 +63,7 @@
 ## 0.155.4
 
 ### Changed
+
 
 - Every `find_papers` filter — `categories`, `authors`, `published_from`,
   `published_to` — and `search_knowledge`'s `search_in` now state that they are
