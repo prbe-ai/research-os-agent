@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.158.4
+
 ## 0.158.3
 
 - Session-import retries recognize hash-verified history already finalized in Probe, including when live capture advanced beyond an older approved copy. They preserve later pending capture and never upload beyond the approved history.
