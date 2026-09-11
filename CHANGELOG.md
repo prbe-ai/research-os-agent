@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.157.0
+
 ### Added
 
 - `probe exec` can open the run itself (`--project`, `--experiment`, `--slug`,
