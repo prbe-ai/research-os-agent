@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Import progress now has exactly two completion bars: Session imports and File imports. Queued jobs share their category, overlapping session snapshots are counted once, and failed or completed file imports stay visible. Remaining-time estimates use observed delivery progress; scanning and preparation do not fill the completion bars.
+
 ## 0.156.1
 
 ## 0.156.0
