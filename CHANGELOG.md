@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The main menu's **Import research work** opens the same session/folder multi-select as onboarding, with both selected by default. **Existing imports** remains the monitor. Its actions show details first and Return to main menu last, with no separate Exit action; press `c` on an import's details to copy its complete log path.
+- Failed session imports now name each failed session, its stage and a safe error reason in the log, with counts and the first failure in job details. HTTP failures preserve their status and retryability even when the error body is malformed or times out; credentials and response bodies stay out of these diagnostics.
+
 ## 0.158.0
 
 ## 0.157.0

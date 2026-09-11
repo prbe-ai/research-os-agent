@@ -58,13 +58,30 @@ _ROUTES = {"claude_code": "claude-code", "codex": "codex", "pi": "pi"}
 
 
 class ReconciliationRequired(RuntimeError):
-    pass
+    def __init__(self, message: str, *, safe_message: str | None = None):
+        super().__init__(message)
+        self.safe_message = message if safe_message is None else safe_message
 
 
 class DeliveryPending(RuntimeError):
-    def __init__(self, message: str, *, retryable: bool = False):
+    def __init__(self, message: str, *, retryable: bool = False, safe_message: str | None = None):
         super().__init__(message)
         self.retryable = retryable
+        self.safe_message = message if safe_message is None else safe_message
+
+
+def _request_failure(wire, code: int) -> str:
+    """Displayable diagnostics, never an HTTP body, URL or exception string."""
+    if code == 0:
+        kind = getattr(wire, "last_request_error", None)
+        return f"request failed ({kind})" if kind else "request failed without an HTTP response"
+    guidance = {
+        401: "capture credentials were rejected; reconnect this agent",
+        403: "capture access was refused; check this agent's pairing",
+        409: "transcript conflicts with accepted data; reconciliation required",
+        422: "transcript was rejected; reconciliation required",
+    }.get(code, "transcript request was not accepted")
+    return f"HTTP {code}: {guidance}"
 
 
 def _retryable_status(code: int) -> bool:
@@ -139,9 +156,11 @@ class Wire:
         self.source = source
         self.timeout = timeout
         self.last_request_retryable = False
+        self.last_request_error = None
 
     def _request(self, path: str, body: bytes | None = None) -> tuple[int, dict]:
         self.last_request_retryable = False
+        self.last_request_error = None
         request = urllib.request.Request(
             self.base_url + path,
             data=body,
@@ -160,11 +179,14 @@ class Wire:
         except urllib.error.HTTPError as exc:
             self.last_request_retryable = _retryable_status(exc.code)
             try:
-                return exc.code, json.loads(exc.read(8192))
-            except ValueError:
+                body = json.loads(exc.read(8192))
+                return exc.code, body if isinstance(body, dict) else {"detail": "invalid error response"}
+            except (OSError, ValueError):
                 return exc.code, {"detail": "invalid error response"}
         except (OSError, ValueError) as exc:
             self.last_request_retryable = _network_interruption(exc)
+            cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+            self.last_request_error = type(cause).__name__
             return 0, {"detail": str(exc)}
 
     def receipts(self, session_id: str) -> dict:
@@ -173,6 +195,10 @@ class Wire:
             raise DeliveryPending(
                 f"protocol 2 receipts unavailable (http {code}); nothing newly staged",
                 retryable=_retryable_status(code) or (code == 0 and self.last_request_retryable),
+                safe_message=(
+                    "server returned an unsupported receipt protocol"
+                    if code == 200 else _request_failure(self, code)
+                ),
             )
         if (
             body.get("session_id") != session_id
@@ -680,12 +706,13 @@ class Journal:
             message = f"http {code}: {result.get('detail', 'transcript delivery pending')}"
             self.update(session_id, error=message)
             if code in (409, 422):
-                raise ReconciliationRequired(message)
+                raise ReconciliationRequired(message, safe_message=_request_failure(wire, code))
             raise DeliveryPending(
                 message,
                 retryable=_retryable_status(code) or (
                     code == 0 and getattr(wire, "last_request_retryable", False)
                 ),
+                safe_message=_request_failure(wire, code),
             )
         self.acknowledge(session_id, result, sent_body=body)
         return True
