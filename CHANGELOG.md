@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.159.0
+
 ## 0.158.10
 
 - Offer connected W&B projects during the folder import flow, then review the chosen source's Probe destination before starting imports. Remove W&B linking from post-import status and details; file-only imports still support automatic background scanning.
