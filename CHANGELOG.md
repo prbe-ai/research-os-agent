@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Offer connected W&B projects during the folder import flow, then review the chosen source's Probe destination before starting imports. Remove W&B linking from post-import status and details; file-only imports still support automatic background scanning.
+
 ## 0.158.9
 
 - The install funnel now covers what the guided setup does after the plugins land: the installation settling, the import offer's answer (including skipping it), the dashboard handoff, and Uninstall -- both the removal and a confirmation someone backed out of. The past-sessions lane reports a verdict for each of its exit paths, as the folder lane already did.
