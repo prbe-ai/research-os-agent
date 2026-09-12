@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.158.8
+
 - Cancel an individual session or folder import from its detail menu. Other imports keep running; canceled jobs retain their progress for an explicit resume and leave the active progress bars. Uploads already submitted may still finish.
 - Exit, Escape, and Ctrl-C leave background imports and their history intact. Exit closes the wizard; use Cancel import in the details to stop a selected job.
 
