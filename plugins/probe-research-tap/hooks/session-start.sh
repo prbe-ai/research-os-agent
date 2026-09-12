@@ -283,4 +283,22 @@ elif ! kill -0 "$(cat "$PID_FILE" 2>/dev/null || echo 0)" 2>/dev/null; then
 after spawn; session=$SESSION_ID — transcript will be recovered by the reconciler" >>"$LOG_FILE"
 fi
 
-printf '{"continue": true}\n'
+# Tell the researcher what was redacted from their LAST session. The daemon
+# has no terminal of its own — it is spawned detached below and everything it
+# logs goes to a file nobody reads — so this hook's `systemMessage` is the only
+# channel that actually reaches a human. A credential we quietly removed and
+# never mentioned leaves the key live and the researcher unaware, which is the
+# whole failure this lane exists to close.
+#
+# Bounded and fail-open: a 5s cap, stderr discarded, and any failure just means
+# no message. Never a reason a session fails to start.
+NOTICE=""
+if [ -n "${PY:-}" ] && [ -x "$PY" ]; then
+    NOTICE=$(cd "$PLUGIN_ROOT" 2>/dev/null && timeout 5 "$PY" -m tap redaction-notice 2>/dev/null || true)
+fi
+if [ -n "$NOTICE" ]; then
+    printf '%s' "$NOTICE" | "$PY" -c 'import json,sys; print(json.dumps({"continue": True, "systemMessage": sys.stdin.read().strip()}))' 2>/dev/null \
+        || printf '{"continue": true}\n'
+else
+    printf '{"continue": true}\n'
+fi

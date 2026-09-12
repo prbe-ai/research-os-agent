@@ -9,6 +9,7 @@ see tap.sanitize for what gets dropped. Bookkeeping-only system events
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import time
 from importlib import import_module
@@ -118,6 +119,64 @@ def build_batch_body(
 build_finalize_body = _transcript.build_finalize_body
 
 
+#: Meta keys holding what the NEXT SessionStart tells the researcher. The tap
+#: itself has no terminal — session-start.sh spawns it detached and its only
+#: stdout is `{"continue": true}` — so a redaction it performs now can only be
+#: reported at the next session, through the hook's `systemMessage`.
+REDACTED_COUNT_KEY = "pending_redaction_count"
+REDACTED_RULES_KEY = "pending_redaction_rules"
+
+
+def _record_redactions(storage: Storage, body: bytes) -> None:
+    """Accumulate this batch's redaction report for the next SessionStart.
+
+    Reads the body we are about to spool rather than taking a parameter: every
+    producer reaches the wire through `enqueue`, so there is exactly one place
+    to account for, and a new caller cannot forget to report.
+
+    Best-effort by construction. A researcher not being told is bad; a tap that
+    stops capturing because it could not write a counter is worse.
+    """
+    try:
+        report = json.loads(body).get("redactions")
+        if not report:
+            return
+        count = int(report.get("count") or 0)
+        if count <= 0:
+            return
+        previous = int(storage.get_meta(REDACTED_COUNT_KEY) or 0)
+        rules = set(filter(None, (storage.get_meta(REDACTED_RULES_KEY) or "").split(",")))
+        rules.update(str(r) for r in report.get("rules") or [])
+        storage.set_meta_pair(
+            REDACTED_COUNT_KEY, str(previous + count),
+            REDACTED_RULES_KEY, ",".join(sorted(rules)),
+        )
+    except Exception:  # noqa: BLE001 - never let reporting break capture
+        log.debug("outbox: could not record redaction report", exc_info=True)
+
+
+def redaction_notice(storage: Storage, *, clear: bool = True) -> str:
+    """One line for the researcher, or "" when there is nothing to say.
+
+    Names the RULES, not just a count: "rotate your AWS key" and "a false
+    positive ate a checkpoint path" need different responses from them, and the
+    rule id is the only thing that distinguishes the two.
+    """
+    count = int(storage.get_meta(REDACTED_COUNT_KEY) or 0)
+    if count <= 0:
+        return ""
+    rules = [r for r in (storage.get_meta(REDACTED_RULES_KEY) or "").split(",") if r]
+    if clear:
+        storage.delete_meta(REDACTED_COUNT_KEY)
+        storage.delete_meta(REDACTED_RULES_KEY)
+    what = ", ".join(rules) if rules else "credential-shaped values"
+    plural = "s" if count != 1 else ""
+    return (
+        f"probe: redacted {count} credential-shaped value{plural} ({what}) from your last "
+        "session before upload. If any of those are live keys, rotate them now."
+    )
+
+
 def enqueue(
     *,
     storage: Storage,
@@ -127,6 +186,7 @@ def enqueue(
     body: bytes,
     now: int,
 ) -> None:
+    _record_redactions(storage, body)
     storage.enqueue_batch(
         session_id=session_id,
         batch_seq=batch_seq,

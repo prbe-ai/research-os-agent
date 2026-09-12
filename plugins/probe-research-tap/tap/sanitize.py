@@ -18,6 +18,13 @@ plus a one-line marker for each tool call. Everything else is noise:
   - Full tool_result `content` (file contents, command output, search
     results — usually the single largest chunk of any session payload)
 
+REDACTION IS NOT DONE HERE. `transcript.build_batch_body` runs
+`secrets.redact_event` on whatever this returns, so a credential in a prompt or
+a shell command is replaced before the event joins a batch. It lives there, not
+here, because all three lanes (this one, Codex, pi) and all three producers
+(the live daemon, the reconciler, the importer) converge on that one function.
+Do not add a second redactor to this module.
+
 We KEEP enough of each tool block to reconstruct what happened:
   - tool_use:    type, id, name, summary — the FULL command for Bash
                  (shell lines are a session's method section; capped at
@@ -160,7 +167,12 @@ _TOOL_SUMMARY_MAX_LEN = 200
 # and heredoc/inline-script bodies were exactly what first-line summaries
 # dropped. The full command ships — outputs still never do — under its own,
 # larger cap so a pathological one-liner can't bloat a batch.
-_COMMAND_MAX_LEN = 4000
+#: PUBLIC because the Codex and pi sanitizers import it. It used to be
+#: redeclared in each of them, with codex_sanitize.py carrying the comment
+#: "Parity with cc-tap's sanitize.py" -- a decision written down three times is
+#: a decision that drifts. One definition, three importers.
+COMMAND_MAX_LEN = 4000
+_COMMAND_MAX_LEN = COMMAND_MAX_LEN  # backwards-compatible local alias
 
 
 def sanitize_event(event: Any) -> Any:

@@ -64,6 +64,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from .sanitize import COMMAND_MAX_LEN
+
 SUPPORTED_SESSION_VERSIONS = frozenset({1, 2, 3})
 
 _TREE_KEYS = ("id", "parentId")
@@ -134,7 +136,8 @@ def _system_event(
     return out
 
 
-_COMMAND_MAX_LEN = 4000
+#: Single definition in sanitize.py -- see COMMAND_MAX_LEN there.
+_COMMAND_MAX_LEN = COMMAND_MAX_LEN
 _TOOL_SUMMARY_MAX_LEN = 200
 #: Cap for a single untrusted metadata field (mimeType, tool_use id,
 #: toolCallId, toolName) — see the module docstring's "UNTRUSTED PRODUCER"

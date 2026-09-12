@@ -67,6 +67,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from .sanitize import COMMAND_MAX_LEN
+
 # Compaction is shared with the Claude Code sanitizer on purpose. The two
 # formats differ; what we choose to RECORD about a tool call should not, or
 # the same session recorded through two agents produces two different
@@ -128,7 +130,8 @@ _TOOL_SUMMARY_MAX_LEN = 200
 # Parity with cc-tap's sanitize.py (2026-08-13): shell commands ship in FULL
 # under their own larger cap — a session's commands are its method section —
 # while every other key stays first-line-only.
-_COMMAND_MAX_LEN = 4000
+#: Single definition in sanitize.py -- see COMMAND_MAX_LEN there.
+_COMMAND_MAX_LEN = COMMAND_MAX_LEN
 
 
 def sanitize_event(event: Any) -> Any:

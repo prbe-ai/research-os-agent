@@ -21,6 +21,7 @@ def _print_help() -> int:
     print("  pair     exchange pairing token for a device token")
     print("  status   print local state")
     print("  revoke   revoke device + wipe local state")
+    print("  redaction-notice  print (and clear) what was redacted last session")
     return 0
 
 
@@ -47,6 +48,26 @@ def main(argv: list[str] | None = None) -> int:
         from tap.pair import main as pair_main
 
         return pair_main(rest)
+    if cmd == "redaction-notice":
+        # Reads and CLEARS the pending report, so the researcher is told once.
+        # Silent and exit 0 when there is nothing pending or no local state
+        # yet: this runs on the SessionStart path and must never be a reason a
+        # session fails to start.
+        try:
+            from tap import config as cfg
+            from tap.outbox import redaction_notice
+            from tap.storage import Storage
+
+            storage = Storage(cfg.state_db_path())
+            try:
+                notice = redaction_notice(storage)
+            finally:
+                storage.close()
+        except Exception:  # noqa: BLE001
+            return 0
+        if notice:
+            print(notice)
+        return 0
     if cmd == "status":
         from tap.status import main as status_main
 

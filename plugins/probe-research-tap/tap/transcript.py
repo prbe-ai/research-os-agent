@@ -23,6 +23,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .secrets import redact_event
+
 
 @dataclass
 class TailResult:
@@ -166,8 +168,17 @@ def build_batch_body(
     all sharing that line's `line_no`. Two events legitimately sharing a
     line_no is safe: the server keys batches on (session_id, batch_seq) and
     treats line_no as ordering, not identity.
+
+    REDACTION runs here, on the far side of `sanitize`, for the same reason
+    `sanitize` is a parameter: this is the one place every producer converges.
+    The live daemon, the reconciler's gap backfill and the historical importer
+    all call this function, and all three agent lanes (Claude Code, Codex, pi)
+    pass through it. A redactor wired into the sanitizers instead would be
+    three copies, and the next lane would ship unredacted until somebody
+    remembered. Credentials are replaced in place; nothing is ever dropped.
     """
     events = []
+    redacted_rules: list[str] = []
     for i, line in enumerate(lines):
         try:
             raw = json.loads(line)
@@ -177,16 +188,26 @@ def build_batch_body(
         if sanitized is None:
             continue
         for one in (sanitized if isinstance(sanitized, list) else [sanitized]):
-            events.append({"line_no": base_line_no + i, "raw": one})
+            scrubbed, fired = redact_event(one)
+            redacted_rules.extend(fired)
+            events.append({"line_no": base_line_no + i, "raw": scrubbed})
     if not events:
         return None
-    body = {
+    body: dict[str, Any] = {
         "device_id": device_id,
         "session_id": session_id,
         "batch_seq": batch_seq,
         "cwd": cwd,
         "events": events,
     }
+    if redacted_rules:
+        # Counts only — the values themselves never leave the machine, and the
+        # rule names are what let a researcher tell "rotate your AWS key" from
+        # "a false positive ate a checkpoint path".
+        body["redactions"] = {
+            "count": len(redacted_rules),
+            "rules": sorted(set(redacted_rules)),
+        }
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
 
 
