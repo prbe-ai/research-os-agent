@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.160.0
+
 - **"Tracking" now means a transcript daemon is running, or says why not.** The two were never connected: a session could report tracking on while no daemon had ever started, and nothing anywhere said so. `probe session status` and `session initialize` now carry a `capture` object and a third state, `tracked, not captured`, with one reason from a closed vocabulary (`not started`, `not installed`, `not paired`, `killswitch`, `disabled path`, `no session file`, `interpreter too old`, `halted`). The Claude Code status segment renders `◐ tracking → project · no capture: <reason>`; the pi footer and the Codex notice say the same in their own idiom.
 - **On pi, the CLI starts the daemon itself when tracking says one should exist** -- from `session status`, from `track`/`toggle`, and from the root callback, at most once per session per ten minutes, printing a line when it does. pi's package filter (`"extensions": []`) loads our skills and MCP tools but not the extension that spawns capture, so there was no in-process code left to do it. Explicit opt-outs are never reversed: a killswitch, a disabled path and a capture that was never installed each keep their own reason.
 - **A dead capture daemon is revived at the next prompt, not the next session.** A `UserPromptSubmit` hook costs one file read and one liveness check on the healthy path and respawns on the unhealthy one, bounded to once every ten minutes.
