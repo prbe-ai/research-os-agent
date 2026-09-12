@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Fix folder imports blocked by the retired personal-workspace lookup. Use the only available workspace or the newest created by the current user, preserving explicit and already-approved destinations.
+- Restore automatic folder scanning and import with W&B selected. Choose or create one Probe project for the files and W&B history before starting; no later file-plan review is required. Workspace selection errors no longer ask the user to log in again.
+
 ## 0.159.0
 
 ## 0.158.10
