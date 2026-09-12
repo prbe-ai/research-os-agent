@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Fix the `UserPromptSubmit` self-heal hook dying on Linux instead of reviving a dead capture daemon. It read the heal marker's mtime with `stat -f %m`, which is BSD-only; on GNU coreutils that prints a filesystem block rather than a timestamp, and the arithmetic that followed aborted the hook under `set -u`. Every prompt after the first in a session failed with `File: unbound variable` and no respawn was ever attempted, so a daemon that died mid-session stayed dead until a new session started.
 - Automatically reconcile a stale transcript finalization when Probe already accepted the exact same source boundary, allowing newly approved messages to import without replaying old data. Recheck receipts once after a conflict and count matching, already-finalized approved content as complete; preserve unverified content and pending capture data.
 
 ## 0.160.0

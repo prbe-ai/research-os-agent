@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
@@ -74,9 +75,31 @@ def test_spawns_when_no_daemon_is_alive(hook_env):
 
 
 def test_a_fresh_marker_blocks_a_second_spawn(hook_env):
-    _run({"session_id": SID}, hook_env["env"])
-    _run({"session_id": SID}, hook_env["env"])
+    first = _run({"session_id": SID}, hook_env["env"])
+    second = _run({"session_id": SID}, hook_env["env"])
+    # Both return codes, or this is vacuous: a hook that CRASHES on the marker
+    # read also fails to spawn, and the count alone cannot tell the two apart.
+    # `stat -f %m` did exactly that on GNU coreutils for every prompt after the
+    # first, so the self-heal was dead on Linux under a green test.
+    assert (first.returncode, second.returncode) == (0, 0), second.stderr
     assert hook_env["spawn_log"].read_text(encoding="utf-8").count("ran") == 1
+
+
+def test_an_expired_marker_allows_another_spawn(hook_env):
+    """The other direction: the bound is a real clock, not a crash.
+
+    Paired with the test above this pins that the marker's mtime is genuinely
+    parsed as a number. A hook that reads garbage and falls back to 0 re-spawns
+    every time and fails the fresh-marker test; one that cannot read the mtime
+    at all never re-spawns and fails this one.
+    """
+    _run({"session_id": SID}, hook_env["env"])
+    marker = hook_env["state"] / "heal" / SID
+    old_mtime = time.time() - 700  # past the ten-minute bound
+    os.utime(marker, (old_mtime, old_mtime))
+    result = _run({"session_id": SID}, hook_env["env"])
+    assert result.returncode == 0, result.stderr
+    assert hook_env["spawn_log"].read_text(encoding="utf-8").count("ran") == 2
 
 
 def test_no_session_id_exits_quietly(hook_env):

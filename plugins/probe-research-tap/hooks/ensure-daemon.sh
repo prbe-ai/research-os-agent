@@ -68,7 +68,17 @@ esac
 MARKER="$STATE/heal/$SID"
 if [ -f "$MARKER" ]; then
     NOW=$(date +%s)
-    THEN=$(stat -f %m "$MARKER" 2>/dev/null || stat -c %Y "$MARKER" 2>/dev/null || echo 0)
+    # GNU first, and then refuse anything that is not digits. On GNU coreutils
+    # `-f` is *filesystem* status and `%m` is not one of its directives, so
+    # `stat -f %m` reads `%m` as a FILENAME: it prints the marker's filesystem
+    # block on stdout and exits 1, and the `||` appends the real mtime to that
+    # block. `$((NOW - THEN))` then evaluates the whole thing as arithmetic,
+    # reaches the bare word `File`, and `set -u` makes that fatal -- killing
+    # this hook two lines above the respawn it exists to perform. BSD `stat`
+    # rejects `-c` outright, so this order serves both. The digit guard is the
+    # belt: no `||` chain can ever put prose into the arithmetic again.
+    THEN=$(stat -c %Y "$MARKER" 2>/dev/null || stat -f %m "$MARKER" 2>/dev/null || echo 0)
+    case "$THEN" in '' | *[!0-9]*) THEN=0 ;; esac
     [ $((NOW - THEN)) -lt 600 ] && exit 0
 fi
 
