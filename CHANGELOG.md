@@ -4,6 +4,9 @@
 
 - The install funnel now covers what the guided setup does after the plugins land: the installation settling, the import offer's answer (including skipping it), the dashboard handoff, and Uninstall -- both the removal and a confirmation someone backed out of. The past-sessions lane reports a verdict for each of its exit paths, as the folder lane already did.
 - Durable background imports report their own outcome -- finished, failed, interrupted, stalled waiting for a connection, or a worker that vanished -- under the session that approved them, replayed off the job record. Until now nothing said whether an approved import ever completed. Metadata only; telemetry can be absent from a worker's pinned source tree without affecting the import.
+- Show live import progress on the last onboarding page, with Open dashboard, Return to main menu, and Exit last. Each action preserves background imports.
+- Explain folder-start failures and offer Retry, Skip, and Back before advancing onboarding.
+- Link W&B projects from saved folder import status and details, including automatic imports, without scanning or uploading the folder again.
 
 ## 0.158.8
 
