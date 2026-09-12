@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.160.2
+
 ## 0.160.1
 - `wizard.uninstall_completed` resolves its identity before `finish_removal` revokes and clears the device credential. The event fires after that release, so the sender's lazy resolution found no token and fell back to `machine:<id>`; a destination filtering on a known person dropped it entirely. Fail-soft — an unresolvable identity leaves the event exactly as it was.
 
