@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.158.6
+
 - Folder-picker actions use `b` for Back, `s` for Skip, and `i` for Import, with directional arrows only on Back and Import. These shortcuts do not activate while editing the path with Ctrl+L.
 - Completed imports leave the progress overview after 24 hours. Repeating a completed folder import starts a fresh job and rechecks current files without duplicating completed uploads.
 - Explicit Exit, sign out, and uninstall stop workers and clear local import jobs. The final **Onboarding complete** page opens the dashboard with Enter or → while approved imports continue in the background.
