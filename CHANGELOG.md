@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Back returns to the previous import form or review with selections preserved. Revisiting optional imports never repeats installation or automatically starts the same import again; unchanged reviews reuse their scan. Import selection labels its Main menu boundary, and already-started import status labels Escape as Continue.
 ## 0.158.6
 
 - Folder-picker actions use `b` for Back, `s` for Skip, and `i` for Import, with directional arrows only on Back and Import. These shortcuts do not activate while editing the path with Ctrl+L.
