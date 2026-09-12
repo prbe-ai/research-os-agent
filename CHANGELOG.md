@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.158.7
+
 - Back returns to the previous import form or review with selections preserved. Revisiting optional imports never repeats installation or automatically starts the same import again; unchanged reviews reuse their scan. Import selection labels its Main menu boundary, and already-started import status labels Escape as Continue.
 ## 0.158.6
 
