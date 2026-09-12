@@ -10,4 +10,4 @@ PROBE_BASE_URL env overrides. State and lifecycle are owned by Claude Code's
 session hooks — daemon dies when the session ends.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"

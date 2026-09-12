@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Automatically reconcile a stale transcript finalization when Probe already accepted the exact same source boundary, allowing newly approved messages to import without replaying old data. Recheck receipts once after a conflict and count matching, already-finalized approved content as complete; preserve unverified content and pending capture data.
+
 ## 0.160.0
 
 - **"Tracking" now means a transcript daemon is running, or says why not.** The two were never connected: a session could report tracking on while no daemon had ever started, and nothing anywhere said so. `probe session status` and `session initialize` now carry a `capture` object and a third state, `tracked, not captured`, with one reason from a closed vocabulary (`not started`, `not installed`, `not paired`, `killswitch`, `disabled path`, `no session file`, `interpreter too old`, `halted`). The Claude Code status segment renders `◐ tracking → project · no capture: <reason>`; the pi footer and the Codex notice say the same in their own idiom.

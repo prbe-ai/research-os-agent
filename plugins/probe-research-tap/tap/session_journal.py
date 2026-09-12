@@ -62,9 +62,12 @@ _ROUTES = {"claude_code": "claude-code", "codex": "codex", "pi": "pi"}
 
 
 class ReconciliationRequired(RuntimeError):
-    def __init__(self, message: str, *, safe_message: str | None = None):
+    def __init__(
+        self, message: str, *, safe_message: str | None = None, status_code: int | None = None,
+    ):
         super().__init__(message)
         self.safe_message = message if safe_message is None else safe_message
+        self.status_code = status_code
 
 
 class DeliveryPending(RuntimeError):
@@ -72,6 +75,13 @@ class DeliveryPending(RuntimeError):
         super().__init__(message)
         self.retryable = retryable
         self.safe_message = message if safe_message is None else safe_message
+
+
+def _validate_history(state: dict, expected: tuple[int, str] | None) -> None:
+    if expected is not None and (
+        state.get("historical_end"), state.get("historical_hash")
+    ) != expected:
+        raise ReconciliationRequired("approved transcript snapshot changed during reconciliation")
 
 
 def _request_failure(wire, code: int) -> str:
@@ -339,6 +349,62 @@ class Journal:
         if prefix_hash(path, end) != expected:
             raise ReconciliationRequired("source changed inside an acknowledged or pending range")
 
+    def _reconcile_finalization(self, state: dict, remote: dict) -> bool:
+        """Retire only a no-data completion whose exact boundary is accepted.
+
+        Called after source validation, inside ensure's write transaction. A
+        different producer can finalize the same prefix with another envelope;
+        that does not authorize acknowledging different transcript event bytes.
+        """
+        stream = remote.get("stream") or {}
+        if (remote.get("protocol_version") != 2 or remote.get("state") != "ready"
+                or stream.get("finalized") is not True):
+            return False
+        row = self.conn.execute(
+            "SELECT body,digest FROM pending WHERE session_id=?", (state["session_id"],)
+        ).fetchone()
+        if row is None:
+            return False
+        body, digest = bytes(row[0]), row[1]
+        if hashlib.sha256(body).hexdigest() != digest:
+            return False
+        payload = json.loads(body)
+        sequence, remote_sequence = payload.get("batch_seq"), stream.get("last_seq")
+        if (
+            payload.get("protocol_version") != 2 or payload.get("finalize") is not True
+            or payload.get("events") not in (None, [])
+            or payload.get("session_id") != state["session_id"]
+            or payload.get("stream_id") != state["stream_id"]
+            or stream.get("stream_id") != state["stream_id"]
+            or type(sequence) is not int or sequence != state["last_seq"] + 1
+            or type(remote_sequence) is not int or remote_sequence < sequence
+            or payload.get("prefix_sha256") != state["prefix_sha256"]
+            or stream.get("prefix_sha256") != state["prefix_sha256"]
+        ):
+            return False
+        for cursor in ("source_byte", "source_line", "event"):
+            end = state[cursor + "_end"]
+            if (type(end) is not int or end < 0
+                    or any(type(item) is not int for item in (
+                        payload.get(cursor + "_start"), payload.get(cursor + "_end"),
+                        stream.get(cursor + "_end"),
+                    ))
+                    or payload.get(cursor + "_start") != end
+                    or payload.get(cursor + "_end") != end
+                    or stream.get(cursor + "_end") != end):
+                return False
+        removed = self.conn.execute(
+            "DELETE FROM pending WHERE session_id=? AND digest=? AND body=?",
+            (state["session_id"], digest, body),
+        )
+        if removed.rowcount != 1:
+            return False
+        state.update(last_seq=remote_sequence, finalized=True, error=None)
+        if (state.get("historical_end") == state["source_byte_end"]
+                and state.get("historical_hash") == state["prefix_sha256"]):
+            state["historical_complete"] = True
+        return True
+
     def ensure(
         self,
         session_id: str,
@@ -349,6 +415,8 @@ class Journal:
         provenance: dict | None = None,
         cwd: str | None = None,
         complete_lines_only: bool = False,
+        reconcile_body: bytes | None = None,
+        expected_history: tuple[int, str] | None = None,
     ) -> dict:
         if (remote.get("customer_id"), remote.get("source"), remote.get("session_id")) != (
             self.customer_id,
@@ -363,6 +431,10 @@ class Journal:
                 "legacy transcript coverage is unverified; reconcile before replay"
             )
         with self.transaction():
+            if reconcile_body is not None and (
+                self.get(session_id) is None or self.pending(session_id) != reconcile_body
+            ):
+                raise ReconciliationRequired("pending reservation changed before reconciliation")
             # A process may die between snapshot fsync and the SQLite commit.
             # The write lock proves no other producer is still creating these.
             states = self.sessions()
@@ -403,6 +475,9 @@ class Journal:
                     raise ReconciliationRequired(
                         "server stream changed; existing pending bytes retained"
                     )
+                reconciled = self._reconcile_finalization(state, remote)
+                if reconcile_body is not None and not reconciled:
+                    raise ReconciliationRequired("pending finalization does not match accepted coverage")
                 if (
                     stream
                     and stream["last_seq"] > state["last_seq"]
@@ -505,6 +580,7 @@ class Journal:
                         historical_hash=snapshot_hash,
                         historical_complete=True,
                     )
+                    _validate_history(state, expected_history)
                     self._save(state)
                     return state
                 if (
@@ -562,6 +638,7 @@ class Journal:
                 )
                 if extended:
                     state.update(digest_state="not_requested", pending_digest=None)
+            _validate_history(state, expected_history)
             self._save(state)
             return state
 
@@ -573,16 +650,21 @@ class Journal:
         finalize: bool = False,
         historical_only: bool = False,
         max_body_bytes: int = MAX_BODY_BYTES,
+        require_no_pending: bool = False,
+        expected_history: tuple[int, str] | None = None,
     ) -> bytes | None:
         with self.transaction():
             state = self.get(session_id)
             if state is None:
                 raise ReconciliationRequired("session has no validated source reservation")
+            _validate_history(state, expected_history)
             if not state.get("cwd") and cwd and Path(cwd).is_absolute():
                 state["cwd"] = cwd
             self._validate_source(state, Path(state["path"]))
             pending = self.pending(session_id)
             if pending:
+                if require_no_pending:
+                    raise ReconciliationRequired("another transcript delivery was reserved during reconciliation")
                 return pending
             historic = bool(state.get("snapshot_path") and not state.get("historical_complete"))
             if historical_only and state.get("historical_complete"):
@@ -749,8 +831,11 @@ class Journal:
             self._save(state)
             self.conn.execute("DELETE FROM pending WHERE session_id=?", (session_id,))
 
-    def deliver(self, session_id: str, wire: Wire) -> bool:
-        body = self.pending(session_id)
+    def deliver(self, session_id: str, wire: Wire, *, expected_body: bytes | None = None) -> bool:
+        # A compatible drainer may already have acknowledged the staged body
+        # and reserved a successor. Replay the caller's immutable bytes only;
+        # acknowledge's cursor guard leaves that newer reservation untouched.
+        body = expected_body if expected_body is not None else self.pending(session_id)
         if body is None:
             return False
         code, result = wire.post(body)
@@ -758,7 +843,9 @@ class Journal:
             message = f"http {code}: {result.get('detail', 'transcript delivery pending')}"
             self.update(session_id, error=message)
             if code in (409, 422):
-                raise ReconciliationRequired(message, safe_message=_request_failure(wire, code))
+                raise ReconciliationRequired(
+                    message, safe_message=_request_failure(wire, code), status_code=code,
+                )
             raise DeliveryPending(
                 message,
                 retryable=_retryable_status(code) or (
