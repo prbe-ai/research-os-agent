@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The install funnel now covers what the guided setup does after the plugins land: the installation settling, the import offer's answer (including skipping it), the dashboard handoff, and Uninstall -- both the removal and a confirmation someone backed out of. The past-sessions lane reports a verdict for each of its exit paths, as the folder lane already did.
+- Durable background imports report their own outcome -- finished, failed, interrupted, stalled waiting for a connection, or a worker that vanished -- under the session that approved them, replayed off the job record. Until now nothing said whether an approved import ever completed. Metadata only; telemetry can be absent from a worker's pinned source tree without affecting the import.
+
 ## 0.158.8
 
 - Cancel an individual session or folder import from its detail menu. Other imports keep running; canceled jobs retain their progress for an explicit resume and leave the active progress bars. Uploads already submitted may still finish.
