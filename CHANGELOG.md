@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Show Resume in import details only for stopped imports that can be resumed. Update actions live as the worker starts, stops, or completes; active scans, queued work, and automatic connection retries no longer show a Resume action.
+
 ## 0.160.2
 
 ## 0.160.1
