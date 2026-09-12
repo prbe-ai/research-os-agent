@@ -60,9 +60,19 @@ const execFileMock = vi.fn(
   },
 );
 
+/**
+ * `daemon.ts::isDaemonAlive` asks `/bin/ps` what a pidfile's pid actually is,
+ * so that its answer matches `tap start`'s. No test here plants a pidfile, so
+ * this is never reached — it is in the mock so that a test which one day does
+ * plant one gets a fake rather than a real `ps` (and, until then, so the mock
+ * names everything the modules under test import).
+ */
+const execFileSyncMock = vi.fn(() => "");
+
 vi.mock("node:child_process", () => ({
   spawn: (command: string, args: string[], options: { detached: boolean; stdio: string; env: Record<string, string | undefined> }) =>
     spawnMock(command, args, options),
+  execFileSync: () => execFileSyncMock(),
   execFile: (
     command: string,
     args: string[],
@@ -77,6 +87,7 @@ vi.mock("node:child_process", () => ({
 const { registerExtension } = await import("../src/extension.js");
 const { pidFile, shutdownSentinelFile, disabledFile, teamNoteDocumentPath, extensionLogFile } = await import("../src/paths.js");
 const { MCP_SERVED_VIA_ADAPTER_MESSAGE } = await import("../src/adapterHandoff.js");
+const { trackingStatusText } = await import("../src/trackingState.js");
 
 type Handler = (event: unknown, ctx: unknown) => Promise<void> | void;
 
@@ -388,6 +399,125 @@ describe("registerExtension — session_start", () => {
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
 
     expect(daemonSpawns()).toHaveLength(0);
+  });
+});
+
+describe("trackingStatusText", () => {
+  it("shows tracking when a daemon is live", () => {
+    expect(trackingStatusText(true, { running: true, reason: "running" })).toBe("● tracking");
+  });
+
+  it("names the reason when tracking is on but capture is not", () => {
+    expect(trackingStatusText(true, { running: false, reason: "not paired" })).toBe(
+      "◐ tracking · no capture: not paired",
+    );
+  });
+
+  it("says nothing about capture when tracking is off", () => {
+    expect(trackingStatusText(false, { running: false, reason: "killswitch" })).toBe(
+      "○ not tracking",
+    );
+  });
+
+  it("falls back to the plain state when the CLI returned no capture block", () => {
+    expect(trackingStatusText(true, undefined)).toBe("● tracking");
+  });
+});
+
+describe("registerExtension — the footer's third state", () => {
+  it("renders `tracked, not captured` from the CLI's own capture block", async () => {
+    installProbeCli();
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({
+          session_id: "pi-uncaptured-session",
+          tracking: true,
+          signal: "on",
+          seeded: true,
+          source: "shipped",
+          capture: { running: false, pid: null, reason: "not paired" },
+          effective: "tracked, not captured",
+        }),
+        "",
+      );
+    });
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({
+      sessionId: "pi-uncaptured-session",
+      sessionFile: undefined,
+      cwd: "/repo",
+      hasUI: true,
+    });
+
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+    expect(ctx.setStatus).toHaveBeenCalledWith(
+      "probe-tracking",
+      "◐ tracking · no capture: not paired",
+    );
+  });
+
+  it("ignores a malformed capture block rather than failing the whole read", async () => {
+    installProbeCli();
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({
+          session_id: "pi-malformed-capture",
+          tracking: true,
+          signal: "on",
+          seeded: true,
+          source: "shipped",
+          capture: { running: "no", reason: 7 },
+        }),
+        "",
+      );
+    });
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({
+      sessionId: "pi-malformed-capture",
+      sessionFile: undefined,
+      cwd: "/repo",
+      hasUI: true,
+    });
+
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+    // An older probe CLI has no `capture` key at all, and a broken one may
+    // have a bad one. Neither is a reason to blank the footer: tracking is
+    // still known, and that is what gets rendered.
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "● tracking");
+  });
+
+  it("re-reads the footer after the spawn attempt, so a refused spawn is visible", async () => {
+    pair();
+    installProbeCli();
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const sessionId = uniqueSessionId("post-spawn-refresh");
+    const ctx = fakeContext({
+      sessionId,
+      sessionFile: `/tmp/${sessionId}.jsonl`,
+      cwd: "/repo",
+      hasUI: true,
+    });
+
+    execFileMock.mockClear();
+    await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
+
+    // Once before the spawn (seeding the signal), once after it: the capture
+    // reading taken before `tap start` has even been asked to run is the one
+    // reading guaranteed to be out of date.
+    const initializeCalls = execFileMock.mock.calls.filter(
+      ([, args]) => args[0] === "session" && args[1] === "initialize",
+    );
+    expect(initializeCalls).toHaveLength(2);
+
+    rmSync(pidFile(sessionId), { force: true });
+    rmSync(shutdownSentinelFile(sessionId), { force: true });
   });
 });
 

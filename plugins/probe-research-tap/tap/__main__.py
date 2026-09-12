@@ -17,6 +17,7 @@ def _print_help() -> int:
     print()
     print("Subcommands:")
     print("  watch    spawn the daemon (used by SessionStart hook)")
+    print("  start    spawn the daemon idempotently, with gates (used by every caller)")
     print("  pair     exchange pairing token for a device token")
     print("  status   print local state")
     print("  revoke   revoke device + wipe local state")
@@ -38,6 +39,10 @@ def main(argv: list[str] | None = None) -> int:
         from tap.main import main as watch_main
 
         return watch_main(rest)
+    if cmd == "start":
+        from tap.start import main as start_main
+
+        return start_main(rest)
     if cmd == "pair":
         from tap.pair import main as pair_main
 

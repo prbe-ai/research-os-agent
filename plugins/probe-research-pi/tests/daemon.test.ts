@@ -1,8 +1,41 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { isDaemonAlive, pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type PruneDeps } from "../src/daemon.js";
 import { pidFile, shutdownSentinelFile } from "../src/paths.js";
 import type { TapRuntime } from "../src/tapRuntime.js";
+
+/**
+ * The `tap start` argv, built from the contract the Python side reads too.
+ *
+ * Three callers in two languages spawn this command. Each used to pin the
+ * argv as a literal in its own test, so a renamed flag stayed green
+ * everywhere and produced a pi session that captured nothing. The flag names
+ * now live in one file; see its `_why`, and `agent/tests/test_spawn_contract.py`
+ * for the end that asks `tap start`'s own parser whether it still accepts them.
+ */
+function expectedTapStartArgv(values: Record<string, string>): string[] {
+  const contractPath = join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "probe-research-tap",
+    "spawn-contract.json",
+  );
+  const contract = JSON.parse(readFileSync(contractPath, "utf-8")) as {
+    subcommand: string[];
+    flags: Record<string, string>;
+    flag_order: string[];
+  };
+  const argv = [...contract.subcommand];
+  for (const name of contract.flag_order) {
+    argv.push(contract.flags[name], values[name]);
+  }
+  return argv;
+}
 
 /** A tiny in-memory filesystem + recording spawn, standing in for real fs/child_process. */
 function fakeDeps(overrides: Partial<DaemonDeps> = {}): DaemonDeps & { files: Map<string, string>; spawnCalls: Array<{ command: string; args: string[]; options: unknown }> } {
@@ -32,6 +65,13 @@ function fakeDeps(overrides: Partial<DaemonDeps> = {}): DaemonDeps & { files: Ma
     kill: () => {
       throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
     },
+    // What `ps -p <pid> -o command=` prints for a real wrapper (verified
+    // against a live one: the whole script text plus its positional args, so
+    // both `-m tap watch` and the `probe-research-tap` prefix are in there).
+    // Tests that care about the identity check override this.
+    commandForPid: () =>
+      '/bin/sh -c SID="$1"; ... "$PY" -m tap watch --session-id "$SID" ... sh sess /repo ' +
+      "/usr/bin/python3 /tmp/sess.log /tmp/probe-research-tap-watcher-sess.pid probe-research-tap",
     log: () => {},
     // Instant by default so nothing in this suite pays real wall-clock time
     // for the bounded poll in waitForSpawnConfirmation; tests that care about
@@ -45,6 +85,41 @@ function fakeDeps(overrides: Partial<DaemonDeps> = {}): DaemonDeps & { files: Ma
 const runtime: TapRuntime = { python: "/usr/bin/python3", tapRoot: "/opt/tap-checkout" };
 
 describe("spawnDaemon", () => {
+  it("spawns `tap start`, not its own wrapper script", () => {
+    const deps = fakeDeps();
+
+    const result = spawnDaemon(
+      {
+        sessionId: "01a06383-6f4e-751a-b94c-bcefef19938c",
+        transcriptPath: "/Users/oded/.pi/agent/sessions/x/s.jsonl",
+        cwd: "/Users/oded/Repos/rosetta-workers/visium",
+        runtime: { python: "/usr/bin/python3" },
+      },
+      deps,
+    );
+
+    expect(result).toEqual({ spawned: true, pid: 4242 });
+    expect(deps.spawnCalls).toHaveLength(1);
+    expect(deps.spawnCalls[0].command).toBe("/usr/bin/python3");
+    // Built from the SHARED contract, never retyped here. This argv has three
+    // callers in two languages; a literal in each test file is three copies of
+    // one contract that nothing compares, which is the exact shape of the bug
+    // `tap start` was created to delete. See spawn-contract.json's own note,
+    // and agent/tests/test_spawn_contract.py for the other end.
+    expect(deps.spawnCalls[0].args).toEqual(
+      expectedTapStartArgv({
+        session_id: "01a06383-6f4e-751a-b94c-bcefef19938c",
+        cwd: "/Users/oded/Repos/rosetta-workers/visium",
+        transcript: "/Users/oded/.pi/agent/sessions/x/s.jsonl",
+      }),
+    );
+  });
+
+  it("no longer builds a wrapper script of its own", async () => {
+    const mod = await import("../src/daemon.js");
+    expect("buildWrapperScript" in mod).toBe(false);
+  });
+
   it("spawns with PROBE_TAP_SOURCE=pi in the child's env", () => {
     const deps = fakeDeps();
 
@@ -56,12 +131,12 @@ describe("spawnDaemon", () => {
     expect(result.spawned).toBe(true);
     expect(deps.spawnCalls).toHaveLength(1);
     const { command, options } = deps.spawnCalls[0];
-    expect(command).toBe("/bin/sh");
+    expect(command).toBe("/usr/bin/python3");
     const env = (options as { env: Record<string, string | undefined> }).env;
     expect(env.PROBE_TAP_SOURCE).toBe("pi");
   });
 
-  it("passes --session-id, --cwd and --transcript through to the wrapper's argv", () => {
+  it("passes --session-id, --cwd and --transcript through to `tap start`'s argv", () => {
     const deps = fakeDeps();
 
     spawnDaemon(
@@ -69,13 +144,19 @@ describe("spawnDaemon", () => {
       deps,
     );
 
-    const { args } = deps.spawnCalls[0];
-    // args: ["-c", script, "sh", sessionId, cwd, python, logFile, pidFile, prefix, "--transcript", path]
-    expect(args).toContain("sess-2");
-    expect(args).toContain("/repo/proj");
-    expect(args).toContain("/usr/bin/python3");
-    expect(args).toContain("--transcript");
-    expect(args.at(-1)).toBe("/tmp/sess-2.jsonl");
+    const { command, args } = deps.spawnCalls[0];
+    expect(command).toBe("/usr/bin/python3");
+    expect(args).toEqual([
+      "-m",
+      "tap",
+      "start",
+      "--session-id",
+      "sess-2",
+      "--cwd",
+      "/repo/proj",
+      "--transcript",
+      "/tmp/sess-2.jsonl",
+    ]);
   });
 
   it("prepends the resolved tap root to PYTHONPATH", () => {
@@ -104,13 +185,36 @@ describe("spawnDaemon", () => {
     expect(deps.spawnCalls).toHaveLength(0);
   });
 
-  it("clears a stale shutdown sentinel before spawning (resumed-session case)", () => {
+  it("still calls the spawner when the pidfile names a live process that is not the tap", () => {
+    const deps = fakeDeps({
+      kill: () => {
+        /* no throw => pid is alive */
+      },
+      commandForPid: () => "/usr/bin/some-unrelated-daemon",
+    });
+    deps.files.set(pidFile("sess-4b"), "9999");
+
+    const result = spawnDaemon(
+      { sessionId: "sess-4b", transcriptPath: "/tmp/sess-4b.jsonl", cwd: "/repo", runtime },
+      deps,
+    );
+
+    expect(result.spawned).toBe(true);
+    expect(deps.spawnCalls).toHaveLength(1);
+  });
+
+  it("leaves a stale shutdown sentinel alone — `tap start` owns clearing it", () => {
     const deps = fakeDeps();
     deps.files.set(shutdownSentinelFile("sess-5"), "");
 
     spawnDaemon({ sessionId: "sess-5", transcriptPath: "/tmp/sess-5.jsonl", cwd: "/repo", runtime }, deps);
 
-    expect(deps.files.has(shutdownSentinelFile("sess-5"))).toBe(false);
+    // Deliberately NOT cleared here any more: the sentinel, the pid file and
+    // the wrapper are one lifecycle, and that lifecycle now lives in exactly
+    // one place. Clearing it from this side too would be a second copy of the
+    // rule, free to drift from the one that matters.
+    expect(deps.files.has(shutdownSentinelFile("sess-5"))).toBe(true);
+    expect(deps.spawnCalls).toHaveLength(1);
   });
 });
 
@@ -242,6 +346,27 @@ describe("isDaemonAlive", () => {
     const deps = fakeDeps({ kill: () => {} });
     deps.files.set(pidFile("garbage"), "not-a-pid");
     expect(isDaemonAlive("garbage", deps)).toBe(false);
+  });
+
+  // The identity half of the rule, and the reason it exists: `tap start`
+  // (tap/start.py::daemon_state) treats a live pid that is NOT the tap as
+  // STALE, not as `running`. If this function stopped at kill(pid, 0) the two
+  // would disagree about the word "alive" — and the disagreement is silent and
+  // one-directional: spawnDaemon would return `already-running` for a recycled
+  // pid and never call the spawner that would have corrected it.
+  it("is false when the pid is alive but is not the tap (pid reuse or a planted pidfile)", () => {
+    const deps = fakeDeps({
+      kill: () => {},
+      commandForPid: () => "/Applications/Firefox.app/Contents/MacOS/firefox",
+    });
+    deps.files.set(pidFile("impostor"), "123");
+    expect(isDaemonAlive("impostor", deps)).toBe(false);
+  });
+
+  it("is false when the process cannot be identified at all", () => {
+    const deps = fakeDeps({ kill: () => {}, commandForPid: () => null });
+    deps.files.set(pidFile("unidentifiable"), "123");
+    expect(isDaemonAlive("unidentifiable", deps)).toBe(false);
   });
 });
 

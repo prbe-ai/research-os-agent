@@ -150,7 +150,7 @@ async function refreshTrackingStatus(
   }
   if (ctx.hasUI) {
     try {
-      ctx.ui.setStatus("probe-tracking", trackingStatusText(state.tracking));
+      ctx.ui.setStatus("probe-tracking", trackingStatusText(state.tracking, state.capture));
     } catch (err) {
       logLine(
         `tracking footer refresh failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -314,6 +314,14 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     } else {
       logLine(`session_start(${event.reason}): capture already running for ${sessionId}`);
     }
+
+    // Read the footer back now that `tap start` has had its say. The refresh
+    // at the top of this handler ran BEFORE the spawn, so its capture reading
+    // is the one reading guaranteed to be stale — and a `tap start` that
+    // refused (a gate this handler does not pre-check, an interpreter below
+    // 3.11) would otherwise leave "● tracking" on screen for the rest of the
+    // session with nothing capturing behind it.
+    await refreshTrackingStatus(ctx, sessionId, ctx.cwd);
   });
 
   pi.on("session_shutdown", async (event, ctx) => {

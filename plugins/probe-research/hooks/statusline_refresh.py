@@ -221,6 +221,123 @@ def fetch_active_run_ids(base_url: str, token: str, session_id: str, marker) -> 
     return ids
 
 
+#: The `/tmp` filename prefix the tap's watcher files carry, per agent. A
+#: MIRROR of `tap.config.watcher_prefix` and `probe.cli.capture_state`, kept by
+#: hand because this file is a hook: it runs with no `probe` package and no
+#: `tap` package on its path, so it cannot import either of them. The parity
+#: test in `agent/tests/test_watcher_prefix_parity.py` is what keeps the copies
+#: equal — the drift is otherwise silent, because a wrong prefix just never
+#: finds a pid file and reads as "no daemon".
+_WATCHER_PREFIX = {"codex": "prbe-codex-tap"}
+_WATCHER_PREFIX_DEFAULT = "probe-research-tap"
+
+#: The tap's durable state directory, per agent — the SECOND convention this
+#: file mirrors by hand, for the same reason and under the same parity test.
+#: Canonically `tap.config.plugin_dir()` (which reads the env name and the
+#: state root off `tap.sources`) and `probe.cli.capabilities.tap_plugin_dir`.
+#:
+#: WHY THE STATE DIR AND NOT JUST THE PID FILE. A missing pid file has two
+#: causes that are nothing alike: a daemon that died, and a tap that was never
+#: installed. Reading only `/tmp` collapses them into `not started`, so the
+#: segment on a tracking-only machine blames a crashed daemon that never
+#: existed, and the one row in the spec's edge-case table that exists to say
+#: "an explicit opt-out is never silently reversed" renders as a fault report.
+_TAP_PLUGIN_NAME = "probe-research-tap"
+#: The standalone Codex tap's directory, kept as a ONE-WAY fallback exactly as
+#: `tap.config.plugin_dir()` keeps it: an existing install stays where its
+#: state already is, a clean install gets the unified name.
+_CODEX_LEGACY_PLUGIN_NAME = "prbe-codex-tap-plugin"
+_TAP_PLUGIN_DIR_ENV = {
+    "codex": "PRBE_CODEX_TAP_PLUGIN_DIR",
+    "pi": "PROBE_PI_TAP_PLUGIN_DIR",
+}
+_TAP_PLUGIN_DIR_ENV_DEFAULT = "PROBE_RESEARCH_TAP_PLUGIN_DIR"
+
+
+def _agent_source(env=None) -> str:
+    """Which harness this session belongs to, by the hook's own evidence.
+
+    `PROBE_AGENT` when the plugin exported one, else Codex's own thread id as
+    the tell, else claude_code — the same default `tap.sources.DEFAULT_SOURCE_ID`
+    and `tap.config.capture_source()` fall back to when nothing says otherwise.
+    """
+    active = os.environ if env is None else env
+    return active.get("PROBE_AGENT") or ("codex" if active.get("CODEX_THREAD_ID") else "claude_code")
+
+
+def _tap_plugin_dir(source: str, env=None) -> str:
+    """Where the tap keeps its durable state for `source`. Never raises.
+
+    A hand mirror of `tap.config.plugin_dir()`; an unrecognized source falls to
+    claude_code's row, matching `probe.cli.capabilities.tap_plugin_dir`.
+    """
+    active = os.environ if env is None else env
+    override = active.get(_TAP_PLUGIN_DIR_ENV.get(source, _TAP_PLUGIN_DIR_ENV_DEFAULT))
+    if override:
+        return override
+    home = os.path.expanduser("~")
+    if source == "codex":
+        current = os.path.join(home, ".codex", "state", _TAP_PLUGIN_NAME)
+        legacy = os.path.join(home, ".codex", "state", _CODEX_LEGACY_PLUGIN_NAME)
+        if os.path.exists(legacy) and not os.path.exists(current):
+            return legacy
+        return current
+    if source == "pi":
+        return os.path.join(home, ".pi", "agent", "state", _TAP_PLUGIN_NAME)
+    return os.path.join(home, ".claude", "plugins", _TAP_PLUGIN_NAME)
+
+
+def _capture_reading(session_id: str) -> dict:
+    """Is a transcript daemon live for this session, and if not, why? Stdlib only.
+
+    COMPUTED HERE, IN THE DETACHED CHILD, AND NEVER IN THE RENDERER.
+    `statusline.py` renders in ~26ms measured and its contract is no network, no
+    `probe` subprocess, and nothing of ours imported but one vendored module by
+    explicit path. Putting this in the marker means the segment gains a FIELD TO
+    READ rather than a syscall to make, and the render path is untouched.
+
+    THE GATE ORDER IS `probe.cli.capture_state.session_capture_state`'s, and the
+    order is the meaning: installed, then not switched off, then running. Each
+    answer is a different sentence for the reader — `not installed` is a
+    decision of theirs being honoured, `killswitch` likewise, and only
+    `not started` is a fault. Two implementations that ordered these
+    differently would put two different words on the same machine.
+
+    THE ONE DELIBERATE GAP is `halted` (the tap's 401 latch). Naming it means
+    opening the tap's sqlite state db AND resolving the winning credential to
+    fingerprint it, which is `capture_state._halted`'s job in a process that
+    can import the tap. This hook runs every few seconds for the life of a
+    session; a halted daemon reads as `not started` here, which is wrong about
+    the cause but right about the fact, and `probe session status` and
+    `probe doctor` both name it exactly.
+
+    A pid that exists is taken at face value here, where `probe.cli.capture_state`
+    additionally asks `ps` what the process IS. That check is a subprocess, and
+    this runs every few seconds for the life of a session; the accident it
+    guards against is pid reuse inside the refresh window, which costs one
+    over-optimistic reading that the next refresh corrects.
+    """
+    source = _agent_source()
+
+    plugin_dir = _tap_plugin_dir(source)
+    if not os.path.exists(plugin_dir):
+        return {"running": False, "reason": "not installed"}
+    if os.path.exists(os.path.join(plugin_dir, ".disabled")):
+        return {"running": False, "reason": "killswitch"}
+
+    prefix = _WATCHER_PREFIX.get(source, _WATCHER_PREFIX_DEFAULT)
+    path = os.path.join("/tmp", prefix + "-watcher-" + session_id + ".pid")
+    try:
+        with open(path, encoding="utf-8") as handle:
+            pid = int(handle.read().strip())
+        if pid <= 0:
+            return {"running": False, "reason": "not started"}
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return {"running": False, "reason": "not started"}
+    return {"running": True, "reason": "running"}
+
+
 def refresh(session_id: str) -> None:
     """Fetch and store. Runs in the DETACHED child, never in the hook."""
     core = _load("_telemetry_core")
@@ -241,6 +358,11 @@ def refresh(session_id: str) -> None:
     # still store the project — the segment simply falls back to the local locks
     # for the accent, which is exactly what the fast path is for.
     state["active_run_ids"] = fetch_active_run_ids(base_url, token, session_id, marker)
+    # Local, and stored alongside the server's answer so the segment renders both
+    # halves of one state from one file. Written LAST so a reading is never
+    # published without the identity it qualifies: `no capture` on a segment that
+    # does not yet name a project is a warning about nothing.
+    state["capture"] = _capture_reading(session_id)
     marker.write(session_id, state)
 
 

@@ -9,11 +9,32 @@
 import { type PathEnv } from "./paths.js";
 import { findProbeBinary, type ProbeBinaryDeps } from "./teamNote.js";
 
+/**
+ * Is a capture daemon live for this session, and if not, why not.
+ *
+ * `reason` comes from the CLI's own closed vocabulary (`probe session
+ * status`'s `capture.reason`) and is rendered verbatim — this side never
+ * invents or rewords one, so the footer and the CLI cannot describe the same
+ * situation differently.
+ */
+export interface CaptureReading {
+  running: boolean;
+  reason: string;
+}
+
 export interface TrackingState {
   tracking: boolean;
   signal: "on" | "off";
   seeded: boolean;
   source: string;
+  /**
+   * Absent when the probe CLI on this machine predates the `capture` block
+   * (`session initialize` grew it alongside the third state). Absent is not
+   * "not capturing" — it is "this CLI cannot say" — which is why it is
+   * optional rather than defaulted, and why the footer falls back to the
+   * plain two-state text when it is missing.
+   */
+  capture?: CaptureReading;
 }
 
 export interface TrackingExecOptions {
@@ -152,6 +173,7 @@ export async function initializeTrackingState(
       signal: value.signal,
       seeded: value.seeded,
       source: value.source,
+      capture: parseCapture(value.capture),
     };
   } catch (err) {
     deps.log(
@@ -161,6 +183,35 @@ export async function initializeTrackingState(
   }
 }
 
-export function trackingStatusText(tracking: boolean): string {
-  return tracking ? "● tracking" : "○ not tracking";
+/**
+ * The optional half of the payload, read LENIENTLY on purpose.
+ *
+ * Every other field above is validated strictly and a failure discards the
+ * whole read — those fields are the tracking signal itself, and rendering a
+ * guess about that is the one thing this module must never do. `capture` is
+ * different: it arrived later than the CLI contract around it, so a probe
+ * that does not send it, or sends a shape this version does not recognise,
+ * must still leave the tracking state renderable. Unrecognised means absent,
+ * never `{running: false}` — "no capture" is a claim, and this side is not
+ * entitled to make it on the strength of a field it could not read.
+ */
+function parseCapture(raw: unknown): CaptureReading | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const { running, reason } = raw as { running?: unknown; reason?: unknown };
+  if (typeof running !== "boolean" || typeof reason !== "string") return undefined;
+  return { running, reason };
+}
+
+/**
+ * The footer, in pi's idiom. THREE states, matching `probe session status`'s
+ * `effective` field exactly — a footer that said "tracking" while the CLI
+ * said "tracked, not captured" would be the same lie in a smaller font.
+ *
+ * Capture is never mentioned when tracking is off: it may still be running,
+ * and "not tracking" is the researcher's decision, not a capture report.
+ */
+export function trackingStatusText(tracking: boolean, capture?: CaptureReading): string {
+  if (!tracking) return "○ not tracking";
+  if (!capture || capture.running) return "● tracking";
+  return `◐ tracking · no capture: ${capture.reason}`;
 }

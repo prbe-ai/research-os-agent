@@ -85,6 +85,25 @@ _LABEL_NOT_TRACKING = "not tracking"
 #: sequence of three things rather than as a name with a state hung off it.
 _ACCENT_TEXT = " " + _SEPARATOR + " running"
 
+#: The third state: tracking is ON and the work IS landing, but no
+#: transcript-capture daemon is live for this conversation.
+#:
+#: A HALF-FILLED dot, not a hollow one. Hollow is faint at terminal font sizes
+#: (see `_DOT`), and the reader must be able to tell this from `not tracking` at
+#: a glance; the WORD carries the meaning for anyone whose terminal renders both
+#: dots the same. The dot stays GREEN when painted, because green means
+#: "landing" and the work still is — yellow already belongs to `not tracking`,
+#: and reusing it would make a degraded session look like a switched-off one.
+_DOT_DEGRADED = "◐"  # ◐
+_LABEL_NO_CAPTURE = " " + _SEPARATOR + " no capture: "
+
+#: Below this many columns an elided project name identifies nothing — `a-rea…`
+#: is not a name, it is noise wearing one. When the reason is long enough to
+#: push the name under this floor, the name is dropped ENTIRELY and the segment
+#: falls back to `_LABEL_TRACKING_BARE`, which this file already renders for
+#: "tracking is on, nothing filed yet".
+_MIN_SLUG_CHARS_DEGRADED = 8
+
 #: Hard ceiling on the rendered segment, leading indent included, counted in
 #: VISIBLE characters. The cap exists because the status line must not WRAP: a
 #: wrapped line reflows every other segment sharing it, which is the one failure
@@ -627,12 +646,48 @@ def state_key(state: dict | None, *, live: bool) -> str:
     return f"{project}|{'running' if live else 'idle'}"
 
 
-def message(state: dict | None, *, live: bool = False) -> str:
+def _capture_reason(state: dict | None) -> str:
+    """Why no transcript daemon is watching this session, or `""` for silence.
+
+    The marker's `capture` object is written by the background refresh hook, and
+    the reason is one of the closed vocabulary in `probe.cli.capture_state`.
+    SILENCE IS THE DEFAULT, and deliberately so: a marker written by an older
+    refresh hook carries no `capture` key at all, and every shape this function
+    does not recognise — a missing key, a null, a non-string reason, a `running`
+    that is not exactly `False` — means nobody measured anything. Rendering a
+    guess there would put a fabricated diagnosis on somebody's status line.
+
+    A multi-line reason is refused rather than flattened: the one thing the
+    segment may never do is emit a newline, and a reason that needs two lines is
+    not a reason this vocabulary produced.
+
+    Shared by `render` and `message` so the two surfaces cannot come to disagree
+    about when capture is missing.
+    """
+    capture = state.get("capture") if isinstance(state, dict) else None
+    if not isinstance(capture, dict) or capture.get("running") is not False:
+        return ""
+    reason = capture.get("reason")
+    if not (isinstance(reason, str) and reason) or "\n" in reason or "\r" in reason:
+        return ""
+    return reason
+
+
+def message(state: dict | None, *, live: bool = False, tracking: bool = True) -> str:
     """One line for an agent with no status line to hang a segment on.
 
     Built from the same labels the segment uses, so the two surfaces cannot drift
     into describing the same state differently. No colour and no glyph: this is a
     sentence in a transcript, not a mark on a line.
+
+    `tracking` defaults to True because that is the only state this notice has
+    ever been emitted in — `statusline_notify.py` reaches here having already
+    resolved the switch. It is a parameter rather than an assumption so a caller
+    that has NOT resolved it cannot accidentally claim a capture failure matters
+    to a session that is recording nothing.
+
+    NO WIDTH CAP HERE, unlike `render`. This is a sentence in a transcript, which
+    wraps harmlessly; the segment shares one line with strangers, which does not.
     """
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
@@ -640,6 +695,9 @@ def message(state: dict | None, *, live: bool = False) -> str:
     text = "Probe: " + _LABEL_TRACKED + project
     if live:
         text += _ACCENT_TEXT
+    reason = _capture_reason(state) if tracking else ""
+    if reason:
+        text += ", but no transcript capture: " + reason
     return text
 
 
@@ -1035,6 +1093,27 @@ def _elide(slug: str, limit: int = MAX_SLUG_CHARS) -> str:
     return slug[: limit - 1] + _ELLIPSIS
 
 
+def _no_capture_clause(reason: str) -> str:
+    """The `· no capture: …` suffix as it hangs off `_LABEL_TRACKING_BARE`.
+
+    THE LAST STOP FOR THE WIDTH CAP. With no project name left to give up, the
+    reason itself is elided. The vocabulary in `probe.cli.capture_state` is short
+    enough that this never fires today, but this renderer reads whatever a
+    refresh hook of ANY vintage wrote into the marker, and an unbounded field on
+    a status line wraps the whole line — which reflows every other segment on it.
+    """
+    if not reason:
+        return ""
+    room = (
+        MAX_SEGMENT_CHARS
+        - len(_INDENT)
+        - _GLYPH_WIDTH
+        - len(_LABEL_TRACKING_BARE)
+        - len(_LABEL_NO_CAPTURE)
+    )
+    return _LABEL_NO_CAPTURE + _elide(reason, room)
+
+
 def render(
     state: dict | None,
     *,
@@ -1045,11 +1124,21 @@ def render(
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
-    TWO STATES: tracking, or not. The caller resolves which via `is_tracking`;
-    this only renders it. An earlier version carried a third — "tracking off" as
-    something distinct from "untracked" — and that was a mistake. A reader does
-    not care WHY nothing is being recorded, only whether anything is, and the
-    third state made them decode a distinction that changed nothing they would do.
+    TWO STATES OF THE SWITCH: tracking, or not. The caller resolves which via
+    `is_tracking`; this only renders it. An earlier version carried a third —
+    "tracking off" as something distinct from "untracked" — and that was a
+    mistake. A reader does not care WHY nothing is being recorded, only whether
+    anything is, and the third state made them decode a distinction that changed
+    nothing they would do.
+
+    `tracked, not captured` is a third state of a DIFFERENT question, and it
+    earns its place by the same test the rejected one failed: it changes what the
+    reader does. The work is landing — projects, runs, metrics, artifacts, all of
+    it — and the CONVERSATION is not being recorded. Only the researcher can
+    decide whether that matters for this session, and they cannot decide it
+    without being told. It renders as a SUFFIX on the tracking segment, never as
+    a replacement for it, because a line reading only "no capture" says the
+    opposite of what is true.
 
     THE SEGMENT MUST SURVIVE ANY NEIGHBOUR. It shares one line with whatever else
     is chained into `statusLine`, so four properties are load-bearing:
@@ -1073,13 +1162,45 @@ def render(
     if not tracking:
         return _INDENT + _paint(_DOT, _YELLOW, color) + " " + _LABEL_NOT_TRACKING
 
+    # Read PAST the `not tracking` return above on purpose: capture is a fact
+    # about a session that is recording, and naming it for one that is not would
+    # be an answer to a question nobody asked.
+    reason = _capture_reason(state)
+    head = _INDENT + _paint(_DOT_DEGRADED if reason else _DOT, _GREEN, color) + " "
+
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
         # Tracking is on, nothing filed yet. State it without inventing a name.
-        return _INDENT + _paint(_DOT, _GREEN, color) + " " + _LABEL_TRACKING_BARE
+        return head + _LABEL_TRACKING_BARE + _no_capture_clause(reason)
 
-    # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT: `MAX_SLUG_CHARS` reserves both
-    # widths whether or not the accent shows, so truncation only ever costs
-    # characters of the project name.
-    accent = _ACCENT_TEXT if live else ""
-    return _INDENT + _paint(_DOT, _GREEN, color) + " " + _LABEL_TRACKED + _elide(project) + accent
+    if not reason:
+        # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT: `MAX_SLUG_CHARS` reserves
+        # both widths whether or not the accent shows, so truncation only ever
+        # costs characters of the project name.
+        accent = _ACCENT_TEXT if live else ""
+        return head + _LABEL_TRACKED + _elide(project) + accent
+
+    # DEGRADED — WHAT YIELDS FIRST, AND WHY.
+    #
+    # The name, and it yields all the way to nothing. The reason is the only
+    # actionable thing on the line — it names what to fix — and it is on screen
+    # nowhere else; the project name is on the dashboard, in `probe session
+    # status`, and usually in the previous turn's own output. `no capture:
+    # interp…` names nothing to fix, so the reason is the LAST thing cut, and
+    # only after the name has been given up entirely (`_no_capture_clause`).
+    #
+    # The live-run accent goes with the name, and hands the reason back its ten
+    # columns. One qualifier per segment stays legible; `· running · no capture:
+    # halted` reads as a list of unrelated facts, and the accent returns the
+    # moment capture is healthy — which is also the moment it is worth reading.
+    room = (
+        MAX_SEGMENT_CHARS
+        - len(_INDENT)
+        - _GLYPH_WIDTH
+        - len(_LABEL_TRACKED)
+        - len(_LABEL_NO_CAPTURE)
+        - len(reason)
+    )
+    if room >= _MIN_SLUG_CHARS_DEGRADED:
+        return head + _LABEL_TRACKED + _elide(project, room) + _LABEL_NO_CAPTURE + reason
+    return head + _LABEL_TRACKING_BARE + _no_capture_clause(reason)

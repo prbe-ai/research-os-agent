@@ -23,10 +23,25 @@ def test_hosted_gateway_contract_is_research_os() -> None:
 
 
 def test_codex_lifecycle_hooks_start_and_stop_capture() -> None:
+    """The exact event set, not a subset.
+
+    One hooks.json serves BOTH plugin manifests (neither declares hooks; both
+    systems auto-discover this file), so every event added here reaches Codex
+    too. UserPromptSubmit is the respawn hook (hooks/ensure-daemon.sh): on a
+    harness that never dispatches the event it is inert, and on one that does
+    but carries no `session_id` the script exits 0 without spawning. Keeping
+    this an equality assertion is what makes the next addition a decision
+    rather than an accident.
+    """
     hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text())
-    assert set(hooks["hooks"]) == {"SessionStart", "SessionEnd"}
+    assert set(hooks["hooks"]) == {"SessionStart", "UserPromptSubmit", "SessionEnd"}
     start = hooks["hooks"]["SessionStart"][0]["hooks"][0]
     end = hooks["hooks"]["SessionEnd"][0]["hooks"][0]
+    ensure = hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]
     assert "session-start.sh" in start["command"]
     assert "session-end.sh" in end["command"]
+    assert "ensure-daemon.sh" in ensure["command"]
     assert end["timeout"] == 3
+    assert ensure["timeout"] == 5
+    # Silent on the common path: this one fires on every prompt.
+    assert "statusMessage" not in ensure

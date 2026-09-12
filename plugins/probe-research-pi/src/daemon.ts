@@ -1,35 +1,35 @@
 /**
- * Spawns and stops the probe-research-tap daemon for one pi session.
+ * Starts and stops capture for one pi session.
  *
- * This is the TypeScript/Node equivalent of what
- * `agent/plugins/probe-research-tap/hooks/session-start.sh` and
- * `hooks/session-end.sh` do for Claude Code and Codex — ported, not copied
- * verbatim, because Node's `spawn(..., {detached: true})` already puts the
- * child in its own session/process group on POSIX (libuv calls setsid()
- * internally), which is exactly the property session-start.sh's own comments
- * say it had to work around bash's lack of a `setsid(1)` builtin to get. That
- * whole shim (nohup + a python `os.setsid()`-or-fork inline script) is not
- * needed here.
+ * THIS FILE USED TO OWN THE PROCESS LIFECYCLE and no longer does. It carried
+ * its own POSIX-sh crash-recovery wrapper — a TypeScript string that was a
+ * hand-port of the bash string in
+ * `agent/plugins/probe-research-tap/hooks/session-start.sh` — plus the pid
+ * file, the shutdown-sentinel clear, and nothing else that decided whether
+ * capture should start at all. Two copies of a process-lifecycle contract is
+ * where lifecycle bugs live, so both were replaced by one spawner,
+ * `python -m tap start` (`probe-research-tap/tap/start.py`), which also holds
+ * the gates (killswitch, disabled paths, pairing, transcript, interpreter
+ * version) that each caller would otherwise re-implement and drift on.
  *
- * What IS ported: the crash-recovery wrapper. `tap watch` is a long-running
- * daemon; if it dies (transient error, OOM, etc.) nothing restarts it unless
- * something is watching. session-start.sh handles this with a small bash
- * loop that respawns the daemon up to 5 times per rolling 60s window and
- * exits for good once the shutdown sentinel appears. That loop is
- * reproduced here nearly verbatim in POSIX sh (not bash — no arrays needed,
- * and `/bin/sh` is what both target platforms guarantee), spawned as the
- * detached process instead of the daemon directly. The wrapper — not this
- * Node process — is the long-lived thing; this function returns as soon as
- * it starts.
+ * What is left here is exactly what is pi's and nobody else's:
  *
- * ALSO ported, separately from the setsid question: session-start.sh's
- * post-spawn wait (its own lines ~266-284). setsid() replaces that wait's
- * ORIGINAL motivation (a stale `$!` from the old nohup/disown shim) but not
- * two further things it did that have nothing to do with process groups —
- * see `waitForSpawnConfirmation()` below for both, and why they still apply
- * here even though this is native Node spawn, not a bash shim.
+ *  - WHICH INTERPRETER and WHICH ENV. Claude Code and Codex ship `tap/`
+ *    bundled beside the hook that spawns it; a pi extension is pure
+ *    TypeScript and has to go find a Python that can `import tap` (see
+ *    tapRuntime.ts), then hand it a PYTHONPATH.
+ *  - THE DETACH. Node's `spawn(..., {detached: true})` puts the child in its
+ *    own session/process group on POSIX (libuv calls setsid() internally),
+ *    which is the property session-start.sh needed a nohup+python shim to
+ *    get. Nothing here reproduces that shim.
+ *  - THE PRE-CHECK, THE WAIT AND THE STOP. `isDaemonAlive()` (which must
+ *    agree with the spawner — see its own comment),
+ *    `waitForSpawnConfirmation()`'s post-spawn diagnostic, `stopDaemon()`'s
+ *    session_shutdown analog of session-end.sh, and the sentinel pruning.
+ *    All four read and write the same `/tmp` files `tap start` does.
  */
 
+import { execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
 
 import { pidFile, sessionLogFile, shutdownSentinelFile, WATCHER_PREFIX, type PathEnv } from "./paths.js";
@@ -55,46 +55,68 @@ export interface DaemonDeps {
   writeFileSync: (path: string, content: string) => void;
   /** process.kill-shaped: signal 0 is a liveness probe, never delivers a signal. */
   kill: (pid: number, signal: number | string) => void;
+  /**
+   * What the OS says this pid IS, or null if it cannot be asked. Optional
+   * because every real caller wants the same `ps` answer — see
+   * `psCommandForPid` below — and only tests have a reason to substitute one.
+   */
+  commandForPid?: (pid: number) => string | null;
   log: (message: string) => void;
   /** Real callers pass a setTimeout-backed sleep; tests pass an instant one so
    * the bounded poll below never actually costs wall-clock time in the suite. */
   sleep: (ms: number) => Promise<void>;
 }
 
-/** Build POSIX-sh crash-recovery wrapper source. Pure function — easy to snapshot in tests. */
-export function buildWrapperScript(): string {
-  return [
-    'SID="$1"; CWD="$2"; PY="$3"; LOG="$4"; PIDF="$5"; PREFIX="$6"; shift 6',
-    'echo $$ >"$PIDF"',
-    'SHUTDOWN="/tmp/${PREFIX}-watcher-${SID}.shutdown"',
-    "RESTART_COUNT=0",
-    'WINDOW_START=$(date +%s)',
-    'CHILD_PID=""',
-    "trap '[ -n \"$CHILD_PID\" ] && kill -TERM \"$CHILD_PID\" 2>/dev/null; exit 0' TERM INT",
-    "while true; do",
-    '  [ -f "$SHUTDOWN" ] && exit 0',
-    '  NOW=$(date +%s)',
-    '  if [ $((NOW - WINDOW_START)) -ge 60 ]; then',
-    "    WINDOW_START=$NOW",
-    "    RESTART_COUNT=0",
-    "  fi",
-    '  if [ "$RESTART_COUNT" -ge 5 ]; then',
-    '    echo "[$(date -u +%FT%TZ)] tap: too many restarts in 1min, giving up" >>"$LOG"',
-    "    exit 1",
-    "  fi",
-    '  "$PY" -m tap watch --session-id "$SID" --cwd "$CWD" "$@" >>"$LOG" 2>&1 &',
-    "  CHILD_PID=$!",
-    '  wait "$CHILD_PID" 2>/dev/null || true',
-    '  CHILD_PID=""',
-    '  [ -f "$SHUTDOWN" ] && exit 0',
-    "  RESTART_COUNT=$((RESTART_COUNT + 1))",
-    "  sleep 5",
-    "done",
-  ].join("\n");
+/**
+ * Ask the OS what a pid actually IS. The default `commandForPid`.
+ *
+ * Byte-for-byte the same question `tap/start.py::_looks_like_the_uploader`
+ * asks (`/bin/ps -p <pid> -o command=`, 5s bound, any failure reads as "not
+ * the tap"), because the two answers have to match — see `isDaemonAlive`.
+ *
+ * Never throws: an unreadable `ps` is indistinguishable, from here, from a
+ * process that is not ours, and both must resolve to "do not claim it is
+ * alive".
+ */
+function psCommandForPid(pid: number): string | null {
+  try {
+    return execFileSync("/bin/ps", ["-p", String(pid), "-o", "command="], {
+      encoding: "utf-8",
+      timeout: 5_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch {
+    return null;
+  }
 }
 
-/** Read a pidfile and check whether that pid (== pgid, since we always spawn detached) is alive. */
-export function isDaemonAlive(sessionId: string, deps: Pick<DaemonDeps, "existsSync" | "readFileSync" | "kill">): boolean {
+/**
+ * Is a tap daemon watching this session?
+ *
+ * TWO conditions, not one: the pidfile's pid must be signalable AND the OS
+ * must say that process is the tap. The second half is not belt-and-braces —
+ * it is what keeps this function's answer identical to
+ * `tap/start.py::daemon_state`'s, which classifies a live-but-unrelated pid
+ * as `stale` rather than `running`.
+ *
+ * That agreement is load-bearing now that `spawnDaemon` delegates to `tap
+ * start`. The pre-check here exists purely to skip a python process spawn on
+ * the common resumed-session path, so it is allowed to be CHEAPER than the
+ * spawner's check but never more PERMISSIVE: a false "alive" here returns
+ * `already-running` and the spawner that would have corrected it is never
+ * called, leaving a tracked session with nothing capturing it — silently, and
+ * for the whole session. /tmp is world-writable and pids get reused, so that
+ * case is ordinary, not adversarial.
+ *
+ * (`probe.cli.capture._looks_like_the_uploader` spells the same check
+ * slightly more strictly — plugin name, or "tap" as a whole word. This
+ * mirrors `tap start`'s looser substring form on purpose: this function must
+ * match the process that decides the spawn, not a third variant.)
+ */
+export function isDaemonAlive(
+  sessionId: string,
+  deps: Pick<DaemonDeps, "existsSync" | "readFileSync" | "kill" | "commandForPid">,
+): boolean {
   const pf = pidFile(sessionId);
   if (!deps.existsSync(pf)) return false;
   let raw: string;
@@ -107,10 +129,11 @@ export function isDaemonAlive(sessionId: string, deps: Pick<DaemonDeps, "existsS
   if (!Number.isFinite(pid) || pid <= 0) return false;
   try {
     deps.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  const command = (deps.commandForPid ?? psCommandForPid)(pid);
+  return command !== null && command.includes("tap");
 }
 
 export type SpawnResult =
@@ -143,25 +166,32 @@ const SPAWN_CONFIRM_MAX_POLLS = 40;
  * dance -- but that shim and this wait were solving two DIFFERENT problems,
  * and setsid() only retires one of them:
  *
- *  - It narrows a double-spawn race. The wrapper writes its pidfile
- *    asynchronously from inside `/bin/sh -c` (its first line is `echo $$
- *    >"$PIDF"`, run only once the shell has actually started), so between
- *    `deps.spawn()` returning and the pidfile existing on disk there is a
- *    real window in which a second concurrent session_start for the SAME
- *    session id -- another pi process resuming the same conversation, or a
- *    second event firing before the in-process `spawnedSessionIds` guard in
- *    extension.ts has a chance to matter -- sees no pidfile via
- *    `isDaemonAlive()` and spawns a second daemon. Waiting here, before the
- *    caller's session_start handler completes, shrinks that window instead
- *    of leaving it fully open the way the pre-wait code did.
+ *  - It narrows a double-spawn race, and that window got WIDER when this
+ *    file stopped spawning the wrapper itself: `deps.spawn()` now returns as
+ *    soon as a python interpreter has been forked, and the pidfile is not
+ *    written until that interpreter has started, run `tap start`'s gates,
+ *    spawned the sh wrapper, and the wrapper has run its own first line
+ *    (`echo $$ >"$PIDF"`). Through that whole window a second concurrent
+ *    session_start for the SAME session id -- another pi process resuming
+ *    the same conversation, or a second event firing before the in-process
+ *    `spawnedSessionIds` guard in extension.ts has a chance to matter --
+ *    sees no pidfile via `isDaemonAlive()`. It is `tap start`'s own
+ *    three-state pid check that ultimately makes a doubled spawn harmless;
+ *    waiting here, before the caller's session_start handler completes,
+ *    keeps the window from being left wide open in the first place.
  *  - It emits the same spawn-failure diagnostic session-start.sh's own log
- *    line exists for. A wrapper that writes no pidfile at all (spawn failed
+ *    line exists for. A start that writes no pidfile at all (spawn failed
  *    outright) or writes one and dies immediately (pidfile present, pid not
  *    signalable) is otherwise silent -- observed once in production, on the
  *    bash side, as "wrapper wrote no pid file, no process, no log line",
  *    recoverable only because the reconciler backstops a missed daemon
  *    regardless. Bounding the wait is what makes that diagnostic possible at
- *    all: an unbounded wait would never reach the "it did not show up" branch.
+ *    all: an unbounded wait would never reach the "it did not show up"
+ *    branch. Note that a REFUSAL by one of `tap start`'s gates lands in that
+ *    same branch: extension.ts pre-checks pairing and the killswitch itself,
+ *    so the remaining refusals (a gate flipped between the check and the
+ *    spawn, an interpreter below 3.11, a transcript not yet on disk) are
+ *    exactly the cases worth a log line.
  *
  * Never throws and never changes the caller's success/failure story: exactly
  * like session-start.sh, which always prints `{"continue": true}` whether or
@@ -169,7 +199,7 @@ const SPAWN_CONFIRM_MAX_POLLS = 40;
  */
 export async function waitForSpawnConfirmation(
   sessionId: string,
-  deps: Pick<DaemonDeps, "existsSync" | "readFileSync" | "kill" | "log" | "sleep">,
+  deps: Pick<DaemonDeps, "existsSync" | "readFileSync" | "kill" | "commandForPid" | "log" | "sleep">,
   opts: { pollMs?: number; maxPolls?: number } = {},
 ): Promise<void> {
   const pollMs = opts.pollMs ?? SPAWN_CONFIRM_POLL_MS;
@@ -231,24 +261,11 @@ export function spawnDaemon(params: SpawnParams, deps: DaemonDeps): SpawnResult 
     return { spawned: false, reason: "already-running" };
   }
 
-  const pf = pidFile(sessionId);
-  const shutdownFile = shutdownSentinelFile(sessionId);
-  const logFile = sessionLogFile(sessionId, params.baseEnv ?? process.env);
+  const baseEnv = params.baseEnv ?? process.env;
+  const logFile = sessionLogFile(sessionId, baseEnv);
 
   deps.mkdirSync(join(logFile, ".."));
 
-  // A resumed session's PREVIOUS run may have left its shutdown sentinel behind
-  // (session-end.sh's Claude Code/Codex analog deliberately never deletes it —
-  // see stopDaemon() below). With no live wrapper for this session id, that
-  // sentinel is stale: clear it before spawning, or the fresh wrapper's very
-  // first `[ -f "$SHUTDOWN" ] && exit 0` check would kill it immediately.
-  try {
-    deps.rmSync(shutdownFile);
-  } catch {
-    // Fine — most sessions have no leftover sentinel to clear.
-  }
-
-  const baseEnv = params.baseEnv ?? process.env;
   const pythonPath = runtime.tapRoot
     ? [runtime.tapRoot, baseEnv.PYTHONPATH].filter((v): v is string => Boolean(v)).join(delimiter)
     : baseEnv.PYTHONPATH;
@@ -259,14 +276,28 @@ export function spawnDaemon(params: SpawnParams, deps: DaemonDeps): SpawnResult 
     ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
   };
 
+  // `tap start` owns the wrapper, the pid file, the stale-sentinel clear and
+  // every gate. This function keeps only what is genuinely pi's: which
+  // interpreter, which env, and the UI announcements its caller makes from
+  // the pre-checks in extension.ts.
   const child = deps.spawn(
-    "/bin/sh",
-    ["-c", buildWrapperScript(), "sh", sessionId, cwd, runtime.python, logFile, pf, WATCHER_PREFIX, "--transcript", transcriptPath],
+    runtime.python,
+    [
+      "-m",
+      "tap",
+      "start",
+      "--session-id",
+      sessionId,
+      "--cwd",
+      cwd,
+      "--transcript",
+      transcriptPath,
+    ],
     { detached: true, stdio: "ignore", env },
   );
   child.unref();
 
-  deps.log(`spawned tap watcher for session ${sessionId} (wrapper pid ${child.pid ?? "unknown"})`);
+  deps.log(`spawned tap watcher for session ${sessionId} (pid ${child.pid ?? "unknown"})`);
   return { spawned: true, pid: child.pid };
 }
 

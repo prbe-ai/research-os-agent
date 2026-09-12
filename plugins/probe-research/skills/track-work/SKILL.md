@@ -78,6 +78,11 @@ to make your own write legal.
 If the command errors (an older CLI), say so before proceeding — a status you
 could not read is not a session you know is tracked.
 
+Read `effective`, not `tracking` alone. When it says `tracked, not captured`,
+say exactly that to the researcher and name the reason the `capture` object
+gives — never summarise it as "tracking is on". The work is being recorded;
+the conversation is not, and only they can decide whether that matters.
+
 ## 1. Routing — what goes where
 
 One rule anchors everything: **the lowest entity the thing applies to** —

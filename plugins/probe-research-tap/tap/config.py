@@ -139,9 +139,38 @@ def log_dir() -> Path:
     return plugin_dir() / "logs"
 
 
+def watcher_prefix() -> str:
+    """The `/tmp` filename prefix this source's watcher files share.
+
+    ONE definition. `shutdown_sentinel` below inlined the same ternary, and
+    three other homes (`probe-research-pi/src/paths.ts`, `cli/capture.py`,
+    the hooks) mirror it by hand. Task 12's parity test pins them together.
+    """
+    return "prbe-codex-tap" if capture_source() == "codex" else PLUGIN_NAME
+
+
+def pid_file(session_id: str) -> Path:
+    """The wrapper's pid file — the single fact that says a daemon is live."""
+    return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.pid"
+
+
+def heal_marker(session_id: str) -> Path:
+    """Rate-limit stamp for a self-heal attempt.
+
+    Shared by `tap start`'s callers so the ten-minute bound is one rule and
+    not two: `hooks/ensure-daemon.sh` stats it, `probe`'s `ensure_capture`
+    writes it. The hook resolves this path in bash; if the two ever disagree
+    the bound silently becomes two different bounds, so any change here is a
+    change to that script as well.
+    """
+    return plugin_dir() / "heal" / session_id
+
+
+HEAL_RETRY_SECONDS = 600
+
+
 def shutdown_sentinel(session_id: str) -> Path:
-    prefix = "prbe-codex-tap" if capture_source() == "codex" else PLUGIN_NAME
-    return Path("/tmp") / f"{prefix}-watcher-{session_id}.shutdown"
+    return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.shutdown"
 
 
 def capture_source() -> str:

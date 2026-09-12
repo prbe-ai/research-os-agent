@@ -1,0 +1,34 @@
+{
+  "_why": [
+    "The argv three callers must agree on, in ONE place they all read.",
+    "",
+    "`tap start` exists because the same spawn lived twice and drifted. Its",
+    "callers now number three -- the pi extension (TypeScript), the probe CLI",
+    "self-heal (Python), and the tap's own hooks -- and each pinned this argv",
+    "in its own test file, in its own language, by hand. Three independent",
+    "copies of a contract is the shape of the bug this whole change removes:",
+    "nothing fails when one of them changes, because nothing compares them.",
+    "",
+    "So the flag names live here, and each side's test builds its expected",
+    "argv from this file rather than retyping it. Rename a flag in",
+    "tap/start.py's parser without editing this file and the tap's own",
+    "acceptance test fails; edit this file without updating a caller and that",
+    "caller's test fails. Either way it is a red test, not a silent",
+    "no-capture session.",
+    "",
+    "NOT a runtime input. Nothing imports this at runtime -- `tap start`",
+    "parses argv with argparse as usual. This is a test fixture, and making",
+    "it load-bearing at runtime would give the extension a file dependency on",
+    "a sibling package it is not distributed with."
+  ],
+  "subcommand": ["-m", "tap", "start"],
+  "flags": {
+    "session_id": "--session-id",
+    "cwd": "--cwd",
+    "transcript": "--transcript"
+  },
+  "flag_order": ["session_id", "cwd", "transcript"],
+  "env": {
+    "PROBE_TAP_SOURCE": "pi"
+  }
+}
