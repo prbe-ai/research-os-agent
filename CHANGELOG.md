@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Claude Code printed a warning about our hooks at every session start.**
+  `hooks.json` declared `additionalContextLimit: 9000` on `SessionStart`. That
+  key is Codex's; Claude Code has never had it, and once Claude Code began
+  validating hook config it announced `unknown key "additionalContextLimit" in
+  hooks.SessionStart[0] ignored` on every startup. The key is gone, and nothing
+  it guarded is left: it sized this channel against the team-note brief, and the
+  note stopped travelling here in 0.114.0 -- it renders into `CLAUDE.md` /
+  `AGENTS.md` now. What remains is a few hundred characters of nudges (257 on a
+  measured start), against a Codex default that is thousands. Splitting the file
+  per harness is not the alternative: Codex supplements a manifest-declared
+  hooks file on top of its own discovery of `hooks/hooks.json` rather than
+  replacing it, so a second file runs every hook twice. A test now holds both
+  plugins' hooks to keys both harnesses read, so the next one-sided key fails in
+  CI instead of on a person's screen.
+
 ## 0.162.0
 
 ## 0.161.0
