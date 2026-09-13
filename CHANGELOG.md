@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **The menu now says whether this device is up to date.** "On this device"
+  listed what was switched on and nothing about whether it was the version we
+  publish, so a machine three releases behind looked identical to a current one.
+  A new Versions row carries the verdict — up to date, update available, update
+  needed, update required — and the numbers behind it (`plugin 0.80.0 → 0.81.0`).
+  It is the same per-component grading `probe doctor` prints, so the two can
+  differ in wording and never in verdict, and an unreadable or missing manifest
+  reads as "Not checked" rather than as good news. The wizard now also refreshes
+  the cached version manifest itself: the only other refresher is gated on
+  auto-update being ON, so the box nothing was keeping current was the one box
+  that could never be told so.
+
 ## 0.163.0
 
 - Show how many sessions a running session import has processed next to its status, in import details and on the import status page. A resumed import re-checks every session from the start while its bar counts only confirmed sessions, so the bar could sit at 3855/3857 for many minutes and look stuck.
