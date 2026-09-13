@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.164.0
+
 - **The menu now says whether this device is up to date.** "On this device"
   listed what was switched on and nothing about whether it was the version we
   publish, so a machine three releases behind looked identical to a current one.
