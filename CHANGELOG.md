@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.163.0
+
 - Show how many sessions a running session import has processed next to its status, in import details and on the import status page. A resumed import re-checks every session from the start while its bar counts only confirmed sessions, so the bar could sit at 3855/3857 for many minutes and look stuck.
 
 - **Claude Code printed a warning about our hooks at every session start.**
