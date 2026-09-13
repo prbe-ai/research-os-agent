@@ -293,9 +293,51 @@ def _translate_content_item(item: Any) -> dict | None:
         url = item.get("image_url")
         if not isinstance(url, str) or not url:
             return None
-        # Anthropic image block has source.url; detail is Codex-only and lost.
-        return {"type": "image", "source": {"type": "url", "url": url}}
+        # A PASTED IMAGE IS FILE CONTENT AND DOES NOT LEAVE THE MACHINE.
+        #
+        # Codex inlines a paste as `data:image/png;base64,...` on ONE line, so
+        # one screenshot is one event of its full encoded size. Two things
+        # followed from shipping that verbatim. It contradicted the promise the
+        # import review screen makes in so many words -- "tool output, file
+        # contents and API metadata never leave" -- for every image small
+        # enough to fit a batch. And for the rest it was fatal rather than
+        # lossy: a single event above MAX_BODY_BYTES can be put in no batch at
+        # all, so `Journal.stage` refused, the session never imported, and no
+        # retry could ever change that. Measured on one machine's history:
+        # 1,790 codex events carried an inlined image, 1.47GB -- 36.5% of the
+        # whole corpus -- and 354 of them were individually over the cap.
+        #
+        # `pi_sanitize._translate_content_block` already answers this exactly
+        # this way ("Size, mime and nothing else"); this is codex catching up,
+        # not a new rule. The text block beside it still names the file
+        # (`<image name=[Image #1] path="...">`), so the conversation reads
+        # the same -- only the pixels are gone.
+        return _image_placeholder(url)
     return None
+
+
+#: A URL is a reference and costs nothing to keep; anything longer than this is
+#: not a URL, whatever its scheme says.
+MAX_IMAGE_URL = 2048
+
+
+def _image_placeholder(url: str) -> dict:
+    """An image block that records WHAT was there, never the bytes.
+
+    A remote `https://` reference is kept: it is a pointer, not file content,
+    and a reader following it later is the point of having it. An inline
+    `data:` payload -- and any other absurdly long value claiming to be a URL
+    -- is replaced by its media type and encoded length.
+    """
+    if not url.startswith("data:") and len(url) <= MAX_IMAGE_URL:
+        return {"type": "image", "source": {"type": "url", "url": url}}
+    media = "image"
+    if url.startswith("data:"):
+        head = url[5 : url.find(",")] if "," in url else url[5:]
+        candidate = head.split(";")[0].strip()
+        if candidate and len(candidate) <= 128:
+            media = candidate
+    return {"type": "image", "mimeType": media, "bytes": len(url)}
 
 
 def _translate_reasoning(payload: dict, timestamp: Any) -> dict | None:

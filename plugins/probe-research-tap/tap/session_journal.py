@@ -29,6 +29,25 @@ from . import codex_sanitize, pi_sanitize, sanitize
 PROTOCOL_VERSION = 2
 EMPTY_HASH = hashlib.sha256(b"").hexdigest()
 MAX_BODY_BYTES = 1024 * 1024
+
+#: What the INGEST ROUTE actually accepts, from `app/ingestion/sessions_router.py`
+#: (`MAX_BODY_BYTES = 2_000_000`; the ingress in front of it allows 25m, so the
+#: app is the binding limit). MAX_BODY_BYTES above is this client's PACKING
+#: target and is deliberately smaller -- batching to the server's exact ceiling
+#: leaves no room for the envelope and turns a good batch into a 413.
+#:
+#: The two are separated because one event that does not fit the packing target
+#: used to be fatal rather than merely awkward: with no room to pack it beside
+#: anything, `stage` refused, the session never imported, and no retry could
+#: change that -- while the server would have taken it happily. A lone event is
+#: now allowed the whole route budget, less the envelope around it.
+SERVER_BATCH_LIMIT = 2_000_000
+#: Envelope overhead: eleven small scalars, a session/stream id pair, a cwd, a
+#: sha256, and (on the first batch) provenance. Measured at well under 2KB;
+#: 16KB is slack, not an estimate, because being wrong here costs a 413 on a
+#: batch that cannot be split.
+ENVELOPE_HEADROOM = 16 * 1024
+MAX_SOLO_EVENT_BYTES = SERVER_BATCH_LIMIT - ENVELOPE_HEADROOM
 MAX_SOURCE_LINE = 64 * 1024 * 1024
 DEFAULT_CAP_BYTES = 100 * 1024 * 1024
 # Raw history can be much larger than its sanitized pending delivery. Its
@@ -650,9 +669,17 @@ class Journal:
         finalize: bool = False,
         historical_only: bool = False,
         max_body_bytes: int = MAX_BODY_BYTES,
+        solo_limit: int | None = None,
         require_no_pending: bool = False,
         expected_history: tuple[int, str] | None = None,
     ) -> bytes | None:
+        # A lone event may use the whole ROUTE budget; a packed batch may only
+        # use the packing target. A caller that lowers `max_body_bytes` to
+        # exercise batching still gets the real solo allowance unless it says
+        # otherwise, because the two answer different questions: how much to
+        # pack, versus what the server will take.
+        if solo_limit is None:
+            solo_limit = max(max_body_bytes, MAX_SOLO_EVENT_BYTES)
         with self.transaction():
             state = self.get(session_id)
             if state is None:
@@ -710,10 +737,19 @@ class Journal:
                     increment = len(json.dumps(additions, separators=(",", ":")).encode())
                     if size + increment > max_body_bytes:
                         if not events:
-                            raise DeliveryPending(
-                                "sanitized event exceeds the gateway batch budget; source retained"
-                            )
-                        break
+                            # NOTHING TO PACK IT BESIDE, so the packing target
+                            # does not apply -- only what the route will take.
+                            # Refusing here on `max_body_bytes` rejected batches
+                            # the server would have accepted, and did it
+                            # permanently: one such event stranded its whole
+                            # session on every retry forever.
+                            if increment > solo_limit:
+                                raise DeliveryPending(
+                                    "sanitized event exceeds the gateway batch budget; "
+                                    "source retained"
+                                )
+                        else:
+                            break
                     events.extend(additions)
                     event_no += len(additions)
                     size += increment
@@ -756,7 +792,10 @@ class Journal:
                 body["snapshot_byte_end"] = state["historical_end"]
                 body["snapshot_sha256"] = state["historical_hash"]
             encoded = canonical_payload(body)
-            if len(encoded) > max_body_bytes:
+            # One event that could not be packed is allowed the route's budget;
+            # anything packed stays inside the smaller target.
+            envelope_limit = solo_limit if len(events) <= 1 else max_body_bytes
+            if len(encoded) > envelope_limit:
                 raise DeliveryPending("transcript envelope exceeds the batch budget")
             used = self.conn.execute(
                 "SELECT COALESCE(sum(length(body)),0) FROM pending"
