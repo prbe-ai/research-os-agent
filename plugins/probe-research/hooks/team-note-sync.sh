@@ -42,6 +42,49 @@ do
 done
 [ -n "$PROBE_BIN" ] || exit 0
 
+# PROBE OFF MEANS NO NETWORK, and this is the loudest thing the plugin does
+# without being asked: a detached push, every turn. A researcher who set `off`
+# and then watched packets leave would be right to say it was not off.
+#
+# Resolved through the SAME module every other surface reads, never by
+# re-implementing the file format here -- two answers to "is this session off"
+# is how one surface ends up honouring a declaration the other ignores. Fail
+# OPEN: an unreadable state syncs, because a note that silently stopped sending
+# is the one failure this hook must never cause.
+# THE HOOK PAYLOAD IS THE AUTHORITY, the environment only a fallback. Stop and
+# SessionEnd both deliver `session_id` on stdin, and a harness that does not ALSO
+# export it into the hook's environment would skip this check entirely and sync a
+# session the researcher had switched off. Reading stdin is safe here: nothing
+# below consumes it, and a payload that is missing, empty or unparseable just
+# leaves the environment fallback in place.
+_SID=""
+if command -v python3 >/dev/null 2>&1; then
+  _SID="$(python3 -c '
+import json, sys
+try:
+    payload = json.load(sys.stdin)
+    value = payload.get("session_id") if isinstance(payload, dict) else None
+    sys.stdout.write(value if isinstance(value, str) else "")
+except Exception:
+    pass
+' 2>/dev/null <&0 || true)"
+fi
+[ -n "$_SID" ] || _SID="${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-}}"
+if [ -n "$_SID" ] && command -v python3 >/dev/null 2>&1; then
+  _HOOKDIR="$(cd "$(dirname "$0")" && pwd)"
+  if python3 -c "
+import sys
+sys.path.insert(0, '$_HOOKDIR')
+try:
+    import _session_marker as m
+    sys.exit(0 if m.session_state('$_SID') == m.STATE_OFF else 1)
+except Exception:
+    sys.exit(1)
+" 2>/dev/null; then
+    exit 0
+  fi
+fi
+
 # DETACHED, because the two harnesses give this hook wildly different budgets.
 # Claude Code fires it on Stop with room to spare; Codex caps SessionEnd at 3
 # seconds, which is not a round trip. Spawning and returning means the cap bounds

@@ -6,11 +6,14 @@
   "type": "module",
   "license": "MIT",
   "pi": {
-    "extensions": ["index.ts"],
+    "extensions": [
+      "index.ts"
+    ],
     "skills": [
+      "skills/probe",
       "skills/track-work",
       "skills/show-research-status",
-      "skills/instrument-training-runs",
+      "skills/instrument-code",
       "skills/notes-audit",
       "skills/write-overview"
     ],

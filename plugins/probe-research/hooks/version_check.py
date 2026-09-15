@@ -144,7 +144,8 @@ COMPACT_CONTEXT = (
     "config changes, user overrides -- to the project's notes, and re-check "
     "the state of any open run. Do not reconstruct details the summary no "
     "longer carries. The probe-research:track-work skill has the "
-    "current commands."
+    "current commands, and probe-research:probe is the switch that governs "
+    "whether any of it is recorded."
 )
 # ONE SENTENCE, deliberately. This is injected at EVERY session start now, not
 # just at a boundary, so it is the most-repeated string the plugin owns and the
@@ -165,10 +166,32 @@ COMPACT_CONTEXT = (
 # context. Wording mirrors the skill; drift between them would have the two
 # surfaces describing one state differently.
 TRACKING_OFF_CONTEXT = (
-    "Research tracking is OFF for this conversation: create no Probe projects, "
+    "Probe is READ-ONLY for this conversation: create no Probe projects, "
     "experiments, runs, notes or visible entity Markdown, and do not raise "
-    "tracking at all, including as a reminder or a closing caveat -- reading "
-    "Probe and the work itself are unaffected."
+    "recording again, as a reminder or a closing caveat -- searching Probe is "
+    "unaffected and you should still do it."
+)
+
+#: THE ONE LINE `off` STILL INJECTS, and the reason it is not zero.
+#:
+#: `off` suppresses everything else this hook emits -- that is what "no effect on
+#: the coding agent" means. This line survives because of the failure documented
+#: in `_start_context`: the pointer block in the researcher's own CLAUDE.md /
+#: AGENTS.md says to register work in Probe, no hook can remove it per session,
+#: and a model whose ONLY information about Probe is that standing instruction
+#: will follow it -- which is how an untracked session created a project while
+#: the status line read `untracked`. Injecting nothing here does not buy silence;
+#: it buys a wall the model hits once a session and can never learn from.
+#:
+#: The second sentence is the part that cannot be dropped. An agent that cannot
+#: look must not report "no prior work found" -- that is a claim about the team's
+#: record, made by something that did not read it.
+TRACKING_FULLY_OFF_CONTEXT = (
+    "Probe is OFF for this conversation: make no Probe calls at all, reads "
+    "included, and do not raise Probe again -- not as a reminder, not as a "
+    "closing caveat. Your standing instructions tell you to record work in "
+    "Probe; they are overridden here. If prior work would have been relevant, "
+    "say you could not look rather than reporting that none exists."
 )
 
 
@@ -347,13 +370,34 @@ def _seed_tracking_signal() -> None:
         # The signal is the live state. Once present, even discovering the cwd
         # default is both wasted ancestor I/O and a risk of live-reloading a
         # config edit into a session that already decided.
-        if _session_marker.tracking_signal(session_id) is not None:
+        if _session_marker.session_state(session_id) is not None:
             return
         cwd = os.environ.get(SESSION_CWD_ENV) or None
-        on, _source = _session_marker.resolve_tracking_default(cwd)
-        _session_marker.set_tracking_if_absent(session_id, on)
+        state, _source = _session_marker.resolve_state_default(cwd)
+        _session_marker.set_session_state_if_absent(session_id, state)
     except Exception:
         pass
+
+
+def _probe_state() -> str:
+    """This conversation's three-valued state, resolved exactly as the guard does.
+
+    Falls back to `full` when the session id is missing or the resolver raises:
+    everything in this hook is advisory, and a hook that guessed "off" on its own
+    failure would silence the plugin on a machine that never asked for it.
+    """
+    session_id = os.environ.get(SESSION_ID_ENV) or ""
+    try:
+        if session_id:
+            explicit = _session_marker.session_state(session_id)
+            if explicit is not None:
+                return explicit
+        state, _source = _session_marker.resolve_state_default(
+            os.environ.get(SESSION_CWD_ENV) or None
+        )
+        return state
+    except Exception:
+        return _session_marker.STATE_FULL
 
 
 def _tracking_off() -> bool:
@@ -411,11 +455,25 @@ def _start_context() -> str | None:
     # ran once cannot help it. Compaction is the one recurring occasion such a
     # session offers, and it costs nothing here -- the spawn is detached and its
     # return value is only ever a MESSAGE, which PreCompact then discards.
+    # `off` MEANS OFF, INCLUDING THE MAINTENANCE. The spawn below refreshes the
+    # instruction block and pushes the team note -- two network calls this
+    # session never asked for. A researcher who turned Probe off and then found
+    # it still talking to the server would be right to say it was not off, so
+    # this returns before the spawn rather than merely suppressing its message.
+    state = _probe_state()
+    if state == _session_marker.STATE_OFF:
+        if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
+            return None
+        # Everything else is suppressed -- the outbox report, the compact nudge,
+        # the render-failure and parked-copy reports, the stale-CLI warning. See
+        # TRACKING_FULLY_OFF_CONTEXT for why this one line is not suppressed too.
+        return TRACKING_FULLY_OFF_CONTEXT
+
     stale_cli = _spawn_session_maintenance()
     if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
         return None
     parts: list[str] = []
-    tracking_off = _tracking_off()
+    tracking_off = not _session_marker.state_allows_writes(state)
     if tracking_off:
         parts.append(TRACKING_OFF_CONTEXT)
     else:
@@ -628,7 +686,7 @@ OUTBOX_REPAIR_CONTEXT = (
 #: steps above it won.
 OUTBOX_REPORT_ONLY_CONTEXT = (
     "The Probe outbox on this machine holds {failed} dead-lettered write(s) "
-    "that will not deliver on their own. This session's tracking is OFF, so "
+    "that will not deliver on their own. Probe is READ-ONLY for this session, so "
     "do not write to Probe: run `probe outbox status --verbose` (a read) and "
     "report what is stuck to the researcher, who can retry, re-home, or "
     "discard it."

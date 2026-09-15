@@ -99,9 +99,10 @@ EVENT_SESSION_SUMMARY = "plugin.session_summary"
 # names stay listed forever: a resumed transcript can invoke one against this
 # newer hook file, and an unlisted slug silently stops counting.
 RESEARCH_SKILLS = {
+    "probe",
     "track-work",
     "show-research-status",
-    "instrument-training-runs",
+    "instrument-code",
     "notes-audit",
     "set-rule",
     "pull-rules",
@@ -110,6 +111,8 @@ RESEARCH_SKILLS = {
     "start-research-work",
     "track-research-work",
     "toggle-research-tracking",
+    "research-tracking",
+    "instrument-training-runs",
     "capture-run-inputs",
     "show-research-timeline",
     "write-overview",

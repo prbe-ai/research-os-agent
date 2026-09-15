@@ -44,7 +44,7 @@
     ],
     "PreToolUse": [
       {
-        "matcher": "^Bash$",
+        "matcher": "^Bash$|probe[-_]research",
         "hooks": [
           {
             "type": "command",

@@ -35,9 +35,20 @@ import { findProbeBinary, type ProbeBinaryDeps } from "./teamNote.js";
 
 /** Verbatim from `hooks/tracking_guard.py`; keep the two in step. */
 const OFF_WORDS = new Set(["off", "stop", "disable", "end"]);
-const ON_WORDS = new Set(["on", "start", "resume"]);
-const TOGGLE_WORDS = new Set(["toggle", "flip"]);
+const ON_WORDS = new Set(["on", "start", "resume", "full"]);
+const READ_ONLY_WORDS = new Set(["read-only", "readonly", "read_only", "ro"]);
+const TOGGLE_WORDS = new Set(["toggle", "flip", "cycle", "next"]);
 const STATUS_WORDS = new Set(["status"]);
+
+/**
+ * Slugs that predate the third state, and what `off` means when typed at one.
+ *
+ * `/track-work off` has always meant "stop recording, keep searching" -- the
+ * switch never gated reads -- which is `read-only` exactly. Re-pointing it at
+ * the new `off` would take reads away from everyone with that phrase in muscle
+ * memory. Verbatim from `tracking_guard.py::LEGACY_SLUGS`; keep the two in step.
+ */
+const LEGACY_SLUGS = new Set(["track-work", "toggle-research-tracking", "research-tracking"]);
 
 /**
  * Every spelling a researcher might type, canonicalised to pi's real one.
@@ -50,10 +61,27 @@ const STATUS_WORDS = new Set(["status"]);
  * identically: the switch flips AND the guidance still loads, instead of the
  * model receiving a bare line that looks like a command pi ignored.
  */
-const SPELLINGS = ["/skill:track-work", "/track-work", "$track-work"] as const;
-const CANONICAL = "/skill:track-work";
+/**
+ * The switch's own spellings FIRST, then the legacy ones it inherited.
+ *
+ * Order is load-bearing: `find` takes the first prefix that matches, and
+ * `/probe` must not be shadowed. The legacy names stay forever -- matching a
+ * name that no longer resolves costs nothing, missing one that did costs the
+ * flip.
+ */
+const SPELLINGS = [
+  "/skill:probe",
+  "/probe",
+  "$probe",
+  "/skill:track-work",
+  "/track-work",
+  "$track-work",
+] as const;
+const CANONICAL = "/skill:probe";
+const LEGACY_CANONICAL = "/skill:track-work";
 
-export type SwitchDirection = "on" | "off" | "toggle";
+/** The three states, plus the relative request. Mirrors `session_marker.STATES`. */
+export type SwitchDirection = "full" | "read-only" | "off" | "cycle";
 
 export interface SwitchIntent {
   direction: SwitchDirection | null;
@@ -77,16 +105,26 @@ export function parseSwitchIntent(text: string): SwitchIntent | null {
   if (!spelling) return null;
 
   const rest = trimmed.slice(spelling.length).trim();
-  const canonicalText = rest ? `${CANONICAL} ${rest}` : CANONICAL;
+  // A legacy spelling canonicalises to the MANUAL it has always loaded, not to
+  // the new switch skill. Someone typing `/track-work off` wants both halves of
+  // what that line used to do: the switch moves, and the manual still opens.
+  const slug = spelling.replace(/^[/$]/, "").replace(/^skill:/, "");
+  const legacy = LEGACY_SLUGS.has(slug);
+  const head = legacy ? LEGACY_CANONICAL : CANONICAL;
+  const canonicalText = rest ? `${head} ${rest}` : head;
   const first = rest.split(/\s+/)[0]?.toLowerCase() ?? "";
 
   // Bare is a TOGGLE. Only an interactive source reaches this function (see
   // extension.ts), which is the researcher reaching for the switch -- the
   // guard's `RESEARCHER_SHAPES` branch, reached by a field instead of a guess.
-  if (!first) return { direction: "toggle", canonicalText };
-  if (OFF_WORDS.has(first)) return { direction: "off", canonicalText };
-  if (ON_WORDS.has(first)) return { direction: "on", canonicalText };
-  if (TOGGLE_WORDS.has(first)) return { direction: "toggle", canonicalText };
+  if (!first) return { direction: "cycle", canonicalText };
+  if (READ_ONLY_WORDS.has(first)) return { direction: "read-only", canonicalText };
+  // THE SLUG DECIDES WHAT `off` MEANS. See LEGACY_SLUGS.
+  if (OFF_WORDS.has(first)) {
+    return { direction: legacy ? "read-only" : "off", canonicalText };
+  }
+  if (ON_WORDS.has(first)) return { direction: "full", canonicalText };
+  if (TOGGLE_WORDS.has(first)) return { direction: "cycle", canonicalText };
   if (STATUS_WORDS.has(first)) return { direction: null, canonicalText };
   return { direction: null, canonicalText };
 }
@@ -109,16 +147,24 @@ export function parseSwitchIntent(text: string): SwitchIntent | null {
  */
 export function switchAppliedNotice(direction: SwitchDirection): string {
   return (
-    `\n\n(The tracking switch was just moved by the \`${direction}\` request above. ` +
+    `\n\n(The Probe switch was just moved by the \`${direction}\` request above. ` +
     "Read the resulting state back with `probe session status` and report that, " +
     "rather than describing what tracking does.)"
   );
 }
 
-const SUBCOMMAND: Record<SwitchDirection, string> = {
-  on: "track",
-  off: "untrack",
-  toggle: "toggle",
+/**
+ * The CLI call each direction makes. ARGUMENT LISTS, not one verb: the switch
+ * grew a value, and `session state <name>` is two tokens where `track` was one.
+ *
+ * The write is still not reimplemented here -- this spawns the CLI's own
+ * commands, so there is exactly one writer of the state and it stays in Python.
+ */
+const SUBCOMMAND: Record<SwitchDirection, readonly string[]> = {
+  full: ["state", "full"],
+  "read-only": ["state", "read-only"],
+  off: ["state", "off"],
+  cycle: ["toggle"],
 };
 
 /**
@@ -168,7 +214,7 @@ export async function applyTrackingSwitch(
     return false;
   }
   try {
-    const child = deps.spawn(binary, ["session", SUBCOMMAND[direction], "--session", sessionId], {
+    const child = deps.spawn(binary, ["session", ...SUBCOMMAND[direction], "--session", sessionId], {
       detached: false,
       stdio: "ignore",
       env: { ...deps.env, PROBE_AGENT: "pi" } as PathEnv,

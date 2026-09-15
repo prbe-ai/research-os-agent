@@ -2,6 +2,59 @@
 
 ## Unreleased
 
+## 0.165.0
+
+- **The Probe switch has three positions now, and `/probe` is where it lives.**
+  `full` records your work as it happens, the way tracking always has.
+  `read-only` stops the recording and leaves searching alone. `off` stops Probe
+  entirely — no writes, no lookups, and nothing injected into your session at
+  start. Type `/probe` on its own and it advances one step: full → read-only →
+  off → back to full. Each press takes away exactly one thing, so you can learn
+  it in one lap, and the switch now tells your agent where it landed instead of
+  leaving it to guess.
+
+  `off` is the genuinely new state. Until now the switch never gated reads, on
+  purpose: a session that cannot record is still better off knowing what the
+  team already tried. That reasoning still holds, and it is what `read-only`
+  is. `off` is for the conversations where you want Probe to have no presence
+  at all — and because it costs you searches you will not know you missed, an
+  agent in `off` is told to say it could not look rather than report that
+  nothing exists.
+
+  Nothing you already recorded is ever deleted by moving the switch, and moving
+  back does not backfill the gap. Cleanup keeps working in every state:
+  "record nothing" was never "prevent cleanup".
+
+- **`/track-work` keeps its name and loses the switch.** It is the manual for
+  recording work from a shell; `/probe` decides whether it may. Everything you
+  have typed before still works — `/track-work off` still moves the switch, and
+  still means read-only, which is what it has always done.
+  `/instrument-training-runs` is now `/instrument-code`, the same job from
+  inside a script.
+
+- **Set a default for new sessions in any of the three states**, per machine or
+  per folder: `probe session default read-only`, or
+  `probe session default off --folder ~/work/clientrepo`. New sessions still
+  start at `full` unless you say otherwise. `probe session status` now reports
+  `state`, `reads_allowed` and `writes_allowed`, and the status line reads
+  `tracking → project`, `read-only`, or `off`.
+
+### For contributors
+
+- The per-session state is canonical in `sessions/<id>.state`;
+  `sessions/<id>.tracking` is still written as the two-valued projection so no
+  older client can read an opt-out as consent. Machine and folder defaults gain
+  `defaults.session_state` beside `defaults.session_tracking`, on the same
+  rule. Anything written in the old vocabulary keeps the meaning it was written
+  with: `off` there is `read-only`, never the new `off`.
+- `probe session initialize` and `session status` keep `tracking` and `signal`
+  two-valued forever — pi's extension pins `signal: "on" | "off"` and ships on
+  its own release train — and carry the third value in a new `state` field.
+- The `PreToolUse` hook matcher widened to `^Bash$|probe[-_]research`, so `off`
+  can refuse an MCP call. `full` returns from the guard after one file read,
+  before any parsing.
+
+
 ## 0.164.0
 
 - **The menu now says whether this device is up to date.** "On this device"

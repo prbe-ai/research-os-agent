@@ -1,82 +1,39 @@
 ---
 name: track-work
-description: Register and record the team's ML work, whatever its shape — training runs, inference-time sweeps and evaluations, literature reviews and design work, data processing, provisioning. Create the project BEFORE designing or scaffolding, an experiment when there is a question to answer, a run when code is about to execute; then record everything the work produces at the moment it happens, not at session end — files to artifacts, numbers to metrics, decisions and caveats to notes, inputs into the run snapshot. Tracking on means everything is recorded. Trigger unprompted for exploratory work, when writing a script that will run, when the user did not ask for tracking, and whenever something worth recording happens — a choice made or reversed, a tool behaving differently than documented, an assumption proving false. Also the tracking switch for THIS conversation — when the researcher says to stop tracking or that this session is not research, that is this skill with `off`; `on` resumes; typed bare by the researcher it TOGGLES, while an agent loading it bare as a tool only reads this guidance and NEVER flips the state.
+description: Register and record the team's ML work, whatever its shape — training runs, inference-time sweeps and evaluations, literature reviews and design work, data processing, provisioning. Create the project BEFORE designing or scaffolding, an experiment when there is a question to answer, a run when code is about to execute; then record everything the work produces at the moment it happens, not at session end — files to artifacts, numbers to metrics, decisions and caveats to notes, inputs into the run snapshot. Tracking on means everything is recorded. Trigger unprompted for exploratory work, when writing a script that will run, when the user did not ask for tracking, and whenever something worth recording happens — a choice made or reversed, a tool behaving differently than documented, an assumption proving false. Recording is governed by `probe-research:probe`, a separate switch skill; this one is the manual for what gets recorded and how.
 ---
 
 # Track work
 
-One skill, two jobs: the per-conversation tracking switch, and everything that
-gets recorded while the switch is on. Recording is the default, not a favor —
-when tracking is on, everything the work produces lands in Probe, and the only
-opt-out is the researcher flipping the switch.
+The manual for recording the team's work from a shell. Recording is the default,
+not a favor — when Probe is `full`, everything the work produces lands in it, and
+the only opt-out is the researcher moving the switch.
 
-## The switch
+The switch itself is a separate skill: `probe-research:probe`. It has three
+states — `full`, `read-only`, `off` — and this skill applies only under `full`.
+Under `read-only` and `off` nothing here may write; under `off` nothing here may
+read either. Never move the switch to make your own write legal.
 
-A plugin hook watches this skill's activation and writes the session's tracking
-signal: `off` (or "stop"/"disable") turns tracking off for THIS conversation,
-`on` (or "start"/"resume") turns it on, and `status` writes NOTHING — a question
-never flips a switch.
+## 0. Check the state before the first write
 
-A BARE invocation depends on who made it. Typed by the researcher
-(`/track-work`, `$track-work`, `/skill:track-work` on pi -- whichever
-spelling this harness uses -- or `toggle`/`flip` spelled out) it is a TOGGLE:
-it flips to the opposite of the state the session is in now. Invoked by an
-AGENT with no argument — a tool call, a skill activation — it writes nothing at
-all: that is how this guidance gets loaded, mid-task and unprompted, and
-reading the manual must never flip the switch. So when you need the state
-changed, pass the direction word; bare is the researcher's spelling, not
-yours.
+`probe session status`, and read `state`. This is the manual's own obligation to
+know whether it may write, and under three states it is `read-only` where that
+now bites: everything below still applies, only the writes are refused.
 
-Do not decide the new state yourself — read it back with `probe session status`
-and trust what it prints. Never write the signal yourself (`probe session track`/`untrack`/
-`toggle` are not this skill's tools); if status contradicts what the researcher
-plainly asked for, that is a broken hook — say so in one line and report the
-state as it is, rather than quietly repairing it.
-
-**If it landed OFF**, for the rest of this conversation: create no projects,
-experiments or runs; write no notes, artifacts or visible entity Markdown; and
-do not raise tracking again — not as a reminder, not as a closing caveat. Keep
-doing the actual work. This overrides the standing CLAUDE.md/AGENTS.md rules
-for this conversation; that is the point of the switch. Say once what it did:
-
-> Tracking is off for this session — nothing further will be recorded. What was
-> already recorded is untouched. `/track-work on` (`/skill:track-work on` on
-> pi) flips it back.
-
-OFF deletes nothing, does not stop transcript capture (that is machine-wide,
-via `probe wizard`), and does not touch other sessions. **If it landed ON**,
-normal tracking resumes — say so in one line and carry on; do not open a
-project just to prove the switch worked.
-
-Starting is the AGENT's call — the standing rules make tracking automatic.
-Stopping is the RESEARCHER's. Never invert that by waiting to be told to track.
-
-## Defaults for future sessions
-
-When the researcher asks for a tracking **default**, target the folder they
-named and use the CLI as the only persistence surface:
-
-| intent | target / action |
+| `state` | what this skill may do |
 |---|---|
-| “this repo” | Resolve `git rev-parse --show-toplevel` from the current directory and use that absolute root. If it fails, ask which folder to use; do not substitute the cwd. |
-| “this folder” or a named folder | Use that exact directory as an absolute path. |
-| default on or off | `probe session default on|off --folder PATH` |
-| remove the folder override / inherit | `probe session default inherit --folder PATH` |
-| inspect the default | `probe session default --folder PATH` |
+| `full` | all of it |
+| `read-only` | none of the writes below. Keep searching prior work and keep reporting it. |
+| `off` | nothing at all, reads included. Say you could not look; never report that no prior work exists. |
 
-Show the CLI's JSON result after every action so the researcher sees both the
-exact folder override and the effective inherited default. Never edit
-`.probe/config.json` directly.
+Under `read-only` or `off`: create nothing, say so in one line, and ask whether
+they want recording on. Moving the switch is theirs (`/probe full`,
+`/skill:probe full` on pi) — never move it to make your own write legal.
 
-## 0. Check the session state before the first write
-
-`probe session status`. Tracking `false` means OFF — whether the researcher
-turned it off or the machine starts sessions that way — so stop: create
-nothing, say so in one line, and ask whether they want tracking on. Turning it
-on is theirs (`/track-work on`, `/skill:track-work on` on pi); never flip it
-to make your own write legal.
 If the command errors (an older CLI), say so before proceeding — a status you
-could not read is not a session you know is tracked.
+could not read is not a session you know is recording. An older CLI that prints
+no `state` field is reporting a two-valued world: read `tracking` there, and
+treat `false` as `read-only`.
 
 Read `effective`, not `tracking` alone. When it says `tracked, not captured`,
 say exactly that to the researcher and name the reason the `capture` object

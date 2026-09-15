@@ -25,6 +25,14 @@ export interface CaptureReading {
 export interface TrackingState {
   tracking: boolean;
   signal: "on" | "off";
+  /**
+   * The three-valued switch. Optional because the CLI grew it after this
+   * interface shipped, and a pi running against an older probe must still
+   * render: absent means "this CLI cannot say", not "full". `tracking` and
+   * `signal` keep their two-valued meaning forever for exactly this reason --
+   * `read-only` and `off` both project to `off`, which is true of both.
+   */
+  state?: "full" | "read-only" | "off";
   seeded: boolean;
   source: string;
   /**
@@ -76,6 +84,11 @@ const CHILD_ENV_KEYS = [
   "TEMP",
   "PROBE_CONFIG_PATH",
   "PROBE_SESSION_TRACKING",
+  // Dropping this was a silent opt-out loss: starting pi with
+  // PROBE_SESSION_STATE=off left the CLI child resolving the default instead,
+  // seeding `full`, and PERSISTING that -- so the override did not merely fail
+  // to apply, it was overwritten by a decision nobody made.
+  "PROBE_SESSION_STATE",
 ] as const;
 
 function trackingChildEnv(env: PathEnv): PathEnv {
@@ -171,6 +184,7 @@ export async function initializeTrackingState(
     return {
       tracking: value.tracking,
       signal: value.signal,
+      state: parseState(value.state),
       seeded: value.seeded,
       source: value.source,
       capture: parseCapture(value.capture),
@@ -181,6 +195,18 @@ export async function initializeTrackingState(
     );
     return null;
   }
+}
+
+/**
+ * The three-valued state, read LENIENTLY for the same reason `capture` is.
+ *
+ * An unrecognised or missing value is `undefined`, never a guess. The strict
+ * fields above already carry a safe two-valued answer, so a reader that cannot
+ * understand the third value degrades to "records nothing" rather than to a
+ * claim it is not entitled to make.
+ */
+function parseState(raw: unknown): "full" | "read-only" | "off" | undefined {
+  return raw === "full" || raw === "read-only" || raw === "off" ? raw : undefined;
 }
 
 /**

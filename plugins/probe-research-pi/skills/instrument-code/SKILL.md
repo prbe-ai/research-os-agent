@@ -1,5 +1,5 @@
 ---
-name: instrument-training-runs
+name: instrument-code
 description: Wire tracking into a training or evaluation script so what it records actually lands — where the capture code must live in a distributed job, which run it writes to, and whether a thing is a metric or a span. Use when writing or modifying a script that trains, evaluates, sweeps or serves and should be tracked; when launching such a job on a machine other than the one you are on (Modal, Slurm, Ray, a container image you build), where the capture code has to travel with the job or nothing reports back; when choosing between run.log, spans, artifacts and labeled points; when adding Probe to a trainer that already has its own integration (miles, trl, verl, Ray); and when a run finished green but recorded nothing, recorded less than expected, or recorded onto the wrong run. Trigger before the first paid GPU hour, not after — every failure here is silent, and a run that captures nothing looks exactly like a run that captures fine until someone reads it back.
 ---
 

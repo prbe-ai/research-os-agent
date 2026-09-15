@@ -52,6 +52,23 @@ const spawnedSessionIds = new Set<string>();
 // see teamNote.ts's module docstring ("cache once per session") for why.
 let cachedTeamNote: string | null = null;
 
+/**
+ * The three-valued switch for this session, as the CLI last reported it.
+ *
+ * `undefined` means unknown -- an older probe that does not send `state`, or a
+ * read that failed -- and unknown behaves exactly as it did before this existed.
+ * Only a confirmed `off` suppresses anything, because suppressing on a failed
+ * read would silently stop the team note syncing on a machine that never asked
+ * for it, and a note that quietly stops sending is the one failure that surface
+ * must never have.
+ */
+let cachedProbeState: "full" | "read-only" | "off" | undefined;
+
+/** Has the researcher switched Probe off for this session? */
+function probeIsOff(): boolean {
+  return cachedProbeState === "off";
+}
+
 // Live Probe MCP connections, keyed by session id. Module-scope for the same
 // reload-survives-reasoning as spawnedSessionIds/cachedTeamNote — but unlike
 // those two, THIS one is read as well as written on every session_start: pi
@@ -148,6 +165,7 @@ async function refreshTrackingStatus(
     }
     return false;
   }
+  cachedProbeState = state.state;
   if (ctx.hasUI) {
     try {
       ctx.ui.setStatus("probe-tracking", trackingStatusText(state.tracking, state.capture));
@@ -181,17 +199,31 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // read an ordinary one. Independent of the capture-daemon logic below on
     // purpose: a session with no transcript file, no pairing, or the killswitch
     // active should still see the team note. Neither call ever throws.
-    await syncTeamNoteThenRead(realTeamNoteSyncDeps());
-    cachedTeamNote = readTeamNote(process.env);
-
     const sessionId = ctx.sessionManager.getSessionId();
     const transcriptPath = ctx.sessionManager.getSessionFile();
 
-    // Seed the ONE durable session signal before any capture-specific early
-    // return, then render that same answer in Pi's persistent footer. Reloads
+    // THE SWITCH IS RESOLVED FIRST, and it did not used to be. The note sync
+    // below is a network call and the read after it becomes text in every
+    // prompt, so both have to know whether this session is `off` -- and they
+    // cannot ask after the fact. Nothing in resolving the switch depends on the
+    // note, so this is a pure reorder.
+    //
+    // Seeds the ONE durable session signal before any capture-specific early
+    // return, then renders that same answer in Pi's persistent footer. Reloads
     // are safe: the hidden initializer uses set-if-absent and returns the
     // existing signal rather than resolving the folder again.
     await refreshTrackingStatus(ctx, sessionId, ctx.cwd);
+
+    if (probeIsOff()) {
+      // `off` means no Probe calls and nothing injected. Leaving this out was
+      // the difference between a switch and a promise: the note still synced
+      // over the network every settle, and still rode into every prompt.
+      cachedTeamNote = null;
+      logLine("probe state is off: skipping the team-note sync and injection");
+    } else {
+      await syncTeamNoteThenRead(realTeamNoteSyncDeps());
+      cachedTeamNote = readTeamNote(process.env);
+    }
 
     // Probe MCP read tools: entirely independent of the capture daemon below
     // (a separate credential — mcp_token, never the tap's ingest/device
@@ -354,7 +386,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   // EVERY turn, so this must stay a cheap string append against the cache
   // populated at session_start: no file read, no CLI spawn, here.
   pi.on("before_agent_start", async (event) => {
-    if (!cachedTeamNote) return;
+    if (probeIsOff() || !cachedTeamNote) return;
     return {
       systemPrompt: event.systemPrompt + renderTeamNoteForPrompt(cachedTeamNote, teamNoteDocumentPath(process.env)),
     };
@@ -366,6 +398,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   // user message and would push/pull far more than needed. See teamNote.ts's
   // module docstring for why this is a full sync, detached, and fail-open.
   pi.on("agent_settled", async () => {
+    if (probeIsOff()) return;
     spawnTeamNoteSync(realTeamNoteSyncDeps());
   });
 

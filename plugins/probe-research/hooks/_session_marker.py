@@ -78,7 +78,20 @@ _GLYPH_WIDTH = 2  # the dot plus its trailing space
 #: does not, and a status line is read by people who did not install it.
 _LABEL_TRACKED = "tracking " + _ARROW + " "
 _LABEL_TRACKING_BARE = "tracking"
+#: Kept for readers that still resolve the switch to a BOOLEAN. `render` only
+#: reaches it when no three-valued state was passed in, which is the shape a
+#: pre-three-state caller has. New callers pass `session_state` and get one of
+#: the two labels below instead.
 _LABEL_NOT_TRACKING = "not tracking"
+
+#: The two non-recording states, spelled the way the CLI, the config file and
+#: the deny reason spell them. A status line that said "reading only" while
+#: `probe session status` said "read-only" would make the reader translate
+#: between two vocabularies for one fact -- which is the drift the shared-label
+#: design exists to prevent. Both are SHORTER than `not tracking` (9 and 3
+#: against 12), so the width cap in MAX_SEGMENT_CHARS is not touched by them.
+_LABEL_READ_ONLY = "read-only"
+_LABEL_OFF = "off"
 
 #: A middle dot, NOT a second arrow. `tracked → folding ▸ running` puts two
 #: arrow-shaped glyphs in one short segment, and the eye reads them as a
@@ -489,9 +502,29 @@ def _legacy_off_path(session_id: str) -> Path:
 
 
 def tracking_signal(session_id: str) -> str | None:
-    """`"on"`, `"off"`, or None when nobody has decided yet."""
+    """`"on"`, `"off"`, or None when nobody has decided yet.
+
+    THE CANONICAL FILE ANSWERS FIRST, and that is what stops the two files from
+    ever disagreeing inside this codebase. `set_session_state` publishes twice --
+    `.state`, then the compat `.tracking` -- and two writers interleaving those
+    four writes can leave `.state=off` beside `.tracking=on`. Reading `.tracking`
+    directly, half the surfaces here (the status-line refresh, the capture check,
+    the wizard) would keep recording while the guard refused every write: one
+    setting, two answers, and nothing saying which is winning.
+
+    So `.tracking` is a file we WRITE for old clients and do not READ while the
+    canonical one exists. A torn pair is then eventually consistent rather than
+    contradictory -- the next write repairs it, and until then everything here
+    agrees.
+    """
     if not valid_session_id(session_id):
         return None
+    try:
+        raw = state_path(session_id).read_text(encoding="utf-8").strip().lower()
+        if raw in STATES:
+            return "on" if raw == STATE_FULL else "off"
+    except OSError:
+        pass
     try:
         value = tracking_signal_path(session_id).read_text(encoding="utf-8").strip().lower()
         if value in ("on", "off"):
@@ -502,21 +535,22 @@ def tracking_signal(session_id: str) -> str | None:
 
 
 def set_tracking(session_id: str, on: bool) -> bool:
-    """Record the decision. True when it landed.
+    """Record a BOOLEAN decision. True when it landed.
 
-    Writes the new spelling and clears the legacy one, so an upgraded session
-    that is turned back ON does not keep reading `off` from the old file.
+    THE FALSE BRANCH IS `read-only`, NOT `off`. Every caller of this function
+    predates the third state, and what they have always meant by False is what
+    `probe session untrack` has always documented: "records nothing further".
+    That is `read-only` precisely -- the switch has never gated reads. Routing
+    them to the new `off` would take reads away from people who asked only to
+    stop recording, which is the same mistake `session_state` refuses to make
+    when it migrates a stored marker.
+
+    The hard `off` is reachable only by naming it: `set_session_state(sid,
+    STATE_OFF)`, which is what the new switch calls.
     """
-    if not valid_session_id(session_id):
-        return False
-    path = tracking_signal_path(session_id)
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("on\n" if on else "off\n", encoding="utf-8")
-        _legacy_off_path(session_id).unlink(missing_ok=True)
-        return True
-    except OSError:
-        return False
+    return set_session_state(
+        session_id, STATE_FULL if on else STATE_READ_ONLY
+    )
 
 
 def set_tracking_if_absent(session_id: str, on: bool) -> bool:
@@ -557,36 +591,9 @@ def set_tracking_if_absent(session_id: str, on: bool) -> bool:
     this must never do. Losing that race is repaired by removing what we just
     published, not by keeping it.
     """
-    if not valid_session_id(session_id):
-        return False
-    if tracking_signal(session_id) is not None:
-        return False  # a decision exists (including the legacy off spelling)
-    path = tracking_signal_path(session_id)
-    tmp_path = "%s.tmp-%d-%d" % (str(path), os.getpid(), time.time_ns())
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        handle = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-    except OSError:
-        return False
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as fh:
-            fh.write("on\n" if on else "off\n")
-        try:
-            os.link(tmp_path, path)
-        except OSError:
-            return False  # EEXIST: someone decided between the read and the publish
-        if _legacy_off_path(session_id).is_file():
-            # An opt-out landed in the old spelling while we were publishing.
-            path.unlink(missing_ok=True)
-            return False
-        return True
-    except OSError:
-        return False
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    return set_session_state_if_absent(
+        session_id, STATE_FULL if on else STATE_READ_ONLY
+    )
 
 
 def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
@@ -611,6 +618,277 @@ def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
     if signal == "on":
         return True
     return default_tracking() if default is None else default
+
+
+# ---------------------------------------------------------------------------
+# THE THREE-VALUED SWITCH.
+#
+#   full        reads and writes. What "tracking on" has always meant.
+#   read-only   reads allowed, records nothing new. What "tracking off" has
+#               always meant -- the switch never gated reads.
+#   off         no Probe calls at all, and no session-start injections.
+#
+#          /probe            /probe            /probe
+#   full ----------> read-only ----------> off ----------> full
+#         (stop            (stop             (resume
+#         writing)         reading)          everything)
+#
+#   Each press removes exactly one capability, so the cycle is learnable after
+#   one lap. Reversing that (full -> off -> read-only) would ADD capability on
+#   the second press, which reads as random.
+#
+# TWO FILES, ONE DECISION. `<sid>.state` is canonical and three-valued.
+# `<sid>.tracking` keeps being WRITTEN with the two-valued projection and is
+# never read by new code. That is not bookkeeping: `tracking_signal` above
+# returns its value only when it is exactly "on" or "off", and ANY other answer
+# -- an unknown word, or a missing file -- falls through to `default_tracking()`
+# -> DEFAULT_TRACKING -> True. So an older client that met a three-valued file,
+# or met no file at all after a clean cutover, would resolve an opt-out to
+# TRACKING ON and silently record work the researcher declined. The compat write
+# is what makes that unsayable, and it is the same trick `<sid>.off` already
+# plays in the other direction.
+# ---------------------------------------------------------------------------
+
+STATE_FULL = "full"
+STATE_READ_ONLY = "read-only"
+STATE_OFF = "off"
+
+#: Every state, and the order `toggle` advances through. One tuple, because a
+#: separate cycle list is a second place to forget a state.
+STATES = (STATE_FULL, STATE_READ_ONLY, STATE_OFF)
+
+#: What a machine that has said nothing gets. `full`, for the same reason
+#: DEFAULT_TRACKING is True: tracking must not depend on anyone remembering to
+#: ask for it. Shipping `read-only` here would quietly stop recording for
+#: everyone on upgrade -- a product change wearing a plumbing change's clothes.
+DEFAULT_STATE = STATE_FULL
+
+
+def state_path(session_id: str) -> Path:
+    """Where the three-valued decision lives. Canonical; see the block above."""
+    return sessions_dir() / (session_id + ".state")
+
+
+def normalize_state(raw: object) -> "str | None":
+    """A recognized state name, or None.
+
+    Accepts the spellings a person actually types. `read-only` carries a hyphen,
+    and a hyphen is the one character someone reliably gets wrong, so the three
+    obvious near-misses resolve rather than reading as unrecognized -- which, per
+    `default_session_state`, would mean falling back to `full` and recording work
+    somebody tried to decline.
+    """
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    # THE CANONICAL NAMES FIRST. They are not all in the legacy synonym tuples
+    # -- `full` is in none of them -- and leaning on those alone meant the one
+    # spelling this file documents everywhere was the one it rejected.
+    if value in STATES:
+        return value
+    if value in TRACKING_READ_ONLY_VALUES:
+        return STATE_READ_ONLY
+    if value in TRACKING_OFF_VALUES:
+        return STATE_OFF
+    if value in TRACKING_ON_VALUES:
+        return STATE_FULL
+    return None
+
+
+def next_state(state: str) -> str:
+    """The state one press of the bare switch lands on. Wraps."""
+    try:
+        return STATES[(STATES.index(state) + 1) % len(STATES)]
+    except ValueError:
+        return STATE_FULL
+
+
+def state_allows_writes(state: "str | None") -> bool:
+    """Only `full` records anything new."""
+    return state == STATE_FULL
+
+
+def state_allows_reads(state: "str | None") -> bool:
+    """`full` and `read-only` may look things up. Only `off` may not.
+
+    An UNKNOWN state reads as allowed, deliberately. Everywhere else in this
+    file ambiguity resolves toward the shipped posture, and a corrupted marker
+    that silently stopped an agent finding prior work would be invisible: it
+    looks exactly like the work not existing.
+    """
+    return state != STATE_OFF
+
+
+def session_state(session_id: str) -> "str | None":
+    """This conversation's state, or None when nobody has decided yet.
+
+    MIGRATION LIVES HERE, and it is the most consequential rule in the switch.
+    A legacy `off` marker was written by somebody who meant "stop recording,
+    keep searching" -- the switch has never gated reads. That is the new
+    `read-only` exactly. Mapping it to the new `off` would retroactively take
+    away reads they never gave up, so it maps to `read-only` and the hard `off`
+    is reachable only from an explicit new-format write.
+
+        .state = full | read-only | off   ->  that
+        .tracking = "on"                  ->  full
+        .tracking = "off"                 ->  read-only
+        <sid>.off present                 ->  read-only
+        nothing                           ->  None (undecided)
+    """
+    if not valid_session_id(session_id):
+        return None
+    try:
+        raw = state_path(session_id).read_text(encoding="utf-8").strip().lower()
+        if raw in STATES:
+            return raw
+    except OSError:
+        pass
+    # No canonical file: fall back to the legacy spellings and MIGRATE them.
+    # Read those directly rather than through `tracking_signal`, which now
+    # consults `.state` first and would re-walk a file we just missed.
+    legacy = _legacy_tracking_value(session_id)
+    if legacy == "on":
+        return STATE_FULL
+    if legacy == "off":
+        return STATE_READ_ONLY
+    return STATE_READ_ONLY if _legacy_off_path(session_id).is_file() else None
+
+
+def _publish_atomically(path: Path, content: str) -> bool:
+    """Write `content` to `path` so no reader can ever see it half-written.
+
+    A plain `write_text` truncates first, so a concurrent reader -- and there is
+    always one, the status line renders on every turn -- can observe an EMPTY
+    marker and resolve it as "no decision". Write to a unique temp and
+    `os.replace`, which is atomic on POSIX and on Windows.
+
+    `os.replace`, not `os.link`: this is a LAST-WRITER-WINS file, unlike the
+    exclusive publish in `set_session_state_if_absent`, which must fail rather
+    than overwrite.
+    """
+    tmp = "%s.tmp-%d-%d" % (str(path), os.getpid(), time.time_ns())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(content)
+        os.replace(tmp, path)
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def _write_compat_tracking(session_id: str, state: str) -> None:
+    """Leave older clients a value they cannot misread. Best effort.
+
+    `full` -> on; `read-only` and `off` -> off. Both non-recording states project
+    to `off` because that is the strongest thing a two-valued reader can be told,
+    and it is TRUE of both: neither records. Failure here is not fatal -- the
+    canonical file already landed -- but it is the difference between an old CLI
+    reading an opt-out and an old CLI inventing consent.
+    """
+    if _publish_atomically(
+        tracking_signal_path(session_id), "on\n" if state == STATE_FULL else "off\n"
+    ):
+        try:
+            _legacy_off_path(session_id).unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _legacy_tracking_value(session_id: str) -> "str | None":
+    """The two-valued file's raw decision, or None. Never consults `.state`."""
+    try:
+        value = tracking_signal_path(session_id).read_text(encoding="utf-8").strip().lower()
+    except OSError:
+        return None
+    return value if value in ("on", "off") else None
+
+
+def set_session_state(session_id: str, state: str) -> bool:
+    """Record the decision. True when the canonical file now reads `state`."""
+    if not valid_session_id(session_id) or state not in STATES:
+        return False
+    if not _publish_atomically(state_path(session_id), state + "\n"):
+        return False
+    _write_compat_tracking(session_id, state)
+    return True
+
+
+def set_session_state_if_absent(session_id: str, state: str) -> bool:
+    """Seed the STARTING state, only when nobody has decided. True when we did.
+
+    Exclusive by construction, exactly as `set_tracking_if_absent` is and for the
+    same reasons -- see that docstring for why `os.link` rather than a
+    check-then-write, and why the temp name carries pid AND a nanosecond stamp.
+    The legacy spellings are re-checked after publishing for the same reason too:
+    an old client writing `<sid>.off` between the read and the publish must not
+    be overridden by automation.
+    """
+    if not valid_session_id(session_id) or state not in STATES:
+        return False
+    if session_state(session_id) is not None:
+        return False
+    path = state_path(session_id)
+    tmp_path = "%s.tmp-%d-%d" % (str(path), os.getpid(), time.time_ns())
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handle = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except OSError:
+        return False
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as fh:
+            fh.write(state + "\n")
+        try:
+            os.link(tmp_path, path)
+        except OSError:
+            return False  # EEXIST: someone decided between the read and the publish
+        # BOTH LEGACY SPELLINGS ARE RE-CHECKED AFTER PUBLISHING, and the second
+        # one is new with this file. `os.link` arbitrates `<sid>.state` only, so
+        # a decision that landed in either older spelling between our read and
+        # our publish would otherwise be overwritten by the compat write below --
+        # automation silently overriding an explicit opt-out, which is the one
+        # thing this must never do. Losing that race is repaired by removing what
+        # we just published, not by keeping it.
+        try:
+            published = path.read_text(encoding="utf-8").strip().lower()
+        except OSError:
+            published = ""
+        if published != state:
+            # A NEWER WRITER took the canonical file. `os.link` refuses to
+            # replace, but `set_session_state` publishes with `os.replace`,
+            # which does, so what is on disk is now somebody's explicit
+            # decision. Leave it and report that we did not decide. Deleting
+            # here is how a seed erased an explicit `off` that had landed a
+            # microsecond earlier, leaving only its compat file to migrate back
+            # to read-only and silently reopen reads the researcher had closed.
+            return False
+        legacy = _legacy_tracking_value(session_id)
+        expected = "on" if state == STATE_FULL else "off"
+        if _legacy_off_path(session_id).is_file() or (
+            legacy is not None and legacy != expected
+        ):
+            # An OLDER CLIENT wrote a legacy opt-out while we were publishing.
+            # Only a value that DISAGREES counts: the one we are about to write
+            # ourselves agrees by construction.
+            path.unlink(missing_ok=True)
+            return False
+        _write_compat_tracking(session_id, state)
+        return True
+    except OSError:
+        return False
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def notify_flag_path() -> Path:
@@ -747,12 +1025,33 @@ DEFAULT_TRACKING = True
 DEFAULTS_KEY = "defaults"
 TRACKING_DEFAULT_KEY = "session_tracking"
 
+#: The THREE-VALUED default, in its own key beside the two-valued one.
+#:
+#: A separate key, not a widened vocabulary in the old one, and the reason is
+#: the same collision the flip claim hit: `session_tracking: "off"` was written
+#: when `off` meant "stop recording, keep searching". That is `read-only` now.
+#: Reading the new hard `off` out of that key would silently take reads away
+#: from every folder and machine already configured -- the exact migration
+#: mistake `session_state` refuses to make for a session marker.
+#:
+#: So writers write BOTH: this key three-valued, the old one as the safe
+#: two-valued projection for clients that only know it. Readers prefer this one
+#: and fall back to the old one THROUGH the legacy mapping.
+STATE_DEFAULT_KEY = "session_state"
+
 #: The spellings `default_tracking` recognizes, exported so the ONE other
 #: surface that reasons about the env override (the wizard's settings screen)
 #: cannot drift from the parser: a value outside both sets is IGNORED, and a
 #: screen that calls it an override anyway misdiagnoses a typo.
 TRACKING_OFF_VALUES = ("off", "0", "false", "no", "disabled")
 TRACKING_ON_VALUES = ("on", "1", "true", "yes", "enabled")
+
+#: The third set, exported beside the other two so the wizard and the CLI cannot
+#: drift from this parser. Four spellings for one state looks generous until you
+#: remember the failure mode: an unrecognized value resolves to `full`, so a
+#: researcher who typed `readonly` and got recorded anyway would have no way to
+#: tell a typo from a bug.
+TRACKING_READ_ONLY_VALUES = ("read-only", "readonly", "read_only", "ro")
 
 # Folder configs are repository-controlled settings, never data blobs. Their bound
 # protects startup/status paths from devices and giant files before JSON parsing can
@@ -834,14 +1133,37 @@ def tracking_env_override() -> bool | None:
     the stored value can never be set equal to the env's -- the wizard hides
     its toggle row on this answer instead.
     """
+    # BOTH VARIABLES, PROJECTED. The three-valued reader has its own
+    # `state_env_override`, but half this codebase still asks the boolean
+    # question -- the status-line refresh, the capture check, the wizard's
+    # settings screen. If `PROBE_SESSION_STATE=off` were invisible here, those
+    # surfaces would keep behaving as though the session were recording while
+    # the guard refused every write: one setting, two answers, nothing saying
+    # which is winning. That is the exact failure this pair of functions exists
+    # to prevent, so the projection happens once, here.
+    explicit = normalize_state(os.environ.get("PROBE_SESSION_STATE"))
+    if explicit is not None:
+        return explicit == STATE_FULL
     return _parse_tracking_value(os.environ.get("PROBE_SESSION_TRACKING"))
 
 
 def _tracking_value(data: dict) -> bool | None:
+    """The stored default as a BOOLEAN, from whichever key carries it.
+
+    Writers put both keys down, so the old one is normally enough. This reads
+    the new one as a fallback for the config somebody edited BY HAND -- setting
+    `session_state` alone is the obvious thing to do once it is documented, and
+    without this fallback that edit would move the guard and leave the status
+    line, the capture check and the wizard reading the shipped default.
+    """
     defaults = data.get(DEFAULTS_KEY)
     if not isinstance(defaults, dict):
         return None
-    return _parse_tracking_value(defaults.get(TRACKING_DEFAULT_KEY))
+    value = _parse_tracking_value(defaults.get(TRACKING_DEFAULT_KEY))
+    if value is not None:
+        return value
+    state = normalize_state(defaults.get(STATE_DEFAULT_KEY))
+    return None if state is None else state == STATE_FULL
 
 
 def default_tracking(config: dict | None = None) -> bool:
@@ -863,6 +1185,56 @@ def default_tracking(config: dict | None = None) -> bool:
     data = _read_config() if config is None else config
     value = _tracking_value(data)
     return DEFAULT_TRACKING if value is None else value
+
+
+def state_env_override() -> "str | None":
+    """The RECOGNIZED `PROBE_SESSION_TRACKING` value as a state, or None.
+
+    Same variable as the boolean override, widened. Keeping one variable matters
+    more than the tidiness of a second: a machine that exported the old name and
+    a machine that exported a new one would disagree about the same setting, and
+    nothing would say which was winning.
+    """
+    explicit = normalize_state(os.environ.get("PROBE_SESSION_STATE"))
+    if explicit is not None:
+        return explicit
+    # The old variable, read as what it meant when it was the only one.
+    return _legacy_state_from_tracking(os.environ.get("PROBE_SESSION_TRACKING"))
+
+
+def _legacy_state_from_tracking(value: object) -> "str | None":
+    """A two-valued stored default, read as what it MEANT: on -> full, off -> read-only."""
+    parsed = _parse_tracking_value(value)
+    if parsed is None:
+        return None
+    return STATE_FULL if parsed else STATE_READ_ONLY
+
+
+def _stored_state(defaults: object) -> "str | None":
+    """The state a `defaults` block carries, new key first, else the legacy one."""
+    if not isinstance(defaults, dict):
+        return None
+    value = normalize_state(defaults.get(STATE_DEFAULT_KEY))
+    if value is not None:
+        return value
+    return _legacy_state_from_tracking(defaults.get(TRACKING_DEFAULT_KEY))
+
+
+def default_session_state(config: dict | None = None) -> str:
+    """This machine's default state for sessions nobody has decided about.
+
+    Env beats file, matching the rest of the client. Anything UNRECOGNIZED reads
+    as DEFAULT_STATE rather than as a quieter state -- the rule `default_tracking`
+    already states for recording ("a typo in a config file must not silently stop
+    recording someone's research") applied to reads as well, which is where it
+    now also bites.
+    """
+    override = state_env_override()
+    if override is not None:
+        return override
+    data = _read_config() if config is None else config
+    value = _stored_state(data.get(DEFAULTS_KEY))
+    return DEFAULT_STATE if value is None else value
 
 
 def folder_config_path(folder: str | os.PathLike[str]) -> Path:
@@ -901,11 +1273,15 @@ def _folder_tracking_override(path: Path, errors: list[str] | None = None) -> bo
     if not isinstance(defaults, dict):
         _append_config_error(errors, f"{path}: defaults is not a JSON object")
         return None
-    if TRACKING_DEFAULT_KEY not in defaults:
+    if TRACKING_DEFAULT_KEY not in defaults and STATE_DEFAULT_KEY not in defaults:
         return None
-    value = _parse_tracking_value(defaults.get(TRACKING_DEFAULT_KEY))
+    # Same projection as `_tracking_value`, for the same reason: a folder config
+    # carrying only the new key must not read as "no override here" to every
+    # surface that still asks the boolean question.
+    value = _tracking_value({DEFAULTS_KEY: defaults})
     if value is None:
-        _append_config_error(errors, f"{path}: invalid defaults.{TRACKING_DEFAULT_KEY} value")
+        key = TRACKING_DEFAULT_KEY if TRACKING_DEFAULT_KEY in defaults else STATE_DEFAULT_KEY
+        _append_config_error(errors, f"{path}: invalid defaults.{key} value")
     return value
 
 
@@ -951,6 +1327,90 @@ def resolve_tracking_default(
     return value, str(machine_path)
 
 
+def _folder_state_override(path: Path, errors: list[str] | None = None) -> "str | None":
+    """One folder's stored state, or None. Reuses the boolean reader's I/O rules.
+
+    Reads the SAME key the boolean override reads (`defaults.session_tracking`),
+    because it is the same setting with a wider vocabulary. A second key would
+    let one folder hold two answers.
+    """
+    try:
+        raw = _read_config_text(
+            path, require_regular=True, max_bytes=FOLDER_CONFIG_MAX_BYTES
+        )
+    except FileNotFoundError:
+        return None
+    except (OSError, ValueError) as exc:
+        _append_config_error(errors, f"{path}: could not be read ({exc})")
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError as exc:
+        _append_config_error(errors, f"{path}: malformed JSON ({exc})")
+        return None
+    if not isinstance(data, dict):
+        _append_config_error(errors, f"{path}: config is not a JSON object")
+        return None
+    if DEFAULTS_KEY not in data:
+        return None
+    defaults = data[DEFAULTS_KEY]
+    if not isinstance(defaults, dict):
+        _append_config_error(errors, f"{path}: defaults is not a JSON object")
+        return None
+    # SAME DIAGNOSTICS AS THE TWO-VALUED READER. A folder config is
+    # repository-controlled and a typo in it is somebody's mistake to find, so
+    # an unusable value is REPORTED and then ignored -- never silently swallowed
+    # into the shipped default, which is what makes a typo indistinguishable
+    # from "no override here".
+    present = [k for k in (STATE_DEFAULT_KEY, TRACKING_DEFAULT_KEY) if k in defaults]
+    if not present:
+        return None
+    value = _stored_state(defaults)
+    if value is None:
+        _append_config_error(errors, f"{path}: invalid defaults.{present[0]} value")
+    return value
+
+
+def resolve_state_default(
+    cwd: str | os.PathLike[str] | None,
+    config: dict | None = None,
+    *,
+    errors: list[str] | None = None,
+) -> tuple[str, str]:
+    """The effective new-session STATE and its diagnostic source.
+
+    Walks the same ladder as `resolve_tracking_default` -- env, then each
+    `.probe/config.json` from cwd upward, then the machine file, then shipped --
+    so the two can never disagree about which file won, only about how many
+    values that file is allowed to hold.
+    """
+    override = state_env_override()
+    if override is not None:
+        return override, "environment"
+
+    try:
+        current = Path(os.path.abspath(os.getcwd() if cwd is None else os.fspath(cwd)))
+    except (OSError, TypeError, ValueError) as exc:
+        _append_config_error(errors, f"{cwd}: could not resolve working directory ({exc})")
+        current = None
+
+    while current is not None:
+        path = current / ".probe" / "config.json"
+        value = _folder_state_override(path, errors)
+        if value is not None:
+            return value, str(path)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    data = _read_config() if config is None else config
+    stored = _stored_state(data.get(DEFAULTS_KEY))
+    if stored is None:
+        return DEFAULT_STATE, "shipped"
+    return stored, str(Path(os.path.abspath(os.fspath(config_path()))))
+
+
 def write_folder_tracking_default(
     folder: str | os.PathLike[str], on: bool | None
 ) -> Path:
@@ -980,6 +1440,7 @@ def write_folder_tracking_default(
             )
         if on is None:
             if isinstance(defaults, dict):
+                defaults.pop(STATE_DEFAULT_KEY, None)
                 defaults.pop(TRACKING_DEFAULT_KEY, None)
                 if not defaults:
                     data.pop(DEFAULTS_KEY, None)
@@ -988,6 +1449,7 @@ def write_folder_tracking_default(
                 defaults = {}
                 data[DEFAULTS_KEY] = defaults
             defaults[TRACKING_DEFAULT_KEY] = "on" if on else "off"
+            defaults[STATE_DEFAULT_KEY] = STATE_FULL if on else STATE_READ_ONLY
         _save_json_file(
             target,
             data,
@@ -1042,7 +1504,107 @@ def write_default_tracking(on: bool) -> Path:
         defaults = data.get(DEFAULTS_KEY)
         data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
         data[DEFAULTS_KEY][TRACKING_DEFAULT_KEY] = "on" if on else "off"
+        # BOTH KEYS, OR THIS WRITE IS A NO-OP. Readers prefer `session_state`,
+        # so leaving a stale `full` there while this sets `session_tracking: off`
+        # means the wizard reports tracking off and every new session keeps
+        # recording. False maps to read-only -- what this boolean has always
+        # meant: stop recording, keep searching.
+        data[DEFAULTS_KEY][STATE_DEFAULT_KEY] = STATE_FULL if on else STATE_READ_ONLY
         _save_json_file(target, data, private=True, _resolved=True)
+    return path
+
+
+def write_default_state(state: str) -> Path:
+    """Persist this machine's default STATE; returns the config path.
+
+    The same key, the same file, the same locking as `write_default_tracking` --
+    only the vocabulary is wider. One key, because it is one setting: a second
+    key would let a machine hold two answers to "what does a new session start
+    at" with nothing to say which won.
+
+    An older client reading `read-only` here sees an unrecognized value and falls
+    back to the SHIPPED default rather than to off, which is the documented rule
+    (`default_tracking`) and the safe direction: a machine whose default is
+    read-only records nothing under a new client, and records under an old one.
+    That is visible on the dashboard. The reverse -- an old client reading it as
+    a hard stop -- would silently lose work.
+    """
+    if state not in STATES:
+        raise ValueError(f"expected one of {STATES}, got {state!r}")
+    from probe.sdk.config import (
+        CONFIG_VERSION,
+        DEFAULT_CONTEXT,
+        _config_lock,
+        _load_json_file,
+        _save_json_file,
+        _write_target,
+    )
+
+    path = config_path()
+    target = _write_target(path)
+    with _config_lock(target, _resolved=True):
+        data = _load_json_file(target, strict=True, migrate=True) or {
+            "version": CONFIG_VERSION,
+            "current_context": DEFAULT_CONTEXT,
+            "contexts": {},
+        }
+        defaults = data.get(DEFAULTS_KEY)
+        data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
+        data[DEFAULTS_KEY][STATE_DEFAULT_KEY] = state
+        # The compat projection, for clients that only know the old key.
+        data[DEFAULTS_KEY][TRACKING_DEFAULT_KEY] = "on" if state == STATE_FULL else "off"
+        _save_json_file(target, data, private=True, _resolved=True)
+    return path
+
+
+def write_folder_state_default(
+    folder: str | os.PathLike[str], state: "str | None"
+) -> Path:
+    """Set this exact folder's default state; None removes the override."""
+    if state is not None and state not in STATES:
+        raise ValueError(f"expected one of {STATES}, got {state!r}")
+    from probe.sdk.config import (
+        ConfigUnreadable,
+        _config_lock,
+        _load_json_file,
+        _save_json_file,
+        _write_target,
+    )
+
+    path = folder_config_path(folder)
+    target = _write_target(path)
+    with _config_lock(target, _resolved=True):
+        data = _load_json_file(
+            target,
+            strict=True,
+            migrate=False,
+            require_regular=True,
+            max_bytes=FOLDER_CONFIG_MAX_BYTES,
+        )
+        defaults = data.get(DEFAULTS_KEY)
+        if DEFAULTS_KEY in data and not isinstance(defaults, dict):
+            raise ConfigUnreadable(
+                f"{path} has a non-object {DEFAULTS_KEY}. Refusing to overwrite it."
+            )
+        if state is None:
+            if isinstance(defaults, dict):
+                defaults.pop(STATE_DEFAULT_KEY, None)
+                defaults.pop(TRACKING_DEFAULT_KEY, None)
+                if not defaults:
+                    data.pop(DEFAULTS_KEY, None)
+        else:
+            if not isinstance(defaults, dict):
+                defaults = {}
+                data[DEFAULTS_KEY] = defaults
+            defaults[STATE_DEFAULT_KEY] = state
+            defaults[TRACKING_DEFAULT_KEY] = "on" if state == STATE_FULL else "off"
+        _save_json_file(
+            target,
+            data,
+            private=False,
+            _resolved=True,
+            max_bytes=FOLDER_CONFIG_MAX_BYTES,
+        )
     return path
 
 
@@ -1121,6 +1683,7 @@ def render(
     tracking: bool,
     live: bool = False,
     color: bool = True,
+    session_state: "str | None" = None,
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
@@ -1160,7 +1723,20 @@ def render(
         return ""
 
     if not tracking:
-        return _INDENT + _paint(_DOT, _YELLOW, color) + " " + _LABEL_NOT_TRACKING
+        # THE SWITCH NOW HAS THREE POSITIONS AND TWO OF THEM ARE NOT RECORDING,
+        # and the difference is the one thing a reader can act on: under
+        # `read-only` an agent will still find prior work, under `off` it will
+        # not and will not know what it missed. That passes the same test the
+        # rejected third state failed and `no capture` passed -- it changes what
+        # the reader does.
+        #
+        # `session_state=None` is a caller from before the third state. It gets
+        # the two-state word it has always got rather than a guess.
+        label = {
+            STATE_READ_ONLY: _LABEL_READ_ONLY,
+            STATE_OFF: _LABEL_OFF,
+        }.get(session_state, _LABEL_NOT_TRACKING)
+        return _INDENT + _paint(_DOT, _YELLOW, color) + " " + label
 
     # Read PAST the `not tracking` return above on purpose: capture is a fact
     # about a session that is recording, and naming it for one that is not would

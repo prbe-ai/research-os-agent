@@ -56,9 +56,10 @@ import {
 const PACKAGE_ROOT = join(__dirname, "..");
 
 const EXPECTED_SKILLS = [
+  "probe",
   "track-work",
   "show-research-status",
-  "instrument-training-runs",
+  "instrument-code",
   "notes-audit",
   "write-overview",
 ].sort();
@@ -88,7 +89,7 @@ function installThisPackage(agentDir: string): SettingsManager {
 }
 
 describe("pi.skills manifest, resolved by pi's own loader", () => {
-  it("resolves exactly the three vendored skills once this package is installed", async () => {
+  it("resolves exactly the vendored skills once this package is installed", async () => {
     const agentDir = join(scratchHome, ".pi", "agent");
     const settingsManager = installThisPackage(agentDir);
 
@@ -132,7 +133,19 @@ describe("pi.skills manifest, resolved by pi's own loader", () => {
     expect(loader.getSkills().skills).toEqual([]);
   });
 
-  it("still loads track-work despite its description exceeding pi's 1024-char cap", async () => {
+  it("ships every description inside pi's 1024-char cap, so nothing warns", async () => {
+    // THIS ASSERTION FLIPPED, and the reason is worth keeping. It used to pin a
+    // FINDING -- track-work's description was 1128 characters and pi's Agent
+    // Skills validation warns rather than truncating or refusing, so the skill
+    // still loaded over the cap. That was verified live and is still true of
+    // pi; it simply no longer has a subject here, because splitting the switch
+    // out of track-work took it to 949 and every shipped description now fits.
+    //
+    // So this now guards the state we are in rather than the state we were in:
+    // a description that grows back over the cap fails here instead of shipping
+    // a warning nobody reads. If one ever legitimately must exceed it, the old
+    // finding says what happens -- pi warns, the skill still works -- and this
+    // test is the place to record that decision.
     const agentDir = join(scratchHome, ".pi", "agent");
     const settingsManager = installThisPackage(agentDir);
 
@@ -144,19 +157,19 @@ describe("pi.skills manifest, resolved by pi's own loader", () => {
     await loader.reload();
 
     const { skills, diagnostics } = loader.getSkills();
-    const trackWork = skills.find((s) => s.name === "track-work");
-    expect(trackWork).toBeDefined();
-    expect(trackWork!.description.length).toBeGreaterThan(1024);
+    expect(skills.length).toBe(EXPECTED_SKILLS.length);
+    for (const skill of skills) {
+      expect(
+        skill.description.length,
+        `${skill.name} description is ${skill.description.length} chars`,
+      ).toBeLessThanOrEqual(1024);
+    }
 
-    // Pinned finding, not silently accepted: pi's Agent Skills validation
-    // warns rather than truncates or refuses. See the file header before
-    // touching this assertion.
     const overLength = diagnostics.filter(
       (d: { message?: string }) =>
         typeof d.message === "string" && d.message.includes("exceeds 1024 characters"),
     );
-    expect(overLength).toHaveLength(1);
-    expect(overLength[0]).toMatchObject({ path: trackWork!.filePath });
+    expect(overLength).toHaveLength(0);
   });
 
   it("renders a well-formed <available_skills> prompt block", async () => {

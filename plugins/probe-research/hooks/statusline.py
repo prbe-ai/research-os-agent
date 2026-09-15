@@ -89,23 +89,31 @@ def segment(payload: dict) -> str:
     cwd = payload.get("cwd")
     cwd = cwd if isinstance(cwd, str) and cwd else None
     if not session_id:
-        default, _source = marker.resolve_tracking_default(cwd, config)
-        return marker.render(None, configured=True, tracking=default, color=_color())
+        switch, _source = marker.resolve_state_default(cwd, config)
+        return marker.render(
+            None,
+            configured=True,
+            tracking=marker.state_allows_writes(switch),
+            color=_color(),
+            session_state=switch,
+        )
 
     state = marker.read(session_id)
-    signal = marker.tracking_signal(session_id)
-    if signal is not None:
-        # The normal path: SessionStart already settled the state, so rendering
-        # costs no ancestor walk and a later config edit cannot live-reload it.
-        tracking = marker.is_tracking(signal)
-    else:
-        tracking, _source = marker.resolve_tracking_default(cwd, config)
+    switch = marker.session_state(session_id)
+    if switch is None:
+        # No decision on disk. SessionStart normally settles this, so reaching
+        # here means a session that predates the seed or a hook that could not
+        # write -- resolve it against the same ladder rather than inventing a
+        # third behaviour.
+        switch, _source = marker.resolve_state_default(cwd, config)
+    tracking = marker.state_allows_writes(switch)
     return marker.render(
         state,
         configured=True,
         tracking=tracking,
         live=tracking and marker.is_live(state),
         color=_color(),
+        session_state=switch,
     )
 
 

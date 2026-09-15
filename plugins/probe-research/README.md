@@ -40,7 +40,7 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 
 ## What's inside
 
-- **Skills:** `track-work` (the tracking switch, plus everything recorded
+- **Skills:** `probe` (the switch: full / read-only / off), `track-work` (everything recorded
   while it is on — registering work, files to artifacts, metrics, notes,
   snapshot inputs), and `show-research-status` (render the state and the
   research arc in-session). Claude Code and Codex load this same directory.
@@ -73,21 +73,21 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 - **Tracking-off contract** (`hooks/version_check.py`, `hooks/tracking_guard.py`):
   the researcher's `probe session untrack` declaration is a file, so hooks can
   own it end to end. The FLIP is deterministic: invoking
-  `/track-work off` (or `on`) writes the session's tracking
+  `/probe off` (or `read-only`, `full`, or bare to advance one step) writes the session's
   signal from the PostToolUse hook itself, so the declaration lands even if
   the model never runs the CLI the skill instructs (the CLI call stays in the
   skill — idempotent, and it prints the confirmation). The file then carries
   the declaration across the one boundary prose cannot survive — a rebuilt
   context: on a post-compaction or resumed SessionStart of an untracked
   session, the reconcile-Probe nudge is replaced by one line restating the off
-  contract (record nothing, raise nothing, `/track-work on`
+  contract (record nothing, raise nothing, `/probe full`
   re-enables). And when a Bash command still WRITES research content through
   the probe CLI in such a session, the same hook hands the model the contract
   as additionalContext. Warn, never gate: hooks own the fact (the declaration
   and its recording), the model owns the behaviour, and nothing here can deny
   a tool call or block a session. Ambiguity leans toward today's behaviour —
   an absent or unreadable signal reads as tracking on, `status` flips nothing,
-  a bare invocation on `track-work` flips only in a shape that is PROOF OF A
+  a bare invocation on `track-work` moves the switch only in a shape that is PROOF OF A
   PERSON — a typed line or Claude Code's expansion of one, never a tool call
   or a Codex activation block, either of which the model can produce and both
   of which are how it reads the manual (the legacy toggle slugs, having no

@@ -137,8 +137,8 @@ in step instead of two. See `pi_config.resolve_install_source`.
 
 ## Skills
 
-This package vendors three workflow-memory skills —`track-work`,
-`show-research-status`, `instrument-training-runs` — copied byte-for-byte
+This package vendors the workflow-memory skills — `probe`, `track-work`,
+`show-research-status`, `instrument-code` and the rest — copied byte-for-byte
 from this monorepo's canonical `skills/` by `make sync-pi-skills` (run from
 `agent/`; `tests/test_pi_skills_sync.py` fails the build if the copies
 drift). Edit `skills/`, never `plugins/probe-research-pi/skills/` directly.
@@ -166,7 +166,7 @@ re-implementation of its discovery rules).
 
 ```bash
 mkdir -p ~/.pi/agent/skills
-for s in track-work show-research-status instrument-training-runs; do
+for s in probe track-work show-research-status instrument-code; do
   ln -s /path/to/research-os/agent/skills/$s ~/.pi/agent/skills/$s
 done
 ```
@@ -183,7 +183,7 @@ and it installs nothing for transcript capture or the MCP bridge.
 
 ### A known content gap, not a wiring gap
 
-`track-work`'s description is 1,142 characters — over the Agent Skills
+`track-work`'s description WAS 1,142 characters — over the Agent Skills
 spec's 1,024-character cap that pi's own validator enforces
 (`core/skills.js`, `MAX_DESCRIPTION_LENGTH`). pi does not refuse the skill
 for it: `loadSkillFromFile` still loads it with the full, untruncated
@@ -205,7 +205,8 @@ the existing per-session tracking signal only when it is absent. Reloading an
 extension therefore reads the settled signal instead of changing the session
 because a config file changed later.
 
-Interactive `/track-work`, `/skill:track-work`, and `$track-work` requests use
+Interactive `/probe`, `/skill:probe`, and `$probe` requests (and the legacy
+`track-work` spellings) use
 the existing per-session switch. After the write lands, Pi reads the resulting
 signal back and refreshes the persistent footer as `● tracking` or
 `○ not tracking`; it never guesses the result of a toggle.

@@ -147,25 +147,62 @@ READ_VERBS = frozenset(
 )
 
 DENY_REASON = (
-    "Research tracking is OFF for this conversation -- this machine starts "
-    "sessions untracked, or the researcher turned it off with "
-    "/track-work off -- so `{matched}` was refused before it ran. "
-    "Create no Probe projects, experiments or runs, write no notes or Project "
-    "Summary Markdown. Reading Probe is still fine and the actual work "
-    "continues as normal. If the researcher wants this recorded, they turn "
-    "tracking on (`/track-work on`); do not ask them to approve "
-    "the write itself, and do not route around this."
+    "Probe is set to READ-ONLY for this conversation -- this machine starts "
+    "sessions that way, or the researcher set it with `/probe read-only` -- so "
+    "`{matched}` was refused before it ran. Create no Probe projects, "
+    "experiments or runs, write no notes or Project Summary Markdown. READING "
+    "PROBE IS STILL FINE and you should still do it: search the team's prior "
+    "work and report what you find. The actual work continues as normal. If the "
+    "researcher wants this recorded they set `/probe full`; do not ask them to "
+    "approve the write itself, and do not route around this."
+)
+
+#: The `off` refusal. A SEPARATE message, because the remedy differs and that is
+#: the whole reason the third state exists: under read-only an agent should still
+#: search and still report what it found, and under `off` it must not call at all
+#: -- and must SAY it did not look, rather than reporting an empty result as an
+#: absence of prior work.
+DENY_REASON_OFF = (
+    "Probe is OFF for this conversation -- the researcher set it with "
+    "`/probe off` -- so `{matched}` was refused before it ran. Make no Probe "
+    "calls at all, reads included. This has a COST you must surface rather than "
+    "hide: there may be prior work, decisions or incidents that bear on this "
+    "task, and you cannot see them and cannot know what you missed. Say so "
+    "plainly instead of reporting that nothing was found. Turning it back on "
+    "does not backfill the gap. The researcher sets `/probe read-only` to "
+    "restore searching, or `/probe full` to restore recording too; do not ask "
+    "them to approve this call, and do not route around it."
 )
 
 MESSAGE = (
-    "Research tracking is OFF for this conversation -- this machine starts "
-    "sessions untracked, or the researcher turned it off with "
-    "/track-work off -- but `{matched}` "
-    "just wrote to Probe. Honor the declaration: record nothing further. If the "
-    "researcher explicitly asked for this write, ask whether tracking should "
-    "resume (`/track-work on`); otherwise consider undoing it, and "
-    "continue the actual work without recording."
+    "Probe is not recording this conversation -- it is set to `{state}` -- but "
+    "`{matched}` just wrote to Probe. Honor the declaration: record nothing "
+    "further. If the researcher explicitly asked for this write, ask whether "
+    "recording should resume (`/probe full`); otherwise consider undoing it, "
+    "and continue the actual work without recording."
 )
+
+#: What the model is told the moment the switch MOVES. Returned as
+#: additionalContext from the hook that made the write, never left to the skill's
+#: prose -- see the FLIP ANNOUNCES ITSELF note in the module docstring.
+FLIP_NOTICE = {
+    "full": (
+        "Probe is now FULL for this conversation: reads and writes. Record the "
+        "work as it happens -- files to artifacts, numbers to metrics, decisions "
+        "to notes. Nothing before this moment is backfilled."
+    ),
+    "read-only": (
+        "Probe is now READ-ONLY for this conversation. Keep searching the team's "
+        "prior work and keep reporting what you find; create and modify nothing. "
+        "Already-recorded work is untouched."
+    ),
+    "off": (
+        "Probe is now OFF for this conversation: no calls at all, reads "
+        "included. Do not raise Probe again, including as a reminder or a "
+        "closing caveat. When prior work would have been relevant, say you could "
+        "not look rather than reporting that nothing exists."
+    ),
+}
 
 # The switch, by trailing slug -- in TWO classes, which differ ONLY in whether
 # a bare invocation flips on the TOOL surface. The legacy names were a
@@ -176,9 +213,36 @@ MESSAGE = (
 # the TYPED surface only (see `_bare_flips`). Old slugs stay matched forever:
 # matching a name that no longer resolves costs nothing; missing one that did
 # costs the flip.
+#: `probe` IS IN THE GUIDANCE CLASS, and the reasoning that put it in the bare
+#: class first was wrong in a way worth writing down.
+#:
+#: That reasoning was: the switch is a switch and nothing else -- the CLI manual
+#: stayed behind in `track-work` -- so there is no manual for an agent to open
+#: bare, and a bare sighting can only be a person. The hole is "open bare". A
+#: skill is a TOOL the model can call, and this one has a body worth loading:
+#: an agent asked what state Probe is in, or told to check before writing, will
+#: invoke it. On the bare class that invocation ADVANCES the cycle -- so from
+#: `off`, the model reading the switch's own documentation turns Probe back on,
+#: and the state whose entire purpose is "no Probe" is undone by an agent that
+#: was trying to respect it.
+#:
+#: In the guidance class a bare invocation flips only in a shape a PERSON can
+#: produce (`RESEARCHER_SHAPES`), which is exactly the protection `track-work`
+#: already has and for the same reason. The legacy names keep the bare class:
+#: they were a dedicated toggle with no body to read, and a resumed transcript
+#: from before the consolidation must keep meaning what it meant.
 BARE_FLIP_SLUGS = frozenset({"toggle-research-tracking", "research-tracking"})
-GUIDANCE_SLUGS = frozenset({"track-work"})
+GUIDANCE_SLUGS = frozenset({"track-work", "probe"})
 TOGGLE_SKILL_SLUGS = BARE_FLIP_SLUGS | GUIDANCE_SLUGS
+
+#: Slugs that predate the third state, and what `off` means when TYPED at one.
+#: `/track-work off` has always meant "stop recording, keep searching", which is
+#: `read-only` exactly. Re-pointing it at the new `off` would take reads away
+#: from everybody with that phrase in muscle memory or in a resumed transcript --
+#: the same mistake `session_marker.session_state` refuses to make when it
+#: migrates a stored marker. The hard `off` is reachable only by naming it on the
+#: new switch.
+LEGACY_SLUGS = frozenset({"toggle-research-tracking", "research-tracking", "track-work"})
 
 # Direction words, mirroring the skill's own reading of its argument ("off",
 # "stop", "disable" / "on", "start", "resume"). "toggle"/"flip" is a relative
@@ -187,9 +251,14 @@ TOGGLE_SKILL_SLUGS = BARE_FLIP_SLUGS | GUIDANCE_SLUGS
 # unrecognised prose write nothing: asking a question must never flip the
 # switch.
 OFF_WORDS = frozenset({"off", "stop", "disable", "end"})
-ON_WORDS = frozenset({"on", "start", "resume"})
-TOGGLE_WORDS = frozenset({"toggle", "flip"})
+ON_WORDS = frozenset({"on", "start", "resume", "full"})
+READ_ONLY_WORDS = frozenset({"read-only", "readonly", "read_only", "ro"})
+TOGGLE_WORDS = frozenset({"toggle", "flip", "cycle", "next"})
 STATUS_WORDS = frozenset({"status"})
+
+#: The relative request, kept distinct from the three absolute targets. A claim
+#: stores what a cycle RESOLVED TO, never the word -- see `_apply_direction`.
+CYCLE = "cycle"
 
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\|")
@@ -242,6 +311,11 @@ SHAPE_SKILL_BLOCK = "skill-block"
 #: has to be trusted here.
 FLIP_CLAIM_TTL_SECONDS = 300.0
 
+#: Which vocabulary a claim's `target` is written in. Absent means the
+#: two-valued one ("on"/"off"); see `_read_claim` for why the value alone
+#: cannot answer that.
+CLAIM_VERSION = 2
+
 
 #: Verbs inside a write group that REMOVE research rather than record it.
 #: "Record nothing" is not "prevent cleanup" -- the first thing a researcher
@@ -286,6 +360,72 @@ def probe_write(command: str) -> "str | None":
     return None
 
 
+#: Groups whose whole job is READING research content. Denied only under `off`.
+#: Deliberately NOT a catch-all: `session` is the escape hatch (denying it would
+#: wall the researcher out of the switch that releases them), `outbox` is how
+#: pending work is surfaced once `off` stops injecting the report, and the
+#: machine-plumbing groups (context, token, mcp, workspace) talk to the client,
+#: not to the team's record.
+#:
+#: `shared` is in the list and was nearly not: it reads as plumbing beside those
+#: others, but `probe shared list` and `probe shared download` return the TEAM'S
+#: artifacts. That is the team's record by any reading, and leaving it out left a
+#: door into exactly the content `off` exists to stop reaching.
+READ_GROUPS = frozenset(
+    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared"}
+)
+
+
+def probe_read(command: str) -> "str | None":
+    """The probe invocation that READS research content, or None.
+
+    Only `off` uses this. The parse mirrors `probe_write` exactly -- same
+    segment split, same env-prefix skip, same lean-silent posture on anything
+    unparseable -- because a gate that disagreed with the warn about what a
+    `probe` command IS would refuse one spelling and wave through another.
+    """
+    for segment in _SEGMENT_SPLIT.split(command):
+        try:
+            tokens = shlex.split(segment, posix=True)
+        except ValueError:
+            continue
+        index = 0
+        while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
+            index += 1
+        if index >= len(tokens):
+            continue
+        if os.path.basename(tokens[index]) != "probe":
+            continue
+        args = [t for t in tokens[index + 1 :] if not t.startswith("-")]
+        if not args:
+            continue
+        head = args[0]
+        if head in READ_GROUPS:
+            return "probe " + head
+        if head in WRITE_GROUPS:
+            verb = args[1] if len(args) > 1 else ""
+            if verb in READ_VERBS:
+                return "probe " + head + " " + verb
+    return None
+
+
+#: A Probe MCP tool call, by NAME. A regex and not a list of five names on
+#: purpose: the same tool is `mcp__probe-research__browse` under one install and
+#: `mcp__plugin_probe-research_probe-research__browse` under another, and a third
+#: harness may spell it a third way. This is the matcher `hooks.json` already
+#: uses on PostToolUse -- reuse beats inventing a list that silently misses.
+_PROBE_MCP_RE = re.compile(r"probe[-_]research", re.IGNORECASE)
+
+
+def is_probe_mcp_tool(tool_name: object) -> bool:
+    """Is this tool call a Probe MCP read? Never Bash, Skill or SlashCommand."""
+    if not isinstance(tool_name, str) or not tool_name:
+        return False
+    if tool_name in ("Bash", "Skill", "SlashCommand"):
+        return False
+    return bool(_PROBE_MCP_RE.search(tool_name))
+
+
 #: The shapes only a RESEARCHER can produce. An ALLOWLIST, and deliberately so:
 #: everywhere else in this file ambiguity resolves toward silence, and a
 #: denylist would resolve the next shape somebody adds -- a subagent shape, a
@@ -317,24 +457,34 @@ def _bare_flips(slug: str, shape: str) -> bool:
     return slug in BARE_FLIP_SLUGS
 
 
-def _direction_from_words(words: "list[str]", *, bare_flips: bool) -> "str | None":
-    """Map an argument word list to a direction; None means do not touch the
-    signal. `bare_flips` is the caller's answer to "may a direction-less
-    invocation flip here?" -- see `_bare_flips`, which is where the slug class
-    and the surface are weighed. `status` and unrecognised prose write nothing
-    -- asking a question must never flip a switch."""
+def _direction_from_words(
+    words: "list[str]", *, bare_flips: bool, slug: str = ""
+) -> "str | None":
+    """Map an argument word list to an ABSOLUTE target, or CYCLE, or None.
+
+    None means do not touch the signal. `bare_flips` is the caller's answer to
+    "may a direction-less invocation flip here?" -- see `_bare_flips`, which is
+    where the slug class and the surface are weighed. `status` and unrecognised
+    prose write nothing: asking a question must never flip a switch.
+
+    THE SLUG DECIDES WHAT `off` MEANS, and this is the one place that asymmetry
+    lives. Typed at a legacy name it is `read-only` (what it has always done);
+    typed at the new switch it is the new `off`. See LEGACY_SLUGS.
+    """
     if not words:
-        return "toggle" if bare_flips else None
+        return CYCLE if bare_flips else None
+    if words[0] in READ_ONLY_WORDS:
+        return "read-only"
     if words[0] in OFF_WORDS:
-        return "off"
+        return "read-only" if slug in LEGACY_SLUGS else "off"
     if words[0] in ON_WORDS:
-        return "on"
+        return "full"
     if words[0] in TOGGLE_WORDS:
         # A relative flip is only meaningful where the bare form is one:
-        # `/track-work toggle` and `/track-work` are the same request, and a
-        # surface that honours one while ignoring the other reads as a switch
-        # that works only if you guess its vocabulary.
-        return "toggle" if bare_flips else None
+        # `/probe toggle` and `/probe` are the same request, and a surface that
+        # honours one while ignoring the other reads as a switch that works only
+        # if you guess its vocabulary.
+        return CYCLE if bare_flips else None
     if words[0] in STATUS_WORDS:
         return None  # a question, and questions never flip switches
     return None
@@ -392,7 +542,7 @@ def prompt_direction(prompt: object) -> "tuple[str | None, str, str]":
             args = _ARGUMENTS_LINE.search(text)
         words = args.group(1).strip().lower().split() if args else []
         return (
-            _direction_from_words(words, bare_flips=_bare_flips(slug, shape)),
+            _direction_from_words(words, bare_flips=_bare_flips(slug, shape), slug=slug),
             shape,
             slug,
         )
@@ -404,7 +554,9 @@ def prompt_direction(prompt: object) -> "tuple[str | None, str, str]":
         return None, SHAPE_RAW, slug
     return (
         _direction_from_words(
-            [w.lower() for w in parts[1:]], bare_flips=_bare_flips(slug, SHAPE_RAW)
+            [w.lower() for w in parts[1:]],
+            bare_flips=_bare_flips(slug, SHAPE_RAW),
+            slug=slug,
         ),
         SHAPE_RAW,
         slug,
@@ -447,7 +599,9 @@ def toggle_direction(tool_name: str, tool_input: object) -> "tuple[str | None, s
         inline_args = (inline_args + " " + separate).strip()
     return (
         _direction_from_words(
-            inline_args.lower().split(), bare_flips=_bare_flips(matched_slug, SHAPE_TOOL)
+            inline_args.lower().split(),
+            bare_flips=_bare_flips(matched_slug, SHAPE_TOOL),
+            slug=matched_slug,
         ),
         matched_slug,
     )
@@ -483,7 +637,22 @@ def _read_claim(session_id: str) -> "dict | None":
     slug = claim.get("slug")
     if slug is not None and not isinstance(slug, str):
         return None
-    if target not in ("on", "off"):
+    # THE VERSION IS LOAD-BEARING, and leaving it out was a real bug rather
+    # than an omission. A claim written before the third state stores "on"/"off",
+    # and "off" then meant "stop recording, keep searching" -- `read-only`. But
+    # "off" is ALSO a valid new state name, so migrating on the VALUE alone
+    # rewrote every fresh `off` claim into `read-only`, and a cycle that landed
+    # on `off` silently walked back one step on its next converging sighting.
+    #
+    # So the SHAPE says which vocabulary the value is in: `v` present means the
+    # writer knew all three states and the value is literal; absent means a
+    # pre-three-state writer, and only then does the value get mapped.
+    if claim.get("v") != CLAIM_VERSION:
+        if target == "on":
+            target = _session_marker.STATE_FULL
+        elif target == "off":
+            target = _session_marker.STATE_READ_ONLY
+    if target not in _session_marker.STATES:
         return None
     # `bool` is an `int`, and NaN compares False against every bound -- a claim
     # carrying either would never expire. A truncated or hand-edited file is
@@ -504,7 +673,7 @@ def _read_claim(session_id: str) -> "dict | None":
 
 
 def _write_claim(
-    session_id: str, on: bool, seen: "list[str]", slug: str, at=None
+    session_id: str, target: str, seen: "list[str]", slug: str, at=None
 ) -> None:
     """Fail-soft, like everything else here: a claim that cannot be written
     costs a duplicate flip, and a hook that raised would cost the session.
@@ -515,7 +684,8 @@ def _write_claim(
     invocation it belongs to.
     """
     record = {
-        "target": "on" if on else "off",
+        "target": target,
+        "v": CLAIM_VERSION,
         "at": time.time() if at is None else at,
         "seen": seen,
         "slug": slug,
@@ -542,18 +712,38 @@ def _is_tracking(session_id: str, cwd: "str | None" = None) -> bool:
     return on
 
 
+def _state(session_id: str, cwd: "str | None" = None) -> str:
+    """This conversation's three-valued state. ONE file read on the hot path.
+
+    The explicit decision when one exists, else this cwd's effective default --
+    the same ladder `resolve_tracking_default` walks, so the guard and the status
+    line cannot disagree about what "current" means.
+    """
+    explicit = _session_marker.session_state(session_id)
+    if explicit is not None:
+        return explicit
+    state, _source = _session_marker.resolve_state_default(cwd)
+    return state
+
+
 def _apply_direction(
     direction: str,
     session_id: str,
     shape: str,
     slug: str,
     cwd: "str | None" = None,
-) -> None:
-    """Write the signal a direction asks for, ONCE PER INVOCATION.
+) -> "str | None":
+    """Write the state a direction asks for, ONCE PER INVOCATION.
 
-    Silent on success and on failure alike: the skill has the model read the
-    result back with `probe session status` and narrate it, and set_tracking
-    already validates the session id.
+    Returns the state to ANNOUNCE, or None when this sighting resolved nothing
+    (a converging shape of an invocation already resolved, or a refused write).
+
+    The announcement is why this returns at all. A two-state switch needed none:
+    the typed word WAS the answer, so `/track-work off` told the researcher and
+    the model where they landed. A cycle has no such readout -- nobody can know
+    where one press landed without being told -- and leaving it to the skill's
+    prose would make the model's knowledge depend on obeying prose, which is
+    exactly what this file refuses to do for the write itself.
 
     An explicit `on`/`off` needs none of the claim below -- setting the same
     state twice IS setting it once. Only the bare toggle is relative, and only
@@ -572,7 +762,7 @@ def _apply_direction(
         # how a guarded write grows an unguarded sibling, and this one escaped
         # the sessions directory entirely on a traversal id.
         return
-    if direction != "toggle":
+    if direction != CYCLE:
         # Clear the claim rather than ignoring it. An explicit setter is
         # absolute and needs no claim of its own, but LEAVING one behind
         # outlives the invocation that wrote it: the next bare toggle,
@@ -583,27 +773,36 @@ def _apply_direction(
             _claim_path(session_id).unlink()
         except OSError:
             pass
-        _session_marker.set_tracking(session_id, direction == "on")
-        return
+        _session_marker.set_session_state(session_id, direction)
+        return direction
 
     claim = _read_claim(session_id)
     same_invocation = claim is not None and claim["slug"] in (slug, None)
     if same_invocation and shape not in claim["seen"]:
         # Another shape of the invocation that wrote this claim: converge on
         # the target it already resolved, and record the shape so a third
-        # sighting cannot flip either.
-        on = claim["target"] == "on"
-        _write_claim(session_id, on, claim["seen"] + [shape], slug, at=claim["at"])
+        # sighting cannot flip either. SILENT -- this sighting resolved nothing,
+        # and announcing here would print the same line up to three times for
+        # one keypress.
+        target = claim["target"]
+        _write_claim(session_id, target, claim["seen"] + [shape], slug, at=claim["at"])
+        _session_marker.set_session_state(session_id, target)
+        return None
     else:
         # A shape already seen, a DIFFERENT slug, or nothing claimed -- each of
-        # them a new invocation, and a new invocation always flips. Flip
-        # to the opposite of the CURRENT state: the explicit signal when one
-        # exists, else the payload cwd's effective default posture
-        # so this and the statusline cannot disagree about what "current"
-        # means.
-        on = not _is_tracking(session_id, cwd)
-        _write_claim(session_id, on, [shape], slug)
-    _session_marker.set_tracking(session_id, on)
+        # them a new invocation, and a new invocation always advances. Advance
+        # from the CURRENT state: the explicit decision when one exists, else the
+        # payload cwd's effective default posture, so this and the status line
+        # cannot disagree about what "current" means.
+        #
+        # THE CLAIM STORES THE RESOLVED STATE, NOT THE DIRECTION. With two states
+        # a stored direction was harmless -- a second flip landed back where it
+        # started. With three it advances twice, so one keypress seen in three
+        # shapes would land two states from what was asked for.
+        target = _session_marker.next_state(_state(session_id, cwd))
+        _write_claim(session_id, target, [shape], slug)
+    _session_marker.set_session_state(session_id, target)
+    return target
 
 
 def _offending_write(payload: dict, session_id: str) -> "str | None":
@@ -619,7 +818,7 @@ def _offending_write(payload: dict, session_id: str) -> "str | None":
     new session starts at, and a layer that fired only when someone re-typed it
     per session would be silent exactly where the writes are.
     """
-    if _is_tracking(session_id, _payload_cwd(payload)):
+    if _session_marker.state_allows_writes(_state(session_id, _payload_cwd(payload))):
         return None
     if payload.get("tool_name") != "Bash":
         return None
@@ -628,6 +827,82 @@ def _offending_write(payload: dict, session_id: str) -> "str | None":
     if not isinstance(command, str):
         return None
     return probe_write(command)
+
+
+def _announce(hook_event: str, landed: "str | None") -> None:
+    """Tell the model where the switch landed. Silent when nothing resolved."""
+    notice = FLIP_NOTICE.get(landed) if landed else None
+    if not notice:
+        return
+    sys.stdout.write(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": hook_event,
+                    "additionalContext": notice,
+                }
+            }
+        )
+    )
+
+
+def _deny(payload: dict, session_id: str) -> None:
+    """Refuse a call this state does not permit. THE HOT PATH.
+
+    `full` is the overwhelmingly common state and the widened matcher now runs
+    this file before EVERY Probe MCP call, not only before Bash. So the first
+    thing here is one file read and a return -- no shlex, no regex, no parse --
+    because the cost of the gate is paid by every session that never needed it.
+
+        state == full   -> return, always
+        state == read-only -> deny WRITES typed into Bash
+        state == off    -> deny writes, Probe MCP calls, and Probe content reads
+    """
+    state = _state(session_id, _payload_cwd(payload))
+    if _session_marker.state_allows_writes(state):
+        return
+
+    tool_name = payload.get("tool_name")
+    off = state == _session_marker.STATE_OFF
+
+    if off and is_probe_mcp_tool(tool_name):
+        _refuse(DENY_REASON_OFF.format(matched=tool_name))
+        return
+    if tool_name != "Bash":
+        return
+
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return
+
+    matched = probe_write(command)
+    if matched:
+        _refuse((DENY_REASON_OFF if off else DENY_REASON).format(matched=matched))
+        return
+    if off:
+        # READS ARE DENIED ONLY HERE. Under `read-only` they are the point of
+        # the state; under `off` a CLI read is the same act as an MCP read, and
+        # a gate that locked one door while leaving the other open would teach
+        # the model that the gate is advisory -- the exact failure the deny was
+        # added to stop.
+        matched = probe_read(command)
+        if matched:
+            _refuse(DENY_REASON_OFF.format(matched=matched))
+
+
+def _refuse(reason: str) -> None:
+    sys.stdout.write(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": "PreToolUse",
+                    "permissionDecision": "deny",
+                    "permissionDecisionReason": reason,
+                }
+            }
+        )
+    )
 
 
 def main() -> None:
@@ -643,33 +918,25 @@ def main() -> None:
     hook_event = payload.get("hook_event_name")
     if hook_event == "UserPromptSubmit":
         direction, shape, slug = prompt_direction(payload.get("prompt"))
-        if direction is not None:
-            _apply_direction(direction, session_id, shape, slug, _payload_cwd(payload))
+        if direction is None:
+            return
+        landed = _apply_direction(
+            direction, session_id, shape, slug, _payload_cwd(payload)
+        )
+        _announce("UserPromptSubmit", landed)
         return
     if hook_event == "PreToolUse":
-        matched = _offending_write(payload, session_id)
-        if matched:
-            sys.stdout.write(
-                json.dumps(
-                    {
-                        "hookSpecificOutput": {
-                            "hookEventName": "PreToolUse",
-                            "permissionDecision": "deny",
-                            "permissionDecisionReason": DENY_REASON.format(
-                                matched=matched
-                            ),
-                        }
-                    }
-                )
-            )
+        _deny(payload, session_id)
         return
     tool_name = payload.get("tool_name")
     if tool_name in ("Skill", "SlashCommand"):
         direction, slug = toggle_direction(tool_name, payload.get("tool_input"))
-        if direction is not None:
-            _apply_direction(
-                direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload)
-            )
+        if direction is None:
+            return
+        landed = _apply_direction(
+            direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload)
+        )
+        _announce("PostToolUse", landed)
         return
     if tool_name != "Bash":
         return
@@ -681,7 +948,10 @@ def main() -> None:
             {
                 "hookSpecificOutput": {
                     "hookEventName": "PostToolUse",
-                    "additionalContext": MESSAGE.format(matched=matched),
+                    "additionalContext": MESSAGE.format(
+                        matched=matched,
+                        state=_state(session_id, _payload_cwd(payload)),
+                    ),
                 }
             }
         )
