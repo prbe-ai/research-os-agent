@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.166.0
+
 - **The switch's three states are called `on`, `read` and `off`.** They were
   `full`, `read-only` and `off`. `/probe read` is the new spelling of
   `/probe read-only`, and every old spelling still works — `full`, `read-only`,
