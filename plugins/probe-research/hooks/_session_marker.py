@@ -84,14 +84,12 @@ _LABEL_TRACKING_BARE = "tracking"
 #: the two labels below instead.
 _LABEL_NOT_TRACKING = "not tracking"
 
-#: The two non-recording states, spelled the way the CLI, the config file and
-#: the deny reason spell them. A status line that said "reading only" while
-#: `probe session status` said "read-only" would make the reader translate
-#: between two vocabularies for one fact -- which is the drift the shared-label
-#: design exists to prevent. Both are SHORTER than `not tracking` (9 and 3
-#: against 12), so the width cap in MAX_SEGMENT_CHARS is not touched by them.
-_LABEL_READ_ONLY = "read-only"
-_LABEL_OFF = "off"
+#: The two non-recording states get no constants of their own: they are spelled
+#: by `state_label`, the same function the CLI, the wizard and the deny reason
+#: spell them with. A status line that said "reading only" while `/probe` said
+#: `read` would make the reader translate between two vocabularies for one fact,
+#: which is the drift a shared label exists to prevent. Both words are SHORTER
+#: than `not tracking` (4 and 3 against 12), so MAX_SEGMENT_CHARS is untouched.
 
 #: A middle dot, NOT a second arrow. `tracked → folding ▸ running` puts two
 #: arrow-shaped glyphs in one short segment, and the eye reads them as a
@@ -663,6 +661,42 @@ STATES = (STATE_FULL, STATE_READ_ONLY, STATE_OFF)
 #: everyone on upgrade -- a product change wearing a plumbing change's clothes.
 DEFAULT_STATE = STATE_FULL
 
+#: WHAT EACH STATE IS CALLED, which is deliberately not what it is STORED as.
+#:
+#: `<sid>.state` and `defaults.session_state` are a wire format shared with every
+#: OTHER copy of this module on the machine -- a vendored hook, an older plugin,
+#: the pi extension's own parser -- and `normalize_state` in those copies cannot
+#: know a word this version invented. An unrecognised value there reads as
+#: DEFAULT_STATE (see the block above this one), so renaming the stored value
+#: would turn somebody's opt-out into recording on exactly the machines that are
+#: half-upgraded. The WORDS are ours to change; the bytes are not.
+#:
+#: Both spellings are accepted on input, forever -- see `normalize_state`.
+STATE_LABELS = {STATE_FULL: "on", STATE_READ_ONLY: "read", STATE_OFF: "off"}
+
+#: The words in cycle order, for anything that has to offer all three.
+STATE_WORDS = tuple(STATE_LABELS[state] for state in STATES)
+
+
+def state_label(state: "str | None") -> str:
+    """The word for a state -- what a person types, and what we print back.
+
+    Unknown in, unknown out: a value this module does not recognise is shown as
+    it is rather than dressed as a state, because the one thing worse than an
+    odd-looking word on screen is a familiar one standing in for it.
+    """
+    return STATE_LABELS.get(state, str(state))
+
+
+def state_for_label(word: object) -> "str | None":
+    """A word back to the state it names, or None. `normalize_state`, narrowed
+    to the vocabulary this version prints -- kept beside it so the two halves of
+    the rename cannot drift apart."""
+    if not isinstance(word, str):
+        return None
+    wanted = word.strip().lower()
+    return next((state for state, label in STATE_LABELS.items() if label == wanted), None)
+
 
 def state_path(session_id: str) -> Path:
     """Where the three-valued decision lives. Canonical; see the block above."""
@@ -1047,11 +1081,13 @@ TRACKING_OFF_VALUES = ("off", "0", "false", "no", "disabled")
 TRACKING_ON_VALUES = ("on", "1", "true", "yes", "enabled")
 
 #: The third set, exported beside the other two so the wizard and the CLI cannot
-#: drift from this parser. Four spellings for one state looks generous until you
+#: drift from this parser. Five spellings for one state looks generous until you
 #: remember the failure mode: an unrecognized value resolves to `full`, so a
 #: researcher who typed `readonly` and got recorded anyway would have no way to
-#: tell a typo from a bug.
-TRACKING_READ_ONLY_VALUES = ("read-only", "readonly", "read_only", "ro")
+#: tell a typo from a bug. `read` leads because it is the word this version
+#: PRINTS (STATE_LABELS); the hyphenated spellings are what it is stored as and
+#: what earlier versions taught people to type, and both keep working.
+TRACKING_READ_ONLY_VALUES = ("read", "read-only", "readonly", "read_only", "ro")
 
 # Folder configs are repository-controlled settings, never data blobs. Their bound
 # protects startup/status paths from devices and giant files before JSON parsing can
@@ -1732,10 +1768,11 @@ def render(
         #
         # `session_state=None` is a caller from before the third state. It gets
         # the two-state word it has always got rather than a guess.
-        label = {
-            STATE_READ_ONLY: _LABEL_READ_ONLY,
-            STATE_OFF: _LABEL_OFF,
-        }.get(session_state, _LABEL_NOT_TRACKING)
+        label = (
+            state_label(session_state)
+            if session_state in (STATE_READ_ONLY, STATE_OFF)
+            else _LABEL_NOT_TRACKING
+        )
         return _INDENT + _paint(_DOT, _YELLOW, color) + " " + label
 
     # Read PAST the `not tracking` return above on purpose: capture is a fact

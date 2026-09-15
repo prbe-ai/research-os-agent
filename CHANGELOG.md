@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **The switch's three states are called `on`, `read` and `off`.** They were
+  `full`, `read-only` and `off`. `/probe read` is the new spelling of
+  `/probe read-only`, and every old spelling still works — `full`, `read-only`,
+  `readonly`, `read_only`, `ro` — so a resumed transcript, a script you wrote
+  last month, or muscle memory keeps moving the switch exactly as it did.
+
+  What is stored in your config file and in the session marker does NOT change:
+  those still say `full` and `read-only`. That is deliberate rather than
+  half-finished. Those files are read by every copy of the client on the
+  machine, including an older plugin or a pi extension that has not updated
+  yet, and a word this version invented reads to them as unrecognised — which
+  resolves to recording. Renaming the words costs nothing; renaming the bytes
+  would have turned somebody's opt-out into consent on exactly the machines
+  that are half-upgraded.
+
+- **The wizard can set all three states as the machine default.** The Settings
+  screen's `Track sessions by default` tick box is now a `Probe in new sessions`
+  row that CYCLES: the same key that ticks every other box walks it round
+  `on → read → off`, the same order and the same direction as a bare `/probe`.
+  Before this, the box could only say `on` or `read` — the empty box meant
+  `read`, and a default of `off` was reachable only from the command line.
+
 ## 0.165.0
 
 - **The Probe switch has three positions now, and `/probe` is where it lives.**

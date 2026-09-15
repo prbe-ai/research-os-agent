@@ -1,6 +1,6 @@
 ---
 name: probe
-description: The Probe switch for THIS conversation, with three states — `full` (reads and writes, the default), `read-only` (search the team's history, record nothing new), and `off` (no Probe calls at all). Use it when the researcher says to stop tracking, that this session is not research, to go quiet, to stop recording, to turn Probe off or back on, or asks what state Probe is in. Typed bare by the researcher it ADVANCES one step — full → read-only → off → full. An agent loading this skill as a tool only reads the guidance and never moves the switch. Setting a default for future sessions or for a folder is here too.
+description: The Probe switch for THIS conversation, with three states — `on` (reads and writes, the default), `read` (search the team's history, record nothing new), and `off` (no Probe calls at all). Use it when the researcher says to stop tracking, that this session is not research, to go quiet, to stop recording, to turn Probe off or back on, or asks what state Probe is in. Typed bare by the researcher it ADVANCES one step — on → read → off → on. An agent loading this skill as a tool only reads the guidance and never moves the switch. Setting a default for future sessions or for a folder is here too.
 ---
 
 # Probe: the switch
@@ -12,23 +12,23 @@ the same job from inside a script. This decides whether either of them may run.
 ## The three states
 
 ```
-                /probe            /probe            /probe
-       full ------------> read-only ------------> off ------------> full
-              (stop             (stop              (resume
-              writing)          reading)           everything)
+             /probe             /probe            /probe
+       on ------------> read ------------> off ------------> on
+            (stop              (stop             (resume
+            writing)           reading)          everything)
 ```
 
 | state | reads | writes | what you do |
 |---|---|---|---|
-| `full` | yes | yes | Record the work as it happens. The default. |
-| `read-only` | yes | no | Keep searching prior work and keep reporting what you find. Create and modify nothing. |
+| `on` | yes | yes | Record the work as it happens. The default. |
+| `read` | yes | no | Keep searching prior work and keep reporting what you find. Create and modify nothing. |
 | `off` | no | no | Make no Probe calls. Do not raise Probe again. |
 
 Each press of the bare switch removes exactly one capability, so the cycle is
 learnable after one lap.
 
 **Nothing is ever deleted by moving the switch,** and nothing is backfilled by
-moving it back. An interval spent in `read-only` or `off` happened unrecorded;
+moving it back. An interval spent in `read` or `off` happened unrecorded;
 reconstructing it afterwards would be a worse lie than the gap.
 
 ## How it moves
@@ -37,11 +37,11 @@ A plugin hook watches this skill's activation and writes the state. Pass the
 state you want:
 
 ```
-/probe full          reads and writes
-/probe read-only     search yes, record no
-/probe off           nothing
-/probe               advance one step
-/probe status        print the state, change nothing
+/probe on       reads and writes
+/probe read     search yes, record no
+/probe off      nothing
+/probe          advance one step
+/probe status   print the state, change nothing
 ```
 
 `status` writes NOTHING — a question never moves a switch.
@@ -66,16 +66,16 @@ To check without moving anything: `probe session status`, and read `state`.
 
 ## What each state obliges you to do
 
-**`full`.** Normal. Record as the work happens. Say so in one line when the
+**`on`.** Normal. Record as the work happens. Say so in one line when the
 switch lands here; do not open a project just to prove it worked.
 
-**`read-only`.** Create no projects, experiments or runs; write no notes,
+**`read`.** Create no projects, experiments or runs; write no notes,
 artifacts or visible entity Markdown. **Keep searching.** The team's history is
 still the best source you have for prior rationale, incidents and constraints,
 and a session that stops looking because it cannot write has lost the half that
 was free. Report what you find as normal.
 
-> Probe is read-only for this session — nothing further will be recorded.
+> Probe is set to `read` for this session — nothing further will be recorded.
 > What was already recorded is untouched. I can still search prior work.
 
 **`off`.** Make no Probe calls at all, reads included. Do not raise Probe
@@ -88,7 +88,7 @@ from an `off` session** — that is a claim about the team's record made by
 something that did not read it. Say you could not look.
 
 > Probe is off for this session — no calls at all, so I will not be able to
-> check prior work. `/probe read-only` restores searching.
+> check prior work. `/probe read` restores searching.
 
 **There is no one-off exception.** If the researcher asks again for the same
 call, that is still `off` — say so and name the switch. Only moving the switch
@@ -107,10 +107,19 @@ Stopping is the RESEARCHER's. Never invert that by waiting to be told to record.
 
 `/track-work off`, `$track-work off` and the older
 `toggle-research-tracking` / `research-tracking` names still move the switch,
-and **`off` typed at any of them means `read-only`** — that is what it has
+and **`off` typed at any of them means `read`** — that is what it has
 always done, since the switch never gated reads. The hard `off` is reached only
 by naming it here. A resumed transcript, or muscle memory, keeps working and
 keeps meaning what it meant.
+
+The states were called `full` and `read-only` before they were called `on` and
+`read`, and both spellings are accepted wherever a state is typed (`readonly`,
+`read_only` and `ro` too). The LONGER names are also what still lands in the
+config file and the session marker, deliberately: those files are read by every
+other copy of the client on the machine — an older plugin, a vendored hook —
+and a word this version invented reads to them as unrecognised, which resolves
+to `on`. Renaming the words is free; renaming the bytes would turn somebody's
+opt-out into recording.
 
 ## Defaults for future sessions
 
@@ -120,16 +129,19 @@ The switch is per-conversation. A default is what a NEW session starts at.
 |---|---|
 | “this repo” | Resolve `git rev-parse --show-toplevel` from the current directory and use that absolute root. If it fails, ask which folder to use; do not substitute the cwd. |
 | “this folder” or a named folder | Use that exact directory as an absolute path. |
-| set a folder default | `probe session default full\|read-only\|off --folder PATH` |
+| set a folder default | `probe session default on\|read\|off --folder PATH` |
 | remove the folder override / inherit | `probe session default inherit --folder PATH` |
 | inspect the folder default | `probe session default --folder PATH` |
-| set or inspect the machine default | `probe session default [full\|read-only\|off]` |
+| set or inspect the machine default | `probe session default [on\|read\|off]` |
 
 Show the CLI's JSON after every action so the researcher sees both the exact
 folder override and the effective inherited default. Never edit
 `.probe/config.json` directly.
 
 A per-session state always beats a default. Anything unrecognised in a config
-file reads as `full`, never as a quieter state: a typo must not silently stop
+file reads as `on`, never as a quieter state: a typo must not silently stop
 recording someone's research, and it must not silently stop them searching
 either.
+
+The wizard sets the same machine default on its `Probe in new sessions` row —
+the same three states, and the same key cycles them.

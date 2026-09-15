@@ -204,9 +204,19 @@ export async function initializeTrackingState(
  * fields above already carry a safe two-valued answer, so a reader that cannot
  * understand the third value degrades to "records nothing" rather than to a
  * claim it is not entitled to make.
+ *
+ * BOTH VOCABULARIES ARE ACCEPTED. The CLI prints the words a person types --
+ * `on` / `read` / `off` -- while the config file and the session marker keep the
+ * older `full` / `read-only` spellings, because those files are read by every
+ * other copy of the client on the machine. This extension ships on its own
+ * release train (see the `signal` note in `probe session status`), so it meets
+ * both: a new CLI printing `on`, and an older one printing `full`.
  */
 function parseState(raw: unknown): "full" | "read-only" | "off" | undefined {
-  return raw === "full" || raw === "read-only" || raw === "off" ? raw : undefined;
+  if (raw === "full" || raw === "read-only" || raw === "off") return raw;
+  if (raw === "on") return "full";
+  if (raw === "read") return "read-only";
+  return undefined;
 }
 
 /**

@@ -6,34 +6,36 @@ description: Register and record the team's ML work, whatever its shape — trai
 # Track work
 
 The manual for recording the team's work from a shell. Recording is the default,
-not a favor — when Probe is `full`, everything the work produces lands in it, and
+not a favor — when Probe is `on`, everything the work produces lands in it, and
 the only opt-out is the researcher moving the switch.
 
 The switch itself is a separate skill: `probe-research:probe`. It has three
-states — `full`, `read-only`, `off` — and this skill applies only under `full`.
-Under `read-only` and `off` nothing here may write; under `off` nothing here may
+states — `on`, `read`, `off` — and this skill applies only under `on`.
+Under `read` and `off` nothing here may write; under `off` nothing here may
 read either. Never move the switch to make your own write legal.
 
 ## 0. Check the state before the first write
 
 `probe session status`, and read `state`. This is the manual's own obligation to
-know whether it may write, and under three states it is `read-only` where that
+know whether it may write, and under three states it is `read` where that
 now bites: everything below still applies, only the writes are refused.
 
 | `state` | what this skill may do |
 |---|---|
-| `full` | all of it |
-| `read-only` | none of the writes below. Keep searching prior work and keep reporting it. |
+| `on` | all of it |
+| `read` | none of the writes below. Keep searching prior work and keep reporting it. |
 | `off` | nothing at all, reads included. Say you could not look; never report that no prior work exists. |
 
-Under `read-only` or `off`: create nothing, say so in one line, and ask whether
-they want recording on. Moving the switch is theirs (`/probe full`,
-`/skill:probe full` on pi) — never move it to make your own write legal.
+Under `read` or `off`: create nothing, say so in one line, and ask whether
+they want recording on. Moving the switch is theirs (`/probe on`,
+`/skill:probe on` on pi) — never move it to make your own write legal.
 
 If the command errors (an older CLI), say so before proceeding — a status you
 could not read is not a session you know is recording. An older CLI that prints
 no `state` field is reporting a two-valued world: read `tracking` there, and
-treat `false` as `read-only`.
+treat `false` as `read`. An older CLI also prints the older spellings for the
+states themselves (`full` for `on`, `read-only` for `read`); they mean the same
+thing, and both are accepted wherever a state is typed.
 
 Read `effective`, not `tracking` alone. When it says `tracked, not captured`,
 say exactly that to the researcher and name the reason the `capture` object

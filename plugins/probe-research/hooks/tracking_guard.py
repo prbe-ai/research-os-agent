@@ -147,18 +147,18 @@ READ_VERBS = frozenset(
 )
 
 DENY_REASON = (
-    "Probe is set to READ-ONLY for this conversation -- this machine starts "
-    "sessions that way, or the researcher set it with `/probe read-only` -- so "
+    "Probe is set to READ for this conversation -- this machine starts "
+    "sessions that way, or the researcher set it with `/probe read` -- so "
     "`{matched}` was refused before it ran. Create no Probe projects, "
     "experiments or runs, write no notes or Project Summary Markdown. READING "
     "PROBE IS STILL FINE and you should still do it: search the team's prior "
     "work and report what you find. The actual work continues as normal. If the "
-    "researcher wants this recorded they set `/probe full`; do not ask them to "
+    "researcher wants this recorded they set `/probe on`; do not ask them to "
     "approve the write itself, and do not route around this."
 )
 
 #: The `off` refusal. A SEPARATE message, because the remedy differs and that is
-#: the whole reason the third state exists: under read-only an agent should still
+#: the whole reason the third state exists: under `read` an agent should still
 #: search and still report what it found, and under `off` it must not call at all
 #: -- and must SAY it did not look, rather than reporting an empty result as an
 #: absence of prior work.
@@ -169,8 +169,8 @@ DENY_REASON_OFF = (
     "hide: there may be prior work, decisions or incidents that bear on this "
     "task, and you cannot see them and cannot know what you missed. Say so "
     "plainly instead of reporting that nothing was found. Turning it back on "
-    "does not backfill the gap. The researcher sets `/probe read-only` to "
-    "restore searching, or `/probe full` to restore recording too; do not ask "
+    "does not backfill the gap. The researcher sets `/probe read` to "
+    "restore searching, or `/probe on` to restore recording too; do not ask "
     "them to approve this call, and do not route around it."
 )
 
@@ -178,7 +178,7 @@ MESSAGE = (
     "Probe is not recording this conversation -- it is set to `{state}` -- but "
     "`{matched}` just wrote to Probe. Honor the declaration: record nothing "
     "further. If the researcher explicitly asked for this write, ask whether "
-    "recording should resume (`/probe full`); otherwise consider undoing it, "
+    "recording should resume (`/probe on`); otherwise consider undoing it, "
     "and continue the actual work without recording."
 )
 
@@ -187,12 +187,12 @@ MESSAGE = (
 #: prose -- see the FLIP ANNOUNCES ITSELF note in the module docstring.
 FLIP_NOTICE = {
     "full": (
-        "Probe is now FULL for this conversation: reads and writes. Record the "
+        "Probe is now ON for this conversation: reads and writes. Record the "
         "work as it happens -- files to artifacts, numbers to metrics, decisions "
         "to notes. Nothing before this moment is backfilled."
     ),
     "read-only": (
-        "Probe is now READ-ONLY for this conversation. Keep searching the team's "
+        "Probe is now READ for this conversation. Keep searching the team's "
         "prior work and keep reporting what you find; create and modify nothing. "
         "Already-recorded work is untouched."
     ),
@@ -252,7 +252,12 @@ LEGACY_SLUGS = frozenset({"toggle-research-tracking", "research-tracking", "trac
 # switch.
 OFF_WORDS = frozenset({"off", "stop", "disable", "end"})
 ON_WORDS = frozenset({"on", "start", "resume", "full"})
-READ_ONLY_WORDS = frozenset({"read-only", "readonly", "read_only", "ro"})
+#: `read` leads because it is the word the switch now PRINTS; the hyphenated
+#: spellings are what the state is stored as and what earlier versions taught
+#: people to type, and every one of them keeps working. Mirrors
+#: `session_marker.TRACKING_READ_ONLY_VALUES`; the two are checked against each
+#: other in `test_probe_three_states.py`.
+READ_ONLY_WORDS = frozenset({"read", "read-only", "readonly", "read_only", "ro"})
 TOGGLE_WORDS = frozenset({"toggle", "flip", "cycle", "next"})
 STATUS_WORDS = frozenset({"status"})
 
@@ -950,7 +955,11 @@ def main() -> None:
                     "hookEventName": "PostToolUse",
                     "additionalContext": MESSAGE.format(
                         matched=matched,
-                        state=_state(session_id, _payload_cwd(payload)),
+                        # The WORD, not the stored value: this sentence is read
+                        # by a model that is about to repeat it to a person.
+                        state=_session_marker.state_label(
+                            _state(session_id, _payload_cwd(payload))
+                        ),
                     ),
                 }
             }

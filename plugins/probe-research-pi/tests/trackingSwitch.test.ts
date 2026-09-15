@@ -16,7 +16,10 @@ describe("parseSwitchIntent", () => {
     for (const word of ["toggle", "flip", "cycle", "next"]) {
       expect(parseSwitchIntent(`/skill:probe ${word}`)?.direction).toBe("cycle");
     }
-    for (const word of ["read-only", "readonly", "read_only", "ro"]) {
+    // `read` is what the switch calls this state now; the hyphenated spellings
+    // are what it is STORED as and what earlier versions taught people to type,
+    // and every one of them still moves it.
+    for (const word of ["read", "read-only", "readonly", "read_only", "ro"]) {
       expect(parseSwitchIntent(`/skill:probe ${word}`)?.direction).toBe("read-only");
     }
   });

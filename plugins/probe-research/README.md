@@ -73,14 +73,14 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 - **Tracking-off contract** (`hooks/version_check.py`, `hooks/tracking_guard.py`):
   the researcher's `probe session untrack` declaration is a file, so hooks can
   own it end to end. The FLIP is deterministic: invoking
-  `/probe off` (or `read-only`, `full`, or bare to advance one step) writes the session's
+  `/probe off` (or `read`, `on`, or bare to advance one step) writes the session's
   signal from the PostToolUse hook itself, so the declaration lands even if
   the model never runs the CLI the skill instructs (the CLI call stays in the
   skill — idempotent, and it prints the confirmation). The file then carries
   the declaration across the one boundary prose cannot survive — a rebuilt
   context: on a post-compaction or resumed SessionStart of an untracked
   session, the reconcile-Probe nudge is replaced by one line restating the off
-  contract (record nothing, raise nothing, `/probe full`
+  contract (record nothing, raise nothing, `/probe on`
   re-enables). And when a Bash command still WRITES research content through
   the probe CLI in such a session, the same hook hands the model the contract
   as additionalContext. Warn, never gate: hooks own the fact (the declaration

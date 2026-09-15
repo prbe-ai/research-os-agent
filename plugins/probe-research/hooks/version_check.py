@@ -166,7 +166,7 @@ COMPACT_CONTEXT = (
 # context. Wording mirrors the skill; drift between them would have the two
 # surfaces describing one state differently.
 TRACKING_OFF_CONTEXT = (
-    "Probe is READ-ONLY for this conversation: create no Probe projects, "
+    "Probe is set to READ for this conversation: create no Probe projects, "
     "experiments, runs, notes or visible entity Markdown, and do not raise "
     "recording again, as a reminder or a closing caveat -- searching Probe is "
     "unaffected and you should still do it."
@@ -686,7 +686,7 @@ OUTBOX_REPAIR_CONTEXT = (
 #: steps above it won.
 OUTBOX_REPORT_ONLY_CONTEXT = (
     "The Probe outbox on this machine holds {failed} dead-lettered write(s) "
-    "that will not deliver on their own. Probe is READ-ONLY for this session, so "
+    "that will not deliver on their own. Probe is set to READ for this session, so "
     "do not write to Probe: run `probe outbox status --verbose` (a read) and "
     "report what is stuck to the researcher, who can retry, re-home, or "
     "discard it."

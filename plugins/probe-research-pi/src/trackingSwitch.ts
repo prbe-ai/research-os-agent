@@ -36,7 +36,11 @@ import { findProbeBinary, type ProbeBinaryDeps } from "./teamNote.js";
 /** Verbatim from `hooks/tracking_guard.py`; keep the two in step. */
 const OFF_WORDS = new Set(["off", "stop", "disable", "end"]);
 const ON_WORDS = new Set(["on", "start", "resume", "full"]);
-const READ_ONLY_WORDS = new Set(["read-only", "readonly", "read_only", "ro"]);
+// `read` leads because it is the word the switch now prints; the hyphenated
+// spellings are what the state is stored as and what earlier versions taught
+// people to type, and every one of them keeps working. Mirrors
+// `session_marker.TRACKING_READ_ONLY_VALUES` and the guard's `READ_ONLY_WORDS`.
+const READ_ONLY_WORDS = new Set(["read", "read-only", "readonly", "read_only", "ro"]);
 const TOGGLE_WORDS = new Set(["toggle", "flip", "cycle", "next"]);
 const STATUS_WORDS = new Set(["status"]);
 
@@ -160,6 +164,11 @@ export function switchAppliedNotice(direction: SwitchDirection): string {
  * The write is still not reimplemented here -- this spawns the CLI's own
  * commands, so there is exactly one writer of the state and it stays in Python.
  */
+//
+// The LONG spellings are sent on purpose, even though the CLI now prints the
+// short ones: this extension ships on its own release train, so it routinely
+// runs against a probe that predates `read` and would reject it. `full` and
+// `read-only` are understood by every version, old and new.
 const SUBCOMMAND: Record<SwitchDirection, readonly string[]> = {
   full: ["state", "full"],
   "read-only": ["state", "read-only"],
