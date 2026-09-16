@@ -1,6 +1,6 @@
 ---
 name: probe
-description: The Probe switch for THIS conversation, with three states — `on` (reads and writes, the default), `read` (search the team's history, record nothing new), and `off` (no Probe calls at all). Use it when the researcher says to stop tracking, that this session is not research, to go quiet, to stop recording, to turn Probe off or back on, or asks what state Probe is in. Typed bare by the researcher it ADVANCES one step — on → read → off → on. An agent loading this skill as a tool only reads the guidance and never moves the switch. Setting a default for future sessions or for a folder is here too.
+description: The Probe switch for THIS conversation, with three states — `on` (reads and writes, the default), `read` (search the team's history, record nothing new), and `off` (no Probe calls at all). Use it when the researcher says to stop tracking, that this session is not research, to go quiet, to stop recording, to turn Probe off or back on, or asks what state Probe is in. Typed bare by the researcher it TOGGLES between `on` and `read` — `off` is not on that cycle and is reached only by typing `/probe off`. An agent loading this skill as a tool only reads the guidance and never moves the switch. Setting a default for future sessions or for a folder is here too.
 ---
 
 # Probe: the switch
@@ -12,10 +12,12 @@ the same job from inside a script. This decides whether either of them may run.
 ## The three states
 
 ```
-             /probe             /probe            /probe
-       on ------------> read ------------> off ------------> on
-            (stop              (stop             (resume
-            writing)           reading)          everything)
+                     /probe
+            on <--------------> read            off ---------> read
+                     /probe                          /probe
+
+       `off` is NOT on the cycle. A press while off leaves for `read`
+       and cannot come back — only `/probe off` puts it there.
 ```
 
 | state | reads | writes | what you do |
@@ -24,8 +26,16 @@ the same job from inside a script. This decides whether either of them may run.
 | `read` | yes | no | Keep searching prior work and keep reporting what you find. Create and modify nothing. |
 | `off` | no | no | Make no Probe calls. Do not raise Probe again. |
 
-Each press of the bare switch removes exactly one capability, so the cycle is
-learnable after one lap.
+**The bare switch never lands on `off`, and that is deliberate.** It is pressed
+without reading anything, often to quiet a session mid-thought. Under `off` an
+agent cannot find prior work AND cannot know what it missed, so every later
+answer is quietly poorer with nothing to show it — a state nobody should arrive
+in by one press too many. `on` and `read` both keep searching alive, so pressing
+between them costs nothing you cannot see.
+
+A press while the switch is `off` leaves for `read`: someone pressing a switch
+they turned off is asking for something to change, and `read` is the smallest
+change that gives back what `off` took away.
 
 **Nothing is ever deleted by moving the switch,** and nothing is backfilled by
 moving it back. An interval spent in `read` or `off` happened unrecorded;
@@ -40,14 +50,14 @@ state you want:
 /probe on       reads and writes
 /probe read     search yes, record no
 /probe off      nothing
-/probe          advance one step
+/probe          toggle on <-> read (never lands on off)
 /probe status   print the state, change nothing
 ```
 
 `status` writes NOTHING — a question never moves a switch.
 
 **A bare invocation is the researcher's spelling, not yours.** Typed by them
-(`/probe`, `$probe`, `/skill:probe` on pi) it advances one step. Invoked by an
+(`/probe`, `$probe`, `/skill:probe` on pi) it toggles. Invoked by an
 AGENT with no argument — a tool call, a skill activation — it writes nothing at
 all: that is how this guidance gets loaded mid-task, and reading the manual must
 never move the switch. When you need the state changed, pass the state word.
@@ -144,4 +154,6 @@ recording someone's research, and it must not silently stop them searching
 either.
 
 The wizard sets the same machine default on its `Probe in new sessions` row —
-the same three states, and the same key cycles them.
+the same three states, and the same key cycles them. That row DOES walk all
+three, unlike the bare switch: it is a settings screen you are looking at, with
+a separate commit step, so every default it can set has to be reachable there.

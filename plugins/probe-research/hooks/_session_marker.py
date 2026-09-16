@@ -631,14 +631,16 @@ def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
 #               always meant -- the switch never gated reads.
 #   off         no Probe calls at all, and no session-start injections.
 #
-#          /probe            /probe            /probe
-#   full ----------> read-only ----------> off ----------> full
-#         (stop            (stop             (resume
-#         writing)         reading)          everything)
+#                 /probe
+#          full <----------> read-only        off ----------> read-only
+#                 /probe                            /probe
 #
-#   Each press removes exactly one capability, so the cycle is learnable after
-#   one lap. Reversing that (full -> off -> read-only) would ADD capability on
-#   the second press, which reads as random.
+#   THE BARE SWITCH NEVER LANDS ON `off`. It is thrown without reading
+#   anything, and `off` is the one state that costs something invisible: no
+#   Probe calls at all, so an agent under it cannot find prior work and cannot
+#   know what it missed. Nobody should get there by one press too many. `off`
+#   is reached by TYPING it, and one press leaves it for `read-only` -- the
+#   smallest change that gives back what it took away. See `_NEXT_STATE`.
 #
 # TWO FILES, ONE DECISION. `<sid>.state` is canonical and three-valued.
 # `<sid>.tracking` keeps being WRITTEN with the two-valued projection and is
@@ -656,8 +658,9 @@ STATE_FULL = "full"
 STATE_READ_ONLY = "read-only"
 STATE_OFF = "off"
 
-#: Every state, and the order `toggle` advances through. One tuple, because a
-#: separate cycle list is a second place to forget a state.
+#: Every state, in the order any surface that has to OFFER all three lists them.
+#: This is NOT the order the bare switch advances through -- see `_NEXT_STATE`,
+#: which deliberately leaves `off` off the cycle.
 STATES = (STATE_FULL, STATE_READ_ONLY, STATE_OFF)
 
 #: What a machine that has said nothing gets. `full`, for the same reason
@@ -734,12 +737,40 @@ def normalize_state(raw: object) -> "str | None":
     return None
 
 
+#: WHERE ONE BARE PRESS LANDS. Not a rotation through `STATES`: `off` is not on
+#: the cycle at all, and that asymmetry is the point.
+#:
+#: The bare switch is the FAST path -- it is pressed without reading anything,
+#: often to quiet a session mid-thought. `off` is the expensive state: under it
+#: an agent makes no Probe calls, so it cannot find prior work AND cannot know
+#: what it missed, and every later answer is silently poorer with no signal that
+#: it is. Reaching that by one press too many is a cost the presser never
+#: consented to and has no way to notice. A state that damaging has to be
+#: TYPED: `/probe off`, and nothing else, puts the switch there.
+#:
+#: So the cycle oscillates between the two states that both keep reads alive:
+#:
+#:     on  <-->  read-only          off  -->  read-only  (one way out)
+#:
+#: `off` still ANSWERS a press, rather than sticking. Someone pressing a switch
+#: they have set to off is asking for something to change, and `read-only` is
+#: the smallest change that gives them back what off took away. From there the
+#: oscillation is ordinary, and returning to `off` means typing it again.
+_NEXT_STATE = {
+    STATE_FULL: STATE_READ_ONLY,
+    STATE_READ_ONLY: STATE_FULL,
+    STATE_OFF: STATE_READ_ONLY,
+}
+
+
 def next_state(state: str) -> str:
-    """The state one press of the bare switch lands on. Wraps."""
-    try:
-        return STATES[(STATES.index(state) + 1) % len(STATES)]
-    except ValueError:
-        return STATE_FULL
+    """The state one press of the bare switch lands on.
+
+    An UNRECOGNISED state lands on `full`, which is what every other ambiguity
+    in this file resolves to: a corrupted marker must not be a quiet way to stop
+    recording somebody's research.
+    """
+    return _NEXT_STATE.get(state, STATE_FULL)
 
 
 def state_allows_writes(state: "str | None") -> bool:

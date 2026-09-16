@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **The bare switch no longer lands on `off`.** `/probe` typed with no argument
+  used to advance `on → read → off → on`. It now TOGGLES `on` <-> `read`, and
+  `off` is reached only by typing `/probe off` (or `probe session state off`).
+  A press while the switch is `off` leaves for `read`.
+
+  Why: the bare switch is thrown without reading anything, often mid-thought to
+  quiet a session. `off` is the one state that costs something invisible — no
+  Probe calls at all, so an agent under it cannot find prior work AND cannot
+  know what it missed, and every later answer is quietly poorer with nothing on
+  screen to say so. Nobody should arrive there by one press too many. `on` and
+  `read` both keep searching alive, so pressing between them costs only what
+  you can see.
+
+  `off` still answers a press rather than sticking: someone pressing a switch
+  they turned off is asking for something to change, and `read` is the smallest
+  change that gives back what `off` took away. Getting back to `off` means
+  typing it again.
+
+  The wizard's `Probe in new sessions` row still cycles all three — it is a
+  settings screen you are looking at, with a separate commit step, so every
+  default it can set has to be reachable there.
+
 ## 0.170.0
 
 ## 0.169.0

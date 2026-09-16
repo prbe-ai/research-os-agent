@@ -222,9 +222,11 @@ FLIP_NOTICE = {
 #: skill is a TOOL the model can call, and this one has a body worth loading:
 #: an agent asked what state Probe is in, or told to check before writing, will
 #: invoke it. On the bare class that invocation ADVANCES the cycle -- so from
-#: `off`, the model reading the switch's own documentation turns Probe back on,
+#: `off`, the model reading the switch's own documentation moves it to `read`,
 #: and the state whose entire purpose is "no Probe" is undone by an agent that
-#: was trying to respect it.
+#: was trying to respect it. (`off` leaving for `read` rather than `on` is a
+#: smaller hole than it was, not a closed one: the researcher's `off` is gone
+#: either way.)
 #:
 #: In the guidance class a bare invocation flips only in a shape a PERSON can
 #: produce (`RESEARCHER_SHAPES`), which is exactly the protection `track-work`
@@ -800,10 +802,12 @@ def _apply_direction(
         # payload cwd's effective default posture, so this and the status line
         # cannot disagree about what "current" means.
         #
-        # THE CLAIM STORES THE RESOLVED STATE, NOT THE DIRECTION. With two states
-        # a stored direction was harmless -- a second flip landed back where it
-        # started. With three it advances twice, so one keypress seen in three
-        # shapes would land two states from what was asked for.
+        # THE CLAIM STORES THE RESOLVED STATE, NOT THE DIRECTION, and it stays
+        # that way even though the cycle is two-state again. A stored direction
+        # is only harmless while every lap has even length: it was wrong the
+        # moment `off` joined the cycle (one keypress seen in three shapes landed
+        # two states away), and storing the state is the shape that does not have
+        # to be revisited the next time the cycle changes.
         target = _session_marker.next_state(_state(session_id, cwd))
         _write_claim(session_id, target, [shape], slug)
     _session_marker.set_session_state(session_id, target)
