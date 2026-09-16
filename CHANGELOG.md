@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.170.0
+
 ## 0.169.0
 
 - **`show-research-status` is now `visualize-progress`.** "Status" collided with
