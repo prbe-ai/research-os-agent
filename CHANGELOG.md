@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`probe overview write` and the `write-overview` skill are removed.** The backend door they wrote through (`PUT .../overview`) is gone: the dashboard's own lane reads the same session transcripts and writes the first version of a project's or experiment's page itself. `Client.write_overview()` is removed with them, the skill no longer ships in the plugin or the pi package, and the folder importer's shared vocabulary is `track-work` alone.
+
 ## 0.167.0
 
 - **The team note's audit reminder now arrives when you type, not from

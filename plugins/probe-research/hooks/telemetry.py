@@ -115,6 +115,7 @@ RESEARCH_SKILLS = {
     "instrument-training-runs",
     "capture-run-inputs",
     "show-research-timeline",
+    # removed skills, same reason: a cached plugin install still has them
     "write-overview",
 }
 

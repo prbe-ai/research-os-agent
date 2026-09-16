@@ -14,8 +14,7 @@
       "skills/track-work",
       "skills/show-research-status",
       "skills/instrument-code",
-      "skills/notes-audit",
-      "skills/write-overview"
+      "skills/notes-audit"
     ],
     "mcp": "./mcp.json"
   },
