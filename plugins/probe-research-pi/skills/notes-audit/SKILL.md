@@ -93,20 +93,33 @@ needs more, cut what you confidently can and say so.
 
 ## 4. How you edit
 
-Exact-span replacement, always: match the stored text EXACTLY and UNIQUELY, then
-replace or delete that span. Never read-modify-rewrite a whole document to
-change part of it — that is how the parts you did not think to repeat disappear.
-Widen an ambiguous span with surrounding context until it is unique.
+Every note is a FILE you check out, edit, and push back.
 
-On an entity note that is `probe notes edit --old <span> [--new <text>]`; an
-omitted `--new` deletes. Use `@file` or `-` for a multi-line span. **A 409 is not
-a failure, it is the merge affordance**: it carries `match_count` and
-`current_notes`, the whole current document. Someone else wrote while you were
-thinking. Re-derive your edit against the body the 409 handed you and retry — do
-not re-read, and do not give up on the edit.
+    probe notes checkout --run <slug>     # writes the file, prints the path
+    <edit that file with ordinary exact-match edits>
+    probe notes push --run <slug>         # sends it, merging if the note moved
 
-On a FILE (the team note), use an editor that enforces the same uniqueness. Never
-`sed -i` a shared, syncing file.
+**Edit the file. Never read a document into your context and write the whole
+thing back** — that is how the parts you did not think to re-type disappear, and
+nothing reports it. Exact-match edits on the file, the same discipline as any
+other file you edit.
+
+`push` merges rather than overwrites: a paragraph someone wrote while you were
+editing survives. A conflict writes markers into the file and exits 2 — resolve
+them and push again. The base does not move until a push lands, so a failed push
+loses nothing.
+
+**Never `--force`.** It skips the merge and deletes anything written since you
+checked out. It is an operator escape hatch, not a step in any procedure here —
+a compaction included. Reorganising a document says nothing about whether the
+paragraphs that arrived while you worked are expendable.
+
+`--note "<title>"` reaches a sub-note. `checkout` tells you how full the note is;
+act on that before you edit, not after.
+
+The team note is the same model with the checkout already done: the file is
+always there and `probe notes sync` is the push. Never `sed -i` a shared, syncing
+file, and never edit the rendered copy inside `CLAUDE.md` / `AGENTS.md`.
 
 Write nothing about the audit into the document. No changelog, no "audited"
 summary, no receipt. If a previous pass left one, delete it — it is not content.
