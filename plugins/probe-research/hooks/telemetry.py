@@ -101,7 +101,7 @@ EVENT_SESSION_SUMMARY = "plugin.session_summary"
 RESEARCH_SKILLS = {
     "probe",
     "track-work",
-    "show-research-status",
+    "visualize-progress",
     "instrument-code",
     "notes-audit",
     "set-rule",

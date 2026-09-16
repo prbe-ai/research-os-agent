@@ -58,7 +58,7 @@ const PACKAGE_ROOT = join(__dirname, "..");
 const EXPECTED_SKILLS = [
   "probe",
   "track-work",
-  "show-research-status",
+  "visualize-progress",
   "instrument-code",
   "notes-audit",
 ].sort();

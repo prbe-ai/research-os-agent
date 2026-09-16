@@ -138,7 +138,7 @@ in step instead of two. See `pi_config.resolve_install_source`.
 ## Skills
 
 This package vendors the workflow-memory skills — `probe`, `track-work`,
-`show-research-status`, `instrument-code` and the rest — copied byte-for-byte
+`visualize-progress`, `instrument-code` and the rest — copied byte-for-byte
 from this monorepo's canonical `skills/` by `make sync-pi-skills` (run from
 `agent/`; `tests/test_pi_skills_sync.py` fails the build if the copies
 drift). Edit `skills/`, never `plugins/probe-research-pi/skills/` directly.
@@ -166,7 +166,7 @@ re-implementation of its discovery rules).
 
 ```bash
 mkdir -p ~/.pi/agent/skills
-for s in probe track-work show-research-status instrument-code; do
+for s in probe track-work visualize-progress instrument-code; do
   ln -s /path/to/research-os/agent/skills/$s ~/.pi/agent/skills/$s
 done
 ```

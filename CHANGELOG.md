@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **`show-research-status` is now `visualize-progress`.** "Status" collided with
+  `probe session status` — a CLI read the skill itself calls — and undersold
+  what the skill produces, which is a drawn timeline rather than a status line.
+  The description now names session MOMENTS rather than only user phrasings, so
+  the skill can fire unprompted: arriving in an unfamiliar project, before a run
+  or sweep starts, when a run ends, at handoff, on a broad question about the
+  work, and before proposing what to do next.
+
+  The body is 8% shorter with nothing removed but justification, and two calls
+  it taught were wrong against the code: `browse(scope=)` is `ref=` (`scope` is
+  the service-side name), and `entity(ref=)` is `refs=[...]`, a list — FastMCP
+  drops the unknown key and the call then fails on a missing required argument,
+  so the old spelling could never have worked.
+
+  The removed-skill guard now rejects `show-research-status`, so a stale
+  cross-reference fails the suite instead of teaching an agent to invoke
+  nothing. An installed plugin keeps serving the old name until it updates.
+
 ## 0.168.0
 
 - **`probe overview write` and the `write-overview` skill are removed.** The backend door they wrote through (`PUT .../overview`) is gone: the dashboard's own lane reads the same session transcripts and writes the first version of a project's or experiment's page itself. `Client.write_overview()` is removed with them, the skill no longer ships in the plugin or the pi package, and the folder importer's shared vocabulary is `track-work` alone.

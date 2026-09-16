@@ -118,7 +118,7 @@ probe mcp status        # must report a stored token the API accepts
 ## 4. Install the plugin (interactive Claude Code only, optional)
 
 **Order matters, and this is the step people get wrong.** To get the `track-work` and
-`show-research-status` skills plus the auto-wired `.mcp.json`, the user types these
+`visualize-progress` skills plus the auto-wired `.mcp.json`, the user types these
 **in the Claude Code prompt** (not via an agent shell):
 
 ```
@@ -200,7 +200,7 @@ with `PROBE_MCP_TOKEN` + `PROBE_BASE_URL`) and point your MCP config at it.
   no extra setup here — the backend holds the provider key. On a deployment
   with no Firecrawl account it reports that in `completeness`.
   General web searches and opening URLs use the host agent's web tools.
-- The `track-work` and `show-research-status` skills are ready
+- The `track-work` and `visualize-progress` skills are ready
   (plugin installs only).
 - `probe_procedures` (workflow memory) is NOT in that list on purpose. It is behind a
   per-user feature flag and the server does not advertise it to accounts outside the

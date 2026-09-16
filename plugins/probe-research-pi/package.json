@@ -12,7 +12,7 @@
     "skills": [
       "skills/probe",
       "skills/track-work",
-      "skills/show-research-status",
+      "skills/visualize-progress",
       "skills/instrument-code",
       "skills/notes-audit"
     ],

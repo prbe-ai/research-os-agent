@@ -42,7 +42,7 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 
 - **Skills:** `probe` (the switch: full / read-only / off), `track-work` (everything recorded
   while it is on — registering work, files to artifacts, metrics, notes,
-  snapshot inputs), and `show-research-status` (render the state and the
+  snapshot inputs), and `visualize-progress` (render the state and the
   research arc in-session). Claude Code and Codex load this same directory.
 - **Requires Claude Code ≥ 2.1.195.** The MCP passes its credential through a headers
   helper addressed as `${CLAUDE_PLUGIN_ROOT}/bin/probe-mcp-headers`; that placeholder is

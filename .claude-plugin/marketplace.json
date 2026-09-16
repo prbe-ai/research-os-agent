@@ -12,7 +12,7 @@
     {
       "name": "probe-research",
       "source": "./plugins/probe-research",
-      "description": "Experiment-tracking skills (probe-research:probe, probe-research:track-work, probe-research:show-research-status, probe-research:instrument-code) wired to a read-only Probe Research MCP server; writes via the `probe` CLI."
+      "description": "Experiment-tracking skills (probe-research:probe, probe-research:track-work, probe-research:visualize-progress, probe-research:instrument-code) wired to a read-only Probe Research MCP server; writes via the `probe` CLI."
     },
     {
       "name": "probe-research-tap",
