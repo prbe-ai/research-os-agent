@@ -20,6 +20,21 @@
   cross-reference fails the suite instead of teaching an agent to invoke
   nothing. An installed plugin keeps serving the old name until it updates.
 
+- **The status line spells `read-only` out, and `off` is now RED.** The segment
+  showed `● read`, which is the switch's own word — and alone on one line, with
+  no neighbouring word to lean on, `read` reads as an activity in progress
+  rather than as a restriction. It now says `● read-only`. Nothing else moves:
+  `read-only` is already the state's stored name and an accepted spelling
+  everywhere a state is typed, so `/probe read` still works and
+  `probe session status` still prints `read`.
+
+  The dot's colour now separates the two non-recording states instead of
+  painting both yellow. Red is reserved for `off` — the one position of the
+  switch under which an agent cannot find prior work AND cannot know what it
+  missed. `read-only` still answers questions, so it keeps yellow. A caller
+  that resolved the switch to a boolean and passed no state is still yellow
+  `not tracking`, never guessed into red.
+
 ## 0.168.0
 
 - **`probe overview write` and the `write-overview` skill are removed.** The backend door they wrote through (`PUT .../overview`) is gone: the dashboard's own lane reads the same session transcripts and writes the first version of a project's or experiment's page itself. `Client.write_overview()` is removed with them, the skill no longer ships in the plugin or the pi package, and the folder importer's shared vocabulary is `track-work` alone.

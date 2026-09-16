@@ -97,8 +97,9 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 
 - **Status line** (`hooks/statusline.py`, `hooks/statusline_refresh.py`):
   an opt-in segment under Claude Code's input box saying whether this session's
-  work is landing in Probe — `○ untracked`, `● <project>`, or
-  `● <project> ▸ running`. Turn it on with `probe statusline install`; off with
+  work is landing in Probe — `● tracking`, `● tracking → <project>`, or
+  `● tracking → <project> · running` in green; `● read-only` in yellow and
+  `● off` in RED when it is not. Turn it on with `probe statusline install`; off with
   `probe statusline uninstall`, or `PROBE_STATUSLINE=off` to mute the refresh.
 
   `statusLine` is a single global slot in the user's settings and there is no

@@ -84,12 +84,10 @@ _LABEL_TRACKING_BARE = "tracking"
 #: the two labels below instead.
 _LABEL_NOT_TRACKING = "not tracking"
 
-#: The two non-recording states get no constants of their own: they are spelled
-#: by `state_label`, the same function the CLI, the wizard and the deny reason
-#: spell them with. A status line that said "reading only" while `/probe` said
-#: `read` would make the reader translate between two vocabularies for one fact,
-#: which is the drift a shared label exists to prevent. Both words are SHORTER
-#: than `not tracking` (4 and 3 against 12), so MAX_SEGMENT_CHARS is untouched.
+#: The two non-recording states are spelled by `_STATE_SEGMENT`, down in the
+#: Rendering section beside the colour each one is painted. Both words are
+#: SHORTER than `not tracking` (9 and 3 against 12), so MAX_SEGMENT_CHARS is
+#: untouched.
 
 #: A middle dot, NOT a second arrow. `tracked → folding ▸ running` puts two
 #: arrow-shaped glyphs in one short segment, and the eye reads them as a
@@ -146,11 +144,18 @@ MAX_SLUG_CHARS = (
 # they already chose. Claude Code additionally dims the whole line, so treat
 # these as a hint of hue rather than as emphasis.
 #
-# Three, and each is a state someone can name: landing, not landing, and
-# deliberately switched off. A fourth colour would be a state nobody defined.
+# Three, and each is a state someone can name: landing (green), not landing but
+# still reading (yellow), and switched off entirely (red). A fourth colour would
+# be a state nobody defined.
+#
+# RED IS THE ONE THAT STOPS A READER, and `off` is the one state that earns it:
+# it is the only position of the switch under which an agent cannot find prior
+# work AND cannot know what it missed. `read-only` still answers questions, so
+# it keeps the yellow that means "look, but nothing is on fire".
 _DIM = "\033[2m"
 _GREEN = "\033[32m"
 _YELLOW = "\033[33m"
+_RED = "\033[31m"
 _RESET = "\033[0m"
 
 # Session ids are uuids today; the bound and charset are the real guard, since
@@ -1712,6 +1717,25 @@ def _no_capture_clause(reason: str) -> str:
     return _LABEL_NO_CAPTURE + _elide(reason, room)
 
 
+#: WHAT EACH NON-RECORDING STATE IS CALLED HERE, and the colour it is painted.
+#:
+#: `read-only` is spelled OUT rather than taken from `state_label`. The switch's
+#: own word is `read`, which names what the session may still do and not what it
+#: may no longer do -- alone on a status line, with no neighbouring word to lean
+#: on, `read` is taken for an activity in progress rather than for a restriction.
+#: This is not a second vocabulary: `read-only` is the state's canonical STORED
+#: name and an accepted spelling everywhere a state is typed, so `/probe read`
+#: and this label still name one thing, and `normalize_state` takes either back.
+#:
+#: The colour is here rather than at the call site so that a state cannot be
+#: given a word without also being given a hue -- the two are one decision, and
+#: splitting them is how a fourth state ends up yellow by default.
+_STATE_SEGMENT = {
+    STATE_READ_ONLY: ("read-only", _YELLOW),
+    STATE_OFF: ("off", _RED),
+}
+
+
 def render(
     state: dict | None,
     *,
@@ -1767,13 +1791,11 @@ def render(
         # the reader does.
         #
         # `session_state=None` is a caller from before the third state. It gets
-        # the two-state word it has always got rather than a guess.
-        label = (
-            state_label(session_state)
-            if session_state in (STATE_READ_ONLY, STATE_OFF)
-            else _LABEL_NOT_TRACKING
-        )
-        return _INDENT + _paint(_DOT, _YELLOW, color) + " " + label
+        # the two-state word -- and the two-state colour -- it has always got
+        # rather than a guess: yellow, because the one state red is reserved for
+        # is the one such a caller cannot tell us it is in.
+        label, hue = _STATE_SEGMENT.get(session_state, (_LABEL_NOT_TRACKING, _YELLOW))
+        return _INDENT + _paint(_DOT, hue, color) + " " + label
 
     # Read PAST the `not tracking` return above on purpose: capture is a fact
     # about a session that is recording, and naming it for one that is not would

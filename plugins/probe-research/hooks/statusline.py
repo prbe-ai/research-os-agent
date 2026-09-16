@@ -4,10 +4,11 @@
 Reads the status-line payload on stdin, prints ONE bounded segment, exits 0.
 
     (nothing)                           Probe is not configured on this machine
-      ● untracked                       configured; this session has recorded nothing
-      ● tracked → bird-sql-sft          its work is filed under that project
-      ● tracked → bird-sql-sft · running  ...and a run it opened is executing now
-      ● tracking off                    the researcher ended tracking here
+      ● tracking                        configured; this session has recorded nothing
+      ● tracking → bird-sql-sft         its work is filed under that project
+      ● tracking → bird-sql-sft · running  ...and a run it opened is executing now
+      ● read-only                       searching prior work, recording nothing
+      ● off                             not calling Probe at all (RED, not yellow)
 
 CONTRACT — this runs on a RENDER PATH, once per status-line update:
 
