@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **The team note's audit reminder now arrives when you type, not from
+  `CLAUDE.md`.** It used to be rendered into the managed team-note block, which
+  every session of a harness reads — including `claude -p`, `codex exec`, a cron
+  job and subagents. Those runs were being asked to spawn a background cleanup
+  they cannot spawn, for a researcher who is not there when it finishes. The
+  line now travels on the `UserPromptSubmit` hook, which fires only when a
+  prompt is submitted, and stays silent in an automated session (`CODEX_CI=1`
+  from `codex exec`, `CLAUDE_CODE_ENTRYPOINT=sdk-cli` from `claude -p`; an
+  unrecognised harness is treated as a person, because the hook already only
+  fires on a submitted prompt). It asks once per session.
+
+  Two things fall out of the move. The rendered block no longer changes size
+  when an audit is due, so a reminder can no longer be what tips a note into
+  its pointer form. And a harness with no working hook — pi today, or a Codex
+  install that has not trusted ours — simply never dispatches an audit, which
+  is the honest answer where presence cannot be known.
+
+- **A note nobody has audited in a week is re-checked for TRUTH, whatever its
+  size.** Size still fires the tightening half and nothing else does: a date
+  says nothing about whether a document is too long. What the weekly pass buys
+  is the half that was closed by nothing — a claim only got corrected when a
+  reader happened to hold the evidence against it, so the quiet claims went
+  stale unopposed. The overdue dispatch says explicitly NOT to tighten.
+  `PROBE_NOTES_AUDIT_INTERVAL_DAYS=0` turns the calendar off; the 24-hour floor
+  and the one-audit-per-day stamp are unchanged.
+
+- **New: `probe notes audit-advisory`.** Prints that line, or nothing. It is
+  what the hook calls — local state only, no network, and silent in an
+  automated session unless `--force`.
+
 ## 0.166.0
 
 - **The switch's three states are called `on`, `read` and `off`.** They were

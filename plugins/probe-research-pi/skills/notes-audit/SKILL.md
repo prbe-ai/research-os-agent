@@ -72,9 +72,12 @@ lie.
 
 ## 3. Tighten what stays
 
-This is why you were dispatched: on the team note an audit is triggered by SIZE
-and nothing else. On an entity note, tighten when the advisory beside it reports
-the document filling up.
+TIGHTEN ONLY WHEN YOU WERE SENT HERE FOR SIZE. The line that dispatched you
+says which of the two triggers fired: a note over its render budget is
+compacted, a note that is merely overdue is not. Tightening a document that is
+inside its budget is busywork, and it spends a pass bought for truth. On an
+entity note, tighten when the advisory beside it reports the document filling
+up.
 
 Shipped work becomes one line plus its PR number. Sections that say the same
 thing merge. Detail that lives in a PR, a repo file, a dashboard or version
@@ -142,11 +145,14 @@ auditor that then read this section and refused to work. Found by running a real
 audit, which stopped and asked instead. The two must agree, and it is the
 dispatcher that holds the rest of the picture.
 
-The stamp is a RATE LIMIT, not a schedule. Nothing here runs on a calendar: an
-audit is dispatched because the note has outgrown its render budget, and for no
-other reason. A note that has gone stale without growing is corrected by whoever
-next reads a claim their evidence contradicts — this note is injected into every
-session on every machine, so that is a great many readers.
+The stamp is both the rate limit and the clock. Two triggers reach you through
+it: the note outgrew its render budget (compact it), or nobody has audited it in
+a week (re-check what is still TRUE and leave the length alone).
+`PROBE_NOTES_AUDIT_INTERVAL_DAYS=0` turns the weekly half off on a machine that
+does not want it. Neither trigger replaces the reader who corrects a claim their
+evidence contradicts on the spot — this note is injected into every session on
+every machine, so that is a great many readers, and they are still the fastest
+path from "this is wrong" to "this is fixed".
 
 This is a best-effort cadence, not a lock: two sessions can read the same expired
 stamp before either writes, and separate machines hold separate copies. That is

@@ -205,12 +205,15 @@ traps).
 Keep the team note TRUE, not just current: add a team-wide fact the moment you
 learn it (a compacted session keeps only what was written down), prefer
 correcting an existing line over adding a new one, and record shipped work as
-one line plus its PR number. **When the rendered team-note block itself says the
-audit is due**, dispatch it exactly as that line says — it is written per
-harness, so it already knows what yours can do: on Claude Code a BACKGROUND
-subagent told to follow the `notes-audit` skill, never inline; on Codex the
-sandbox reaps detached processes, so run the audit yourself first — it is one
-small file and quick — then take up the user's work.
+one line plus its PR number. **When a line arrives with the researcher's prompt
+saying the note's audit is due**, dispatch it exactly as that line says — it is
+written per harness, so it already knows what yours can do: on Claude Code a
+BACKGROUND subagent told to follow the `notes-audit` skill, never inline; on
+Codex the sandbox reaps detached processes, so run the audit yourself first — it
+is one small file and quick — then take up the user's work. It arrives on prompt
+submit rather than in the rendered block because that is the only event that
+means a person is here to receive the result: an unattended run can neither
+spawn the agent nor read what it found.
 
 ### Numbers
 
