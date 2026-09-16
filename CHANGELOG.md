@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.169.0
+
 - **`show-research-status` is now `visualize-progress`.** "Status" collided with
   `probe session status` — a CLI read the skill itself calls — and undersold
   what the skill produces, which is a drawn timeline rather than a status line.
