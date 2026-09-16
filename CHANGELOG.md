@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.167.0
+
 - **The team note's audit reminder now arrives when you type, not from
   `CLAUDE.md`.** It used to be rendered into the managed team-note block, which
   every session of a harness reads — including `claude -p`, `codex exec`, a cron
