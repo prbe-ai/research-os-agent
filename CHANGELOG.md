@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.171.0
+
 - **The bare switch no longer lands on `off`.** `/probe` typed with no argument
   used to advance `on → read → off → on`. It now TOGGLES `on` <-> `read`, and
   `off` is reached only by typing `/probe off` (or `probe session state off`).
