@@ -151,15 +151,15 @@ the work runs:
   spawn a BACKGROUND agent for it and carry on. **What you put in its prompt is
   the whole job**, because a spawned agent inherits none of your context:
 
-  - the entity it works on, exactly as `probe notes edit` takes it
+  - the entity it works on, exactly as `probe notes checkout` takes it
     (`--project <slug>`, `--run <slug>`, `--note "<title>"` for a sub-note);
   - the instruction to load the `notes-audit` skill and follow its §1-§4 —
     naming the skill is what makes the rules arrive, and without it the agent
     improvises a compaction with no idea what it may not delete;
   - the fullness figure from the advisory, so it knows how much to cut;
-  - that it reads the note ITSELF with `probe notes show`. **Never paste the
-    document into the prompt.** It would then edit against a copy, and every
-    exact-span edit it composes would miss the stored bytes.
+  - that it checks the note out ITSELF with `probe notes checkout`. **Never
+    paste the document into the prompt.** It would then edit a copy, and the
+    push would replace the real document with text derived from stale bytes.
 
   Tell it to report one line to you and nothing to the user: this is
   maintenance, and the researcher asked for something else.
@@ -172,17 +172,18 @@ the work runs:
   that can afford it — spending the researcher's own context compacting a note
   nobody is struggling to read is the wrong trade.
 
-Write entity notes with `probe notes append` (a new paragraph, concurrency-safe)
-or `probe notes edit` (replace one exact span; `--new` omitted deletes). Never
-read-modify-rewrite a whole document — that is how the parts you did not think
-to repeat disappear. **A 409 from `notes edit` is not a failure, it is the merge
-affordance**: someone wrote while you were thinking, and the error carries
-`match_count` plus `current_notes`, the whole current document. Re-derive your
-edit against that body and retry — do not re-read, and do not abandon the
-correction. Notes are CAPPED and `notes append`/`edit` refuse an
-over-cap write rather than truncating it; both advise from 60% full, and
-`probe notes status` shows every note in the team fullest first. Act when the
-advice appears — at the cap the document is closed until it is compacted.
+Write entity notes as FILES: `probe notes checkout` writes the document out,
+you edit it with ordinary exact-match edits, and `probe notes push` sends it
+back. Never read a document into your context and write the whole thing back —
+that is how the parts you did not think to re-type disappear, and nothing
+reports it. **`push` MERGES rather than overwriting**: a paragraph someone wrote
+while you were editing survives, and a real clash comes back as conflict markers
+with exit 2 — resolve them and push again. **Never `--force`**; it skips the
+merge and deletes whatever arrived since you checked out. Notes are CAPPED and a
+push refuses an over-cap write rather than truncating it; checkout and push both
+advise from 60% full, and `probe notes status` shows every note in the team
+fullest first. Act when the advice appears — at the cap the document is closed
+until it is compacted.
 
 An entity can also carry titled SUB-NOTES — separate documents, each with its
 own cap and history. Start one when a distinct topic ("Caveats", a handoff)

@@ -134,6 +134,6 @@ bug, not an arc.
 - **Not a write.** Registering what it shows as missing, or recording what it
     shows as unlogged, is `track-work`.
 - **Not a status report to file.** It goes in the session; a durable claim
-    belongs in the project's notes (`probe notes append`).
+    belongs in the project's notes (`probe notes checkout` / `push`).
 - **Not a plan of record.** The stages ahead came from the brief and change as
     the work does; when one turns out wrong, note it and redraw.
