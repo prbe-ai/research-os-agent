@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.172.0
+
 - **Every prompt surface rewritten shorter, in one register.** The CLAUDE.md /
   AGENTS.md pointer block (POINTER_VERSION 33) is 2,885 characters instead of
   6,507: what Probe is, the three doors and their skills, when to read prior
