@@ -103,11 +103,15 @@ RESEARCH_SKILLS = {
     "track-work",
     "visualize-progress",
     "instrument-code",
-    "notes-audit",
+    "audit-team-note",
+    "edit-notes",
     "set-rule",
-    "pull-rules",
+    "read-rules",
     "probe-research-setup",
-    # pre-consolidation names (kept for resumed transcripts)
+    # retired names (kept for resumed transcripts and cached installs);
+    # notes-audit and pull-rules were renamed on 2026-09-17
+    "notes-audit",
+    "pull-rules",
     "start-research-work",
     "track-research-work",
     "toggle-research-tracking",

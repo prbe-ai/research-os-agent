@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **Every prompt surface rewritten shorter, in one register.** The CLAUDE.md /
+  AGENTS.md pointer block (POINTER_VERSION 33) is 2,885 characters instead of
+  6,507: what Probe is, the three doors and their skills, when to read prior
+  work, and what NOT to call Probe for. The write doctrine lives in the
+  `track-work` skill it always belonged to. MCP instructions and the six tool
+  sheets are rewritten under the 2,048-character client cap, with one view
+  vocabulary delivered on every arrival path (`available_views` on
+  `search_knowledge` too, and a 422 that names each supported view). Hook
+  messages use the switch's own words (on / read / off). Always-on context
+  drops ~27% (6,434 -> 4,716 o200k tokens plus 798 -> 396 for the skill
+  listing); hook strings ~16%; skill bodies ~35%.
+- **`entity(filters=...)` is `entity(view_options=...)`.** The old name is
+  accepted as an alias for one release (a hosted session's tool list predates
+  the deploy) and refused when both are given; it is never silently ignored.
+- **Skills renamed for consistency:** `notes-audit` -> `audit-team-note`,
+  `pull-rules` -> `read-rules`; new `edit-notes` skill carries the notes method
+  (checkout / edit / push, the team note as a file, compaction). A one-line
+  `notes-audit` stub ships for this release only, so a CLI whose audit dispatch
+  still names it resolves; drop it in 0.91. Old slugs stay in telemetry's
+  legacy list for resumed transcripts.
+- **Continuation cursors issued before this deploy do not resume** (the
+  `entity` request binding gained `view_options`); re-issue the read.
+- **Prose audited against CLI 0.171.0.** Dead flags removed from the skills
+  (`--description` on create/set, `--summary` outside `paper`, `--hypothesis`
+  -> `--question`, `notes append`/`edit` -> `checkout`/`push`); the MCP
+  `entity` sheet no longer teaches `probe <kind> set --summary`: the authored
+  Markdown below AI Summary is the researcher's by policy now (the flag still
+  exists). `track-work` cites its reference by numbered section, guarded by
+  `test_track_work_cross_refs.py`.
 - **A retry gets a server-minted name like every other run.** `probe exec`
   takes `--parent RUN --relation retry|resume|fork|branch`, so the honest
   wrapper can say "this run re-attempts that one" without the retiring

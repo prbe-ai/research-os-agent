@@ -1,159 +1,63 @@
 ---
 name: probe
-description: The Probe switch for THIS conversation, with three states — `on` (reads and writes, the default), `read` (search the team's history, record nothing new), and `off` (no Probe calls at all). Use it when the researcher says to stop tracking, that this session is not research, to go quiet, to stop recording, to turn Probe off or back on, or asks what state Probe is in. Typed bare by the researcher it TOGGLES between `on` and `read` — `off` is not on that cycle and is reached only by typing `/probe off`. An agent loading this skill as a tool only reads the guidance and never moves the switch. Setting a default for future sessions or for a folder is here too.
+description: The Probe switch for this conversation - `on` (reads + writes), `read` (read-only), `off` (no Probe calls at all). Use when the researcher says to stop tracking, go quiet, turn Probe off or back on, or asks what state it is in. Only the researcher moves it - typed bare it toggles on <-> read; an agent invoking this skill never moves the switch.
 ---
+# Probe
 
-# Probe: the switch
+This skill only changes the state of Probe - it doesn't actually track any work.
 
-This skill is the switch and nothing else. `probe-research:track-work` is the
-manual for recording work from a shell, and `probe-research:instrument-code` is
-the same job from inside a script. This decides whether either of them may run.
+```
+/probe on      reads and writes        /probe          advance one step
+/probe read    search yes, record no   /probe status   print it, change nothing
+/probe off     no calls at all
+```
 
 ## The three states
 
-```
-                     /probe
-            on <--------------> read            off ---------> read
-                     /probe                          /probe
-
-       `off` is NOT on the cycle. A press while off leaves for `read`
-       and cannot come back — only `/probe off` puts it there.
-```
-
 | state | reads | writes | what you do |
 |---|---|---|---|
-| `on` | yes | yes | Record the work as it happens. The default. |
-| `read` | yes | no | Keep searching prior work and keep reporting what you find. Create and modify nothing. |
-| `off` | no | no | Make no Probe calls. Do not raise Probe again. |
+| `on` | yes | yes | Default. Record work as it happens, per the `track-work` skill, and search the team's history for context worth injecting. |
+| `read` | yes | no | Create no projects, experiments or runs; write no notes, artifacts or visible entity Markdown. Keep searching and keep reporting what you find. If the researcher asks for something that would be recorded, say once that `/probe on` would record it — never as a reminder, never as a closing caveat. |
+| `off` | no | no | Make no Probe calls, reads included. Say you could not look; never report that no prior work exists. |
 
-**The bare switch never lands on `off`, and that is deliberate.** It is pressed
-without reading anything, often to quiet a session mid-thought. Under `off` an
-agent cannot find prior work AND cannot know what it missed, so every later
-answer is quietly poorer with nothing to show it — a state nobody should arrive
-in by one press too many. `on` and `read` both keep searching alive, so pressing
-between them costs nothing you cannot see.
+Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing `/probe
+off`; one press leaves it for `read`.
 
-A press while the switch is `off` leaves for `read`: someone pressing a switch
-they turned off is asking for something to change, and `read` is the smallest
-change that gives back what `off` took away.
+FYI:
 
-**Nothing is ever deleted by moving the switch,** and nothing is backfilled by
-moving it back. An interval spent in `read` or `off` happened unrecorded;
-reconstructing it afterwards would be a worse lie than the gap.
+- Moving the switch never deletes anything and never backfills anything. An
+  interval spent in `read` or `off` happened unrecorded.
+- There are no one-off exceptions. If the researcher asks again for the same
+  call, that is still the state they set — say so and name the switch. A repeat
+  request is not permission.
+- Never move the switch yourself. An agent that can move it can unblock its own
+  writes.
+- The state overrides your standing `CLAUDE.md` / `AGENTS.md` rules for this
+  conversation. That is the point of it.
 
-## How it moves
+## SAY WHERE IT LANDED:
 
-A plugin hook watches this skill's activation and writes the state. Pass the
-state you want:
+> Probe is set to `read` for this session - nothing further will be recorded.
 
-```
-/probe on       reads and writes
-/probe read     search yes, record no
-/probe off      nothing
-/probe          toggle on <-> read (never lands on off)
-/probe status   print the state, change nothing
-```
+> Probe is off for this session - no calls at all, so I will not be able to
+> check prior work or write. `/probe [read/on]` to turn back on.
 
-`status` writes NOTHING — a question never moves a switch.
+In the `off` state, do not fabricate information - do not report "no info"
+during lookup - clearly state that you couldn't look due to the state.
 
-**A bare invocation is the researcher's spelling, not yours.** Typed by them
-(`/probe`, `$probe`, `/skill:probe` on pi) it toggles. Invoked by an
-AGENT with no argument — a tool call, a skill activation — it writes nothing at
-all: that is how this guidance gets loaded mid-task, and reading the manual must
-never move the switch. When you need the state changed, pass the state word.
+## DEFAULTS:
 
-**Never write the state yourself.** `probe session state` is not this skill's
-tool. An agent that can move the switch can unblock its own writes, which would
-make the opt-out meaningless.
+A default is what a NEW session starts at. This conversation's state always
+beats it.
 
-**The hook tells you where it landed.** You do not have to guess, and you do not
-have to read it back — the state arrives in your context the moment it moves. If
-what you were told contradicts what the researcher plainly asked for, that is a
-broken hook: say so in one line and report the state as it is, rather than
-quietly repairing it.
+**Machine-wide Defaults**
 
-To check without moving anything: `probe session status`, and read `state`.
+ONLY written by the wizard (`npx probe-research`). `probe session status`
+reports it as `machine_default_state`.
 
-## What each state obliges you to do
+**Folder Defaults**
 
-**`on`.** Normal. Record as the work happens. Say so in one line when the
-switch lands here; do not open a project just to prove it worked.
-
-**`read`.** Create no projects, experiments or runs; write no notes,
-artifacts or visible entity Markdown. **Keep searching.** The team's history is
-still the best source you have for prior rationale, incidents and constraints,
-and a session that stops looking because it cannot write has lost the half that
-was free. Report what you find as normal.
-
-> Probe is set to `read` for this session — nothing further will be recorded.
-> What was already recorded is untouched. I can still search prior work.
-
-**`off`.** Make no Probe calls at all, reads included. Do not raise Probe
-again — not as a reminder, not as a closing caveat.
-
-`off` has a cost, and it is your job to surface it rather than hide it: there
-may be prior work, decisions or incidents that bear on the task, and you cannot
-see them and cannot know what you missed. **Never report "no prior work found"
-from an `off` session** — that is a claim about the team's record made by
-something that did not read it. Say you could not look.
-
-> Probe is off for this session — no calls at all, so I will not be able to
-> check prior work. `/probe read` restores searching.
-
-**There is no one-off exception.** If the researcher asks again for the same
-call, that is still `off` — say so and name the switch. Only moving the switch
-changes what you may do, and moving it is theirs. An agent that treats a repeat
-request as permission has turned the state into a suggestion.
-
-All three states override the standing CLAUDE.md / AGENTS.md rules for this
-conversation. That is the point of the switch.
-
-## Who moves it, and which way
-
-Starting is the AGENT's call — the standing rules make recording automatic.
-Stopping is the RESEARCHER's. Never invert that by waiting to be told to record.
-
-## Legacy spellings still work
-
-`/track-work off`, `$track-work off` and the older
-`toggle-research-tracking` / `research-tracking` names still move the switch,
-and **`off` typed at any of them means `read`** — that is what it has
-always done, since the switch never gated reads. The hard `off` is reached only
-by naming it here. A resumed transcript, or muscle memory, keeps working and
-keeps meaning what it meant.
-
-The states were called `full` and `read-only` before they were called `on` and
-`read`, and both spellings are accepted wherever a state is typed (`readonly`,
-`read_only` and `ro` too). The LONGER names are also what still lands in the
-config file and the session marker, deliberately: those files are read by every
-other copy of the client on the machine — an older plugin, a vendored hook —
-and a word this version invented reads to them as unrecognised, which resolves
-to `on`. Renaming the words is free; renaming the bytes would turn somebody's
-opt-out into recording.
-
-## Defaults for future sessions
-
-The switch is per-conversation. A default is what a NEW session starts at.
-
-| intent | target / action |
-|---|---|
-| “this repo” | Resolve `git rev-parse --show-toplevel` from the current directory and use that absolute root. If it fails, ask which folder to use; do not substitute the cwd. |
-| “this folder” or a named folder | Use that exact directory as an absolute path. |
-| set a folder default | `probe session default on\|read\|off --folder PATH` |
-| remove the folder override / inherit | `probe session default inherit --folder PATH` |
-| inspect the folder default | `probe session default --folder PATH` |
-| set or inspect the machine default | `probe session default [on\|read\|off]` |
-
-Show the CLI's JSON after every action so the researcher sees both the exact
-folder override and the effective inherited default. Never edit
-`.probe/config.json` directly.
-
-A per-session state always beats a default. Anything unrecognised in a config
-file reads as `on`, never as a quieter state: a typo must not silently stop
-recording someone's research, and it must not silently stop them searching
-either.
-
-The wizard sets the same machine default on its `Probe in new sessions` row —
-the same three states, and the same key cycles them. That row DOES walk all
-three, unlike the bare switch: it is a settings screen you are looking at, with
-a separate commit step, so every default it can set has to be reachable there.
+The hook already writes direct `/probe --folder` commands but semantic requests ("default this repo to read"), run it yourself: `probe session default read --folder PATH`.
+- A relative path resolves against this session's directory, and `~` works. The folder must already exist.
+- "this repo" is `git rev-parse --show-toplevel`. If that fails, ASK which folder - never fall back to the cwd.
+- Never edit `.probe/config.json` by hand.

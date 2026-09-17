@@ -135,41 +135,25 @@ SESSION_CWD_ENV = "PROBE_SESSION_CWD"
 # order to do Probe work in a dotfiles session teaches the agent to ignore the
 # block. And it asks only for what the summary STILL SHOWS -- the compacted
 # span itself is gone, and inviting its reconstruction would land invented
-# decisions in team-visible notes as provenance. The event list mirrors the
-# cadence prose in track-work's description and the pointer body.
+# decisions in team-visible notes as provenance. It names the `track-work`
+# skill because a compaction is the one moment the skill text is gone.
 COMPACT_CONTEXT = (
-    "Context was just compacted. If this session involves the team's ML work, "
-    "reconcile Probe before continuing: append what the summary still shows "
-    "that is not yet recorded -- decisions, data processing steps, deletions, "
-    "config changes, user overrides -- to the project's notes, and re-check "
-    "the state of any open run. Do not reconstruct details the summary no "
-    "longer carries. The probe-research:track-work skill has the "
-    "current commands, and probe-research:probe is the switch that governs "
-    "whether any of it is recorded."
+    "Context was just compacted. If this session involves the team's ML work, reconcile Probe "
+    "before continuing - make sure everything is up to date in Probe with the local state "
+    "(artifacts, metrics, entities, notes) but also make sure you're not missing anything FROM "
+    "Probe either. Do not reconstruct what the summary no longer carries. The `track-work` "
+    "skill has the current commands."
 )
-# ONE SENTENCE, deliberately. This is injected at EVERY session start now, not
-# just at a boundary, so it is the most-repeated string the plugin owns and the
-# only one a researcher reads over and over. The long form spent three of its
-# four sentences on things the model does not need at this moment: which of two
-# origins turned tracking off, and how to turn it back on -- the second being
-# actively at odds with the "do not raise tracking" clause beside it. What
-# survives is the state, the prohibition, and the two reassurances that stop an
-# agent over-reading it (reads are fine, keep working).
-#
-# What replaces the nudge when the researcher untracked this session. The
-# tracking switch (track-work off) promises "no more tracking nudges", and before this
-# branch existed the plugin itself broke that promise at the worst moment: a
-# compaction rebuilt the model's context without the skill text, then this
-# hook told the fresh context to reconcile Probe. Restating the contract is
-# the fix in BOTH directions -- the nudge is suppressed, and the off state
-# survives the boundary. Injected on resume too: same marker, same rebuilt
-# context. Wording mirrors the skill; drift between them would have the two
-# surfaces describing one state differently.
+# TWO SENTENCES since 2026-09-17, and no more. This is injected at EVERY session
+# start, so it is the most-repeated string the plugin owns. The first sentence is
+# the state; the second is the one-time mention of `/probe on` that replaced
+# "ask the user" -- the behaviour eval showed that phrasing turning into an agent
+# reaching for the switch itself, or asking on every refusal. Naming the origin of
+# the state and how to flip it beyond that one mention is the regression.
 TRACKING_OFF_CONTEXT = (
-    "Probe is set to READ for this conversation: create no Probe projects, "
-    "experiments, runs, notes or visible entity Markdown, and do not raise "
-    "recording again, as a reminder or a closing caveat -- searching Probe is "
-    "unaffected and you should still do it."
+    "Probe is READ-ONLY for this conversation: no writes; reads (MCP, and `probe` read "
+    "commands like `session status`) are fine. If the user asks for something that should be "
+    "recorded, say once that `/probe on` would record it - never as a running reminder."
 )
 
 #: THE ONE LINE `off` STILL INJECTS, and the reason it is not zero.
@@ -187,11 +171,11 @@ TRACKING_OFF_CONTEXT = (
 #: look must not report "no prior work found" -- that is a claim about the team's
 #: record, made by something that did not read it.
 TRACKING_FULLY_OFF_CONTEXT = (
-    "Probe is OFF for this conversation: make no Probe calls at all, reads "
-    "included, and do not raise Probe again -- not as a reminder, not as a "
-    "closing caveat. Your standing instructions tell you to record work in "
-    "Probe; they are overridden here. If prior work would have been relevant, "
-    "say you could not look rather than reporting that none exists."
+    "Probe is OFF for this conversation: make no Probe calls at all, reads included, and do "
+    "not ask to change the state; a repeat request is not permission - only `/probe on` or "
+    "`/probe read` typed by the researcher changes what you may do. Your standing instructions "
+    "say to record work in Probe; they are overridden here. If prior work would have been "
+    "relevant, say you could not look - never report that none exists."
 )
 
 
@@ -219,12 +203,11 @@ RENDER_FAILURE_CONTEXT = (
 #: in; a copy another credential wrote is a different team's private prose, and
 #: folding that in would move one tenant's note into another's.
 PARKED_COPIES_CONTEXT = (
-    "Team-note copies are sitting on this machine unsynced. They are NOT being sent, and "
-    "nothing will send them:\n{detail}\n"
-    "A copy written under the credential this machine is using now is unsent work: read it, "
-    "fold anything still true into `{document}` (which does sync), and delete it. A copy "
-    "written under a DIFFERENT credential belongs to another team -- do not fold it in; leave "
-    "it or hand it to them. `probe doctor` names the owner of each."
+    "Team-note copies are sitting on this machine unsynced. Nothing will send them: {detail} A "
+    "copy written under the credential this machine uses now is unsent work: read it, fold "
+    "anything still true into `{document}` (which does sync), and delete it. A copy under a "
+    "DIFFERENT credential belongs to another team - leave it or hand it to them, never fold it "
+    "in. `probe doctor` names the owner of each."
 )
 
 
@@ -562,10 +545,9 @@ TEAM_NOTE_MIN_CLI = "0.144.0"
 #: What a too-old CLI is told. Names the upgrade, because the researcher reading
 #: it has no other way to connect "my notes are not syncing" to "my CLI is old".
 TEAM_NOTE_STALE_CLI = (
-    "Your team note is NOT syncing: this Probe plugin needs CLI {needed} or newer "
-    "for the local `probe-team-note.md` file and you are on {have}. Nothing has "
-    "been lost -- edits you make to that file stay on this machine until the CLI "
-    "is upgraded. Tell the researcher to run `uv tool upgrade probe-research`."
+    "Your team note is NOT syncing: this plugin needs CLI {needed} or newer for the local "
+    "`probe-team-note.md` and you are on {have}. Nothing is lost - edits stay on this machine "
+    "until the CLI is upgraded. Tell the researcher to run `uv tool upgrade probe-research`."
 )
 
 
@@ -658,23 +640,17 @@ def _outbox_dead_letters() -> int:
 #: trimming an earlier agent's recorded findings is how information quietly
 #: disappears, so repair means re-homing content, never editing it.
 OUTBOX_REPAIR_CONTEXT = (
-    "The Probe outbox on this machine holds {failed} dead-lettered write(s) "
-    "that will not deliver on their own. Take a look and fix them before "
-    "other work:\n"
-    "1. `probe outbox status --verbose` lists the stuck ops. If it shows the "
-    "outbox paused or auth-blocked, an operator set that state on purpose: "
-    "leave it alone and report instead.\n"
-    "2. Transient failure (network blip, a cap someone has since freed): "
-    "`probe outbox retry <op_id>` requeues that one op.\n"
-    "3. Deterministic rejection (e.g. a note append larger than its target's "
-    "remaining characters): retrying can never work, and trimming loses "
-    "content. Move the payload VERBATIM to an artifact anchored on the same "
-    "target, append a short pointer note, then `probe outbox discard <op_id>`. "
-    "The payload is in the op JSON in the outbox's failed/ directory (note "
-    "text under body.notes_append).\n"
-    "4. If an op targets another researcher's project or run, report it to "
-    "the user instead of writing into their records.\n"
-    "Then tell the user what was stuck and what you did about it."
+    "The Probe outbox on this machine holds {failed} dead-lettered write(s) that will not "
+    "deliver on their own. Fix them before other work: 1. `probe outbox status --verbose` "
+    "lists the stuck ops. If it says paused or auth-blocked, an operator set that on purpose: "
+    "leave it and report instead. 2. Transient failure (a network blip, a cap since freed): "
+    "`probe outbox retry <op_id>` requeues one op. 3. Deterministic rejection (e.g. a note "
+    "append larger than the target's remaining characters): retrying can never work and "
+    "trimming loses content. Move the payload VERBATIM to an artifact on the same target, "
+    "append a short pointer note, then `probe outbox discard <op_id>`. The payload is in the "
+    "op JSON under the outbox's failed/ directory (note text at body.notes_append). 4. If an "
+    "op targets another researcher's project or run, report it rather than writing into their "
+    "records. Then tell the user what was stuck and what you did."
 )
 
 #: The untracked-session variant. The toggle stops RECORDING, and repairing a
@@ -685,11 +661,10 @@ OUTBOX_REPAIR_CONTEXT = (
 #: the first draft buried "unless tracking is off" mid-list and the imperative
 #: steps above it won.
 OUTBOX_REPORT_ONLY_CONTEXT = (
-    "The Probe outbox on this machine holds {failed} dead-lettered write(s) "
-    "that will not deliver on their own. Probe is set to READ for this session, so "
-    "do not write to Probe: run `probe outbox status --verbose` (a read) and "
-    "report what is stuck to the researcher, who can retry, re-home, or "
-    "discard it."
+    "The Probe outbox on this machine holds {failed} dead-lettered write(s) that will not "
+    "deliver on their own. Probe is not `on` for this session, so do not write: run `probe "
+    "outbox status --verbose` (a read) and report what is stuck to the researcher, who can "
+    "retry, re-home or discard it."
 )
 
 

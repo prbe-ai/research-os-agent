@@ -14,6 +14,8 @@
       "skills/track-work",
       "skills/visualize-progress",
       "skills/instrument-code",
+      "skills/audit-team-note",
+      "skills/edit-notes",
       "skills/notes-audit"
     ],
     "mcp": "./mcp.json"

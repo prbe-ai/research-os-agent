@@ -60,6 +60,8 @@ const EXPECTED_SKILLS = [
   "track-work",
   "visualize-progress",
   "instrument-code",
+  "audit-team-note",
+  "edit-notes",
   "notes-audit",
 ].sort();
 

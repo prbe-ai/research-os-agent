@@ -147,14 +147,9 @@ READ_VERBS = frozenset(
 )
 
 DENY_REASON = (
-    "Probe is set to READ for this conversation -- this machine starts "
-    "sessions that way, or the researcher set it with `/probe read` -- so "
-    "`{matched}` was refused before it ran. Create no Probe projects, "
-    "experiments or runs, write no notes or Project Summary Markdown. READING "
-    "PROBE IS STILL FINE and you should still do it: search the team's prior "
-    "work and report what you find. The actual work continues as normal. If the "
-    "researcher wants this recorded they set `/probe on`; do not ask them to "
-    "approve the write itself, and do not route around this."
+    "Probe is READ-ONLY for this conversation, so `{matched}` was refused before it ran. Reads "
+    "are still fine. If the researcher wants this recorded they set `/probe on`; say so once, "
+    "do not ask them to approve the call, and do not route around it."
 )
 
 #: The `off` refusal. A SEPARATE message, because the remedy differs and that is
@@ -163,23 +158,18 @@ DENY_REASON = (
 #: -- and must SAY it did not look, rather than reporting an empty result as an
 #: absence of prior work.
 DENY_REASON_OFF = (
-    "Probe is OFF for this conversation -- the researcher set it with "
-    "`/probe off` -- so `{matched}` was refused before it ran. Make no Probe "
-    "calls at all, reads included. This has a COST you must surface rather than "
-    "hide: there may be prior work, decisions or incidents that bear on this "
-    "task, and you cannot see them and cannot know what you missed. Say so "
-    "plainly instead of reporting that nothing was found. Turning it back on "
-    "does not backfill the gap. The researcher sets `/probe read` to "
-    "restore searching, or `/probe on` to restore recording too; do not ask "
-    "them to approve this call, and do not route around it."
+    "Probe is OFF for this conversation, so `{matched}` was refused before it ran. Make no "
+    "Probe calls at all, reads included: you cannot see prior work and cannot know what you "
+    "missed, so say you could not look rather than reporting nothing was found; turning it "
+    "back on does not backfill the gap. Only the researcher changes the state (`/probe read` "
+    "restores searching); a repeat request is not permission: do not ask them to approve this "
+    "call, and do not route around it."
 )
 
 MESSAGE = (
-    "Probe is not recording this conversation -- it is set to `{state}` -- but "
-    "`{matched}` just wrote to Probe. Honor the declaration: record nothing "
-    "further. If the researcher explicitly asked for this write, ask whether "
-    "recording should resume (`/probe on`); otherwise consider undoing it, "
-    "and continue the actual work without recording."
+    "Probe is set to `{state}` for this conversation, but `{matched}` just wrote to it. Record "
+    "nothing further; if the researcher asked for that write, say once that `/probe on` would "
+    "record the rest."
 )
 
 #: What the model is told the moment the switch MOVES. Returned as

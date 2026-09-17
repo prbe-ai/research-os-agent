@@ -1,4 +1,5 @@
 interface:
   display_name: "Track Work"
-  short_description: "The tracking switch, and everything recorded while it is on"
-  default_prompt: "Use $track-work to register any shape of the team's ML work before it starts and record everything it produces at the moment it happens — files to artifacts, numbers to metrics, decisions to notes, inputs into the snapshot — while keeping visible entity Markdown and hidden handoff notes current. Flip tracking off or on for this conversation only with an explicit `off`/`on`; your own bare invocation loads guidance and never flips (bare is the researcher's toggle, typed by them, not yours)."
+  short_description: "How to track ML work in Probe"
+  default_prompt: "Record ML work in Probe - track ALL related work (training runs, inference sweeps, evals, lit reviews, architecture design work, dataset processing) and what supports it (infra and provisioning for training, results dashboards, config or dependency changes before a launch) - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`$probe`).
+"
