@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **A retry gets a server-minted name like every other run.** `probe exec`
+  takes `--parent RUN --relation retry|resume|fork|branch`, so the honest
+  wrapper can say "this run re-attempts that one" without the retiring
+  `run child`. `run child --name` and the SDK's `run.child(name)` are now
+  optional: omitted, the request carries no name, the server mints a petname
+  and titles the run from its content once it finishes.
+
+  Why: `--name` stayed required on `run child` long after #1276 stopped
+  `run start` fabricating names, so every retry was hand-named (`attempt-2`)
+  and stamped `name_customized` -- the one kind of run permanently locked out
+  of the title generation every other run gets.
+
 ## 0.171.0
 
 - **The bare switch no longer lands on `off`.** `/probe` typed with no argument
