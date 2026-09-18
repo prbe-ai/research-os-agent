@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `Client.session_artifacts()` is removed, with the backend route it called
+  (`GET /v1/sessions/{id}/artifacts`). The conversation-artifact lane behind it
+  is deleted server-side: the session page's transcript already rendered
+  everything the extractor re-rendered beside it. Nothing called this method --
+  its only caller was an MCP source wrapper that no tool reached -- so no
+  command or tool changes. The generated models lose `SessionArtifactsOut`,
+  `SessionVisualsOut`, `SessionVisualCandidate`, `SessionVisualKind` and
+  `SessionVisualSourceRole`.
+
 ## 0.172.0
 
 - **Every prompt surface rewritten shorter, in one register.** The CLAUDE.md /
