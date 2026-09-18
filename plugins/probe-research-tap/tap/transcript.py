@@ -169,13 +169,11 @@ def build_batch_body(
     line_no is safe: the server keys batches on (session_id, batch_seq) and
     treats line_no as ordering, not identity.
 
-    REDACTION runs here, on the far side of `sanitize`, for the same reason
-    `sanitize` is a parameter: this is the one place every producer converges.
-    The live daemon, the reconciler's gap backfill and the historical importer
-    all call this function, and all three agent lanes (Claude Code, Codex, pi)
-    pass through it. A redactor wired into the sanitizers instead would be
-    three copies, and the next lane would ship unredacted until somebody
-    remembered. Credentials are replaced in place; nothing is ever dropped.
+    Legacy REDACTION runs here, after `sanitize`. The current protocol-2
+    daemon and historical importer reserve batches through `Journal.stage`,
+    which applies the same shared redactor before canonicalization. Keep both
+    egress boundaries covered. Credentials are replaced in place; findings
+    never drop an event or a batch.
     """
     events = []
     redacted_rules: list[str] = []
@@ -207,6 +205,15 @@ def build_batch_body(
         body["redactions"] = {
             "count": len(redacted_rules),
             "rules": sorted(set(redacted_rules)),
+        }
+    # Include envelope metadata and adjacent event fragments in the same
+    # boundary. Event-only scanning misses cwd and split text across records.
+    body, envelope_rules = redact_event(body)
+    if envelope_rules:
+        previous = body.get('redactions', {})
+        body['redactions'] = {
+            'count': previous.get('count', 0) + len(envelope_rules),
+            'rules': sorted(set(previous.get('rules', [])) | set(envelope_rules)),
         }
     return json.dumps(body, separators=(",", ":")).encode("utf-8")
 

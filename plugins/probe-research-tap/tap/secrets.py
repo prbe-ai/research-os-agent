@@ -1,7 +1,8 @@
 """Credential detection and span redaction for captured transcripts.
 
-Runs on the researcher's machine, inside `outbox.build_batch_body`, so a
-credential that lands in a prompt or a shell command never leaves the host.
+Runs on the researcher's machine at the journal reservation boundary and in
+the legacy batch builder. Both apply the same scanner before serialized
+transcript content can leave the host.
 
 WHY THIS EXISTS AND WHY IT LOOKS LIKE THIS
 ------------------------------------------
@@ -55,6 +56,8 @@ positive costs a mangled string, never a transcript.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import math
 import re
 from dataclasses import dataclass
@@ -99,9 +102,9 @@ _ENTROPY_MAX_LEN = 512
 MAX_SCAN_CHARS = 64_000
 
 #: Overlap between consecutive scan windows. Must exceed the longest span any
-#: rule can match (the private-key block, at ~4000) plus the pair window, so a
+#: rule can match (the private-key block, at ~33K) plus the pair window, so a
 #: credential straddling a seam is still seen whole in one window.
-_WINDOW_OVERLAP = 8_000
+_WINDOW_OVERLAP = 34_000
 
 
 @dataclass(frozen=True)
@@ -169,17 +172,19 @@ _RULES: tuple[_Rule, ...] = (
     _r("npm-token", r"\bnpm_[A-Za-z0-9]{36}\b", ("npm_",)),
     # Weights & Biases keys are 40 hex with no prefix, so they are ONLY safe to
     # match next to the literal `wandb` — a bare 40-hex rule is a git-sha rule.
-    _r("wandb-key", r"\bwandb[^\n]{0,40}?\b[0-9a-f]{40}\b", ("wandb",)),
+    _r("wandb-key", r"(?i)\bwandb(?:[_ -]api[_ -]key\s*[:=]\s*|\s+login\s+|\s*[:=]\s*|\.login\(\s*key\s*=\s*)[\"']?[0-9a-f]{40}\b", ("wandb",)),
     # A private key block. The body requirement stops a bare header comment
     # from matching.
     _r("private-key-block",
-       r"-----BEGIN(?:[ A-Z0-9]{0,30})PRIVATE KEY(?: BLOCK)?-----[^-]{16,4000}?-----END",
+       r"-----BEGIN(?:[ A-Z0-9]{0,30})PRIVATE KEY(?: BLOCK)?-----[^-]{16,32768}?-----END(?:[ A-Z0-9]{0,30})PRIVATE KEY(?: BLOCK)?-----",
        ("-----begin",)),
     # JSON Web Token: three base64url segments, the first two JSON-shaped.
     _r("jwt", r"\beyJ[A-Za-z0-9_\-]{8,2000}\.eyJ[A-Za-z0-9_\-]{8,2000}\.[A-Za-z0-9_\-]{8,2000}",
        ("eyj",)),
     # An Authorization header carrying a real value.
-    _r("bearer-token", r"[Aa]uthorization[\"']?\s*[:=]\s*[\"']?[Bb]earer\s+[A-Za-z0-9._\-]{20,500}",
+    _r("bearer-token", r"(?i)authorization[\"']?\s*[:=]\s*[\"']?bearer\s+[A-Za-z0-9._~+/=\-]{8,4096}",
+       ("authorization",)),
+    _r("basic-auth", r"(?i)authorization[\"']?\s*[:=]\s*[\"']?basic\s+[A-Za-z0-9+/=]{8,4096}",
        ("authorization",)),
     # user:password@host in a URI.
     _r("credential-uri", r"\b[a-z][a-z0-9+.\-]{1,20}://[^/@\s:]{1,64}:[^/@\s]{3,64}@",
@@ -197,7 +202,7 @@ _RULES: tuple[_Rule, ...] = (
 _ANCHOR_WORDS = (
     "secret", "password", "passwd", "api[_ -]?key", "apikey", "access[_ -]?key",
     "secret[_ -]?key", "private[_ -]?key", "auth[_ -]?token", "access[_ -]?token",
-    "refresh[_ -]?token", "bearer[_ -]?token", "client[_ -]?secret", "credential",
+    "refresh[_ -]?token", "bearer[_ -]?token", "client[_ -]?secret", "credential", "token",
 )
 
 #: `<anchor> <sep> <value>` where sep is `=`, `:` or `: [None]:`-style noise.
@@ -236,7 +241,45 @@ _INDIRECT = re.compile(
 _ANCHOR_KEYWORDS = ("secret", "password", "passwd", "api key", "api_key", "apikey",
                     "access key", "access_key", "private key", "private_key",
                     "auth token", "auth_token", "access token", "access_token",
-                    "credential", "client secret", "client_secret", "bearer")
+                    "credential", "client secret", "client_secret", "bearer",
+                    "api-key", "access-key", "private-key", "auth-token", "access-token",
+                    "refresh_token", "refresh-token", "refresh token", "token")
+
+# Explicit assignments allow short, mixed-class passwords and quoted spaces.
+# They still require an anchor, entropy, and mixed character classes: prose and
+# references must not become the bare-entropy gate this module replaced.
+_SHORT_ANCHORED = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?P<anchor>" + "|".join(_ANCHOR_WORDS) + r")(?![A-Za-z0-9])"
+    r"[^\n.!?]{0,24}?[:=]\s*(?:\"(?P<double>[^\"\n]{1,512})\"|"
+    r"'(?P<single>[^'\n]{1,512})'|(?P<bare>[^\s\"'`,;]{1,512}))"
+)
+# Password assignments carry context even when the value is a short word or
+# a human passphrase. Quoting ends at its matching quote; an unquoted value
+# continues through spaces until a statement delimiter, never just word one.
+_PASSWORD_ASSIGNMENT = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:password|passwd)(?![A-Za-z0-9])[\"']?\s*[:=]\s*"
+    r"(?:\"(?P<double>(?:\\.|[^\"\\])*)\"|'(?P<single>(?:\\.|[^'\\])*)'|"
+    r"(?P<bare>[^\r\n,;)}\]\"'`]+))"
+)
+_MODEL_TOKEN_KEYS = frozenset({
+    "bos_token", "cls_token", "eos_token", "mask_token", "pad_token",
+    "sep_token", "stop_token", "unk_token",
+})
+
+
+def _model_token_anchor(text: str, start: int) -> bool:
+    """A token suffix in a tokenizer field is vocabulary, not auth context."""
+    left = start
+    right = start
+    while left and (text[left - 1].isalnum() or text[left - 1] in "_-."):
+        left -= 1
+    while right < len(text) and (text[right].isalnum() or text[right] in "_-."):
+        right += 1
+    return text[left:right].lower().replace('-', '_').replace('.', '_') in _MODEL_TOKEN_KEYS
+
+
+_ENCODED_CHAR = re.compile(r"%[0-9a-fA-F]{2}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\x1b\[[0-?]*[ -/]*[@-~]|[\u200b-\u200d\ufeff]")
+_BASE64 = re.compile(r"(?<![A-Za-z0-9+/=_-])[A-Za-z0-9+/_-]{24,16384}={0,2}(?![A-Za-z0-9+/=_-])")
 
 
 def shannon_entropy(value: str) -> float:
@@ -303,7 +346,7 @@ def _is_indirect(value: str) -> bool:
     return bool(_INDIRECT.match(value))
 
 
-def scan(text: str) -> list[Finding]:
+def scan(text: str, *, _decode: bool = True) -> list[Finding]:
     """Every credential-shaped span in `text`, ordered by position.
 
     Never raises on ordinary input: a non-string, an empty string and a
@@ -333,9 +376,21 @@ def scan(text: str) -> list[Finding]:
             if rule.pairs_with_entropy:
                 pair_anchors.append((match.start(), match.end()))
 
+    if "password" in lowered or "passwd" in lowered:
+        for match in _PASSWORD_ASSIGNMENT.finditer(text):
+            group = next(name for name in ("double", "single", "bare") if match.group(name) is not None)
+            value = match.group(group).rstrip()
+            if not value or _is_indirect(value):
+                continue
+            if _is_word_like(value) and ("/" in value or value.startswith("--")):
+                continue
+            findings.append(Finding("anchored-secret", match.start(group), match.start(group) + len(value)))
+
     # [3] anchored entropy: a credential-shaped key name introduces the value.
     if any(k in lowered for k in _ANCHOR_KEYWORDS):
         for match in _ANCHORED.finditer(text):
+            if _model_token_anchor(text, match.start()):
+                continue
             value = match.group("value")
             if _is_indirect(value) or _is_word_like(value):
                 continue
@@ -344,6 +399,17 @@ def scan(text: str) -> list[Finding]:
             findings.append(
                 Finding("anchored-secret", match.start("value"), match.end("value"))
             )
+        for match in _SHORT_ANCHORED.finditer(text):
+            if _model_token_anchor(text, match.start()):
+                continue
+            group = next(name for name in ("double", "single", "bare") if match.group(name) is not None)
+            value = match.group(group)
+            if _is_indirect(value):
+                continue
+            if (_is_word_like(value) or _character_classes(value) < 2
+                    or shannon_entropy(value) < 2.5):
+                continue
+            findings.append(Finding("anchored-secret", match.start(group), match.end(group)))
 
     # [4] pair promotion: the formless half of a structured credential.
     for anchor_start, anchor_end in pair_anchors:
@@ -361,7 +427,52 @@ def scan(text: str) -> list[Finding]:
                 continue
             findings.append(Finding("paired-secret", match.start(), match.end()))
 
+    if _decode:
+        findings.extend(_encoded_findings(text))
     return _dedupe(findings)
+
+
+def _encoded_findings(text: str) -> list[Finding]:
+    """One bounded decoding layer; offsets always refer to original text.
+
+    Only a positive credential rule on the decoded view permits replacement.
+    Opaque blobs, source escapes and hashes alone are never findings.
+    """
+    found: list[Finding] = []
+    matches = list(_ENCODED_CHAR.finditer(text))
+    if matches:
+        chars: list[str] = []
+        offsets: list[tuple[int, int]] = []
+        cursor = 0
+        for match in matches:
+            for index in range(cursor, match.start()):
+                chars.append(text[index])
+                offsets.append((index, index + 1))
+            value = match.group()
+            if value.startswith('%'):
+                decoded = chr(int(value[1:], 16))
+            elif value.startswith('\\'):
+                decoded = chr(int(value[2:], 16))
+            else:
+                decoded = ''  # ANSI formatting and zero-width separators
+            if decoded:
+                chars.append(decoded)
+                offsets.append((match.start(), match.end()))
+            cursor = match.end()
+        for index in range(cursor, len(text)):
+            chars.append(text[index])
+            offsets.append((index, index + 1))
+        for finding in scan(''.join(chars), _decode=False):
+            found.append(Finding(finding.rule, offsets[finding.start][0], offsets[finding.end-1][1]))
+    for match in _BASE64.finditer(text):
+        value = match.group()
+        try:
+            decoded = base64.b64decode(value + '=' * (-len(value) % 4), altchars=b'-_', validate=True).decode('utf-8')
+        except (ValueError, UnicodeDecodeError, binascii.Error):
+            continue
+        if scan(decoded, _decode=False):
+            found.append(Finding('encoded-secret', match.start(), match.end()))
+    return found
 
 
 def _scan_windowed(text: str) -> list[Finding]:
@@ -393,7 +504,11 @@ def _dedupe(findings: list[Finding]) -> list[Finding]:
         if kept and finding.start >= kept[-1].start and finding.end <= kept[-1].end:
             continue
         if kept and finding.start < kept[-1].end:
-            continue  # overlapping but not contained; the first one wins
+            # Keep the union: first-wins can expose a suffix when two rules
+            # recognize overlapping credential representations.
+            previous = kept[-1]
+            kept[-1] = Finding(previous.rule, previous.start, max(previous.end, finding.end))
+            continue
         kept.append(finding)
     return kept
 
@@ -423,19 +538,105 @@ def redact_event(event: Any) -> tuple[Any, list[str]]:
     Walks the whole structure rather than an allowlist of fields: the tap ships
     prompts, assistant text, thinking, and the FULL Bash command, and a new
     field carrying a credential must not need a code change here to be covered.
-    Shape is preserved exactly — only string LEAVES change.
+    String leaves and dictionary keys are scrubbed. Sensitive field names
+    supply context for opaque values; colliding redacted keys are disambiguated
+    so their values are retained. Adjacent text fragments are also inspected.
     """
     fired: list[str] = []
 
-    def walk(node: Any) -> Any:
+    def walk(node: Any, context: str = '') -> Any:
         if isinstance(node, str):
             redacted, rules = redact(node)
             fired.extend(rules)
+            if context and not context.startswith('<redacted:') and not rules:
+                prefix = context + '='
+                findings = scan(prefix + node)
+                spans = [Finding(f.rule, max(0, f.start-len(prefix)), f.end-len(prefix))
+                         for f in findings if f.end > len(prefix)]
+                for finding in reversed(spans):
+                    redacted = redacted[:finding.start] + f'<redacted:{finding.rule}>' + redacted[finding.end:]
+                    fired.append(finding.rule)
             return redacted
         if isinstance(node, dict):
-            return {k: walk(v) for k, v in node.items()}
+            out = {}
+            reserved = set(node)
+            for key, value in node.items():
+                base_key = walk(key) if isinstance(key, str) else key
+                new_key = base_key
+                # Different sensitive keys may redact to the same marker;
+                # reserve original keys too, including keys encountered later,
+                # so generated suffixes cannot overwrite a benign sibling.
+                suffix = 1
+                while new_key in out or (base_key != key and new_key in reserved):
+                    new_key = f'{base_key}:{suffix}'
+                    suffix += 1
+                out[new_key] = walk(value, key if isinstance(key, str) else '')
+            return out
         if isinstance(node, list):
-            return [walk(v) for v in node]
+            out = [walk(v) for v in node]
+            _redact_adjacent_text(out, fired)
+            return out
         return node
 
     return walk(event), fired
+
+
+def _redact_adjacent_text(items: list, fired: list[str]) -> None:
+    """Catch credentials fragmented across adjacent text blocks/messages.
+
+    Only contiguous homogeneous text-bearing items participate; never join
+    unrelated metadata fields or carry raw fragments across requests.
+    """
+    refs: list[tuple[Any, Any, str]] = []
+    for index, item in enumerate(items):
+        if isinstance(item, str):
+            ref = (items, index, item)
+        elif isinstance(item, dict) and item.get('type') in ('text', 'input_text', 'output_text') and isinstance(item.get('text'), str):
+            ref = (item, 'text', item['text'])
+        else:
+            raw = item.get('raw', item) if isinstance(item, dict) else None
+            message = raw.get('message') if isinstance(raw, dict) else None
+            if isinstance(message, dict) and isinstance(message.get('content'), str):
+                ref = (message, 'content', message['content'])
+            else:
+                _redact_fragment_run(refs, fired)
+                refs = []
+                continue
+        refs.append(ref)
+    _redact_fragment_run(refs, fired)
+
+
+def _redact_fragment_run(refs: list[tuple[Any, Any, str]], fired: list[str]) -> None:
+    if len(refs) < 2:
+        return
+    # Stream adjacent fragments through overlapping scan windows. Skipping an
+    # oversized pair creates a blind spot precisely at the join; tail/head
+    # pairs alone also miss a token split over three or more small blocks.
+    # Keep only one window in the temporary buffer, with absolute offsets for
+    # mapping detections back to each original fragment below.
+    findings: list[Finding] = []
+    window = ''
+    base = 0
+    step = MAX_SCAN_CHARS - _WINDOW_OVERLAP
+    for _, _, text in refs:
+        offset = 0
+        while offset < len(text):
+            take = min(MAX_SCAN_CHARS - len(window), len(text) - offset)
+            window += text[offset:offset + take]
+            offset += take
+            if len(window) == MAX_SCAN_CHARS:
+                findings.extend(Finding(f.rule, base + f.start, base + f.end) for f in scan(window))
+                window = window[step:]
+                base += step
+    if window:
+        findings.extend(Finding(f.rule, base + f.start, base + f.end) for f in scan(window))
+    findings = _dedupe(findings)
+    cursor = 0
+    for container, key, text in refs:
+        end = cursor + len(text)
+        local = [f for f in findings if f.start < end and f.end > cursor]
+        for finding in reversed(local):
+            text = text[:max(0, finding.start-cursor)] + f'<redacted:{finding.rule}>' + text[min(len(text), finding.end-cursor):]
+            fired.append(finding.rule)
+        container[key] = text
+        cursor = end

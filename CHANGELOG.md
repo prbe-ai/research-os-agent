@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Transcript and SDK content now receives mandatory credential scrubbing before
+  journaling and upload, including nested metadata, encoded text and diagnostic
+  output. Artifact bytes are inspected before staging and replay; detected
+  credentials are refused. Opaque formats and objects above 64 MiB are refused
+  by default. See `docs/artifact-credential-gate.md` for limits and the separate
+  server enforcement policy. Existing upload receipts remain replayable when
+  their original source file has moved or changed.
+
 - **One run's stuck outbox op can no longer fail another run's close.** The
   journal is shared per directory across runs and `drain` is strict FIFO, so a
   single undeliverable op parked every op behind it — and then the NEXT run's

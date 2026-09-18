@@ -18,8 +18,8 @@ plus a one-line marker for each tool call. Everything else is noise:
   - Full tool_result `content` (file contents, command output, search
     results — usually the single largest chunk of any session payload)
 
-REDACTION IS NOT DONE HERE. `transcript.build_batch_body` runs
-`secrets.redact_event` on whatever this returns, so a credential in a prompt or
+REDACTION IS NOT DONE HERE. `Journal.stage` and the legacy
+`transcript.build_batch_body` run `secrets.redact_event` on this output, so a credential in a prompt or
 a shell command is replaced before the event joins a batch. It lives there, not
 here, because all three lanes (this one, Codex, pi) and all three producers
 (the live daemon, the reconciler, the importer) converge on that one function.

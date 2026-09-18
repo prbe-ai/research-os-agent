@@ -25,6 +25,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from . import codex_sanitize, pi_sanitize, sanitize
+from .secrets import redact_event
 
 PROTOCOL_VERSION = 2
 EMPTY_HASH = hashlib.sha256(b"").hexdigest()
@@ -143,6 +144,28 @@ def canonical_payload(payload: dict) -> bytes:
         separators=(",", ":"),
         ensure_ascii=False,
     ).encode()
+
+
+def _scrub_content(payload: dict) -> dict:
+    """Scrub content without rewriting stream IDs, source hashes or cursors."""
+    content = {key: payload[key] for key in ('events', 'cwd', 'provenance') if key in payload}
+    scrubbed, _rules = redact_event(content)
+    return payload | scrubbed
+
+
+def _require_safe_pending(body: bytes) -> None:
+    """An old immutable reservation cannot be silently assigned a new digest.
+
+    It may already have reached the server before a lost response. Preserve
+    the exact bytes and require receipt reconciliation instead of replaying a
+    detectable credential or rewriting the accepted batch's identity.
+    """
+    payload = json.loads(body)
+    if _scrub_content(payload) != payload:
+        raise ReconciliationRequired(
+            'pending transcript contains credentials requiring redaction; '
+            'reconcile its receipt before rebuilding the reservation'
+        )
 
 
 def prefix_hash(path: Path, end: int) -> str:
@@ -690,6 +713,7 @@ class Journal:
             self._validate_source(state, Path(state["path"]))
             pending = self.pending(session_id)
             if pending:
+                _require_safe_pending(pending)
                 if require_no_pending:
                     raise ReconciliationRequired("another transcript delivery was reserved during reconciliation")
                 return pending
@@ -791,7 +815,7 @@ class Journal:
             if historic:
                 body["snapshot_byte_end"] = state["historical_end"]
                 body["snapshot_sha256"] = state["historical_hash"]
-            encoded = canonical_payload(body)
+            encoded = canonical_payload(_scrub_content(body))
             # One event that could not be packed is allowed the route's budget;
             # anything packed stays inside the smaller target.
             envelope_limit = solo_limit if len(events) <= 1 else max_body_bytes
@@ -877,6 +901,7 @@ class Journal:
         body = expected_body if expected_body is not None else self.pending(session_id)
         if body is None:
             return False
+        _require_safe_pending(body)
         code, result = wire.post(body)
         if code != 202:
             message = f"http {code}: {result.get('detail', 'transcript delivery pending')}"
