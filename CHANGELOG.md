@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Escape NUL characters as visible `\0` in recognized descriptive span attributes
+  before upload, including queued span replay and ingest batches. Record per-span
+  counts under `probe.nul_escaped`; this display escape is not reversible.
+  Reject NUL-bearing keys, identities and unsupported fields locally as permanent
+  validation errors, retaining the rejected outbox operation while later writes
+  continue. Rejection survives retries and older SDK drainers. Cyclic/deep JSON
+  fails promptly; warnings contain no user keys or caller source lines. Inspect
+  NUL-obfuscated credentials, including serialized text, before partial redaction.
+  Materialize opaque values before validation. Malformed legacy records retain
+  a rejection marker with the unsafe payload explicitly omitted.
+  Artifact bytes are not changed by this safeguard. Existing credential scrubbing
+  and artifact inspection still apply. This does not change the finish barrier.
+
 ## 0.173.0
 
 - Transcript and SDK content now receives mandatory credential scrubbing before
