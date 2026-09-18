@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.173.1
+
 - Escape NUL characters as visible `\0` in recognized descriptive span attributes
   before upload, including queued span replay and ingest batches. Record per-span
   counts under `probe.nul_escaped`; this display escape is not reversible.
