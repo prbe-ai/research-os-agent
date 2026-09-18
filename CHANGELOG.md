@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.173.0
+
 - Transcript and SDK content now receives mandatory credential scrubbing before
   journaling and upload, including nested metadata, encoded text and diagnostic
   output. Artifact bytes are inspected before staging and replay; detected
