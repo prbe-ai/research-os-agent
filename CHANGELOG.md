@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **One run's stuck outbox op can no longer fail another run's close.** The
+  journal is shared per directory across runs and `drain` is strict FIFO, so a
+  single undeliverable op parked every op behind it — and then the NEXT run's
+  `finish()` raised `run <id> not closed` over a queue it had no stake in.
+  `Run.finish()` now passes `run_ref=self.id` to the drain it already ran, the
+  barrier scoping `drain(run_ref=...)`, `probe run end` and
+  `Run._flush_for_span` have used all along. `Client.flush()` gains a
+  `run_ref=` keyword for it; the default stays MACHINE-WIDE, so `probe outbox
+  drain`, the detached worker and post-outage recovery are unchanged. FIFO is
+  not weakened — a run's writes are still attempted in enqueue order, and they
+  only ever needed ordering against each other.
+
 - `Client.session_artifacts()` is removed, with the backend route it called
   (`GET /v1/sessions/{id}/artifacts`). The conversation-artifact lane behind it
   is deleted server-side: the session page's transcript already rendered
