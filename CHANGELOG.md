@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.174.0
+
 - The CLI and SDK now say who composed a name or a description. Pass
   `--authored-by human` when the researcher gave you the words and the text is
   locked: no model will ever rewrite it. Under a coding agent the default is
