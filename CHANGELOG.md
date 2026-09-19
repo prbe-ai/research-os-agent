@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `--authored-by` is available on `probe exec` too, the command `run start`
+  points to. `probe run fork --authored-by human` no longer sends `agent`: a
+  fork that names itself only declares that name when you have not said who
+  wrote one. The same now holds for a superseded run's `<name>-r2`. Creating a
+  project with an empty `--name` works again instead of failing validation, and
+  a backfill import declares the names it composes from folders and spec files
+  as agent-written, so they stay improvable.
+
 ## 0.174.0
 
 - The CLI and SDK now say who composed a name or a description. Pass
