@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The CLI and SDK now say who composed a name or a description. Pass
+  `--authored-by human` when the researcher gave you the words and the text is
+  locked: no model will ever rewrite it. Under a coding agent the default is
+  `agent`, which means the server may improve the wording later; typed by hand
+  in a terminal nothing is sent and the behaviour is exactly what it has always
+  been. Available on `project create|set`, `experiment create|set`, and
+  `run start|set|child|fork`, and on the matching SDK methods. Creating a run
+  also declares the same author for any project or experiment created alongside
+  it. A fork that names itself `<source>-fork` says so, so that fabricated name
+  stays improvable.
+
 - The `track-work` skill now asks a session to name a project or experiment
   instead of leaving it unnamed. A slug is permanent; a name is not, so the
   session writes the best title it can from the context it has and the server
