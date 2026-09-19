@@ -68,7 +68,7 @@ What to do, per entity:
 | paper | a paper read, on a `research` project | `paper add` | `paper update\|tag` | `paper remove` | §5 |
 | notes | hidden prose on project, experiment, run, group, artifact | `notes checkout` then `notes push` | same, `--note "<title>"` for a sub-note | `notes delete` (sub-note only) | `edit-notes` |
 | team note | ONE synced file per team (`probe-team-note.md`) | edit the file | same | same | `edit-notes` |
-| authored Markdown | `summary_markdown`, below AI Summary | the RESEARCHER's - never write it | - | - | - |
+| authored Markdown | `summary_markdown`; a block IN the Overview page (run: below AI Summary) | the RESEARCHER's - never write it | - | - | - |
 | workspace | yours, across projects; files only | `workspace create\|use` | `workspace rename` | `delete` (empty only) | reference §1 |
 | Shared folder | the team's, across projects; files only | `shared add`; `shared share` lifts a workspace file | - | `shared unshare`; `delete` (soft) | reference §1 |
 
