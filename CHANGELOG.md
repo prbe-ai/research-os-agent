@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.174.1
+
 - `--authored-by` is available on `probe exec` too, the command `run start`
   points to. `probe run fork --authored-by human` no longer sends `agent`: a
   fork that names itself only declares that name when you have not said who
