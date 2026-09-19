@@ -13,32 +13,18 @@ Its INDEX maps each section here to one there - pointers below say `reference
 
 # HARD GUIDELINES FOR ALL WRITES:
 
-- all human facing data should be as SHORT, CONCISE, and SIMPLE as possible - it
-  should be readable by a new member of the team who has little context
-- **human facing**: every SLUG and `--name`; `--question`, `--summary`,
-    `--discrepancies`, `--via-reason`; every `--tag`, metric key and span name;
-    the run summary at `run end`; all notes and the team note.
-- NOT human facing - keep exact and machine-shaped: `--external-id`, `probe
-  link` foreign keys, `--config`, `--spec`, an artifact's `--name` (the file's
-  relative path) and a paper's title (its real one).
+- all human facing data should be as SHORT, CONCISE, and SIMPLE as possible - it should be readable by a new member of the team who has little context
+- **human facing**: every SLUG and `--name`; `--question`, `--summary`, `--discrepancies`, `--via-reason`; every `--tag`, metric key and span name; the run summary at `run end`; all notes and the team note.
+    - human facing values should never have: hashes, uuids, timestamps, ticket numbers, command lines, parameter piles, bare counters, or abbreviations only you can expand.
+- NOT human facing - keep exact and machine-shaped: `--external-id`, `probe link` foreign keys, `--config`, `--spec`, an artifact's `--name` (the file's relative path) and a paper's title (its real one).
 
 ## ENTITY NAMING
 
-NOTHING RENAMES THESE LATER. What you type is the heading a teammate reads for
-the life of the row.
+A SLUG is permanent. A NAME is not.
 
-- SLUG: 2-4 lowercase hyphenated words saying what the thing IS -
-  `tool-calling-reliability`. It is the fallback heading, so it must read alone.
-- `--name`: OMIT IT unless you have a title a teammate would write - Title Case,
-  2-6 words. Supplying one stamps `name_customized`, permanently blocking the
-  server from ever naming the row, with no undo. Do not re-case the slug as a
-  name ("Bfcl Toolcall Sft").
-- In NEITHER, ever: hashes, uuids, timestamps, ticket numbers, command lines,
-  parameter piles, bare counters, or abbreviations only you can expand.
-  `pb-traj-1291e7bf`, `run-20260802-041507`, `experiment-1` are defects.
-- Nothing human to tell them apart (per-shard, per-trajectory)? Three common
-  hyphenated words - `quiet-blue-otter`. The real id goes in a `--tag`, never
-  the slug.
+- SLUG: 3 lowercase hyphenated words saying what the thing IS - ex: `tool-calling-reliability`. It never changes, and it is the fallback heading, so it must read alone
+- `--name`: a simple concise English title. Always try to set this - this session has some of the best context on what this work is about. 
+    - Never just re-case the slug ("Bfcl Toolcall Sft")
 
 ## 0. STATE GATE
 

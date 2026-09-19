@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The `track-work` skill now asks a session to name a project or experiment
+  instead of leaving it unnamed. A slug is permanent; a name is not, so the
+  session writes the best title it can from the context it has and the server
+  refines it later. The list of things a human-facing value must never contain
+  (hashes, uuids, timestamps, ticket numbers, bare counters) moved up to the
+  hard guidelines, where it now covers tags, metric keys and span names too.
+
 ## 0.173.1
 
 - Escape NUL characters as visible `\0` in recognized descriptive span attributes
