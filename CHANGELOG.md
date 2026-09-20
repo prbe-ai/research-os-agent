@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.174.2
+
 - `instrument-code` now tells a script to stamp `wall_clock=` with the event's
   own time: omitted, the server records when the point arrived, which behind the
   SDK's durable queue is drain time and a fictional axis. Its destination check
