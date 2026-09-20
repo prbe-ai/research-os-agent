@@ -138,6 +138,8 @@ disagree.
 - Never call HTTP synchronously inside a coroutine - in an async reward it
   serialises every other sample and stalls the timers `asyncio.wait_for` depends
   on, so timeouts overshoot silently. Use `asyncio.to_thread`, or a queue
+- Pass `wall_clock=` the event's own time. Omitted, the server stamps ARRIVAL,
+  and behind the queue below that is drain time
 - Prefer the SDK's durable on-disk queue to per-event network calls
 - Cache handles per process, but cache only SUCCESS - the first attempt often
   races the run's creation, and a cached miss disables capture for the life of
@@ -158,6 +160,7 @@ The exit code says the process ended, not what was stored.
 run = client.get_run(run_id)
 assert run["counts"]["metrics"] > 0
 assert len(client.run_series(run_id)) < 50   # else: a wall of one-point tiles
+assert all(not a["uri"].startswith("file://") for a in client.list_run_artifacts(run_id).items)
 ```
 
 Series count near point count means something high-cardinality became a

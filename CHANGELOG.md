@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- `instrument-code` now tells a script to stamp `wall_clock=` with the event's
+  own time: omitted, the server records when the point arrived, which behind the
+  SDK's durable queue is drain time and a fictional axis. Its destination check
+  also reads an artifact's `uri` back, because a metric count cannot see a file
+  recorded but never stored.
+- `track-work` says what attaching a W&B project actually does: live sync sees
+  only runs created after it is enabled, so existing runs need the import.
+
 ## 0.174.1
 
 - `--authored-by` is available on `probe exec` too, the command `run start`

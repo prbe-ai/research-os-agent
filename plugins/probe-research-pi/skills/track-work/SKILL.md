@@ -129,8 +129,10 @@ ALIVENESS. There are currently only three possible owners:
 
 2. `probe.init()` inside the script - read `instrument-code` skill - use this
    for when a job runs on a remote machine also.
-3. a W&B connector in the dashboard, or `probe wandb import-local ROOT --project
-   P` / `import-hosted` for history - the project must already exist
+3. a W&B project attached in the dashboard - live sync sees only runs created
+   AFTER it is enabled; tick "Import existing runs" for older ones. `probe wandb
+   import-local ROOT --project P` / `import-hosted` also need an existing
+   project
 
 NOTE:
 - Do not name runs. The server gives each one a readable slug, and a finished run gets a title generated from its content. Use `--slug` only when you will need to find the run by hand later (a nightly job, say).
