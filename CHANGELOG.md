@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- A node agent, phase one. Nothing inside a job can report why the job died: the hardware rail
+  looks like it could, but it runs as a daemon thread inside the training process and stops
+  existing at the same instant as the thing it would explain. This adds the first piece that is
+  not inside the job. A run beating as owner registers which process on this machine it is, and a
+  separate watcher -- one per box, holding a file lease, in its own session so a Ctrl-C aimed at
+  the job cannot reach it -- notices when that process stops existing and records it against the
+  run. Process identity is the pid AND the kernel's creation time for it, so a recycled pid is
+  never mistaken for the original. It observes within one ten-second sweep, where the server's
+  heartbeat reaper takes fifteen to seventeen minutes, and it separates two facts that were
+  previously indistinguishable: a stale heartbeat means nothing reported recently, which a wedged
+  process produces while alive, and a vanished pid means the job is actually gone. Opt-in via
+  `PROBE_BOX=1`, fail-open throughout, and read-only with respect to every process it watches.
+  Later phases add the evidence only the box holds: kernel out-of-memory lines, a scheduler's
+  termination reason, a card's ECC counters.
+
 ## 0.174.2
 
 - `instrument-code` now tells a script to stamp `wall_clock=` with the event's
