@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **`summary_markdown` is `document` on a project and an experiment, and gone
+  on a run and a paper.** BREAKING. The field named a database column that no
+  longer holds anything: a project's and an experiment's authored Markdown is
+  a marked block inside its Overview page, and `document` says so. A run and a
+  paper were never on that page lane, so there is nothing to rename -- the
+  field is retired, and every door onto it with it.
+
+  * SDK: `create_project`, `update_project`, `create_experiment` and
+    `update_experiment` take `document`. `create_run`, `create_project_run`
+    and `update_run` no longer take an authored document at all, and
+    `Run.summary_markdown` is gone.
+  * CLI: `--summary` stays on `project` and `experiment`; it is gone from
+    `run start`, `run child` and `run set`.
+  * MCP: the `summary` view is project and experiment only. `patch_run` no
+    longer declares a document argument -- it would have answered 200 and
+    stored nothing.
+
+  A pinned older client keeps working against the old field until the server
+  release that renames it lands; after that, `summary_markdown` is refused
+  rather than ignored, so an un-upgraded write fails loudly instead of
+  silently dropping a researcher's text.
 - A detected credential is replaced rather than refused, so an upload is never
   lost to a false positive. Text has its spans replaced with
   `<redacted:{rule}>` before the file is hashed, so the credential never leaves
