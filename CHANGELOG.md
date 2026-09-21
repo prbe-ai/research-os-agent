@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.175.0
+
 - **`summary_markdown` is `document` on a project and an experiment, and gone
   on a run and a paper.** BREAKING. The field named a database column that no
   longer holds anything: a project's and an experiment's authored Markdown is
