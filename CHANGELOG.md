@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Metric reads work on runs mirrored from another tool.** Points for such a run are
+  fetched from the source rather than copied, and the server refuses any reader that has
+  not declared which coverage contract it understands -- a guard against handing back a
+  re-sampled series as though it were the whole run. The client never declared one, so
+  every MCP metric view on a W&B-synced run failed outright and reported no metrics,
+  while the same data came back fine over HTTP. The client now declares the contract on
+  each provider read, and the raw-point view follows the server's own redirect to the
+  door that can serve a mirrored run instead of surfacing it as an error.
+
 - A node agent, phase one. Nothing inside a job can report why the job died: the hardware rail
   looks like it could, but it runs as a daemon thread inside the training process and stops
   existing at the same instant as the thing it would explain. This adds the first piece that is
