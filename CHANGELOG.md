@@ -11,6 +11,13 @@
   A base64-shaped run of one repeated character is no longer decoded as a
   candidate: it cannot carry key material.
 
+- **The SDK sends its headline scalars under both wire names.** `summary_metrics` is
+  the field's real name and `summary` the alias the server still accepts. Sending only
+  the alias means the server can never drop it without silently discarding the map from
+  every client in the field; sending only the new name loses it against a server older
+  than the rename. Both keys close both holes, and this is what lets the alias be
+  removed server-side in a later release.
+
 - **Metric reads work on runs mirrored from another tool.** Points for such a run are
   fetched from the source rather than copied, and the server refuses any reader that has
   not declared which coverage contract it understands -- a guard against handing back a
