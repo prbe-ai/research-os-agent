@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Hardware metrics are on by default.** A bare `run()` now collects GPU and host metrics;
+  `PROBE_HW=0` (or `false`/`off`) disables, and an explicit `run(hw=...)` still wins over the
+  environment in both directions. This reverses the opt-in default of 2026-08-06. The reason is
+  measured: of 209 crashed runs over 30 days of production, FIVE had any hardware series, and five
+  of the fourteen crash detectors -- `gpu_thermal`, `gpu_cold`, `gpu_memory_creep`,
+  `host_memory_pressure`, `disk_filling` -- read nothing else. Those are the detectors that explain
+  an OOM or a SIGKILL, the deaths hardest to diagnose from inside the job, so opt-in left the most
+  valuable third of the library dark for 97.6% of the runs that needed it. Expect roughly 4 series
+  per GPU sampled every 15s; on a box with no GPU the system source alone is cheaper still.
+
 ## 0.175.0
 
 - **`summary_markdown` is `document` on a project and an experiment, and gone
