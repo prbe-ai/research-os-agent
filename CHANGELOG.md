@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- The credential gate no longer refuses model output. A name that is also an
+  ordinary English word (`cookie`, `token`, `secret`, `credential`) now needs a
+  key-shaped VALUE before it redacts, so a GSM8K answer reading `$0.10/cookie =
+  $6`, a tokenizer vocabulary dump and `{"token": 50257}` upload unchanged.
+  Compound names (`auth_token`, `set_cookie`, `wandb_api_key`) and URL query
+  parameters are unchanged, and every real credential shape is still refused.
+  A base64-shaped run of one repeated character is no longer decoded as a
+  candidate: it cannot carry key material.
+
 - **Metric reads work on runs mirrored from another tool.** Points for such a run are
   fetched from the source rather than copied, and the server refuses any reader that has
   not declared which coverage contract it understands -- a guard against handing back a

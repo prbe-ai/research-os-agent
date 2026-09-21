@@ -302,6 +302,34 @@ def _counts(value: str) -> dict[str, int]:
     return out
 
 
+#: Fewest DISTINCT characters a base64-shaped run must use before it is worth
+#: decoding as a possible credential. A run of one repeated character carries no
+#: key material: `3` x 48 is a language model doing arithmetic inside a GSM8K
+#: answer, not a secret, and `ababab...` is no better.
+#:
+#: Chosen over Shannon entropy because this floor has to hold identically for a
+#: 24-character window and a 16K one, and entropy over a short window is
+#: dominated by its LENGTH -- 24 random base64 chars and 240 of them score very
+#: differently while being equally secret. Distinct-character count is
+#: length-independent, so one number is honest at both ends.
+#:
+#: Every real credential clears it by a wide margin: base64 needs ~12 distinct
+#: characters before it can carry even 64 bits, and the least diverse fixture in
+#: the test suite uses far more. `test_diversity_floor_admits_no_real_secret` is
+#: the negative control -- it fails if this number is ever raised far enough to
+#: let a real credential through.
+_MIN_CANDIDATE_DISTINCT = 6
+
+
+def low_diversity(value: str) -> bool:
+    """True when a base64-shaped run is too uniform to encode a credential.
+
+    Shared with the artifact gate (`probe.sdk.secret_gate`) so both halves of
+    the boundary agree about what is not even worth calling a candidate.
+    """
+    return len(_counts(value)) < _MIN_CANDIDATE_DISTINCT
+
+
 #: A value is WORD-LIKE when `-`/`_` split it into three or more parts and at
 #: least two of those are plain alphabetic words. That is what a CLI flag
 #: (`--some-thing-SOME-VALUE-`), a test name, and a hyphenated identifier all
@@ -406,6 +434,24 @@ def scan(text: str, *, _decode: bool = True) -> list[Finding]:
             value = match.group(group)
             if _is_indirect(value):
                 continue
+            # Not key material: an escape is SERIALIZATION and a non-ASCII
+            # character is TEXT. Every credential shape is plain ASCII drawn
+            # from base64/hex, so both prove the value is content.
+            #
+            # This rule is the crude half of the anchored pass -- it accepts
+            # SHORT values, so it leans on character classes and a 2.5 entropy
+            # floor instead of length, and a tokenizer vocabulary dump walks
+            # straight through both. `{"token": "\u0120the"}` is GPT-2's space
+            # marker U+0120, and the escape alone supplies the digits and the
+            # second character class; decoded, `\u0120cookie` becomes `Gcookie`
+            # (with U+0120) whose entropy is 2.52 against a floor of 2.50. Both
+            # halves matched, so every vocabulary row was a credential.
+            #
+            # A credential genuinely written with escapes is still caught:
+            # `_encoded_findings` re-scans the decoded view and maps offsets
+            # back, which is the entire purpose of that pass.
+            if "\\" in value or not value.isascii():
+                continue
             if (_is_word_like(value) or _character_classes(value) < 2
                     or shannon_entropy(value) < 2.5):
                 continue
@@ -466,6 +512,8 @@ def _encoded_findings(text: str) -> list[Finding]:
             found.append(Finding(finding.rule, offsets[finding.start][0], offsets[finding.end-1][1]))
     for match in _BASE64.finditer(text):
         value = match.group()
+        if low_diversity(value):
+            continue
         try:
             decoded = base64.b64decode(value + '=' * (-len(value) % 4), altchars=b'-_', validate=True).decode('utf-8')
         except (ValueError, UnicodeDecodeError, binascii.Error):
