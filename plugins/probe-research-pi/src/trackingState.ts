@@ -228,8 +228,9 @@ function parseState(raw: unknown): "full" | "read-only" | "off" | undefined {
  * different: it arrived later than the CLI contract around it, so a probe
  * that does not send it, or sends a shape this version does not recognise,
  * must still leave the tracking state renderable. Unrecognised means absent,
- * never `{running: false}` — "no capture" is a claim, and this side is not
- * entitled to make it on the strength of a field it could not read.
+ * never `{running: false}` — "not capturing session transcript" is a claim,
+ * and this side is not entitled to make it on the strength of a field it
+ * could not read.
  */
 function parseCapture(raw: unknown): CaptureReading | undefined {
   if (typeof raw !== "object" || raw === null) return undefined;
@@ -241,7 +242,8 @@ function parseCapture(raw: unknown): CaptureReading | undefined {
 /**
  * The footer, in pi's idiom. THREE states, matching `probe session status`'s
  * `effective` field exactly — a footer that said "tracking" while the CLI
- * said "tracked, not captured" would be the same lie in a smaller font.
+ * said "tracked, not capturing session transcript" would be the same lie in
+ * a smaller font.
  *
  * Capture is never mentioned when tracking is off: it may still be running,
  * and "not tracking" is the researcher's decision, not a capture report.
@@ -249,5 +251,5 @@ function parseCapture(raw: unknown): CaptureReading | undefined {
 export function trackingStatusText(tracking: boolean, capture?: CaptureReading): string {
   if (!tracking) return "○ not tracking";
   if (!capture || capture.running) return "● tracking";
-  return `◐ tracking · no capture: ${capture.reason}`;
+  return `◐ tracking · not capturing session transcript: ${capture.reason}`;
 }

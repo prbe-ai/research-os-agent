@@ -104,7 +104,19 @@ _ACCENT_TEXT = " " + _SEPARATOR + " running"
 #: "landing" and the work still is — yellow already belongs to `not tracking`,
 #: and reusing it would make a degraded session look like a switched-off one.
 _DOT_DEGRADED = "◐"  # ◐
-_LABEL_NO_CAPTURE = " " + _SEPARATOR + " no capture: "
+#: SPELLED OUT. An earlier `no capture:` named the mechanism, and read beside
+#: `tracking` it was taken for its opposite -- "nothing is being recorded" --
+#: when the work IS landing and only the conversation is not. Naming the
+#: transcript says exactly which half is missing. The columns this costs are
+#: paid by `MAX_SEGMENT_CHARS` below, never by the project name.
+_LABEL_NO_CAPTURE = " " + _SEPARATOR + " not capturing session transcript: "
+
+#: The longest word in `probe.cli.capture_state.REASONS` (`interpreter too old`).
+#: A literal, because nothing of ours may be imported on the render path;
+#: `test_every_reason_in_the_closed_vocabulary_renders_whole_on_the_bare_line`
+#: pins it against the vocabulary, so a longer reason added there fails a test
+#: here rather than rendering as `interp…` on somebody's status line.
+_LONGEST_REASON_CHARS = 19
 
 #: Below this many columns an elided project name identifies nothing — `a-rea…`
 #: is not a name, it is noise wearing one. When the reason is long enough to
@@ -118,22 +130,41 @@ _MIN_SLUG_CHARS_DEGRADED = 8
 #: wrapped line reflows every other segment sharing it, which is the one failure
 #: that makes neighbouring output less readable rather than merely longer.
 #:
-#: 51 is measured, not picked. It is the smallest ceiling at which a 26-character
-#: name budget survives, and 26 is what this lab's project names actually need:
-#: median 18, longest 29, 27 of 28 whole. At 25 that drops to 15 of 20 on the
-#: pinned sample -- one character of label costs four whole names, because real
-#: slugs cluster right at the boundary.
+#: DERIVED FROM THE WIDEST LINE THAT MUST RENDER WHOLE: the degraded bare form
+#: carrying the longest reason in the closed vocabulary,
+#: `  ◐ tracking · not capturing session transcript: interpreter too old` (68).
+#: The reason is the one actionable thing on that line and is on screen nowhere
+#: else, so it is the last thing cut (`_no_capture_clause`); a ceiling it cannot
+#: fit under would elide the diagnosis on every degraded render.
+#:
+#: The previous ceiling, 51, was measured against the HEALTHY line instead: the
+#: smallest number at which a 26-character name budget survived, 26 being what
+#: this lab's project names need (median 18, longest 29). The capture suffix was
+#: 15 columns then and fit beneath it; spelling the suffix out made the degraded
+#: line the binding one. The name budget grows with the ceiling (see
+#: `MAX_SLUG_CHARS`), so nothing that fit whole before fits worse now.
 #:
 #: THE LABEL IS PAID FOR BY THE CEILING, NEVER BY THE NAME. Spelling out
 #: "tracking → " costs eleven columns; taking them from the name would elide the
-#: project the segment exists to identify. When the label changes length, this
-#: number moves with it. `test_this_labs_project_names_mostly_fit_whole` pins it.
-MAX_SEGMENT_CHARS = 51
+#: project the segment exists to identify. When a label changes length, this
+#: number moves with it by construction.
+#: `test_this_labs_project_names_mostly_fit_whole` pins the name budget.
+MAX_SEGMENT_CHARS = (
+    len(_INDENT)
+    + _GLYPH_WIDTH
+    + len(_LABEL_TRACKING_BARE)
+    + len(_LABEL_NO_CAPTURE)
+    + _LONGEST_REASON_CHARS
+)
 
 #: What the name may occupy. DERIVED, and derived against the LIVE width even
 #: when idle, so the name keeps one budget in both states: a name that shrank the
 #: moment a run started -- and grew back when it ended -- would read as the status
 #: line glitching rather than as the run changing.
+#:
+#: Wider than any name this lab has (43 against a longest of 29), so a healthy
+#: line reaches the ceiling only in theory; the columns the ceiling grew by are
+#: spent on the reason, and only when there is one.
 MAX_SLUG_CHARS = (
     MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH - len(_LABEL_TRACKED) - len(_ACCENT_TEXT)
 )
@@ -1045,7 +1076,7 @@ def message(state: dict | None, *, live: bool = False, tracking: bool = True) ->
         text += _ACCENT_TEXT
     reason = _capture_reason(state) if tracking else ""
     if reason:
-        text += ", but no transcript capture: " + reason
+        text += ", but not capturing session transcript: " + reason
     return text
 
 
@@ -1728,7 +1759,8 @@ def _elide(slug: str, limit: int = MAX_SLUG_CHARS) -> str:
 
 
 def _no_capture_clause(reason: str) -> str:
-    """The `· no capture: …` suffix as it hangs off `_LABEL_TRACKING_BARE`.
+    """The `· not capturing session transcript: …` suffix, as it hangs off
+    `_LABEL_TRACKING_BARE`.
 
     THE LAST STOP FOR THE WIDTH CAP. With no project name left to give up, the
     reason itself is elided. The vocabulary in `probe.cli.capture_state` is short
@@ -1785,14 +1817,14 @@ def render(
     anything is, and the third state made them decode a distinction that changed
     nothing they would do.
 
-    `tracked, not captured` is a third state of a DIFFERENT question, and it
-    earns its place by the same test the rejected one failed: it changes what the
-    reader does. The work is landing — projects, runs, metrics, artifacts, all of
-    it — and the CONVERSATION is not being recorded. Only the researcher can
-    decide whether that matters for this session, and they cannot decide it
-    without being told. It renders as a SUFFIX on the tracking segment, never as
-    a replacement for it, because a line reading only "no capture" says the
-    opposite of what is true.
+    `tracked, not capturing session transcript` is a third state of a DIFFERENT
+    question, and it earns its place by the same test the rejected one failed: it
+    changes what the reader does. The work is landing — projects, runs, metrics,
+    artifacts, all of it — and the CONVERSATION is not being recorded. Only the
+    researcher can decide whether that matters for this session, and they cannot
+    decide it without being told. It renders as a SUFFIX on the tracking segment,
+    never as a replacement for it, because a line reading only "not capturing
+    session transcript" says the opposite of what is true.
 
     THE SEGMENT MUST SURVIVE ANY NEIGHBOUR. It shares one line with whatever else
     is chained into `statusLine`, so four properties are load-bearing:
@@ -1818,8 +1850,8 @@ def render(
         # and the difference is the one thing a reader can act on: under
         # `read-only` an agent will still find prior work, under `off` it will
         # not and will not know what it missed. That passes the same test the
-        # rejected third state failed and `no capture` passed -- it changes what
-        # the reader does.
+        # rejected third state failed and `not capturing session transcript`
+        # passed -- it changes what the reader does.
         #
         # `session_state=None` is a caller from before the third state. It gets
         # the two-state word -- and the two-state colour -- it has always got
@@ -1851,14 +1883,16 @@ def render(
     # The name, and it yields all the way to nothing. The reason is the only
     # actionable thing on the line — it names what to fix — and it is on screen
     # nowhere else; the project name is on the dashboard, in `probe session
-    # status`, and usually in the previous turn's own output. `no capture:
-    # interp…` names nothing to fix, so the reason is the LAST thing cut, and
-    # only after the name has been given up entirely (`_no_capture_clause`).
+    # status`, and usually in the previous turn's own output. `not capturing
+    # session transcript: interp…` names nothing to fix, so the reason is the
+    # LAST thing cut, and only after the name has been given up entirely
+    # (`_no_capture_clause`).
     #
     # The live-run accent goes with the name, and hands the reason back its ten
-    # columns. One qualifier per segment stays legible; `· running · no capture:
-    # halted` reads as a list of unrelated facts, and the accent returns the
-    # moment capture is healthy — which is also the moment it is worth reading.
+    # columns. One qualifier per segment stays legible; `· running · not
+    # capturing session transcript: halted` reads as a list of unrelated facts,
+    # and the accent returns the moment capture is healthy — which is also the
+    # moment it is worth reading.
     room = (
         MAX_SEGMENT_CHARS
         - len(_INDENT)

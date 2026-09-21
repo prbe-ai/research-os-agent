@@ -360,8 +360,9 @@ def refresh(session_id: str) -> None:
     state["active_run_ids"] = fetch_active_run_ids(base_url, token, session_id, marker)
     # Local, and stored alongside the server's answer so the segment renders both
     # halves of one state from one file. Written LAST so a reading is never
-    # published without the identity it qualifies: `no capture` on a segment that
-    # does not yet name a project is a warning about nothing.
+    # published without the identity it qualifies: `not capturing session
+    # transcript` on a segment that does not yet name a project is a warning
+    # about nothing.
     state["capture"] = _capture_reading(session_id)
     marker.write(session_id, state)
 

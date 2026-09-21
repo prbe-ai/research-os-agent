@@ -7,6 +7,8 @@ Reads the status-line payload on stdin, prints ONE bounded segment, exits 0.
       ● tracking                        configured; this session has recorded nothing
       ● tracking → bird-sql-sft         its work is filed under that project
       ● tracking → bird-sql-sft · running  ...and a run it opened is executing now
+      ◐ tracking → bird-sql-sft · not capturing session transcript: halted
+                                        ...work lands, but no transcript daemon is watching
       ● read-only                       searching prior work, recording nothing
       ● off                             not calling Probe at all (RED, not yellow)
 

@@ -409,7 +409,7 @@ describe("trackingStatusText", () => {
 
   it("names the reason when tracking is on but capture is not", () => {
     expect(trackingStatusText(true, { running: false, reason: "not paired" })).toBe(
-      "◐ tracking · no capture: not paired",
+      "◐ tracking · not capturing session transcript: not paired",
     );
   });
 
@@ -425,7 +425,7 @@ describe("trackingStatusText", () => {
 });
 
 describe("registerExtension — the footer's third state", () => {
-  it("renders `tracked, not captured` from the CLI's own capture block", async () => {
+  it("renders `tracked, not capturing session transcript` from the CLI's own capture block", async () => {
     installProbeCli();
     execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
       callback(
@@ -437,7 +437,7 @@ describe("registerExtension — the footer's third state", () => {
           seeded: true,
           source: "shipped",
           capture: { running: false, pid: null, reason: "not paired" },
-          effective: "tracked, not captured",
+          effective: "tracked, not capturing session transcript",
         }),
         "",
       );
@@ -455,7 +455,7 @@ describe("registerExtension — the footer's third state", () => {
 
     expect(ctx.setStatus).toHaveBeenCalledWith(
       "probe-tracking",
-      "◐ tracking · no capture: not paired",
+      "◐ tracking · not capturing session transcript: not paired",
     );
   });
 

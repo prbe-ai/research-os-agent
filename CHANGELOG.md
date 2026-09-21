@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The status line says what is missing when no transcript daemon is running.** `◐ tracking · no capture: <reason>` read, beside `tracking`, as "nothing is being recorded" — the opposite of the truth, since every run, metric and artifact still lands and only the conversation does not. Every surface now says `not capturing session transcript`: the Claude Code segment (`◐ tracking → project · not capturing session transcript: <reason>`), the pi footer, the Codex notice (`…, but not capturing session transcript: <reason>`), and `probe session status`, whose `effective` field reads `tracked, not capturing session transcript` where it said `tracked, not captured`. The segment's width ceiling is now derived from the widest line that must render whole — the bare degraded form with the longest reason — so the longer label costs the ceiling and never the project name, and a test pins that ceiling against the reason vocabulary so no reason can be elided to `interp…`.
+
 - The credential gate no longer refuses model output. A name that is also an
   ordinary English word (`cookie`, `token`, `secret`, `credential`) now needs a
   key-shaped VALUE before it redacts, so a GSM8K answer reading `$0.10/cookie =
