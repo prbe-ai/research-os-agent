@@ -44,7 +44,7 @@ What to do, per entity:
 | entity | what it is | make | change | undo / move | how-to |
 |---|---|---|---|---|---|
 | project | high level organization for a given effort; `--kind` required; a phase nests via `--parent` | `project create` | `project set\|tag` | `project move` (parent, top level, workspace); `delete` is PERMANENT | §2 |
-| experiment | one question inside a project | `experiment create --question` | `experiment set\|tag`; `freeze` pins its runs | `delete` PERMANENT | §2 |
+| experiment | one question inside a project; IS a project, `kind=experiment` | `experiment create --question` | `experiment set --question\|--name\|--summary`, `tag`; `freeze` pins its runs (NO `--description`: the question is it) | `delete` PERMANENT | §2 |
 | run | one execution, in an experiment or project-direct | `probe exec CMD` / SDK `run()` | `run set\|tag`, `run end --status` | `exec --parent RUN --relation retry\|resume\|fork\|branch`; `run fork SRC --step`, `run start --rewind-to-step` (see `instrument-code`, RELAUNCHING); `delete` PERMANENT | §3 |
 | group | a sweep's runs; needs an experiment | `group create EXP --name NAME` then `run start --group ID` | `group set` | - | reference §1 |
 | trial | one rollout under a run; `--name` only, no notes | `trial add DIR --step N`; the Harbor/Miles pipeline is in `instrument-code` | `trial set` | - | reference §1, §9 |
@@ -96,7 +96,7 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
 | `inference` | weights do not move: sweeps, ablations, evals. A sweep is an experiment, not a project. |
 | `research` | document-shaped: lit reviews, design, theory. A review feeding a training effort is a project BESIDE it, not inside it |
 | `general` | everything else; also what W&B import uses |
-| `experiment` | a LEAF under one of the four, answering one question. Its `--description` IS that question. Runs live in it; nothing nests under it. |
+| `experiment` | a LEAF under one of the four, answering one question. Its `--description` IS that question, which is why `experiment set` has no `--description` to set separately. Runs live in it; nothing nests under it. |
 
 NOTES:
 
