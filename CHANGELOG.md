@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.176.0
+
 - **Hardware metrics are on by default.** A bare `run()` now collects GPU and host metrics;
   `PROBE_HW=0` (or `false`/`off`) disables, and an explicit `run(hw=...)` still wins over the
   environment in both directions. This reverses the opt-in default of 2026-08-06. The reason is
