@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Ctrl-C under `probe exec` no longer mails you a crash notice.** `execute` closed a wrapped run
+  on "is the exit code zero", so an interrupt landed as `failed` and the crash notifier told the
+  researcher their run had died -- a run they had just stopped themselves. SIGINT now maps to
+  `canceled`, the call `fluent.py` already makes in-process for `KeyboardInterrupt`. Both spellings
+  (`-2` from `subprocess.run`, `130` through a shell). SIGTERM and SIGKILL deliberately still fail:
+  a preemption or an eviction is exactly the death a researcher does NOT already know about.
 - `search` with the default `collapse="experiment"` still shows an experiment once. The server
   now names an experiment by its project address in both channels, so the collapse folds
   repeated `project` hits of one id as well.
