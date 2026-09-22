@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `Client.enqueue_artifact_reference(anchor="experiment", ...)` now delivers to the experiment's
+  project address. It still queued `POST /v1/experiments/{id}/artifacts`, which answers 410
+  since the experiments API was retired, so the reference was dropped on delivery. The CLI's own
+  backfill passes a project anchor and was not affected.
 - **Ctrl-C under `probe exec` no longer mails you a crash notice.** `execute` closed a wrapped run
   on "is the exit code zero", so an interrupt landed as `failed` and the crash notifier told the
   researcher their run had died -- a run they had just stopped themselves. SIGINT now maps to
