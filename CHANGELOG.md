@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `search` with the default `collapse="experiment"` still shows an experiment once. The server
+  now names an experiment by its project address in both channels, so the collapse folds
+  repeated `project` hits of one id as well.
+
 ## 0.177.0
 
 ## 0.176.0
