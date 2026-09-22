@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.177.0
+
 ## 0.176.0
 
 - **Hardware metrics are on by default.** A bare `run()` now collects GPU and host metrics;
