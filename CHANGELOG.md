@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The Probe daemon uploads files wherever the session worked** (tap 0.7.1). It no longer refuses a
+  session started in the home folder or a file outside the starting folder: a relative path a
+  command printed resolves against the folder that command `cd`'d into. Before uploading it checks
+  the target AND every run the session worked on for the same bytes, so a file the agent already
+  logged with the SDK is never uploaded twice. Credential-shaped names, hidden folders and the
+  secret scan still apply.
+
 ## 0.179.2
 
 - **The status line names the switch position in `daemon`.** `on (daemon) → <project>` while the

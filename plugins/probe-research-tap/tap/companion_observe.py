@@ -47,6 +47,9 @@ _TYPED_ID_RE = re.compile(
     r"(?P<id>[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})",
     re.IGNORECASE,
 )
+#: `cd DIR` at the start of a shell command or after `&&`, `;`, `||`, `(` or a
+#: newline: the folder the rest of the command ran in.
+_CD_RE = re.compile(r"(?:^|&&|\|\||;|\(|\n)\s*cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|)]+)")
 _PROBE_CMD_RE = re.compile(r"(?:^|[\s;&|(`])probe\s+(?P<rest>[^\n;&|]*)")
 _WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit"}
 #: A Probe MCP tool, under any harness's spelling of its name.
@@ -88,7 +91,9 @@ class Observation:
     `ids` are the entities the session ACTED on (see `_ACTED_VERBS`), the only
     ones the daemon may write to. `produced_text` is the output of the shell
     commands that did work (not `cat`/`ls`/...), where a file the session
-    produced is named -- the artifact gate's evidence.
+    produced is named -- the artifact gate's evidence. `workdirs` are the
+    folders those commands `cd`'d into, in order: a relative path in the
+    output is relative to one of them, not to where the session started.
     """
 
     events: list[Event]
@@ -99,6 +104,7 @@ class Observation:
     touched_files: set[str]
     redactions: int
     produced_text: str = ""
+    workdirs: list[str] = field(default_factory=list)
 
 
 def _cap(text: str, limit: int) -> str:
@@ -403,6 +409,7 @@ def observe(source: str, lines: list[tuple[int, bytes]]) -> Observation:
     directed: list[tuple[int, str]] = []
     touched: set[str] = set()
     produced: list[str] = []
+    workdirs: list[str] = []
     redactions = 0
 
     def ground(text: str, offset: int, context: str) -> None:
@@ -426,6 +433,8 @@ def observe(source: str, lines: list[tuple[int, bytes]]) -> Observation:
                 # ...and so is one it passed to a Probe tool, as opposed to one a
                 # listing merely returned.
                 ground(json.dumps(event.tool_input, default=str), event.offset, event.tool)
+            for found in _CD_RE.findall(command):
+                workdirs.append(found.strip("'\""))
             path = event.tool_input.get("file_path") or event.tool_input.get("path")
             if event.tool in _WRITE_TOOLS and isinstance(path, str):
                 touched.add(path)
@@ -454,7 +463,7 @@ def observe(source: str, lines: list[tuple[int, bytes]]) -> Observation:
                 redactions += len(fired)
                 event.tool_input = redacted_input if isinstance(redacted_input, dict) else {}
     return Observation(
-        events, ids, run_starts, run_ends, directed, touched, redactions, "\n".join(produced)
+        events, ids, run_starts, run_ends, directed, touched, redactions, "\n".join(produced), workdirs
     )
 
 

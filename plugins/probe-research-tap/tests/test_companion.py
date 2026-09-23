@@ -92,6 +92,21 @@ def test_claude_observation_finds_ids_run_starts_directed_and_redacts(tmp_path):
     assert "[user @" in rendered and "probe run start" in rendered
 
 
+def test_observation_records_the_folders_commands_ran_in(tmp_path):
+    raw = _claude_lines(
+        _tool_use("c1", "mkdir -p ~/trials/x && cd ~/trials/x && python run.py"),
+        _tool_result("c1", "wrote results/table.md"),
+        _tool_use("c2", "cd \"/data/my runs\"; ls"),
+        _tool_result("c2", "a b"),
+        _tool_use("c3", "echo cd nowhere"),
+        _tool_result("c3", "cd nowhere"),
+    )
+    path = tmp_path / "t.jsonl"
+    path.write_bytes(raw)
+    lines, _ = observe.read_chunk(path, 0, max_bytes=1 << 20)
+    assert observe.observe("claude_code", lines).workdirs == ["~/trials/x", "/data/my runs"]
+
+
 def test_codex_and_pi_parsers_read_tool_calls_and_results():
     codex = [
         (10, json.dumps({"type": "response_item", "payload": {"type": "function_call", "name": "shell", "call_id": "k", "arguments": json.dumps({"command": ["probe", "run", "start"]})}}).encode()),
@@ -315,10 +330,47 @@ def test_artifact_gates(tmp_path, monkeypatch):
     ):
         with pytest.raises(worker_mod.Held, match=reason):
             decider.decide(_raw("artifact", path=bad))
-    # A session in the home directory uploads nothing on its own.
+    # Where the session started does not matter: from the home folder it still uploads.
     monkeypatch.setattr(worker_mod.Path, "home", classmethod(lambda cls: work))
-    with pytest.raises(worker_mod.Held, match="home directory"):
-        decider.decide(_raw("artifact", path="results.csv"))
+    assert decider.decide(_raw("artifact", path="results.csv"))["op"][0] == "UPLOAD"
+
+
+def test_a_session_started_in_home_uploads_from_the_folder_it_worked_in(tmp_path, monkeypatch):
+    """`claude` started in ~, the work done in ~/trials/x: a relative path the
+    command printed resolves against the folder that command `cd`'d into."""
+    home = tmp_path
+    work = home / "trials" / "x"
+    (work / "results").mkdir(parents=True)
+    (work / "results" / "table.md").write_text("| c | acc |\n")
+    monkeypatch.setattr(worker_mod.Path, "home", classmethod(lambda cls: home))
+    api = FakeApi(entities={f"/v1/runs/{RUN}": {"id": RUN}}, lists={f"/v1/runs/{RUN}/artifacts": []})
+    decider = _decider(
+        api, tmp_path, cwd=home, workdirs=["~/elsewhere", str(work)], produced_text="wrote results/table.md"
+    )
+    out = decider.decide(_raw("artifact", path="results/table.md"))
+    assert out["op"][0] == "UPLOAD" and out["payload"]["path"] == str(work / "results" / "table.md")
+
+
+def test_bytes_the_session_already_recorded_are_never_uploaded_again(tmp_path):
+    """The agent's own SDK upload lands on the run it logged; the daemon, aiming
+    at another entity under another name, must still see it."""
+    work = tmp_path / "work"
+    work.mkdir()
+    plot = work / "plot.png"
+    plot.write_bytes(b"\x89PNG same bytes")
+    digest = worker_mod._sha256_file(plot)
+    lists = {
+        f"/v1/runs/{RUN}/artifacts": [],
+        f"/v1/runs/{PARENT}/artifacts": [{"name": "results/plot.png", "content_hash": digest}],
+    }
+    api = FakeApi(entities={f"/v1/runs/{RUN}": {"id": RUN}}, lists=lists)
+    decider = _decider(api, tmp_path, cwd=work, produced_text="saved plot.png")
+    with pytest.raises(worker_mod.Held, match=f"already recorded: these bytes are on run {PARENT}"):
+        decider.decide(_raw("artifact", path="plot.png"))
+    # A run whose artifacts cannot be read is skipped, not a reason to hold.
+    lists.pop(f"/v1/runs/{PARENT}/artifacts")
+    fresh = _decider(api, tmp_path, cwd=work, produced_text="saved plot.png")
+    assert fresh.decide(_raw("artifact", path="plot.png"))["op"][0] == "UPLOAD"
 
 
 def test_an_upload_sends_the_bytes_that_were_scanned(tmp_path):

@@ -114,6 +114,8 @@ MAX_ARTIFACT_BYTES = 50 * 1024 * 1024
 #: A text file is scanned WHOLE for credentials before it may upload; one larger
 #: than this is not uploaded at all.
 MAX_TEXT_ARTIFACT_BYTES = 10 * 1024 * 1024
+#: Runs checked for the same bytes before an upload (the session's most recent).
+MAX_DEDUPE_RUNS = 40
 #: What the daemon may upload, by extension. Text kinds are scanned whole; the
 #: binary kinds are results a run produces (plots, arrays, tables, reports).
 #: Anything else -- archives, databases, pickles, keystores -- is the
@@ -256,7 +258,7 @@ class Decider:
     def __init__(self, api: api_mod.Api, *, known_ids: dict[str, str | None], run_starts: set[str],
                  run_ends: set[str], cwd: Path, touched: set[str], chunk_text: str,
                  range_start: int, range_end: int, agent_ranges: list | tuple = (),
-                 produced_text: str = "") -> None:
+                 produced_text: str = "", workdirs: list[str] | tuple = ()) -> None:
         self.api = api
         self.known_ids = known_ids
         self.run_starts = run_starts
@@ -268,7 +270,9 @@ class Decider:
         self.range_end = range_end
         self.agent_ranges = [tuple(r) for r in agent_ranges]
         self.produced_text = produced_text
+        self.workdirs = list(workdirs)
         self._entity_cache: dict[tuple[str, str], dict] = {}
+        self._artifact_cache: dict[tuple[str, str], list] = {}
 
     # -- helpers --
     def _get(self, path: str) -> Any:
@@ -280,6 +284,55 @@ class Decider:
             raise Held(f"read refused ({exc.status}): {path}") from None
         except api_mod.Retryable:
             raise Held(f"read failed, not written: {path}") from None
+
+    def _resolve(self, path_text: str) -> Path:
+        """The file a path names. A relative path is relative to where the
+        command that printed it ran: the folders the session `cd`'d into, most
+        recent first, then the folder the session started in."""
+        path = Path(os.path.expanduser(path_text))
+        if path.is_absolute():
+            candidates = [path]
+        else:
+            bases = [Path(os.path.expanduser(d)) for d in reversed(self.workdirs)]
+            bases = [b if b.is_absolute() else self.cwd / b for b in bases] + [self.cwd]
+            candidates = [base / path for base in bases]
+        for candidate in candidates:
+            try:
+                resolved = candidate.resolve(strict=True)
+            except (OSError, RuntimeError):
+                continue
+            if resolved.is_file():
+                return resolved
+        raise Held("file does not exist")
+
+    def _artifact_rows(self, etype: str, eid: str, *, strict: bool) -> list:
+        """An entity's artifacts, once per cycle. `strict` holds the proposal on a
+        failed read (the target); otherwise an unreadable entity is skipped."""
+        key = (etype, eid)
+        if key not in self._artifact_cache:
+            try:
+                listing = self._get(f"/v1/{etype}s/{eid}/artifacts")
+            except Held:
+                if strict:
+                    raise
+                listing = []
+            rows = listing.get("items", listing.get("artifacts", [])) if isinstance(listing, dict) else listing
+            self._artifact_cache[key] = [r for r in rows or [] if isinstance(r, dict)]
+        return self._artifact_cache[key]
+
+    def _already_recorded(self, etype: str, eid: str, name: str, digest: str) -> None:
+        """Never re-upload what is already in Probe: the same bytes on the target
+        or on any run this session worked on (where the agent's own SDK uploads
+        land), or the same name on the target."""
+        runs = [rid for rid, kind in self.known_ids.items() if kind in ("run", None) and rid != eid]
+        runs += [rid for rid in sorted(self.run_starts) if rid not in runs and rid != eid]
+        places = [(etype, eid, True)] + [("run", rid, False) for rid in runs[-MAX_DEDUPE_RUNS:]]
+        for place_type, place_id, strict in places:
+            for row in self._artifact_rows(place_type, place_id, strict=strict):
+                if row.get("content_hash") == digest:
+                    raise Held(f"already recorded: these bytes are on {place_type} {place_id}")
+                if strict and row.get("name") == name:
+                    raise Held("already recorded: an artifact with this name is on the target")
 
     def _entity(self, etype: str, eid: str) -> dict:
         key = (etype, eid)
@@ -439,32 +492,21 @@ class Decider:
         Produced means: written by the agent's own edit tools, or named in the
         output of a shell command that did work (not `cat`, `ls`, `grep`...). A
         path that only appears in a file the agent read, or in the model's own
-        words, is not evidence. Then: inside the session's folder (never when
-        that folder is the home directory), no hidden directory on the way, no
-        credential-shaped name, an allowed extension, and a text file scanned
-        whole by the same scanner capture uses.
+        words, is not evidence. WHERE the file lives does not matter: a session
+        started in the home folder that works in `~/trials/x` uploads from there.
+        Then: no hidden directory on the way, no credential-shaped name, an
+        allowed extension, a text file scanned whole by the same scanner capture
+        uses, and never bytes the session already recorded (`_already_recorded`).
         """
         path_text = _str(raw.get("path"), 1000)
         if not path_text:
             raise Held("artifact needs a path")
         if path_text not in self.touched and not _names_path(self.produced_text, path_text):
             raise Held("the session did not produce this file")
-        cwd = self.cwd.resolve()
-        if cwd == Path.home().resolve() or cwd == Path("/"):
-            raise Held("the session runs in the home directory; files are the researcher's to upload")
-        path = Path(path_text)
-        if not path.is_absolute():
-            path = self.cwd / path
-        try:
-            resolved = path.resolve(strict=True)
-        except (OSError, RuntimeError):
-            raise Held("file does not exist") from None
-        if cwd not in resolved.parents:
-            raise Held("file is outside the session's working directory")
-        relative = resolved.relative_to(cwd)
-        if any(part.startswith(".") for part in relative.parts):
+        resolved = self._resolve(path_text)
+        if any(part.startswith(".") for part in resolved.parts):
             raise Held("file is in a hidden directory or is a hidden file")
-        if not resolved.is_file() or _SECRET_NAME_RE.search(str(relative)):
+        if _SECRET_NAME_RE.search(_display_path(resolved)):
             raise Held("file is not uploadable")
         suffix = resolved.suffix.lower()
         size = resolved.stat().st_size
@@ -480,11 +522,7 @@ class Decider:
             raise Held(f"the daemon does not upload {suffix or 'extension-less'} files")
         digest = _sha256_file(resolved)
         name = _str(raw.get("name"), 200) or resolved.name
-        existing = self._get(f"/v1/{etype}s/{eid}/artifacts") or {}
-        rows = existing.get("items", existing.get("artifacts", [])) if isinstance(existing, dict) else existing
-        for row in rows or []:
-            if isinstance(row, dict) and (row.get("content_hash") == digest or row.get("name") == name):
-                raise Held("an artifact with this name or these bytes is already recorded")
+        self._already_recorded(etype, eid, name, digest)
         content_type = mimetypes.guess_type(resolved.name)[0] or "application/octet-stream"
         presign = {"name": name, "content_hash": digest, "size_bytes": size, "content_type": content_type}
         if etype == "run" and _str(raw.get("kind"), 40):
@@ -493,6 +531,15 @@ class Decider:
             presign["notes"] = _str(raw.get("notes"), 1000)
         payload = {**presign, "path": str(resolved)}
         return {"payload": payload, "op": ("UPLOAD", f"/v1/{etype}s/{eid}/artifacts/uploads", payload)}
+
+
+def _display_path(path: Path) -> str:
+    """`path` relative to the home folder when it is under it, for the name check:
+    the home folder's own path is not the file's name."""
+    try:
+        return str(path.relative_to(Path.home().resolve()))
+    except ValueError:
+        return str(path)
 
 
 def _names_path(text: str, path_text: str) -> bool:
@@ -734,6 +781,7 @@ class Worker:
         run_starts = set(self.ledger.get_json("run_starts", []))
         run_ends = set(self.ledger.get_json("run_ends", []))
         touched = list(self.ledger.get_json("touched", []))
+        workdirs = list(self.ledger.get_json("workdirs", []))
         while offset < end:
             lines, new = observe.read_chunk(self.transcript, offset, max_bytes=min(CHUNK_BYTES, end - offset))
             if new <= offset:
@@ -744,11 +792,13 @@ class Worker:
             run_starts |= seen.run_starts
             run_ends |= seen.run_ends
             touched = _merge_touched(touched, seen.touched_files)
+            workdirs = _merge_workdirs(workdirs, seen.workdirs)
             offset = new
         with self.ledger.transaction():
             self.ledger.set_json("run_starts", sorted(run_starts))
             self.ledger.set_json("run_ends", sorted(run_ends))
             self.ledger.set_json("touched", touched)
+            self.ledger.set_json("workdirs", workdirs)
 
     def take_lease(self) -> None:
         """agent -> daemon. The daemon never authors from a range the agent owned."""
@@ -862,6 +912,8 @@ class Worker:
         run_starts = set(self.ledger.get_json("run_starts", [])) | seen.run_starts
         run_ends = set(self.ledger.get_json("run_ends", [])) | seen.run_ends
         touched = _merge_touched(self.ledger.get_json("touched", []), seen.touched_files)
+        workdirs = _merge_workdirs(self.ledger.get_json("workdirs", []), seen.workdirs)
+        self.ledger.set_json("workdirs", workdirs)
         chunk_text = observe.render(seen.events)
         if not chunk_text.strip():
             with self.ledger.transaction():
@@ -936,6 +988,7 @@ class Worker:
             range_end=end,
             agent_ranges=self._agent_ranges(),
             produced_text=seen.produced_text,
+            workdirs=workdirs,
         )
         # EVERY proposal gets a decision on the record: deciding is a few reads,
         # and a proposal dropped here would be dropped silently while the lease
@@ -1203,6 +1256,16 @@ class Worker:
             self.ledger.close()
             self.spend.close()
         return 0
+
+
+def _merge_workdirs(existing: list, new: list) -> list:
+    """Folders the session's commands ran in, most recent last, each once, capped."""
+    order = [d for d in existing if d not in new]
+    for d in new:
+        if d in order:
+            order.remove(d)
+        order.append(d)
+    return order[-20:]
 
 
 def _merge_touched(existing: list, new: set) -> list:
