@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`probe companion authorize` prints the approval link.** It passed no prompt to the device
+  flow, so `--no-browser` (or any machine where the browser does not open) showed nothing and
+  polled until the code expired. The wizard's `daemon` choice goes through the same path.
+
 ## 0.179.0
 
 - **The Probe daemon: a fourth state of the `probe` switch.** `on` / `daemon` / `read` / `off`.
