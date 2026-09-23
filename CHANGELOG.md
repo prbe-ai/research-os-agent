@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.179.0
+
 - **The Probe daemon: a fourth state of the `probe` switch.** `on` / `daemon` / `read` / `off`.
   In `daemon`, a background worker reads the session transcript and records the work in Probe
   (titled `companion:` sub-notes, empty names and descriptions, tags, papers, run lineage,
