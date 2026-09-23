@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.179.4
+
 - **A failed plugin update says why.** The wizard's Update printed "`claude plugin update` did not
   complete" (or the Codex equivalent) and dropped the error `claude`/`codex` had printed, so
   neither the screen nor `probe doctor` could say what went wrong. It now names the command that
