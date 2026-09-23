@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.179.3
+
 - **The Probe daemon uploads files wherever the session worked** (tap 0.7.1). It no longer refuses a
   session started in the home folder or a file outside the starting folder: a relative path a
   command printed resolves against the folder that command `cd`'d into. Before uploading it checks
