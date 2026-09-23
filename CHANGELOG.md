@@ -9,6 +9,11 @@
   logged with the SDK is never uploaded twice. Credential-shaped names, hidden folders and the
   secret scan still apply.
 
+- **The daemon state reads `tracking (daemon)`, not `on (daemon)`.** The status line and pi's footer
+  now use the same word as the `on` state, with the switch position in brackets:
+  `tracking (daemon) → <project>`, and `tracking (daemon degraded) → <project>` while the agent has
+  recording back.
+
 ## 0.179.2
 
 - **The status line names the switch position in `daemon`.** `on (daemon) → <project>` while the

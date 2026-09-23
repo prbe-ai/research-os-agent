@@ -267,14 +267,14 @@ function parseCapture(raw: unknown): CaptureReading | undefined {
 /** The footer's word for a recording session; mirrors `session_marker._recording_labels`. */
 export const RecordingLabel = {
   Tracking: "tracking",
-  Daemon: "on (daemon)",
-  DaemonDegraded: "on (daemon degraded)",
+  Daemon: "tracking (daemon)",
+  DaemonDegraded: "tracking (daemon degraded)",
 } as const;
 
 /**
  * `daemonLive` is undefined outside the `daemon` state. Inside it the footer
- * names the switch's position: `on (daemon)` while the daemon holds a live
- * lease, `on (daemon degraded)` while the agent has recording back. With
+ * names the switch's position: `tracking (daemon)` while the daemon holds a
+ * live lease, `tracking (daemon degraded)` while the agent has recording back. With
  * capture down the suffix already explains a daemon that cannot run (it is
  * capture's child), so that line keeps the shorter label.
  */

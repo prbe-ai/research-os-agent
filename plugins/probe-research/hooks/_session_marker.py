@@ -78,16 +78,16 @@ _GLYPH_WIDTH = 2  # the dot plus its trailing space
 #: does not, and a status line is read by people who did not install it.
 _LABEL_TRACKED = "tracking " + _ARROW + " "
 _LABEL_TRACKING_BARE = "tracking"
-#: The `daemon` state's words, in place of "tracking": recording is ON, and the
-#: daemon does it. The switch's own word is kept in the label so the reader can
+#: The `daemon` state's words: the same "tracking" as `on`, because the work
+#: lands either way, with the switch's position in parentheses so the reader can
 #: see which of the four positions the session is in.
-_LABEL_DAEMON = "on (daemon) " + _ARROW + " "
-_LABEL_DAEMON_BARE = "on (daemon)"
+_LABEL_DAEMON = "tracking (daemon) " + _ARROW + " "
+_LABEL_DAEMON_BARE = "tracking (daemon)"
 #: Still the `daemon` state, but the daemon holds no live lease (no key, out of
 #: budget, gateway down, not started yet), so the AGENT is recording. The mode
 #: stays on screen; `degraded` says the daemon is not the one doing it.
-_LABEL_DAEMON_DEGRADED = "on (daemon degraded) " + _ARROW + " "
-_LABEL_DAEMON_DEGRADED_BARE = "on (daemon degraded)"
+_LABEL_DAEMON_DEGRADED = "tracking (daemon degraded) " + _ARROW + " "
+_LABEL_DAEMON_DEGRADED_BARE = "tracking (daemon degraded)"
 #: Kept for readers that still resolve the switch to a BOOLEAN. `render` only
 #: reaches it when no three-valued state was passed in, which is the shape a
 #: pre-three-state caller has. New callers pass `session_state` and get one of
@@ -161,8 +161,8 @@ _MIN_SLUG_CHARS_DEGRADED = 8
 #: `test_this_labs_project_names_mostly_fit_whole` pins the name budget.
 #:
 #: The bare label is the WIDER of the two that can carry the capture suffix:
-#: `on (daemon)` does too (see `_recording_labels`), and it is three columns
-#: longer than `tracking`.
+#: `tracking (daemon)` does too (see `_recording_labels`), and it is nine
+#: columns longer than `tracking`.
 MAX_SEGMENT_CHARS = (
     len(_INDENT)
     + _GLYPH_WIDTH
@@ -2188,7 +2188,7 @@ def _recording_labels(session_state: "str | None", daemon_live: bool, capture_re
 
     In the `daemon` state the capture suffix already explains a daemon that is
     not running (the worker is a child of capture), so that line keeps the
-    shorter `on (daemon)` and its columns go to the reason.
+    shorter `tracking (daemon)` and its columns go to the reason.
     """
     if session_state != STATE_DAEMON:
         return _LABEL_TRACKED, _LABEL_TRACKING_BARE
@@ -2250,10 +2250,10 @@ def render(
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
-    In the `daemon` state the word "tracking" becomes the switch's position:
-    `on (daemon)` while the daemon holds a live lease (`daemon_live`), and
-    `on (daemon degraded)` when it does not, because then the AGENT is the one
-    recording and that is what the reader needs to know.
+    In the `daemon` state "tracking" carries the switch's position:
+    `tracking (daemon)` while the daemon holds a live lease (`daemon_live`), and
+    `tracking (daemon degraded)` when it does not, because then the AGENT is the
+    one recording and that is what the reader needs to know.
 
     TWO STATES OF THE SWITCH: tracking, or not. The caller resolves which via
     `is_tracking`; this only renders it. An earlier version carried a third —

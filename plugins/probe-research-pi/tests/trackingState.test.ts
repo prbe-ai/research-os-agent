@@ -193,16 +193,16 @@ describe("trackingStatusText", () => {
   });
 
   it("names the switch position in the daemon state", () => {
-    expect(trackingStatusText(true, undefined, true)).toBe("● on (daemon)");
-    expect(trackingStatusText(true, undefined, false)).toBe("● on (daemon degraded)");
+    expect(trackingStatusText(true, undefined, true)).toBe("● tracking (daemon)");
+    expect(trackingStatusText(true, undefined, false)).toBe("● tracking (daemon degraded)");
     expect(trackingStatusText(true, { running: true, reason: "running" }, false)).toBe(
-      "● on (daemon degraded)",
+      "● tracking (daemon degraded)",
     );
   });
 
   it("keeps the short daemon label when capture is down, so the reason reads whole", () => {
     expect(trackingStatusText(true, { running: false, reason: "halted" }, false)).toBe(
-      "◐ on (daemon) · not capturing session transcript: halted",
+      "◐ tracking (daemon) · not capturing session transcript: halted",
     );
     expect(trackingStatusText(true, { running: false, reason: "halted" })).toBe(
       "◐ tracking · not capturing session transcript: halted",
