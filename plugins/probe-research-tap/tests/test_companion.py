@@ -308,19 +308,43 @@ def test_artifact_gates(tmp_path, monkeypatch):
     (work / "results.csv").write_text("step,loss\n1,0.5\n")
     (work / "plot.png").write_bytes(b"\x89PNG\x00\x00binary")
     (work / "data.db").write_bytes(b"SQLite format 3\x00")
+    (work / "embeddings.npy").write_bytes(b"\x93NUMPY\x01\x00v\x00" + bytes(range(256)))
+    (work / "run.creds").write_text("aws_secret_access_key = wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYzz\n")
+    (work / "id_rsa").write_text("not a real key\n")
+    (work / "empty.csv").write_text("")
+    key_line = "aws_secret_access_key = " + "wJalrXUtnFEMIK7MDENG" + "bPxRfiCYEXAMPLEKEYzz\n"
+    (work / "notes-latin1.txt").write_bytes(("caf\xe9 " + key_line).encode("latin-1"))
+    (work / "nul-led.log").write_bytes(b"\x00" + key_line.encode())
+    (work / "cache.sqlite").write_bytes(b"SQLite format 3\x00" + bytes(64) + key_line.encode() + bytes(64))
+    (work / "bundle.zip").write_bytes(b"PK\x03\x04" + bytes(200))
+    (work / "vault.kdbx").write_bytes(bytes(range(256)))
     (work / ".env").write_text("X=1\n")
     (work / ".cache").mkdir()
     (work / ".cache" / "out.csv").write_text("a\n")
     (work / "leak.txt").write_text("aws_secret_access_key = wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEYzz\n")
     (work / "tokens.txt").write_text("x\n")
     (work / "read-only.csv").write_text("a\n")
-    produced = "python train.py\nsaved results.csv, plot.png, data.db, .env, .cache/out.csv, leak.txt, tokens.txt"
+    produced = ("python train.py\nsaved results.csv, plot.png, data.db, .env, .cache/out.csv, leak.txt, tokens.txt, "
+                "embeddings.npy, run.creds, id_rsa, empty.csv, notes-latin1.txt, nul-led.log, cache.sqlite, "
+                "bundle.zip, vault.kdbx")
     decider = _decider(api, tmp_path, cwd=work, produced_text=produced)
     out = decider.decide(_raw("artifact", path="results.csv"))
     assert out["op"][0] == "UPLOAD" and out["payload"]["name"] == "results.csv"
     assert decider.decide(_raw("artifact", path="plot.png"))["op"][0] == "UPLOAD"
+    # Any kind of file: the extension decides nothing (a .npy or a .db the run made uploads).
+    assert decider.decide(_raw("artifact", path="embeddings.npy"))["op"][0] == "UPLOAD"
+    assert decider.decide(_raw("artifact", path="data.db"))["op"][0] == "UPLOAD"
     for bad, reason in (
-        ("data.db", "does not upload .db"),
+        ("run.creds", "secret scanner"),  # text by content, whatever the suffix: scanned
+        ("id_rsa", "not uploadable"),
+        ("empty.csv", "empty"),
+        # Every file is scanned, whatever its encoding or kind...
+        ("notes-latin1.txt", "secret scanner"),
+        ("nul-led.log", "secret scanner"),
+        ("cache.sqlite", "secret scanner"),
+        # ...and a container the scan cannot read into is the researcher's to upload.
+        ("bundle.zip", "compressed"),
+        ("vault.kdbx", "not uploadable"),
         (".env", "hidden"),
         (".cache/out.csv", "hidden"),
         ("leak.txt", "secret scanner"),
@@ -787,14 +811,16 @@ def test_the_supervisor_honours_do_not_respawn(tmp_path, monkeypatch):
     assert len(spawned) == 2  # the switch moved: try again
 
 
-def test_finish_runs_one_last_cycle_and_hands_back(tmp_path, monkeypatch):
+def test_finish_runs_one_last_cycle_then_the_conclusions_pass_and_hands_back(tmp_path, monkeypatch):
     api = FakeApi(entities={f"/v1/runs/{RUN}": {"id": RUN}}, lists={f"/v1/runs/{RUN}/sub-notes": {"sub_notes": []}})
     body = _claude_lines(_tool_use("c1", "probe run start"), _tool_result("c1", f'{{"run_id": "{RUN}"}}'))
     worker, _ = _live_worker(tmp_path, api, body)
     monkeypatch.setattr(worker_mod.Worker, "ensure_api", lambda self: True)
     api.proposals = [{"kind": "note", "target": {"type": "run", "id": RUN}, "evidence": {"from": 1, "to": len(body)}, "title": "t", "body": "b"}]
     assert worker.finish() == 0
-    assert api.completions == 1 and [w[0] for w in api.writes] == ["POST"]
+    # The last cycle, then the conclusions pass over the whole session: the same
+    # note proposed twice is ONE write (its idempotency key is the same).
+    assert api.completions == 2 and [w[0] for w in api.writes] == ["POST"]
     reasons = [r for (r,) in ledger_mod.Ledger(SID).conn.execute("SELECT reason FROM boundaries ORDER BY id")]
     assert reasons[-1] == "session_end"
     assert json.loads(lease.lease_path(SID).read_text())["reason"] == lease.REASON_STOPPED

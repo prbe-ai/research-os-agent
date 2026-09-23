@@ -34,7 +34,14 @@ def test_codex_lifecycle_hooks_start_and_stop_capture() -> None:
     rather than an accident.
     """
     hooks = json.loads((PLUGIN_ROOT / "hooks" / "hooks.json").read_text())
-    assert set(hooks["hooks"]) == {"SessionStart", "UserPromptSubmit", "SessionEnd"}
+    assert set(hooks["hooks"]) == {"SessionStart", "UserPromptSubmit", "SessionEnd", "Stop"}
+    # Stop is the daemon's turn-end signal (hooks/turn-end.sh). It reaches Codex
+    # too, by decision: it writes only when the session is in `daemon` and the
+    # payload names a transcript, prints nothing, and exits 0 on every failure,
+    # so where Codex sends no transcript path the worker keeps its quiet timer.
+    turn = hooks["hooks"]["Stop"][0]["hooks"][0]
+    assert "turn-end.sh" in turn["command"] and turn["timeout"] == 3
+    assert "statusMessage" not in turn
     start = hooks["hooks"]["SessionStart"][0]["hooks"][0]
     end = hooks["hooks"]["SessionEnd"][0]["hooks"][0]
     ensure = hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]

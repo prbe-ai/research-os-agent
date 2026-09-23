@@ -17,9 +17,21 @@ write again; the server's `Idempotency-Key` store makes that replay a no-op.
 (the CLI cannot import the tap), so the format carries a version:
 `meta.format_version`. A reader that finds a version it does not know must
 refuse ("upgrade the CLI"), never guess; the writer never opens a file newer
-than itself. Bump LEDGER_VERSION on ANY schema change and keep the CLI reader in
+than itself. Bump LEDGER_VERSION on a change an older reader or writer would
+misread (a changed column, a changed meaning) and keep the CLI reader in
 `probe/cli/companion.py` in step -- `agent/tests/test_companion_ledger_contract.py`
-fails if they disagree.
+fails if they disagree. A NEW table older code never touches is additive and
+keeps the version: bumping it would lock every released CLI out of every daemon
+ledger until the next CLI release, and make a tap rollback refuse its own files.
+
+`judgments` (additive) are the Jev judge's answers about each finished turn,
+kept beside what the model then decided (SHADOW: they never skip a call).
+`traces` (additive) keeps the exact conversation of every model round: the
+request the worker sent (system prompt, session facts, transcript view) and the
+answer or the error, zlib-compressed JSON, so nothing the daemon saw, asked or
+answered is invisible afterwards (`probe companion trace <cycle>`). Bounded per
+session: TRACE_KEEP_SECONDS and TRACE_KEEP_BYTES, oldest first; an existing file
+gains both tables when a worker opens it.
 
 `<state>/probe/companion/device.sqlite` is the device-wide spend ceiling, shared
 by every session's worker.
@@ -31,11 +43,15 @@ import json
 import os
 import sqlite3
 import time
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterator
 
 LEDGER_VERSION = 1
+
+TRACE_KEEP_SECONDS = 7 * 24 * 3600
+TRACE_KEEP_BYTES = 50 * 1024 * 1024
 
 STATUS_HELD = "held"
 STATUS_PENDING = "pending"
@@ -101,6 +117,30 @@ CREATE TABLE IF NOT EXISTS feedback (
     note TEXT,
     consumed INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS traces (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle INTEGER,
+    round INTEGER NOT NULL,
+    at REAL NOT NULL,
+    request BLOB NOT NULL,
+    response BLOB,
+    error TEXT,
+    bytes INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS traces_cycle ON traces(cycle);
+CREATE INDEX IF NOT EXISTS traces_bytes ON traces(bytes);
+CREATE TABLE IF NOT EXISTS judgments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at REAL NOT NULL,
+    purpose TEXT NOT NULL,
+    byte_start INTEGER NOT NULL,
+    byte_end INTEGER NOT NULL,
+    questions TEXT NOT NULL,
+    answers TEXT,
+    model TEXT,
+    error TEXT,
+    elapsed_ms INTEGER
+);
 """
 
 
@@ -160,6 +200,8 @@ class Ledger:
             raise LedgerVersionError(
                 f"{self.path} is ledger format {found}; this worker writes {LEDGER_VERSION}"
             )
+        else:
+            self._prune_traces(time.time())
 
     def close(self) -> None:
         self.conn.close()
@@ -223,6 +265,10 @@ class Ledger:
             [(eid, etype, off, ctx[:300]) for eid, (etype, off, ctx) in found.items()],
         )
 
+    def seen_contexts(self) -> dict[str, str | None]:
+        """Where each id was first seen: the command, or the Probe tool's name."""
+        return dict(self.conn.execute("SELECT entity_id, context FROM seen_ids"))
+
     def seen_ids(self) -> dict[str, str | None]:
         return dict(
             self.conn.execute(
@@ -251,6 +297,67 @@ class Ledger:
             "WHERE id = ?",
             (time.time(), outcome, input_tokens, output_tokens, cycle),
         )
+
+    # -- traces -------------------------------------------------------------
+    def add_trace(self, *, cycle: int | None, round: int, request: Any, response: Any = None,
+                  error: str | None = None) -> None:
+        """One model round, exactly as sent and received (the caller redacts)."""
+        req = zlib.compress(json.dumps(request, default=str).encode("utf-8"))
+        resp = zlib.compress(json.dumps(response, default=str).encode("utf-8")) if response is not None else None
+        size = len(req) + len(resp or b"")
+        now = time.time()
+        with self.transaction():
+            self.conn.execute(
+                "INSERT INTO traces(cycle, round, at, request, response, error, bytes) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (cycle, round, now, req, resp, error, size),
+            )
+            self._prune_traces(now)
+
+    def _prune_traces(self, now: float) -> None:
+        """Older than TRACE_KEEP_SECONDS, then oldest first past TRACE_KEEP_BYTES
+        (also run when a worker opens the file, so a finished session's ledger
+        does not keep a week of traces for the ledger's whole retention)."""
+        self.conn.execute("DELETE FROM traces WHERE at < ?", (now - TRACE_KEEP_SECONDS,))
+        # `bytes` is indexed: the sum reads the index, not the BLOB pages.
+        total = self.conn.execute("SELECT COALESCE(SUM(bytes), 0) FROM traces").fetchone()[0]
+        while total > TRACE_KEEP_BYTES:
+            row = self.conn.execute("SELECT id, bytes FROM traces ORDER BY id LIMIT 1").fetchone()
+            if row is None:
+                break
+            self.conn.execute("DELETE FROM traces WHERE id = ?", (row[0],))
+            total -= row[1]
+
+    def traces(self, cycle: int) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT round, at, request, response, error FROM traces WHERE cycle = ? ORDER BY id", (cycle,)
+        ).fetchall()
+        return [
+            {"round": r[0], "at": r[1], "request": json.loads(zlib.decompress(r[2])),
+             "response": json.loads(zlib.decompress(r[3])) if r[3] is not None else None, "error": r[4]}
+            for r in rows
+        ]
+
+    # -- judgments ----------------------------------------------------------
+    def add_judgment(self, *, purpose: str, byte_start: int, byte_end: int, questions: dict,
+                     answers: dict | None = None, model: str | None = None, error: str | None = None,
+                     elapsed_ms: int | None = None) -> None:
+        self.conn.execute(
+            "INSERT INTO judgments(at, purpose, byte_start, byte_end, questions, answers, model, error, elapsed_ms) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (time.time(), purpose, byte_start, byte_end, json.dumps(questions),
+             json.dumps(answers) if answers is not None else None, model, error, elapsed_ms),
+        )
+
+    def judgments(self) -> list[dict]:
+        rows = self.conn.execute(
+            "SELECT purpose, byte_start, byte_end, questions, answers, model, error, elapsed_ms FROM judgments "
+            "ORDER BY id"
+        ).fetchall()
+        return [
+            {"purpose": r[0], "byte_start": r[1], "byte_end": r[2], "questions": json.loads(r[3]),
+             "answers": json.loads(r[4]) if r[4] else None, "model": r[5], "error": r[6], "elapsed_ms": r[7]}
+            for r in rows
+        ]
 
     # -- proposals ----------------------------------------------------------
     def add_proposal(
@@ -323,13 +430,18 @@ class Ledger:
         ).fetchone()
         return int(row[0])
 
-    def committed_writes(self) -> int:
-        """Writes published or waiting to be: what the per-session cap counts."""
-        row = self.conn.execute(
-            "SELECT COUNT(*) FROM proposals WHERE status IN (?, ?)",
-            (STATUS_PUBLISHED, STATUS_PENDING),
-        ).fetchone()
-        return int(row[0])
+    def committed_writes(self, *, kind: str | None = None, exclude_kind: str | None = None) -> int:
+        """Writes published or waiting to be: what the per-session caps count
+        (file notes have a cap of their own, so they never crowd out a note)."""
+        sql = "SELECT COUNT(*) FROM proposals WHERE status IN (?, ?)"
+        args: list = [STATUS_PUBLISHED, STATUS_PENDING]
+        if kind is not None:
+            sql += " AND kind = ?"
+            args.append(kind)
+        if exclude_kind is not None:
+            sql += " AND kind != ?"
+            args.append(exclude_kind)
+        return int(self.conn.execute(sql, args).fetchone()[0])
 
     def hold_pending(self, reason: str) -> int:
         cur = self.conn.execute(

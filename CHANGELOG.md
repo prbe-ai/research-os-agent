@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **The Probe daemon records what the session concluded, not just what it ran** (tap 0.8.0).
+  Replayed against the two digits trials, it matches what the inline agent recorded: the decision
+  with both numbers, the caveat, the PCA verdict, lineage, the parent's description and a note on
+  every result file, where the daemon before it recorded one PCA note and no file notes. What
+  changed:
+  - A **turn-end signal** (a new `Stop` hook; pi's `agent_settled`) makes the daemon read a finished
+    turn at once, then run a **conclusions pass** over the whole session (at most one per 10
+    minutes, and always at session end): conclusions with both sides of every comparison, caveats,
+    the experiment's and project's main documents while they are empty, a parent project's empty
+    description, `derived_from`/`retried_from` lineage, an `abandoned` tag on a run the session
+    replaced, and a one-line note on every result file. Codex runs the new `Stop` hook once you
+    approve it; until then the daemon concludes at session end.
+  - **Nothing is trimmed**: commands whole and outputs up to 120k characters, sized to the
+    gateway's request limit; anything longer or older is one `expand`/`grep` away, and a section of
+    track-work's detailed reference (now vendored as `tap/companion_reference.md`) too. Every model
+    round is kept exactly, redacted: `probe companion trace` lists the cycles, `probe companion
+    trace <cycle>` prints one (7 days / 50 MB per session; needs this CLI release).
+  - Runs a sweep script printed are the session's when they were created during it in a project a
+    `probe` command of the session touched; text inside quotes or a heredoc is never read as a
+    `probe` command.
+  - **Any kind of file the session produced uploads**, and every one is scanned for credentials
+    first (text by content, in any encoding; other files by their readable runs). Compressed
+    archives, which the scan cannot read into, and files from before the session are left for you
+    to upload with `--directed`.
+  - Chunks with nothing to decide (reads and listings only) skip the model call, on the record.
+    With the server's new `POST /v1/companion/judge` enabled for the workspace, Jev flags the
+    agent's paragraphs that no existing note records for the conclusions pass, and records per-kind
+    answers beside each turn; it never replaces a model call. `PROBE_COMPANION_JUDGE=off` turns it
+    off.
+
 - **One statement of who writes what in the `daemon` state.** You launch and the daemon records.
   Yours: the project, experiment and sweep group you launch into, starting runs (`probe exec` or the
   SDK), the run's own data and `run end`. The daemon's: everything else (notes, artifacts, papers,

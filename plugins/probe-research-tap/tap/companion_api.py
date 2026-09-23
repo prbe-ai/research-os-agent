@@ -31,6 +31,7 @@ from typing import Any
 from tap import config as cfg
 
 GATEWAY_PATH = "/v1/companion/complete"
+JUDGE_PATH = "/v1/companion/judge"
 DEFAULT_TIMEOUT = 30.0
 GATEWAY_TIMEOUT = 120.0
 USER_AGENT = "probe-companion/1"
@@ -169,6 +170,17 @@ class Api:
         out = self.request("POST", GATEWAY_PATH, body, timeout=timeout)
         if not isinstance(out, dict) or not isinstance(out.get("content"), str):
             raise Retryable(502, out, "gateway answered without content")
+        return out
+
+    def judge(self, text: str, questions: dict[str, str], *, notes: list[str] | None = None,
+              timeout: float = 30) -> dict:
+        """Jev's probability per yes/no question about `text`:
+        `{"answers", "model", "error", "elapsed_ms"}`. A Jev failure is `error`
+        with no answers (a 200), never a zero probability."""
+        body = {"state": {"text": text, "notes": list(notes or [])}, "questions": questions}
+        out = self.request("POST", JUDGE_PATH, body, timeout=timeout)
+        if not isinstance(out, dict):
+            raise Retryable(502, out, "the judge answered without a body")
         return out
 
     def put_file(self, url: str, path: Path, *, content_type: str, headers: dict | None = None) -> None:

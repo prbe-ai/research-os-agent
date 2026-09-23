@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -31,12 +32,16 @@ ASSISTANT = "assistant"
 TOOL_CALL = "tool_call"
 TOOL_RESULT = "tool_result"
 
-#: Per-event caps on what reaches the model. Head and tail are kept for long
-#: results because a script's verdict (final metric, saved path) is usually at
-#: the end and its configuration at the start.
-TEXT_CAP = 4000
+#: The daemon sees events WHOLE: a command is never cut, and a message or a
+#: result only when one event alone is larger than EVENT_CEILING, which keeps
+#: its head and tail and says how much is between them (the full text stays in
+#: the transcript). What bounds a cycle is the WORKER's render budget, which
+#: ends the cycle early rather than cutting what is in it.
+EVENT_CEILING = 120_000
 #: The longest single transcript line the worker will parse.
 MAX_LINE_BYTES = 4 * 1024 * 1024
+#: Kept for callers that still ask for the old per-event view (context only).
+TEXT_CAP = 4000
 COMMAND_CAP = 2000
 RESULT_CAP = 3000
 
@@ -50,7 +55,22 @@ _TYPED_ID_RE = re.compile(
 #: `cd DIR` at the start of a shell command or after `&&`, `;`, `||`, `(` or a
 #: newline: the folder the rest of the command ran in.
 _CD_RE = re.compile(r"(?:^|&&|\|\||;|\(|\n)\s*cd\s+(\"[^\"]+\"|'[^']+'|[^\s;&|)]+)")
-_PROBE_CMD_RE = re.compile(r"(?:^|[\s;&|(`])probe\s+(?P<rest>[^\n;&|]*)")
+#: shlex operator tokens (the newline included: each line is its own command),
+#: those that END a command, and a heredoc opener -- the plugin guard's
+#: tokenizer (`hooks/tracking_guard.py`), vendored: the tap cannot import it.
+_OPERATOR_CHARS = "();<>|&\n"
+_SEPARATOR_CHARS = frozenset(";|&()\n")
+_HEREDOC = re.compile(r"(?<!<)<<(-?)[ \t]*(['\"]?)\\?([A-Za-z0-9_][A-Za-z0-9_.-]*)\2")
+_SHELLS = {"bash", "sh", "zsh", "dash"}
+_ENV_WORD = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+#: Words that run the command after them: `uv run [opts] probe ...`, `time probe ...`.
+_LAUNCHERS = {"uv", "uvx", "pipx", "poetry", "pdm", "npx", "time", "sudo", "nohup", "env", "exec", "command",
+              "timeout", "nice", "xargs", "caffeinate", "stdbuf",
+              # shell keywords a command follows: `do probe ...`, `then probe ...`
+              "do", "then", "else", "elif", "!", "{"}
+#: A heredoc opener is looked for on the line with its quoted text and arithmetic
+#: blanked: `python -c 'print(1<<2)'` and `$((1<<2))` open nothing.
+_QUOTED_OR_ARITH = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"|\$\(\([^)]*\)\)")
 _WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "write", "edit"}
 #: A Probe MCP tool, under any harness's spelling of its name.
 _PROBE_MCP_RE = re.compile(r"probe[-_]research", re.IGNORECASE)
@@ -105,14 +125,23 @@ class Observation:
     redactions: int
     produced_text: str = ""
     workdirs: list[str] = field(default_factory=list)
+    # Tool calls whose result has not arrived yet (call id -> {"offset", "tool",
+    # "command"}), carried to the next chunk so a call read in one cycle and
+    # answered in the next still grounds its run id and produced files.
+    open_calls: dict[str, dict] = field(default_factory=dict)
+    # Runs named in the OUTPUT of the session's own work commands (a sweep script
+    # printing each run's URL): not acted on by a `probe` command, so not in
+    # `ids`; the worker admits one only inside an experiment the session acted on.
+    mentioned_runs: dict[str, int] = field(default_factory=dict)
 
 
-def _cap(text: str, limit: int) -> str:
+def _cap(text: str, limit: int, event_id: str | None = None) -> str:
     if len(text) <= limit:
         return text
     head = limit * 2 // 3
     tail = limit - head - 30
-    return f"{text[:head]}\n…[{len(text) - head - tail} chars cut]…\n{text[-tail:]}"
+    how = f'; {{"expand": "{event_id}"}} pages through them' if event_id else ""
+    return f"{text[:head]}\n…[{len(text) - head - tail} chars cut{how}]…\n{text[-tail:]}"
 
 
 def _block_texts(content: Any) -> list[str]:
@@ -369,8 +398,100 @@ def probe_words(rest: str) -> list[str]:
     return words
 
 
+def _strip_heredocs(command: str) -> str:
+    """The command without its heredoc BODIES (text on stdin, not commands)."""
+    kept: list[str] = []
+    pending: list[tuple[str, bool]] = []
+    for line in command.split("\n"):
+        if pending:
+            word, tabs = pending[0]
+            if (line.lstrip("\t") if tabs else line) == word:
+                pending.pop(0)
+            continue
+        kept.append(line)
+        pending.extend((m.group(3), bool(m.group(1))) for m in _HEREDOC.finditer(_QUOTED_OR_ARITH.sub(" ", line)))
+    return "\n".join(kept)
+
+
+def _shell_segments(command: str) -> list[list[str]]:
+    """Each simple command's words, split on operators OUTSIDE quotes, so quoted
+    text (`grep -E '^(wrote|probe run)'`) is one word, never a command. A segment
+    left open by unbalanced quotes is dropped."""
+    lexer = shlex.shlex(_strip_heredocs(command).replace("\\\n", " "), posix=True,
+                        punctuation_chars=_OPERATOR_CHARS)
+    lexer.whitespace_split = True
+    lexer.whitespace = " \t\r"
+    lexer.commenters = ""
+    segments: list[list[str]] = []
+    segment: list[str] = []
+    try:
+        for token in lexer:
+            if set(token) <= set(_OPERATOR_CHARS) and set(token) & _SEPARATOR_CHARS:
+                if segment:
+                    segments.append(segment)
+                segment = []
+            else:
+                segment.append(token)
+    except ValueError:
+        return segments
+    if segment:
+        segments.append(segment)
+    return segments
+
+
+def _probe_invocations(command: str, depth: int = 0) -> list[str]:
+    """The text after `probe` for each probe invocation in a shell command: the
+    first `probe` word of each simple command (after a launcher like `uv run`
+    too), inside a `bash -lc '...'` wrapper too, never in quotes or a heredoc."""
+    out: list[str] = []
+    for words in _shell_segments(command):
+        while words and _ENV_WORD.match(words[0]):
+            words = words[1:]
+        if not words:
+            continue
+        head = words[0].rsplit("/", 1)[-1]
+        if depth < 2 and head in _SHELLS:
+            # `bash [--norc ...] -lc '<command>'`: the command string is the shell's.
+            for i, word in enumerate(words[1:], start=1):
+                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", word):
+                    if i + 1 < len(words):
+                        out += _probe_invocations(words[i + 1], depth + 1)
+                    break
+                if not word.startswith("-"):
+                    break
+            continue
+        # `probe` is the command itself, or what a launcher runs (`uv run --with
+        # probe-research probe exec ...`, `time probe ...`); never an argument of
+        # another command (`echo probe run end <id>`).
+        at = 0 if head == "probe" else None
+        if at is None and head in _LAUNCHERS:
+            at = next((i for i, w in enumerate(words) if w == "probe" or w.endswith("/probe")), None)
+        if at is not None:
+            out.append(" ".join(words[at + 1 :]))
+    return out
+
+
 def _probe_segments(command: str) -> list[list[str]]:
-    return [probe_words(m.group("rest")) for m in _PROBE_CMD_RE.finditer(command)]
+    return [probe_words(rest) for rest in _probe_invocations(command)]
+
+
+def command_of(event: Event | None) -> str:
+    """The shell command a tool call ran ("" for anything else)."""
+    return _command_of(event) if event is not None else ""
+
+
+def is_work_command(command: str) -> bool:
+    """A command that did work: a probe command that acted, or anything that is
+    not a pure reader (`cat`, `ls`, `grep`...). Its output is evidence."""
+    return bool(command) and (_acted(_probe_segments(command)) or not _is_reader(command))
+
+
+def from_probe_tool(context: str | None) -> bool:
+    """Was an id first seen in a call to a Probe MCP tool (a read), rather than
+    in a `probe` command the session ran?"""
+    # A tool's name has no spaces; a command line (even `uv run --with
+    # probe-research ...`) does.
+    return bool(context) and not any(c.isspace() for c in context) and bool(_PROBE_MCP_RE.search(context))
 
 
 def _acted(segments: list[list[str]]) -> bool:
@@ -392,6 +513,10 @@ def _is_reader(command: str) -> bool:
         command = wrapped.group("inner")
     for segment in _SEGMENT_SPLIT_RE.split(command):
         words = segment.strip().split()
+        # `env X=1 python train.py` and `X=1 python train.py` run python: skip
+        # the environment to find the command.
+        while words and ((words[0] == "env" and len(words) > 1) or _ENV_WORD.match(words[0])):
+            words = words[1:]
         if not words:
             continue
         head = words[0].rsplit("/", 1)[-1]
@@ -400,9 +525,20 @@ def _is_reader(command: str) -> bool:
     return True
 
 
-def observe(source: str, lines: list[tuple[int, bytes]]) -> Observation:
+OPEN_CALLS_KEPT = 200
+OPEN_CALL_COMMAND_CHARS = 20_000
+
+
+def observe(source: str, lines: list[tuple[int, bytes]], open_calls: dict[str, dict] | None = None) -> Observation:
+    """What `lines` show. `open_calls` are the calls earlier chunks left
+    unanswered (`Observation.open_calls` of the previous cycle)."""
     events = parse_lines(source, lines)
-    calls: dict[str, Event] = {e.call_id: e for e in events if e.role == TOOL_CALL and e.call_id}
+    calls: dict[str, Event] = {
+        cid: Event(offset=int(row.get("offset") or 0), role=TOOL_CALL, tool=row.get("tool"), call_id=cid,
+                   tool_input={"command": row.get("command") or ""})
+        for cid, row in (open_calls or {}).items() if isinstance(row, dict)
+    }
+    calls.update({e.call_id: e for e in events if e.role == TOOL_CALL and e.call_id})
     ids: dict[str, tuple[str | None, int, str]] = {}
     run_starts: set[str] = set()
     run_ends: set[str] = set()
@@ -410,6 +546,7 @@ def observe(source: str, lines: list[tuple[int, bytes]]) -> Observation:
     touched: set[str] = set()
     produced: list[str] = []
     workdirs: list[str] = []
+    mentioned: dict[str, int] = {}
     redactions = 0
 
     def ground(text: str, offset: int, context: str) -> None:
@@ -421,8 +558,7 @@ def observe(source: str, lines: list[tuple[int, bytes]]) -> Observation:
     for event in events:
         if event.role == TOOL_CALL:
             command = _command_of(event)
-            for match in _PROBE_CMD_RE.finditer(command):
-                rest = match.group("rest")
+            for rest in _probe_invocations(command):
                 if "--directed" in rest.split():
                     directed.append((event.offset, secrets.redact("probe " + rest.strip())[0]))
                 if probe_words(rest)[:2] == ["run", "end"]:
@@ -452,6 +588,9 @@ def observe(source: str, lines: list[tuple[int, bytes]]) -> Observation:
                 # The OUTPUT only: a path in the command line is as likely an
                 # input (`python eval.py --data customers.parquet`) as a result.
                 produced.append(event.text)
+                for match in _TYPED_ID_RE.finditer(event.text):
+                    if match.group("kind").lower() == "run":
+                        mentioned.setdefault(match.group("id").lower(), event.offset)
         # Redact LAST, and in place: everything downstream sees only this.
         clean, fired = secrets.redact(event.text)
         if fired:
@@ -462,24 +601,144 @@ def observe(source: str, lines: list[tuple[int, bytes]]) -> Observation:
             if fired:
                 redactions += len(fired)
                 event.tool_input = redacted_input if isinstance(redacted_input, dict) else {}
+    answered = {e.call_id for e in events if e.role == TOOL_RESULT and e.call_id}
+    still_open = {
+        cid: {"offset": call.offset, "tool": call.tool,
+              "command": secrets.redact(_command_of(call))[0][:OPEN_CALL_COMMAND_CHARS]}
+        for cid, call in calls.items() if cid not in answered
+    }
+    still_open = dict(sorted(still_open.items(), key=lambda kv: kv[1]["offset"])[-OPEN_CALLS_KEPT:])
     return Observation(
-        events, ids, run_starts, run_ends, directed, touched, redactions, "\n".join(produced), workdirs
+        events, ids, run_starts, run_ends, directed, touched, redactions, "\n".join(produced), workdirs,
+        still_open, mentioned,
     )
 
 
-def render(events: list[Event]) -> str:
-    """The model's view of a chunk: one short block per event, capped."""
-    parts: list[str] = []
+def render_event(event: Event, *, whole: bool = True, index: int = 0) -> str:
+    """One event as the model sees it: `[role @offset]` and its text.
+
+    `whole` (the daemon's view): every event whole up to EVENT_CEILING (a
+    command almost always is; a 500 KB file handed to a Write tool is not), past it
+    cut with the id that pages through the rest. Otherwise the short per-event caps
+    (the earlier-context block)."""
+    text_cap, command_cap, result_cap = (
+        (EVENT_CEILING, EVENT_CEILING, EVENT_CEILING) if whole else (TEXT_CAP, COMMAND_CAP, RESULT_CAP)
+    )
+    eid = f"{event.offset}:{index}" if whole else None
+    if event.role in (USER, ASSISTANT):
+        text = event.text.strip()
+        return f"[{event.role} @{event.offset}]\n{_cap(text, text_cap, eid)}" if text else ""
+    if event.role == TOOL_CALL:
+        command = _command_of(event)
+        detail = _cap(command or json.dumps(event.tool_input, default=str), command_cap, eid)
+        return f"[tool_call {event.tool} @{event.offset}]\n{detail}"
+    if event.role == TOOL_RESULT:
+        status = " error" if event.is_error else ""
+        return f"[tool_result{status} @{event.offset}]\n{_cap(event.text.strip(), result_cap, eid)}"
+    return ""
+
+
+def render(events: list[Event], *, whole: bool = True) -> str:
+    """The model's view of a chunk: one block per event (see `render_event`)."""
+    return "\n\n".join(part for part in (render_event(e, whole=whole, index=i) for e, i in indexed(events)) if part)
+
+
+def indexed(events: list[Event]) -> list[tuple[Event, int]]:
+    """Each event with its index among the events of its JSONL line: one line can
+    hold several (Codex O13), so an event's id is `<line end offset>:<index>`."""
+    out: list[tuple[Event, int]] = []
+    last, index = None, 0
     for event in events:
-        if event.role in (USER, ASSISTANT):
-            text = event.text.strip()
-            if text:
-                parts.append(f"[{event.role} @{event.offset}]\n{_cap(text, TEXT_CAP)}")
-        elif event.role == TOOL_CALL:
-            command = _command_of(event)
-            detail = command or json.dumps(event.tool_input, default=str)
-            parts.append(f"[tool_call {event.tool} @{event.offset}]\n{_cap(detail, COMMAND_CAP)}")
-        elif event.role == TOOL_RESULT:
-            status = " error" if event.is_error else ""
-            parts.append(f"[tool_result{status} @{event.offset}]\n{_cap(event.text.strip(), RESULT_CAP)}")
-    return "\n\n".join(parts)
+        index = index + 1 if event.offset == last else 0
+        last = event.offset
+        out.append((event, index))
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Retrieval: what the model may ask for when the view is not enough.
+# ---------------------------------------------------------------------------
+
+EXPAND_PAGE_CHARS = 48 * 1024
+GREP_MAX_HITS = 50
+GREP_HIT_CHARS = 300
+
+
+def _line_ending_at(path: Path, end: int) -> bytes | None:
+    """The JSONL line whose end offset (just past its newline) is `end`."""
+    if end <= 0:
+        return None
+    with path.open("rb") as handle:
+        handle.seek(end - 1)
+        if handle.read(1) != b"\n":
+            return None
+        begin, pos = 0, end - 1  # search for the newline BEFORE the one ending the line
+        while pos > 0:
+            step = min(64 * 1024, pos)
+            handle.seek(pos - step)
+            nl = handle.read(step).rfind(b"\n")
+            if nl >= 0:
+                begin = pos - step + nl + 1
+                break
+            pos -= step
+            if end - pos > MAX_LINE_BYTES:
+                return None
+        handle.seek(begin)
+        return handle.read(end - 1 - begin)
+
+
+def read_event(path: Path, source: str, event_id: str) -> Event | None:
+    """One event by its id (`<line end offset>:<index>`), redacted, or None."""
+    try:
+        end_s, index_s = event_id.split(":", 1)
+        end, index = int(end_s), int(index_s)
+    except ValueError:
+        return None
+    raw = _line_ending_at(path, end)
+    if raw is None:
+        return None
+    events = parse_lines(source, [(end, raw)])
+    if not 0 <= index < len(events):
+        return None
+    event = events[index]
+    event.text = secrets.redact(event.text)[0]
+    if event.tool_input:
+        redacted, _ = secrets.redact_event(event.tool_input)
+        event.tool_input = redacted if isinstance(redacted, dict) else {}
+    return event
+
+
+def event_text(event: Event) -> str:
+    """What an expansion pages through: the text, or a call's whole input."""
+    if event.role == TOOL_CALL:
+        return _command_of(event) or json.dumps(event.tool_input, default=str)
+    return event.text
+
+
+def grep(path: Path, source: str, needle: str, upto: int) -> list[tuple[str, str]]:
+    """Case-insensitive plain-text search over every event up to `upto`:
+    `[(event id, a <= GREP_HIT_CHARS window around the hit, redacted)]`."""
+    needle = needle.strip().lower()
+    if not needle:
+        return []
+    hits: list[tuple[str, str]] = []
+    offset = 0
+    while offset < upto and len(hits) < GREP_MAX_HITS:
+        lines, new = read_chunk(path, offset, max_bytes=2 * 1024 * 1024)
+        if new <= offset:
+            break
+        for event, index in indexed(parse_lines(source, [(o, raw) for o, raw in lines if o <= upto])):
+            # Redact the WHOLE event before searching or cutting: a window cut from
+            # raw text can start inside a secret, past the key name the redactor
+            # anchors on, and a search over raw text answers whether a secret exists.
+            text = secrets.redact(event_text(event))[0]
+            at = text.lower().find(needle)
+            if at < 0:
+                continue
+            lo = max(0, at - (GREP_HIT_CHARS - len(needle)) // 2)
+            window = text[lo : lo + GREP_HIT_CHARS]
+            hits.append((f"{event.offset}:{index}", window.replace("\n", " ")))
+            if len(hits) >= GREP_MAX_HITS:
+                break
+        offset = new
+    return hits

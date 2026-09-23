@@ -22,6 +22,7 @@ import { checkPairing } from "./pairing.js";
 import { buildStatusReport } from "./status.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./tapRuntime.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./trackingSwitch.js";
+import { writeTurnSignal, type TurnSignalDeps } from "./turnSignal.js";
 import {
   companionKeyHeld,
   DAEMON_CONTEXT,
@@ -104,6 +105,18 @@ function probeIsOff(): boolean {
  * session that just LEFT it runs it once more to clear the notified record.
  */
 let lastTurnInDaemon = false;
+
+function realTurnSignalDeps(): TurnSignalDeps {
+  return {
+    env: process.env,
+    now: () => Date.now(),
+    pid: process.pid,
+    readFileSync: (path) => fs.readFileSync(path, "utf-8"),
+    sizeOf: (path) => fs.statSync(path).size,
+    writeFileSync: (path, content) => fs.writeFileSync(path, content),
+    renameSync: (from, to) => fs.renameSync(from, to),
+  };
+}
 
 function realDaemonNoticeDeps(): DaemonNoticeDeps {
   return {
@@ -486,8 +499,17 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   // retry/compaction/continuation pending); turn_end fires several times per
   // user message and would push/pull far more than needed. See teamNote.ts's
   // module docstring for why this is a full sync, detached, and fail-open.
-  pi.on("agent_settled", async () => {
+  pi.on("agent_settled", async (_event, ctx) => {
     if (probeIsOff()) return;
+    // The daemon's turn signal (turnSignal.ts), before the note sync: it is two
+    // small file writes, and only in `daemon`.
+    if (cachedProbeState === ProbeState.Daemon) {
+      try {
+        writeTurnSignal(ctx.sessionManager.getSessionId(), ctx.sessionManager.getSessionFile(), realTurnSignalDeps());
+      } catch {
+        // No session manager on this event: the worker keeps its quiet timer.
+      }
+    }
     spawnTeamNoteSync(realTeamNoteSyncDeps());
   });
 
