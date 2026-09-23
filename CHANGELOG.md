@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`query_sql`, the MCP's seventh tool.** Read-only SQL over the lab's research tables for
+  exact counts, joins and verifying a number, under the caller's own tenant and visibility.
+  Call it with no `sql` for the table list, pass `tables` for columns, then send one SELECT.
+  It answers in ONE page and never returns a cursor: re-reading would re-run the query. Its
+  description is generated from research-os (`make gen-sql`), so it matches the dashboard
+  assistant word for word. A plan refusal now carries the server's `hint` into the error.
 - `Client.enqueue_artifact_reference(anchor="experiment", ...)` now delivers to the experiment's
   project address. It still queued `POST /v1/experiments/{id}/artifacts`, which answers 410
   since the experiments API was retired, so the reference was dropped on delivery. The CLI's own

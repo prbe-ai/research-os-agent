@@ -136,7 +136,7 @@ probe setup --action imports  # did the background imports finish
 ```
 
 In a fresh agent session, the MCP is connected when its tools appear
-(`browse`, `entity`, `search_knowledge`, `metrics`, `find_papers`). Claude Code
+(`browse`, `entity`, `search_knowledge`, `metrics`, `find_papers`, `query_sql`). Claude Code
 defers MCP tools, so they may be names only until something loads them.
 
 ## Manual and air-gapped installs
