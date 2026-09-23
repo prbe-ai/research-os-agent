@@ -90,6 +90,22 @@ class ReconciliationRequired(RuntimeError):
         self.status_code = status_code
 
 
+class UnsafePending(ReconciliationRequired):
+    """A pending batch that today's redaction would change.
+
+    `Journal.reconcile_pending` settles it against the server's receipt.
+    """
+
+
+def recoverable(exc: ReconciliationRequired) -> bool:
+    """Whether `Journal.reconcile_pending` may be able to settle `exc`.
+
+    An unsafe pending batch, or a 409 (the server may already hold this
+    batch_seq, from a lost response or from another producer).
+    """
+    return isinstance(exc, UnsafePending) or exc.status_code == 409
+
+
 class DeliveryPending(RuntimeError):
     def __init__(self, message: str, *, retryable: bool = False, safe_message: str | None = None):
         super().__init__(message)
@@ -146,11 +162,26 @@ def canonical_payload(payload: dict) -> bytes:
     ).encode()
 
 
+#: Scrub passes before giving up on a fixed point. Real content settles in two.
+_MAX_SCRUB_PASSES = 8
+
+
 def _scrub_content(payload: dict) -> dict:
-    """Scrub content without rewriting stream IDs, source hashes or cursors."""
+    """Scrub content without rewriting stream IDs, source hashes or cursors.
+
+    Repeats until nothing changes. One pass is not always stable: a marker such
+    as `<redacted:probe-token>` contains the word "token" and anchors the next
+    value, and a shortened span can bring an anchor within reach of a value.
+    `_require_safe_pending` scrubs once more and demands no change, so a body
+    staged from a single pass could be refused by its own daemon forever.
+    """
     content = {key: payload[key] for key in ('events', 'cwd', 'provenance') if key in payload}
-    scrubbed, _rules = redact_event(content)
-    return payload | scrubbed
+    for _ in range(_MAX_SCRUB_PASSES):
+        scrubbed, _rules = redact_event(content)
+        if scrubbed == content:
+            break
+        content = scrubbed
+    return payload | content
 
 
 def _require_safe_pending(body: bytes) -> None:
@@ -162,7 +193,7 @@ def _require_safe_pending(body: bytes) -> None:
     """
     payload = json.loads(body)
     if _scrub_content(payload) != payload:
-        raise ReconciliationRequired(
+        raise UnsafePending(
             'pending transcript contains credentials requiring redaction; '
             'reconcile its receipt before rebuilding the reservation'
         )
@@ -245,8 +276,11 @@ class Wire:
             self.last_request_error = type(cause).__name__
             return 0, {"detail": str(exc)}
 
-    def receipts(self, session_id: str) -> dict:
-        code, body = self._request(f"/ingest/v1/sessions/{self.source}/{session_id}/receipts")
+    def receipts(self, session_id: str, *, after: int = -1, limit: int | None = None) -> dict:
+        query = f"?after={after}&limit={limit}" if limit is not None else ""
+        code, body = self._request(
+            f"/ingest/v1/sessions/{self.source}/{session_id}/receipts{query}"
+        )
         if code != 200 or body.get("protocol_version") != 2:
             raise DeliveryPending(
                 f"protocol 2 receipts unavailable (http {code}); nothing newly staged",
@@ -835,7 +869,20 @@ class Journal:
             self._save(state)
             return encoded
 
-    def acknowledge(self, session_id: str, result: dict, *, sent_body: bytes | None = None):
+    def acknowledge(
+        self,
+        session_id: str,
+        result: dict,
+        *,
+        sent_body: bytes | None = None,
+        content_may_differ: bool = False,
+    ):
+        """Retire the pending batch the server acknowledged.
+
+        `content_may_differ` accepts a receipt for the same source range whose
+        body differs only in content (another scrub of the same bytes): every
+        cursor and the prefix hash must still match exactly.
+        """
         with self.transaction():
             pending = self.pending(session_id)
             body = sent_body if sent_body is not None else pending
@@ -843,9 +890,9 @@ class Journal:
                 return
             payload = json.loads(body)
             receipt = result.get("receipt") or {}
-            if (
-                result.get("protocol_version") != 2
-                or receipt.get("body_sha256") != hashlib.sha256(body).hexdigest()
+            if result.get("protocol_version") != 2 or (
+                not content_may_differ
+                and receipt.get("body_sha256") != hashlib.sha256(body).hexdigest()
             ):
                 raise ReconciliationRequired(
                     "server acknowledgment does not match the immutable pending batch"
@@ -919,6 +966,69 @@ class Journal:
             )
         self.acknowledge(session_id, result, sent_body=body)
         return True
+
+    def reconcile_pending(self, session_id: str, wire: Wire) -> str | None:
+        """Settle a pending batch that cannot be replayed as it is.
+
+        Pending bytes are immutable because the server may already hold them.
+        So ask it, for this one batch_seq:
+
+          it has a receipt  -> adopt it. Same cursors and prefix hash means the
+                               same source range, even if another scrub of
+                               those bytes was the body it accepted.
+          it has none, and the body fails today's redaction
+                            -> re-redact the SAME reservation in place: same
+                               batch_seq, same cursors, only content changes.
+                               An older daemon may still be sending the
+                               original; whichever copy the server takes, the
+                               other is then adopted through its receipt.
+          it has none, and the body is clean
+                            -> None. Nothing to settle here, and the caller's
+                               own error is the more specific one.
+
+        Before this, a batch staged by an older scrubber was refused by every
+        newer daemon, and its session stopped shipping for good.
+        """
+        body = self.pending(session_id)
+        state = self.get(session_id)
+        if body is None or state is None:
+            return "nothing pending"
+        payload = json.loads(body)
+        sequence = payload["batch_seq"]
+        remote = wire.receipts(session_id, after=sequence - 1, limit=1)
+        stream = remote.get("stream") or {}
+        receipt = next(
+            (item for item in remote.get("receipts") or [] if item.get("batch_seq") == sequence),
+            None,
+        )
+        if receipt is not None:
+            if stream.get("stream_id") != state["stream_id"]:
+                raise ReconciliationRequired("server stream changed; existing pending bytes retained")
+            self.acknowledge(
+                session_id,
+                {"protocol_version": 2, "receipt": receipt},
+                sent_body=body,
+                content_may_differ=True,
+            )
+            return f"adopted the server's receipt for batch {sequence}"
+        scrubbed = _scrub_content(payload)
+        if scrubbed == payload:
+            return None
+        if _scrub_content(scrubbed) != scrubbed:
+            raise ReconciliationRequired(
+                "redaction does not settle on the pending batch; bytes retained"
+            )
+        encoded = canonical_payload(scrubbed)
+        if len(encoded) > SERVER_BATCH_LIMIT:
+            raise DeliveryPending("re-redacted batch exceeds the route budget; bytes retained")
+        with self.transaction():
+            updated = self.conn.execute(
+                "UPDATE pending SET body=?, digest=? WHERE session_id=? AND body=?",
+                (encoded, hashlib.sha256(encoded).hexdigest(), session_id, body),
+            )
+            if updated.rowcount != 1:
+                raise ReconciliationRequired("pending reservation changed before reconciliation")
+        return f"re-redacted batch {sequence} in place; the server holds no copy of it"
 
     def update(self, session_id: str, **values):
         with self.transaction():

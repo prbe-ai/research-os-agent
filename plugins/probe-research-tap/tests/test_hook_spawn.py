@@ -18,6 +18,7 @@ shell, so a python model of it would have stayed green.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
@@ -99,7 +100,7 @@ def tap_env(tmp_path: Path):
             os.killpg(pid, signal.SIGTERM) if _pgid(pid) == pid else os.kill(pid, signal.SIGTERM)
         except (ValueError, OSError):
             pass
-    for suffix in (".pid", ".shutdown"):
+    for suffix in (".pid", ".shutdown", ".owner", ".stopping"):
         Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
 
 
@@ -244,9 +245,10 @@ def test_session_end_never_group_kills_a_recycled_pid(tmp_path: Path) -> None:
             except OSError:
                 pass
         pid_file.unlink(missing_ok=True)
-        Path(f"/tmp/probe-research-tap-watcher-{session_id}.shutdown").unlink(
-            missing_ok=True
-        )
+        for suffix in (".shutdown", ".stopping"):
+            Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(
+                missing_ok=True
+            )
 
 
 def test_stale_sentinels_are_pruned(tap_env) -> None:
@@ -275,3 +277,161 @@ def test_hooks_are_executable_and_valid_shell() -> None:
         assert script.is_file(), script
         if shutil.which("bash"):
             subprocess.run(["bash", "-n", str(script)], check=True, timeout=30)
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/stat").exists(),
+    reason="a #! script's process name is its file name only on Linux",
+)
+def test_an_agent_that_dies_without_session_end_ends_its_session(tap_env, tmp_path) -> None:
+    """A hard-killed agent never runs SessionEnd. The daemon must notice its
+    owner is gone and finalize, instead of shipping into a dead session until
+    ten quiet minutes pass (and, worse, ending LIVE sessions on the same rule).
+
+    The owner here is a script named `claude`: Linux names a #! process after
+    its script, so SessionStart's walk up its own ancestry stops there.
+    """
+    session_id, transcript, env, _ = tap_env
+    payload = tmp_path / "payload.json"
+    payload.write_text(
+        json.dumps({"session_id": session_id, "transcript_path": str(transcript), "cwd": "/tmp"})
+    )
+    agent = tmp_path / "claude"
+    agent.write_text(f'#!/bin/bash\nbash "{SESSION_START}" <"{payload}" >/dev/null 2>&1\n')
+    agent.chmod(0o755)
+    pid_file = Path(f"/tmp/probe-research-tap-watcher-{session_id}.pid")
+    owner_file = Path(f"/tmp/probe-research-tap-watcher-{session_id}.owner")
+
+    # The agent starts the session, then exits with no SessionEnd.
+    proc = subprocess.run(
+        [str(agent)], env={**env, "PROBE_RESEARCH_TAP_INTERVAL_SECONDS": "1"}, timeout=60
+    )
+    assert proc.returncode == 0
+    record = json.loads(owner_file.read_text())
+    assert record["name"] == "claude"
+    assert not _alive(record["pid"]), "the recorded owner should be the exited script"
+
+    wrapper_pid = int(pid_file.read_text().strip())
+    deadline = time.time() + 30
+    while time.time() < deadline and _alive(wrapper_pid):
+        time.sleep(0.2)
+    assert not _alive(wrapper_pid), "the daemon outlived its agent"
+    assert Path(f"/tmp/probe-research-tap-watcher-{session_id}.shutdown").is_file()
+
+
+def _fake_daemon_group(session_id: str, linger_s: float) -> subprocess.Popen:
+    """A wrapper stand-in that leads its group and takes `linger_s` to finish
+    after SIGTERM, the way the daemon's last pass delivers its FINALIZE."""
+    proc = subprocess.Popen(
+        ["bash", "-c", f'trap "sleep {linger_s}; exit 0" TERM; while :; do sleep 0.05; done'],
+        start_new_session=True,
+    )
+    Path(f"/tmp/probe-research-tap-watcher-{session_id}.pid").write_text(str(proc.pid))
+    time.sleep(0.3)
+    return proc
+
+
+def _cleanup(session_id: str, proc: subprocess.Popen) -> None:
+    with contextlib.suppress(OSError):
+        os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait(timeout=10)
+    for suffix in (".pid", ".shutdown", ".stopping"):
+        Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
+
+
+def _session_end(session_id: str, reason: str, *flags: str) -> float:
+    started = time.monotonic()
+    subprocess.run(
+        ["bash", str(SESSION_END), *flags],
+        input=json.dumps({"session_id": session_id, "reason": reason}),
+        text=True,
+        capture_output=True,
+        check=True,
+        timeout=30,
+    )
+    return time.monotonic() - started
+
+
+@pytest.mark.parametrize(
+    ("reason", "waits"),
+    [("prompt_input_exit", True), ("other", True), ("clear", False), ("resume", False)],
+)
+def test_session_end_waits_for_the_final_delivery(reason, waits) -> None:
+    """Returning at once let the agent exit before the FINALIZE left: in a
+    container that exit kills the daemon mid-delivery. `/clear` and `/resume`
+    keep the agent running, so they must not freeze the researcher."""
+    session_id = f"pytest-wait-{os.getpid()}-{reason}"
+    proc = _fake_daemon_group(session_id, linger_s=1.5)
+    try:
+        started = time.monotonic()
+        subprocess.run(
+            ["bash", str(SESSION_END), "--wait"],
+            input=json.dumps({"session_id": session_id, "reason": reason}),
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        elapsed = time.monotonic() - started
+        if waits:
+            assert elapsed >= 1.2, f"returned after {elapsed:.2f}s, before the daemon finished"
+            assert proc.wait(timeout=5) == 0
+        else:
+            assert elapsed < 1.0, f"{reason} waited {elapsed:.2f}s"
+    finally:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=10)
+        for suffix in (".pid", ".shutdown", ".stopping"):
+            Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
+
+
+def test_session_end_wait_is_bounded() -> None:
+    """A daemon stuck on a dead network cannot hold the agent's exit past the
+    hook's own budget (15s of hooks.json's 20s)."""
+    session_id = f"pytest-bounded-{os.getpid()}"
+    proc = _fake_daemon_group(session_id, linger_s=60)
+    try:
+        started = time.monotonic()
+        subprocess.run(
+            ["bash", str(SESSION_END), "--wait"],
+            input=json.dumps({"session_id": session_id, "reason": "other"}),
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=30,
+        )
+        assert 14 <= time.monotonic() - started < 19
+    finally:
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=10)
+        for suffix in (".pid", ".shutdown", ".stopping"):
+            Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
+
+
+def test_the_original_entry_still_returns_at_once() -> None:
+    """The flagless entry is the one Codex already trusts: its behavior, and
+    its 3s budget, must not change."""
+    session_id = f"pytest-nowait-{os.getpid()}"
+    proc = _fake_daemon_group(session_id, linger_s=1.5)
+    try:
+        assert _session_end(session_id, "other") < 1.0
+    finally:
+        _cleanup(session_id, proc)
+
+
+def test_the_waiting_entry_finds_the_daemon_after_its_sibling_ran() -> None:
+    """Claude Code runs both SessionEnd entries at once, in either order. When
+    the flagless one has already signalled and removed the pid file, the
+    waiting one must still find the daemon and wait for it."""
+    session_id = f"pytest-sibling-{os.getpid()}"
+    proc = _fake_daemon_group(session_id, linger_s=1.5)
+    try:
+        assert _session_end(session_id, "other") < 1.0
+        assert not Path(f"/tmp/probe-research-tap-watcher-{session_id}.pid").exists()
+        assert _session_end(session_id, "other", "--wait") >= 1.0
+        assert proc.wait(timeout=5) == 0
+        assert not Path(f"/tmp/probe-research-tap-watcher-{session_id}.stopping").exists()
+    finally:
+        _cleanup(session_id, proc)

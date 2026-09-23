@@ -17,10 +17,11 @@ Exits cleanly on:
   - cwd matching .disabled_paths
   - 401 halt from the server
   - transcript file missing for 5 ticks (file deleted / session torn down)
-  - orphan session detected (no process holds the transcript open) —
-    happens when CC is hard-killed (SIGKILL / OS reboot / force-quit) and
-    SessionEnd never fires; touches the shutdown sentinel so the wrapper
-    exits too instead of respawning a doomed daemon
+  - the agent process that owns the session is gone (tap/owner.py) —
+    happens when the agent is hard-killed (SIGKILL / OS reboot / force-quit)
+    and SessionEnd never fires; touches the shutdown sentinel so the wrapper
+    exits too instead of respawning a doomed daemon. A quiet session whose
+    agent is still running is never ended: silence is not an ending.
 
 On the way out (every path except the killswitch, whose contract is "ship
 nothing") the daemon reads one last transcript tail and enqueues a FINALIZE for
@@ -49,10 +50,17 @@ from pathlib import Path
 
 from tap import config as cfg
 from tap import killswitch, outbox, reconcile
+from tap import owner as session_owner
 from tap.companion_supervisor import Supervisor
 from tap.outbox import HaltError
 from tap.session_identity import validate_identity
-from tap.session_journal import DeliveryPending, Journal, ReconciliationRequired, Wire
+from tap.session_journal import (
+    DeliveryPending,
+    Journal,
+    ReconciliationRequired,
+    Wire,
+    recoverable,
+)
 from tap.storage import FileOffset, Storage
 from tap.transcript import read_new, validate_json
 
@@ -66,11 +74,18 @@ MAX_DRAIN_PER_TICK = 64
 # the user is mid-sentence; two in a row means they've stopped typing.
 IDLE_THRESHOLD_TICKS = 2
 
-# Run the orphan-session check (lsof on transcript) every N ticks. At the
-# active interval, 12 ticks ≈ 12 minutes; at idle, ≈ 1 hour. lsof is a
-# subprocess and we don't need fast detection — orphans only matter for
-# tidy cleanup.
+# Run the lsof reader check every N ticks. At the active interval, 12 ticks ≈
+# 12 minutes; at idle, ≈ 1 hour. It can only end a session after it has SEEN a
+# reader and then lost it (Codex holds its rollout open; Claude Code never holds
+# its transcript open, so "no reader" alone proves nothing).
 ORPHAN_CHECK_EVERY_TICKS = 12
+
+# A daemon that cannot name its session's owner process (pi, or an agent whose
+# ancestry could not be read) ends the session after this much quiet: the same
+# window the server's idle sweep uses (`--idle-minutes 1440`), so it adds no
+# ending the server would not make anyway, and the daemon does not outlive a
+# hard-killed agent forever.
+UNKNOWN_OWNER_QUIET_SECONDS = 24 * 60 * 60
 #: How often, inside a tick's sleep, the daemon worker's supervisor looks at the
 #: session's switch -- the delay between `/probe daemon` and the worker starting.
 COMPANION_POLL_SECONDS = 5
@@ -79,8 +94,9 @@ COMPANION_POLL_SECONDS = 5
 # rather assume "alive" and skip than block the tick.
 ORPHAN_LSOF_TIMEOUT_S = 5
 
-# Missing daemons recover through a frozen, quiet source prefix. Completion
-# attests that prefix only; it never claims the producer cannot append again.
+# Another session whose daemon is gone recovers through a frozen, quiet source
+# prefix, unless its owner process is known to be alive. Completion attests
+# that prefix only; it never claims the producer cannot append again.
 ORPHAN_QUIET_SECONDS = 10 * 60
 
 # After a 401 halt, a daemon start older than this cooldown clears the latch and
@@ -161,6 +177,14 @@ def _transcript_has_active_reader(path: Path) -> bool | None:
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         return None
     return bool(result.stdout.strip())
+
+
+def _quiet_for(path: Path) -> float:
+    """Seconds since the transcript last changed; 0 when it cannot be read."""
+    try:
+        return time.time() - path.stat().st_mtime
+    except OSError:
+        return 0.0
 
 
 def _resolve_codex_transcript(transcript_dir: Path, session_id: str) -> Path | None:
@@ -322,6 +346,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     journal = None
     tick = 0
     seen_reader = False
+    # (session, batch_seq) pairs a 409 already sent to reconciliation this run:
+    # one receipts lookup per batch, not one per tick for a lasting conflict.
+    reconciled_conflicts: set[tuple[str, int]] = set()
     empty_ticks = 0
     # The Probe daemon worker rides this process's lifecycle as a child; see
     # companion_supervisor.py. Polled every tick and every few seconds of the
@@ -371,7 +398,13 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                 # Recover only sessions with durable consent/capture ownership.
                 states = journal.sessions()
                 current = [state for state in states if state["session_id"] == c.session_id]
-                others = [state for state in states if state["session_id"] != c.session_id]
+                # Stopping drains this session only: SessionEnd waits for this
+                # pass, and the other sessions' backlog is not the agent's exit.
+                others = (
+                    []
+                    if stopping
+                    else [state for state in states if state["session_id"] != c.session_id]
+                )
                 start = (tick * (MAX_DRAIN_PER_TICK - 1)) % len(others) if others else 0
                 states = current + others[start:] + others[:start]
                 for state in states[:MAX_DRAIN_PER_TICK]:
@@ -384,6 +417,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                             state["session_id"] != c.session_id
                             and state.get("live_enabled")
                             and not reconcile.has_live_daemon(state["session_id"])
+                            and session_owner.state(state["session_id"])
+                            is not session_owner.OwnerState.ALIVE
                         ):
                             source_stat = Path(state["path"]).stat()
                             if time.time() - source_stat.st_mtime >= ORPHAN_QUIET_SECONDS and (
@@ -395,16 +430,37 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                                 )
                         for _ in range(4):
                             _require_capture_eligible(source_cwd)
-                            body = journal.stage(
-                                state["session_id"],
-                                cwd=str(source_cwd),
-                                finalize=bool(state.get("finalize_requested")),
-                                historical_only=not state.get("live_enabled", False),
-                            )
-                            if body is None:
-                                break
-                            _require_capture_eligible(source_cwd)
-                            journal.deliver(state["session_id"], wire)
+                            try:
+                                body = journal.stage(
+                                    state["session_id"],
+                                    cwd=str(source_cwd),
+                                    finalize=bool(state.get("finalize_requested")),
+                                    historical_only=not state.get("live_enabled", False),
+                                )
+                                if body is None:
+                                    break
+                                _require_capture_eligible(source_cwd)
+                                journal.deliver(state["session_id"], wire)
+                            except ReconciliationRequired as exc:
+                                if not recoverable(exc):
+                                    raise
+                                pending = journal.pending(state["session_id"])
+                                conflict = (
+                                    state["session_id"],
+                                    json.loads(pending)["batch_seq"] if pending else -1,
+                                )
+                                if exc.status_code == 409:
+                                    if conflict in reconciled_conflicts:
+                                        raise
+                                    reconciled_conflicts.add(conflict)
+                                # Settle it against the server's receipt, then
+                                # stage again. Raises when it cannot be settled;
+                                # None leaves the original error standing.
+                                outcome = journal.reconcile_pending(state["session_id"], wire)
+                                if outcome is None:
+                                    raise
+                                log.warning("session %s: %s", state["session_id"], outcome)
+                                continue
                             sent_bytes += len(body)
                         journal.release_snapshot(state["session_id"])
                     except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
@@ -456,14 +512,22 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
             if stopping:
                 return 0
             tick += 1
+            owner = session_owner.state(c.session_id)
+            if owner is session_owner.OwnerState.GONE:
+                log.info("session %s: its agent process is gone; finalizing", c.session_id)
+                c.shutdown_sentinel.touch()
+                continue
+            if owner is session_owner.OwnerState.ALIVE:
+                session_owner.keep(c.session_id)
+            elif _quiet_for(c.transcript_path) >= UNKNOWN_OWNER_QUIET_SECONDS:
+                log.info("session %s: owner unknown and quiet for a day; finalizing", c.session_id)
+                c.shutdown_sentinel.touch()
+                continue
             if tick % ORPHAN_CHECK_EVERY_TICKS == 0:
                 reader = _transcript_has_active_reader(c.transcript_path)
                 if reader:
                     seen_reader = True
-                elif reader is False and (
-                    seen_reader
-                    or time.time() - c.transcript_path.stat().st_mtime >= ORPHAN_QUIET_SECONDS
-                ):
+                elif reader is False and seen_reader:
                     c.shutdown_sentinel.touch()
                     continue
             empty_ticks = 0 if sent_bytes else empty_ticks + 1

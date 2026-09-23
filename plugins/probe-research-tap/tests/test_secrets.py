@@ -17,6 +17,7 @@ published documentation example. No live secret appears in this repository.
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 import json
 import time
@@ -49,6 +50,12 @@ _SLACK = "xoxb-" + "123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
 #: body — which is exactly how this file broke the public mirror on 2026-09-12.
 _ANTHROPIC = "sk-" + "ant-" + "api03-" + "a" * 80 + "9xQ"
 _OPENAI = "sk-" + "proj-" + "T3Blb" + "kFJ" + "b" * 50
+#: Probe's own ingest tokens, both lengths the server mints: `probe login`'s
+#: device flow cuts an HMAC to 32 hex, pairing draws 48. Only the 48 was
+#: caught, and `ros`/`ing` made the 32 read as word-like to the anchored pass,
+#: so a printed `~/.config/probe/config.json` shipped a live ingest token.
+_PROBE_INGEST_LOGIN = "ros_" + "ing_" + "0f3a9c7e" * 4
+_PROBE_INGEST_PAIRED = "ros_" + "ing_" + "0f3a9c7e" * 6
 
 #: Must be caught. Synthetic values only.
 TRUE_POSITIVES: tuple[tuple[str, str], ...] = (
@@ -74,24 +81,35 @@ TRUE_POSITIVES: tuple[tuple[str, str], ...] = (
     ("gcp_api_key", _GCP_KEY),
     ("bearer_header", "Authorization: Bearer abc123XYZdef456GHIjkl789MNO"),
     ("credential_uri", "postgres://admin:s3cr3tP4ssw0rd@db.internal:5432/probe"),
+    ("probe_ingest_device_login", f"'ingest_token': '{_PROBE_INGEST_LOGIN}'"),
+    ("probe_ingest_paired", f"PROBE_INGEST_TOKEN={_PROBE_INGEST_PAIRED}"),
 )
 
 #: Must NOT be caught. The first four are verbatim from the outage.
 FALSE_POSITIVES: tuple[tuple[str, str], ...] = (
     # PR #365, 539 drops: any 40-character path satisfied the base64 window.
-    ("outage_path_casp", "/OdysseyPrivate/odyssey/experiments/casp"),          # H=3.85
-    ("outage_path_fsq", "/workspace/library/checkpoints/fsq/FINAL"),           # H=4.38
+    ("outage_path_casp", "/OdysseyPrivate/odyssey/experiments/casp"),  # H=3.85
+    ("outage_path_fsq", "/workspace/library/checkpoints/fsq/FINAL"),  # H=4.38
     # PR #365, 76 drops: ordinary pipeline stdout read as a pasted .env.
-    ("outage_env_sha", "SLICE_SHA256=9f2c1ab44e3d8071b5c6e2f9a0d4738b1c5e6f7a8b9c0d1e2f3a4b5c6d7e8f90"),
+    (
+        "outage_env_sha",
+        "SLICE_SHA256=9f2c1ab44e3d8071b5c6e2f9a0d4738b1c5e6f7a8b9c0d1e2f3a4b5c6d7e8f90",
+    ),
     ("outage_env_bytes", "SLICE_BYTES=48210347"),
     ("outage_env_n", "EVAL_N=1024"),
     # Ordinary ML-transcript noise.
     ("path_long", "/workspace/shyam/runs/2026-08-30/checkpoints/step_48000"),
-    ("path_safetensors", "loading /workspace/odyssey/checkpoints/fsq_v3/step_412000/model.safetensors"),
+    (
+        "path_safetensors",
+        "loading /workspace/odyssey/checkpoints/fsq_v3/step_412000/model.safetensors",
+    ),
     ("git_sha", "commit 03a24b90bee1c7341cc4714a5ca21850f8a9a91c"),
     ("uuid", "session 4525087c-392d-4acf-b221-d861512fb467"),
     ("wandb_run_dir", "wandb: Run data is saved locally in wandb/run-20260830_152500-a7k3m9qz"),
-    ("content_hash", "content_hash = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+    (
+        "content_hash",
+        "content_hash = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    ),
     ("hex_digest", "sha256:9f2c1ab44e3d8071b5c6e2f9a0d4738b1c5e6f7a8b9c0d1e2f3a4b5c6d7e8f90"),
     ("torch_shape", "tensor shape torch.Size([32, 1024, 4096]) dtype=torch.bfloat16"),
     ("s3_uri", "s5cmd ls s3://runpod-files-new/checkpoints/odyssey3/"),
@@ -112,10 +130,22 @@ FALSE_POSITIVES: tuple[tuple[str, str], ...] = (
     # taken for a value. Keep them; they are the only evidence we have that the
     # detector survives contact with real transcripts rather than a fixture.
     ("prod_cli_flag", "create the pull secret here:  --some-thing-SOMEEE-SOMEE-SOMEEEE-"),
-    ("prod_path_after_anchor", 'creates R2 credential secret for pods"}, {"path": "SomeThing/configs-abc-defg"'),
-    ("prod_flag_with_literal", ':  --from-literal=R2_ACCESS_KEY_ID="<key>" \\ 54:  --some-thing-K8-SOMEEEE-SOMEEE-ABC-'),
-    ("prod_test_assertion", "test_secret_syncs_before_app_secret - AssertionError: /some/path_with/parts-9a-bc9de"),
-    ("prod_hyphenated_ident", "loaded config `attention-ablation` (26) — the attention-ablation-config entry"),
+    (
+        "prod_path_after_anchor",
+        'creates R2 credential secret for pods"}, {"path": "SomeThing/configs-abc-defg"',
+    ),
+    (
+        "prod_flag_with_literal",
+        ':  --from-literal=R2_ACCESS_KEY_ID="<key>" \\ 54:  --some-thing-K8-SOMEEEE-SOMEEE-ABC-',
+    ),
+    (
+        "prod_test_assertion",
+        "test_secret_syncs_before_app_secret - AssertionError: /some/path_with/parts-9a-bc9de",
+    ),
+    (
+        "prod_hyphenated_ident",
+        "loaded config `attention-ablation` (26) — the attention-ablation-config entry",
+    ),
 )
 
 
@@ -130,6 +160,36 @@ def test_true_positive_is_redacted(name: str, text: str) -> None:
     assert rules, f"{name}: no rule fired"
     assert redacted != text, f"{name}: text unchanged despite a finding"
     assert "<redacted:" in redacted
+
+
+def test_redacted_text_is_stable_under_a_second_scan() -> None:
+    """A marker names its rule, and rule names hold anchor words: the "secret"
+    in `<redacted:anchored-secret>` used to anchor the next value, one value per
+    pass, redacting every sha256 in a JSON line eleven scans deep."""
+    shas = [hashlib.sha256(str(i).encode()).hexdigest() for i in range(10)]
+    line = json.dumps(
+        {"token": "Zq8Wv6Ut4Sr2Po0Nm8Lk6Ab", **{f"sha{i}": v for i, v in enumerate(shas)}}
+    )
+    once, rules = secrets.redact(line)
+    assert rules and secrets.redact(once) == (once, [])
+    assert all(sha in once for sha in shas)
+
+
+def test_a_real_key_after_a_marker_is_still_found() -> None:
+    """Skipping a marker-anchored match resumes past the marker, so a real key
+    name inside that skipped match's reach is still scanned."""
+    value = "hT7xQ2mVb9LkZp0RwYe4Ns6Uc1Ai8Jd3Fg5Oh2Pq"
+    text = f'"a": "<redacted:anchored-secret>", "api_key": "{value}"'
+    redacted, rules = secrets.redact(text)
+    assert rules == ["anchored-secret"] and value not in redacted
+
+
+@pytest.mark.parametrize("token", [_PROBE_INGEST_LOGIN, _PROBE_INGEST_PAIRED])
+def test_both_probe_ingest_token_lengths_are_removed_whole(token: str) -> None:
+    dump = f"{{'contexts': {{'default': {{'ingest_token': '{token}'}}}}}}"
+    redacted, rules = secrets.redact(dump)
+    assert rules == ["probe-ingest-token"]
+    assert token[len("ros_ing_") :] not in redacted
 
 
 @pytest.mark.parametrize("name,text", FALSE_POSITIVES, ids=[n for n, _ in FALSE_POSITIVES])
@@ -174,10 +234,7 @@ def test_structured_and_paired_halves_both_go() -> None:
     A per-rule policy redacts the harmless identifier and keeps the half that
     actually grants access. Pair promotion is what stops that.
     """
-    text = (
-        f"aws_access_key_id = {_AWS_ID}\n"
-        f"aws_secret_access_key = {_AWS_SECRET}\n"
-    )
+    text = f"aws_access_key_id = {_AWS_ID}\naws_secret_access_key = {_AWS_SECRET}\n"
     redacted, rules = secrets.redact(text)
     assert _AWS_ID not in redacted
     assert _AWS_SECRET not in redacted
@@ -205,10 +262,7 @@ def test_indirect_reference_is_not_a_credential() -> None:
 
 
 def test_spans_do_not_overlap_after_dedupe() -> None:
-    text = (
-        f"aws_access_key_id = {_AWS_ID} and "
-        f"aws_secret_access_key = {_AWS_SECRET}"
-    )
+    text = f"aws_access_key_id = {_AWS_ID} and aws_secret_access_key = {_AWS_SECRET}"
     findings = secrets.scan(text)
     for earlier, later in itertools.pairwise(findings):
         assert earlier.end <= later.start, "overlapping spans corrupt the replacement"
@@ -411,11 +465,15 @@ def test_enqueue_records_a_notice_the_next_session_can_print(tmp_path) -> None:
     storage = _storage(tmp_path)
     try:
         body = build_batch_body(
-            device_id="d", session_id="s", batch_seq=0, cwd="/tmp",
-            base_line_no=0, lines=[_cc_line()], sanitize=cc_sanitize,
+            device_id="d",
+            session_id="s",
+            batch_seq=0,
+            cwd="/tmp",
+            base_line_no=0,
+            lines=[_cc_line()],
+            sanitize=cc_sanitize,
         )
-        outbox.enqueue(storage=storage, session_id="s", batch_seq=0, cwd="/tmp",
-                       body=body, now=0)
+        outbox.enqueue(storage=storage, session_id="s", batch_seq=0, cwd="/tmp", body=body, now=0)
         notice = outbox.redaction_notice(storage)
         assert "redacted 1 credential-shaped value" in notice
         assert "aws-access-key-id" in notice
@@ -434,11 +492,15 @@ def test_notice_is_cleared_after_being_read(tmp_path) -> None:
     storage = _storage(tmp_path)
     try:
         body = build_batch_body(
-            device_id="d", session_id="s", batch_seq=0, cwd="/tmp",
-            base_line_no=0, lines=[_cc_line()], sanitize=cc_sanitize,
+            device_id="d",
+            session_id="s",
+            batch_seq=0,
+            cwd="/tmp",
+            base_line_no=0,
+            lines=[_cc_line()],
+            sanitize=cc_sanitize,
         )
-        outbox.enqueue(storage=storage, session_id="s", batch_seq=0, cwd="/tmp",
-                       body=body, now=0)
+        outbox.enqueue(storage=storage, session_id="s", batch_seq=0, cwd="/tmp", body=body, now=0)
         assert outbox.redaction_notice(storage)
         assert outbox.redaction_notice(storage) == ""
     finally:
@@ -452,11 +514,17 @@ def test_notice_accumulates_across_batches(tmp_path) -> None:
     try:
         for seq in range(3):
             body = build_batch_body(
-                device_id="d", session_id="s", batch_seq=seq, cwd="/tmp",
-                base_line_no=0, lines=[_cc_line()], sanitize=cc_sanitize,
+                device_id="d",
+                session_id="s",
+                batch_seq=seq,
+                cwd="/tmp",
+                base_line_no=0,
+                lines=[_cc_line()],
+                sanitize=cc_sanitize,
             )
-            outbox.enqueue(storage=storage, session_id="s", batch_seq=seq, cwd="/tmp",
-                           body=body, now=0)
+            outbox.enqueue(
+                storage=storage, session_id="s", batch_seq=seq, cwd="/tmp", body=body, now=0
+            )
         assert "redacted 3 credential-shaped values" in outbox.redaction_notice(storage)
     finally:
         storage.close()
@@ -467,16 +535,23 @@ def test_clean_session_produces_no_notice(tmp_path) -> None:
 
     storage = _storage(tmp_path)
     try:
-        line = json.dumps({
-            "type": "assistant", "uuid": "u1",
-            "message": {"role": "assistant", "content": [{"type": "text", "text": "clean"}]},
-        }).encode()
+        line = json.dumps(
+            {
+                "type": "assistant",
+                "uuid": "u1",
+                "message": {"role": "assistant", "content": [{"type": "text", "text": "clean"}]},
+            }
+        ).encode()
         body = build_batch_body(
-            device_id="d", session_id="s", batch_seq=0, cwd="/tmp",
-            base_line_no=0, lines=[line], sanitize=cc_sanitize,
+            device_id="d",
+            session_id="s",
+            batch_seq=0,
+            cwd="/tmp",
+            base_line_no=0,
+            lines=[line],
+            sanitize=cc_sanitize,
         )
-        outbox.enqueue(storage=storage, session_id="s", batch_seq=0, cwd="/tmp",
-                       body=body, now=0)
+        outbox.enqueue(storage=storage, session_id="s", batch_seq=0, cwd="/tmp", body=body, now=0)
         assert outbox.redaction_notice(storage) == ""
     finally:
         storage.close()
@@ -489,8 +564,9 @@ def test_recording_a_notice_never_breaks_capture(tmp_path) -> None:
 
     storage = _storage(tmp_path)
     try:
-        outbox.enqueue(storage=storage, session_id="s", batch_seq=0, cwd="/tmp",
-                       body=b"not json", now=0)
+        outbox.enqueue(
+            storage=storage, session_id="s", batch_seq=0, cwd="/tmp", body=b"not json", now=0
+        )
         assert outbox.redaction_notice(storage) == ""
     finally:
         storage.close()

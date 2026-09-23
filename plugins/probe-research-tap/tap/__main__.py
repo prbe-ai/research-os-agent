@@ -18,6 +18,7 @@ def _print_help() -> int:
     print("Subcommands:")
     print("  watch    spawn the daemon (used by SessionStart hook)")
     print("  start    spawn the daemon idempotently, with gates (used by every caller)")
+    print("  owner    record the agent process that owns a session (SessionStart)")
     print("  pair     exchange pairing token for a device token")
     print("  status   print local state")
     print("  revoke   revoke device + wipe local state")
@@ -41,6 +42,10 @@ def main(argv: list[str] | None = None) -> int:
         from tap.main import main as watch_main
 
         return watch_main(rest)
+    if cmd == "owner":
+        from tap.owner import main as owner_main
+
+        return owner_main(rest)
     if cmd == "companion":
         from tap.companion_worker import main as companion_main
 

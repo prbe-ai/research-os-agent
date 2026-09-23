@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 
 from tap import main as tapmain
+from tap import session_journal as tapmain_journal
 from tap.session_identity import validate_identity
 from tap.session_journal import DeliveryPending, Journal
 from tap.storage import Storage
@@ -27,7 +28,7 @@ class Wire:
     def __init__(self):
         self.accepted = {}
 
-    def receipts(self, sid):
+    def receipts(self, sid, **_page):
         if self.unsupported:
             raise DeliveryPending("protocol unavailable")
         return dict(
@@ -483,4 +484,194 @@ def test_current_daemon_shutdown_certifies_complete_records_before_partial_tail(
     final = json.loads(wire.accepted[(config.session_id, 1)])
     assert final["snapshot_byte_end"] == len(original)
     assert final["snapshot_sha256"] == hashlib.sha256(original).hexdigest()
+    journal.close()
+
+
+# ---------------------------------------------------------------------------
+# When is a session over? Its owner process says so, never silence.
+# ---------------------------------------------------------------------------
+
+Owner = tapmain.session_owner.OwnerState
+
+
+def _owner_states(monkeypatch, states: dict[str, Owner], default: Owner = Owner.UNKNOWN):
+    monkeypatch.setattr(
+        tapmain.session_owner, "state", lambda sid: states.get(sid, default)
+    )
+
+
+def _stop_after(monkeypatch, sleeps: int):
+    count = 0
+
+    def sleep(_seconds):
+        nonlocal count
+        count += 1
+        if count >= sleeps:
+            tapmain._shutdown_requested = True
+
+    monkeypatch.setattr(tapmain.time, "sleep", sleep)
+
+
+def test_a_gone_owner_finalizes_the_session(setup, monkeypatch):
+    """The agent was SIGKILLed: no SessionEnd will come. One tick later the
+    daemon finalizes, instead of waiting out a quiet timer."""
+    config, storage, wire = setup
+    _owner_states(monkeypatch, {config.session_id: Owner.GONE})
+    _stop_after(monkeypatch, 50)  # a safety net only: the owner must end it first
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert config.shutdown_sentinel.exists()
+    batches = [json.loads(body) for body in wire.accepted.values()]
+    assert batches[-1]["finalize"] is True
+    journal = Journal(wire.base_url, "synthetic", "claude_code")
+    assert journal.get(config.session_id)["finalized"] is True
+    journal.close()
+
+
+@pytest.mark.parametrize("owner", [Owner.ALIVE, Owner.UNKNOWN])
+def test_a_quiet_session_is_never_ended_for_being_quiet(setup, monkeypatch, owner):
+    """THE false ending. Claude Code holds no reader on its transcript, so the
+    old rule ended every session paused for ten minutes: one was finalized 29
+    times in three days, each ending mined again. Quiet for an hour, no reader
+    ever seen, and still live."""
+    config, storage, _ = setup
+    _owner_states(monkeypatch, {config.session_id: owner})
+    monkeypatch.setattr(tapmain, "ORPHAN_CHECK_EVERY_TICKS", 1)
+    monkeypatch.setattr(tapmain, "_transcript_has_active_reader", lambda _path: False)
+    old = time.time() - 3600
+    os.utime(config.transcript_path, (old, old))
+    _stop_after(monkeypatch, 5)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert not config.shutdown_sentinel.exists(), "a live session was ended for being quiet"
+
+
+def test_unknown_owner_still_ends_when_a_seen_reader_disappears(setup, monkeypatch):
+    """The one deterministic half of the old lsof check survives for agents
+    with no owner record: a reader that WAS there and is now gone."""
+    config, storage, _ = setup
+    _owner_states(monkeypatch, {})
+    monkeypatch.setattr(tapmain, "ORPHAN_CHECK_EVERY_TICKS", 1)
+    readers = iter([True, False])
+    monkeypatch.setattr(tapmain, "_transcript_has_active_reader", lambda _path: next(readers))
+    _stop_after(monkeypatch, 50)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert config.shutdown_sentinel.exists()
+
+
+@pytest.mark.parametrize(("owner", "pinned"), [(Owner.ALIVE, False), (Owner.GONE, True)])
+def test_another_daemon_never_completes_a_session_whose_agent_is_alive(
+    setup, monkeypatch, owner, pinned
+):
+    """A session whose daemon crashed out is still live while its agent runs:
+    the next prompt respawns its daemon. Only a gone (or unknown) owner lets a
+    sibling daemon complete its quiet prefix."""
+    config, storage, wire = setup
+    sid, path = _other_source(config)
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd="/synthetic/other")
+    journal.close()
+    old = time.time() - tapmain.ORPHAN_QUIET_SECONDS - 1
+    os.utime(path, (old, old))
+    monkeypatch.setattr(tapmain.reconcile, "has_live_daemon", lambda _: False)
+    _owner_states(monkeypatch, {sid: owner})
+    assert tapmain._run_durable_loop(config, storage) == 0
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    assert journal.get(sid)["source_byte_end"] == path.stat().st_size
+    assert journal.get(sid)["finalized"] is pinned
+    journal.close()
+
+
+def test_a_batch_older_redaction_let_through_no_longer_strands_its_session(setup, monkeypatch):
+    """A pending body that today's scrubber would change was refused by every
+    newer daemon, forever. The server never saw it, so the loop rebuilds it
+    under current redaction and the session ships again."""
+    config, storage, wire = setup
+    token = "probe_pat_" + "0123456789abcdef" * 2
+    with config.transcript_path.open("a") as handle:
+        handle.write(
+            json.dumps(
+                dict(
+                    type="user",
+                    sessionId=config.session_id,
+                    message=dict(role="user", content=f"token {token}"),
+                )
+            )
+            + "\n"
+        )
+    journal = Journal(wire.base_url, "synthetic", "claude_code")
+    journal.ensure(
+        config.session_id, config.transcript_path, wire.receipts(config.session_id),
+        historical=False, cwd=str(config.cwd),
+    )
+    with monkeypatch.context() as patch:
+        patch.setattr(tapmain_journal, "_scrub_content", lambda payload: payload)
+        assert token.encode() in journal.stage(config.session_id, cwd=str(config.cwd))
+    journal.close()
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert wire.accepted, "the stranded session shipped nothing"
+    assert all(token.encode() not in body for body in wire.accepted.values())
+    journal = Journal(wire.base_url, "synthetic", "claude_code")
+    assert journal.get(config.session_id)["finalized"] is True
+    assert journal.pending(config.session_id) is None
+    journal.close()
+
+
+def test_stopping_drains_only_its_own_session(setup, monkeypatch):
+    """SessionEnd waits for this pass. Another session's backlog is not the
+    agent's exit and must not hold it for up to 15s."""
+    config, storage, wire = setup
+    sid, path = _other_source(config)
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd="/synthetic/other")
+    journal.close()
+    tapmain._shutdown_requested = True
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert any(key[0] == config.session_id for key in wire.accepted)
+    assert not any(key[0] == sid for key in wire.accepted)
+
+
+@pytest.mark.parametrize(("owner", "ended"), [(Owner.UNKNOWN, True), (Owner.ALIVE, False)])
+def test_an_unknown_owner_ends_after_the_servers_idle_window(setup, monkeypatch, owner, ended):
+    """With no owner to watch (pi), a daemon would otherwise outlive a
+    hard-killed agent forever. A day of quiet is the server sweep's own window."""
+    config, storage, _ = setup
+    _owner_states(monkeypatch, {config.session_id: owner})
+    old = time.time() - tapmain.UNKNOWN_OWNER_QUIET_SECONDS - 1
+    os.utime(config.transcript_path, (old, old))
+    _stop_after(monkeypatch, 5)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert config.shutdown_sentinel.exists() is ended
+
+
+def test_a_live_owner_still_ends_when_its_reader_disappears(setup, monkeypatch):
+    """Codex holds its rollout open; a new session in the same process closes
+    the old one while the process lives on."""
+    config, storage, _ = setup
+    _owner_states(monkeypatch, {config.session_id: Owner.ALIVE})
+    monkeypatch.setattr(tapmain, "ORPHAN_CHECK_EVERY_TICKS", 1)
+    readers = iter([True, False])
+    monkeypatch.setattr(tapmain, "_transcript_has_active_reader", lambda _path: next(readers))
+    _stop_after(monkeypatch, 50)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert config.shutdown_sentinel.exists()
+
+
+def test_a_lasting_409_costs_one_receipts_lookup_per_batch(setup, monkeypatch):
+    config, storage, wire = setup
+    calls = []
+    receipts = wire.receipts
+
+    def counting(sid, **page):
+        if page:
+            calls.append(sid)
+        return receipts(sid, **page)
+
+    monkeypatch.setattr(wire, "receipts", counting)
+    monkeypatch.setattr(
+        wire, "post", lambda body: (409, {"detail": "session capture source is disconnected"})
+    )
+    _stop_after(monkeypatch, 5)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert calls == [config.session_id]
+    journal = Journal(wire.base_url, "synthetic", "claude_code")
+    assert "disconnected" in journal.get(config.session_id)["error"]
     journal.close()

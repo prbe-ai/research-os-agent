@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **Transcript capture ends a session when its agent process ends, never because it went quiet**
+  (tap 0.7.2). The tap used to finalize any session that had been quiet for ten minutes with no
+  process holding its transcript open, and Claude Code never holds it open: one session was
+  finalized 29 times in three days and mined again each time. SessionStart now records the
+  `claude`/`codex` process that owns the session (pid and start time), and the daemon finalizes
+  when that exact process is gone, including a hard kill that skips SessionEnd. A daemon that
+  cannot name its owner (pi) ends the session after a day of quiet, the server sweep's window.
+
+- **SessionEnd waits up to 15s for the final delivery** (tap 0.7.2). It returned at once, so
+  wherever the agent's exit took the machine down with it (a container, a CI job) the daemon died
+  before sending the session's finalize. `/clear` and `/resume` do not wait. The wait is a second
+  SessionEnd hook, so the existing one keeps its Codex approval; Codex runs the new one once it is
+  approved.
+
+- **A batch staged under older redaction rules no longer blocks its session forever** (tap 0.7.2).
+  The daemon asks the server about that batch: it adopts the receipt if the server has one, and
+  otherwise re-redacts the same batch in place (same sequence and range, so a copy an older daemon
+  delivers meanwhile is adopted too). Redaction markers no longer anchor the next value: the
+  "secret" in `<redacted:anchored-secret>` used to redact one more value per scan, so a daemon
+  could refuse a body it had just staged.
+
+- **Ingest tokens from `probe login` are redacted from transcripts.** The rule matched only the
+  48-hex tokens pairing mints; the device login's 32-hex `ros_ing_` tokens passed through.
+
 ## 0.179.3
 
 - **The Probe daemon uploads files wherever the session worked** (tap 0.7.1). It no longer refuses a

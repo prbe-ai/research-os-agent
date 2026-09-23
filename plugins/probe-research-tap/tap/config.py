@@ -173,6 +173,15 @@ def shutdown_sentinel(session_id: str) -> Path:
     return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.shutdown"
 
 
+def owner_file(session_id: str) -> Path:
+    """The agent process that owns this session (`tap/owner.py`).
+
+    Written by SessionStart, read by the daemon every tick. Beside the pid
+    file and the shutdown sentinel, so one prune covers all three.
+    """
+    return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.owner"
+
+
 def capture_source() -> str:
     """The source this daemon is capturing for.
 

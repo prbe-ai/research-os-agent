@@ -149,9 +149,12 @@ _RULES: tuple[_Rule, ...] = (
        ("sk-ant-",)),
     # Probe's own credentials (app/auth/tokens.py): user PATs (and the legacy
     # `ros_pat_`), service tokens, ingest tokens. Fixed prefix + hex, so exact.
+    # Ingest tokens come in two lengths: pairing mints 48 hex, `probe login`'s
+    # device flow 32 (app/auth/device_router.py). The anchored pass cannot catch
+    # either, because `ros` and `ing` make the value read as word-like.
     _r("probe-token", r"\b(?:probe_pat_|ros_pat_|probe_svc_)[0-9a-f]{32}\b",
        ("probe_pat_", "ros_pat_", "probe_svc_")),
-    _r("probe-ingest-token", r"\bros_ing_[0-9a-f]{48}\b", ("ros_ing_",)),
+    _r("probe-ingest-token", r"\bros_ing_[0-9a-f]{32}(?:[0-9a-f]{16})?\b", ("ros_ing_",)),
     # OpenAI, both the project-scoped and the classic shape.
     _r("openai-api-key", r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{40,200}\b",
        ("sk-proj-", "sk-svcacct-", "sk-admin-")),
@@ -375,6 +378,40 @@ def _character_classes(value: str) -> int:
     )
 
 
+#: What `redact` writes in place of a finding. A marker names its rule, and rule
+#: names contain anchor words (`<redacted:anchored-secret>`, `probe-token`).
+_MARKER = re.compile(r"<redacted:[a-z0-9_-]+>")
+
+
+def _unmarked(pattern: re.Pattern[str], text: str) -> Any:
+    """`pattern.finditer(text)`, minus any match that touches a redaction marker.
+
+    Without this, scanning already-redacted text is not stable: the "secret" in
+    `<redacted:anchored-secret>` anchors the next value, whose own marker then
+    anchors the one after, one more value per pass. A skipped match resumes the
+    search just past the marker, so a real key name that the skipped match's
+    gap covered is still seen.
+    """
+    if "<redacted:" not in text:
+        yield from pattern.finditer(text)
+        return
+    markers = [(m.start(), m.end()) for m in _MARKER.finditer(text)]
+    pos = 0
+    while pos <= len(text):
+        match = pattern.search(text, pos)
+        if match is None:
+            return
+        crossed = next(
+            (end for start, end in markers if start < match.end() and end > match.start()),
+            None,
+        )
+        if crossed is None:
+            yield match
+            pos = max(match.end(), match.start() + 1)
+        else:
+            pos = max(crossed, match.start() + 1)
+
+
 def _is_indirect(value: str) -> bool:
     """A reference or a placeholder rather than a live credential."""
     return bool(_INDIRECT.match(value))
@@ -411,7 +448,7 @@ def scan(text: str, *, _decode: bool = True) -> list[Finding]:
                 pair_anchors.append((match.start(), match.end()))
 
     if "password" in lowered or "passwd" in lowered:
-        for match in _PASSWORD_ASSIGNMENT.finditer(text):
+        for match in _unmarked(_PASSWORD_ASSIGNMENT, text):
             group = next(name for name in ("double", "single", "bare") if match.group(name) is not None)
             value = match.group(group).rstrip()
             if not value or _is_indirect(value):
@@ -422,7 +459,7 @@ def scan(text: str, *, _decode: bool = True) -> list[Finding]:
 
     # [3] anchored entropy: a credential-shaped key name introduces the value.
     if any(k in lowered for k in _ANCHOR_KEYWORDS):
-        for match in _ANCHORED.finditer(text):
+        for match in _unmarked(_ANCHORED, text):
             if _model_token_anchor(text, match.start()):
                 continue
             value = match.group("value")
@@ -433,7 +470,7 @@ def scan(text: str, *, _decode: bool = True) -> list[Finding]:
             findings.append(
                 Finding("anchored-secret", match.start("value"), match.end("value"))
             )
-        for match in _SHORT_ANCHORED.finditer(text):
+        for match in _unmarked(_SHORT_ANCHORED, text):
             if _model_token_anchor(text, match.start()):
                 continue
             group = next(name for name in ("double", "single", "bare") if match.group(name) is not None)

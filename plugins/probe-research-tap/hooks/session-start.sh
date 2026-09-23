@@ -38,7 +38,12 @@ mkdir -p "$LOG_DIR"
 # private/tmp and find defaults to -P (never follow symlinks), so `find /tmp`
 # matches the symlink itself, descends into nothing, and exits 0 having done
 # nothing at all — which the `|| true` would have hidden forever.
-find /tmp/ -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.shutdown" -mtime +2 -delete 2>/dev/null || true
+# Owner records (tap/owner.py) and session-end's pid hand-overs go the same way:
+# a running daemon refreshes its owner record every tick, so only a finished
+# session's files are ever 2 days old.
+find /tmp/ -maxdepth 1 \( -name "${WATCHER_PREFIX}-watcher-*.shutdown" \
+    -o -name "${WATCHER_PREFIX}-watcher-*.owner" -o -name "${WATCHER_PREFIX}-watcher-*.stopping" \) \
+    -mtime +2 -delete 2>/dev/null || true
 
 HOOK_INPUT="$(cat)"
 SESSION_ID=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || echo "")
@@ -146,6 +151,24 @@ PYEOF
     fi
 fi
 
+# Resolve Python interpreter — prefer plugin-local venv.
+PY="$PLUGIN_ROOT/.venv/bin/python3"
+[ -x "$PY" ] || PY="$(command -v python3 || true)"
+if [ -z "$PY" ] || [ ! -x "$PY" ]; then
+    echo "[$(date -u +%FT%TZ)] no python3 found, daemon disabled" >>"$LOG_FILE"
+    printf '{"continue": true}\n'
+    exit 0
+fi
+
+# Record which agent process owns this session: this hook runs below it, so
+# tap/owner.py walks up from our own pid to the first `claude`/`codex`. The
+# daemon finalizes when that exact process is gone, and never on silence.
+# BEFORE the already-running check on purpose: a session resumed in a new agent
+# process must hand the surviving daemon its new owner, or the old process's
+# exit would end a live session. Fail-open: no record means "owner unknown".
+PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
+    "$PY" -m tap owner --session-id "$SESSION_ID" --from-pid "$$" </dev/null >/dev/null 2>&1 || true
+
 PID_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
 
 # If a daemon is already running for this session_id (e.g. resumed session),
@@ -161,15 +184,6 @@ fi
 # immediately kill the fresh daemon on a resumed session.
 SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 rm -f "$SHUTDOWN_FILE"
-
-# Resolve Python interpreter — prefer plugin-local venv.
-PY="$PLUGIN_ROOT/.venv/bin/python3"
-[ -x "$PY" ] || PY="$(command -v python3 || true)"
-if [ -z "$PY" ] || [ ! -x "$PY" ]; then
-    echo "[$(date -u +%FT%TZ)] no python3 found, daemon disabled" >>"$LOG_FILE"
-    printf '{"continue": true}\n'
-    exit 0
-fi
 
 if [ -n "$TRANSCRIPT_PATH" ]; then
     TRANSCRIPT_ARGS=(--transcript "$TRANSCRIPT_PATH")

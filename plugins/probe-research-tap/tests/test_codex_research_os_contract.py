@@ -42,6 +42,16 @@ def test_codex_lifecycle_hooks_start_and_stop_capture() -> None:
     assert "session-end.sh" in end["command"]
     assert "ensure-daemon.sh" in ensure["command"]
     assert end["timeout"] == 3
+    # The waiting SessionEnd is a SECOND entry, never a change to the first:
+    # Codex trusts a hook by a hash of its whole entry (timeout included) and
+    # silently skips a changed one until the researcher re-approves it. Claude
+    # Code runs both and waits for the longer (up to 15s for the FINALIZE).
+    assert len(hooks["hooks"]["SessionEnd"]) == 2
+    wait = hooks["hooks"]["SessionEnd"][1]["hooks"][0]
+    assert wait["command"] == end["command"].replace(
+        'session-end.sh\"\'', 'session-end.sh\" --wait\''
+    )
+    assert wait["timeout"] == 20
     assert ensure["timeout"] == 5
     # Silent on the common path: this one fires on every prompt.
     assert "statusMessage" not in ensure
