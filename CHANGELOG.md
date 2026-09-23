@@ -24,6 +24,9 @@
   tokens and Claude OAuth tokens are redacted like any other secret.
 - Prompts: the `probe` and `track-work` skills, the setup command and the pointer block
   (version 35) describe the `daemon` state; four skill descriptions are shorter.
+- Docstrings in the SDK client and MCP service now cite the `/v1/projects/...` routes the calls
+  actually hit, not the retired `/v1/experiments/...` addresses (which answer 410). No behaviour
+  change.
 
 ## 0.178.0
 
