@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **A failed plugin update says why.** The wizard's Update printed "`claude plugin update` did not
+  complete" (or the Codex equivalent) and dropped the error `claude`/`codex` had printed, so
+  neither the screen nor `probe doctor` could say what went wrong. It now names the command that
+  failed and what it printed about why, with credentials, home paths and terminal control
+  characters removed. The Claude marketplace refresh also gets 150s instead of 90s: Claude allows
+  that refresh 120s itself, so a slow clone was cut off before Claude gave up on it. When the
+  refresh fails, the tap update is skipped rather than waiting out a second timeout.
+
+- **Update from a temporary environment (`npx`, `uvx`, `pipx run`) says what it did to your
+  installed copy**: already current, installing one, or, when the temporary copy is itself older
+  than the latest release, how to upgrade the installed one. It used to print "upgrading your
+  installed copy instead" and then nothing. A permanent install that fails is now reported as a
+  failed update, not a successful one.
+
+- **After Update upgrades the CLI, the wizard's Versions row and Diagnose page show the new
+  version.** Both graded the running process's own version, which cannot change until it exits,
+  so the menu kept saying "Update available" right after a successful upgrade. The number now
+  comes from the upgraded install itself, not whichever `probe` is first on your PATH.
+
 - **Transcript capture ends a session when its agent process ends, never because it went quiet**
   (tap 0.7.2). The tap used to finalize any session that had been quiet for ten minutes with no
   process holding its transcript open, and Claude Code never holds it open: one session was
