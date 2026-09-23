@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.178.0
+
 - **`query_sql`, the MCP's seventh tool.** Read-only SQL over the lab's research tables for
   exact counts, joins and verifying a number, under the caller's own tenant and visibility.
   Call it with no `sql` for the table list, pass `tables` for columns, then send one SELECT.
