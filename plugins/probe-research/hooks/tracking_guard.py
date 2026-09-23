@@ -65,9 +65,11 @@ REMOVAL_VERBS are never gated at all, because "record nothing" is not
 "prevent cleanup".
 
 WHY THE PARSE IS A HEURISTIC, AND WHICH WAY IT LEANS. The command string is
-shell, and this is not a shell parser: segments are split on `&&`/`||`/`;`/
-`|`, env-var prefixes are skipped, and the first probe invocation whose
-subcommand records research content is reported. False negatives are
+shell, and this is not a shell parser: heredoc bodies are dropped, the rest is
+tokenized once with quotes honoured, segments are split on the operator tokens
+(`&&`/`||`/`;`/`|`/`&`/parentheses/newlines), env-var prefixes are skipped, and
+the first probe invocation whose subcommand records research content is
+reported. False negatives are
 acceptable -- a missed warning costs one unwarned write in a state the
 researcher will notice on the dashboard anyway. False positives are NOT: a
 warning on `probe run show` teaches the model this layer cries wolf, which is
@@ -120,9 +122,13 @@ FLIP_NOTICE = {
         "prior work and keep reporting what you find; create and modify nothing. "
         "Already-recorded work is untouched."
     ),
+    # The FULL statement of the split, not a one-liner: a session that flips to
+    # `daemon` mid-conversation never sees the session-start injection, so this
+    # is the only place it learns what stays its own. Also what a recovery (the
+    # lease live again after a lapse) says.
     "daemon": (
-        "Probe is now in the `daemon` state for this conversation; it handles all WRITES to "
-        "Probe from here-on out except for SDK usage in run scripts."
+        "Probe is now in the `daemon` state for this conversation. "
+        + _session_marker.DAEMON_CONTEXT
     ),
     "off": (
         "Probe is now OFF for this conversation: no calls at all, reads "
@@ -141,9 +147,10 @@ DAEMON_REASON_WORDS = _session_marker.DAEMON_REASON_WORDS
 #: older CLI, or a write made outside it).
 MESSAGE_DAEMON = (
     "The Probe daemon is recording this conversation, but `{matched}` just wrote to Probe "
-    "directly. The daemon will see that write in the transcript and will not repeat it; do "
-    "not write to Probe yourself from here on. Run scripts and SDK usage is still your "
-    "responsibility."
+    "directly. The daemon sees that write in the transcript and will not repeat it. From here, "
+    "leave notes, artifacts, papers, tags and descriptions to the daemon; launching runs, and "
+    "the project, experiment and group they go into, stays yours. A write the researcher asks "
+    "for takes `--directed`."
 )
 
 # The switch, by trailing slug -- in TWO classes, which differ ONLY in whether
@@ -212,7 +219,26 @@ STATUS_WORDS = frozenset({"status"})
 CYCLE = "cycle"
 
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-_SEGMENT_SPLIT = re.compile(r"&&|\|\||;|\|")
+
+#: The characters shlex hands back as operator tokens. The newline is one: each
+#: line of a multi-line command is its own command.
+_OPERATOR_CHARS = "();<>|&\n"
+#: An operator token that ENDS a command, as opposed to a redirection (`>`,
+#: `>>`, `<`) whose next word is a file, not a command.
+_SEPARATOR_CHARS = frozenset(";|&()\n")
+#: What follows a heredoc's `<<`: `-` (the terminator line may be indented with
+#: tabs), then the delimiter word, quoted (`'EOF'`, `"EOF"`), escaped (`\EOF`) or
+#: bare. A bare word must start with a letter or `_`, so an arithmetic shift the
+#: scanner did not recognise as one (`1 << 2`) still opens no heredoc.
+_HEREDOC_DELIMITER = re.compile(
+    r"(-?)[ \t]*(?:'([^'\n]+)'|\"([^\"\n]+)\"|\\?([A-Za-z_][A-Za-z0-9_.-]*))"
+)
+#: The scanner's contexts. Shell contexts are where `<<` can open a heredoc: the
+#: top level, a `$(...)` substitution (also inside double quotes, which is how
+#: `git commit -m "$(cat <<'EOF' ...)"` works) and a paren nested in one.
+_SHELL, _SUBST, _PAREN = "sh", "$(", "("
+_SINGLE, _DOUBLE = "'", '"'
+_ARITH, _ARITH_PAREN = "((", "a("
 
 # A typed slash command reaches UserPromptSubmit in one of two shapes,
 # depending on whether the harness expands it before or after the hook: the
@@ -271,13 +297,149 @@ CLAIM_VERSION = 2
 REMOVAL_VERBS = _session_marker.REMOVAL_VERBS
 
 
+def _skip_heredoc_bodies(command: str, index: int, pending: "list[tuple[str, bool]]") -> int:
+    """Past every pending heredoc body, starting at the line after the operator."""
+    while pending and index < len(command):
+        newline = command.find("\n", index)
+        line = command[index:] if newline < 0 else command[index:newline]
+        word, tabs = pending[0]
+        if (line.lstrip("\t") if tabs else line) == word:
+            pending.pop(0)
+        index = len(command) if newline < 0 else newline + 1
+    pending.clear()  # an unterminated body runs to the end: all of it is dropped
+    return index
+
+
+def _strip_heredocs(command: str) -> str:
+    """The command with every heredoc BODY removed, the line that opens it kept.
+
+    A body is text handed to a program on stdin (a commit message, a Python
+    script), not commands this shell runs, and it is where the probe commands
+    get MENTIONED: a commit message about the gate, a script that greps for
+    them.
+
+    A `<<` opens a heredoc only where the SHELL reads it. So this walks the
+    command tracking quotes and `$((...))` arithmetic across lines: a `<<` inside
+    `'...'`, inside `"..."` (outside a `$(...)` in it) or in arithmetic is a
+    shift or text, and treating it as a heredoc would drop every line after it,
+    real probe writes included. A body opens at the newline that ends the
+    operator's line and closes at its terminator line.
+    """
+    out: "list[str]" = []
+    pending: "list[tuple[str, bool]]" = []
+    stack = [_SHELL]
+    index, size = 0, len(command)
+    while index < size:
+        top, char = stack[-1], command[index]
+        if top == _SINGLE:
+            if char == "'":
+                stack.pop()
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\":
+            out.append(command[index : index + 2])
+            index += 2
+            continue
+        if top in (_ARITH, _ARITH_PAREN):
+            if char == "(":
+                stack.append(_ARITH_PAREN)
+            elif char == ")" and top == _ARITH_PAREN:
+                stack.pop()
+            elif top == _ARITH and command.startswith("))", index):
+                stack.pop()
+                out.append("))")
+                index += 2
+                continue
+            out.append(char)
+            index += 1
+            continue
+        opener = next(
+            (tok for tok in ("$((", "$(") if command.startswith(tok, index)), None
+        )
+        if opener:
+            stack.append(_ARITH if opener == "$((" else _SUBST)
+            out.append(opener)
+            index += len(opener)
+            continue
+        if top == _DOUBLE:
+            if char == '"':
+                stack.pop()
+            out.append(char)
+            index += 1
+            continue
+        # A shell context: the top level, a `$(...)`, or a paren inside one.
+        if char == "\n" and pending:
+            out.append(char)
+            index = _skip_heredoc_bodies(command, index + 1, pending)
+            continue
+        if char in "'\"":
+            stack.append(char)
+        elif command.startswith("((", index):
+            stack.append(_ARITH)  # `(( x = y << z ))`, the arithmetic command
+            out.append("((")
+            index += 2
+            continue
+        elif char == "(" and top != _SHELL:
+            stack.append(_PAREN)
+        elif char == ")" and top != _SHELL:
+            stack.pop()
+        elif command.startswith("<<<", index):
+            out.append("<<<")  # a here-string: its word is an ordinary word
+            index += 3
+            continue
+        elif command.startswith("<<", index):
+            match = _HEREDOC_DELIMITER.match(command, index + 2)
+            if match:
+                word = match.group(2) or match.group(3) or match.group(4)
+                pending.append((word, bool(match.group(1))))
+                out.append(command[index : match.end()])
+                index = match.end()
+                continue
+            out.append("<<")
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _segments(command: str):
+    """Each simple command's words, split on the operators OUTSIDE quotes.
+
+    Splitting the raw string on `|` before tokenizing (the old parse) cut quoted
+    text apart: a regex like `'x|probe run start'` became a segment that began
+    with the probe command, and was refused. Tokenizing first lets quotes
+    protect what they hold. A segment still open when the quotes stop balancing
+    is dropped, not reported: the text after an unclosed quote is inside it.
+    """
+    lexer = shlex.shlex(
+        # A backslash-newline continues the line; it is not a word.
+        _strip_heredocs(command).replace("\\\n", " "),
+        posix=True,
+        punctuation_chars=_OPERATOR_CHARS,
+    )
+    lexer.whitespace_split = True
+    lexer.whitespace = " \t\r"
+    lexer.commenters = ""  # as `shlex.split` does: `#` starts no comment here
+    segment: "list[str]" = []
+    try:
+        for token in lexer:
+            if set(token) <= set(_OPERATOR_CHARS) and set(token) & _SEPARATOR_CHARS:
+                if segment:
+                    yield segment
+                segment = []
+            else:
+                segment.append(token)
+    except ValueError:
+        return  # unbalanced quotes: the open segment is not parseable, lean silent
+    if segment:
+        yield segment
+
+
 def _probe_invocations(command: str):
     """The args after `probe`, for every `probe` invocation in a shell line."""
-    for segment in _SEGMENT_SPLIT.split(command):
-        try:
-            tokens = shlex.split(segment, posix=True)
-        except ValueError:
-            continue  # unbalanced quotes: not parseable, lean silent
+    for tokens in _segments(command):
         index = 0
         while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
             index += 1

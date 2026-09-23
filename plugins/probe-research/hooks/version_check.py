@@ -150,15 +150,13 @@ COMPACT_CONTEXT = (
 # "ask the user" -- the behaviour eval showed that phrasing turning into an agent
 # reaching for the switch itself, or asking on every refusal. Naming the origin of
 # the state and how to flip it beyond that one mention is the regression.
-#: The `daemon` state's line, at every session start: the daemon records, the
-#: agent does not -- except starting runs. Selected instead of nothing (a fresh
-#: start under `full` injects nothing), because an agent that is not told will
-#: record, and then the daemon and the agent both write.
-DAEMON_CONTEXT = (
-    "The Probe daemon is recording this session: it reads the transcript and files names, "
-    "tags, notes, artifacts, papers, lineage and run ends itself, so do not write to Probe "
-    "yourself. You still start runs yourself (`probe exec`, or the SDK in the script)."
-)
+#: The `daemon` state's line, at every session start: who writes what (the agent
+#: launches, the daemon records). Selected instead of nothing (a fresh start
+#: under `full` injects nothing), because an agent that is not told will record,
+#: and then the daemon and the agent both write. The text is
+#: `_session_marker.DAEMON_CONTEXT`, the one statement of the split, which the
+#: guard hook also sends when the switch moves to `daemon` mid-session.
+DAEMON_CONTEXT = _session_marker.DAEMON_CONTEXT
 
 #: After a compaction in the `daemon` state, IN PLACE OF `COMPACT_CONTEXT`: the
 #: daemon read the transcript through the compaction, so there is nothing to

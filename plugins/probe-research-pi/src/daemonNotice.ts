@@ -20,16 +20,19 @@ import { join } from "node:path";
 
 import { probeConfigPath, probeStateDir, type PathEnv } from "./paths.js";
 
-/** `version_check.DAEMON_CONTEXT`. */
+/** `session_marker.DAEMON_CONTEXT`: the one statement of who writes what. */
 export const DAEMON_CONTEXT =
-  "The Probe daemon is recording this session: it reads the transcript and files names, " +
-  "tags, notes, artifacts, papers, lineage and run ends itself, so do not write to Probe " +
-  "yourself. You still start runs yourself (`probe exec`, or the SDK in the script).";
+  "The Probe daemon is recording this session: you launch, and the daemon records. Yours: " +
+  "create the project, experiment and sweep group you launch into, start runs (`probe exec` " +
+  "or the SDK), the run's own data (metrics, spans, trials, files the run itself attaches) " +
+  "and `probe run end` when a run finishes. The daemon's: everything else (notes, artifacts, " +
+  "papers, tags, names, descriptions, lineage), read from the transcript; it also ends any " +
+  "run you leave open. If the researcher asks for one of the daemon's writes, add " +
+  "`--directed`.";
 
 /** `tracking_guard.FLIP_NOTICE["daemon"]`: the daemon (again) holds the writes. */
 export const DAEMON_LIVE_NOTICE =
-  "Probe is now in the `daemon` state for this conversation; it handles all WRITES to " +
-  "Probe from here-on out except for SDK usage in run scripts.";
+  "Probe is now in the `daemon` state for this conversation. " + DAEMON_CONTEXT;
 
 /** `session_marker.DAEMON_DEGRADED_NOTICE`. */
 export const DAEMON_DEGRADED_NOTICE =

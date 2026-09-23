@@ -969,9 +969,11 @@ READ_GROUPS = frozenset(
 
 #: WHAT THE AGENT STILL WRITES IN THE `daemon` STATE, without `--directed`: the
 #: launch of a run and the run's own data -- the `instrument-code` surface the
-#: daemon never authors -- plus the project and experiment a run launches into,
-#: because `run start` refuses to create them and a launch must not wait on the
-#: daemon. Keys are "group verb", or the bare top-level command.
+#: daemon never authors -- plus the project, experiment and sweep group a run
+#: launches into, because `run start` refuses to create them and a launch must
+#: not wait on the daemon. Keys are "group verb", or the bare top-level command.
+#: `probe session status` prints this list as `daemon.agent_writes`, and
+#: `DAEMON_CONTEXT` below says the same thing in words.
 DAEMON_AGENT_WRITES = frozenset(
     {
         "exec",
@@ -991,8 +993,18 @@ DAEMON_AGENT_WRITES = frozenset(
         "trial expand",
         "project create",
         "experiment create",
+        "group create",
     }
 )
+
+#: Writes that are the run's OWN data only when a run makes them: inside a
+#: `probe exec` job or an SDK script (`PROBE_RUN_ID` set), a `probe artifact add`
+#: attaches the run's file, the same write the SDK's `log_artifact` makes there
+#: ungated. From the agent's own shell it is the daemon's (an artifact the
+#: session made), so it stays out of `DAEMON_AGENT_WRITES`. The CLI's write gate
+#: admits it only anchored to the run (no `--project`, `--experiment`,
+#: `--workspace`, `--shared` or `--from-manifest`).
+DAEMON_RUN_WRITES = frozenset({"artifact add"})
 
 #: The flag that marks a write the researcher asked for. The CLI strips it
 #: before parsing (it may appear anywhere after `probe`), and the gate lets a
@@ -1085,7 +1097,27 @@ DENY_REASON_OFF = (
 
 DENY_REASON_DAEMON = (
     "The Probe daemon is recording this conversation (the `daemon` state), so `{matched}` was "
-    "refused before it ran.\n\nIf the researcher asked for exactly this, run it again with "
+    "refused before it ran: that write is the daemon's. Yours are creating the project, "
+    "experiment and group you launch into, starting runs, the run's own data and `probe run "
+    "end`; `probe session status` lists them.\n\nIf the researcher asked for exactly this, run "
+    "it again with `--directed`."
+)
+
+#: THE ONE STATEMENT OF WHO WRITES WHAT IN THE `daemon` STATE. Every surface that
+#: tells the agent about the split carries this meaning; the hooks read this
+#: constant (session start in `version_check`, the flip and the recovery in
+#: `tracking_guard`), pi's `daemonNotice.ts` keeps a copy, and
+#: `tests/test_daemon_split_texts.py` holds the rest (the skills, the refusal,
+#: the after-the-fact notice) to the same nouns. The agent's list is
+#: `DAEMON_AGENT_WRITES`. The daemon ending a run the agent left open is a
+#: BACKSTOP, not the plan, so `run end` stays the agent's.
+DAEMON_CONTEXT = (
+    "The Probe daemon is recording this session: you launch, and the daemon records. Yours: "
+    "create the project, experiment and sweep group you launch into, start runs (`probe exec` "
+    "or the SDK), the run's own data (metrics, spans, trials, files the run itself attaches) "
+    "and `probe run end` when a run finishes. The daemon's: everything else (notes, artifacts, "
+    "papers, tags, names, descriptions, lineage), read from the transcript; it also ends any "
+    "run you leave open. If the researcher asks for one of the daemon's writes, add "
     "`--directed`."
 )
 

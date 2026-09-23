@@ -894,6 +894,52 @@ describe("registerExtension — the daemon state", () => {
     expect(third?.message).toBeUndefined(); // announced once
   });
 
+  it("tells the model the whole split on the turn the switch moves to daemon", async () => {
+    // A session that STARTS in `on` never saw the daemon's session-start text,
+    // so the turn after the flip is where it must arrive, in full.
+    const { DAEMON_CONTEXT } = await import("../src/daemonNotice.js");
+    installProbeCli();
+    const config = join(tmp, "config.json");
+    writeFileSync(
+      config,
+      JSON.stringify({ current_context: "default", contexts: { default: { companion_token: "k" } } }),
+    );
+    process.env.PROBE_CONFIG_PATH = config;
+    const sessionId = uniqueSessionId("daemon-flip");
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId, sessionFile: undefined });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    const before = handlers.get("before_agent_start") as unknown as BeforeAgentStart;
+    const onTurn = await before({ systemPrompt: "BASE" }, ctx);
+    expect(onTurn?.systemPrompt ?? "").not.toContain(DAEMON_CONTEXT);
+
+    spawnMock.mockImplementationOnce(() => ({
+      pid: 4242,
+      unref: vi.fn(),
+      on: (event: string, callback: (value: unknown) => void) => {
+        if (event === "exit") queueMicrotask(() => callback(0));
+      },
+      once: (event: string, callback: (value: unknown) => void) => {
+        if (event === "exit") queueMicrotask(() => callback(0));
+      },
+    }));
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({ session_id: sessionId, tracking: true, signal: "on", state: "daemon", seeded: true, source: "session" }),
+        "",
+      );
+    });
+    await handlers.get("input")!({ text: "/probe daemon", source: "interactive" }, ctx);
+
+    const flipTurn = await before({ systemPrompt: "BASE" }, ctx);
+    expect(flipTurn!.systemPrompt).toContain(DAEMON_CONTEXT);
+    for (const word of ["project", "experiment", "group", "run end", "--directed"]) {
+      expect(DAEMON_CONTEXT).toContain(word);
+    }
+  });
+
   it("never claims a keyless daemon records", async () => {
     const { before, ctx } = await startInDaemon(uniqueSessionId("daemon-keyless"), false);
     const first = await before({ systemPrompt: "BASE" }, ctx);

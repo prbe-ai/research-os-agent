@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- **One statement of who writes what in the `daemon` state.** You launch and the daemon records.
+  Yours: the project, experiment and sweep group you launch into, starting runs (`probe exec` or the
+  SDK), the run's own data and `run end`. The daemon's: everything else (notes, artifacts, papers,
+  tags, names, descriptions, lineage). A write the researcher asks for takes `--directed`. The
+  session-start context, the flip notice, the `probe` and `track-work` skills, the gate's refusal
+  and the after-the-fact notice now all say this (six texts had said it six ways, and an agent spent
+  2.5 of 8.5 minutes of a trial reading the gate's source). The text lives once in
+  `session_marker.DAEMON_CONTEXT`; pi keeps a pinned copy, and `test_daemon_split_texts.py` holds
+  every surface to it.
+
+- **Moving to `daemon` mid-session now tells the agent the whole split.** The flip notice carries the
+  full session-start text instead of one line, so a session that never saw SessionStart in
+  `daemon` learns what stays its own.
+
+- **`probe group create` and an in-run `probe artifact add` are no longer refused in `daemon`.** A
+  sweep's group has to exist before `run start --group`, so it is part of the launch. Inside a run's
+  own job (`PROBE_RUN_ID` set) `probe artifact add` onto THAT run is the run attaching its file, the
+  same write the SDK's `log_artifact` makes there ungated; onto another run, or filed on a project,
+  experiment, workspace or Shared, it is gated as before.
+
+- **`probe session status` lists the agent's writes in `daemon`.** The `daemon` block gains
+  `agent_writes` (the gate's own list), `agent_writes_in_run` and a `directed` line; the refusal
+  points there.
+
+- **A probe command mentioned inside quotes or a heredoc is no longer refused.** The guard hook
+  split the raw command on `|` and `;` before reading quotes, so a quoted regex naming a probe
+  command, or a commit message about one, looked like a write. It now drops heredoc bodies (a
+  `<<` the shell reads: not one inside quotes or `$((...))` arithmetic; `<<\EOF` included),
+  tokenizes with quotes honoured and splits on the real operators (newlines included). A write
+  piped into or chained after another command is still refused.
+
+- **An image artifact is a `plot`.** With no kind given, `log_artifact` and `probe artifact add` on
+  a run file `.png`, `.jpg`, `.jpeg`, `.svg`, `.gif` and `.webp` as `plot`, anything else as
+  `file`. A PDF stays a `file` (a paper or a report far more often than a figure). An explicit kind
+  always wins.
+
+- **`probe update` reports the transcript tap and fails when it stays behind.** It already asked
+  `claude` to update the tap, but read nothing back. It now prints the tap's version beside the
+  CLI's and the plugin's, and when an installed tap is still behind the published one it says so
+  and why (the failed command and what it printed, a timeout, or `claude` exiting 0 without moving
+  it, which is the in-session no-op the plugin line already names), prints the manual commands and
+  records the update as failed (Claude Code and Codex). `probe doctor` warns when the tap is behind.
+
 ## 0.179.4
 
 - **A failed plugin update says why.** The wizard's Update printed "`claude plugin update` did not

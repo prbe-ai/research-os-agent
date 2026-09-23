@@ -32,8 +32,12 @@ Check `probe session status` first: this skill is all about writing. If it is
 `read` or `off`, do not write - say so once and carry on. Never move the switch
 (`probe session track`) to make a write legal; only the researcher does that.
 
-In the `daemon` state, add `--directed` to any write the researcher asks for, so
-the daemon does not repeat it.
+In the `daemon` state you launch and the daemon records. You do §2 (create the
+project and experiment, and a sweep's group) and the launch half of §3 (start
+runs, their metrics and spans, `run check`, `run end`). The daemon does the rest
+of this skill (notes, artifacts, papers, tags, names, descriptions, lineage), so
+skip those. A write the researcher asks for takes `--directed`, so the daemon
+does not repeat it.
 
 ## 1. THE MAP
 
