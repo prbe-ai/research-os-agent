@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.179.2
+
 - **The status line names the switch position in `daemon`.** `on (daemon) → <project>` while the
   daemon records, `on (daemon degraded) → <project>` while the agent has recording back (it used to
   read `daemon`, then `tracking` when degraded). pi's footer, which said `tracking` in every recording
