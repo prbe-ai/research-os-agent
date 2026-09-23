@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **`probe companion authorize` exits 1 when no key was minted** (an expired or declined
+  approval), so a script can tell it from success.
+
 ## 0.179.1
 
 - **`probe companion authorize` prints the approval link.** It passed no prompt to the device
