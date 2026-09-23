@@ -34,6 +34,7 @@ import {
   initializeTrackingState,
   ProbeState,
   trackingStatusText,
+  type CaptureReading,
   type ProbeStateValue,
   type TrackingExecFileFn,
 } from "./trackingState.js";
@@ -77,6 +78,20 @@ let cachedTeamNote: string | null = null;
  * must never have.
  */
 let cachedProbeState: ProbeStateValue | undefined;
+
+/** The last tracking reading, so a turn in `daemon` can redraw the footer
+ * when the daemon's lease changes without spawning the CLI again. */
+let cachedTracking: { tracking: boolean; capture?: CaptureReading } | undefined;
+
+/** The footer for this session: in `daemon`, it reads the lease file. */
+function footerText(sessionId: string, daemonLive?: boolean): string | undefined {
+  if (!cachedTracking) return undefined;
+  const live =
+    cachedProbeState !== ProbeState.Daemon
+      ? undefined
+      : (daemonLive ?? daemonStatus(sessionId, realDaemonNoticeDeps()).status === DaemonStatus.Live);
+  return trackingStatusText(cachedTracking.tracking, cachedTracking.capture, live);
+}
 
 /** Has the researcher switched Probe off for this session? */
 function probeIsOff(): boolean {
@@ -186,6 +201,7 @@ async function refreshTrackingStatus(
   if (!state) {
     // Unknown, not the last value seen: see cachedProbeState's docstring.
     cachedProbeState = undefined;
+    cachedTracking = undefined;
     if (ctx.hasUI) {
       try {
         // Never leave a previous authoritative-looking value visible when
@@ -200,9 +216,10 @@ async function refreshTrackingStatus(
     return false;
   }
   cachedProbeState = state.state;
+  cachedTracking = { tracking: state.tracking, capture: state.capture };
   if (ctx.hasUI) {
     try {
-      ctx.ui.setStatus("probe-tracking", trackingStatusText(state.tracking, state.capture));
+      ctx.ui.setStatus("probe-tracking", footerText(sessionId));
     } catch (err) {
       logLine(
         `tracking footer refresh failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -441,6 +458,14 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       const live = sessionId ? daemonStatus(sessionId, deps).status === DaemonStatus.Live : false;
       if (live || (!lastTurnInDaemon && companionKeyHeld(deps))) {
         systemPrompt += `\n\n${DAEMON_CONTEXT}`;
+      }
+      // The lease goes live (or lapses) between refreshes: redraw the footer.
+      if (sessionId && ctx?.hasUI) {
+        try {
+          ctx.ui.setStatus("probe-tracking", footerText(sessionId, live));
+        } catch (err) {
+          logLine(`tracking footer redraw failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
       }
     }
     let notice: string | null = null;

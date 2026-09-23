@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The status line names the switch position in `daemon`.** `on (daemon) → <project>` while the
+  daemon records, `on (daemon degraded) → <project>` while the agent has recording back (it used to
+  read `daemon`, then `tracking` when degraded). pi's footer, which said `tracking` in every recording
+  state, now says the same and redraws each turn so the lease going live shows up.
+
 - **`probe companion authorize` exits 1 when no key was minted** (an expired or declined
   approval), so a script can tell it from success.
 

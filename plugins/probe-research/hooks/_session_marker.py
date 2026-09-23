@@ -78,11 +78,16 @@ _GLYPH_WIDTH = 2  # the dot plus its trailing space
 #: does not, and a status line is read by people who did not install it.
 _LABEL_TRACKED = "tracking " + _ARROW + " "
 _LABEL_TRACKING_BARE = "tracking"
-#: The `daemon` state's words, in place of "tracking": the work is recorded,
-#: by the daemon. Shorter than the tracking label, so every width budget below
-#: still holds.
-_LABEL_DAEMON = "daemon " + _ARROW + " "
-_LABEL_DAEMON_BARE = "daemon"
+#: The `daemon` state's words, in place of "tracking": recording is ON, and the
+#: daemon does it. The switch's own word is kept in the label so the reader can
+#: see which of the four positions the session is in.
+_LABEL_DAEMON = "on (daemon) " + _ARROW + " "
+_LABEL_DAEMON_BARE = "on (daemon)"
+#: Still the `daemon` state, but the daemon holds no live lease (no key, out of
+#: budget, gateway down, not started yet), so the AGENT is recording. The mode
+#: stays on screen; `degraded` says the daemon is not the one doing it.
+_LABEL_DAEMON_DEGRADED = "on (daemon degraded) " + _ARROW + " "
+_LABEL_DAEMON_DEGRADED_BARE = "on (daemon degraded)"
 #: Kept for readers that still resolve the switch to a BOOLEAN. `render` only
 #: reaches it when no three-valued state was passed in, which is the shape a
 #: pre-three-state caller has. New callers pass `session_state` and get one of
@@ -154,10 +159,14 @@ _MIN_SLUG_CHARS_DEGRADED = 8
 #: project the segment exists to identify. When a label changes length, this
 #: number moves with it by construction.
 #: `test_this_labs_project_names_mostly_fit_whole` pins the name budget.
+#:
+#: The bare label is the WIDER of the two that can carry the capture suffix:
+#: `on (daemon)` does too (see `_recording_labels`), and it is three columns
+#: longer than `tracking`.
 MAX_SEGMENT_CHARS = (
     len(_INDENT)
     + _GLYPH_WIDTH
-    + len(_LABEL_TRACKING_BARE)
+    + max(len(_LABEL_TRACKING_BARE), len(_LABEL_DAEMON_BARE))
     + len(_LABEL_NO_CAPTURE)
     + _LONGEST_REASON_CHARS
 )
@@ -2165,9 +2174,32 @@ def _elide(slug: str, limit: int = MAX_SLUG_CHARS) -> str:
     return slug[: limit - 1] + _ELLIPSIS
 
 
-def _no_capture_clause(reason: str) -> str:
+def _name_room(label: str) -> int:
+    """Columns left for the project name after `label` and the running accent.
+
+    `MAX_SLUG_CHARS` for the tracking label; a longer label (the daemon's) takes
+    its extra columns from the name, never from the ceiling.
+    """
+    return MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH - len(label) - len(_ACCENT_TEXT)
+
+
+def _recording_labels(session_state: "str | None", daemon_live: bool, capture_reason: str) -> tuple[str, str]:
+    """`(label before a project name, bare label)` for a session that records.
+
+    In the `daemon` state the capture suffix already explains a daemon that is
+    not running (the worker is a child of capture), so that line keeps the
+    shorter `on (daemon)` and its columns go to the reason.
+    """
+    if session_state != STATE_DAEMON:
+        return _LABEL_TRACKED, _LABEL_TRACKING_BARE
+    if daemon_live or capture_reason:
+        return _LABEL_DAEMON, _LABEL_DAEMON_BARE
+    return _LABEL_DAEMON_DEGRADED, _LABEL_DAEMON_DEGRADED_BARE
+
+
+def _no_capture_clause(reason: str, label_bare: str = _LABEL_TRACKING_BARE) -> str:
     """The `· not capturing session transcript: …` suffix, as it hangs off
-    `_LABEL_TRACKING_BARE`.
+    `label_bare`.
 
     THE LAST STOP FOR THE WIDTH CAP. With no project name left to give up, the
     reason itself is elided. The vocabulary in `probe.cli.capture_state` is short
@@ -2181,7 +2213,7 @@ def _no_capture_clause(reason: str) -> str:
         MAX_SEGMENT_CHARS
         - len(_INDENT)
         - _GLYPH_WIDTH
-        - len(_LABEL_TRACKING_BARE)
+        - len(label_bare)
         - len(_LABEL_NO_CAPTURE)
     )
     return _LABEL_NO_CAPTURE + _elide(reason, room)
@@ -2218,10 +2250,10 @@ def render(
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
-    `daemon_live` swaps the word "tracking" for "daemon" when the session is in
-    the `daemon` state AND the daemon holds a live lease. A DEGRADED daemon keeps
-    "tracking", because then the agent is the one recording and that is what the
-    reader needs to know.
+    In the `daemon` state the word "tracking" becomes the switch's position:
+    `on (daemon)` while the daemon holds a live lease (`daemon_live`), and
+    `on (daemon degraded)` when it does not, because then the AGENT is the one
+    recording and that is what the reader needs to know.
 
     TWO STATES OF THE SWITCH: tracking, or not. The caller resolves which via
     `is_tracking`; this only renders it. An earlier version carried a third —
@@ -2278,21 +2310,19 @@ def render(
     # be an answer to a question nobody asked.
     reason = _capture_reason(state)
     head = _INDENT + _paint(_DOT_DEGRADED if reason else _DOT, _GREEN, color) + " "
-    by_daemon = session_state == STATE_DAEMON and daemon_live
-    label_tracked = _LABEL_DAEMON if by_daemon else _LABEL_TRACKED
-    label_bare = _LABEL_DAEMON_BARE if by_daemon else _LABEL_TRACKING_BARE
+    label_tracked, label_bare = _recording_labels(session_state, daemon_live, reason)
 
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
         # Tracking is on, nothing filed yet. State it without inventing a name.
-        return head + label_bare + _no_capture_clause(reason)
+        return head + label_bare + _no_capture_clause(reason, label_bare)
 
     if not reason:
         # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT: `MAX_SLUG_CHARS` reserves
         # both widths whether or not the accent shows, so truncation only ever
         # costs characters of the project name.
         accent = _ACCENT_TEXT if live else ""
-        return head + label_tracked + _elide(project) + accent
+        return head + label_tracked + _elide(project, _name_room(label_tracked)) + accent
 
     # DEGRADED — WHAT YIELDS FIRST, AND WHY.
     #
@@ -2313,10 +2343,10 @@ def render(
         MAX_SEGMENT_CHARS
         - len(_INDENT)
         - _GLYPH_WIDTH
-        - len(_LABEL_TRACKED)
+        - len(label_tracked)
         - len(_LABEL_NO_CAPTURE)
         - len(reason)
     )
     if room >= _MIN_SLUG_CHARS_DEGRADED:
         return head + label_tracked + _elide(project, room) + _LABEL_NO_CAPTURE + reason
-    return head + label_bare + _no_capture_clause(reason)
+    return head + label_bare + _no_capture_clause(reason, label_bare)

@@ -264,8 +264,33 @@ function parseCapture(raw: unknown): CaptureReading | undefined {
  * Capture is never mentioned when tracking is off: it may still be running,
  * and "not tracking" is the researcher's decision, not a capture report.
  */
-export function trackingStatusText(tracking: boolean, capture?: CaptureReading): string {
+/** The footer's word for a recording session; mirrors `session_marker._recording_labels`. */
+export const RecordingLabel = {
+  Tracking: "tracking",
+  Daemon: "on (daemon)",
+  DaemonDegraded: "on (daemon degraded)",
+} as const;
+
+/**
+ * `daemonLive` is undefined outside the `daemon` state. Inside it the footer
+ * names the switch's position: `on (daemon)` while the daemon holds a live
+ * lease, `on (daemon degraded)` while the agent has recording back. With
+ * capture down the suffix already explains a daemon that cannot run (it is
+ * capture's child), so that line keeps the shorter label.
+ */
+export function trackingStatusText(
+  tracking: boolean,
+  capture?: CaptureReading,
+  daemonLive?: boolean,
+): string {
   if (!tracking) return "○ not tracking";
-  if (!capture || capture.running) return "● tracking";
-  return `◐ tracking · not capturing session transcript: ${capture.reason}`;
+  const captureDown = capture !== undefined && !capture.running;
+  const label =
+    daemonLive === undefined
+      ? RecordingLabel.Tracking
+      : daemonLive || captureDown
+        ? RecordingLabel.Daemon
+        : RecordingLabel.DaemonDegraded;
+  if (!capture || capture.running) return `● ${label}`;
+  return `◐ ${label} · not capturing session transcript: ${capture.reason}`;
 }
