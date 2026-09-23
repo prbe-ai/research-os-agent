@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.180.0
+
 - **The Probe daemon records what the session concluded, not just what it ran** (tap 0.8.0).
   Replayed against the two digits trials, it matches what the inline agent recorded: the decision
   with both numbers, the caveat, the PCA verdict, lineage, the parent's description and a note on
