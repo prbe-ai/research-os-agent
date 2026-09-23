@@ -78,6 +78,11 @@ _GLYPH_WIDTH = 2  # the dot plus its trailing space
 #: does not, and a status line is read by people who did not install it.
 _LABEL_TRACKED = "tracking " + _ARROW + " "
 _LABEL_TRACKING_BARE = "tracking"
+#: The `daemon` state's words, in place of "tracking": the work is recorded,
+#: by the daemon. Shorter than the tracking label, so every width budget below
+#: still holds.
+_LABEL_DAEMON = "daemon " + _ARROW + " "
+_LABEL_DAEMON_BARE = "daemon"
 #: Kept for readers that still resolve the switch to a BOOLEAN. `render` only
 #: reaches it when no three-valued state was passed in, which is the shape a
 #: pre-three-state caller has. New callers pass `session_state` and get one of
@@ -556,7 +561,7 @@ def tracking_signal(session_id: str) -> str | None:
     try:
         raw = state_path(session_id).read_text(encoding="utf-8").strip().lower()
         if raw in STATES:
-            return "on" if raw == STATE_FULL else "off"
+            return "on" if raw in RECORDING_STATES else "off"
     except OSError:
         pass
     try:
@@ -688,11 +693,29 @@ def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
 STATE_FULL = "full"
 STATE_READ_ONLY = "read-only"
 STATE_OFF = "off"
+#: THE FOURTH STATE: the session is recorded, by the Probe daemon beside it
+#: rather than by the agent. The agent still searches, still launches runs and
+#: still makes the writes the researcher asks for (`--directed`); the `probe`
+#: CLI refuses the rest while the daemon holds the write lease (see
+#: `daemon_status`). Reached only by NAME -- `/probe daemon`, a folder default,
+#: or the wizard's machine default -- never by a bare press (see `_NEXT_STATE`).
+#:
+#: OLDER CLIENTS READ IT AS `full`. They do not know this word, so they fall
+#: through to the compat `<sid>.tracking` file, which projects `daemon` to `on`
+#: (`_write_compat_tracking`). That is the safe direction: a half-upgraded
+#: machine's agent records as it always has, and the worst case is a duplicate
+#: the daemon's read-before-write drops -- never silence.
+STATE_DAEMON = "daemon"
 
-#: Every state, in the order any surface that has to OFFER all three lists them.
+#: Every state, in the order any surface that has to OFFER all four lists them.
 #: This is NOT the order the bare switch advances through -- see `_NEXT_STATE`,
 #: which deliberately leaves `off` off the cycle.
-STATES = (STATE_FULL, STATE_READ_ONLY, STATE_OFF)
+STATES = (STATE_FULL, STATE_DAEMON, STATE_READ_ONLY, STATE_OFF)
+
+#: The states in which this session's work IS recorded -- by the agent (`full`)
+#: or by the daemon (`daemon`). Everything that asks "is this session being
+#: tracked?" asks this, not "is it `full`?".
+RECORDING_STATES = (STATE_FULL, STATE_DAEMON)
 
 #: What a machine that has said nothing gets. `full`, for the same reason
 #: DEFAULT_TRACKING is True: tracking must not depend on anyone remembering to
@@ -711,9 +734,14 @@ DEFAULT_STATE = STATE_FULL
 #: half-upgraded. The WORDS are ours to change; the bytes are not.
 #:
 #: Both spellings are accepted on input, forever -- see `normalize_state`.
-STATE_LABELS = {STATE_FULL: "on", STATE_READ_ONLY: "read", STATE_OFF: "off"}
+STATE_LABELS = {
+    STATE_FULL: "on",
+    STATE_DAEMON: "daemon",
+    STATE_READ_ONLY: "read",
+    STATE_OFF: "off",
+}
 
-#: The words in cycle order, for anything that has to offer all three.
+#: The words in STATES order, for anything that has to offer all four.
 STATE_WORDS = tuple(STATE_LABELS[state] for state in STATES)
 
 
@@ -791,6 +819,9 @@ _NEXT_STATE = {
     STATE_FULL: STATE_READ_ONLY,
     STATE_READ_ONLY: STATE_FULL,
     STATE_OFF: STATE_READ_ONLY,
+    # `daemon` is off the cycle like `off`: it is reached by typing it, and one
+    # press leaves it for `read-only`, the same smallest-change rule.
+    STATE_DAEMON: STATE_READ_ONLY,
 }
 
 
@@ -805,8 +836,16 @@ def next_state(state: str) -> str:
 
 
 def state_allows_writes(state: "str | None") -> bool:
-    """Only `full` records anything new."""
-    return state == STATE_FULL
+    """Is this session's work recorded at all? `full` and `daemon`.
+
+    WHO may write is a second question, answered by the `probe` CLI's write gate
+    (`probe.cli.write_gate`): under `daemon` with a live lease the agent's own
+    ambient writes are refused and the daemon makes them. Every caller of this
+    function asks the first question -- whether to show "tracking", whether to
+    inject the read-only notice, whether capture's work counts -- so `daemon`
+    answers True here.
+    """
+    return state in RECORDING_STATES
 
 
 def state_allows_reads(state: "str | None") -> bool:
@@ -820,6 +859,374 @@ def state_allows_reads(state: "str | None") -> bool:
     return state != STATE_OFF
 
 
+# ---------------------------------------------------------------------------
+# WHICH `probe` COMMANDS WRITE. One list, read by the plugin's guard hook and by
+# the CLI's own write gate (`probe.cli.write_gate`), so the two can never
+# disagree about what a command IS. Moved here from `tracking_guard.py`, which
+# re-exports the names.
+# ---------------------------------------------------------------------------
+
+#: Top-level probe commands that record research content whatever follows them.
+#: `flush` is deliberately absent: draining an outbox delivers writes recorded
+#: BEFORE the researcher flipped the switch, and honouring the pre-off record is
+#: what "off deletes nothing" means.
+TOP_LEVEL_WRITES = frozenset(
+    {"log", "link", "snapshot", "exec", "backfill", "import", "wandb"}
+)
+
+#: Command groups whose verbs write research content unless the verb is a read.
+#: `session` is deliberately absent (it is the switch itself -- refusing
+#: `probe session track` would wall the researcher out of the un-mute), and so
+#: are the read groups and the machine-plumbing groups (context, token, mcp,
+#: workspace, shared, outbox, companion).
+WRITE_GROUPS = frozenset(
+    {
+        "project",
+        "experiment",
+        "run",
+        "artifact",
+        "notes",
+        "span",
+        "group",
+        "edge",
+        "trial",
+        "views",
+        "paper",
+    }
+)
+
+#: Verbs inside a write group that only read. Unknown verbs count as writes --
+#: the group already said "research content".
+READ_VERBS = frozenset(
+    {
+        "show",
+        "list",
+        "get",
+        "status",
+        "versions",
+        "cat",
+        "diff",
+        "search",
+        "export",
+        "events",
+        "coordinates",
+        "download",
+        "help",
+        # `probe notes team` PRINTS the team note.
+        "team",
+        "check",
+        "reproduce",
+        # `probe notes checkout` pulls a note into a local file; the edit lands
+        # later through `push`. `audit-advisory` prints the note-size nudge the
+        # `note_audit` hook shows.
+        "checkout",
+        "audit-advisory",
+    }
+)
+
+#: Verbs inside a write group that REMOVE research rather than record it. Never
+#: refused: cleanup must stay possible in every state.
+REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
+
+#: "group verb" pairs inside a write group that are machine plumbing, not a
+#: record of the work, so no state refuses them. `notes sync` is the team note's
+#: own sync, which hooks run in the background and which the switch has never
+#: governed (see `version_check._spawn_session_maintenance`); `project use` only sets the
+#: local default project.
+UNGATED_COMMANDS = frozenset({"notes sync", "project use"})
+
+#: Research-content writes that sit outside the write groups: `rule declare`
+#: and `rule publish` write and publish team rules (`rule list|preview` read).
+#: Kept apart from WRITE_GROUPS only because `rule` has its own read verbs.
+RULE_READ_VERBS = frozenset({"list", "preview"})
+
+#: `probe companion feedback` steers the daemon (its note reaches the model as
+#: the researcher's correction), so from an agent session it is only admitted
+#: with `--directed`, in every state.
+DIRECTED_ONLY = frozenset({"companion feedback"})
+
+#: Root `probe` options that take a VALUE (the root callback in `cli/main.py`).
+#: Their value is not a command word: `probe --base-url URL notes push` runs
+#: `notes push`, and reading the URL as the command waved that write through.
+ROOT_VALUE_OPTIONS = frozenset({"--base-url", "--spool-dir"})
+
+#: The only help flag the CLI has (`-h` is not registered: click refuses it).
+HELP_FLAG = "--help"
+
+#: Groups whose whole job is READING research content. Refused only under `off`.
+READ_GROUPS = frozenset(
+    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared"}
+)
+
+#: WHAT THE AGENT STILL WRITES IN THE `daemon` STATE, without `--directed`: the
+#: launch of a run and the run's own data -- the `instrument-code` surface the
+#: daemon never authors -- plus the project and experiment a run launches into,
+#: because `run start` refuses to create them and a launch must not wait on the
+#: daemon. Keys are "group verb", or the bare top-level command.
+DAEMON_AGENT_WRITES = frozenset(
+    {
+        "exec",
+        "log",
+        "snapshot",
+        "run start",
+        "run child",
+        "run fork",
+        "run end",
+        "span add",
+        "trial add",
+        "trial stage",
+        "trial export",
+        "trial drain",
+        "trial watch",
+        "trial reconcile",
+        "trial expand",
+        "project create",
+        "experiment create",
+    }
+)
+
+#: The flag that marks a write the researcher asked for. The CLI strips it
+#: before parsing (it may appear anywhere after `probe`), and the gate lets a
+#: marked write through the `daemon` state; the daemon sees it in the transcript
+#: and does not repeat it.
+DIRECTED_FLAG = "--directed"
+
+
+def command_words(args: "list[str]") -> "list[str]":
+    """The (at most two) words click dispatches on, from the args after `probe`.
+
+    Mirrors click's own resolution closely enough for a gate: options are
+    skipped, and so is the VALUE of a root option that takes one; a `--` before
+    the command words is skipped too (click still dispatches the command after
+    it), while after `exec` everything past `--` is the launched command.
+    """
+    words: "list[str]" = []
+    skip_value = False
+    for token in args:
+        if skip_value:
+            skip_value = False
+            continue
+        if token == "--":
+            if words[:1] == ["exec"]:
+                break
+            continue
+        if token.startswith("-"):
+            if not words and token in ROOT_VALUE_OPTIONS:
+                skip_value = True
+            continue
+        words.append(token)
+        if len(words) == 2:
+            break
+    return words
+
+
+def classify_probe_args(args: "list[str]") -> "tuple[str | None, str]":
+    """`(kind, matched)` for the args after `probe`; kind is write/read/None.
+
+    `matched` is `probe <head>` or `probe <head> <verb>`, the words a refusal
+    names. The ONE classifier: the CLI's write gate and the plugin's guard hook
+    both call it.
+    """
+    words = command_words(args)
+    if not words:
+        return (None, "")
+    head = words[0]
+    verb = words[1] if len(words) > 1 else ""
+    if head == "rule" and verb:
+        return (("read" if verb in RULE_READ_VERBS else "write"), "probe rule " + verb)
+    if head in TOP_LEVEL_WRITES:
+        return ("write", "probe " + head)
+    if head in READ_GROUPS:
+        return ("read", "probe " + head)
+    if head + " " + verb in DIRECTED_ONLY:
+        return ("write", "probe " + head + " " + verb)
+    if head in WRITE_GROUPS:
+        if head + " " + verb in UNGATED_COMMANDS:
+            return (None, "probe " + head + " " + verb)
+        if verb in READ_VERBS:
+            return ("read", "probe " + head + " " + verb)
+        if verb and verb not in REMOVAL_VERBS:
+            return ("write", "probe " + head + " " + verb)
+    return (None, "probe " + head)
+
+
+def daemon_allows_agent(matched: str) -> bool:
+    """Does the `daemon` state leave this write to the agent? (`matched` from
+    `classify_probe_args`.)"""
+    key = matched[len("probe "):] if matched.startswith("probe ") else matched
+    return key in DAEMON_AGENT_WRITES
+
+
+#: The refusals, shared by the guard hook and the CLI gate. Placeholders:
+#: `{matched}` is the command the refusal names.
+DENY_REASON = (
+    "Probe is READ-ONLY for this conversation, so `{matched}` was refused before it ran. Reads "
+    "are still fine. If the researcher wants this recorded they set `/probe on`; say so once, "
+    "do not ask them to approve the call, and do not route around it."
+)
+
+DENY_REASON_OFF = (
+    "Probe is OFF for this conversation, so `{matched}` was refused before it ran. Make no "
+    "Probe calls at all, reads included: you cannot see prior work and cannot know what you "
+    "missed, so say you could not look rather than reporting nothing was found; turning it "
+    "back on does not backfill the gap. Only the researcher changes the state (`/probe read` "
+    "restores searching); a repeat request is not permission: do not ask them to approve this "
+    "call, and do not route around it."
+)
+
+DENY_REASON_DAEMON = (
+    "The Probe daemon is recording this conversation (the `daemon` state), so `{matched}` was "
+    "refused before it ran.\n\nIf the researcher asked for exactly this, run it again with "
+    "`--directed`."
+)
+
+
+# ---------------------------------------------------------------------------
+# THE DAEMON'S WRITE LEASE.
+#
+#   <sessions_dir>/<sid>.writer   JSON, written ONLY by the tap plugin's
+#                                 companion worker (tap/companion_lease.py),
+#                                 read here by the CLI write gate, the hooks
+#                                 and the status line.
+#
+#   {"v": 1, "writer": "daemon", "pid": 123, "expires_at": 1790000000.0,
+#    "renewed_at": 1789999940.0, "reason": null}
+#
+# The STATE says what the researcher wants; the LEASE says whether the daemon is
+# actually doing it. `daemon` + a live lease: the daemon records and the CLI
+# refuses the agent's ambient writes. `daemon` + no live lease (never started,
+# crashed, hung past a cycle, out of budget, unauthorized): DEGRADED, and the
+# agent records exactly as under `full` -- fall back to the agent, never to
+# silence. The worker renews only when a cycle FINISHES in time, so a hung model
+# call lets the lease lapse rather than holding writing hostage.
+#
+# UNREADABLE, MALFORMED, UNKNOWN-VERSION or EXPIRED all read as "no live lease".
+# That is the fail-open direction on purpose: a broken file must hand writing
+# back to the agent, never lock everybody out.
+#
+# The format is a CONTRACT between two packages that cannot import each other;
+# tests/test_companion_lease_contract.py writes it with the worker's writer and
+# reads it with this reader.
+# ---------------------------------------------------------------------------
+
+#: THE DAEMON HANDED WRITING BACK. Injected on the next prompt after the lease
+#: lapses (tracking_guard) -- a dead worker cannot announce its own death, and an
+#: agent told "the daemon records" has no other reason to look -- and at session
+#: start when the daemon cannot run at all (version_check). `{reason}` is a
+#: phrase from `DAEMON_REASON_WORDS`.
+DAEMON_DEGRADED_NOTICE = (
+    "Probe is in the `daemon` state, but the daemon is {reason}, so recording is back with "
+    "you. Record the work as it happens, per `track-work`."
+)
+DAEMON_NOT_STARTED = "not-started"
+DAEMON_REASON_WORDS = {
+    DAEMON_NOT_STARTED: "not running",
+    "expired": "not responding",
+    "stopped": "stopped",
+    "gateway": "unable to reach its model",
+    "budget": "out of budget",
+    "unauthorized": "not authorized",
+    "error": "hitting an error",
+}
+
+
+def daemon_degraded_notice(reason: "str | None") -> str:
+    return DAEMON_DEGRADED_NOTICE.format(reason=DAEMON_REASON_WORDS.get(reason or "", "not running"))
+
+
+def companion_key_held(config: "dict | None" = None) -> bool:
+    """Does the active context hold the daemon's own key (`companion_token`)?
+
+    Without it the worker can never take the lease, so nothing should tell the
+    agent the daemon records. Reads the same file the CLI and the tap do.
+    """
+    data = _read_config() if config is None else config
+    contexts = data.get("contexts")
+    if isinstance(contexts, dict):
+        active = contexts.get(data.get("current_context") or "default")
+        data = active if isinstance(active, dict) else {}
+    value = data.get("companion_token")
+    return isinstance(value, str) and bool(value.strip())
+
+
+LEASE_SUFFIX = ".writer"
+#: The once-per-change record of which handback notice was last shown; the guard
+#: hook and pi's extension share it, so one change is never announced twice.
+NOTIFIED_SUFFIX = ".writer-notified"
+LEASE_VERSION = 1
+DAEMON_LIVE = "live"
+DAEMON_DEGRADED = "degraded"
+
+
+def lease_path(session_id: str) -> Path:
+    return sessions_dir() / (session_id + LEASE_SUFFIX)
+
+
+def read_lease(session_id: str) -> "dict | None":
+    """The lease file's content when it is well-formed, else None. No liveness check."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        data = json.loads(lease_path(session_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("v") != LEASE_VERSION:
+        return None
+    if data.get("writer") != "daemon":
+        return None
+    try:
+        float(data.get("expires_at"))
+    except (TypeError, ValueError):
+        return None
+    return data
+
+
+def lease_live(session_id: str, now: "float | None" = None) -> bool:
+    lease = read_lease(session_id)
+    if lease is None or lease.get("reason"):
+        return False
+    return float(lease["expires_at"]) > (time.time() if now is None else now)
+
+
+def daemon_status(
+    session_id: str, state: "str | None" = None, now: "float | None" = None
+) -> "tuple[str, str | None] | None":
+    """`(live|degraded, reason)` for a session in the `daemon` state, else None.
+
+    `reason` is what the worker recorded when it released the lease
+    (`unauthorized`, `budget`, `gateway`, `stopped`), `expired` when the lease
+    simply lapsed, or `not-started` when there is no lease at all.
+    """
+    if state is None:
+        state = session_state(session_id)
+    if state != STATE_DAEMON:
+        return None
+    lease = read_lease(session_id)
+    if lease is None:
+        return (DAEMON_DEGRADED, DAEMON_NOT_STARTED)
+    if lease.get("reason"):
+        return (DAEMON_DEGRADED, str(lease["reason"]))
+    if float(lease["expires_at"]) <= (time.time() if now is None else now):
+        return (DAEMON_DEGRADED, "expired")
+    return (DAEMON_LIVE, None)
+
+
+def agent_writes_freely(session_id: str, state: "str | None" = None) -> bool:
+    """May the AGENT make ambient writes in this session right now?
+
+    `full`, and `daemon` whose lease is not live (degraded). Not `read-only`,
+    not `off`, not `daemon` with a live lease -- there the daemon records and the
+    agent writes only what the researcher asks for (`--directed`) and what a run
+    launch needs.
+    """
+    if state is None:
+        state = session_state(session_id)
+    if state == STATE_FULL:
+        return True
+    status = daemon_status(session_id, state)
+    return status is not None and status[0] == DAEMON_DEGRADED
+
+
 def session_state(session_id: str) -> "str | None":
     """This conversation's state, or None when nobody has decided yet.
 
@@ -830,7 +1237,7 @@ def session_state(session_id: str) -> "str | None":
     away reads they never gave up, so it maps to `read-only` and the hard `off`
     is reachable only from an explicit new-format write.
 
-        .state = full | read-only | off   ->  that
+        .state = full | daemon | read-only | off  ->  that
         .tracking = "on"                  ->  full
         .tracking = "off"                 ->  read-only
         <sid>.off present                 ->  read-only
@@ -896,7 +1303,7 @@ def _write_compat_tracking(session_id: str, state: str) -> None:
     reading an opt-out and an old CLI inventing consent.
     """
     if _publish_atomically(
-        tracking_signal_path(session_id), "on\n" if state == STATE_FULL else "off\n"
+        tracking_signal_path(session_id), "on\n" if state in RECORDING_STATES else "off\n"
     ):
         try:
             _legacy_off_path(session_id).unlink(missing_ok=True)
@@ -972,7 +1379,7 @@ def set_session_state_if_absent(session_id: str, state: str) -> bool:
             # to read-only and silently reopen reads the researcher had closed.
             return False
         legacy = _legacy_tracking_value(session_id)
-        expected = "on" if state == STATE_FULL else "off"
+        expected = "on" if state in RECORDING_STATES else "off"
         if _legacy_off_path(session_id).is_file() or (
             legacy is not None and legacy != expected
         ):
@@ -1246,7 +1653,7 @@ def tracking_env_override() -> bool | None:
     # to prevent, so the projection happens once, here.
     explicit = normalize_state(os.environ.get("PROBE_SESSION_STATE"))
     if explicit is not None:
-        return explicit == STATE_FULL
+        return explicit in RECORDING_STATES
     return _parse_tracking_value(os.environ.get("PROBE_SESSION_TRACKING"))
 
 
@@ -1266,7 +1673,7 @@ def _tracking_value(data: dict) -> bool | None:
     if value is not None:
         return value
     state = normalize_state(defaults.get(STATE_DEFAULT_KEY))
-    return None if state is None else state == STATE_FULL
+    return None if state is None else state in RECORDING_STATES
 
 
 def default_tracking(config: dict | None = None) -> bool:
@@ -1655,7 +2062,7 @@ def write_default_state(state: str) -> Path:
         data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
         data[DEFAULTS_KEY][STATE_DEFAULT_KEY] = state
         # The compat projection, for clients that only know the old key.
-        data[DEFAULTS_KEY][TRACKING_DEFAULT_KEY] = "on" if state == STATE_FULL else "off"
+        data[DEFAULTS_KEY][TRACKING_DEFAULT_KEY] = "on" if state in RECORDING_STATES else "off"
         _save_json_file(target, data, private=True, _resolved=True)
     return path
 
@@ -1700,7 +2107,7 @@ def write_folder_state_default(
                 defaults = {}
                 data[DEFAULTS_KEY] = defaults
             defaults[STATE_DEFAULT_KEY] = state
-            defaults[TRACKING_DEFAULT_KEY] = "on" if state == STATE_FULL else "off"
+            defaults[TRACKING_DEFAULT_KEY] = "on" if state in RECORDING_STATES else "off"
         _save_json_file(
             target,
             data,
@@ -1807,8 +2214,14 @@ def render(
     live: bool = False,
     color: bool = True,
     session_state: "str | None" = None,
+    daemon_live: bool = False,
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
+
+    `daemon_live` swaps the word "tracking" for "daemon" when the session is in
+    the `daemon` state AND the daemon holds a live lease. A DEGRADED daemon keeps
+    "tracking", because then the agent is the one recording and that is what the
+    reader needs to know.
 
     TWO STATES OF THE SWITCH: tracking, or not. The caller resolves which via
     `is_tracking`; this only renders it. An earlier version carried a third —
@@ -1865,18 +2278,21 @@ def render(
     # be an answer to a question nobody asked.
     reason = _capture_reason(state)
     head = _INDENT + _paint(_DOT_DEGRADED if reason else _DOT, _GREEN, color) + " "
+    by_daemon = session_state == STATE_DAEMON and daemon_live
+    label_tracked = _LABEL_DAEMON if by_daemon else _LABEL_TRACKED
+    label_bare = _LABEL_DAEMON_BARE if by_daemon else _LABEL_TRACKING_BARE
 
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):
         # Tracking is on, nothing filed yet. State it without inventing a name.
-        return head + _LABEL_TRACKING_BARE + _no_capture_clause(reason)
+        return head + label_bare + _no_capture_clause(reason)
 
     if not reason:
         # THE NAME YIELDS, THE LABEL AND ACCENT DO NOT: `MAX_SLUG_CHARS` reserves
         # both widths whether or not the accent shows, so truncation only ever
         # costs characters of the project name.
         accent = _ACCENT_TEXT if live else ""
-        return head + _LABEL_TRACKED + _elide(project) + accent
+        return head + label_tracked + _elide(project) + accent
 
     # DEGRADED — WHAT YIELDS FIRST, AND WHY.
     #
@@ -1902,5 +2318,5 @@ def render(
         - len(reason)
     )
     if room >= _MIN_SLUG_CHARS_DEGRADED:
-        return head + _LABEL_TRACKED + _elide(project, room) + _LABEL_NO_CAPTURE + reason
-    return head + _LABEL_TRACKING_BARE + _no_capture_clause(reason)
+        return head + label_tracked + _elide(project, room) + _LABEL_NO_CAPTURE + reason
+    return head + label_bare + _no_capture_clause(reason)

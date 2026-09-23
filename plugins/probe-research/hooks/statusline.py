@@ -110,6 +110,7 @@ def segment(payload: dict) -> str:
         # third behaviour.
         switch, _source = marker.resolve_state_default(cwd, config)
     tracking = marker.state_allows_writes(switch)
+    daemon = marker.daemon_status(session_id, switch)
     return marker.render(
         state,
         configured=True,
@@ -117,6 +118,7 @@ def segment(payload: dict) -> str:
         live=tracking and marker.is_live(state),
         color=_color(),
         session_state=switch,
+        daemon_live=daemon is not None and daemon[0] == marker.DAEMON_LIVE,
     )
 
 

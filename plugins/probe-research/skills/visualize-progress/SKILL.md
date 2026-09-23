@@ -1,6 +1,6 @@
 ---
 name: visualize-progress
-description: Renders progress of the current project/work tracked in Probe - meant to be used to help the user visualize what is going on. Trigger unprompted on high level discussions or unfamiliarity - broad questions about the work, on arriving in an unfamiliar project, before a run starts or after one ends, and when planning next steps, etc.
+description: Renders progress of the current project/work tracked in Probe - meant to be used to help the user visualize what is going on.
 ---
 # Visualize research progress
 

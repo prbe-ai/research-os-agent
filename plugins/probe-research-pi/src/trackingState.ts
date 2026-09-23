@@ -22,6 +22,15 @@ export interface CaptureReading {
   reason: string;
 }
 
+/** The switch's four stored states. Mirrors `session_marker.STATES`. */
+export const ProbeState = {
+  Full: "full",
+  Daemon: "daemon",
+  ReadOnly: "read-only",
+  Off: "off",
+} as const;
+export type ProbeStateValue = (typeof ProbeState)[keyof typeof ProbeState];
+
 export interface TrackingState {
   tracking: boolean;
   signal: "on" | "off";
@@ -32,7 +41,7 @@ export interface TrackingState {
    * `signal` keep their two-valued meaning forever for exactly this reason --
    * `read-only` and `off` both project to `off`, which is true of both.
    */
-  state?: "full" | "read-only" | "off";
+  state?: ProbeStateValue;
   seeded: boolean;
   source: string;
   /**
@@ -212,8 +221,15 @@ export async function initializeTrackingState(
  * release train (see the `signal` note in `probe session status`), so it meets
  * both: a new CLI printing `on`, and an older one printing `full`.
  */
-function parseState(raw: unknown): "full" | "read-only" | "off" | undefined {
-  if (raw === "full" || raw === "read-only" || raw === "off") return raw;
+function parseState(raw: unknown): ProbeStateValue | undefined {
+  if (
+    raw === ProbeState.Full ||
+    raw === ProbeState.Daemon ||
+    raw === ProbeState.ReadOnly ||
+    raw === ProbeState.Off
+  ) {
+    return raw;
+  }
   if (raw === "on") return "full";
   if (raw === "read") return "read-only";
   return undefined;

@@ -22,6 +22,7 @@ def _print_help() -> int:
     print("  status   print local state")
     print("  revoke   revoke device + wipe local state")
     print("  redaction-notice  print (and clear) what was redacted last session")
+    print("  companion  the Probe daemon worker (started by `watch` in the daemon state)")
     return 0
 
 
@@ -40,6 +41,10 @@ def main(argv: list[str] | None = None) -> int:
         from tap.main import main as watch_main
 
         return watch_main(rest)
+    if cmd == "companion":
+        from tap.companion_worker import main as companion_main
+
+        return companion_main(rest)
     if cmd == "start":
         from tap.start import main as start_main
 

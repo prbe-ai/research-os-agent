@@ -49,6 +49,7 @@ from pathlib import Path
 
 from tap import config as cfg
 from tap import killswitch, outbox, reconcile
+from tap.companion_supervisor import Supervisor
 from tap.outbox import HaltError
 from tap.session_identity import validate_identity
 from tap.session_journal import DeliveryPending, Journal, ReconciliationRequired, Wire
@@ -70,6 +71,9 @@ IDLE_THRESHOLD_TICKS = 2
 # subprocess and we don't need fast detection — orphans only matter for
 # tidy cleanup.
 ORPHAN_CHECK_EVERY_TICKS = 12
+#: How often, inside a tick's sleep, the daemon worker's supervisor looks at the
+#: session's switch -- the delay between `/probe daemon` and the worker starting.
+COMPANION_POLL_SECONDS = 5
 
 # Hard cap on how long we'll wait for lsof to return; if it hangs, we'd
 # rather assume "alive" and skip than block the tick.
@@ -319,9 +323,15 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     tick = 0
     seen_reader = False
     empty_ticks = 0
+    # The Probe daemon worker rides this process's lifecycle as a child; see
+    # companion_supervisor.py. Polled every tick and every few seconds of the
+    # sleep, so switching to `daemon` mid-session starts it within seconds.
+    companion = Supervisor(session_id=c.session_id, transcript=c.transcript_path, cwd=c.cwd)
     try:
         while True:
             stopping = _shutdown_observed(c)
+            if not stopping:
+                companion.poll()
             if cfg.killswitch_active() or cfg.cwd_disabled(c.cwd):
                 return 0
             enabled, _reason = killswitch.is_ingestion_enabled(
@@ -464,7 +474,12 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
             while slept < cadence and not _shutdown_observed(c):
                 time.sleep(1)
                 slept += 1
+                if slept % COMPANION_POLL_SECONDS == 0:
+                    companion.poll()
     finally:
+        # Ask the daemon worker to finish. It runs its own bounded final cycle in
+        # its own process group; FINALIZE below never waits on it.
+        companion.stop()
         if journal is not None:
             journal.close()
 

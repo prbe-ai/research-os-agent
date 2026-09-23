@@ -1,6 +1,6 @@
 ---
 name: instrument-code
-description: Wires the Probe Logging SDK (`probe.init`, `probe.log`) into a script that trains, evaluates, sweeps or serves, so that it records run-level metrics. Use when writing or changing any such script, launching a training script on another machine, when a trainer already has its own integration (miles, trl, verl, Ray), and when a run finished green but recorded nothing, less than expected, or onto the wrong run. HARD TRIGGER - ENSURE YOU READ BEFORE LAUNCHING ANY PAID GPU HOURS.
+description: Wires the Probe SDK (`probe.init`, `probe.log`) into a script that trains, evaluates, sweeps or serves, so that it records run-level metrics. Use when writing or changing any such script, launching a training script on another machine, when a trainer already has its own integration (miles, trl, verl, Ray), and when a run finished green but recorded nothing, less than expected, or onto the wrong run. HARD TRIGGER - ENSURE YOU READ BEFORE ANY PAID GPU HOURS.
 ---
 # Instrument code
 

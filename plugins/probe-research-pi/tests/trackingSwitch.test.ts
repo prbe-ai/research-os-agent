@@ -22,6 +22,8 @@ describe("parseSwitchIntent", () => {
     for (const word of ["read", "read-only", "readonly", "read_only", "ro"]) {
       expect(parseSwitchIntent(`/skill:probe ${word}`)?.direction).toBe("read-only");
     }
+    expect(parseSwitchIntent("/skill:probe daemon")?.direction).toBe("daemon");
+    expect(parseSwitchIntent("/probe daemon")?.direction).toBe("daemon");
   });
 
   it("treats a bare invocation as one step around the cycle", () => {
@@ -101,9 +103,10 @@ describe("applyTrackingSwitch", () => {
     ]);
   });
 
-  it("maps each of the three states, and the cycle, onto its CLI call", async () => {
+  it("maps each of the four states, and the cycle, onto its CLI call", async () => {
     const cases = [
       ["full", ["state", "full"]],
+      ["daemon", ["state", "daemon"]],
       ["read-only", ["state", "read-only"]],
       ["off", ["state", "off"]],
       ["cycle", ["toggle"]],
@@ -137,7 +140,7 @@ describe("switchAppliedNotice", () => {
   });
 
   it("names the request that moved it, for each direction", () => {
-    for (const direction of ["full", "read-only", "off", "cycle"] as const) {
+    for (const direction of ["full", "daemon", "read-only", "off", "cycle"] as const) {
       expect(switchAppliedNotice(direction)).toContain(`\`${direction}\``);
     }
   });

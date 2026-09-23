@@ -22,7 +22,21 @@ import { checkPairing } from "./pairing.js";
 import { buildStatusReport } from "./status.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./tapRuntime.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./trackingSwitch.js";
-import { initializeTrackingState, trackingStatusText, type TrackingExecFileFn } from "./trackingState.js";
+import {
+  companionKeyHeld,
+  DAEMON_CONTEXT,
+  daemonNotice,
+  daemonStatus,
+  DaemonStatus,
+  type DaemonNoticeDeps,
+} from "./daemonNotice.js";
+import {
+  initializeTrackingState,
+  ProbeState,
+  trackingStatusText,
+  type ProbeStateValue,
+  type TrackingExecFileFn,
+} from "./trackingState.js";
 import {
   readTeamNote,
   renderTeamNoteForPrompt,
@@ -62,11 +76,29 @@ let cachedTeamNote: string | null = null;
  * for it, and a note that quietly stops sending is the one failure that surface
  * must never have.
  */
-let cachedProbeState: "full" | "read-only" | "off" | undefined;
+let cachedProbeState: ProbeStateValue | undefined;
 
 /** Has the researcher switched Probe off for this session? */
 function probeIsOff(): boolean {
-  return cachedProbeState === "off";
+  return cachedProbeState === ProbeState.Off;
+}
+
+/**
+ * Was the last turn in the `daemon` state? The daemon notice reads two small
+ * files, so a session that has never been in the state skips it entirely; a
+ * session that just LEFT it runs it once more to clear the notified record.
+ */
+let lastTurnInDaemon = false;
+
+function realDaemonNoticeDeps(): DaemonNoticeDeps {
+  return {
+    env: process.env,
+    readFileSync: (path) => fs.readFileSync(path, "utf-8"),
+    writeFileSync: (path, content) => fs.writeFileSync(path, content),
+    mkdirSync: (path) => fs.mkdirSync(path, { recursive: true }),
+    rmSync: (path) => fs.rmSync(path, { force: true }),
+    now: () => Date.now(),
+  };
 }
 
 // Live Probe MCP connections, keyed by session id. Module-scope for the same
@@ -152,6 +184,8 @@ async function refreshTrackingStatus(
     log: logLine,
   });
   if (!state) {
+    // Unknown, not the last value seen: see cachedProbeState's docstring.
+    cachedProbeState = undefined;
     if (ctx.hasUI) {
       try {
         // Never leave a previous authoritative-looking value visible when
@@ -384,11 +418,41 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
 
   // Inject, don't render — see teamNote.ts's module docstring. Fires on
   // EVERY turn, so this must stay a cheap string append against the cache
-  // populated at session_start: no file read, no CLI spawn, here.
-  pi.on("before_agent_start", async (event) => {
-    if (probeIsOff() || !cachedTeamNote) return;
+  // populated at session_start: no CLI spawn, and no file I/O EXCEPT in the
+  // `daemon` state (and one turn after leaving it), where daemonNotice reads
+  // the lease, the notified record and the config, and writes the record.
+  //
+  // THE DAEMON STATE rides the same event: `DAEMON_CONTEXT` on every turn it
+  // holds (pi has no SessionStart hook to say it once), plus a one-off message
+  // at the turn where recording changes hands -- see daemonNotice.ts.
+  pi.on("before_agent_start", async (event, ctx) => {
+    if (probeIsOff()) return;
+    let systemPrompt = event.systemPrompt;
+    if (cachedTeamNote) {
+      systemPrompt += renderTeamNoteForPrompt(cachedTeamNote, teamNoteDocumentPath(process.env));
+    }
+    const inDaemon = cachedProbeState === ProbeState.Daemon;
+    // Only claim the daemon records while it DOES: its lease is live, or this
+    // is the first turn and it has a key to start with. Otherwise daemonNotice
+    // below tells the model recording is back with it.
+    if (inDaemon) {
+      const deps = realDaemonNoticeDeps();
+      const sessionId = ctx?.sessionManager?.getSessionId();
+      const live = sessionId ? daemonStatus(sessionId, deps).status === DaemonStatus.Live : false;
+      if (live || (!lastTurnInDaemon && companionKeyHeld(deps))) {
+        systemPrompt += `\n\n${DAEMON_CONTEXT}`;
+      }
+    }
+    let notice: string | null = null;
+    if (inDaemon || lastTurnInDaemon) {
+      const sessionId = ctx?.sessionManager?.getSessionId();
+      if (sessionId) notice = daemonNotice(sessionId, inDaemon, realDaemonNoticeDeps());
+    }
+    lastTurnInDaemon = inDaemon;
+    if (systemPrompt === event.systemPrompt && !notice) return;
     return {
-      systemPrompt: event.systemPrompt + renderTeamNoteForPrompt(cachedTeamNote, teamNoteDocumentPath(process.env)),
+      ...(systemPrompt !== event.systemPrompt ? { systemPrompt } : {}),
+      ...(notice ? { message: { customType: "probe-daemon", content: notice, display: false } } : {}),
     };
   });
 

@@ -143,9 +143,15 @@ _RULES: tuple[_Rule, ...] = (
     # this rule sets pairs=True.
     _r("aws-access-key-id", r"\b(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}\b",
        ("akia", "asia", "abia", "acca"), pairs=True),
-    # Anthropic.
-    _r("anthropic-api-key", r"\bsk-ant-(?:api|admin)[0-9]{2}-[A-Za-z0-9_\-]{80,120}\b",
+    # Anthropic: API and admin keys, and the OAuth access/refresh tokens a
+    # Claude Code login writes (`sk-ant-oat01-`, `sk-ant-ort01-`).
+    _r("anthropic-api-key", r"\bsk-ant-(?:api|admin|oat|ort)[0-9]{2}-[A-Za-z0-9_\-]{40,200}\b",
        ("sk-ant-",)),
+    # Probe's own credentials (app/auth/tokens.py): user PATs (and the legacy
+    # `ros_pat_`), service tokens, ingest tokens. Fixed prefix + hex, so exact.
+    _r("probe-token", r"\b(?:probe_pat_|ros_pat_|probe_svc_)[0-9a-f]{32}\b",
+       ("probe_pat_", "ros_pat_", "probe_svc_")),
+    _r("probe-ingest-token", r"\bros_ing_[0-9a-f]{48}\b", ("ros_ing_",)),
     # OpenAI, both the project-scoped and the classic shape.
     _r("openai-api-key", r"\bsk-(?:proj|svcacct|admin)-[A-Za-z0-9_\-]{40,200}\b",
        ("sk-proj-", "sk-svcacct-", "sk-admin-")),

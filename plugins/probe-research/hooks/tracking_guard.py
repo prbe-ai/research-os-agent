@@ -92,79 +92,13 @@ import time
 # hooks.json runs `python3 <plugin_root>/hooks/tracking_guard.py`.
 import _session_marker
 
-# Top-level probe commands that record research content whatever follows them.
-# `flush` is deliberately absent: draining an outbox delivers writes recorded
-# BEFORE the researcher flipped the switch, and honouring the pre-off record
-# is what "off deletes nothing" means.
-TOP_LEVEL_WRITES = frozenset(
-    {"log", "link", "snapshot", "exec", "backfill", "import", "wandb"}
-)
-
-# Command groups whose verbs write research content unless the verb is a read.
-# `session` is deliberately absent (it is the switch itself -- warning on
-# `probe session track` would block the un-mute), and so are the read groups
-# (metrics, series, get, bundle, events, coordinates, statusline, ...) and the
-# machine-plumbing groups (context, token, mcp, workspace, shared, outbox).
-WRITE_GROUPS = frozenset(
-    {
-        "project",
-        "experiment",
-        "run",
-        "artifact",
-        "notes",
-            "span",
-        "group",
-        "edge",
-        "trial",
-        "views",
-    }
-)
-
-# Verbs inside a write group that only read. Unknown verbs count as writes --
-# the group already said "research content" -- EXCEPT that the leaning above
-# still applies: anything added to probe later that reads should be added here.
-READ_VERBS = frozenset(
-    {
-        "show",
-        "list",
-        "get",
-        "status",
-        "versions",
-        "cat",
-        "diff",
-        "search",
-        "export",
-        "events",
-        "coordinates",
-        "download",
-        "help",
-        # `probe notes team` PRINTS the team note. It reached the guard as an
-        # unknown verb in a write group and was refused by a message that says
-        # "Reading Probe is still fine" -- which is exactly the shape of bug the
-        # deny list is supposed to avoid.
-        "team",
-    }
-)
-
-DENY_REASON = (
-    "Probe is READ-ONLY for this conversation, so `{matched}` was refused before it ran. Reads "
-    "are still fine. If the researcher wants this recorded they set `/probe on`; say so once, "
-    "do not ask them to approve the call, and do not route around it."
-)
-
-#: The `off` refusal. A SEPARATE message, because the remedy differs and that is
-#: the whole reason the third state exists: under `read` an agent should still
-#: search and still report what it found, and under `off` it must not call at all
-#: -- and must SAY it did not look, rather than reporting an empty result as an
-#: absence of prior work.
-DENY_REASON_OFF = (
-    "Probe is OFF for this conversation, so `{matched}` was refused before it ran. Make no "
-    "Probe calls at all, reads included: you cannot see prior work and cannot know what you "
-    "missed, so say you could not look rather than reporting nothing was found; turning it "
-    "back on does not backfill the gap. Only the researcher changes the state (`/probe read` "
-    "restores searching); a repeat request is not permission: do not ask them to approve this "
-    "call, and do not route around it."
-)
+# WHICH COMMANDS WRITE, AND THE REFUSALS, live in `_session_marker` so the CLI's
+# own write gate (`probe.cli.write_gate`) reads the same list this hook does.
+TOP_LEVEL_WRITES = _session_marker.TOP_LEVEL_WRITES
+WRITE_GROUPS = _session_marker.WRITE_GROUPS
+READ_VERBS = _session_marker.READ_VERBS
+DENY_REASON = _session_marker.DENY_REASON
+DENY_REASON_OFF = _session_marker.DENY_REASON_OFF
 
 MESSAGE = (
     "Probe is set to `{state}` for this conversation, but `{matched}` just wrote to it. Record "
@@ -186,6 +120,10 @@ FLIP_NOTICE = {
         "prior work and keep reporting what you find; create and modify nothing. "
         "Already-recorded work is untouched."
     ),
+    "daemon": (
+        "Probe is now in the `daemon` state for this conversation; it handles all WRITES to "
+        "Probe from here-on out except for SDK usage in run scripts."
+    ),
     "off": (
         "Probe is now OFF for this conversation: no calls at all, reads "
         "included. Do not raise Probe again, including as a reminder or a "
@@ -193,6 +131,20 @@ FLIP_NOTICE = {
         "not look rather than reporting that nothing exists."
     ),
 }
+
+#: The daemon's handback notice and its reason phrases live in `_session_marker`
+#: (the session-start hook says the same thing when the daemon has no key).
+DAEMON_DEGRADED_NOTICE = _session_marker.DAEMON_DEGRADED_NOTICE
+DAEMON_REASON_WORDS = _session_marker.DAEMON_REASON_WORDS
+
+#: A write reached Probe past the CLI gate while the daemon held the lease (an
+#: older CLI, or a write made outside it).
+MESSAGE_DAEMON = (
+    "The Probe daemon is recording this conversation, but `{matched}` just wrote to Probe "
+    "directly. The daemon will see that write in the transcript and will not repeat it; do "
+    "not write to Probe yourself from here on. Run scripts and SDK usage is still your "
+    "responsibility."
+)
 
 # The switch, by trailing slug -- in TWO classes, which differ ONLY in whether
 # a bare invocation flips on the TOOL surface. The legacy names were a
@@ -250,6 +202,8 @@ ON_WORDS = frozenset({"on", "start", "resume", "full"})
 #: `session_marker.TRACKING_READ_ONLY_VALUES`; the two are checked against each
 #: other in `test_probe_three_states.py`.
 READ_ONLY_WORDS = frozenset({"read", "read-only", "readonly", "read_only", "ro"})
+#: The fourth state is reached only by NAME, never by a press.
+DAEMON_WORDS = frozenset({"daemon"})
 TOGGLE_WORDS = frozenset({"toggle", "flip", "cycle", "next"})
 STATUS_WORDS = frozenset({"status"})
 
@@ -314,24 +268,11 @@ FLIP_CLAIM_TTL_SECONDS = 300.0
 CLAIM_VERSION = 2
 
 
-#: Verbs inside a write group that REMOVE research rather than record it.
-#: "Record nothing" is not "prevent cleanup" -- the first thing a researcher
-#: does after finding an untracked session's writes on the dashboard is delete
-#: them, and a layer that fought that would make the mess it exists to prevent
-#: permanent. It matters most for the DENY: a blocked cleanup is a wall, not a
-#: warning. The warn skips them for the same reason plus one of its own -- its
-#: line reads "record nothing further ... consider undoing it", which is
-#: nonsense aimed at an undo.
-REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
+REMOVAL_VERBS = _session_marker.REMOVAL_VERBS
 
 
-def probe_write(command: str) -> "str | None":
-    """The probe invocation that records research content, or None.
-
-    Returns the matched `probe <group> <verb>` (or `probe <command>`) so the
-    warning can name what it saw rather than gesturing at the whole command
-    line.
-    """
+def _probe_invocations(command: str):
+    """The args after `probe`, for every `probe` invocation in a shell line."""
     for segment in _SEGMENT_SPLIT.split(command):
         try:
             tokens = shlex.split(segment, posix=True)
@@ -340,69 +281,40 @@ def probe_write(command: str) -> "str | None":
         index = 0
         while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
             index += 1
-        if index >= len(tokens):
+        if index < len(tokens) and os.path.basename(tokens[index]) == "probe":
+            yield tokens[index + 1 :]
+
+
+def probe_write(command: str) -> "str | None":
+    """The probe invocation that records research content, or None.
+
+    Returns the matched `probe <group> <verb>` (or `probe <command>`) so the
+    warning can name what it saw rather than gesturing at the whole command
+    line. Classified by `_session_marker.classify_probe_args`, the same function
+    the CLI's own write gate calls, so the two cannot disagree about what a
+    command IS.
+    """
+    for args in _probe_invocations(command):
+        if _session_marker.HELP_FLAG in args:
             continue
-        if os.path.basename(tokens[index]) != "probe":
-            continue
-        args = [t for t in tokens[index + 1 :] if not t.startswith("-")]
-        if not args:
-            continue
-        head = args[0]
-        if head in TOP_LEVEL_WRITES:
-            return "probe " + head
-        if head in WRITE_GROUPS:
-            verb = args[1] if len(args) > 1 else ""
-            if verb and verb not in READ_VERBS and verb not in REMOVAL_VERBS:
-                return "probe " + head + " " + verb
+        kind, matched = _session_marker.classify_probe_args(args)
+        if kind == "write":
+            return matched
     return None
 
 
-#: Groups whose whole job is READING research content. Denied only under `off`.
-#: Deliberately NOT a catch-all: `session` is the escape hatch (denying it would
-#: wall the researcher out of the switch that releases them), `outbox` is how
-#: pending work is surfaced once `off` stops injecting the report, and the
-#: machine-plumbing groups (context, token, mcp, workspace) talk to the client,
-#: not to the team's record.
-#:
-#: `shared` is in the list and was nearly not: it reads as plumbing beside those
-#: others, but `probe shared list` and `probe shared download` return the TEAM'S
-#: artifacts. That is the team's record by any reading, and leaving it out left a
-#: door into exactly the content `off` exists to stop reaching.
-READ_GROUPS = frozenset(
-    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared"}
-)
+READ_GROUPS = _session_marker.READ_GROUPS
 
 
 def probe_read(command: str) -> "str | None":
     """The probe invocation that READS research content, or None.
 
-    Only `off` uses this. The parse mirrors `probe_write` exactly -- same
-    segment split, same env-prefix skip, same lean-silent posture on anything
-    unparseable -- because a gate that disagreed with the warn about what a
-    `probe` command IS would refuse one spelling and wave through another.
+    Only `off` uses this. Same parse and same classifier as `probe_write`.
     """
-    for segment in _SEGMENT_SPLIT.split(command):
-        try:
-            tokens = shlex.split(segment, posix=True)
-        except ValueError:
-            continue
-        index = 0
-        while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
-            index += 1
-        if index >= len(tokens):
-            continue
-        if os.path.basename(tokens[index]) != "probe":
-            continue
-        args = [t for t in tokens[index + 1 :] if not t.startswith("-")]
-        if not args:
-            continue
-        head = args[0]
-        if head in READ_GROUPS:
-            return "probe " + head
-        if head in WRITE_GROUPS:
-            verb = args[1] if len(args) > 1 else ""
-            if verb in READ_VERBS:
-                return "probe " + head + " " + verb
+    for args in _probe_invocations(command):
+        kind, matched = _session_marker.classify_probe_args(args)
+        if kind == "read":
+            return matched
     return None
 
 
@@ -472,6 +384,8 @@ def _direction_from_words(
         return CYCLE if bare_flips else None
     if words[0] in READ_ONLY_WORDS:
         return "read-only"
+    if words[0] in DAEMON_WORDS:
+        return "daemon"
     if words[0] in OFF_WORDS:
         return "read-only" if slug in LEGACY_SLUGS else "off"
     if words[0] in ON_WORDS:
@@ -804,6 +718,9 @@ def _apply_direction(
     return target
 
 
+_EXEC = "probe exec"
+
+
 def _offending_write(payload: dict, session_id: str) -> "str | None":
     """The probe write this untracked session should not be making, or None.
 
@@ -825,7 +742,109 @@ def _offending_write(payload: dict, session_id: str) -> "str | None":
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str):
         return None
-    return probe_write(command)
+    matched = probe_write(command)
+    return None if matched == _EXEC else matched
+
+
+#: Every refusal the CLI's own write gate prints carries this phrase (see
+#: `_session_marker.DENY_REASON*`).
+GATE_REFUSED_PHRASE = "was refused before it ran"
+
+
+def _gate_refused(payload: dict, matched: str) -> bool:
+    """Did the `probe` CLI refuse THIS write itself? Then nothing was written,
+    and an after-the-fact "that write got through" would be false.
+
+    Keyed on the refusal naming the matched command, and read from stderr only:
+    a compound line where one write was refused and another landed must still
+    warn about the one that landed.
+    """
+    response = payload.get("tool_response")
+    stderr = response.get("stderr") if isinstance(response, dict) else response
+    if not isinstance(stderr, str):
+        return False
+    return f"`{matched}` {GATE_REFUSED_PHRASE}" in stderr
+
+
+def _emit_context(hook_event: str, text: str) -> None:
+    sys.stdout.write(
+        json.dumps(
+            {"hookSpecificOutput": {"hookEventName": hook_event, "additionalContext": text}}
+        )
+    )
+
+
+def _notified_path(session_id: str):
+    return _session_marker.sessions_dir() / (session_id + _session_marker.NOTIFIED_SUFFIX)
+
+
+def _daemon_notice(session_id: str, cwd: "str | None") -> "str | None":
+    """The notice for a CHANGE in who is recording, once per change, or None.
+
+    Runs on every prompt, which is the one moment a person is present and the
+    agent is about to act. Only transitions are announced: session start already
+    told the agent the daemon records, so a steady live daemon says nothing, a
+    live-to-degraded lapse says "recording is back with you", and a recovery says
+    so too. A first prompt may beat the worker's first lease (it is spawned at
+    session start), so `not-started` is announced only from the second prompt on.
+    """
+    path = _notified_path(session_id)
+    try:
+        last = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(last, dict):
+            last = {}
+    except (OSError, ValueError):
+        last = {}
+    state = _state(session_id, cwd)
+    if state != _session_marker.STATE_DAEMON:
+        if last:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        return None
+    kind, reason = _session_marker.daemon_status(session_id, state)
+    prompts = int(last.get("prompts") or 0) + 1
+    previous = last.get("status")
+    notice = None
+    current = previous
+    if kind == _session_marker.DAEMON_LIVE:
+        if previous == _session_marker.DAEMON_DEGRADED:
+            notice = FLIP_NOTICE["daemon"]
+        current = kind
+    elif (
+        reason == _session_marker.DAEMON_NOT_STARTED
+        and previous is None
+        and prompts < 2
+        and _session_marker.companion_key_held()
+    ):
+        # Grace: the worker may not have taken its first lease yet. Only when it
+        # CAN start -- with no key it never will, and saying so now is honest.
+        current = None
+    else:
+        if previous != _session_marker.DAEMON_DEGRADED:
+            notice = _session_marker.daemon_degraded_notice(reason)
+        current = _session_marker.DAEMON_DEGRADED
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"status": current, "prompts": prompts}), encoding="utf-8")
+    except OSError:
+        pass
+    return notice
+
+
+def _daemon_bypass(payload: dict, session_id: str) -> "str | None":
+    """A write that reached Probe past the gate while the daemon held the lease."""
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str) or _session_marker.DIRECTED_FLAG in command:
+        return None
+    matched = probe_write(command)
+    if not matched or _session_marker.daemon_allows_agent(matched):
+        return None
+    if not _session_marker.lease_live(session_id):
+        return None
+    return matched
 
 
 def _announce(hook_event: str, landed: "str | None") -> None:
@@ -853,7 +872,8 @@ def _deny(payload: dict, session_id: str) -> None:
     thing here is one file read and a return -- no shlex, no regex, no parse --
     because the cost of the gate is paid by every session that never needed it.
 
-        state == full   -> return, always
+        state == full or daemon -> return, always (`daemon` is enforced by the
+                                   CLI's own write gate, which knows the lease)
         state == read-only -> deny WRITES typed into Bash
         state == off    -> deny writes, Probe MCP calls, and Probe content reads
     """
@@ -876,6 +896,11 @@ def _deny(payload: dict, session_id: str) -> None:
         return
 
     matched = probe_write(command)
+    if matched == _EXEC:
+        # The CLI itself runs the launched command UNRECORDED under read/off
+        # (`write_gate.exec_child`): refusing here would stop the job, not the
+        # recording.
+        matched = None
     if matched:
         _refuse((DENY_REASON_OFF if off else DENY_REASON).format(matched=matched))
         return
@@ -918,6 +943,9 @@ def main() -> None:
     if hook_event == "UserPromptSubmit":
         direction, shape, slug = prompt_direction(payload.get("prompt"))
         if direction is None:
+            notice = _daemon_notice(session_id, _payload_cwd(payload))
+            if notice:
+                _emit_context("UserPromptSubmit", notice)
             return
         landed = _apply_direction(
             direction, session_id, shape, slug, _payload_cwd(payload)
@@ -939,8 +967,16 @@ def main() -> None:
         return
     if tool_name != "Bash":
         return
+    state = _state(session_id, _payload_cwd(payload))
+    if state == _session_marker.STATE_FULL:
+        return  # the common case: one state read, nothing parsed
+    if state == _session_marker.STATE_DAEMON:
+        matched = _daemon_bypass(payload, session_id)
+        if matched and not _gate_refused(payload, matched):
+            _emit_context("PostToolUse", MESSAGE_DAEMON.format(matched=matched))
+        return
     matched = _offending_write(payload, session_id)
-    if not matched:
+    if not matched or _gate_refused(payload, matched):
         return
     sys.stdout.write(
         json.dumps(

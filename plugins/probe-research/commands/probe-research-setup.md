@@ -71,7 +71,7 @@ probe login --context staging    # a second endpoint or tenant on one machine
 ```
 
 Only the researcher types `--token`, in their own terminal - never from an agent tool
-call: it would land in shell history and in the captured transcript. Both tokens sit in
+call: it would land in shell history and in the captured transcript. The tokens sit in
 plaintext in `~/.config/probe/config.json`.
 
 Switching accounts, or signing in as someone else on a device that already holds
@@ -122,15 +122,23 @@ then:
 probe import wandb …
 ```
 
+To bring in a whole W&B project at once, into an existing Probe project (add `--dry-run`
+to see the plan first):
+
+```bash
+probe wandb import-local ROOT --project P             # W&B run folders already on this machine
+probe wandb import-hosted ENTITY WB_PROJECT --project P   # from W&B's servers
+```
+
 For a continuously mirrored W&B workspace rather than a one-off, that is an integration
 configured in the dashboard, not here.
 
 ## 4. Confirm
 
 ```bash
-probe doctor                  # install, sign-in, capture pairing, staleness
+probe doctor                  # install, sign-in, capture pairing, daemon health, staleness
 probe setup --action diagnose # the same ground from the menu
-probe session status          # is THIS conversation being tracked, and why
+probe session status          # which state THIS conversation is in (on / daemon / read / off), and why
 probe mcp status              # where the read credential comes from, is it valid
 probe setup --action imports  # did the background imports finish
 ```
@@ -166,7 +174,7 @@ cannot work, or when the MCP has to be wired by hand:
 
 ```bash
 probe update                        # CLI + plugins
-probe setup --action settings       # turn auto-update on
+probe setup --action settings       # turn auto-update on; set the default Probe state (on / daemon / read / off - daemon needs capture)
 ```
 
 The CLI and the plugins ship together. Running one without the other is the usual cause of
@@ -175,7 +183,7 @@ a capability that is configured but does nothing.
 ## Removing it
 
 ```bash
-probe setup --action configure --no-capture              # stop capture, keep the plugin
+probe setup --action configure --no-capture              # stop capture (and the daemon), keep the plugin
 probe setup --action configure --no-capture --uninstall  # stop capture AND remove the plugin
 probe setup --action uninstall                           # remove Probe's plugins from the agents you pick, and sign this device out
 probe logout                                             # stop imports, revoke this token, clear local config
@@ -185,5 +193,9 @@ probe logout                                             # stop imports, revoke 
 
 - The write token and the read-only MCP token are different credentials. The
   MCP one cannot write.
+- Allowing the daemon in `--action settings` mints a third token for it: it
+  can read and write, never delete. Turning it off there revokes it. Without
+  that token, `/probe daemon` in a session reads as `daemon (degraded)` and
+  the agent records as in `on`.
 - Never echo a token. `probe mcp status` reports health without printing it.
 - `probe logout` revokes the calling token; it does not touch other devices.

@@ -851,3 +851,53 @@ describe("registerExtension — team note", () => {
     }
   });
 });
+
+
+describe("registerExtension — the daemon state", () => {
+  type BeforeAgentStart = (
+    event: { systemPrompt: string },
+    ctx: unknown,
+  ) => Promise<{ systemPrompt?: string; message?: { content: string } } | undefined>;
+
+  async function startInDaemon(sessionId: string, withKey: boolean) {
+    installProbeCli();
+    const config = join(tmp, "config.json");
+    writeFileSync(
+      config,
+      JSON.stringify({ current_context: "default", contexts: { default: withKey ? { companion_token: "k" } : {} } }),
+    );
+    process.env.PROBE_CONFIG_PATH = config;
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({ session_id: sessionId, tracking: true, signal: "on", state: "daemon", seeded: true, source: "machine" }),
+        "",
+      );
+    });
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId, sessionFile: undefined });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    return { before: handlers.get("before_agent_start") as unknown as BeforeAgentStart, ctx };
+  }
+
+  it("tells the model the daemon records, and says once when it does not", async () => {
+    const { before, ctx } = await startInDaemon(uniqueSessionId("daemon-live"), true);
+    const first = await before({ systemPrompt: "BASE" }, ctx);
+    expect(first!.systemPrompt).toContain("The Probe daemon is recording this session");
+    expect(first!.message).toBeUndefined(); // one prompt of grace for the worker to start
+    const second = await before({ systemPrompt: "BASE" }, ctx);
+    expect(second!.message!.content).toContain("the daemon is not running, so recording is back with you");
+    // ...and from then on the prompt stops claiming it records.
+    expect(second!.systemPrompt ?? "").not.toContain("The Probe daemon is recording this session");
+    const third = await before({ systemPrompt: "BASE" }, ctx);
+    expect(third?.message).toBeUndefined(); // announced once
+  });
+
+  it("never claims a keyless daemon records", async () => {
+    const { before, ctx } = await startInDaemon(uniqueSessionId("daemon-keyless"), false);
+    const first = await before({ systemPrompt: "BASE" }, ctx);
+    expect(first!.systemPrompt ?? "").not.toContain("The Probe daemon is recording this session");
+    expect(first!.message!.content).toContain("the daemon is not running");
+  });
+});

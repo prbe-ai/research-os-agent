@@ -1,6 +1,6 @@
 ---
 name: track-work
-description: Record ML work in Probe - track ALL related work (training runs, inference sweeps, evals, lit reviews, architecture design work, dataset processing) and what supports it (infra and provisioning for training, results dashboards, config or dependency changes before a launch) - this skill tells HOW to track this data properly. Trigger unprompted during any ML work while tracking is on (`/probe`), even when the user did not ask for tracking; record at the moment it happens, not at session end.
+description: Record ML work in Probe - track ALL related work (training runs, inference sweeps, evals, lit reviews, architecture design work, etc) - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`/probe`).
 ---
 
 # Track work
@@ -29,8 +29,11 @@ A SLUG is permanent. A NAME is not.
 ## 0. STATE GATE
 
 Check `probe session status` first: this skill is all about writing. If it is
-not `on`, do not write - say so once and carry on. Never move the switch (`probe
-session track`) to make a write legal; only the researcher does that.
+`read` or `off`, do not write - say so once and carry on. Never move the switch
+(`probe session track`) to make a write legal; only the researcher does that.
+
+In the `daemon` state, add `--directed` to any write the researcher asks for, so
+the daemon does not repeat it.
 
 ## 1. THE MAP
 
@@ -188,8 +191,9 @@ RULES:
 - Only fully upload a copy of the file if <100MB. Else, record a pointer instead - `--reference` when the bytes are on this box or a shared volume, `--uri` when they are already in a bucket.
     - Nothing enforces this; you decide.
 
-- NEVER UPLOAD SECRETS, as bytes or as a pointer: `.env`, `*.pem`, `*.key`,
-  `id_rsa*`, `credentials*`, for ex.
+- NEVER UPLOAD SECRETS or a customer's private content, as bytes, as a pointer,
+  or in prose: `.env`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, tokens, for
+  ex.
 - Don't upload anything a lockfile or a build rebuilds: `.venv`, `node_modules`,
   `__pycache__`, etc.
 

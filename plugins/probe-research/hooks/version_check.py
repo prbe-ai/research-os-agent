@@ -150,6 +150,24 @@ COMPACT_CONTEXT = (
 # "ask the user" -- the behaviour eval showed that phrasing turning into an agent
 # reaching for the switch itself, or asking on every refusal. Naming the origin of
 # the state and how to flip it beyond that one mention is the regression.
+#: The `daemon` state's line, at every session start: the daemon records, the
+#: agent does not -- except starting runs. Selected instead of nothing (a fresh
+#: start under `full` injects nothing), because an agent that is not told will
+#: record, and then the daemon and the agent both write.
+DAEMON_CONTEXT = (
+    "The Probe daemon is recording this session: it reads the transcript and files names, "
+    "tags, notes, artifacts, papers, lineage and run ends itself, so do not write to Probe "
+    "yourself. You still start runs yourself (`probe exec`, or the SDK in the script)."
+)
+
+#: After a compaction in the `daemon` state, IN PLACE OF `COMPACT_CONTEXT`: the
+#: daemon read the transcript through the compaction, so there is nothing to
+#: reconcile INTO Probe; reads are still the agent's.
+COMPACT_CONTEXT_DAEMON = (
+    "Context was just compacted. No need to re-record what happened in Probe. Check Probe for "
+    "any missing content that the compaction dropped."
+)
+
 TRACKING_OFF_CONTEXT = (
     "Probe is READ-ONLY for this conversation: no writes; reads (MCP, and `probe` read "
     "commands like `session status`) are fine. If the user asks for something that should be "
@@ -459,6 +477,24 @@ def _start_context() -> str | None:
     tracking_off = not _session_marker.state_allows_writes(state)
     if tracking_off:
         parts.append(TRACKING_OFF_CONTEXT)
+    elif state == _session_marker.STATE_DAEMON and not _session_marker.companion_key_held():
+        # `daemon` chosen, but the daemon has no key and can never start: say so
+        # now rather than let the agent believe something records it.
+        parts.append(_session_marker.daemon_degraded_notice("unauthorized"))
+    elif state == _session_marker.STATE_DAEMON and os.environ.get(SESSION_SOURCE_ENV) == COMPACT_SOURCE:
+        # Mid-session the worker is already running or it is not: say only what
+        # is true NOW. A dead daemon must not be re-announced as recording.
+        status = _session_marker.daemon_status(os.environ.get(SESSION_ID_ENV) or "", state)
+        if status is not None and status[0] == _session_marker.DAEMON_LIVE:
+            parts.extend((DAEMON_CONTEXT, COMPACT_CONTEXT_DAEMON))
+        else:
+            parts.append(_session_marker.daemon_degraded_notice(status[1] if status else None))
+    elif state == _session_marker.STATE_DAEMON:
+        # The swapped literal: an install that never chooses `daemon` never sees
+        # it, and `COMPACT_CONTEXT` below stays byte-identical. At a fresh start
+        # the worker is starting with the capture daemon; the per-prompt notice
+        # says so if it does not.
+        parts.append(DAEMON_CONTEXT)
     else:
         source = os.environ.get(SESSION_SOURCE_ENV)
         if source == COMPACT_SOURCE:

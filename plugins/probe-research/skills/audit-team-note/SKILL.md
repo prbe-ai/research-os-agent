@@ -1,6 +1,6 @@
 ---
 name: audit-team-note
-description: Periodic team note audit - ensures that team note doesn't have any false information or grows out of proportion - should be used in conjunction with edit-notes skill.
+description: Periodic team note audit - should be used in conjunction with edit-notes skill
 ---
 The team note is injected into every session on every machine, so a stale claim taxes the whole team, and a note past its render budget reaches NOBODY at all.
 

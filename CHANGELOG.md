@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- **The Probe daemon: a fourth state of the `probe` switch.** `on` / `daemon` / `read` / `off`.
+  In `daemon`, a background worker reads the session transcript and records the work in Probe
+  (titled `companion:` sub-notes, empty names and descriptions, tags, papers, run lineage,
+  ending runs the session opened, files the session produced), so the agent does not have to.
+  The agent keeps its reads, still starts runs, and makes the writes the researcher asks for with
+  `--directed`. Off by default: choose it in `probe setup --action settings` (which mints the
+  daemon's own read + write, never-delete key) or per session with `/probe daemon`. When the daemon
+  is down, out of budget or unauthorized, the session reads `daemon (degraded)` and the agent
+  records as in `on`. The worker is a child of the capture daemon, so it needs capture on
+  (probe-research-tap 0.7.0).
+- **The `probe` CLI enforces the switch itself.** In a coding-agent session, a write the session's
+  state does not allow is refused before it runs (exit 3), on every harness, pi included. A
+  refused `probe exec` still runs its command, just unrecorded. Never gated: a shell outside an
+  agent session (a person's own terminal), anything inside a run (`probe exec` and the SDK export
+  `PROBE_RUN_ID`), and `--help`.
+- `probe companion authorize | log | report | feedback`: approve the daemon's key, see every
+  decision it made and why, who owned which part of the transcript, and correct a write.
+  `probe doctor` reports the daemon.
+- Session capture no longer sends Probe's own credentials: `probe_pat_`, `probe_svc_`, `ros_ing_`
+  tokens and Claude OAuth tokens are redacted like any other secret.
+- Prompts: the `probe` and `track-work` skills, the setup command and the pointer block
+  (version 35) describe the `daemon` state; four skill descriptions are shorter.
+
 ## 0.178.0
 
 - **`query_sql`, the MCP's seventh tool.** Read-only SQL over the lab's research tables for
