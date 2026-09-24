@@ -131,6 +131,14 @@ MAX_ADMITTED_RUNS = 60  # runs named in work output, admitted per conclusions pa
 RETRIEVAL_ROUNDS = 3
 NO_RETRIEVAL_NOTE = ("\n\n(Retrieval is not available for this request: answer now, with proposals, from what "
                      "is shown above.)")
+#: A thinking model's reasoning counts against MAX_OUTPUT_TOKENS, so a long one
+#: crowds the answer out (`finish_reason: length`: 2 of 99 conclusions passes in
+#: the replay bench, both in one run, where the visible answer is ~3k tokens of a
+#: ~10k-token output). The same request is asked again at once, with this
+#: appended, instead of losing the pass until the next turn.
+CUT_SHORT_NOTE = ("\n\n(Your previous answer to this request hit the output limit before its JSON was complete: "
+                  "the reasoning before an answer counts against that limit. Keep the reasoning short and "
+                  "answer with the JSON.)")
 #: The conclusions pass runs at most once per this many seconds per session (a
 #: burst of short turns is concluded together; `finish` always concludes).
 CONCLUSIONS_MIN_GAP_SECONDS = 600
@@ -1835,10 +1843,36 @@ class Worker:
             tokens_in += int(usage.get("input_tokens") or 0)
             tokens_out += int(usage.get("output_tokens") or 0)
 
-        answer: dict = {}
-        for round_no in range(RETRIEVAL_ROUNDS + 1):
+        def complete(convo: list[dict]) -> dict:
+            """One round; an answer cut off at the output limit is asked again once,
+            when there is time for another call as long. Whatever stops the re-ask,
+            the cut-off answer stands and takes the unusable-answer path, as before:
+            a re-ask must never turn a skipped pass into a gateway failure."""
+            started = time.monotonic()
             answer = self._complete(convo, deadline, shadow=shadow, cycle_id=cycle_id)
             add(answer)
+            if retried or not _cut_off(answer):
+                return answer
+            retried.append(True)
+            took = time.monotonic() - started
+            left = deadline - time.monotonic()
+            if not shadow:
+                left = min(left, self.lease_left() - LEASE_MARGIN_SECONDS)
+            if left < took:
+                return answer
+            again = [*convo[:-1], {**convo[-1], "content": convo[-1]["content"] + CUT_SHORT_NOTE}]
+            try:
+                second = self._complete(again, deadline, shadow=shadow, cycle_id=cycle_id)
+            except api_mod.ApiError as exc:
+                log.info("re-asking a cut-off answer failed (%s: %s)", type(exc).__name__, exc)
+                return answer
+            add(second)
+            return second
+
+        retried: list[bool] = []
+        answer: dict = {}
+        for round_no in range(RETRIEVAL_ROUNDS + 1):
+            answer = complete(convo)
             needs = _needs_of(answer)
             empty = not (answer.get("content") or "").strip()
             if needs is None and not (empty and round_no > 0):
@@ -1853,8 +1887,7 @@ class Worker:
                 reply = reply[: max(0, room - 80)] + "\n…[cut to fit the request limit]"
             convo += [{"role": "assistant", "content": asked}, {"role": "user", "content": reply}]
         final = [*messages[:-1], {**messages[-1], "content": messages[-1]["content"] + NO_RETRIEVAL_NOTE}]
-        answer = self._complete(final, deadline, shadow=shadow, cycle_id=cycle_id)
-        add(answer)
+        answer = complete(final)
         if _needs_of(answer) is not None:
             raise UnusableAnswer(502, None, "still asking for more after retrieval was withdrawn")
         return {**answer, "usage": {"input_tokens": tokens_in, "output_tokens": tokens_out}}
@@ -2128,6 +2161,18 @@ def _merge_touched(existing: list, new: set) -> list:
     """Files the session wrote, oldest first, newest kept when capped."""
     order = [p for p in existing if p not in new] + sorted(new)
     return order[-500:]
+
+
+def _cut_off(answer: dict) -> bool:
+    """The answer hit the output limit before its JSON was complete (one that
+    happens to end exactly at the limit is whole, and is used as is)."""
+    if answer.get("finish_reason") != "length":
+        return False
+    try:
+        json.loads(answer.get("content") or "")
+    except ValueError:
+        return True
+    return False
 
 
 def _parse_proposals(answer: dict) -> list:

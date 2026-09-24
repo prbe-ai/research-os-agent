@@ -44,7 +44,9 @@ class ScriptedApi(FakeApi):
         self.completions += 1
         self.seen.append([dict(m) for m in messages])
         content = self.script.pop(0) if self.script else json.dumps({"proposals": self.proposals})
-        return {"content": content, "model": "m", "usage": {"input_tokens": 10, "output_tokens": 5}}
+        answer = {"model": "m", "usage": {"input_tokens": 10, "output_tokens": 5}}
+        # A dict scripts a whole answer (`finish_reason` too); a string is its content.
+        return {**answer, **content} if isinstance(content, dict) else {**answer, "content": content}
 
 
 def _need(*requests):
@@ -185,3 +187,94 @@ def test_the_gateway_is_sent_the_same_redacted_bytes_the_trace_keeps(tmp_path):
     messages = [{"role": "user", "content": f"token={_GH_PAT}"}]
     worker._complete(messages, time.monotonic() + 100, shadow=True, cycle_id=None)
     assert _GH_PAT not in api.seen[-1][0]["content"]
+
+
+#: What the gateway returns when the model's reasoning used up the output limit.
+CUT_OFF = {"content": '{"proposals": [{"kind": "no', "finish_reason": "length"}
+
+
+def test_an_answer_cut_off_at_the_output_limit_is_asked_again_at_once(tmp_path):
+    api = ScriptedApi([CUT_OFF])
+    worker, _ = _live_worker(tmp_path, api, _claude_lines(_assistant("the SVM wins on digits")))
+    assert "skipped" not in (worker.cycle(shadow=False) or "")
+    assert api.completions == 2 and api.seen[-1][-1]["content"].endswith(worker_mod.CUT_SHORT_NOTE)
+    assert not api.seen[0][-1]["content"].endswith(worker_mod.CUT_SHORT_NOTE)
+    assert worker.ledger.watermark > 0
+    # Both calls are paid for and counted.
+    tokens = worker.ledger.conn.execute("SELECT input_tokens, output_tokens FROM cycles").fetchall()[-1]
+    assert tuple(tokens) == (20, 10)
+
+
+def test_a_second_cut_off_answer_is_not_chased(tmp_path):
+    api = ScriptedApi([CUT_OFF, CUT_OFF])
+    worker, _ = _live_worker(tmp_path, api, _claude_lines(_assistant("the SVM wins on digits")))
+    with pytest.raises(worker_mod.UnusableAnswer, match="length"):
+        worker.cycle(shadow=False)
+    assert api.completions == 2 and worker.ledger.watermark == 0  # failed, retried on a later cycle
+
+
+def test_one_cut_off_retry_per_answer_even_across_retrieval_rounds(tmp_path):
+    # The first round is cut off and re-asked; the re-ask asks for retrieval; the
+    # next round is cut off again and is NOT re-asked.
+    api = ScriptedApi([CUT_OFF, _need({"grep": "digits"}), CUT_OFF])
+    worker, _ = _live_worker(tmp_path, api, _claude_lines(_assistant("the SVM wins on digits")))
+    with pytest.raises(worker_mod.UnusableAnswer, match="length"):
+        worker.cycle(shadow=False)
+    assert api.completions == 3
+
+
+def test_the_final_answer_without_retrieval_is_re_asked_too(tmp_path):
+    ask = _need({"grep": "x"})
+    api = ScriptedApi([ask] * (worker_mod.RETRIEVAL_ROUNDS + 1) + [CUT_OFF])
+    worker, _ = _live_worker(tmp_path, api, _claude_lines(_assistant("x")))
+    assert "skipped" not in (worker.cycle(shadow=False) or "")
+    assert api.completions == worker_mod.RETRIEVAL_ROUNDS + 3
+    last = api.seen[-1][-1]["content"]
+    assert last.endswith(worker_mod.NO_RETRIEVAL_NOTE + worker_mod.CUT_SHORT_NOTE)
+
+
+class FailingReAskApi(ScriptedApi):
+    """The first answer is cut off; every attempt at the re-ask times out."""
+
+    def complete(self, messages, *, max_tokens=None, timeout=None):
+        if messages[-1]["content"].endswith(worker_mod.CUT_SHORT_NOTE):
+            self.completions += 1
+            raise worker_mod.api_mod.Retryable(0, None, "timed out")
+        return super().complete(messages, max_tokens=max_tokens, timeout=timeout)
+
+
+def test_a_re_ask_that_fails_leaves_the_cut_off_answer_as_before(tmp_path):
+    # Never a gateway failure (which costs the lease after two): the pass fails
+    # as an unusable answer, exactly as it did before the re-ask existed.
+    api = FailingReAskApi([CUT_OFF])
+    worker, _ = _live_worker(tmp_path, api, _claude_lines(_assistant("the SVM wins on digits")))
+    with pytest.raises(worker_mod.UnusableAnswer, match="length"):
+        worker.cycle(shadow=False)
+    assert api.completions == 1 + worker_mod.GATEWAY_ATTEMPTS  # the cut-off one, then each attempt at the re-ask
+
+
+def test_no_re_ask_without_time_for_another_call_as_long(tmp_path, monkeypatch):
+    # The cut-off call took 50 s of a 70 s pass: a re-ask would get a 20 s timeout
+    # it cannot finish in, and would still be paid for. It is never started.
+    clock = {"skew": 0.0}
+    real = worker_mod.time.monotonic
+    monkeypatch.setattr(worker_mod.time, "monotonic", lambda: real() + clock["skew"])
+
+    class SlowApi(ScriptedApi):
+        def complete(self, messages, *, max_tokens=None, timeout=None):
+            clock["skew"] += 50
+            return super().complete(messages, max_tokens=max_tokens, timeout=timeout)
+
+    api = SlowApi([CUT_OFF])
+    worker, _ = _live_worker(tmp_path, api, _claude_lines(_assistant("the SVM wins on digits")))
+    with pytest.raises(worker_mod.UnusableAnswer, match="length"):
+        worker.cycle(shadow=False, wall=70)
+    assert api.completions == 1
+
+
+def test_an_answer_whole_at_the_output_limit_is_used_as_is(tmp_path):
+    whole = {"content": json.dumps({"proposals": []}), "finish_reason": "length"}
+    api = ScriptedApi([whole])
+    worker, _ = _live_worker(tmp_path, api, _claude_lines(_assistant("the SVM wins on digits")))
+    worker.cycle(shadow=False)
+    assert api.completions == 1 and worker.ledger.watermark > 0

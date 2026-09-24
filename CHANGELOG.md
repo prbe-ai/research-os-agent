@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The daemon no longer loses a conclusions pass to a long think** (tap 0.8.3). The model's
+  reasoning counts against the answer's 16k-token limit. In 2 of 99 conclusions passes in the replay
+  bench it ran out of room before the JSON was complete, and the daemon dropped the pass (the
+  decision notes, the file notes, the lineage) until the next turn, or for good at session end: the
+  replay that hit it twice ended with no file notes and no PCA lineage. An answer cut off at the
+  limit is now asked again at once, with a note to keep the reasoning short.
 - **Tap 0.8.2 is tap 0.8.0 again.** 0.8.1 added the daemon judge's SKIP mode and a session-end audit,
   both off by default; they are withdrawn until the replay bench shows them doing better than 0.8.0
   (on both trial fixtures 0.8.1 tied 0.8.0 at 8/8 and 7/7), and stay in an open PR until then.
