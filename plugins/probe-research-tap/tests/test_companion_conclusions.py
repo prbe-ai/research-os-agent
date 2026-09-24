@@ -437,6 +437,10 @@ def _judging(tmp_path, api):
     body = _session(words)
     worker, _ = _live_worker(tmp_path, api, body)
     worker.cycle(shadow=False)
+    _turn(len(body))  # the turn ended: the judge's per-kind answers are taken now
+    import time as _time
+
+    worker._judge_finished_turn(_time.monotonic() + worker_mod.CYCLE_WALL_SECONDS)
     return worker, body, words
 
 

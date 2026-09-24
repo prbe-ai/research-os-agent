@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **The daemon's Jev judge can later skip turns with nothing to record, and can audit the record at
+  session end** (tap 0.8.1). The judge's per-kind answers are now taken when each turn ends. They
+  back a SKIP mode that stays OFF until the shadow data proves every kind:
+  `python agent/scripts/companion_judge_report.py` reads the daemon's ledgers and prints the switch
+  once recall is at least 0.95 for every kind (with a 95% lower bound of 0.95, so a rare kind needs
+  52 hits) over 200 turns from 10 sessions. Even then a skip covers one empty turn and nothing
+  before it; a run starting or ending, a directed command or a produced file always reaches the
+  model; one skipped turn in five still does. `PROBE_COMPANION_JUDGE_AUDIT=on` adds a session-end
+  audit: every paragraph against the notes that now exist (the agent's own included), replacing the
+  final pass with one aimed at what no note records. It is off by default: on the two replay trials
+  it found nothing missing and cost a model pass.
+
+- **`agent/scripts/companion_trial_audit.py` checks a daemon-mode trial session**: no reads of the
+  write gate's source, `group create` not refused, no `--directed` on creates, and where the minutes
+  went, against the first trial's 48 tool calls.
+
 ## 0.180.0
 
 - **The Probe daemon records what the session concluded, not just what it ran** (tap 0.8.0).

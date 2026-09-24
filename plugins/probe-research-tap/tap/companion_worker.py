@@ -163,11 +163,12 @@ TEXT_SNIFF_BYTES = 8192
 ENV_SHADOW = "PROBE_COMPANION_SHADOW"
 SKIPPED_OUTCOME = "skipped: no words, run event, directed command or produced file in this chunk"
 # The Jev judge (`POST /v1/companion/judge`, plan F12), on unless this says off.
-# It never skips a model call: per finished turn it (a) records, per kind, whether
-# the turn holds material for it, beside what the model then decided, and (b)
-# names the agent's paragraphs no existing note records -- the conclusions pass
-# checks each. A workspace the server has not enabled answers 403 once; the
-# session then stops asking.
+# Per finished turn it (a) records, per kind, whether the turn holds material for
+# it, beside what the model then decided (SHADOW: it never skips a model call
+# unless SKIP is switched on and proven, below), and (b) names the agent's
+# paragraphs no existing note records -- the conclusions pass checks each, and
+# the session-end audit checks the whole session. A workspace the server has not
+# enabled answers 403 once; the session then stops asking.
 ENV_JUDGE = "PROBE_COMPANION_JUDGE"
 JUDGE_SLICE_CHARS = 80_000  # a gate slice; `_judge` trims further to the route's budget
 #: The route's own budget (`app/companion/router.py:judge_budget_chars`): text,
@@ -181,6 +182,27 @@ JUDGE_NOTES = 16
 JUDGE_NOTE_CHARS = 1000
 JUDGE_RESERVE_SECONDS = 90  # of the cycle's wall time kept for the model call after judging
 JUDGE_TARGET_P = 0.5
+#: SKIP (plan T16b): a turn's model calls are skipped only when EVERY kind has
+#: been proven on shadow data (`scripts/companion_judge_report.py`: recall >= 0.95
+#: over >= 200 turns from >= 10 sessions, listed in ENV_JUDGE_SKIP_KINDS) and the
+#: judge says "nothing" >= JUDGE_SKIP_NOTHING_P with every kind < JUDGE_SKIP_KIND_P.
+#: A run start or end, a directed command, a written or produced file always call
+#: the model; one skip-verdict turn in JUDGE_HOLDOUT_EVERY calls it anyway, to keep
+#: measuring. Until then the judge is SHADOW: it records and never skips.
+ENV_JUDGE_SKIP_KINDS = "PROBE_COMPANION_JUDGE_SKIP_KINDS"
+#: The session-end audit is opt-in (`PROBE_COMPANION_JUDGE_AUDIT=on`): on the two
+#: replay trials it found nothing the conclusions passes had missed and cost one
+#: more model pass per session (+40% input tokens on the inline trial).
+ENV_JUDGE_AUDIT = "PROBE_COMPANION_JUDGE_AUDIT"
+#: The kinds SKIP must have proven. Not `file_note`: a file note needs a file the
+#: session produced, and a produced file is a deterministic trigger SKIP never skips.
+JUDGE_SKIP_KINDS = ("note", "run_end", "artifact", "edge", "describe", "tag", "paper")
+JUDGE_SKIP_NOTHING_P = 0.8
+JUDGE_SKIP_KIND_P = 0.5
+JUDGE_HOLDOUT_EVERY = 5
+#: The session-end audit judges every paragraph of the session, in batches.
+JUDGE_AUDIT_CALLS = 8
+JUDGE_SKIPPED_OUTCOME = "skipped: the judge found nothing to record in this turn"
 JUDGE_MIN_PARAGRAPH = 80
 JUDGE_KIND_QUESTIONS = {
     "note": "This part of a coding session states a result, a decision, a chosen configuration or a caveat.",
@@ -1219,6 +1241,12 @@ class Worker:
             with self.ledger.transaction():
                 self._commit_watermark(end, run_starts, run_ends, touched, seen.open_calls)
             return "nothing to decide"
+        if self._skipped(start, end) and not _deterministic(seen):
+            with self.ledger.transaction():
+                cycle_id = self.ledger.start_cycle(byte_start=start, byte_end=end, events=len(seen.events))
+                self.ledger.finish_cycle(cycle_id, outcome=JUDGE_SKIPPED_OUTCOME)
+                self._commit_watermark(end, run_starts, run_ends, touched, seen.open_calls)
+            return "skipped by the judge"
         if not _worth_a_call(seen):
             # Reads and listings only: no words from the agent, no run started or
             # ended, nothing directed, written or produced. The ledger above kept the
@@ -1388,6 +1416,7 @@ class Worker:
         """One poll's deciding: a due cycle (at once when a turn just finished),
         then the conclusions pass once that turn is fully read."""
         outcome = None
+        self._judge_finished_turn(time.monotonic() + CYCLE_WALL_SECONDS)
         if self.due():
             outcome = self.cycle(shadow=shadow)
         if self.conclusions_due():
@@ -1399,8 +1428,72 @@ class Worker:
             return False
         return not self.ledger.get_json("judge_off") and callable(getattr(self.api, "judge", None))
 
+    def _judge_skips(self) -> bool:
+        """SKIP mode: asked for (`PROBE_COMPANION_JUDGE=skip`) AND every kind proven."""
+        if os.environ.get(ENV_JUDGE, "").strip().lower() != "skip" or not self._judge_on():
+            return False
+        proven = {k.strip() for k in os.environ.get(ENV_JUDGE_SKIP_KINDS, "").split(",") if k.strip()}
+        return set(JUDGE_SKIP_KINDS) <= proven
+
+    def _gate_turn(self, start: int, end: int, deadline: float) -> dict[str, float] | None:
+        """The judge's per-kind answers about one finished turn (every slice asked;
+        a kind's answer is its highest over the slices, "nothing" its lowest)."""
+        events = self._turn_events(start, end)
+        self.ledger.set_json("gated_through", end)
+        if not events:
+            return None
+        text = "\n\n".join(t if role != observe.ASSISTANT else f"[assistant @{off}]\n{t}" for off, role, t in events)
+        merged: dict[str, float] = {}
+        for calls, at in enumerate(range(0, len(text), JUDGE_SLICE_CHARS)):
+            if calls >= JUDGE_CALLS_PER_TURN or deadline - time.monotonic() < JUDGE_RESERVE_SECONDS:
+                return None  # a turn not judged whole is never skipped
+            answers = self._judge("gate", start, end, text[at : at + JUDGE_SLICE_CHARS], JUDGE_KIND_QUESTIONS)
+            if not answers:
+                return None
+            for kind, p in answers.items():
+                if isinstance(p, (int, float)):
+                    merged[kind] = min(merged.get(kind, 1.0), p) if kind == "nothing" else max(merged.get(kind, 0.0), p)
+        return merged or None
+
+    def _skipped(self, start: int, end: int) -> bool:
+        """Is (start, end] inside ONE turn the judge found empty (SKIP on)?"""
+        if not self._judge_skips():
+            return False
+        return any(lo <= start and end <= hi for lo, hi in self.ledger.get_json("skip_ranges", []))
+
+    def _holdout(self, turn: int) -> bool:
+        digest = hashlib.sha256(f"{self.session_id}:{turn}".encode()).digest()
+        return digest[0] % JUDGE_HOLDOUT_EVERY == 0
+
+    def _judge_finished_turn(self, deadline: float) -> None:
+        """At a turn's end: record the judge's answers about it (SHADOW), and in SKIP
+        mode, when the turn holds nothing to record, mark it for skipping."""
+        turn = self._turn_offset()
+        gated = int(self.ledger.get_json("gated_through", 0) or 0)
+        if turn is not None and turn < gated:
+            # The transcript was rewritten (a shorter one restarts at 0): old marks mean nothing.
+            gated = 0
+            self.ledger.set_json("gated_through", 0)
+            self.ledger.set_json("skip_ranges", [])
+        if turn is None or turn <= gated or not self._judge_on():
+            return
+        verdict = self._gate_turn(gated, turn, deadline)
+        if not (verdict and self._judge_skips()):
+            return
+        nothing = verdict.get("nothing", 0.0) >= JUDGE_SKIP_NOTHING_P
+        quiet = all(verdict.get(k, 1.0) < JUDGE_SKIP_KIND_P for k in JUDGE_SKIP_KINDS)
+        if not (nothing and quiet):
+            return
+        holdout = self._holdout(turn)
+        self.ledger.add_judgment(purpose="holdout" if holdout else "skip", byte_start=gated, byte_end=turn,
+                                 questions={}, answers=verdict)
+        if not holdout:
+            # This turn's range only: an earlier turn not yet read is never swept in.
+            ranges = self.ledger.get_json("skip_ranges", [])
+            self.ledger.set_json("skip_ranges", ranges[-199:] + [[gated, turn]])
+
     def _judge(self, purpose: str, start: int, end: int, text: str, questions: dict[str, str],
-               notes: list[str] | tuple = ()) -> dict[str, float] | None:
+               notes: list[str] | tuple = (), timeout: float = 30) -> dict[str, float] | None:
         """One judge call, recorded whatever happens; the answers, or None."""
         assert self.api is not None
         if self.ledger.get_json("judge_off"):
@@ -1409,7 +1502,7 @@ class Worker:
         notes = [n[:JUDGE_NOTE_CHARS] for n in list(notes)[:JUDGE_NOTES]]
         room = _judge_budget(len(questions)) - sum(len(q) for q in questions.values()) - sum(map(len, notes)) - 200
         try:
-            out = self.api.judge(text[-max(0, room):], questions, notes=notes)
+            out = self.api.judge(text[-max(0, room):], questions, notes=notes, timeout=timeout)
         except (api_mod.Rejected, api_mod.Forbidden) as exc:
             # Not enabled for this workspace, or a server without the route: stop asking.
             self.ledger.set_json("judge_off", f"{type(exc).__name__}: {exc}")
@@ -1444,28 +1537,24 @@ class Worker:
             offset = new
         return out
 
-    def _judge_turn(self, start: int, size: int, deadline: float, notes: list[str]) -> list[dict]:
-        """(a) SHADOW: per-kind answers about the turn, recorded only. (b) TARGETS:
-        the agent's paragraphs in the turn that none of `notes` (what the session's
-        entities already say) records."""
+    def _judge_targets(self, start: int, size: int, deadline: float, notes: list[str],
+                       max_calls: int = JUDGE_CALLS_PER_TURN, reserve: float = JUDGE_RESERVE_SECONDS,
+                       newest_first: bool = False) -> list[dict]:
+        """The agent's paragraphs in [start, size) that none of `notes` (what the
+        session's entities already say) records: the conclusions pass's targets."""
         events = self._turn_events(start, size)
-        if not events:
-            return []
-        text = "\n\n".join(t if role != observe.ASSISTANT else f"[assistant @{off}]\n{t}" for off, role, t in events)
         calls = 0
-        for at in range(0, len(text), JUDGE_SLICE_CHARS):
-            if calls >= JUDGE_CALLS_PER_TURN or deadline - time.monotonic() < JUDGE_RESERVE_SECONDS:
-                break
-            calls += 1
-            self._judge("gate", start, size, text[at : at + JUDGE_SLICE_CHARS], JUDGE_KIND_QUESTIONS)
         paragraphs = [
             (off, para.strip())
             for off, role, t in events if role == observe.ASSISTANT
             for para in re.split(r"\n\s*\n", t) if len(para.strip()) >= JUDGE_MIN_PARAGRAPH
         ]
+        if newest_first:
+            paragraphs.reverse()  # a long session's latest results are the likeliest missed
         targets: list[dict] = []
         for at in range(0, len(paragraphs), JUDGE_QUESTIONS_PER_CALL):
-            if calls >= 2 * JUDGE_CALLS_PER_TURN or deadline - time.monotonic() < JUDGE_RESERVE_SECONDS:
+            left = deadline - time.monotonic() - reserve
+            if calls >= max_calls or left < 5:
                 break
             calls += 1
             batch = paragraphs[at : at + JUDGE_QUESTIONS_PER_CALL]
@@ -1478,7 +1567,7 @@ class Worker:
             # The state is the batch's own paragraphs, so every paragraph asked about
             # is in the text judged, however long the turn.
             state = "\n\n".join(f"[assistant @{off}]\n{para[:1500]}" for off, para in batch)
-            answers = self._judge("targets", start, size, state, questions, notes) or {}
+            answers = self._judge("targets", start, size, state, questions, notes, timeout=min(30.0, left)) or {}
             targets += [{"offset": off, "paragraph": para[:1500], "p": round(float(answers[qid]), 3)}
                         for qid, (off, para) in zip(ids, batch, strict=True)
                         if isinstance(answers.get(qid), (int, float)) and answers[qid] >= JUDGE_TARGET_P]
@@ -1557,6 +1646,8 @@ class Worker:
             if isinstance(row, dict) and row.get("id"):
                 if row.get("project_id") and not observe.from_probe_tool(contexts.get(eid)):
                     projects.add(row["project_id"])
+                if (row.get("notes") or "").strip():
+                    note_lines.append(f"{row.get('name')}: {row['notes'].strip()[:400]}")
                 add_run(eid, row)
         for rid in sorted(set(mentioned) - set(seen))[:MAX_ADMITTED_RUNS]:
             row = self._read_quiet(f"/v1/runs/{rid}")
@@ -1650,7 +1741,8 @@ class Worker:
             self.ledger.set_json("conclusions_at", time.time())
         return f"skipped ({why})"
 
-    def conclude(self, *, shadow: bool = False, wall: float = CYCLE_WALL_SECONDS) -> str:
+    def conclude(self, *, shadow: bool = False, wall: float = CYCLE_WALL_SECONDS,
+                 targets: list[dict] | None = None) -> str:
         """The conclusions pass: the whole session so far against WHAT YOU MUST
         RECORD, after the agent finished a turn and at session end. Its evidence may
         cite any range the daemon owns (never the agent's). The request is sized to
@@ -1659,10 +1751,16 @@ class Worker:
         deadline = time.monotonic() + wall
         size = self._transcript_size()
         previous = int(self.ledger.get_json("conclusions_through", 0) or 0)
-        if self._owned_end(size) <= previous:
+        audit = targets is not None  # the session-end audit brings its own targets
+        if not audit and self._owned_end(size) <= previous:
             # Nothing the daemon owns since the last pass (the agent had it back).
             self.ledger.set_json("conclusions_through", size)
             return "nothing new the daemon owns"
+        if not audit and self._skipped(previous, size):
+            # SKIP mode: the judge found nothing to record in these turns.
+            self.ledger.set_json("conclusions_through", size)
+            self.ledger.set_json("conclusions_at", time.time())
+            return "nothing to record (the judge)"
         view = self._session_view(size)
         if not (view.words or view.outputs):
             self.ledger.set_json("conclusions_through", size)
@@ -1674,7 +1772,8 @@ class Worker:
         run_starts = set(self.ledger.get_json("run_starts", []))
         if not shadow and time.monotonic() - self.last_renew >= RENEW_EVERY_SECONDS and not self._renew():
             raise api_mod.Retryable(0, None, "could not renew the lease")  # the reads above took a while
-        targets = self._judge_turn(previous, size, deadline, note_lines) if self._judge_on() else []
+        if targets is None:
+            targets = self._judge_targets(previous, size, deadline, note_lines) if self._judge_on() else []
         facts = dict(
             prior_context="", known_ids=known_ids, decided=self.ledger.recent_decisions(limit=200), feedback=[],
             run_starts=sorted(run_starts), cwd=str(self.cwd), entities=entities, files=shown, conclusions=True,
@@ -1761,6 +1860,28 @@ class Worker:
                 break
         self._started_at = started
         return started
+
+    def audit(self, *, wall: float) -> str:
+        """Session end (plan F12 b): every paragraph the agent wrote in the ranges
+        the daemon owns, against the notes that now EXIST on the session's
+        entities (read after publishing, so directed and inline notes count). A
+        paragraph no note records becomes a target of one last conclusions pass;
+        when there is none, no model call is made."""
+        if not self._judge_on():
+            return "judge off"
+        deadline = time.monotonic() + wall
+        notes = self._session_entities().note_lines
+        targets = self._judge_targets(0, self._transcript_size(), deadline, notes, max_calls=JUDGE_AUDIT_CALLS,
+                                      reserve=wall / 2, newest_first=True)  # half the time is the final pass's
+        size = self._transcript_size()
+        if not targets:
+            if int(self.ledger.get_json("conclusions_through", 0) or 0) < size:
+                return "nothing missing; " + self.conclude(wall=max(0.0, deadline - time.monotonic()))
+            return "nothing missing"
+        left = deadline - time.monotonic()
+        if left < 10:
+            return f"{len(targets)} target(s), no time left for a pass"
+        return f"{len(targets)} target(s): " + self.conclude(wall=left, targets=targets)
 
     def _owned_end(self, size: int) -> int:
         """The last transcript offset at or before `size` the daemon owns."""
@@ -2083,7 +2204,15 @@ class Worker:
                 self.publish_pending(deadline - FINAL_PUBLISH_RESERVE_SECONDS)
                 size = self._transcript_size()
                 left = deadline - time.monotonic() - FINAL_PUBLISH_RESERVE_SECONDS
-                if int(self.ledger.get_json("conclusions_through", 0) or 0) < size and self.lease_ok() and left > 20:
+                audit = os.environ.get(ENV_JUDGE_AUDIT, "").strip().lower() in ("1", "on", "true", "yes")
+                if audit and self._judge_on() and self.lease_ok() and left > 20:
+                    # The audit replaces the plain final pass (one model call at most):
+                    # its targets come from the whole session against the notes that exist.
+                    try:
+                        log.info("final audit: %s", self.audit(wall=left))
+                    except Exception:  # noqa: BLE001 - what is already decided still publishes
+                        log.exception("final audit failed")
+                elif int(self.ledger.get_json("conclusions_through", 0) or 0) < size and self.lease_ok() and left > 20:
                     try:
                         log.info("final conclusions: %s", self.conclude(wall=left))
                     except Exception:  # noqa: BLE001 - what is already decided still publishes
@@ -2170,6 +2299,13 @@ def _epoch(stamp: Any) -> float | None:
         except ValueError:
             return None
     return None
+
+
+def _deterministic(seen: observe.Observation) -> bool:
+    """A chunk the judge never skips: a run started or ended, a directed command,
+    a file written or produced."""
+    return bool(seen.run_starts or seen.run_ends or seen.directed or seen.touched_files
+                or seen.produced_text.strip())
 
 
 def _worth_a_call(seen: observe.Observation) -> bool:
