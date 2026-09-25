@@ -4,6 +4,9 @@ description: Wires the Probe SDK (`probe.init`, `probe.log`) into a script that 
 ---
 # Instrument code
 
+Put the SDK in scripts you write. Use `probe exec` only for code you can't edit,
+or a launcher that only submits the job. Both open the run.
+
 Example:
 
 ```python

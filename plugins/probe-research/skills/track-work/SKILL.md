@@ -123,9 +123,13 @@ NOTES:
 ## 3. RUN
 
 A run goes under an experiment or a project and MUST HAVE AN OWNER TO GUARANTEE
-ALIVENESS. There are currently only three possible owners:
+ALIVENESS. Put the SDK in scripts you write. Use `probe exec` only for code you
+can't edit, or a launcher that only submits the job. Both open the run. There
+are currently only three possible owners:
 
-1. `probe exec -- python train.py` from a shell
+1. `probe.init()` inside the script - read `instrument-code` skill - use this
+   for when a job runs on a remote machine also.
+2. `probe exec -- python train.py` from a shell
 
 - `probe exec` runs your command and owns the run. It keeps the heartbeat going,
   sets `PROBE_RUN_ID` and `PROBE_RUN_EPOCH` for the command, and closes the run
@@ -135,8 +139,6 @@ ALIVENESS. There are currently only three possible owners:
   exec` opens the run as AWAITING ATTACH and the job claims it when it starts.
   For a launcher it does not know, pass `--detached-launcher`.
 
-2. `probe.init()` inside the script - read `instrument-code` skill - use this
-   for when a job runs on a remote machine also.
 3. a W&B project attached in the dashboard - live sync sees only runs created
    AFTER it is enabled; tick "Import existing runs" for older ones. `probe wandb
    import-local ROOT --project P` / `import-hosted` also need an existing

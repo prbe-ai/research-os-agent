@@ -930,6 +930,16 @@ READ_VERBS = frozenset(
         # `note_audit` hook shows.
         "checkout",
         "audit-advisory",
+        # Print what is already recorded: `artifact tree|pin-impact`,
+        # `experiment|paper edges`, `run metrics|series`, `views data|preview`
+        # (a preview evaluates a spec without saving it).
+        "tree",
+        "pin-impact",
+        "edges",
+        "metrics",
+        "series",
+        "data",
+        "preview",
     }
 )
 

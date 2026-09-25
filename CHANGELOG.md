@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Reads are no longer refused as writes.** In `read` and `daemon`, the write gate refused eight
+  commands that only print what is recorded: `probe artifact tree`, `artifact pin-impact`,
+  `experiment edges`, `paper edges`, `run metrics`, `run series`, `views data` and `views preview`.
+  The second daemon trial hit it on `artifact tree`. A test now sorts every command inside a write
+  group on purpose, so a new read cannot land as a write again.
+- **Skills say which run owner to use.** `track-work` §3 and `instrument-code` now open with the rule: put
+  the SDK in scripts you write; use `probe exec` only for code you can't edit or a launcher that only
+  submits the job. The SDK is listed first. Before, `probe exec` came first with no rule for choosing.
+
 ## 0.180.2
 
 - **The wizard's menu stops saying "Update needed" for a Claude Code tap that is already updated.**
