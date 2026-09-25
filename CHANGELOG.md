@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.182.0
+
 - **Team rules ("workflow memory") are removed.** The feature was never finished. `probe rule
   preview|declare|publish|list` is gone (the CLI now answers "No such command 'rule'"), along with
   the SDK's `preview_rule`, `declare_rule`, `publish_rule` and `query_rules`, the write gate's
