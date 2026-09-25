@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.180.1
+
 - **A Mac that cannot run git gets the one command that fixes it, not a wall of errors.** Until the
   Xcode license is accepted, and while the Xcode command line tools are missing or point at a deleted
   Xcode, macOS refuses to run `git`, so every `claude`/`codex` marketplace refresh fails. `probe
