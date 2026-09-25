@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.181.0
+
 - **Reads are no longer refused as writes.** In `read` and `daemon`, the write gate refused eight
   commands that only print what is recorded: `probe artifact tree`, `artifact pin-impact`,
   `experiment edges`, `paper edges`, `run metrics`, `run series`, `views data` and `views preview`.
