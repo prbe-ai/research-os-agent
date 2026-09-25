@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A Mac that cannot run git gets the one command that fixes it, not a wall of errors.** Until the
+  Xcode license is accepted, and while the Xcode command line tools are missing or point at a deleted
+  Xcode, macOS refuses to run `git`, so every `claude`/`codex` marketplace refresh fails. `probe
+  update` and the wizard's Update pasted Apple's paragraph in full, again on the Codex tap line,
+  then listed manual commands that fail the same way; the wizard's install run printed it raw on
+  its refresh step, or on a first install only a "marketplace not found". Each now says "git on
+  this Mac is blocked until the Xcode license is accepted. Run `sudo xcodebuild -license` in a
+  terminal and agree to it, then try again." (or `xcode-select --install` / `sudo xcode-select
+  --reset`), with no manual commands after it. The interactive `-license` is deliberate: `probe
+  doctor` replays the message inside agent sessions, and accepting the license is the person's
+  call. Text a git server sent (`remote:`) never triggers it. Also, a tap that failed for the
+  plugin's own reason says "same failure as above", and when the plugin is already current the tap
+  line now carries the failed refresh's reason instead of a bare "skipped".
 - **The daemon no longer loses a conclusions pass to a long think** (tap 0.8.3). The model's
   reasoning counts against the answer's 16k-token limit. In 2 of 99 conclusions passes in the replay
   bench it ran out of room before the JSON was complete, and the daemon dropped the pass (the
