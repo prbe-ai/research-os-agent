@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **The wizard's menu stops saying "Update needed" for a Claude Code tap that is already updated.**
+  The Versions row graded the tap by the version that last RAN, a stamp only a new Claude Code
+  session rewrites, so right after `probe update` said "transcript tap already at the latest
+  (0.8.3)" the menu still read "Update needed — tap 0.6.1 → 0.8.3", and pressing Update again
+  could never clear it. The row, `probe doctor`'s tap warning and `probe update --check` now grade
+  Claude Code's install ledger whenever it is ahead of that stamp, read with `probe update`'s own
+  reader so the two cannot pick different entries when the tap is installed in more than one
+  scope. A Codex or pi tap is graded only by its own stamp, and without one reads as unchecked
+  instead of borrowing Claude Code's number. Codex keeps the original gap for now: its stamp also
+  moves only when a Codex session starts.
+
 ## 0.180.1
 
 - **A Mac that cannot run git gets the one command that fixes it, not a wall of errors.** Until the
