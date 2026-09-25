@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.180.2
+
 - **The wizard's menu stops saying "Update needed" for a Claude Code tap that is already updated.**
   The Versions row graded the tap by the version that last RAN, a stamp only a new Claude Code
   session rewrites, so right after `probe update` said "transcript tap already at the latest
