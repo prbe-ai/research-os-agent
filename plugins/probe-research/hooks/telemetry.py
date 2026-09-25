@@ -105,8 +105,6 @@ RESEARCH_SKILLS = {
     "instrument-code",
     "audit-team-note",
     "edit-notes",
-    "set-rule",
-    "read-rules",
     "probe-research-setup",
     # retired names (kept for resumed transcripts and cached installs);
     # notes-audit and pull-rules were renamed on 2026-09-17
@@ -121,6 +119,8 @@ RESEARCH_SKILLS = {
     "show-research-timeline",
     # removed skills, same reason: a cached plugin install still has them
     "write-overview",
+    "set-rule",
+    "read-rules",
 }
 
 MCP_TOOL_RE = re.compile(r"^mcp__.*probe[-_]research")

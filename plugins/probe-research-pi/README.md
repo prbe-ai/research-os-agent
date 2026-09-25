@@ -137,7 +137,7 @@ in step instead of two. See `pi_config.resolve_install_source`.
 
 ## Skills
 
-This package vendors the workflow-memory skills — `probe`, `track-work`,
+This package vendors the Probe skills — `probe`, `track-work`,
 `visualize-progress`, `instrument-code` and the rest — copied byte-for-byte
 from this monorepo's canonical `skills/` by `make sync-pi-skills` (run from
 `agent/`; `tests/test_pi_skills_sync.py` fails the build if the copies

@@ -954,11 +954,6 @@ REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 #: local default project.
 UNGATED_COMMANDS = frozenset({"notes sync", "project use"})
 
-#: Research-content writes that sit outside the write groups: `rule declare`
-#: and `rule publish` write and publish team rules (`rule list|preview` read).
-#: Kept apart from WRITE_GROUPS only because `rule` has its own read verbs.
-RULE_READ_VERBS = frozenset({"list", "preview"})
-
 #: `probe companion feedback` steers the daemon (its note reaches the model as
 #: the researcher's correction), so from an agent session it is only admitted
 #: with `--directed`, in every state.
@@ -1063,8 +1058,6 @@ def classify_probe_args(args: "list[str]") -> "tuple[str | None, str]":
         return (None, "")
     head = words[0]
     verb = words[1] if len(words) > 1 else ""
-    if head == "rule" and verb:
-        return (("read" if verb in RULE_READ_VERBS else "write"), "probe rule " + verb)
     if head in TOP_LEVEL_WRITES:
         return ("write", "probe " + head)
     if head in READ_GROUPS:

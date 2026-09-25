@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Team rules ("workflow memory") are removed.** The feature was never finished. `probe rule
+  preview|declare|publish|list` is gone (the CLI now answers "No such command 'rule'"), along with
+  the SDK's `preview_rule`, `declare_rule`, `publish_rule` and `query_rules`, the write gate's
+  `rule` branch, the `read-rules` and `set-rule` skills (out of the plugin since 0.113.0, when the
+  feature went behind a per-user flag), and the MCP server's `probe_procedures` tool and its
+  per-user tool-list filter. The server removes the `/v1/procedures/*` routes in the same change.
+  Rules already stored are not deleted.
+
 ## 0.181.0
 
 - **Reads are no longer refused as writes.** In `read` and `daemon`, the write gate refused eight
