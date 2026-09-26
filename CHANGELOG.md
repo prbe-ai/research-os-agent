@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.186.0
+
 - **A write into the trash says so.** Against a server with the trash (0261), a run, group,
   experiment or project someone deleted answers 410 `in_trash` with a notice; the SDK's error now
   carries that sentence ("in the trash since ..., Probe can restore it until ...; contact
