@@ -144,6 +144,25 @@ and `attributes`: the name is the trial's name until a generated title lands,
 and that happens only once the run is terminal, written FROM `attributes`.
 Sparse attributes give 500 opaque rows.
 
+## NAME WHAT A CRASH WAS PROCESSING:
+
+Wrap each batch or sample of the loop so a crash email names what it died on.
+It sends nothing and changes no metric, so enter it every batch:
+
+```python
+for epoch in range(epochs):
+    for i, batch in enumerate(loader):
+        with probe.context(batch_id=i, epoch=epoch):   # or sample_id= / task_id=
+            train_step(batch)
+```
+
+Keys: `batch_id`, `sample_id`, `task_id`, `prompt_id`, `epoch`, `split`,
+`phase` - ints or strings (a whole-number float epoch is kept; `epoch=int(...)`
+otherwise), plus `step` as a non-negative int; anything else is dropped. Wrap
+the code that can raise, and never `yield` inside the block. Never
+`run.unit(labels=/coords=)` for this: it stamps every `log()` inside, and the
+curve stops plotting.
+
 ## HARBOR TRIALS - THE FILE DOOR:
 
 Harbor writes each trial to a directory (`result.json`, `agent/trajectory.json`,

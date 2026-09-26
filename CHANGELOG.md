@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **`probe.context()` names the batch a crash happened in.** Wrap each batch or sample in
+  `with probe.context(batch_id=i, epoch=epoch):` (also `run.context(...)`; keys `sample_id`,
+  `task_id`, `prompt_id`, `step`, `split`, `phase`) and a crash inside it reaches the crash email
+  as `Batch: 17` / `Epoch: 3`. Unlike `run.unit(labels=...)`, it stamps nothing onto what is
+  logged inside, so every curve plots exactly as before. It sends nothing, never raises, and is a
+  no-op with no active run. `epoch` is a new crash-context key. The `instrument-code` skill now
+  tells agents to wrap training loops this way.
+
 ## 0.187.0
 
 - **Tap 0.9.1: a daemon that stops because the switch moved is started again once it reads `daemon`.**
