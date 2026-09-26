@@ -880,7 +880,7 @@ def state_allows_reads(state: "str | None") -> bool:
 #: BEFORE the researcher flipped the switch, and honouring the pre-off record is
 #: what "off deletes nothing" means.
 TOP_LEVEL_WRITES = frozenset(
-    {"log", "link", "snapshot", "exec", "backfill", "import", "wandb"}
+    {"log", "link", "snapshot", "exec", "backfill", "import"}
 )
 
 #: Command groups whose verbs write research content unless the verb is a read.
@@ -901,8 +901,27 @@ WRITE_GROUPS = frozenset(
         "trial",
         "views",
         "paper",
+        "wandb",
     }
 )
+
+#: Every subgroup inside a write group. Its OWN verb decides, so `project code
+#: list` reads while `project code attach` writes; read two words deep, every
+#: `project code` command looked like one write. Keys in the tables below name
+#: the three words (`wandb key set`); a bare subgroup key never matches.
+SUBGROUPS = frozenset({"project code", "project reference", "wandb key"})
+
+#: Commands that only read unless given one of these flags: bare
+#: `project contributors` lists who is credited, `--add`/`--remove` change it.
+#: An argument the shell has not expanded yet (the guard hook reads the command
+#: TEXT) could be one of them, so it counts as a write too.
+READ_UNLESS_FLAGS = {"project contributors": frozenset({"--add", "--remove"})}
+
+#: Characters that mark a word the shell still expands (`$F`, `$(...)`, `--{add,x}`).
+#: Glob characters count only in an option's NAME (`--a[d]d`): a literal `[::1]`
+#: in a `--base-url` value is common.
+_SHELL_EXPANSION_CHARS = frozenset("$`{")
+_GLOB_CHARS = frozenset("*?[")
 
 #: Verbs inside a write group that only read. Unknown verbs count as writes --
 #: the group already said "research content".
@@ -947,12 +966,16 @@ READ_VERBS = frozenset(
 #: refused: cleanup must stay possible in every state.
 REMOVAL_VERBS = frozenset({"delete", "remove", "rm", "prune", "purge"})
 
-#: "group verb" pairs inside a write group that are machine plumbing, not a
+#: "group verb" pairs (three words under a `SUBGROUPS` entry) inside a write
+#: group that are machine plumbing, not a
 #: record of the work, so no state refuses them. `notes sync` is the team note's
 #: own sync, which hooks run in the background and which the switch has never
 #: governed (see `version_check._spawn_session_maintenance`); `project use` only sets the
-#: local default project.
-UNGATED_COMMANDS = frozenset({"notes sync", "project use"})
+#: local default project. `wandb discover` scans a local folder and `wandb key
+#: set|status` store or check a local credential: none of them talks to Probe.
+UNGATED_COMMANDS = frozenset(
+    {"notes sync", "project use", "wandb discover", "wandb key set", "wandb key status"}
+)
 
 #: `probe companion feedback` steers the daemon (its note reaches the model as
 #: the researcher's correction), so from an agent session it is only admitted
@@ -976,7 +999,8 @@ READ_GROUPS = frozenset(
 #: launch of a run and the run's own data -- the `instrument-code` surface the
 #: daemon never authors -- plus the project, experiment and sweep group a run
 #: launches into, because `run start` refuses to create them and a launch must
-#: not wait on the daemon. Keys are "group verb", or the bare top-level command.
+#: not wait on the daemon. Keys are "group verb" (three words under a `SUBGROUPS`
+#: entry), or the bare top-level command.
 #: `probe session status` prints this list as `daemon.agent_writes`, and
 #: `DAEMON_CONTEXT` below says the same thing in words.
 DAEMON_AGENT_WRITES = frozenset(
@@ -1019,8 +1043,10 @@ DIRECTED_FLAG = "--directed"
 
 
 def command_words(args: "list[str]") -> "list[str]":
-    """The (at most two) words click dispatches on, from the args after `probe`.
+    """The (at most three) words click dispatches on, from the args after `probe`.
 
+    The classifier treats the third as a command word only under a `SUBGROUPS`
+    entry; anywhere else it is the command's first argument, and is ignored.
     Mirrors click's own resolution closely enough for a gate: options are
     skipped, and so is the VALUE of a root option that takes one; a `--` before
     the command words is skipped too (click still dispatches the command after
@@ -1041,7 +1067,7 @@ def command_words(args: "list[str]") -> "list[str]":
                 skip_value = True
             continue
         words.append(token)
-        if len(words) == 2:
+        if len(words) == 3:
             break
     return words
 
@@ -1050,27 +1076,40 @@ def classify_probe_args(args: "list[str]") -> "tuple[str | None, str]":
     """`(kind, matched)` for the args after `probe`; kind is write/read/None.
 
     `matched` is `probe <head>` or `probe <head> <verb>`, the words a refusal
-    names. The ONE classifier: the CLI's write gate and the plugin's guard hook
-    both call it.
+    names; under a `SUBGROUPS` entry `<head>` is the subgroup's two words. The
+    ONE classifier: the CLI's write gate and the plugin's guard hook both call it.
     """
     words = command_words(args)
     if not words:
         return (None, "")
-    head = words[0]
+    group = head = words[0]
     verb = words[1] if len(words) > 1 else ""
+    if head + " " + verb in SUBGROUPS:
+        head, verb = head + " " + verb, words[2] if len(words) > 2 else ""
+    command = head + " " + verb
+    if command in UNGATED_COMMANDS:
+        return (None, "probe " + command)
     if head in TOP_LEVEL_WRITES:
         return ("write", "probe " + head)
     if head in READ_GROUPS:
         return ("read", "probe " + head)
-    if head + " " + verb in DIRECTED_ONLY:
-        return ("write", "probe " + head + " " + verb)
-    if head in WRITE_GROUPS:
-        if head + " " + verb in UNGATED_COMMANDS:
-            return (None, "probe " + head + " " + verb)
+    if command in DIRECTED_ONLY:
+        return ("write", "probe " + command)
+    if command in READ_UNLESS_FLAGS:
+        flags = READ_UNLESS_FLAGS[command]
+        writes = any(
+            name in flags
+            or not _SHELL_EXPANSION_CHARS.isdisjoint(arg)
+            or (name.startswith("-") and not _GLOB_CHARS.isdisjoint(name))
+            for arg in args
+            for name in [arg.split("=", 1)[0]]
+        )
+        return ("write" if writes else "read", "probe " + command)
+    if group in WRITE_GROUPS:
         if verb in READ_VERBS:
-            return ("read", "probe " + head + " " + verb)
+            return ("read", "probe " + command)
         if verb and verb not in REMOVAL_VERBS:
-            return ("write", "probe " + head + " " + verb)
+            return ("write", "probe " + command)
     return (None, "probe " + head)
 
 

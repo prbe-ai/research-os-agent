@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Four more reads are no longer refused as writes.** In `read` and `daemon`, the write gate and
+  the plugin's guard hook refused `probe project code list`, bare `probe project contributors`,
+  `probe wandb discover` and `probe wandb key status`: they only read two words of a command, so a
+  subgroup (`project code`) or a read that turns into a write only with `--add`/`--remove` looked
+  like a write, and everything under `wandb` counted as an import. Now a subgroup's own verb
+  decides, `project contributors` is a write only with `--add` or `--remove`, and `wandb discover`
+  and `wandb key set|status` (local only; they never talk to Probe) pass in every state, `off`
+  included. `probe project reference remove` joins the other removals, which no state refuses.
+  Refusals now name the full command (`probe project code attach`, `probe wandb import-local`).
+- **The guard hook reads shell lines more carefully.** Under `off` it no longer refuses `--help` on
+  a read (`probe run list --help`); the CLI already allowed it. A redirection such as `&>/dev/null`
+  or `>&file` is no longer read as the end of the command, and a leading one is skipped with its
+  file, so `>/dev/null probe project create x` and `probe project code &>/dev/null attach ...` are
+  now caught, and so is a write followed by a comment with an apostrophe (`# don't`), which used to
+  drop the whole line. A refusal from an older CLI that names fewer words still counts as one.
+
 ## 0.182.1
 
 - **`probe backfill` says when a team's page generation is paused.** When the server refuses an

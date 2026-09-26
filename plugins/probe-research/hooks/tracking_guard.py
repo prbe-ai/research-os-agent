@@ -226,6 +226,17 @@ _OPERATOR_CHARS = "();<>|&\n"
 #: An operator token that ENDS a command, as opposed to a redirection (`>`,
 #: `>>`, `<`) whose next word is a file, not a command.
 _SEPARATOR_CHARS = frozenset(";|&()\n")
+#: Redirection operators: never a separator. The ones containing `&` or `|` were
+#: cut as separators before, which hid the command words after them
+#: (`probe project code &>/dev/null attach`). They stay in the segment as words,
+#: so a redirection BETWEEN command words fails closed as an unknown verb; only a
+#: LEADING one is skipped with its file (`>/dev/null probe project create x`).
+#: Never dropped mid-segment: shlex has already removed quotes, so a quoted `'>'`
+#: looks the same, and dropping "its file" would swallow a `;` or a `<(`.
+_REDIRECTIONS = frozenset({">", ">>", "<", "<>", ">|", "&>", "&>>", ">&", "<&", "<<", "<<<"})
+#: What may precede a `#` that starts a shell comment: a `#` inside a word
+#: (`a#b`, `$#`) is text.
+_WORD_BOUNDARY = frozenset(" \t\n;&|()<>")
 #: What follows a heredoc's `<<`: `-` (the terminator line may be indented with
 #: tabs), then the delimiter word, quoted (`'EOF'`, `"EOF"`), escaped (`\EOF`) or
 #: bare. A bare word must start with a letter or `_`, so an arithmetic shift the
@@ -373,6 +384,12 @@ def _strip_heredocs(command: str) -> str:
             out.append(char)
             index = _skip_heredoc_bodies(command, index + 1, pending)
             continue
+        if char == "#" and (not out or out[-1][-1:] in _WORD_BOUNDARY):
+            # A comment runs to the end of the line. Left in, an apostrophe in
+            # it (`# don't`) opened a quote and the parse dropped the command.
+            end = command.find("\n", index)
+            index = size if end < 0 else end
+            continue
         if char in "'\"":
             stack.append(char)
         elif command.startswith("((", index):
@@ -414,8 +431,8 @@ def _segments(command: str):
     is dropped, not reported: the text after an unclosed quote is inside it.
     """
     lexer = shlex.shlex(
-        # A backslash-newline continues the line; it is not a word.
-        _strip_heredocs(command).replace("\\\n", " "),
+        # A backslash-newline is removed, as bash does: `--a\<newline>dd` is `--add`.
+        _strip_heredocs(command).replace("\\\n", ""),
         posix=True,
         punctuation_chars=_OPERATOR_CHARS,
     )
@@ -425,7 +442,11 @@ def _segments(command: str):
     segment: "list[str]" = []
     try:
         for token in lexer:
-            if set(token) <= set(_OPERATOR_CHARS) and set(token) & _SEPARATOR_CHARS:
+            if (
+                token not in _REDIRECTIONS
+                and set(token) <= set(_OPERATOR_CHARS)
+                and set(token) & _SEPARATOR_CHARS
+            ):
                 if segment:
                     yield segment
                 segment = []
@@ -441,8 +462,13 @@ def _probe_invocations(command: str):
     """The args after `probe`, for every `probe` invocation in a shell line."""
     for tokens in _segments(command):
         index = 0
-        while index < len(tokens) and _ENV_ASSIGNMENT.match(tokens[index]):
-            index += 1
+        while index < len(tokens):
+            if _ENV_ASSIGNMENT.match(tokens[index]):
+                index += 1
+            elif tokens[index] in _REDIRECTIONS:
+                index += 2  # a leading redirection and its file
+            else:
+                break
         if index < len(tokens) and os.path.basename(tokens[index]) == "probe":
             yield tokens[index + 1 :]
 
@@ -450,19 +476,30 @@ def _probe_invocations(command: str):
 def probe_write(command: str) -> "str | None":
     """The probe invocation that records research content, or None.
 
-    Returns the matched `probe <group> <verb>` (or `probe <command>`) so the
+    Returns the matched `probe <group> [<subgroup>] <verb>` (or `probe <command>`) so the
     warning can name what it saw rather than gesturing at the whole command
     line. Classified by `_session_marker.classify_probe_args`, the same function
     the CLI's own write gate calls, so the two cannot disagree about what a
     command IS.
     """
     for args in _probe_invocations(command):
-        if _session_marker.HELP_FLAG in args:
+        if _asks_help(args):
             continue
         kind, matched = _session_marker.classify_probe_args(args)
         if kind == "write":
             return matched
     return None
+
+
+def _asks_help(args: "list[str]") -> bool:
+    """`--help` before any `--`, as the CLI's gate reads it: after `--` it is an
+    argument (`probe project contributors -- --help` looks up a project). Right
+    after a redirection it is a file name (`probe project create x &> --help`)."""
+    words = args[: args.index("--")] if "--" in args else args
+    return any(
+        word == _session_marker.HELP_FLAG and (i == 0 or words[i - 1] not in _REDIRECTIONS)
+        for i, word in enumerate(words)
+    )
 
 
 READ_GROUPS = _session_marker.READ_GROUPS
@@ -471,9 +508,12 @@ READ_GROUPS = _session_marker.READ_GROUPS
 def probe_read(command: str) -> "str | None":
     """The probe invocation that READS research content, or None.
 
-    Only `off` uses this. Same parse and same classifier as `probe_write`.
+    Only `off` uses this. Same parse and same classifier as `probe_write`, and
+    the same pass for `--help`: asking what a command does reads nothing.
     """
     for args in _probe_invocations(command):
+        if _asks_help(args):
+            continue
         kind, matched = _session_marker.classify_probe_args(args)
         if kind == "read":
             return matched
@@ -919,13 +959,19 @@ def _gate_refused(payload: dict, matched: str) -> bool:
 
     Keyed on the refusal naming the matched command, and read from stderr only:
     a compound line where one write was refused and another landed must still
-    warn about the one that landed.
+    warn about the one that landed. An older CLI names fewer words (`probe
+    project code` for `probe project code attach`), so a refusal naming a
+    shorter prefix of it counts too.
     """
     response = payload.get("tool_response")
     stderr = response.get("stderr") if isinstance(response, dict) else response
     if not isinstance(stderr, str):
         return False
-    return f"`{matched}` {GATE_REFUSED_PHRASE}" in stderr
+    words = matched.split()
+    return any(
+        f"`{' '.join(words[:n])}` {GATE_REFUSED_PHRASE}" in stderr
+        for n in range(len(words), 1, -1)
+    )
 
 
 def _emit_context(hook_event: str, text: str) -> None:
