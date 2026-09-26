@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.183.0
+
 - **A run now records the files it reads, so its parent is a fact, not a guess.** `probe.init()`
   watches every file the run opens for reading (Python's audit hook: `open`, `pathlib`, numpy,
   pandas, `torch.load`, PIL, pickle), hashes each one, and sends the list when the run finishes.
