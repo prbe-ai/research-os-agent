@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.182.1
+
 - **`probe backfill` says when a team's page generation is paused.** When the server refuses an
   AI Summary refresh because the team's page generation is switched off (a 409 with `code:
   generation_paused`), reconstruction now reports "<project>: Optional AI Summary not requested:
