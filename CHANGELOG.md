@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The daemon writes to Probe only through its own guarded path, even in bypass mode.** A `probe`
+  command inside a longer shell command (`cd x && probe ...`, `probe ... | jq`) is refused outright
+  instead of being a question bypass mode approves, and the daemon's shell has no Probe config, so a
+  `probe` it starts has no key. Reads or writes of Probe's own key and state files are refused
+  outright too. Found by the replay bench on 0.186.0, where a bypass-mode session's daemon ran real
+  `probe` writes around its pre-check. The daemon's log no longer starts with Pydantic AI's banner.
+
 - **The transcript tap runs daemon v2** (tap 0.9.0). In the `daemon` state it starts `probe daemon
   worker` (CLI 0.186.0 or newer, with `probe daemon install`) instead of its own v1 worker, relays
   the SDK's run messages to it over a private socket, and backs off a worker that keeps crashing.
