@@ -58,8 +58,11 @@ from __future__ import annotations
 
 import base64
 import binascii
+import bisect
 import math
 import re
+from collections import Counter
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -105,6 +108,25 @@ MAX_SCAN_CHARS = 64_000
 #: rule can match (the private-key block, at ~33K) plus the pair window, so a
 #: credential straddling a seam is still seen whole in one window.
 _WINDOW_OVERLAP = 34_000
+
+#: Where in one text a pattern is worth running: the `(lo, hi)` stretches that
+#: may hold a match, `[]` for "nowhere", or None for "no idea, read it all".
+#:
+#: THE CONTRACT an accelerator must keep, because correctness rests on it: every
+#: match the pattern has in the WHOLE text lies inside one returned stretch, with
+#: `hi` strictly past the match's end unless `hi` is the end of the text. `lo`
+#: needs no margin -- a search starting at `lo` still lets lookbehinds and `\b`
+#: read the characters before it. Stretches are sorted and do not overlap.
+Windows = Callable[[re.Pattern[str]], "list[tuple[int, int]] | None"]
+#: Given a text, its `Windows` -- or None when this accelerator cannot index it,
+#: in which case the text is scanned exactly as if there were no accelerator.
+#: The server supplies a Hyperscan-backed one (`app/security/fast_scan.py`);
+#: nothing on a researcher's machine does, so there every pattern reads every
+#: character, as it always has.
+Accelerator = Callable[[str], "Windows | None"]
+
+#: Below this length an accelerator costs more than it saves.
+_ACCEL_MIN_CHARS = 4_096
 
 
 @dataclass(frozen=True)
@@ -252,6 +274,7 @@ _ANCHOR_KEYWORDS = ("secret", "password", "passwd", "api key", "api_key", "apike
                     "auth token", "auth_token", "access token", "access_token",
                     "credential", "client secret", "client_secret", "bearer",
                     "api-key", "access-key", "private-key", "auth-token", "access-token",
+                    "accesskey", "privatekey",
                     "refresh_token", "refresh-token", "refresh token", "token")
 
 # Explicit assignments allow short, mixed-class passwords and quoted spaces.
@@ -298,17 +321,12 @@ def shannon_entropy(value: str) -> float:
         return 0.0
     length = len(value)
     total = 0.0
-    for count in _counts(value).values():
+    # Counter keeps first-occurrence order, so the float sum is summed in the
+    # same order as the per-character loop it replaced: identical results.
+    for count in Counter(value).values():
         p = count / length
         total -= p * math.log2(p)
     return total
-
-
-def _counts(value: str) -> dict[str, int]:
-    out: dict[str, int] = {}
-    for ch in value:
-        out[ch] = out.get(ch, 0) + 1
-    return out
 
 
 #: Fewest DISTINCT characters a base64-shaped run must use before it is worth
@@ -336,7 +354,7 @@ def low_diversity(value: str) -> bool:
     Shared with the artifact gate (`probe.sdk.secret_gate`) so both halves of
     the boundary agree about what is not even worth calling a candidate.
     """
-    return len(_counts(value)) < _MIN_CANDIDATE_DISTINCT
+    return len(set(value)) < _MIN_CANDIDATE_DISTINCT
 
 
 #: A value is WORD-LIKE when `-`/`_` split it into three or more parts and at
@@ -383,33 +401,76 @@ def _character_classes(value: str) -> int:
 _MARKER = re.compile(r"<redacted:[a-z0-9_-]+>")
 
 
-def _unmarked(pattern: re.Pattern[str], text: str) -> Any:
-    """`pattern.finditer(text)`, minus any match that touches a redaction marker.
+def _matches(
+    pattern: re.Pattern[str],
+    text: str,
+    windows: Windows | None = None,
+    *,
+    skip_markers: bool = False,
+) -> Iterator[re.Match[str]]:
+    """`pattern.finditer(text)`, read only where `windows` says to look.
 
-    Without this, scanning already-redacted text is not stable: the "secret" in
+    With no windows (and no markers to skip) this IS `finditer`. With windows,
+    each stretch is searched separately. A match that reaches a stretch's end
+    before the text's end may be a truncation (`endpos` reads as end-of-text to
+    lookaheads and `\\b`), so its start is matched again against the whole
+    text and that answer is the one kept. Under the `Windows` contract every
+    real match is strictly inside a stretch and this never fires; the quick
+    check's keyword windows are not that exact, and a long bearer token is
+    exactly what it would otherwise cut. Like `finditer`, a stretch resumes
+    after the previous match, never inside it.
+
+    `skip_markers` drops any match that touches a redaction marker. Without it,
+    scanning already-redacted text is not stable: the "secret" in
     `<redacted:anchored-secret>` anchors the next value, whose own marker then
     anchors the one after, one more value per pass. A skipped match resumes the
     search just past the marker, so a real key name that the skipped match's
     gap covered is still seen.
     """
-    if "<redacted:" not in text:
+    spans = windows(pattern) if windows is not None else None
+    if spans and sum(hi - lo for lo, hi in spans) * 2 >= len(text):
+        # Stretches covering half the text are cheaper read as one: a search
+        # per stretch costs more than the C loop they would skip.
+        spans = None
+    markers = (
+        [(m.start(), m.end()) for m in _MARKER.finditer(text)]
+        if skip_markers and "<redacted:" in text
+        else []
+    )
+    if spans is None and not markers:
         yield from pattern.finditer(text)
         return
-    markers = [(m.start(), m.end()) for m in _MARKER.finditer(text)]
-    pos = 0
-    while pos <= len(text):
-        match = pattern.search(text, pos)
-        if match is None:
-            return
-        crossed = next(
-            (end for start, end in markers if start < match.end() and end > match.start()),
-            None,
-        )
-        if crossed is None:
-            yield match
-            pos = max(match.end(), match.start() + 1)
-        else:
-            pos = max(crossed, match.start() + 1)
+    end = len(text)
+    resume = 0
+    for lo, hi in spans if spans is not None else [(0, end)]:
+        pos = max(lo, resume)
+        while pos <= hi:
+            match = pattern.search(text, pos, hi)
+            if match is None:
+                break
+            if hi < end and match.end() >= hi:
+                start = match.start()
+                match = pattern.match(text, start)
+                if match is None:
+                    pos = start + 1
+                    continue
+            crossed = next(
+                (stop for start, stop in markers if start < match.end() and stop > match.start()),
+                None,
+            )
+            if crossed is None:
+                yield match
+                pos = max(match.end(), match.start() + 1)
+            else:
+                pos = max(crossed, match.start() + 1)
+            resume = pos
+
+
+def _unmarked(
+    pattern: re.Pattern[str], text: str, windows: Windows | None = None
+) -> Iterator[re.Match[str]]:
+    """`_matches` minus any match touching a redaction marker. See there."""
+    return _matches(pattern, text, windows, skip_markers=True)
 
 
 def _is_indirect(value: str) -> bool:
@@ -417,7 +478,9 @@ def _is_indirect(value: str) -> bool:
     return bool(_INDIRECT.match(value))
 
 
-def scan(text: str, *, _decode: bool = True) -> list[Finding]:
+def scan(
+    text: str, *, _decode: bool = True, _accel: Accelerator | None = None
+) -> list[Finding]:
     """Every credential-shaped span in `text`, ordered by position.
 
     Never raises on ordinary input: a non-string, an empty string and a
@@ -428,27 +491,45 @@ def scan(text: str, *, _decode: bool = True) -> list[Finding]:
     at offset 64_001 would simply not be looked at — which is the wrong trade
     for a redactor. The overlap is `_WINDOW_OVERLAP`, comfortably wider than
     the longest span any rule can match, so nothing is missed at a seam.
+
+    `_accel` is the server's: it names the stretches of `text` each pattern is
+    worth reading (see `Windows`). Given one that can index the text, the whole
+    text is scanned in one pass, reading only those stretches; the answer is the
+    same set of credentials, found without reading the rest.
     """
     if not isinstance(text, str) or not text:
         return []
-    if len(text) > MAX_SCAN_CHARS:
-        return _scan_windowed(text)
+    windows = _accel(text) if _accel is not None and len(text) >= _ACCEL_MIN_CHARS else None
+    if windows is None and len(text) > MAX_SCAN_CHARS:
+        return _scan_windowed(text, _decode=_decode)
 
-    lowered = text.lower()
+    lowered = ""
     findings: list[Finding] = []
     pair_anchors: list[tuple[int, int]] = []
 
+    def present(keywords: tuple[str, ...], *patterns: re.Pattern[str]) -> bool:
+        # An accelerator that found no candidate for any of these patterns has
+        # already answered; skip the keyword sweep of the whole text.
+        nonlocal lowered
+        if windows is not None and all(windows(p) == [] for p in patterns):
+            return False
+        if not lowered:
+            lowered = text.lower()
+        return any(k in lowered for k in keywords)
+
     # [1] + [2] keyword prefilter, then the structured rules that survive it.
     for rule in _RULES:
-        if rule.keywords and not any(k in lowered for k in rule.keywords):
+        if rule.keywords and not present(rule.keywords, rule.pattern):
             continue
-        for match in rule.pattern.finditer(text):
+        if windows is not None and windows(rule.pattern) == []:
+            continue
+        for match in _matches(rule.pattern, text, windows):
             findings.append(Finding(rule.name, match.start(), match.end()))
             if rule.pairs_with_entropy:
                 pair_anchors.append((match.start(), match.end()))
 
-    if "password" in lowered or "passwd" in lowered:
-        for match in _unmarked(_PASSWORD_ASSIGNMENT, text):
+    if present(("password", "passwd"), _PASSWORD_ASSIGNMENT):
+        for match in _unmarked(_PASSWORD_ASSIGNMENT, text, windows):
             group = next(name for name in ("double", "single", "bare") if match.group(name) is not None)
             value = match.group(group).rstrip()
             if not value or _is_indirect(value):
@@ -458,8 +539,8 @@ def scan(text: str, *, _decode: bool = True) -> list[Finding]:
             findings.append(Finding("anchored-secret", match.start(group), match.start(group) + len(value)))
 
     # [3] anchored entropy: a credential-shaped key name introduces the value.
-    if any(k in lowered for k in _ANCHOR_KEYWORDS):
-        for match in _unmarked(_ANCHORED, text):
+    if present(_ANCHOR_KEYWORDS, _ANCHORED, _SHORT_ANCHORED):
+        for match in _unmarked(_ANCHORED, text, windows):
             if _model_token_anchor(text, match.start()):
                 continue
             value = match.group("value")
@@ -470,7 +551,7 @@ def scan(text: str, *, _decode: bool = True) -> list[Finding]:
             findings.append(
                 Finding("anchored-secret", match.start("value"), match.end("value"))
             )
-        for match in _unmarked(_SHORT_ANCHORED, text):
+        for match in _unmarked(_SHORT_ANCHORED, text, windows):
             if _model_token_anchor(text, match.start()):
                 continue
             group = next(name for name in ("double", "single", "bare") if match.group(name) is not None)
@@ -517,43 +598,85 @@ def scan(text: str, *, _decode: bool = True) -> list[Finding]:
             findings.append(Finding("paired-secret", match.start(), match.end()))
 
     if _decode:
-        findings.extend(_encoded_findings(text))
+        findings.extend(_encoded_findings(text, windows, _accel))
     return _dedupe(findings)
 
 
-def _encoded_findings(text: str) -> list[Finding]:
+#: How far a decoded credential can reach from an escape that hid part of it,
+#: when an accelerator limits decoding to escapes' neighbourhoods. A credential
+#: ENCODED as a whole (a URL-encoded PEM: `%2B`, `%2F`, `%0A` every line) is
+#: covered end to end by the merged neighbourhoods; one isolated escape only has
+#: to reach across a token, and the longest structured one short of a PEM or
+#: JWT is ~250 characters. Accepted: a PEM or JWT longer than this whose ONLY
+#: escape sits far from its ends is found by the plain path and not here.
+#: Decoding the whole text instead re-indexes every nested view of a binary
+#: file (random bytes carry an accidental `%xx` every ~30 KB): 5.6 s became
+#: 95 s on a 32 MB checkpoint.
+_ESCAPE_REACH = 2_048
+#: How far a neighbourhood's edge moves to reach whitespace (`_snap`).
+_SNAP = 256
+_SPACE = re.compile(r"\s")
+_LAST_SPACE = re.compile(r".*\s", re.DOTALL)
+
+
+def _snap(text: str, lo: int, hi: int) -> tuple[int, int, bool, bool]:
+    """`(lo, hi, lo_cut, hi_cut)`: a neighbourhood's edges moved out to the
+    nearest whitespace, so `\\b` and lookbehinds at an edge see what they see
+    in `text`. Cut in the middle of a word, `AKIA...` inside a longer run reads
+    as a key on its own. `*_cut` says an edge found no whitespace in `_SNAP`
+    characters and still splits the text."""
+    if lo > 0:
+        before = text[max(0, lo - _SNAP):lo]
+        found = _LAST_SPACE.match(before)
+        if found is not None:
+            lo -= len(before) - found.end()
+    if hi < len(text):
+        found = _SPACE.search(text, hi, min(len(text), hi + _SNAP))
+        if found is not None:
+            hi = found.start()
+    lo_cut = lo > 0 and not text[lo - 1].isspace()
+    hi_cut = hi < len(text) and not text[hi].isspace()
+    return lo, hi, lo_cut, hi_cut
+
+
+def _encoded_findings(
+    text: str, windows: Windows | None = None, accel: Accelerator | None = None
+) -> list[Finding]:
     """One bounded decoding layer; offsets always refer to original text.
 
     Only a positive credential rule on the decoded view permits replacement.
     Opaque blobs, source escapes and hashes alone are never findings.
+
+    Without windows the whole text is decoded and rescanned, as it always was.
+    With them only the neighbourhood of each escape is (`_ESCAPE_REACH`): text
+    far from every escape decodes to itself, and the plain pass already read it.
     """
     found: list[Finding] = []
-    matches = list(_ENCODED_CHAR.finditer(text))
+    matches = list(_matches(_ENCODED_CHAR, text, windows))
     if matches:
-        chars: list[str] = []
-        offsets: list[tuple[int, int]] = []
-        cursor = 0
-        for match in matches:
-            for index in range(cursor, match.start()):
-                chars.append(text[index])
-                offsets.append((index, index + 1))
-            value = match.group()
-            if value.startswith('%'):
-                decoded = chr(int(value[1:], 16))
-            elif value.startswith('\\'):
-                decoded = chr(int(value[2:], 16))
-            else:
-                decoded = ''  # ANSI formatting and zero-width separators
-            if decoded:
-                chars.append(decoded)
-                offsets.append((match.start(), match.end()))
-            cursor = match.end()
-        for index in range(cursor, len(text)):
-            chars.append(text[index])
-            offsets.append((index, index + 1))
-        for finding in scan(''.join(chars), _decode=False):
-            found.append(Finding(finding.rule, offsets[finding.start][0], offsets[finding.end-1][1]))
-    for match in _BASE64.finditer(text):
+        regions: list[tuple[int, int, list[re.Match[str]]]] = []
+        if windows is None:
+            regions.append((0, len(text), matches))
+        else:
+            for match in matches:
+                lo = max(0, match.start() - _ESCAPE_REACH)
+                hi = min(len(text), match.end() + _ESCAPE_REACH)
+                if regions and lo <= regions[-1][1]:
+                    start, _, inside = regions[-1]
+                    inside.append(match)  # in place: a copy per escape was quadratic
+                    regions[-1] = (start, max(regions[-1][1], hi), inside)
+                else:
+                    regions.append((lo, hi, [match]))
+        for lo, hi, inside in regions:
+            lo, hi, lo_cut, hi_cut = (lo, hi, False, False) if windows is None else _snap(text, lo, hi)
+            decoded, original = _decoded_view(text, inside, lo, hi)
+            for finding in scan(decoded, _decode=False, _accel=accel):
+                if (lo_cut and finding.start == 0) or (hi_cut and finding.end == len(decoded)):
+                    continue  # read against a cut edge, not against the text
+                found.append(
+                    Finding(finding.rule, original(finding.start)[0], original(finding.end - 1)[1])
+                )
+    for match in _matches(_BASE64, text, windows):
         value = match.group()
         if low_diversity(value):
             continue
@@ -566,15 +689,67 @@ def _encoded_findings(text: str) -> list[Finding]:
     return found
 
 
-def _scan_windowed(text: str) -> list[Finding]:
+def _decoded_view(
+    text: str, matches: list[re.Match[str]], lo: int, hi: int
+) -> tuple[str, Callable[[int], tuple[int, int]]]:
+    """`text[lo:hi]` with each escape in `matches` decoded, and a map from a
+    decoded index back to the original characters behind it.
+
+    Built from slices, one per run of plain text, so the cost follows the number
+    of escapes rather than the length of the text.
+    """
+    parts: list[str] = []
+    starts: list[int] = []  # decoded offset where each part begins
+    sources: list[tuple[int, int | None]] = []  # (original start, original end | None=plain)
+    cursor, length = lo, 0
+    for match in matches:
+        if match.start() > cursor:
+            parts.append(text[cursor:match.start()])
+            starts.append(length)
+            sources.append((cursor, None))
+            length += match.start() - cursor
+        value = match.group()
+        if value.startswith('%'):
+            decoded = chr(int(value[1:], 16))
+        elif value.startswith('\\'):
+            decoded = chr(int(value[2:], 16))
+        else:
+            decoded = ''  # ANSI formatting and zero-width separators
+        if decoded:
+            parts.append(decoded)
+            starts.append(length)
+            sources.append((match.start(), match.end()))
+            length += 1
+        cursor = match.end()
+    if hi > cursor:
+        parts.append(text[cursor:hi])
+        starts.append(length)
+        sources.append((cursor, None))
+
+    def original(index: int) -> tuple[int, int]:
+        part = bisect.bisect_right(starts, index) - 1
+        start, end = sources[part]
+        if end is None:
+            position = start + index - starts[part]
+            return position, position + 1
+        return start, end
+
+    return "".join(parts), original
+
+
+def _scan_windowed(text: str, *, _decode: bool = True) -> list[Finding]:
     """`scan` over overlapping windows, with spans mapped back to absolute
-    offsets. Linear in input length; one 64K window costs a few milliseconds."""
+    offsets. Linear in input length; one 64K window costs a few milliseconds.
+
+    `_decode` passes through: a decoded view longer than one window used to be
+    decoded AGAIN here, so a doubly-escaped credential was found or missed
+    depending on whether its decoded neighbourhood crossed 64K characters."""
     findings: list[Finding] = []
     step = MAX_SCAN_CHARS - _WINDOW_OVERLAP
     for base in range(0, len(text), step):
         window = text[base:base + MAX_SCAN_CHARS]
         findings.extend(
-            Finding(f.rule, f.start + base, f.end + base) for f in scan(window)
+            Finding(f.rule, f.start + base, f.end + base) for f in scan(window, _decode=_decode)
         )
         if base + MAX_SCAN_CHARS >= len(text):
             break

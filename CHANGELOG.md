@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Credential scanning answers the same, faster, and decodes one layer as documented.** The shared
+  scanner's entropy and printable-text checks run in C instead of a per-character Python loop, and a
+  text longer than 64K characters is no longer decoded a second time: a doubly-escaped value was
+  found or missed depending on the length of the text around it. The scanner also accepts a search
+  accelerator, which the server's Hyperscan index uses; nothing on this side of the wire does. The
+  plain anchored-value check now also reads `privateKey` and `accessKey` written without a
+  separator, and escape decoding runs in one regex pass.
+
 ## 0.184.0
 
 - **A run now saves what it produces, automatically.** When a run opened by `probe.init()`,
