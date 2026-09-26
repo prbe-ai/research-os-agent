@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.188.0
+
 - **`probe.context()` names the batch a crash happened in.** Wrap each batch or sample in
   `with probe.context(batch_id=i, epoch=epoch):` (also `run.context(...)`; keys `sample_id`,
   `task_id`, `prompt_id`, `step`, `split`, `phase`) and a crash inside it reaches the crash email
