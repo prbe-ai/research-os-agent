@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The transcript tap runs daemon v2** (tap 0.9.0). In the `daemon` state it starts `probe daemon
+  worker` (CLI 0.186.0 or newer, with `probe daemon install`) instead of its own v1 worker, relays
+  the SDK's run messages to it over a private socket, and backs off a worker that keeps crashing.
+  With an older CLI the daemon does not start and the agent records, as when the daemon is off.
+
 ## 0.186.0
 
 - **A write into the trash says so.** Against a server with the trash (0261), a run, group,

@@ -1,6 +1,6 @@
 {
   "name": "probe-research-tap",
-  "version": "0.8.4",
+  "version": "0.9.0",
   "description": "Ships sanitized per-session Codex rollouts to Probe Research OS.",
   "author": {
     "name": "Probe",
