@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A write into the trash says so.** Against a server with the trash (0261), a run, group,
+  experiment or project someone deleted answers 410 `in_trash` with a notice; the SDK's error now
+  carries that sentence ("in the trash since ..., Probe can restore it until ...; contact
+  support") instead of the bare token, so a training script logging to a deleted run fails with
+  something a person can act on.
+- **`probe run|experiment|project delete` say where the thing goes.** Against a server with the
+  trash (it declares `trash` in `/v1/server/features`) the prompt reads "move ... to the trash? ...
+  Probe support can restore it for 21 days" and the answer prints the date it can be restored
+  until; against an older server, where the delete is permanent, the prompt still says so.
+  `Client.delete_run`, `delete_experiment` and `delete_project` return the server's receipt. A delete the transport RETRIED (the first
+  attempt landed, its reply was lost) that finds the thing already in the trash now returns the
+  notice instead of raising.
+
 ## 0.185.0
 
 - **`log_artifact` no longer waits for the credential scan.** A queued upload is copied into the
