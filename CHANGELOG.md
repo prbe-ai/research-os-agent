@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`probe backfill` says when a team's page generation is paused.** When the server refuses an
+  AI Summary refresh because the team's page generation is switched off (a 409 with `code:
+  generation_paused`), reconstruction now reports "<project>: Optional AI Summary not requested:
+  page updates are paused for your team. Nothing was queued." and records the summary as `paused`.
+  It used to print "<project>: summary pending (ConflictError).", save the request as `unknown`,
+  and on every later run offer to retry a refresh that never existed. A later run checks whether a
+  refresh is already running (generation may be back on) and otherwise asks the ordinary question
+  again. The SDK exports the code as `probe.sdk.errors.GENERATION_PAUSED`.
+
 ## 0.182.0
 
 - **Team rules ("workflow memory") are removed.** The feature was never finished. `probe rule
