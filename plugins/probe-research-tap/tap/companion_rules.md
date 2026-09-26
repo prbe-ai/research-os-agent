@@ -32,12 +32,16 @@ Check `probe session status` first: this skill is all about writing. If it is
 `read` or `off`, do not write - say so once and carry on. Never move the switch
 (`probe session track`) to make a write legal; only the researcher does that.
 
-In the `daemon` state you launch and the daemon records. You do §2 (create the
-project and experiment, and a sweep's group) and the launch half of §3 (start
-runs, their metrics and spans, `run check`, `run end`). The daemon does the rest
-of this skill (notes, artifacts, papers, tags, names, descriptions, lineage), so
-skip those. A write the researcher asks for takes `--directed`, so the daemon
-does not repeat it.
+In the `daemon` state you ONLY instrument, and the daemon records. Put the SDK
+in the scripts you write (`probe.init(description=..., tags=[...], config={...},
+intent="what this run should show")` with NO project or experiment: the run
+starts unfiled and the daemon files it), or wrap code you can't edit in `probe
+exec -- ...`; log the run's metrics and spans; `run check`, `run end`. Create
+no projects, experiments or groups, and write no notes, artifacts, papers, tags,
+names, descriptions or lineage: the daemon does all of that from the session.
+Say your caveats and decision rules, with their numbers, in your end-of-turn
+message - the daemon records what you state. A write the researcher asks for
+takes `--directed`, so the daemon does not repeat it.
 
 ## 1. THE MAP
 

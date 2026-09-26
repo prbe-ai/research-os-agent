@@ -148,9 +148,9 @@ DAEMON_REASON_WORDS = _session_marker.DAEMON_REASON_WORDS
 MESSAGE_DAEMON = (
     "The Probe daemon is recording this conversation, but `{matched}` just wrote to Probe "
     "directly. The daemon sees that write in the transcript and will not repeat it. From here, "
-    "leave notes, artifacts, papers, tags and descriptions to the daemon; launching runs, and "
-    "the project, experiment and group they go into, stays yours. A write the researcher asks "
-    "for takes `--directed`."
+    "launch and instrument runs and leave the rest to the daemon: it creates the project, "
+    "experiment and group a run is filed in, and writes the notes, artifacts, papers, tags and "
+    "descriptions. A write the researcher asks for takes `--directed`."
 )
 
 # The switch, by trailing slug -- in TWO classes, which differ ONLY in whether
@@ -1080,11 +1080,18 @@ def _deny(payload: dict, session_id: str) -> None:
     thing here is one file read and a return -- no shlex, no regex, no parse --
     because the cost of the gate is paid by every session that never needed it.
 
+        any state      -> deny a Write/Edit/Bash aimed at the Probe daemon's
+                          approvals folder (a substring check, before the state
+                          read: only the researcher answers the daemon)
         state == full or daemon -> return, always (`daemon` is enforced by the
                                    CLI's own write gate, which knows the lease)
         state == read-only -> deny WRITES typed into Bash
         state == off    -> deny writes, Probe MCP calls, and Probe content reads
     """
+    aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"))
+    if aimed:
+        _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
+        return
     state = _state(session_id, _payload_cwd(payload))
     if _session_marker.state_allows_writes(state):
         return

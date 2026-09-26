@@ -14,6 +14,72 @@
   `Client.delete_run`, `delete_experiment` and `delete_project` return the server's receipt. A delete the transport RETRIED (the first
   attempt landed, its reply was lost) that finds the thing already in the trash now returns the
   notice instead of raising.
+- **The Probe daemon, version 2.** In the `daemon` state the coding agent only instruments its
+  runs; the daemon records everything else. It is now an AI agent (Pydantic AI) that reads the
+  session's chat log into a queue as lines land and takes a bite at your prompt, the agent's turn
+  end, a size limit, or anything ~2 minutes old. Each bite is rebuilt from disk: its job
+  description (`record-session`), a note of what is cut off, the recent chat (~50K tokens, whole
+  turns, outputs behind tags), what is not recorded yet with its last writes, and its own running
+  note. It records with the same `probe` CLI you use, each command parsed with the CLI's own
+  parser and checked first: is it the daemon's to run (every CLI command now has one owner), does
+  anything it sends look like a credential, does it need your yes. It reads files with a real
+  shell: known-safe commands run at once; anything else is a question for you. Writes carry an
+  `Idempotency-Key`, so a network retry writes once. Install its libraries with
+  `probe daemon install` (the new `daemon` extra); without them capture keeps running and the
+  agent records. See `probe daemon status`.
+- **Questions from the daemon.** A delete that reaches another researcher's data, a shell
+  command off the safe list, or a blocked check the daemon thinks is a false alarm is held; your
+  coding agent asks you the daemon's exact question with its question tool (a hook refuses a
+  reworded one and reads your pick). With the harness's approvals off (bypass mode) nothing is
+  asked. No question tool: answer in your own terminal with `probe approvals`; `probe deny <id>`
+  says no. A yes runs exactly the action you were shown (a command with a credential in it is
+  refused, never asked with parts hidden), questions stay in the session that raised them, and a
+  no is not asked again. Codex counts as bypass only with approvals `never` AND full access; a
+  sandboxed Codex session is asked. Edits to the team note, and the sync that shares them, are a
+  question too.
+- **The daemon deletes only where Probe has a trash.** It checks the server first; on a server
+  without the trash (restorable deletes) every delete stays yours. It stops the moment the switch
+  leaves `daemon`, gives the agent its writes back when its key is refused or its budget is spent,
+  and one session never runs two daemons. `probe run move` now fails loudly on a server that
+  cannot file runs, instead of printing the unchanged run.
+- **Runs can start without a project and be filed later.** `probe run move <run> --to
+  <project|experiment> [--group G]` files or refiles a run; `probe run list --unfiled` lists runs
+  not filed yet. `probe artifact set <id> --notes "..."` gives a file with no notes its one line.
+- **Runs can start with no project (floating runs, daemon v2).** `probe.init()` and
+  `Client.run()` with neither `experiment=` nor `project=`, and `probe run start` / `probe exec`
+  with no `--project`, `--experiment` or active project, now open the run with no home through
+  `POST /v1/runs` instead of refusing; the Probe daemon (or `probe run move`) files it later, and
+  everything the run recorded moves with it. An active project (`probe project use`) still wins,
+  and a call that names an experiment or project sends exactly what it sent before. A floating
+  run's `child()`, `probe run child` and `fork_run` open floating runs too, where they used to
+  raise. A backend without floating runs answers with a `CapabilityUnavailable` naming
+  `--project` / `--experiment`. `probe exec -- python train.py` now wraps `python train.py`; click
+  used to bind `python` to the RUN argument, so without a creation flag it was read as a run name.
+- **New `intent` on a run: what it is meant to show.** `probe.init(intent=...)`,
+  `Client.run(intent=...)`, and `--intent` on `probe run start` and `probe exec`. It is stored in
+  the run's `metadata.intent` (the run schema has no field for it) and is what the daemon files and
+  describes the run by.
+- **The SDK tells the Probe daemon when a run opens and ends.** One JSON datagram on the session's
+  local socket (`<state>/probe/sessions/<session>.sock`, or `/tmp/probe-<uid>/<hash>.sock` when
+  that path is too long, used only when that folder is this user's and private): `run started`
+  with the run id, session, name, description, tags, config (capped at 4 KB), intent, parent and
+  relation, and the command for `probe exec`; `run ended` with the status. Fire-and-forget: under
+  200 ms, never raises, and with no daemon listening nothing changes.
+- **Remote jobs keep the session.** `probe exec` hands the job `PROBE_AGENT_SESSION=<agent>:<id>`
+  next to `PROBE_RUN_ID`, and the hand-off notice for `sbatch` / Modal / Ray / kubectl lists it
+  among the variables to forward. The SDK reads it only when no coding agent is detected on the
+  machine, so a remote job's runs carry the session tag the daemon finds them by.
+- **Unfiled runs are visible.** `probe doctor` and `probe session status` report how many runs
+  wait to be filed and how old the oldest is ("unknown" on a backend that predates floating runs,
+  never a wrong count); `probe doctor` also shows whether the daemon's AI libraries are installed
+  and the last lines of the daemon's error log (`<state>/probe/daemon-errors.log`). `probe run list
+  --unfiled` refuses a backend that ignored the filter. The MCP `browse` tool lists your unfiled
+  runs at the lab root (`unfiled`: id, name, created time, tags), or marks `unfiled_runs` missing
+  when the backend cannot say.
+- **In the `daemon` state the agent no longer creates projects, experiments or groups.** They are
+  the daemon's now: `probe project create`, `probe experiment create` and `probe group create`
+  are refused like other daemon writes (and pass with `--directed`). Launching runs and the run's
+  own data stay the agent's. The pointer paragraph says so (v36).
 
 ## 0.185.0
 

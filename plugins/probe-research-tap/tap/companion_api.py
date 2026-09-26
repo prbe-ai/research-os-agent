@@ -75,7 +75,7 @@ def error_code(detail: Any) -> str | None:
 
 def _code(detail: Any) -> str | None:
     if isinstance(detail, dict):
-        inner = detail.get("detail", detail)
+        inner = detail.get("detail", detail.get("error", detail))
         if isinstance(inner, dict) and isinstance(inner.get("code"), str):
             return inner["code"]
     return None
@@ -87,7 +87,9 @@ def _classify(status: int, detail: Any) -> ApiError:
     if status == 403:
         return Forbidden(status, detail)
     if status == 429:
-        return (Budget if _code(detail) == "budget_exhausted" else Retryable)(status, detail)
+        # `daemon_fuse_tripped`: the team's daily daemon fuse (server S2) -- a budget
+        # stop until midnight UTC, never "retry now".
+        return (Budget if _code(detail) in ("budget_exhausted", "daemon_fuse_tripped") else Retryable)(status, detail)
     if status in (409, 503) and _code(detail) in ("idempotency_in_progress", "idempotency_unavailable"):
         return Retryable(status, detail)
     if status >= 500:

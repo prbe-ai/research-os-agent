@@ -17,6 +17,11 @@
             "type": "command",
             "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/note_audit.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/note_audit.py\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/note_audit.py\"'",
             "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/approvals_hook.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/approvals_hook.py\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/approvals_hook.py\"'",
+            "timeout": 5
           }
         ]
       }
@@ -31,6 +36,11 @@
           {
             "type": "command",
             "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/statusline_refresh.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/statusline_refresh.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/statusline_refresh.py\"'",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/approvals_hook.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/approvals_hook.py\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/approvals_hook.py\"'",
             "timeout": 5
           }
         ]
@@ -57,6 +67,26 @@
             "timeout": 5
           }
         ]
+      },
+      {
+        "matcher": "^AskUserQuestion$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/approvals_hook.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/approvals_hook.py\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/approvals_hook.py\"'",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "^(Write|Edit|MultiEdit|NotebookEdit)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/tracking_guard.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/tracking_guard.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/tracking_guard.py\"'",
+            "timeout": 5
+          }
+        ]
       }
     ],
     "PostToolUse": [
@@ -76,6 +106,16 @@
           {
             "type": "command",
             "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/statusline_refresh.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/statusline_refresh.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/statusline_refresh.py\"'",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "^AskUserQuestion$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/approvals_hook.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/approvals_hook.py\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/approvals_hook.py\"'",
             "timeout": 5
           }
         ]

@@ -997,10 +997,11 @@ READ_GROUPS = frozenset(
 
 #: WHAT THE AGENT STILL WRITES IN THE `daemon` STATE, without `--directed`: the
 #: launch of a run and the run's own data -- the `instrument-code` surface the
-#: daemon never authors -- plus the project, experiment and sweep group a run
-#: launches into, because `run start` refuses to create them and a launch must
-#: not wait on the daemon. Keys are "group verb" (three words under a `SUBGROUPS`
-#: entry), or the bare top-level command.
+#: daemon never authors -- and nothing else (daemon v2, D2 / S11). The project,
+#: experiment and sweep group a run belongs in are the DAEMON's now: a run
+#: starts floating (no project) and the daemon creates its containers and files
+#: it, so a launch never waits on a container. Keys are "group verb" (three
+#: words under a `SUBGROUPS` entry), or the bare top-level command.
 #: `probe session status` prints this list as `daemon.agent_writes`, and
 #: `DAEMON_CONTEXT` below says the same thing in words.
 DAEMON_AGENT_WRITES = frozenset(
@@ -1020,9 +1021,6 @@ DAEMON_AGENT_WRITES = frozenset(
         "trial watch",
         "trial reconcile",
         "trial expand",
-        "project create",
-        "experiment create",
-        "group create",
     }
 )
 
@@ -1139,10 +1137,10 @@ DENY_REASON_OFF = (
 
 DENY_REASON_DAEMON = (
     "The Probe daemon is recording this conversation (the `daemon` state), so `{matched}` was "
-    "refused before it ran: that write is the daemon's. Yours are creating the project, "
-    "experiment and group you launch into, starting runs, the run's own data and `probe run "
-    "end`; `probe session status` lists them.\n\nIf the researcher asked for exactly this, run "
-    "it again with `--directed`."
+    "refused before it ran: that write is the daemon's, and it creates the project, "
+    "experiment and group your runs are filed in. Yours are starting runs (they may start "
+    "with no project), the run's own data and `probe run end`; `probe session status` lists "
+    "them.\n\nIf the researcher asked for exactly this, run it again with `--directed`."
 )
 
 #: THE ONE STATEMENT OF WHO WRITES WHAT IN THE `daemon` STATE. Every surface that
@@ -1154,14 +1152,71 @@ DENY_REASON_DAEMON = (
 #: `DAEMON_AGENT_WRITES`. The daemon ending a run the agent left open is a
 #: BACKSTOP, not the plan, so `run end` stays the agent's.
 DAEMON_CONTEXT = (
-    "The Probe daemon is recording this session: you launch, and the daemon records. Yours: "
-    "create the project, experiment and sweep group you launch into, start runs (`probe exec` "
-    "or the SDK), the run's own data (metrics, spans, trials, files the run itself attaches) "
-    "and `probe run end` when a run finishes. The daemon's: everything else (notes, artifacts, "
-    "papers, tags, names, descriptions, lineage), read from the transcript; it also ends any "
-    "run you leave open. If the researcher asks for one of the daemon's writes, add "
-    "`--directed`."
+    "The Probe daemon is recording this session: you launch and instrument runs, and the daemon "
+    "records. Yours: start runs (`probe exec` or the SDK, no project needed), the run's own data "
+    "(metrics, spans, trials, files the run itself attaches) and `probe run end` when a run "
+    "finishes. The daemon's: everything else, including creating the project, experiment and "
+    "sweep group a run is filed in, and its notes, artifacts, papers, tags, names, descriptions "
+    "and lineage, read from the transcript; it also ends any run you leave open. If the "
+    "researcher asks for one of the daemon's writes, add `--directed`."
 )
+
+
+# ---------------------------------------------------------------------------
+# THE DAEMON'S QUESTIONS ARE NOT THE AGENT'S TO ANSWER.
+# ---------------------------------------------------------------------------
+
+#: Where the Probe daemon keeps the questions it holds for the researcher and
+#: their answers (`probe.daemon.approvals`): `<state>/probe/approvals`.
+APPROVALS_DIRNAME = "approvals"
+
+#: The guard hook's refusal of a coding-agent tool call aimed at that folder.
+DENY_REASON_APPROVALS = (
+    "`{tool}` would touch {path}, where the Probe daemon keeps the questions it holds for the "
+    "researcher and their answers, so it was refused before it ran. Only the researcher answers "
+    "them: through your question tool, word for word, or `probe approvals` in their own "
+    "terminal. Do not write there, and do not route around this."
+)
+
+#: Tools that write a file named by one input field.
+_FILE_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
+                     "NotebookEdit": "notebook_path"}
+#: The folder as a command's text names it (`~/.local/state/probe/approvals/answers/x.json`,
+#: `$XDG_STATE_HOME/probe/approvals`, `cd probe && ... approvals/...`).
+_APPROVALS_TEXT = re.compile(r"probe/+approvals\b|\bapprovals/+(answers|requests)\b")
+
+
+def approvals_dir() -> Path:
+    return state_dir() / APPROVALS_DIRNAME
+
+
+def touches_approvals(tool_name: object, tool_input: object) -> "str | None":
+    """The approvals path a coding agent's tool call aims at, or None.
+
+    A TRIPWIRE, NOT A BOUNDARY: the agent runs as the same user as the daemon,
+    so a script that builds the path at run time still reaches the folder. What
+    this refuses is the plain way -- a Write/Edit whose file is in there, a Bash
+    command that names it -- and that is what a model talked into "answering"
+    a question for the researcher would try first. The daemon's own checks
+    (`approvals.verify_held`, the lease) are what a yes must still pass.
+    """
+    if not isinstance(tool_input, dict):
+        return None
+    field = _FILE_WRITE_TOOLS.get(tool_name) if isinstance(tool_name, str) else None
+    if field is not None:
+        target = tool_input.get(field)
+        if not isinstance(target, str) or not target:
+            return None
+        root = os.path.realpath(str(approvals_dir()))
+        real = os.path.realpath(os.path.expanduser(target))
+        return target if real == root or real.startswith(root.rstrip(os.sep) + os.sep) else None
+    if tool_name == "Bash":
+        command = tool_input.get("command")
+        if isinstance(command, str) and (
+            _APPROVALS_TEXT.search(command) or str(approvals_dir()) in command
+        ):
+            return str(approvals_dir())
+    return None
 
 
 # ---------------------------------------------------------------------------

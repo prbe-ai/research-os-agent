@@ -545,7 +545,9 @@ def test_supervisor_spawns_only_in_the_daemon_state(tmp_path, monkeypatch):
     _set_state("daemon")
     sup.poll()
     sup.poll()
-    assert len(spawned) == 1 and spawned[0][2:4] == ["tap", "companion"]
+    # Daemon v2: the researcher's CLI runs the worker (`probe daemon worker`).
+    assert len(spawned) == 1 and spawned[0][1:3] == ["daemon", "worker"]
+    assert spawned[0][spawned[0].index("--session-id") + 1] == SID
 
 
 def test_prompt_carries_the_closed_id_set_and_the_rules():
@@ -777,9 +779,10 @@ def test_publishing_backs_off_and_gives_up(tmp_path, monkeypatch):
 
 
 def test_shadow_never_runs_outside_on(tmp_path, monkeypatch):
+    # Daemon v2 has no shadow mode: even with the old setting on, only `daemon` runs it.
     monkeypatch.setenv(worker_mod.ENV_SHADOW, "1")
     sup = supervisor_mod.Supervisor(session_id=SID, transcript=tmp_path / "t.jsonl", cwd=tmp_path)
-    for state, wanted in (("full", True), ("read-only", False), ("off", False)):
+    for state, wanted in (("full", False), ("read-only", False), ("off", False), ("daemon", True)):
         _set_state(state)
         assert sup.wanted() is wanted, state
     worker, _ = _worker(tmp_path, FakeApi(), b"")
