@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.187.0
+
 - **Tap 0.9.1: a daemon that stops because the switch moved is started again once it reads `daemon`.**
   The worker now exits 5 ("respawn later") when it leaves over the switch; the tap's supervisor
   starts a new one as soon as the switch reads `daemon` instead of recording a give-up (the
