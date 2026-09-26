@@ -10,6 +10,13 @@
   no-op with no active run. `epoch` is a new crash-context key. The `instrument-code` skill now
   tells agents to wrap training loops this way.
 
+- **`probe.expect()` and `probe run expect`: get an email when a metric leaves a range you set.**
+  `probe.expect({"val/acc": (0.5, 1.0), "train/loss": (None, 20)})` after `probe.init(...)` declares
+  where metrics should stay; the run's creator is emailed the first time a value crosses. For a run
+  already going, `probe run expect <run> val/acc --min 0.5 --max 1` (or `--clear`). Optional: a
+  script that never calls it is unchanged, and a call never breaks the script -- a malformed entry
+  is dropped with a warning and delivery is fail-open like `probe.log`.
+
 ## 0.187.0
 
 - **Tap 0.9.1: a daemon that stops because the switch moved is started again once it reads `daemon`.**

@@ -163,6 +163,21 @@ the code that can raise, and never `yield` inside the block. Never
 `run.unit(labels=/coords=)` for this: it stamps every `log()` inside, and the
 curve stops plotting.
 
+## DECLARE WHERE A METRIC MUST STAY (OPTIONAL):
+
+When a metric has a range you are SURE of - an accuracy in [0, 1], a loss that
+must never pass some ceiling - declare it once, after `probe.init()` and before
+the loop. The run's creator is emailed the first time a value leaves it:
+
+```python
+probe.expect({"val/acc": (0.5, 1.0), "train/loss": (None, 20)})  # None = open end
+```
+
+Only ranges you are sure of: a wrong range emails someone about a healthy run.
+Leave it out when unsure - NaN and inf are reported without any declaration. It
+never raises and changes no metric. For a run already going:
+`probe run expect <run> val/acc --min 0.5 --max 1`.
+
 ## HARBOR TRIALS - THE FILE DOOR:
 
 Harbor writes each trial to a directory (`result.json`, `agent/trajectory.json`,
