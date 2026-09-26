@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.182.2
+
 - **Four more reads are no longer refused as writes.** In `read` and `daemon`, the write gate and
   the plugin's guard hook refused `probe project code list`, bare `probe project contributors`,
   `probe wandb discover` and `probe wandb key status`: they only read two words of a command, so a
