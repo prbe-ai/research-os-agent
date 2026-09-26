@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.185.0
+
 - **`log_artifact` no longer waits for the credential scan.** A queued upload is copied into the
   outbox's waiting room and the call returns (4-60 ms on 11-32 MB files that used to block the
   training loop for 205-346 s). The detached worker then runs a light, dependency-free check that
