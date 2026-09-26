@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **A session your team had deleted is no longer re-sent forever** (tap: needs its next version).
+- **A session your team had deleted is no longer re-sent forever** (tap 0.8.4).
   When a customer asks us to delete a captured session, the server refuses it for good: 410
   `session_deleted` on upload, `state: "deleted"` on the receipts read. The tap used to file that
   under "retained for retry" and re-send it every tick for as long as its daemon ran. Now the
