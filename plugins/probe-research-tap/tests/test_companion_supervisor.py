@@ -107,6 +107,35 @@ def test_a_worker_that_left_over_an_unreadable_switch_starts_again_once_it_reads
     assert len(spawned) == 2
 
 
+def test_a_worker_that_left_over_the_switch_respawns_even_when_it_already_reads_daemon_again(tmp_path, monkeypatch):
+    # T11, the race: the switch file was unreadable for a minute, the worker left,
+    # and by the time this poll looks the switch reads `daemon` again. A give-up
+    # recorded now would be recorded IN `daemon` and never respawn; the worker's
+    # own exit code says "respawn later" instead.
+    sup, spawned, clock = _sup(tmp_path, monkeypatch, [supervisor_mod.EXIT_RESPAWN_LATER, None])
+    _set_state("daemon")
+    sup.poll()  # spawn 1
+    sup.poll()  # it left over the switch, which is readable again already
+    assert sup.gave_up_in is None and sup.crashes == 0 and len(spawned) == 1
+    clock.now += supervisor_mod.RESPAWN_LATER_SECONDS + 1
+    sup.poll()
+    assert len(spawned) == 2, "the session stays with the agent for good"
+
+
+def test_a_worker_that_left_over_the_switch_waits_while_it_is_not_daemon(tmp_path, monkeypatch):
+    sup, spawned, clock = _sup(tmp_path, monkeypatch, [supervisor_mod.EXIT_RESPAWN_LATER, None])
+    _set_state("daemon")
+    sup.poll()
+    _set_state("full")
+    for _ in range(3):
+        clock.now += supervisor_mod.RESPAWN_LATER_SECONDS + 1
+        sup.poll()
+    assert len(spawned) == 1
+    _set_state("daemon")
+    sup.poll()
+    assert len(spawned) == 2
+
+
 def test_the_supervisor_keeps_no_copy_of_the_childs_log_file(tmp_path, monkeypatch):
     sup, spawned, _ = _sup(tmp_path, monkeypatch, [None])
     _set_state("daemon")

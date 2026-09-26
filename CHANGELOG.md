@@ -2,6 +2,121 @@
 
 ## Unreleased
 
+- **Tap 0.9.1: a daemon that stops because the switch moved is started again once it reads `daemon`.**
+  The worker now exits 5 ("respawn later") when it leaves over the switch; the tap's supervisor
+  starts a new one as soon as the switch reads `daemon` instead of recording a give-up (the
+  0.186.x race where the switch flipped back while the worker was leaving). An older tap treats
+  exit 5 as a crash and backs off, which is harmless.
+- **What no mode runs is found in every part of a command.** The shell's checks stopped at the first
+  part they would ask about, and bypass mode runs what is asked, so `env FOO=1 true; cat
+  ~/.config/probe/config.json` read Probe's key, and `PROBE_CONFIG_PATH=... probe ...`, `env -i probe
+  ...`, `timeout 60 probe ...` or `python3 -c "subprocess.run(['probe', ...], env={})"` reached Probe
+  with a key from the daemon's key-less shell (0.186.1's rule held only for a command that started
+  with `probe`). Every part, and the raw text of a command too complex to read, is now checked first
+  for Probe's key or state, a Probe setting set or unset, `env -i`, and a probe started through
+  another program; each is refused in every mode. A `probe` run from the daemon's shell says to run
+  it as a command of its own instead of "run `probe login`".
+- **Chained commands keep to the working folders.** `cd latest && cd ../..` climbed out through a
+  symlink (the check read `..` from the link's target); a `cd` now lands only in a working folder
+  outside bypass mode. A heredoc in a chained command with probe (its lines ran as commands) and a
+  `cd` that is not a bare `cd DIR` are refused in every mode, and a probe write whose filter would
+  not run is not run either (it landed while the model was told "not run").
+- **More ways to print a piece of a key are asked about:** `cut -d` on a delimiter a key can hold,
+  `tail +5c`, jq `reverse`, `diff -y`/`-W`, and `rg --max-columns-preview`.
+- **The reader never shows a piece of a key, and reads a bounded amount.** A cut (a long cell, line
+  or file) drops the word it lands in, so no key fragment escapes the scrubber; a NumPy header's
+  shape must be sizes and a preview skips at most 1 MiB; a FIFO or device is not opened; a malformed
+  file is a "not read", never a tool error; Parquet needs pyarrow 14.0.1+ (CVE-2023-47248).
+- **A write sent again after a different one gets its own key.** `run set --status running`,
+  `finished`, `running` reused the first key for the third and was answered with its stored
+  receipt. A blocked command no longer reads the files it names to make a key, and a read keeps no
+  count. The edge-exists rule's claim is corrected: a queued edge's reason/meta is not applied to
+  the edge that was there (logged).
+- `python -m probe.cli` runs the CLI (the daemon's fallback when no `probe` sits beside it).
+- **The daemon can push the same note twice in one bite.** Each `probe` command the daemon runs
+  sends an Idempotency-Key derived from its words, so a second `probe notes push` of one note with
+  new text reused the first push's key with a different body, and Probe answered 422. The key now
+  also covers every file the command sends (the checked-out note a push uploads, an `@file` value, a
+  file argument, a manifest and its rows), and how often that content changed in the bite: new text
+  is a new key, the same text again keeps its key (a push that landed replays), and text A, then B,
+  then A again does not replay A's first receipt.
+- **A queued lineage edge that already exists counts as delivered.** The outbox dead-lettered a
+  background `probe edge add` whose edge Probe already had (409 "lineage edge already exists"),
+  because a 409 on a first attempt is treated as a real conflict. For that answer the conflict is
+  the whole edge (same source, relation and target), so the write is done and nothing is lost; the
+  other 409 on that route ("this run already has a genealogy parent") still dead-letters.
+- **The daemon asks before it prints a file in pieces.** Outside bypass mode, `cut -c`/`-b`,
+  `head -c`/`tail -c`, `grep -o`, `rg -o`/`-r`, and jq string slicing (`.[m:n]`, `split`, `sub`,
+  `ltrimstr`, `match`, ...) are a question instead of running at once: a key printed a few
+  characters at a time, or without its prefix, is text the output scrubber cannot recognise. Bypass
+  mode still runs them.
+- **The daemon runs several commands per shell call.** A command such as `cd eval && probe artifact
+  add results.csv --project p && probe run tag r1 done`, or `probe run list --json | jq ...`, is no
+  longer refused: the daemon runs its parts in order itself, never through bash. Each `probe` part
+  gets every check a lone probe command gets (owner, secret scan, questions, lease, logbook,
+  Idempotency-Key) in the folder the `cd` parts moved to; `&&`, `||` and `;` behave as in bash (a
+  part that was blocked, held or refused counts as failed); a probe command's stdout feeds the
+  filter after its `|`. Every other part is checked and run, asked about, or refused as a command
+  of its own. A probe command reading piped input or redirected to a file is still refused in
+  every mode, and the shell's environment still has no Probe config. The lease is renewed between
+  the parts, so several slow probe commands in one call do not outlive it.
+- **A file reader for the daemon** (`tools.read_file`, for its `read` tool). It reads a file's lines
+  by range, or previews a CSV/TSV (header, first rows, shape), a JSON document (what it holds,
+  pretty-printed), a Parquet file (schema, rows, first rows) or a NumPy `.npy`/`.npz` (dtype, shape,
+  first values, read from the format's header without numpy). It never loads a pickle or a format
+  built on one (`.pkl`, `.joblib`, `.pt`, an object array: loading runs code) and shows no images.
+  It reads what a safe `cat` may (bypass mode: anything but Probe's own key and state), scrubbed
+  and capped. No dependency was added: Parquet needs pyarrow, and without it the reader says so.
+- **The daemon can read the session again.** `session_search` and `session_open` were plain
+  functions, so Pydantic AI ran them in a worker thread, and the session's store (one SQLite
+  connection) refuses any thread but its own: on 0.186.0 and 0.186.1 every call answered
+  `tool error (ProgrammingError)`, and the daemon could open no output behind a tag. Both now run
+  on the event loop, and a test calls them through the real agent.
+- **One long conversation per session, behind `PROBE_DAEMON_MODE=conversation`** (the default
+  stays `bites` until the bench picks). The daemon keeps one message history per session, like
+  Claude Code: each bite appends a message with only the new events and what is not recorded yet,
+  the history is saved to the session's store after every run and resumed when the worker is
+  restarted, and near `PROBE_DAEMON_CONTEXT_TOKENS` (120K) it compacts -- old tool results cleared
+  first, then older turns summarized. The job description, MEMORY.md and plain code's state of the
+  record (what the logbook says was filed where, what waits for the researcher, what failed) ride
+  every request, so no compaction loses them. It starts fresh from disk, as a bite does, when the
+  saved history cannot be read, after 8 compactions, or when the loop detector stopped a run. In
+  this mode there are no per-bite caps (40 requests, 80 tool calls, 1.5M tokens); bites mode keeps
+  them.
+- **A run no longer starves the daemon's loop.** Between two model rounds the worker reads new
+  transcript lines into the queue, settles the researcher's answers, and stops the run for a moved
+  switch, a lost lease, the device fuse, or the session-end deadline (a run already going when the
+  session ended included). A loop detector stops a run that gets the same refusal or failure 3
+  times, or makes the same successful call (tool and arguments) 5 times: its events are retried
+  over half as many, then skipped with a notice, as a bite its limits cut short.
+- **MEMORY.md replaces the running note.** One notebook per project (the git repository of the
+  session's folder, else the folder; never `$HOME` or above), kept in
+  `<state>/probe/daemon/memory/<sha256 of the path>/MEMORY.md` and shared by every session and
+  every restart on that project. The daemon writes it with `write_memory` (scrubbed for secrets
+  before it lands, one writer at a time per project) and sees it at the end of every request,
+  with the researcher's own agent memory index beside it; the files that index names stay one
+  `cat` away. The daemon's job description now says what to keep there and when to update it.
+- **The daemon's tools, like a coding agent's.** Independent tool calls run in parallel; a tool
+  that writes (`shell`) runs alone, in the order the model called it. The Probe MCP tools are there
+  from the start (no `load_capability` round). A `read` tool is offered when the CLI has the file
+  reader. Oversized tool outputs are spilled to a file with a preview and a `read_tool_result`
+  handle when they are made; a plan tool helps a long job; malformed tool arguments are repaired;
+  a collapsed prompt cache is logged.
+- **Every model round is counted as it happens.** Each response lands in the session's store
+  (model, input, cached and output tokens, the tools it called, estimated dollars) and on the
+  device's daily token counter at once, not after the bite. `probe daemon status` shows each
+  session's tokens, its cache-hit share and an estimate in dollars (gemini-3.8-flash and
+  claude-opus-5-5 at the gateway's prices; any other model in tokens only). There is no
+  per-session spend limit: the team fuse and the device fuse stay the backstop.
+- **File notes at a careful researcher's level.** The daemon no longer gives every file the runs
+  produced a note: it describes the files a teammate needs to understand or reuse a result. It is
+  told to batch independent reads in one turn and to chain commands in one shell call.
+- **A switch file unreadable for a moment no longer strands a session with the agent.** A worker
+  that leaves over the switch (unreadable for a minute, or not `daemon` while it waited for the
+  session lock) exits 5, "respawn later"; the tap starts one again as soon as the switch reads
+  `daemon`. Before, it exited "do not respawn", and when the switch already read `daemon` again by
+  the time the tap looked, the tap recorded giving up in `daemon` and never started one.
+
 ## 0.186.1
 
 - **The daemon writes to Probe only through its own guarded path, even in bypass mode.** A `probe`

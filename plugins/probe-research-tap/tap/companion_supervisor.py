@@ -10,9 +10,11 @@ must be killable without touching capture.
                          state == daemon and no child ─> spawn `probe daemon worker` (v2)
                          child died ─> respawn, at most RESPAWNS_PER_MINUTE; after a
                            crash (EXIT_CRASHED, or any other failing exit) not
-                           before a growing wait; and not at all after it exits
-                           EXIT_DO_NOT_RESPAWN (no AI libraries, no key, the store
-                           is newer than the code) until the switch moves
+                           before a growing wait; after EXIT_RESPAWN_LATER (it left
+                           over the switch) once the switch reads `daemon`; and not
+                           at all after it exits EXIT_DO_NOT_RESPAWN (no AI
+                           libraries, no key, the store is newer than the code)
+                           until the switch moves
                          state left daemon ─> the child notices and exits itself
     tap watch exit ──> stop(): SIGTERM and return. The worker is in its OWN
                        process group, finishes its queue (bounded) and exits on
@@ -46,6 +48,13 @@ log = logging.getLogger("tap.companion.supervisor")
 RESPAWNS_PER_MINUTE = 5
 #: The worker's exit after a crash (`probe.daemon.worker.EXIT_CRASHED`).
 EXIT_CRASHED = 4
+#: The worker left because of the switch -- unreadable for a minute, or not `daemon`
+#: while it waited for the session lock (`probe.daemon.worker.EXIT_RESPAWN_LATER`).
+#: Never "gave up": the switch can read `daemon` again by the time this looks, and a
+#: give-up recorded in `daemon` would never respawn. It starts again once the switch
+#: reads `daemon`, not before RESPAWN_LATER_SECONDS.
+EXIT_RESPAWN_LATER = 5
+RESPAWN_LATER_SECONDS = 5
 #: After a crash, the next spawn waits this long, doubling per crash in a row.
 CRASH_BACKOFF_SECONDS = 30
 CRASH_BACKOFF_CAP_SECONDS = 30 * 60
@@ -197,6 +206,9 @@ class Supervisor:
                 # (too old). Either way: stop until the switch moves; the agent records.
                 if code in (worker.EXIT_DO_NOT_RESPAWN, 2):
                     self.gave_up_in = lease.session_state(self.session_id)
+                elif code == EXIT_RESPAWN_LATER:
+                    self.crashes = 0
+                    self.not_before = time.monotonic() + RESPAWN_LATER_SECONDS
                 elif code == 0:
                     self.crashes = 0
                 else:
