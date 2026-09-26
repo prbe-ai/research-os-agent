@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.186.1
+
 - **The daemon writes to Probe only through its own guarded path, even in bypass mode.** A `probe`
   command inside a longer shell command (`cd x && probe ...`, `probe ... | jq`) is refused outright
   instead of being a question bypass mode approves, and the daemon's shell has no Probe config, so a
