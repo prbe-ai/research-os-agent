@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- **A run now records the files it reads, so its parent is a fact, not a guess.** `probe.init()`
+  watches every file the run opens for reading (Python's audit hook: `open`, `pathlib`, numpy,
+  pandas, `torch.load`, PIL, pickle), hashes each one, and sends the list when the run finishes.
+  The server matches each hash to the run that wrote those bytes and shows a `consumes` edge to
+  the file and a `derived_from` edge to its writer. `probe exec` records the same for a Python
+  child. Sending never holds a run's close; a run that dies leaves its list on disk, and the next
+  run on the machine sends it. Datasets are hashed once per machine (a local cache); files over
+  1 GiB, or past 10 GB per run, get a fingerprint instead of a full hash. Not seen: readers that
+  open files from C (`pyarrow.parquet.read_table` called directly, `h5py`, `safetensors`), and
+  every run says so. Off with `probe.init(capture_reads=False)` or `PROBE_CAPTURE_READS=0`
+  (also in a `probe exec` child's own environment); `Client.run(...)` records only with
+  `capture_reads=True`. Needs a server that declares `run_inputs`; against an older one nothing
+  is hashed or kept. The close waits at most 30 s for hashing (a stalled mount costs a read its
+  hash, never the run its close); a file rewritten at the same path is recorded again; each
+  process sends its own reads, so ranks sharing a run and nodes sharing a home directory never
+  take each other's; credential files (`~/.kube`, `~/.docker`, the Hugging Face token, ...)
+  are never recorded.
+- **`log_artifact` marks whether a file was written during the run** (`written_during_run`,
+  `written_at` in its meta), so a copied-in input no longer counts as the run's output.
+- **A retry the SDK itself made is labelled `observed_call`** (`on_conflict="supersede"` and the
+  automatic retry), so a reader can tell it from a parent a person named.
+- **New SDK reads:** `client.run_inputs(run)`, `client.run_upstream(run, depth=2)` (what a run
+  built on, several hops back), `client.artifact_lineage(artifact)` (who wrote a file and who read
+  it), `client.artifacts_by_hash(sha256)`, and `client.correct_run_input(run, path,
+  dismissed=True | version_id=...)` to fix a wrong match. MCP: `entity(view="lineage")` on an
+  artifact, and `view_options={"depth": N}` on a run's lineage view walks N hops up; against a
+  server without read lineage both say so instead of reporting the file missing.
+- **`instrument-code` has a "WHAT THE RUN READ" section**: what is recorded, what is not, and how
+  to record an unseen read with `probe edge add --relation consumes`.
+
 ## 0.182.3
 
 - **A session your team had deleted is no longer re-sent forever** (tap 0.8.4).
@@ -696,7 +726,6 @@
   can refuse an MCP call. `full` returns from the guard after one file read,
   before any parsing.
 
-
 ## 0.164.0
 
 - **The menu now says whether this device is up to date.** "On this device"
@@ -870,7 +899,6 @@
 ## 0.155.4
 
 ### Changed
-
 
 - Every `find_papers` filter — `categories`, `authors`, `published_from`,
   `published_to` — and `search_knowledge`'s `search_in` now state that they are
@@ -1937,7 +1965,6 @@ mint per-agent capture credentials (`capture_sources`).
   inherited, so marking only SessionEnd would have let an ambient `sessionend`
   put a network pull and an instruction-file rewrite on every turn.
 
-
 ## 0.115.0
 
 ### Added
@@ -1982,7 +2009,6 @@ mint per-agent capture credentials (`capture_sources`).
   made `.get` raise `AttributeError` in the one path whose job is to fail open.
 - The "already current" check moved inside the lock; it was a time-of-check race
   against another process replacing the block.
-
 
 ## 0.114.0
 
@@ -2285,7 +2311,6 @@ mint per-agent capture credentials (`capture_sources`).
   this file, which is exactly how the two drifted apart.
 
 ## 0.111.0
-
 
 ### Added
 
@@ -2757,7 +2782,6 @@ mint per-agent capture credentials (`capture_sources`).
 - **An empty bearer now takes the 401 path.** `Authorization: Bearer ` (no value)
   parsed to `""`, which is falsy, so it skipped upstream verification entirely and fell
   through to whatever server-side credential the process had.
-
 
 - **The outbox reports whether it is draining.** Two client-telemetry events,
   `outbox.drained` and `outbox.stuck`, so a queue that stops delivering is visible
@@ -3237,7 +3261,6 @@ mint per-agent capture credentials (`capture_sources`).
   reassurances that stop an agent over-reading it (reads are fine, keep
   working) survive; the rest is gone.
 
-
 ### Added
 
 - **An off session's probe write is now refused, not narrated.** A new
@@ -3268,7 +3291,6 @@ mint per-agent capture credentials (`capture_sources`).
   twin of the auto-mark bug, automation making the researcher's declaration for
   them. Two states, not three: tracking false means stop and ASK.
 
-
 ## 0.97.0
 
 ### Fixed
@@ -3292,7 +3314,6 @@ mint per-agent capture credentials (`capture_sources`).
   record which value a session started at, never change it. The default is the
   researcher choosing what a new session starts at — the same setting the
   toggle flips, not a weaker kind of preference.
-
 
 ### Added
 

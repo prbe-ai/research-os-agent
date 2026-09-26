@@ -174,6 +174,22 @@ A `--reference` checkpoint or dataset on a box you are about to destroy resolves
 nowhere afterwards. Code is exempt - always uploaded, and `--reference` on it is
 refused.
 
+## WHAT THE RUN READ:
+
+`probe.init()` records every file the run opens for reading (path + sha256) and
+sends the list when the run finishes; the server links each one to the run that
+WROTE those bytes, which is how a follow-up run gets its real parent. `probe
+exec` does the same for a Python child. Nothing to add - but know its edges:
+
+- It sees `open`, `pathlib`, numpy, pandas, `torch.load`, PIL, pickle. It does
+  NOT see readers that open files from C - `pyarrow.parquet.read_table` called
+  directly, `h5py`, `safetensors`. For those, say it yourself:
+  `probe edge add --source run:$RUN --target artifact:$ID --relation consumes`
+- `Client.run(...)` handles record only with `capture_reads=True`
+- Opt out: `probe.init(capture_reads=False)` or `PROBE_CAPTURE_READS=0`
+- A wrong match is corrected, never deleted: `client.correct_run_input(run,
+  path, dismissed=True)` drops it, `version_id=` pins the version really read
+
 ## RELAUNCHING A RUN:
 
 Reusing an `external_id` conflicts with the incumbent; `on_conflict` says what
