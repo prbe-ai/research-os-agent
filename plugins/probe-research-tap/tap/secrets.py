@@ -59,6 +59,7 @@ from __future__ import annotations
 import base64
 import binascii
 import bisect
+import functools
 import math
 import re
 from collections import Counter
@@ -785,7 +786,109 @@ def redact(text: str) -> tuple[str, list[str]]:
     Returns the input unchanged when nothing matched, so callers can test
     identity cheaply.
     """
-    findings = scan(text)
+    return _replaced(text, scan(text))
+
+
+# ---------------------------------------------------------------------------
+# The quick check -- what the artifact gate runs on a researcher's machine
+# ---------------------------------------------------------------------------
+# The full scan above decodes escapes and base64 and reads whole texts rule by
+# rule; on a 20 MB file that is tens of seconds of pure Python. A researcher's
+# upload only needs the OBVIOUS credentials replaced before it leaves the
+# machine -- the server reads every upload again in full (Hyperscan) and records
+# what it finds. So the quick check runs the same rules and the same filters,
+# with no decoding layer, and reads each rule only next to its own keywords,
+# found with `str.find`. Standard library only.
+
+#: How far before a keyword a match can start. Every rule's keyword sits within
+#: its first ~25 characters (`sk-...T3BlbkFJ`, `https://hooks.slack.com`).
+_KEYWORD_LEAD = 64
+#: How far past a keyword to read for a rule whose width has no bound -- the
+#: anchored values: anchor, a 24-character gap, separator, quote, up to 512
+#: characters, and room for some spaces. Longer is not "obvious".
+_QUICK_TAIL = 640
+#: ASCII-only lowering: `str.lower` changes the length of a few Unicode
+#: characters (`İ`), which would misalign keyword offsets.
+_ASCII_LOWER = {c: c + 32 for c in range(ord("A"), ord("Z") + 1)}
+
+
+@functools.lru_cache(maxsize=1)
+def _quick_reach() -> dict[re.Pattern[str], tuple[tuple[str, ...], int]]:
+    """Each quick-check pattern: its keywords and how far past one to read."""
+    from re import _constants as sre_constants  # type: ignore[attr-defined]
+    from re import _parser as sre_parse  # type: ignore[attr-defined]
+
+    def tail(pattern: re.Pattern[str]) -> int:
+        width = sre_parse.parse(pattern.pattern, pattern.flags).getwidth()[1]
+        return (_QUICK_TAIL if width >= sre_constants.MAXREPEAT else width) + 2
+
+    reach = {rule.pattern: (rule.keywords, tail(rule.pattern)) for rule in _RULES if rule.keywords}
+    reach[_PASSWORD_ASSIGNMENT] = (("password", "passwd"), _QUICK_TAIL)
+    reach[_ANCHORED] = (_ANCHOR_KEYWORDS, _QUICK_TAIL)
+    reach[_SHORT_ANCHORED] = (_ANCHOR_KEYWORDS, _QUICK_TAIL)
+    return reach
+
+
+def _keyword_windows(text: str) -> Windows:
+    """`Windows` from `str.find`: a stretch around every keyword occurrence.
+
+    A rule's match always contains one of its keywords, so these stretches
+    hold every match the rule has. `_QUICK_TAIL` bounds the unbounded ones.
+    """
+    reach = _quick_reach()
+    lowered = text.lower()
+    if len(lowered) != len(text):
+        lowered = text.translate(_ASCII_LOWER)
+    found: dict[str, list[int]] = {}
+    cache: dict[re.Pattern[str], list[tuple[int, int]] | None] = {}
+
+    def positions(keyword: str) -> list[int]:
+        if keyword not in found:
+            hits: list[int] = []
+            at = lowered.find(keyword)
+            while at != -1:
+                hits.append(at)
+                at = lowered.find(keyword, at + 1)
+            found[keyword] = hits
+        return found[keyword]
+
+    def windows(pattern: re.Pattern[str]) -> list[tuple[int, int]] | None:
+        if pattern not in cache:
+            spec = reach.get(pattern)
+            if spec is None:
+                cache[pattern] = None
+            else:
+                keywords, tail = spec
+                spans: list[tuple[int, int]] = []
+                for lo, hi in sorted(
+                    (max(0, at - _KEYWORD_LEAD), min(len(text), at + tail))
+                    for keyword in keywords
+                    for at in positions(keyword)
+                ):
+                    if spans and lo <= spans[-1][1]:
+                        spans[-1] = (spans[-1][0], max(spans[-1][1], hi))
+                    else:
+                        spans.append((lo, hi))
+                cache[pattern] = spans
+        return cache[pattern]
+
+    return windows
+
+
+def scan_quick(text: str) -> list[Finding]:
+    """The researcher-side check: `scan`'s rules and filters, no decoding
+    layer, each rule read only near its keywords. What it does not look for --
+    escaped or base64-encoded credentials, the key-name flag -- the server's
+    full inspection still records."""
+    return scan(text, _decode=False, _accel=_keyword_windows)
+
+
+def redact_quick(text: str) -> tuple[str, list[str]]:
+    """`redact`, with `scan_quick`."""
+    return _replaced(text, scan_quick(text))
+
+
+def _replaced(text: str, findings: list[Finding]) -> tuple[str, list[str]]:
     if not findings:
         return text, []
     out: list[str] = []

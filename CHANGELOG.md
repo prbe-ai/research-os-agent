@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **`log_artifact` no longer waits for the credential scan.** A queued upload is copied into the
+  outbox's waiting room and the call returns (4-60 ms on 11-32 MB files that used to block the
+  training loop for 205-346 s). The detached worker then runs a light, dependency-free check that
+  replaces obvious credentials in text files (vendor-prefixed tokens, private keys, JWTs,
+  `password = ...`, key-name + random-looking value) before the file is fingerprinted and queued;
+  zips, tarballs, checkpoints and other binary files upload byte-for-byte as before, and the server
+  inspects every upload in full and records what it finds. A run's uploads reach the server in the
+  order they were logged, and its close lands after them: `finish()` / `probe run end` finish any
+  scans for their run before the run is closed (`probe run end` exits 2 if one cannot be), and
+  delivery holds a run's later writes behind an upload still being scanned. A crash at any point
+  leaves each upload delivered exactly once, redacted, and an older CLI or SDK sharing the outbox
+  never sees an unscanned file. An upload whose scan cannot run is refused with the reason in
+  `probe outbox status` (log it again), never sent unscanned. `probe outbox status` shows uploads
+  still waiting. Direct (`sync=True`) uploads scan once instead of three or four times.
+  `PROBE_ARTIFACT_OPAQUE_POLICY=block` keeps the full inspection on the caller's thread, with its
+  inline refusal. Note: an older `probe run end` sharing the outbox does not know to wait for the
+  waiting room.
 - **Credential scanning answers the same, faster, and decodes one layer as documented.** The shared
   scanner's entropy and printable-text checks run in C instead of a per-character Python loop, and a
   text longer than 64K characters is no longer decoded a second time: a doubly-escaped value was
