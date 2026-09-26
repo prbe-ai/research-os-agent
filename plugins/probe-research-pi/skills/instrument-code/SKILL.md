@@ -16,6 +16,48 @@ probe.log({"loss": 0.42}, step=42)   # ambient: no handle to thread through call
 probe.finish()
 ```
 
+## FILES AND LOGS ARE CAPTURED FOR YOU:
+
+When a run ends - `finish()`, a crash, the script exiting, or a hard death (a
+segfault, the OOM killer, SIGTERM) - the SDK saves what it produced, on any
+machine, including remote jobs:
+
+- every file the run CREATED OR CHANGED in its working folder, as
+  `outputs/<its path there>`; `.git`, `.venv`, `node_modules`, caches,
+  credential-shaped names (`.env`, `*.pem`, `.pgpass`) and, in a home folder,
+  every dot-entry (`.kube`, `.docker`) are skipped
+- everything it PRINTED, as `probe/run.log` (first 2 MB + last 8 MB), C-level
+  output included. Under `probe exec` the child's output is teed the same way;
+  more processes of one run (ranks) each keep `probe/run.rank<N>.log`
+
+An upload carries at most 64 MB, and a close spends at most 120 s inspecting
+files (`PROBE_CAPTURE_BUDGET_SEC`, or the finish timeout). A file past either
+limit, or one the gate cannot inspect, becomes a pointer - path and size, no
+bytes - on storage that lasts (a network drive, a Modal Volume, your own
+machine). On a throwaway box's own disk (a container, a pod, CI) it cannot be
+kept, so it is listed in `probe/outputs-manifest.json` with a warning: write
+checkpoints there to a bucket or a mounted volume instead.
+
+Still call `probe.log_artifact` for:
+
+| case | why |
+|---|---|
+| a file OUTSIDE the run's folder | the sweep only sees that folder |
+| a name or kind you choose (`kind="checkpoint"`) | captured files are named by path, kind by extension |
+| a checkpoint written straight to a bucket | `log_artifact(name, uri="s3://...")` records where it is |
+
+Runs that SHARE a folder at the same time (sweep workers, parallel seeds) cannot
+tell whose files are whose, so capture skips them and warns. Give each run its
+own: `probe.init(..., outputs=f"results/{seed}")` (`probe exec --outputs`).
+
+Opt out with `probe.init(capture_outputs=False)`, `PROBE_CAPTURE_OUTPUTS=0` or
+`probe exec --no-capture-outputs`. `PROBE_CAPTURE_LOG=0` keeps outputs but drops
+the log - and with it capture after a hard death, which the log's helper runs.
+Nothing survives a death that takes the whole container or job step with it (the
+program as a container's PID 1): write to lasting storage there.
+No signal handler is installed: a SIGTERM'd run dies as it always did and reads
+`crashed`.
+
 ## THE ONE RULE:
 
 **A process that emits telemetry must itself be configured to emit it.**
@@ -163,6 +205,7 @@ The exit code says the process ended, not what was stored.
 run = client.get_run(run_id)
 assert run["counts"]["metrics"] > 0
 assert len(client.run_series(run_id)) < 50   # else: a wall of one-point tiles
+# on a box you are about to destroy, a file:// pointer resolves nowhere afterwards:
 assert all(not a["uri"].startswith("file://") for a in client.list_run_artifacts(run_id).items)
 ```
 

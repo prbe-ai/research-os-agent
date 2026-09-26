@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- **A run now saves what it produces, automatically.** When a run opened by `probe.init()`,
+  `Client.run()` or `probe exec` ends -- `finish()`, a crash, interpreter exit, or a hard death
+  (a segfault, the OOM killer, SIGTERM) -- every file it created or changed in its working folder
+  reaches the run as `outputs/<path>`, and everything it printed is saved as `probe/run.log`
+  (first 2 MB + last 8 MB; C-level output included). A small helper process carries the output:
+  it ignores every signal it can, so a scheduler's SIGUSR1/USR2 or Ctrl-C never breaks the
+  program's stdout, and it outlives the run to recover the log and files after a hard death. No
+  signal handler is installed in your program. This works on any machine, including
+  Modal/Ray/Slurm jobs nothing else can see. Files over 64 MB (the most an upload carries), past
+  the close's 120 s inspection budget (`PROBE_CAPTURE_BUDGET_SEC`, or the finish timeout), or not
+  inspectable are recorded as a pointer on storage that lasts (a network drive, a Modal Volume,
+  your own disk) and listed in `probe/outputs-manifest.json` on a throwaway box's own disk.
+  `.git`, `.venv`, `node_modules`, caches, credential-shaped names and, in a home folder, every
+  dot-entry are skipped; a text credential is redacted (in the log too), and a file holding one
+  the gate cannot redact is skipped with a warning naming it. Files already logged with
+  `log_artifact` are not uploaded twice. The uploads are non-blocking outbox ops: `finish()`
+  tries to deliver them first, but an outage can no longer keep a run open. Narrow the sweep with
+  `probe.init(outputs="results/")` / `probe exec --outputs` (runs sharing a folder at the same
+  time skip the sweep and say so; ranks of one run each sweep, skipping unread what another
+  already queued, and each keep `probe/run.rank<N>.log`); opt out with `capture_outputs=False`, `PROBE_CAPTURE_OUTPUTS=0` or
+  `probe exec --no-capture-outputs`, or drop just the log with `PROBE_CAPTURE_LOG=0` -- which also
+  gives up capture after a hard death.
+- **The artifact secret check runs once per file, not five times.** An upload went through the full
+  inspection up to five times (about 1 MB/s on JSON text); verdicts are now cached per process by
+  content hash. Only verdicts are cached, never refusals, and a fork never inherits the cache's
+  lock.
+- **An encoded credential left beside a replaced one is now reported.** When a file held a literal
+  GitHub token AND the same kind of token base64-encoded, replacing the literal one counted the
+  encoded one as handled too (they share a rule name). The redacted bytes are now inspected again
+  and whatever is still found is recorded -- output capture then skips the file.
+- **The `instrument-code` and `track-work` skills say what is captured for you** and when to still
+  call `log_artifact`: a file outside the run's folder, a name or kind you choose, a bucket path.
+
 ## 0.183.0
 
 - **A run now records the files it reads, so its parent is a fact, not a guess.** `probe.init()`

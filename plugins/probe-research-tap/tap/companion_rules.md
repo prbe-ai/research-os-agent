@@ -192,10 +192,16 @@ Every file that directly affects an entity should be uploaded as an artifact. A
 note links to it and never repeats its contents. §1 says which entity to hang it
 on (its ANCHOR); commands and flags are in reference §4.
 
+A RUN CAPTURES ITS OWN OUTPUTS. When a run opened by `probe.init()` or `probe
+exec` ends, every file it created or changed in its folder (`outputs/...`), and
+everything it printed (`probe/run.log`), reach the run without you. Do not
+re-upload them. Add by hand only what that misses: files outside the run's
+folder, a name or kind you choose, a bucket path. Details in `instrument-code`.
+
 RULES:
 
-- Only fully upload a copy of the file if <100MB. Else, record a pointer instead - `--reference` when the bytes are on this box or a shared volume, `--uri` when they are already in a bucket.
-    - Nothing enforces this; you decide.
+- Only fully upload a copy of the file if <64MB (the most an upload carries). Else, record a pointer instead - `--reference` when the bytes are on this box or a shared volume, `--uri` when they are already in a bucket.
+    - Over 64 MB an upload is refused. A pointer to a box that will be destroyed resolves nowhere: there, write big files to a bucket or a mounted volume and record where they are.
 
 - NEVER UPLOAD SECRETS or a customer's private content, as bytes, as a pointer,
   or in prose: `.env`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, tokens, for
