@@ -203,6 +203,11 @@ class Storage:
             (next_attempt_at, msg, row_id),
         )
 
+    def drop_session_batches(self, session_id: str) -> int:
+        """Delete every queued batch of one session. Returns the count dropped."""
+        cur = self._conn.execute("DELETE FROM outbox WHERE session_id=?", (session_id,))
+        return cur.rowcount or 0
+
     def clear_outbox(self) -> int:
         cur = self._conn.execute("DELETE FROM outbox")
         return cur.rowcount or 0

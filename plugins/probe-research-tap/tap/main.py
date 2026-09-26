@@ -58,6 +58,7 @@ from tap.session_journal import (
     DeliveryPending,
     Journal,
     ReconciliationRequired,
+    SessionDeleted,
     Wire,
     recoverable,
 )
@@ -330,6 +331,42 @@ def _reservation_cwd(journal: Journal, state: dict, storage: Storage) -> Path:
     return Path(cwd)
 
 
+class _NothingToDrain(Exception):
+    """Ends one tick's capture pass early; not an error."""
+
+
+def _settle_deleted(
+    journal: Journal | None,
+    exc: SessionDeleted,
+    noted: set[str],
+    path: Path | None = None,
+) -> None:
+    """The server deleted a session at its customer's request: final.
+
+    Records it in the journal (idempotent: pending batch dropped, session marked
+    done, never staged again) and logs it once: not again in this process, and
+    not after a restart that finds the deletion already recorded. Before this
+    the refusal was "retained for retry" and re-sent every tick for good.
+    """
+    try:
+        changed = journal.mark_deleted(exc.session_id, path) if journal is not None else True
+    except (sqlite3.Error, OSError) as err:
+        # Called from an `except` clause, where a second error would escape the
+        # loop and end the daemon. The journal already refuses the session
+        # (`ensure`/`deliver` marked it); a failed re-mark is retried next time.
+        log.warning("session %s: could not record its deletion yet: %s", exc.session_id, err)
+        changed = False
+    if exc.session_id in noted:
+        return
+    noted.add(exc.session_id)
+    if exc.newly or changed:
+        log.info(
+            "session %s was deleted at your team's request; dropped what was waiting to "
+            "upload and will not send it again",
+            exc.session_id,
+        )
+
+
 def _require_capture_eligible(cwd: Path) -> None:
     if cfg.killswitch_active() or cfg.cwd_disabled(cwd):
         raise DeliveryPending("capture disabled for this source folder; pending bytes retained")
@@ -349,6 +386,10 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     # (session, batch_seq) pairs a 409 already sent to reconciliation this run:
     # one receipts lookup per batch, not one per tick for a lasting conflict.
     reconciled_conflicts: set[tuple[str, int]] = set()
+    # Sessions the server deleted at the customer's request, logged once each.
+    # Also the only record of one when the refusal came before a journal
+    # existed to hold it (a 410 on this daemon's very first receipts read).
+    deleted: set[str] = set()
     empty_ticks = 0
     # The Probe daemon worker rides this process's lifecycle as a child; see
     # companion_supervisor.py. Polled every tick and every few seconds of the
@@ -371,7 +412,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                 continue
             try:
                 sent_bytes = 0
-                if journal is None or journal.get(c.session_id) is None:
+                if c.session_id not in deleted and (
+                    journal is None or journal.get(c.session_id) is None
+                ):
                     provenance = validate_identity(c.transcript_path, wire.source, c.session_id)
                     remote = wire.receipts(c.session_id)
                     journal = journal or Journal(wire.base_url, remote["customer_id"], wire.source)
@@ -385,7 +428,13 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                         provenance=provenance,
                         cwd=str(c.cwd),
                     )
-                if stopping:
+                if journal is None:
+                    # Only after the server refused this daemon's own session
+                    # before any journal existed: nothing here to drain.
+                    raise _NothingToDrain
+                if journal.is_deleted(c.session_id):
+                    deleted.add(c.session_id)
+                if stopping and c.session_id not in deleted:
                     journal.ensure(
                         c.session_id,
                         c.transcript_path,
@@ -396,7 +445,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                     )
                     journal.update(c.session_id, finalize_requested=True)
                 # Recover only sessions with durable consent/capture ownership.
-                states = journal.sessions()
+                # A session the server deleted is done: it never takes a slot.
+                states = [state for state in journal.sessions() if not state.get("deleted")]
                 current = [state for state in states if state["session_id"] == c.session_id]
                 # Stopping drains this session only: SessionEnd waits for this
                 # pass, and the other sessions' backlog is not the agent's exit.
@@ -463,6 +513,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                                 continue
                             sent_bytes += len(body)
                         journal.release_snapshot(state["session_id"])
+                    except SessionDeleted as exc:
+                        _settle_deleted(journal, exc, deleted)
                     except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
                         journal.update(state["session_id"], error=str(exc))
                         log.warning("session %s retained for retry: %s", state["session_id"], exc)
@@ -472,7 +524,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                     gaps = [
                         gap
                         for gap in reconcile.find_gaps(storage, now=int(time.time()))
-                        if journal.get(gap.session_id) is None
+                        if journal.get(gap.session_id) is None and gap.session_id not in deleted
                     ]
                     limit = reconcile.MAX_BACKFILL_FILES_PER_SWEEP
                     start = (
@@ -500,6 +552,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                                 provenance=provenance,
                                 cwd=source_cwd,
                             )
+                        except SessionDeleted as exc:
+                            _settle_deleted(journal, exc, deleted, gap.path)
                         except (
                             DeliveryPending,
                             ReconciliationRequired,
@@ -507,6 +561,10 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                             sqlite3.Error,
                         ) as exc:
                             log.warning("reconcile %s pending: %s", gap.session_id, exc)
+            except _NothingToDrain:
+                pass
+            except SessionDeleted as exc:
+                _settle_deleted(journal, exc, deleted, c.transcript_path)
             except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
                 log.warning("capture pending; source and queue retained: %s", exc)
             if stopping:

@@ -177,6 +177,30 @@ def redaction_notice(storage: Storage, *, clear: bool = True) -> str:
     )
 
 
+#: Meta key marking a session the server deleted at its customer's request.
+DELETED_SESSION_KEY_PREFIX = "deleted_session:"
+
+
+def deleted_session_key(session_id: str) -> str:
+    return DELETED_SESSION_KEY_PREFIX + session_id
+
+
+def session_deleted(resp: httpclient.Response, session_id: str | None = None) -> bool:
+    """The server's final "this session was deleted" (410, reason session_deleted).
+
+    The same test the protocol-2 journal settles on (`session_journal.
+    deleted_response`, imported here only when a 410 arrives so the outbox
+    does not load the journal): matched on the body's reason, and on the
+    session it names, so only the server's own statement about THIS session
+    drops its queued batches.
+    """
+    if resp.status != 410:
+        return False
+    from tap.session_journal import deleted_response
+
+    return deleted_response(resp.status, httpclient.parse_json(resp), session_id)
+
+
 def enqueue(
     *,
     storage: Storage,
@@ -186,6 +210,9 @@ def enqueue(
     body: bytes,
     now: int,
 ) -> None:
+    if storage.get_meta(deleted_session_key(session_id)):
+        # Deleted at the customer's request: final, nothing of it is spooled.
+        return
     _record_redactions(storage, body)
     storage.enqueue_batch(
         session_id=session_id,
@@ -238,6 +265,18 @@ def drain_once(
     if resp.classification == httpclient.Classification.SUCCESS:
         storage.mark_success(row.id)
         storage.set_meta("last_successful_post_at", str(now))
+        return True
+    if session_deleted(resp, row.session_id):
+        # Final for the whole SESSION, not only this batch: the server refuses
+        # every later byte of it. Drop all it has queued and spool no more.
+        dropped = storage.drop_session_batches(row.session_id)
+        storage.set_meta(deleted_session_key(row.session_id), str(now))
+        log.info(
+            "outbox: session %s was deleted at the customer's request; dropped %d queued "
+            "batch(es), none will be sent again",
+            row.session_id,
+            dropped,
+        )
         return True
     if resp.classification == httpclient.Classification.POISON:
         # Any non-401 4xx: 400/404 malformed/unroutable, 403 = the backend

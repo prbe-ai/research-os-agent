@@ -4,6 +4,8 @@ Old tap processes cannot enumerate this namespace. One SQLite transaction owns
 the reservation cursor, retained-event ordinal and pending body. The network is
 outside the transaction. Acknowledgement and retiring pending bytes are atomic.
 Pending bodies are never evicted on capacity pressure, authorization or poison.
+The one exception is final by construction: the server saying the session was
+deleted at its customer's request (`SessionDeleted`, `Journal.mark_deleted`).
 """
 
 from __future__ import annotations
@@ -111,6 +113,60 @@ class DeliveryPending(RuntimeError):
         super().__init__(message)
         self.retryable = retryable
         self.safe_message = message if safe_message is None else safe_message
+
+
+#: How the server says a session was deleted at its customer's request (the
+#: engine's `POST /api/session-deletions`, passed through unchanged by the
+#: gateway `app/ingestion/sessions_router.py`): HTTP 410 with
+#: {"detail": {"reason": "session_deleted", ...}} from the upload door, and
+#: `state: "deleted"` from the receipts read. Both are FINAL: the engine refuses
+#: every later byte of that session, forever.
+DELETED_STATUS = 410
+DELETED_REASON = "session_deleted"
+DELETED_STATE = "deleted"
+
+
+class SessionDeleted(DeliveryPending):
+    """The server deleted this session at its customer's request. Final.
+
+    Raised from a `Journal` method, the journal has already dropped the
+    session's pending batch and snapshot and marked it done
+    (`Journal.mark_deleted`), so nothing stages or sends it again. Raised from
+    `Wire.receipts`, nothing is recorded yet: the caller marks the journal it
+    holds (`mark_deleted` is idempotent). It subclasses DeliveryPending, never
+    retryable, only so a caller that does not know it still contains it;
+    callers catch it first and log it once. Retrying it was the bug: the upload
+    was refused before a byte was stored, every tick, for as long as the daemon
+    ran.
+    """
+
+    def __init__(self, session_id: str, *, newly: bool = True):
+        super().__init__(
+            f"session {session_id} was deleted at the customer's request; "
+            "its pending upload was dropped and it will not be sent again",
+            retryable=False,
+            safe_message="session was deleted at the customer's request; it is not uploaded",
+        )
+        self.session_id = session_id
+        #: False when this journal had already recorded the deletion, so a
+        #: caller that logs it says so once, not once per process start.
+        self.newly = newly
+
+
+def deleted_response(code: int, body: object, session_id: str | None = None) -> bool:
+    """Whether an HTTP answer is the server's final 'this session was deleted'.
+
+    Matched on the body's reason as well as the status: only the server's own
+    statement may make this client drop a session's data. With `session_id`,
+    a statement naming ANOTHER session is not one about this session.
+    """
+    detail = body.get("detail") if isinstance(body, dict) else None
+    return (
+        code == DELETED_STATUS
+        and isinstance(detail, dict)
+        and detail.get("reason") == DELETED_REASON
+        and (session_id is None or detail.get("session_id") in (None, session_id))
+    )
 
 
 def _validate_history(state: dict, expected: tuple[int, str] | None) -> None:
@@ -281,6 +337,8 @@ class Wire:
         code, body = self._request(
             f"/ingest/v1/sessions/{self.source}/{session_id}/receipts{query}"
         )
+        if deleted_response(code, body, session_id):
+            raise SessionDeleted(session_id)
         if code != 200 or body.get("protocol_version") != 2:
             raise DeliveryPending(
                 f"protocol 2 receipts unavailable (http {code}); nothing newly staged",
@@ -412,6 +470,64 @@ class Journal:
             (state["session_id"], json.dumps(state, separators=(",", ":"))),
         )
 
+    def is_deleted(self, session_id: str) -> bool:
+        state = self.get(session_id)
+        return bool(state and state.get("deleted"))
+
+    def mark_deleted(self, session_id: str, path: Path | None = None) -> bool:
+        """The server deleted this session: forget everything still owed to it.
+
+        One transaction drops the pending batch and marks the session done
+        (`deleted`, finalized, history complete, no live capture), so no path
+        stages or sends it again; the local snapshot copy of its source is
+        removed after the commit. Idempotent. Returns True only on the call
+        that changed something, so a caller can log it once. The researcher's
+        own transcript file is theirs and is never touched.
+        """
+        with self.transaction():
+            state = self.get(session_id)
+            dropped = self.conn.execute(
+                "DELETE FROM pending WHERE session_id=?", (session_id,)
+            ).rowcount
+            if state is not None and state.get("deleted") and not dropped:
+                return False
+            snapshot = (state or {}).get("snapshot_path")
+            if state is None:
+                state = {
+                    "session_id": session_id,
+                    "stream_id": str(uuid.uuid4()),
+                    "source_byte_end": 0,
+                    "source_line_end": 0,
+                    "event_end": 0,
+                    "last_seq": -1,
+                    "prefix_sha256": EMPTY_HASH,
+                    "path": str(path) if path is not None else "",
+                    "provenance": {},
+                    "digest_state": "not_requested",
+                }
+            state.update(
+                deleted=True,
+                finalized=True,
+                historical_complete=True,
+                live_enabled=False,
+                finalize_requested=False,
+                snapshot_path=None,
+                error=None,
+            )
+            self._save(state)
+        if snapshot:
+            Path(snapshot).unlink(missing_ok=True)
+        return True
+
+    def _refuse_deleted(self, session_id: str) -> None:
+        if self.is_deleted(session_id):
+            raise SessionDeleted(session_id, newly=False)
+
+    def _deleted_remote(self, session_id: str, remote: dict, path: Path | None = None) -> None:
+        """Settle a receipts answer that says the server deleted the session."""
+        if remote.get("state") == DELETED_STATE:
+            raise SessionDeleted(session_id, newly=self.mark_deleted(session_id, path))
+
     def pending(self, session_id: str) -> bytes | None:
         row = self.conn.execute(
             "SELECT body FROM pending WHERE session_id=?", (session_id,)
@@ -502,6 +618,10 @@ class Journal:
             raise ReconciliationRequired(
                 "refusing adoption across transcript destination identities"
             )
+        # Final, and before anything else is looked at: a deleted session is
+        # never reserved, snapshotted or staged again, whatever else is true.
+        self._deleted_remote(session_id, remote, path)
+        self._refuse_deleted(session_id)
         if remote.get("state") == "legacy":
             raise ReconciliationRequired(
                 "legacy transcript coverage is unverified; reconcile before replay"
@@ -741,6 +861,8 @@ class Journal:
             state = self.get(session_id)
             if state is None:
                 raise ReconciliationRequired("session has no validated source reservation")
+            if state.get("deleted"):
+                raise SessionDeleted(session_id, newly=False)
             _validate_history(state, expected_history)
             if not state.get("cwd") and cwd and Path(cwd).is_absolute():
                 state["cwd"] = cwd
@@ -945,11 +1067,14 @@ class Journal:
         # A compatible drainer may already have acknowledged the staged body
         # and reserved a successor. Replay the caller's immutable bytes only;
         # acknowledge's cursor guard leaves that newer reservation untouched.
+        self._refuse_deleted(session_id)
         body = expected_body if expected_body is not None else self.pending(session_id)
         if body is None:
             return False
         _require_safe_pending(body)
         code, result = wire.post(body)
+        if deleted_response(code, result, session_id):
+            raise SessionDeleted(session_id, newly=self.mark_deleted(session_id))
         if code != 202:
             message = f"http {code}: {result.get('detail', 'transcript delivery pending')}"
             self.update(session_id, error=message)
@@ -995,7 +1120,12 @@ class Journal:
             return "nothing pending"
         payload = json.loads(body)
         sequence = payload["batch_seq"]
-        remote = wire.receipts(session_id, after=sequence - 1, limit=1)
+        try:
+            remote = wire.receipts(session_id, after=sequence - 1, limit=1)
+        except SessionDeleted:
+            self.mark_deleted(session_id)
+            raise
+        self._deleted_remote(session_id, remote)
         stream = remote.get("stream") or {}
         receipt = next(
             (item for item in remote.get("receipts") or [] if item.get("batch_seq") == sequence),

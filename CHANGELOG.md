@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A session your team had deleted is no longer re-sent forever** (tap: needs its next version).
+  When a customer asks us to delete a captured session, the server refuses it for good: 410
+  `session_deleted` on upload, `state: "deleted"` on the receipts read. The tap used to file that
+  under "retained for retry" and re-send it every tick for as long as its daemon ran. Now the
+  transcript journal treats either answer as final: it drops what was waiting to upload for that
+  session, deletes its local snapshot copy (never your own transcript file), marks the session done
+  so nothing stages it again, and logs it once. The same holds for the old outbox (every queued
+  batch of the session is dropped and no more are spooled), and `probe backfill`'s session import
+  counts such a session as "deleted at your team's request (not uploaded)" instead of a failure.
+  Its journal is the one the tap reads, so a deletion the import meets is also final for capture.
+  Only the server's own statement about that session counts: a 410 for another reason, or one
+  naming another session, keeps the batch for a retry as before.
+
 ## 0.182.2
 
 - **Four more reads are no longer refused as writes.** In `read` and `daemon`, the write gate and
