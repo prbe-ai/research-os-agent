@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **Each process writes its run under its own lease (SDK reliability 2.8).** Against a server that
+  declares `run_writer_leases`, `probe.init()` (and `probe exec`, and every rank that joins through
+  `PROBE_RUN_ID`) registers a lease for its process and beats that lease instead of the run-level
+  heartbeat: every wait jittered by +-20% (the first one too, so hundreds of ranks started together
+  never beat together; ranks of a large job also spread their attach by up to 2 s), carrying a
+  progress counter (every `log()`/`step()` row, span and artifact upload; new `run.progress()` for
+  loops that log rarely) with its idle time, a rolling 24 h p99 and the longest gap of the whole
+  run, for the coming stall detector. `finish()` releases the lease with the run's verdict instead
+  of setting the status itself, and the server closes the run once its leases say the work ended,
+  with the worst verdict of every writer: a rank that failed is no longer hidden by the owner
+  finishing `completed`, and the first rank to exit no longer closes the run for everyone. A job
+  that joined a run no finalizing launcher will close holds an owner lease and sends no status of
+  its own. A deferred close queues its verdict first, then keeps its lease draining (not beating)
+  for up to an hour with one bounded beat. A release names its writer, so a lease no beat ever
+  registered still counts. Every request carries `X-Probe-Leases: 1`. A run that is not on leases --
+  opened before this server version or by an older client, joined by one, or with the server's kill
+  switch off -- is closed exactly as before, with a status write, and the lease is then released. A
+  writer whose run a wrong death report crashed heals under its own lease, and is told when its
+  lease was reported gone. Behaviour change on such servers: a non-zero rank's own verdict now
+  counts (worst wins) instead of being ignored. Older servers: unchanged.
 - **A killed or crashed training process shows as `crashed` within seconds.** SIGKILL, the OOM
   killer, a segfault or an unhandled SIGTERM runs no Python, so the run used to read `running` until
   the server's 15-minute reaper. The output-capture helper (which outlives the process) now notices
