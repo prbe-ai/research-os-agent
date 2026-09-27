@@ -152,6 +152,14 @@
   Stamps strictly increase within a process, so a frozen clock (freezegun) or one stepped backwards
   cannot merge two `step=None` points into one. The stamps skip the credential scrubber (a value
   that is exactly an ISO-8601 timestamp cannot hold a secret), so `log()` costs what it did before.
+- **An unsupported Probe install says so, once.** When the server answers that this
+  `probe-research` is older than the oldest release it supports, the SDK and CLI print one line on
+  stderr per process, naming your version, the minimum, and how to upgrade: `probe update` from
+  the CLI, `pip install -U probe-research` from a script that imports `probe`.
+  Nothing else changes: requests still go through. A route the server has retired now raises
+  `ClientTooOldError` (with `.min_version`) instead of a bare `RosError`: `probe.init()` raises it
+  as-is, and a queued write that hits one is dead-lettered instead of retried. The trash's 410 is
+  unaffected.
 
 ## 0.188.0
 
