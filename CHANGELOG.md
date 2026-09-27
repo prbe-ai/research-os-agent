@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A refused upload no longer stops a run's other writes (#2073).** An upload goes to a
+  presigned address that carries its own signed permission and no login. When the server at that
+  address refused it (401 or 403), the SDK read the refusal as a refused login and held every
+  queued write of the run: on a self-hosted server that pointed uploads at the wrong address, 29%
+  of a run's points arrived and the run was never closed. Such a refusal now fails only that
+  upload. It is recorded on the run as a failed upload, the other writes keep going, and the
+  error says to check the server's `public_base_url`. It no longer tells the Probe daemon that its
+  key was refused. A network failure of an upload held in memory no longer puts the upload
+  address's signature in its error.
 - **Delivery trouble is said in the training process while it happens.** The background worker
   writes only to `drainer.log`, so a write the server rejected for good (a dead letter) or a
   refused credential surfaced at `finish()`, hours later, while a dropped write warned once per
