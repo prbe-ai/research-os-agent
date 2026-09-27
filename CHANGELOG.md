@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- **`PROBE_MODE=offline` and `probe sync` (plan 2.12).** `probe.init(mode="offline")` trains
+  with NO network call: the run gets a local id (`local:<creation_key>`) and everything it
+  logs -- metrics, spans, artifacts (staged, so the folder is self-contained), config updates
+  (`update_config`, `run.config.x = ...`, `run.config.update(...)`) and its close, with the
+  client's own start and end times -- queues in `<outbox>/offline/<key>/` (the outbox root,
+  also under torchrun/SLURM), which no background worker touches and the 500k op cap does not
+  cut short (the free-space floor still applies; the close is always queued, and writes the
+  floor refused are counted on it as `probe_finish.dropped_writes`). `probe sync [DIR]`
+  delivers it later with the current login (from any machine: a copied folder works; it also
+  looks in every rank's `rank-*/offline/`); `probe sync --list` shows what is unsynced. A run
+  whose create is refused says why and names the fix: `probe sync <dir> --project <slug>` (its
+  recorded project is gone) or `--on-conflict supersede` (another run holds its `external_id`:
+  it opens as `<id>-r2`, linked to that run, a dead one tagged `superseded`, as online). Those
+  flags change only a run whose folder you name or whose create was refused. Exit 0 when
+  everything found is synced and nothing was dropped while recording, 2 when not, 1 when
+  nothing was found (with where it looked, on stderr). A run synced twice, or from two copies,
+  is one run (its creation key). `probe sync` refuses a server that predates offline sync, a
+  folder recorded against another server URL, and another team -- the team is known only if
+  the recording machine had reached the API under that credential; a folder whose team is
+  unknown syncs with a warning on stderr and in the JSON (`metadata.offline_owner:
+  "unknown"`) and is refused under another login context. `--allow-mismatch` overrides the
+  URL and context checks. `PROBE_INIT_FALLBACK=offline` records offline when an online
+  `init()` runs out of its budget: a create it sent without getting a run back keeps its key,
+  and `probe sync` sends the offline create first, replaying the sent request only if the
+  server says that key already made a run -- so a create that landed is found, not
+  duplicated, and one that did not (a gateway 503, a refused connection) becomes a real
+  offline run with its real start. The fallback does not engage when the create came back
+  before init failed, or for an `external_id` on the default `on_conflict` (online that
+  resumes a crashed run; offline cannot): pass `on_conflict="supersede"` or `"error"`. If an
+  online create had landed, the server reads that run `crashed` from about 15 minutes after
+  init until the sync, and queues a crash notice (the 3 h crash-email floor holds the email
+  back). Not yet offline: code snapshot, output capture, read capture and hardware metrics
+  (skipped, and named on stderr and in `metadata.offline.skipped`). A recording killed before
+  its close reads `running` after sync until the server's 7-day sync grace ends. Each write
+  is one op file and, at sync, one request (a 1M-step run is ~1M files and ~1M POSTs): the
+  coalesced drain (plan 1.2) does not merge an offline run's writes yet.
 - **A second `probe.init()` closes the first run instead of abandoning it.** Before, the first run
   was left open with nothing bound to it: the reaper later called it `crashed`, and while both were
   open neither swept its output files. `probe.init(reinit=...)` takes W&B's values, and the default
