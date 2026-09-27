@@ -56,6 +56,33 @@
   them, so `--relation supersedes` and a project or experiment end failed locally. The model is
   regenerated from the server's lineage changes only (a project end takes `derived_from`,
   `supersedes` or `informed_by`); the help lists the `project` type.
+- **`probe edge add` links experiments and projects by slug.** `--source`/`--target` take
+  `experiment:<slug>` and `project:<slug>` (or `id:<uuid>`, as `probe run move --to` does), so one
+  experiment can be linked to another, a project to a project, or a run to an experiment. Both are
+  sent as a `project` end: an experiment is a project. The help lists every end type and every
+  relation, `supersedes` and `informed_by` included.
+- **The MCP `entity(view="lineage")` says where things came from, on projects too.** On a project
+  or an experiment it returns its own links in and out (the stored ones, and "built on" derived
+  from its runs' reads, marked `derived: true`), its `origin` (a project it builds on or replaces,
+  else its parent; none for a top-level project) and its children -- sub-projects, experiments,
+  groups, runs -- each with its own `origin`. A run's lineage adds `origin` (its first parent, else
+  what it built on, else its group, experiment or project); a file's carries the run that wrote
+  it. An experiment's links among its runs and files, which the view always listed, are now under
+  `run_edges`. The links come on the first page only, at most 20 per list; anything cut (links past
+  that, children past the server's 200, "built on" read over only the newest runs) is flagged
+  `*_truncated` and the read says `partial` (`lineage_beyond_window`). `probe experiment edges`
+  lists the whole graph among an experiment's runs. Ships with the MCP deploy.
+- **`track-work` teaches how to link work, and stops teaching hand-written file links.** The SDK
+  records what a run reads and writes, so the skill no longer tells agents (or the Probe daemon,
+  which follows the same text) to add `consumes`/`produces` by hand, except for what the SDK
+  cannot see: a read by non-Python code or a C reader, or a file uploaded above the run that
+  wrote it. A new "Linking" section says to read the facts first (`probe run inputs`,
+  `probe run upstream`), to label a fact only when the session says what it was
+  (`branched_from`, `evaluates_on`, `retried_from` plus `supersedes`), to add a link no fact shows
+  only when the session's own words name its target, with `--reason` and `--evidence`, to link at
+  the level the session talks about (run, experiment or project, and `informed_by` a paper), and
+  never on similarity alone. The data-processing recipe runs the step under `probe exec` instead of
+  writing its edges by hand.
 
 ## 0.194.0
 

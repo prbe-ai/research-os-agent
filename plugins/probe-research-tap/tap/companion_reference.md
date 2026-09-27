@@ -25,7 +25,8 @@ probe group create EXPERIMENT_ID --name NAME [--kind K] [--spec JSON|@FILE] | li
 probe trial list RUN | get TRIAL | set TRIAL --name
 probe workspace create SLUG [--name] [--use] | list | get | rename | use | delete ID --yes
 probe shared add PATH | list | download | share ARTIFACT_ID [--replace] | unshare ARTIFACT_ID | delete
-probe edge add --source run:A --target artifact:B --relation R | remove EDGE_ID
+probe edge add --source TYPE:REF --relation R --target TYPE:REF --reason "..." [--evidence EVENT_ID] | remove EDGE_ID
+probe run inputs RUN | upstream RUN [--depth N] | input dismiss|pin|reset RUN PATH
 probe project reference add --to PROJECT | remove
 probe project code attach OWNER/REPO | detach | list
 ```
@@ -148,7 +149,7 @@ An artifact is a name with immutable versions, each pinned from an upload.
 | read the version chain | `probe artifact versions ARTIFACT_ID` |
 | pin a new version | `probe artifact version-add ARTIFACT_ID --from-artifact SOURCE_ID --label L` |
 | who depends on this | `probe artifact pin-impact ARTIFACT_ID` |
-| record producer lineage | `probe edge add --source run:RUN --target artifact:ID --relation produces` |
+| which run wrote it, which runs read it | `entity(refs=["artifact:ID"], view="lineage")`; the SDK records both for the runs it watches |
 
 ### Big files
 
@@ -328,15 +329,14 @@ One project-direct run per script or stage VERSION, with a deterministic
 `--external-id`:
 
 ```
-probe run start --project PROJ --external-id clean-structures-v2
-probe artifact add $RUN clean_structures.py --kind script
-probe edge add --source run:$RUN --target artifact:RAW_ID --relation consumes
-probe edge add --source run:$RUN --target artifact:CLEAN_ID --relation produces
-probe run end $RUN --status completed
+probe exec --project PROJ --external-id clean-structures-v2 -- python clean_structures.py
+probe run inputs RUN     # what it read, and the stored file each read matched
 ```
 
-A FAILED step resumes on retry with the same id. A COMPLETED one refuses it -
-bump the version. Thresholds chosen and rows deleted go in the run's notes:
+The run records the files it reads and the ones it writes in its folder, and
+the server matches each read to the run that wrote those bytes: no `edge add`
+for either. A FAILED step resumes on retry with the same id: the same run,
+reopened, so no `retried_from`. A COMPLETED one refuses it - bump the version. Thresholds chosen and rows deleted go in the run's notes:
 deletions are provenance, not housekeeping.
 
 ### Provisioning runs
@@ -353,7 +353,8 @@ The error text goes in the run's notes.
 it against the training run, which points back with `probe link $TRAIN --set
 provisioned_by=$INFRA_RUN`. **`foreign_keys` is ONLY for what the lineage
 vocabulary cannot say** (`consumes` `produces` `evaluates_on` `forked_from`
-`resumed_from` `retried_from` `branched_from` `promoted_to` `derived_from`) -
+`resumed_from` `retried_from` `branched_from` `promoted_to` `derived_from`
+`supersedes` `informed_by`) -
 a relaunch after a crash is `run child --relation retry`, not a key. Attempts
 cannot share a run group (groups are experiment-anchored; a project-direct run
 422s on `group_id`): use a shared key (`--set campaign=h100-hunt`) plus a

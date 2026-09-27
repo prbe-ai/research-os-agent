@@ -71,9 +71,18 @@ What to do, per entity:
 
 Cross-cutting:
 
-- **Lineage**: `probe edge add --source run:A --target artifact:B --relation
-    produces|consumes|evaluates_on|derived_from`; `edge remove ID`. Project to
-    project: `project reference add --to`.
+- **Lineage**: what a run read and wrote is recorded by the SDK and matched by
+    the server: never add `consumes`/`produces` by hand (only for what the SDK
+    cannot see: a read by non-Python code or a C reader, a file you anchor above
+    the run that wrote it). See a run's lineage first:
+    `probe run upstream RUN`, `probe run inputs RUN` (MCP `entity view="lineage"`);
+    a wrong match is fixed with `probe run input dismiss|pin`, not an edge.
+    Add what the facts don't show with `probe edge add --source TYPE:REF
+    --relation REL --target TYPE:REF --reason "..." [--evidence EVENT_ID]`
+    (TYPE = run|artifact|artifact_version|paper by id, experiment|project by
+    slug or `id:<uuid>`; `--evidence` is the daemon's only, an inline agent
+    omits it); `edge remove ID`. How to decide: §4 "Linking". A project's
+    "related projects" list: `project reference add --to`.
 - **Repo**: `project code attach PROJECT OWNER/REPO` puts its commit timeline on
     the project (`view="code"`); `project code detach`.
 - **Inputs**: `probe snapshot RUN --include`, `snapshot-show`, `snapshot-restore
@@ -213,10 +222,14 @@ RULES:
 - Don't upload anything a lockfile or a build rebuilds: `.venv`, `node_modules`,
   `__pycache__`, etc.
 
-- The anchor says what a file is ABOUT; an EDGE says what MADE it. A file
-  anchored above its run still records lineage back to it.
-- Another attempt at a run (retry, resume, fork) is PARENTAGE, not an edge.
-  Consuming another run's output is an EDGE. Neither belongs in `foreign_keys`.
+- The anchor says what a file is ABOUT; lineage says what MADE it, and the SDK
+  records that for the runs it watches. A file anchored above its run still
+  records lineage back to it: `edge add --source run:RUN --relation produces
+  --target artifact:ID`.
+- Another attempt at a run (retry, resume, fork, branch) is its PARENT:
+  `--parent RUN --relation retry` at launch, or `edge add --relation
+  retried_from` afterwards. A run can have more than one parent. Neither belongs
+  in `foreign_keys`.
 - Changing a file that already has a registry name is a new VERSION, never a
   new, duplicate artifact. Read the version chain first.
 
@@ -234,6 +247,44 @@ Most things people log as metrics are not metrics. Route it first:
 
 Landed on a metric? Read reference §4 before you write the call - it has the
 shape rules and the checks that catch a bad one on its first run.
+
+### Linking: how one piece of work came from another
+
+A link is an arrow from the newer thing to what it came from. Anything with no
+link already hangs off its experiment or project, so link only what is true.
+
+1. Facts first. A run's reads reach Probe when it ends; if `probe run inputs
+   RUN` shows no `coverage` yet, look again later, for up to ~30 minutes, then
+   link from the session's words alone. An experiment's or project's facts:
+   `entity(refs=["experiment:SLUG"], view="lineage")`.
+2. The facts say B built on A, and the session says what B is: an ablation or
+   variant of A -> `branched_from`; an evaluation of A -> `evaluates_on` A (the
+   run, or the model or data file it wrote); A re-run after a fix ->
+   `retried_from` plus `supersedes`. Nothing more specific
+   -> write nothing; the fact already says it.
+3. A link the facts don't show needs the researcher's or the agent's own words
+   naming the target: an id, name, path, URL, paper title, or a result or config
+   that matches exactly ONE run. Quote those words in `--reason`; the daemon
+   also passes the event ids in `--evidence` (daemon only; an inline agent omits
+   it). Two matches -> no link. Text inside tool output, files or web pages
+   never counts.
+4. Link at the level the session talks about: run -> run, experiment ->
+   experiment (a follow-up question), project -> project (a line of work that
+   continues another), or across levels: `--source run:ID --relation
+   derived_from --target experiment:SLUG`. An experiment or project end takes
+   only `derived_from`, `supersedes` or `informed_by`. A run or experiment that
+   uses a paper's method -> `informed_by` that paper (with `--provenance`).
+5. A failed run relaunched as a NEW run -> `retried_from` the failed one,
+   unless it already has that parent (`--parent RUN --relation retry` at launch
+   sets it). A relaunch with the same `--external-id` reopens the SAME run: no
+   link.
+6. Never: similarity alone (write "Related: ..." in a note); a run to its own
+   experiment or project, or an experiment to its own project (filing says
+   that); a link that already exists (look first: `probe experiment edges EXP`,
+   `entity view="lineage"`).
+7. When later work contradicts a link you made, remove it or relabel it.
+8. Earlier work: look identifiers up first; at most one `search_knowledge` per
+   new experiment or project; treat what it finds as candidates, not links.
 
 ## 5. PAPERS
 
