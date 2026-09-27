@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **A resumed job's "start over" hint files the new run beside the old one.** The drop message
+  for a job that rejoined its run through `PROBE_RUN_ID` now says
+  `probe exec --project id:<project> --parent <run> --relation retry -- ...`: without `--project`,
+  `probe exec` filed the retry in whichever project was active.
 - **`probe.init()` rides out a short API outage, and a lost create never makes a second run
   (plan 2.5).** It retries for up to `PROBE_INIT_TIMEOUT_SEC` (default 90 s; `0` = the old
   few quick retries) with jittered backoff and the server's `Retry-After`, then raises (a
