@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A relaunch's takeover no longer strands, retires or waits on the previous attempt's close.**
+  A relaunch killed hard while it held the previous attempt's queued close aside left it there
+  until another relaunch ran on the same machine -- past the reaper's 15 minutes, so the run read
+  `crashed` and sent a crash email. Now the next outbox drain, or the next client started on that
+  outbox, puts it back at once when its holder's process is gone, and a hold expires in under 10
+  minutes anywhere. A previous attempt that FINISHED (its `completed` close still queued) is no
+  longer continued: the close is delivered and the relaunch refuses like any resume of a
+  completed run (`on_conflict=probe.Rewind(step=N)` still reopens it). And when the server cannot
+  be reached, the relaunch stops delivering the old backlog at the first failure instead of
+  looping for two minutes outside `probe.init()`'s own budget.
 - **`PROBE_MODE=offline` and `probe sync` (plan 2.12).** `probe.init(mode="offline")` trains
   with NO network call: the run gets a local id (`local:<creation_key>`) and everything it
   logs -- metrics, spans, artifacts (staged, so the folder is self-contained), config updates
