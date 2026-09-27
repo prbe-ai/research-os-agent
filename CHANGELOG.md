@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.192.0
+
 - **A `PROBE_TOKEN` job's queued writes go out with its own token (#2035).** On a machine where
   someone had run `probe login`, the outbox worker sent a `PROBE_TOKEN` job's queued writes with
   that stored login instead: in the same team they were written as the other person, and across
