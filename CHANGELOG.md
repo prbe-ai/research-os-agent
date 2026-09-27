@@ -25,6 +25,8 @@
   `PROBE_ARTIFACT_OPAQUE_POLICY=block` and output capture (D12) behave exactly as before. These
   bytes reach object storage before anything scans them: the part PUT is the one byte path without
   the local credential gate; the server inspects a prefix and records what it finds.
+- A script stopped with Ctrl-C exits the way Python normally does again (killed by SIGINT, 130 in
+  a shell) instead of exit code 1; 0.193.0 regression from the delivery report at exit.
 
 ## 0.193.0
 
