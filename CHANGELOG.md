@@ -231,6 +231,35 @@
   per-turn judge (`POST /v1/companion/judge`) and its `PROBE_DAEMON_JUDGE` switch are gone; notes
   are optional.
 
+- **Nested dicts are charted: `probe.log({"eval": {"acc": 0.9}})` writes `eval/acc`.** Before, a
+  nested dict could not be a number, so the whole dict went into the step record and nothing was
+  plotted. Any mapping now flattens to `/` keys (the separator the run page sections panels by),
+  an OmegaConf `DictConfig` too, all at one step; non-numeric leaves land in the step record under
+  their flat key (`eval/text`). Lists are not flattened and an empty dict writes nothing. If you
+  log both `"a/b"` and `{"a": {"b": ...}}`, the explicit `"a/b"` wins, with one warning per key per
+  run. Nesting deeper than 16 levels, or a dict that contains itself, is kept as one step value
+  with a warning. Secrets stay redacted:
+  - A nested field named like a credential (`db.pwd`, `headers.authorization`, `wandb.apikey`) is
+    redacted exactly as it was when the whole dict went to the step record. Numbers are redacted
+    too, except under ordinary-word names (`token`, `secret`, `cookie`, `credential`), where the
+    scrubber keeps a number or plain word, as it always has.
+  - A dict under a credential name (`{"token": {...}}`, a `bytes` key included) is still dropped
+    whole.
+  - A step-record key with a `/` is judged segment by segment, so `tok/pad_token` stays a model
+    setting and `headers/authorization` is redacted even when written flat.
+  - A Hydra/OmegaConf interpolation that would reveal a secret stays its unresolved `${...}` text:
+    one reading the environment (`${oc.env:KEY}`), one naming a credential (`${wandb.api_key}`),
+    and a chain to either, including an alias to a whole credential group (`alias:
+    ${credentials}`, then `auth: ${alias}`) and a secret embedded in a string (`pw=${alias}`,
+    for a secret of 4 characters or more). Other interpolations resolve. A `???` stays `???`.
+
+  A dict keyed by data (`{"per_example_loss": {example_id: v}}`) would mint a series per id. So
+  after 1,000 distinct nested keys in a run, or for a key longer than 256 characters, that
+  top-level value is kept whole in the step record, with one warning. `dimensions` and `labels`
+  are unchanged (still flat maps), and `log_derived` does not flatten. A call with no nested dict
+  sends exactly the bytes it did before. Note: W&B's history uses `.` for nesting, so a run
+  brought in with `probe import wandb` keeps `a.b` keys, which are a different series from `a/b`.
+
 ## 0.188.0
 
 - **`probe.context()` names the batch a crash happened in.** Wrap each batch or sample in
