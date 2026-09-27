@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **Python 3.10 is supported, and every installer now asks for `probe-research[all]`.**
+  `probe-research` installs on Python 3.10 (it required 3.11), for ML images that are still on
+  3.10. `tiktoken` is a tested range (`>=0.8,<0.14`) instead of an exact pin that clashed with
+  other packages. New extras: `cli` (typer, questionary), `mcp` (mcp, anyio, tiktoken) and `all`
+  (both). This release still installs them by default. The next release drops them from the bare
+  install, so a training environment can `pip install probe-research` next to stacks that pin
+  mcp 2.x (vllm 0.30 does). To get ready, `probe update`, `probe daemon install`, the setup
+  wizard and the persistent installer install `probe-research[all]` from now on, and `probe update`
+  keeps what you added to the install (`uv tool install --with ...`, `pipx inject`, other extras).
+  The `npx probe-research` launcher asks for `[all]` from its next published version. If the
+  CLI's or the MCP server's dependencies are missing, `probe` and `probe-research-mcp` print the
+  command to install them instead of a traceback. The SDK itself (`import probe`, `probe.init()`,
+  logging, the run lock and delivery) no longer loads the CLI at all.
 - **A resumed job's "start over" hint files the new run beside the old one.** The drop message
   for a job that rejoined its run through `PROBE_RUN_ID` now says
   `probe exec --project id:<project> --parent <run> --relation retry -- ...`: without `--project`,

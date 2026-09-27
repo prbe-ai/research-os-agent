@@ -815,8 +815,12 @@ _ASCII_LOWER = {c: c + 32 for c in range(ord("A"), ord("Z") + 1)}
 @functools.lru_cache(maxsize=1)
 def _quick_reach() -> dict[re.Pattern[str], tuple[tuple[str, ...], int]]:
     """Each quick-check pattern: its keywords and how far past one to read."""
-    from re import _constants as sre_constants  # type: ignore[attr-defined]
-    from re import _parser as sre_parse  # type: ignore[attr-defined]
+    try:  # Python 3.11+ names
+        from re import _constants as sre_constants  # type: ignore[attr-defined]
+        from re import _parser as sre_parse  # type: ignore[attr-defined]
+    except ImportError:  # Python 3.10 (plan 2.11): only the top-level modules exist
+        import sre_constants
+        import sre_parse
 
     def tail(pattern: re.Pattern[str]) -> int:
         width = sre_parse.parse(pattern.pattern, pattern.flags).getwidth()[1]
