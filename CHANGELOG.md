@@ -79,6 +79,14 @@
   server that cannot be reached at all (a connect failure), or that stops answering twice in one
   pass, still stops the pass for everyone. A parked run's queued writes are not re-read every
   pass, and a run whose writes another process delivered is forgotten, so waiting costs no CPU.
+- **An outbox shared by two SDK versions no longer dead-letters the newer one's writes.** A
+  detached worker keeps delivering for as long as the queue has work, through an upgrade, and it
+  dead-lettered any queued write of a kind it did not know. Each worker now advertises the kinds
+  it delivers (`.worker-caps.json` beside its lease); a newer SDK checks before queueing a new
+  kind, and if the live worker lacks it, asks it (`.worker-stop`) to exit after its current pass
+  so the next write starts a worker of the newer version. A worker that meets a kind it does not
+  know now holds it in its run's queue, unattempted, instead of dead-lettering it, so a rollback
+  strands nothing either.
 
 ## 0.190.0
 
