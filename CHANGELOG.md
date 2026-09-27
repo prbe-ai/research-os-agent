@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **`log_artifact` stores files over 64 MiB (plan item (g), 2/2 SDK).** Against a server that
+  declares `artifact_multipart`, a file over the 64 MiB inspection limit is no longer only a local
+  pointer: `log_artifact` STAGES it and returns at once, and the outbox uploads it in parts, 4 at a
+  time, straight to object storage. Staging is a hardlink into the outbox on the same filesystem
+  (a checkpoint rotated by rename keeps its bytes), else a reflink or copy, and only while free
+  space above the outbox's floor covers it and every upload still waiting; otherwise the old
+  reference row and warning. One upload moves at a time (the oldest), after every other write in
+  each pass and in a lane of its own, so metrics never wait behind a checkpoint; the staged copy
+  is hashed on a background thread; a restarted worker sends only the parts the server is missing;
+  an upload the server dropped while the machine was away starts again. A staged copy rewritten in
+  place aborts the upload and records a reference row, as does a server-side sha256 mismatch; the
+  copy is deleted once verified, on failure, or after 7 days. The op lives in a queue of its own
+  (`<outbox>/multipart/ops/`) that no earlier release reads, so an older worker sharing the outbox
+  never holds or drops it. `finish()` does not wait when a detached worker on durable disk will
+  carry the upload (`N artifact(s) still uploading in the background`); when nothing would (a
+  client that sends its own writes, a pod or Modal disk) it sends them itself and records whatever
+  did not make it as a reference row before returning. A part URL the store refuses (#2075's
+  `UploadRefused`) is retried with fresh URLs, and after three refused slices the upload is recorded
+  as a reference row. Only a server that ADVERTISES the feature gets a multipart upload: today's
+  prod (doors off), a features probe that fails, an older server, an offline run, `strict` (sync),
+  `PROBE_ARTIFACT_OPAQUE_POLICY=block` and output capture (D12) behave exactly as before. These
+  bytes reach object storage before anything scans them: the part PUT is the one byte path without
+  the local credential gate; the server inspects a prefix and records what it finds.
+
 ## 0.193.0
 
 - **Hugging Face Trainer callback: `probe.integrations.huggingface.ProbeCallback`.** After
