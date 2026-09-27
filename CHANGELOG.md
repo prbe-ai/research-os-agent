@@ -2,6 +2,52 @@
 
 ## Unreleased
 
+- **A write Probe refused now fails the command.** Every `probe` write used to swallow the server's
+  answer: a refusal (a run that does not exist, an invalid value, a second parent) was queued,
+  printed `null` and exited 0, and the Probe daemon filed it as recorded. Now a refusal (any 4xx)
+  exits 1 with the server's message. A write Probe did not answer (no connection, a 5xx, a login
+  it refused for now) is still kept in the outbox and sent later: the command exits 0, prints
+  `probe: queued: <METHOD> <path> ...` on stderr (the first one at once, then at most one line per
+  5 minutes with the running count) and, where it printed JSON, `{"queued": true, "count": N,
+  "writes": [...]}` instead of `null`; `probe log` and a run's `artifact add` say `(queued)`, not
+  `(delivered)`. A write the outbox could not keep either prints `probe: NOT queued: ...` and exits
+  1. The daemon's logbook files a queued write as `queued`, under "Not recorded yet" in
+  `session(op=status)`, never under "Recorded" (the outbox delivers it by itself; the daemon is
+  told not to run it again). The daemon may no longer pass `--async`, which would queue a write
+  before Probe answers. `probe exec` and the SDK are unchanged: a refused write never stops a
+  training job, and nothing is kept per failed write.
+- **`probe edge add` says when a link already exists, and can cite the session.** Adding the same
+  edge twice prints `{"already_linked": true, "id": "<edge id>"}` and exits 0 (with `"applied":
+  false` and a note on stderr when this call's `--reason`, `--evidence` or `--provenance` could not
+  be applied to the edge that was there); any other refusal exits 1. `--evidence <event-id>`
+  (repeatable) stores the transcript events a link rests on in `meta.evidence` as `{session, event}`
+  pairs: the daemon's session (`PROBE_DAEMON_SESSION`), else the coding agent's. With neither it is
+  a usage error (exit 2): an event id alone names nothing anyone can open.
+- **What a run read, from the CLI.** `probe run inputs <run>` lists the files a run read, each with
+  the run and file version that wrote the same bytes, whether a person dismissed or pinned that
+  match, and what the recorder could see (`coverage`, including `truncated`). `probe run upstream
+  <run> [--depth N]` walks what it built on, up to 5 hops back. `probe run input dismiss|pin|reset
+  <run> <path>` corrects one read's match (`pin` takes `--version <id>`). The daemon may run the two
+  reads but never the corrections, and the tracking switch lets the reads through in every state
+  that allows reads.
+- **The automatic retry link also needs the same launch.** With `PROBE_AUTO_RETRY_LINEAGE` on (still
+  off by default), a run is linked as a retry of the run before it only when it also runs the same
+  entrypoint, arguments and folder that run recorded. Before, a different script with the same
+  config could match.
+- **The Probe daemon sees what a tool call pointed at.** A call that runs no shell command (a page
+  fetched, a file read, a search, an MCP call) reached the daemon as its tool name alone. It now
+  carries a one-line summary of its key arguments (`url=...`, `file_path=...`, `query=...`), shown in
+  the daemon's view of the chat and found by its session search, for Claude Code, Codex and pi.
+- **The Probe daemon removes its own links without asking.** Before removing a lineage link it reads
+  it (`GET /v1/edges/{id}`, which ships with the server's link stamp); a link Probe says this
+  researcher's daemon made (`inferred`, via the daemon, by this researcher) is removed at once, and
+  its logbook entry says `own link (L9)`. Any other link -- a person's, another researcher's
+  daemon's, one it cannot read, any link on a server without that route -- still asks, as before.
+- **The Probe daemon no longer writes project or run descriptions.** A description written through
+  the CLI locks out the one-line description the server writes once a run finishes. The daemon's
+  pre-check now refuses `--description` on `project create|set|patch` and `run set`; an
+  experiment's question stays the daemon's to write.
+
 ## 0.194.0
 
 - **`log_artifact` stores files over 64 MiB (plan item (g), 2/2 SDK).** Against a server that

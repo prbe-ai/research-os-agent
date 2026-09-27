@@ -909,7 +909,7 @@ WRITE_GROUPS = frozenset(
 #: list` reads while `project code attach` writes; read two words deep, every
 #: `project code` command looked like one write. Keys in the tables below name
 #: the three words (`wandb key set`); a bare subgroup key never matches.
-SUBGROUPS = frozenset({"project code", "project reference", "wandb key"})
+SUBGROUPS = frozenset({"project code", "project reference", "run input", "wandb key"})
 
 #: Commands that only read unless given one of these flags: bare
 #: `project contributors` lists who is credited, `--add`/`--remove` change it.
@@ -959,6 +959,9 @@ READ_VERBS = frozenset(
         "series",
         "data",
         "preview",
+        # `run inputs|upstream`: what a run read and built on (lineage plan L5).
+        "inputs",
+        "upstream",
     }
 )
 
