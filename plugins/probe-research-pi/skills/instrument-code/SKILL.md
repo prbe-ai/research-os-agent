@@ -111,6 +111,12 @@ The credential is `PROBE_TOKEN`, plus `PROBE_BASE_URL` if you are not on the
 default server. There is NO `PROBE_API_KEY` - nothing reads it, though `probe
 exec` prints it in the Modal hint.
 
+On Kubernetes the outbox sits on the container's own disk and its background
+worker dies with the pod, so writes still queued when the pod is deleted are
+lost. Put `PROBE_OUTBOX_DIR` on a persistent volume, set
+`PROBE_FINISH_TIMEOUT_SEC=600`, and give the pod a
+`terminationGracePeriodSeconds` at least that long.
+
 A run id names a row, not an attempt: without the EPOCH a stale process holding
 an old id attaches to a row a newer attempt reopened, and inherits its write
 authority. Several ranks on one id is fine - the first reopens, the rest join.

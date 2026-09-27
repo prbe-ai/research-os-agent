@@ -170,6 +170,21 @@
   `log_derived*`, the hardware rail, `probe import wandb`) now drops, with one warning per kind, a
   point whose step is outside 64 bits or whose key is over 2 KiB, which the server answered with a
   500. Step records are not merged.
+- **Low disk, a bad HOME and Kubernetes no longer drop writes silently.** Below the outbox's
+  free-space floor every write was dropped (live: 0 of 30 points arrived with the network fine,
+  and `finish()` said `completed`). The floor now scales with the volume (5 %, between 256 MiB and
+  2 GiB; `PROBE_OUTBOX_MIN_FREE_BYTES` still overrides it), and under it a write is sent straight
+  to the server when its run has nothing queued (5 s at most on the training thread; after a
+  failed attempt, none for a minute, doubling to ten), counted as `probe_finish.direct_sends` on
+  the run. A write whose run still has queued writes is dropped with a capture gap as before, so
+  a direct write never overtakes an older one of the same step. A HOME that is missing, read-only
+  or on a filesystem without file locks no longer crashes `Client()` or drops every write: the
+  queue falls back to `$TMPDIR/probe-outbox-<uid>` with one warning that it does not survive a pod
+  or machine restart; only ever a directory this user owns with no group or other access (one
+  someone else made there is never used, listed or drained). `probe outbox status` now lists every outbox on the machine (a distributed
+  job's `rank-*` queues, the fallback) with totals, and `probe outbox drain --all` / `retry --all`
+  act on all of them. On Kubernetes without `PROBE_OUTBOX_DIR`, `probe.init()` says once that the
+  queue is lost with the pod; a new process kicks the worker for a queue it finds waiting.
 
 ## 0.191.0
 
