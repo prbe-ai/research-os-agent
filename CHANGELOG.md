@@ -50,6 +50,16 @@
   the outbox (full or unwritable): a warning, and `probe_finish.dropped_writes=N` on the
   run; the close itself is never refused by the cap. A producer record keeps a
   `gap_count` and its last 32 gaps instead of every one, and each drop is recorded once.
+- **A drain pass no longer stalls `log()` behind a queue rescan.** Every pass parsed the whole
+  outbox twice while holding the append lock (to quarantine corrupt files, then to recount
+  `status.json`), so each `log()` in the training loop waited behind it: 3.3 s per pass at
+  20k queued ops in the live audit. A pass now parses the queue once, outside the lock; under
+  it, only corrupt files are re-checked and only ops appended during the pass are parsed.
+  Measured at 20k ops: append lock held 2,075 ms per pass before, 30 ms after (the pass
+  itself: 4.3 s to 1.5 s). A pass also removes `.tmp` files a killed writer left behind more
+  than an hour ago. The blob sweep, which also reads the whole queue under that lock, now runs
+  only after an upload left the queue, not after every pass that tried one: an upload stuck at
+  the head during an outage froze `log()` for up to 0.8 s a pass at 20k queued ops.
 - **A re-login no longer kills a running job's heartbeat.** `probe login` revokes the token a
   running process was built with; its heartbeat was then refused on every beat, the refusal was
   swallowed, and 15 minutes later the run was marked `crashed` while it was still training. When
