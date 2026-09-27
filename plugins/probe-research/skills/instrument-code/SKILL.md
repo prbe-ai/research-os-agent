@@ -117,6 +117,13 @@ authority. Several ranks on one id is fine - the first reopens, the rest join.
 
 ## WHICH RUN ARE YOU WRITING TO:
 
+PyTorch Lightning: `Trainer(logger=ProbeLogger(experiment=..., name=...))`, from
+`probe.integrations.lightning` (install `probe-research[lightning]`). It adopts a
+run `probe.init()` already opened, logs from global rank 0 only, records kept
+checkpoints as path references, and never finishes its run mid-script - the
+process exit, or your `probe.finish()`, does. A sweep loop gets one run per
+Trainer: a new ProbeLogger closes the run the previous one opened.
+
 A trainer integration (miles, trl, verl, Ray, etc) may mint its OWN run and
 ignore the id you supply. Steer it with the knobs it reads (project, experiment,
 run name, external id), then check where it actually wrote:

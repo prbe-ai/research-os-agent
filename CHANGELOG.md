@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **PyTorch Lightning logger: `probe.integrations.lightning.ProbeLogger`.** Pass it as
+  `Trainer(logger=ProbeLogger(experiment="...", name="..."))` (install `probe-research[lightning]`).
+  It opens the run on global rank 0, or adopts one `probe.init()` already opened, and logs each
+  `self.log` value at the trainer's step. Every checkpoint `ModelCheckpoint` keeps becomes a
+  `checkpoint` artifact: a path reference by default (`checkpoints="upload"` stores the bytes),
+  with the monitored score in `meta.score` and the callback that saved it in `meta.callback`;
+  only a callback with a `monitor` marks a row `best`. A sharded checkpoint folder is recorded
+  with the size of what is inside it, summed once per save. It never finishes the run itself.
+  When Lightning stops on Ctrl-C the run closes `canceled`; on SIGTERM or an exception, `failed`.
+  No process hook sees either, because Lightning turns both into ordinary exits. Probe errors
+  never stop training (`strict=True` makes them raise). Under DDP, rank 0 shares the run id and
+  epoch with every rank, and the other ranks write nothing. Their writer leases come with the
+  lease API (plan 2.8). Lightning's hyperparameters are merged into the run's config
+  (`run.update_config`). A sweep loop in one script gets one run per Trainer: a new
+  `ProbeLogger` closes the run the previous one opened, `failed` if its error was caught, and an
+  older logger still writing to that closed run is warned. A second Trainer on a run it shares
+  (the script's `probe.init()` run, or `probe exec`'s) is warned that where both log a metric at
+  the same step the server keeps the first point. Under `probe exec`, a trial error the script
+  caught no longer closes the launcher's run `failed` when the process exits 0. Under
+  `ddp_fork` / `ddp_notebook` / `ddp_spawn` the worker closes the run it opened on the way out:
+  `canceled` on Ctrl-C, `failed` on SIGTERM or an error, as under torchrun. That close is capped
+  at 20 s to fit torch's 30 s grace before SIGKILL, and a SIGTERM or SIGINT arriving during it
+  waits for it (at most 25 s) instead of cutting it short. As top-k pruning moves on, earlier
+  checkpoint rows are refreshed (`best`, `superseded`, `deleted`). `import probe` still loads
+  neither Lightning nor torch.
+- **A folder artifact reference's size walk is bounded** (100,000 entries or 2 s); past it the
+  size is a lower bound and `meta.size_partial` says so. `hash_content=True` on a folder now warns
+  and records `meta.content_hash_skipped` instead of being ignored silently. A `size_bytes` the
+  caller passes is used as is: the folder is not walked again.
 - **The generated models know a long run's smoothing receipts.** `MetricExactness` in
   `probe._generated.models` gains `sampled_smoothed` and `sampled_unsmoothed`, which the server's
   chart reads (SDK reliability plan 1.8) put in `read_provenance.exactness` for a long series
