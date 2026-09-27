@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Delivery trouble is said in the training process while it happens.** The background worker
+  writes only to `drainer.log`, so a write the server rejected for good (a dead letter) or a
+  refused credential surfaced at `finish()`, hours later, while a dropped write warned once per
+  call (44 lines for 50 drops). Now each kind of trouble -- this process's dead letters, an auth
+  block, dropped writes, a queue whose oldest write has waited 10 minutes -- prints one line when
+  it starts and then at most one every 5 minutes with the running count, each naming its fix,
+  prefixed `probe[rank-N]` on a distributed job; `finish()` prints what was held back. The
+  writing process reads the outbox's `status.json` (now written compact) and a new
+  `dead_letters.json` (the last 32 dead letters: run, op, redacted error, status; retry and
+  discard remove theirs) at most every 15 s; a queue that is being worked through is not called
+  stalled. The detached worker prints none of this.
+- **A Ctrl-C that lands in a queue write, or while a Probe warning prints, stops the process.**
+  Both caught it: a Ctrl-C mid-write was counted a dropped write (`probe_finish.dropped_writes=1`,
+  a drop warning) and training went on, and one landing inside a warning was lost. Both let
+  KeyboardInterrupt and `sys.exit` through now; the interrupted write leaves no partial file.
+
 ## 0.192.0
 
 - **A `PROBE_TOKEN` job's queued writes go out with its own token (#2035).** On a machine where
