@@ -293,11 +293,18 @@ def state_root() -> Path:
 class Wire:
     """The existing ingest routes and receipt read, using the paired credential."""
 
-    def __init__(self, base_url: str, token: str, source: str, timeout: float = 30):
+    def __init__(
+        self, base_url: str, token: str, source: str, timeout: float = 30,
+        context: ssl.SSLContext | None = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.token = token
         self.source = source
         self.timeout = timeout
+        # TLS trust. The CLI passes probe.sdk.tls.ssl_context() (REQUESTS_CA_BUNDLE
+        # and friends); the tap's vendored copy cannot import it and passes None,
+        # which is urllib's default.
+        self.context = context
         self.last_request_retryable = False
         self.last_request_error = None
 
@@ -314,7 +321,9 @@ class Wire:
             },
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            with urllib.request.urlopen(
+                request, timeout=self.timeout, context=self.context
+            ) as response:
                 body = json.loads(response.read())
                 if not isinstance(body, dict):
                     raise ValueError("transcript endpoint returned a non-object response")

@@ -52,6 +52,7 @@ from __future__ import annotations
 
 import json
 import os
+import ssl
 import time
 import urllib.request
 from pathlib import Path
@@ -323,15 +324,21 @@ def base_url() -> str:
     return DEFAULT_BASE
 
 
-def fetch(url: str) -> dict:
+def fetch(url: str, *, context: ssl.SSLContext | None = None) -> dict:
     """GET the manifest; raise unless it is a JSON object.
 
     A 200 carrying something that is not an object is treated as a FAILURE, so a
     misconfigured proxy returning an HTML login page can never be cached as a
     good manifest and compared against.
+
+    `context` is the TLS trust. The CLI passes `probe.sdk.tls.ssl_context()`
+    (honours REQUESTS_CA_BUNDLE and friends); the plugin copy cannot import it
+    and passes nothing, keeping urllib's default.
     """
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:  # noqa: S310
+    with urllib.request.urlopen(  # noqa: S310
+        request, timeout=TIMEOUT, context=context
+    ) as response:
         data = json.loads(response.read().decode("utf-8"))
     if not isinstance(data, dict):
         raise ValueError("manifest is not a JSON object")
@@ -401,7 +408,7 @@ def release_refresh(owner: int | None = None) -> None:
         pass
 
 
-def refresh(base: str | None = None) -> dict | None:
+def refresh(base: str | None = None, *, context: ssl.SSLContext | None = None) -> dict | None:
     """Fetch and cache the manifest. Returns it, or None on failure.
 
     On failure the last-good manifest is RETAINED and only the `ok` flag flips,
@@ -410,7 +417,7 @@ def refresh(base: str | None = None) -> dict | None:
     """
     manifest, _, _ = read_cache()
     try:
-        fetched = fetch((base or base_url()) + MANIFEST_PATH)
+        fetched = fetch((base or base_url()) + MANIFEST_PATH, context=context)
         write_cache(fetched, True)
         return fetched
     except Exception:

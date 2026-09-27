@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import ssl
 import time
 import urllib.parse
 import urllib.request
@@ -245,6 +246,7 @@ def resolve_identity(
     *,
     fallback_customer_id: str | None = None,
     machine: str | None = None,
+    context: ssl.SSLContext | None = None,
 ) -> dict:
     """{distinct_id, customer_id, workspace_id, authenticated} — fail-soft.
 
@@ -260,6 +262,11 @@ def resolve_identity(
     sent to a URL telemetry would refuse to emit for. Pass `machine` (the id
     already stamped on the events) so a fallback distinct_id can never
     disagree with the events' machine_id property.
+
+    `context` is the TLS trust for the /v1/me call. The CLI passes the
+    package's shared one (`probe.sdk.tls.ssl_context`, which honours
+    REQUESTS_CA_BUNDLE and friends); the plugin copy cannot import it and
+    passes nothing, keeping urllib's default.
     """
     token = effective_token(cfg)
     base_url = effective_base_url(cfg)
@@ -303,7 +310,7 @@ def resolve_identity(
             base_url + "/v1/me",
             headers={"Authorization": f"Bearer {token}", "User-Agent": "probe-client-telemetry"},
         )
-        with urllib.request.urlopen(req, timeout=SEND_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=SEND_TIMEOUT, context=context) as resp:
             me = json.load(resp)
         user_id = me.get("user_id")
         if not user_id:
@@ -431,14 +438,14 @@ def build_batch(
     return batch
 
 
-def post_batch(entries: list[dict]) -> None:
+def post_batch(entries: list[dict], *, context: ssl.SSLContext | None = None) -> None:
     """POST one batch to PostHog. The wire shape is part of the shared
     contract — both surfaces must send the identical envelope or a future
-    endpoint/header change drifts them apart."""
+    endpoint/header change drifts them apart. `context`: see resolve_identity."""
     payload = json.dumps({"api_key": POSTHOG_KEY, "batch": entries})
     req = urllib.request.Request(
         POSTHOG_HOST.rstrip("/") + "/batch/",
         data=payload.encode(),
         headers={"Content-Type": "application/json"},
     )
-    urllib.request.urlopen(req, timeout=SEND_TIMEOUT).read()
+    urllib.request.urlopen(req, timeout=SEND_TIMEOUT, context=context).read()

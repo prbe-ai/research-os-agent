@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Corporate CA bundles work: `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` are honoured.** Behind a
+  proxy that re-signs TLS, SDK writes failed certificate checks while telemetry got through,
+  because the two used different trust: httpx read only `SSL_CERT_FILE`/`SSL_CERT_DIR` else
+  certifi, urllib only the OS store. Every connection the SDK, CLI, daemon and MCP open now uses
+  one context. `SSL_CERT_FILE`/`SSL_CERT_DIR` replace the defaults, as OpenSSL and httpx read
+  them (setting only one keeps OpenSSL's built-in location for the other). Otherwise
+  `REQUESTS_CA_BUNDLE` (else `CURL_CA_BUNDLE`) is added ON TOP of the OS store plus certifi,
+  never instead of them, so a bundle exported for another tool can never stop Probe reaching
+  its server. A path that is missing or holds no certificate prints one warning and is skipped;
+  nothing raises, and there is no switch that turns verification off. Certificates are read once
+  per process: restart after fixing a bundle. Without any of these set, trust only grows: httpx
+  gains the OS store, urllib gains certifi. The plugin hooks and the tap keep urllib's default
+  trust for now; their shared helpers only gained an optional `context` argument, which the CLI
+  fills.
+
 ## 0.188.0
 
 - **`probe.context()` names the batch a crash happened in.** Wrap each batch or sample in
