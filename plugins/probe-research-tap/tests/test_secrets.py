@@ -57,6 +57,18 @@ _OPENAI = "sk-" + "proj-" + "T3Blb" + "kFJ" + "b" * 50
 _PROBE_INGEST_LOGIN = "ros_" + "ing_" + "0f3a9c7e" * 4
 _PROBE_INGEST_PAIRED = "ros_" + "ing_" + "0f3a9c7e" * 6
 
+_HEX32 = "5e8a1c9f3b7d2e4a" + "6c0f9b1d3e5a7c2f"
+_HEX40 = _HEX32 + "8d4b6e1a"
+_PW = "Tr0ub4" + "dor&3xQ"
+_LONG_PW = "Zq7Lm2" * 12
+_YA29 = "ya29." + "a0AfB_by" + "Xk9-Lm2_Qp7" * 16
+_DOCKER_AUTH = "bWU6" + "VHIwdWI0ZG9yJjN4UQ=="  # base64 of me:<_PW>
+# Generated passwords with letters and digits only: how most tools make them.
+# `_PW`'s `&` let the first #2000 rules pass on shapes that still leaked these.
+_ALNUM_PW = "a8Kd93" + "jLm2Qx"
+_ALNUM_PW2 = "S3cr3t" + "Passw0rd"
+_HEX_PW = "e3b0c442" + "98fc1c14"  # `openssl rand -hex 8`
+
 #: Must be caught. Synthetic values only.
 TRUE_POSITIVES: tuple[tuple[str, str], ...] = (
     # The two shapes that actually leaked (Anthrogen, 2026-08-30).
@@ -83,7 +95,200 @@ TRUE_POSITIVES: tuple[tuple[str, str], ...] = (
     ("credential_uri", "postgres://admin:s3cr3tP4ssw0rd@db.internal:5432/probe"),
     ("probe_ingest_device_login", f"'ingest_token': '{_PROBE_INGEST_LOGIN}'"),
     ("probe_ingest_paired", f"PROBE_INGEST_TOKEN={_PROBE_INGEST_PAIRED}"),
+    # --- #2000 re-review: shapes the rules did not see (2026-09-27). ---
+    # H3: camelCase key names.
+    ("camel_ts_api_key", f'const openaiApiKey = "{_HEX32}";'),
+    ("camel_helm_password", f"postgresql:\n  auth:\n    postgresPassword: {_PW}"),
+    ("camel_wandb_api_key", f"wandbApiKey: {_HEX40}"),
+    ("camel_maven_password", f"mavenPassword={_PW}"),
+    # M3: string prefixes, and defaults a program falls back to.
+    ("fstring_prefix", f'API_KEY = f"{_HEX32}"'),
+    ("bytes_prefix", f"SECRET = rb'{_HEX32}'"),
+    ("environ_setdefault", f'os.environ.setdefault("WANDB_API_KEY", "{_HEX40}")'),
+    ("getenv_default", f'token = os.getenv("HF_TOKEN", "{_HEX32}")'),
+    # M2: `*_KEY` names and a `key:` under a `wandb:` block.
+    ("env_star_key", f"AZURE_OPENAI_KEY={_HEX32}"),
+    ("signing_key", f'SIGNING_KEY = "{_HEX40}"'),
+    ("encryption_key", f"encryption_key: {_HEX40}"),
+    ("yaml_wandb_key", f"wandb:\n  project: odyssey\n  key: {_HEX40}"),
+    # M5: shapes with no `key = value` separator.
+    ("netrc_entry", f"machine api.wandb.ai\n  login user\n  password {_HEX40}"),
+    ("netrc_one_line", f"machine github.com login bot password {_PW}"),
+    ("maven_password", f"<server><id>releases</id><password>{_PW}</password></server>"),
+    ("docker_auth", '{"auths": {"ghcr.io": {"auth": "' + _DOCKER_AUTH + '"}}}'),
+    # M6: a URL password longer than 64 characters (CodeArtifact, GCP).
+    ("uri_long_password", f"postgresql://app:{_LONG_PW}@db.internal:5432/app"),
+    ("uri_ya29", f"--extra-index-url https://oauth2accesstoken:{_YA29}@us-python.pkg.dev/p/r/simple/"),
 )
+
+#: The #2000 security review (2026-09-27): shapes that still leaked, as
+#: `(name, text, secret)`. The SECRET must be gone, not just some span.
+REVIEW3_LEAKS: tuple[tuple[str, str, str], ...] = (
+    # HIGH-1: camelCase passwords of letters and digits only.
+    ("camel_helm_alnum", f"postgresql:\n  auth:\n    postgresPassword: {_ALNUM_PW}\n", _ALNUM_PW),
+    ("camel_helm_quoted_alnum", f'postgresql:\n  auth:\n    postgresPassword: "{_ALNUM_PW2}"\n', _ALNUM_PW2),
+    ("camel_ts_quoted_alnum", f'const dbPassword = "{_ALNUM_PW2}";', _ALNUM_PW2),
+    ("camel_gradle_alnum", f"mavenPassword={_ALNUM_PW}", _ALNUM_PW),
+    ("camel_json_alnum", f'{{"dbPassword": "{_ALNUM_PW2}"}}', _ALNUM_PW2),
+    ("camel_helm_hex", f"redis:\n  auth:\n    redisPassword: {_HEX_PW}\n", _HEX_PW),
+    ("camel_ts_typed", f'private dbPassword: string = "{_ALNUM_PW2}";', _ALNUM_PW2),
+    # MED-1: key names the rules did not read.
+    ("lower_vendor_key_yaml", f"model:\n  azure_openai_key: {_HEX32}\n", _HEX32),
+    ("lower_vendor_key_py", f'openai_key = "{_HEX32}"', _HEX32),
+    ("wandb_key_yaml", f"logging:\n  wandb_key: {_HEX40}\n", _HEX40),
+    ("camel_short_secret", f'export const jwtSecret = "{_PW}";', _PW),
+    ("camel_vendor_key", f'const openaiKey = "{_HEX32}";', _HEX32),
+    ("camel_acronym_vendor_key", f'const azureOpenAIKey = "{_HEX32}";', _HEX32),
+    ("acronym_db_password", f'{{"ConnectionStrings": {{}}, "DBPassword": "{_PW}"}}', _PW),
+    ("acronym_smtp_password", f'SMTPPassword = "{_PW}"', _PW),
+    ("acronym_jwt_secret", f'const JWTSecret = "{_HEX32}";', _HEX32),
+    ("camel_short_hex_secret", f"facebook:\n  appSecret: {_HEX_PW}\n", _HEX_PW),
+    ("getenv_default_keyword", f'key = os.getenv("WANDB_API_KEY", default="{_HEX40}")', _HEX40),
+    ("environ_get_or", f'key = os.environ.get("OPENAI_API_KEY") or "{_HEX32}"', _HEX32),
+    ("js_env_or", f'const key = process.env.AZURE_OPENAI_KEY || "{_HEX32}";', _HEX32),
+    ("js_env_nullish", f'const apiKey = process.env["OPENAI_API_KEY"] ?? "{_HEX32}";', _HEX32),
+    ("argparse_default", f'p.add_argument("--wandb-api-key", default="{_HEX40}")', _HEX40),
+    ("argparse_default_multiline", f'p.add_argument(\n    "--wandb-key",\n    default="{_HEX40}",\n)', _HEX40),
+    ("click_default", f'@click.option("--token", default="{_HEX40}")', _HEX40),
+    ("k8s_env_pair", f"env:\n- name: AZURE_OPENAI_KEY\n  value: {_HEX32}\n", _HEX32),
+    ("k8s_env_pair_quoted", f'env:\n  - name: DB_PASSWORD\n    value: "{_ALNUM_PW}"\n', _ALNUM_PW),
+    # LOW-2 shapes that were clean to add.
+    ("dockerfile_env_space", f"ENV AZURE_OPENAI_KEY {_HEX32}", _HEX32),
+    ("netrc_default_entry", f"default login user password {_HEX40}", _HEX40),
+    ("docker_auth_single_quoted", "CFG = {'auths': {'r.io': {'auth': '" + _DOCKER_AUTH + "'}}}", _DOCKER_AUTH),
+    ("docker_auth_yaml", 'auth: "' + _DOCKER_AUTH + '"', _DOCKER_AUTH),
+    ("docker_identitytoken", '{"auths": {"x.azurecr.io": {"identitytoken": "eyJhbGciOiJSUzI1NiJ9' + _HEX40 + '"}}}', _HEX40),
+    ("npmrc_auth", "_auth=" + _DOCKER_AUTH, _DOCKER_AUTH),
+    ("gradle_password_line", f'credentials {{\n  username "u"\n  password "{_PW}"\n}}', _PW),
+    # HIGH-2's rule still takes a long token password.
+    ("uri_long_token_password", f"--index-url https://aws:{_YA29}@x.d.codeartifact.us-east-1.amazonaws.com/pypi/r/simple/", _YA29),
+)
+
+
+@pytest.mark.parametrize("name,text,secret", REVIEW3_LEAKS, ids=[n for n, _, _ in REVIEW3_LEAKS])
+def test_review3_shape_is_redacted(name: str, text: str, secret: str) -> None:
+    redacted, rules = secrets.redact(text)
+    assert rules, f"{name}: no rule fired"
+    assert secret not in redacted, f"{name}: the secret survived: {redacted!r}"
+
+
+#: Benign shapes the first #2000 rules rewrote (review, MED-2 / HIGH-2): bytes
+#: must come back unchanged.
+REVIEW3_BENIGN: tuple[tuple[str, str], ...] = (
+    # HIGH-2: ordinary JSON, from an `https://` value to an email's `@`.
+    ("json_url_then_email", '{"source":"https://huggingface.co","id":"a1b2c3","n_tokens":123456,'
+     '"label":"positive","split":"train","annotator":"worker-17","score":0.9321,'
+     '"created":"2026-09-01T12:00:00Z","reviewer":"alice@lab.org"}'),
+    ("json_short_url_then_email", '{"url":"https://hf.co/datasets/x","by":"alice@lab.org"}'),
+    # MED-2: template slots and shell variables are not values.
+    ("xml_password_slot", "<server><id>c</id><username>{user}</username><password>{password}</password></server>"),
+    ("xml_password_ellipsis", "Put it in `~/.m2/settings.xml` as `<password>...</password>`."),
+    ("xml_password_jinja", "<password>{{ maven_password }}</password>"),
+    ("netrc_shell_variable", 'printf "machine github.com login ci password $GH_TOKEN\\n" > ~/.netrc'),
+    ("config_get_secret_name", 'we read cfg.get("secret_name", "prod-db-2") at boot'),
+    ("setdefault_token_setting", 'claims.setdefault("id_token_encrypted_response_enc", "A128CBC-HS256")'),
+    ("camel_request_token_uuid", '"ClientRequestToken": "a8f5f167-f44f-4964-a6c9-8f1b2d3e4a5b",'),
+    ("ws_key_guid", 'WS_KEY: Final[bytes] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"'),
+    ("docker_auth_placeholder", '"auth": "dXNlcm5hbWU6cGFzc3dvcmQ="'),  # username:password
+    ("fstring_password_slot", 'repair_args += [f"-sPDFPassword={password}"]'),
+    # HIGH-1's fix keeps these clean: code, prose and generated API clients.
+    ("camel_messages_field", "class Db:\n    adminPassword = _messages.StringField(1)"),
+    ("camel_dotted_value", "const userPassword = form.password.value;"),
+    ("camel_snake_identifier", "'MasterUserPassword': master_user_password,"),
+    ("camel_prose_value", "- **Rotate** the helm `postgresPassword: see 1Password item db-prod` after each restore."),
+    ("camel_help_text", "oauth2ClientSecret: OAuth2 client secret to use for the authentication"),
+    ("camel_quoted_help", '"pvkPassword": "Private key password 1"'),
+    ("camel_quoted_word", '"dataStorePassword": "dataStoreTestQuery",'),
+    ("camel_class_def", "class RSAPrivateKey(metaclass=abc.ABCMeta):"),
+    ("camel_def_default", "def AddUserPassword(parser, required=False):"),
+    ("camel_subscript", "challengePassword['type'] = pkcs_9_at_challengePassword"),
+    ("camel_type_on_next_line", "RSAPrivateKey:\n     version=0"),
+    ("camel_method_type", "async function getBearerToken(): Promise<string | null> {"),
+    ("pagination_token", '"NextToken": "CpHNsscimcV5oH7bSbub03CI2Qms5+ypNpNm+53MNlR0YcXAkp0xFlfKf91yVx",'),
+    ("public_key_name", '{"LANGFUSE_PUBLIC_KEY": "kFiKa1VZukMmD8RB6WXB9F"}'),
+    ("unowned_lower_key", 'cache_key = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4"'),
+    ("unowned_camel_key", 'const sortKey = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4";'),
+    ("raw_regex_secret_name", "_SECRET_NAME_PARTIAL = r'(?P<secret>[a-zA-Z0-9-_]{1,255})'"),
+    ("raw_regex_token", "token = r\"[-!#$%&'*+.^_`|~0-9a-zA-Z]+\""),
+    ("k8s_env_reference_name", "env:\n- name: SECRET_NAME\n  value: prod-db-2\n"),
+    ("dockerfile_env_path", "ENV TOKEN_PATH /run/secrets/token2"),
+    ("netrc_prose_default", "the default password for the image is documented below"),
+)
+
+
+@pytest.mark.parametrize("name,text", REVIEW3_BENIGN, ids=[n for n, _ in REVIEW3_BENIGN])
+def test_review3_benign_shape_is_unchanged(name: str, text: str) -> None:
+    redacted, rules = secrets.redact(text)
+    assert rules == [] and redacted == text, f"{name}: fired {rules}: {redacted!r}"
+
+
+#: The #2034 re-review (2026-09-27), `(name, text, secret)`: `*_KEY` names that
+#: end in an ordinary anchor lost it to the new `*_KEY` rule (caught on main),
+#: and the controls that keep the fixes below narrow.
+REVIEW4_LEAKS: tuple[tuple[str, str, str], ...] = (
+    ("star_key_api_key_letters", 'OPENAI_API_KEY = "abcdefghijklmnopqrstuvwxyzabcdef"', "abcdefghijklmnopqrstuvwxyzabcdef"),
+    ("star_key_secret_key_letters", 'DJANGO_SECRET_KEY = "qwertyuiopasdfghjklzxcvbnmqwertyuiopasdf"', "qwertyuiopasdfghjklzxcvbnmqwertyuiopasdf"),
+    ("star_key_private_key_letters", 'GPG_PRIVATE_KEY = "qwertyuiopasdfghjklzxcvbnmqwertyuiopasdf"', "qwertyuiopasdfghjklzxcvbnmqwertyuiopasdf"),
+    # Controls: a camelCase `...Secret` whose word is not a reference, a
+    # spaced camel value WITH a digit, a netrc entry with `login` and a plain
+    # word, one without `login` and a generated value, a `$`-first password.
+    ("camel_secret_not_a_reference", "dbSecret: pg-auth-v2x9", "pg-auth-v2x9"),
+    ("camel_spaced_with_digit", 'adminPassword: "Tr0ub4dor 3xQ"', "Tr0ub4dor 3xQ"),
+    ("netrc_login_plain_word", "machine h.example.com login u password hunter", "hunter"),
+    ("netrc_no_login_generated", f"machine gpu01 password {_PW}", _PW),
+    ("dsl_password_dollar_first", 'credentials {\n  password "$ecretPa55"\n}', "$ecretPa55"),
+)
+
+
+@pytest.mark.parametrize("name,text,secret", REVIEW4_LEAKS, ids=[n for n, _, _ in REVIEW4_LEAKS])
+def test_review4_shape_is_redacted(name: str, text: str, secret: str) -> None:
+    redacted, rules = secrets.redact(text)
+    assert rules, f"{name}: no rule fired"
+    assert secret not in redacted, f"{name}: the secret survived: {redacted!r}"
+
+
+#: The #2034 re-review's false positives: UI labels under camelCase keys (a
+#: space was a symbol), names of secret OBJECTS, netrc words in prose, and
+#: lower-case variables. Bytes must come back unchanged.
+REVIEW4_BENIGN: tuple[tuple[str, str], ...] = (
+    ("label_forgot_password", '{\n  "forgotPassword": "Forgot password?",\n  "email": "Email"\n}'),
+    ("label_confirm_password", '{\n  "confirmPassword": "Confirm password",\n  "email": "Email"\n}'),
+    ("label_ts_new_password", 'export const labels = {\n  newPassword: "New password",\n  email: "Email",\n};'),
+    ("label_german", '{"forgotPassword": "Passwort vergessen?"}'),
+    ("label_must_match", 'const errors = { confirmPassword: "Must match!" };'),
+    ("label_yaml_unquoted", "auth:\n  forgotPassword: Forgot password?\n  resetPassword: \"Reset password\""),
+    ("java_not_applicable", 'String newPassword = "n/a";'),
+    ("helm_existing_secret", "auth:\n  existingSecret: pg-auth-v2"),
+    ("helm_image_pull_secret", "global:\n  imagePullSecret: regcred-v1"),
+    ("helm_tls_secret", "ingress:\n  tlsSecret: ingress-tls2"),
+    ("netrc_prose", "Use the machine gpu01 password reset flow."),
+    ("netrc_prose_period", "Log in to machine gpu01 password reset."),
+    ("gradle_lower_variable", 'credentials {\n  username "$mavenUser"\n  password "$mavenPassword"\n}'),
+    ("netrc_echo_lower_variable", 'echo "machine github.com login x password $github_token" > ~/.netrc'),
+)
+
+
+@pytest.mark.parametrize("name,text", REVIEW4_BENIGN, ids=[n for n, _ in REVIEW4_BENIGN])
+def test_review4_benign_shape_is_unchanged(name: str, text: str) -> None:
+    redacted, rules = secrets.redact(text)
+    assert rules == [] and redacted == text, f"{name}: fired {rules}: {redacted!r}"
+
+
+@pytest.mark.parametrize(
+    "unit", ["dbPassword=a8Kd93jLm2Qx,", "dbPassword=a8Kd93jLm2Qx "], ids=["camel-comma", "camel-space"]
+)
+def test_one_long_line_is_linear_when_read_whole(unit: str) -> None:
+    """Code capture and the server read a text WHOLE (an accelerator, no 64K
+    windows). A camelCase value's check read to the end of its line per match,
+    so one 2 MB line took 18-29 s (#2034 re-review; 1 MB took a quarter of
+    that). The check now reads a bounded stretch: ~1 s here; the ceiling leaves
+    room for a slow CI machine and still fails the old code."""
+    text = (unit * (2_000_000 // len(unit) + 1))[:2_000_000]
+    started = time.perf_counter()
+    secrets.scan(text, _accel=secrets._keyword_windows)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 8.0, f"{unit!r}: {elapsed:.2f}s for one 2 MB line"
+
 
 #: Must NOT be caught. The first four are verbatim from the outage.
 FALSE_POSITIVES: tuple[tuple[str, str], ...] = (
@@ -146,6 +351,27 @@ FALSE_POSITIVES: tuple[tuple[str, str], ...] = (
         "prod_hyphenated_ident",
         "loaded config `attention-ablation` (26) — the attention-ablation-config entry",
     ),
+    # --- Controls for the #2000 rules: near misses that must stay quiet. ---
+    ("camel_inside_word", "bypassword = 1; compassword: frobnicate"),
+    ("sort_key", 'SORT_KEY = "created_at"'),
+    ("primary_key", "PRIMARY_KEY = 'user_id'"),
+    ("fstring_template_key", 'CACHE_KEY = f"user:{uid}:profile"'),
+    ("max_tokens_default", 'n = cfg.get("max_tokens", "1024")'),
+    ("tokenizer_default", 'name = os.environ.get("TOKENIZER", "bert-base-uncased")'),
+    ("empty_default", 'tok = os.getenv("HF_TOKEN", "")'),
+    ("none_default", 'key = os.environ.get("OPENAI_API_KEY", "none")'),
+    ("prose_machine_password", "Log into the machine with your password first, then run make."),
+    ("maven_env_reference", "<password>${env.MAVEN_PASSWORD}</password>"),
+    ("docker_auth_word", '{"auth": "anonymous"}'),
+    ("yaml_key_without_wandb", "cache:\n  key: " + "0" * 40),
+    ("uri_placeholder_short", "postgres://user:pw@localhost/db"),
+    # Found measuring the #2000 rules on this repo and prbe-knowledge.
+    ("shell_capital_run", 'export PGUSER="$(cat /u)" PGPASSWORD="$(cat /superuser/password)"'),
+    ("camel_call", "const cliToken = readProbeConfigMcpToken(env);"),
+    ("camel_code_value", "const userPassword = form.password.value;"),
+    ("header_name_key", "[ENGINE_INTERNAL_KEY: X-Internal-Knowledge-Key; see CONTRACT]"),
+    ("fstring_template_bearer", 'MCP(url=url, authorization_token=f"Bearer {key}", id="probe")'),
+    ("posthog_project_key", 'POSTHOG_KEY = "phc_' + "pCSs24bQtPaxoJ59PaTtTp" + 'JDS3dfzymfZeY74XQQ956K"'),
 )
 
 
@@ -292,6 +518,24 @@ def test_shannon_entropy_matches_the_outage_measurements() -> None:
         ("begin_marker_flood", "-----BEGIN PRIVATE KEY-----" * 2_000),
         ("anchor_flood", ("secret=" + "Zq" * 40 + "\n") * 2_000),
         ("uri_flood", ("postgres://" + "a" * 60 + ":" + "b" * 60 + "@h ") * 500),
+        ("uri_no_at_flood", ("postgres://a:" + "b" * 3000 + " ") * 40),
+        ("star_key_flood", ("A_" * 40_000)),
+        ("camel_flood", ("aPassword" * 5_000)),
+        ("netrc_flood", ("machine h login u " * 4_000)),
+        ("xml_flood", ("<password>" + "a" * 600) * 200),
+        ("env_default_flood", ('os.getenv("API_KEY", "' + "a" * 600) * 200),
+        ("docker_auth_flood", ('"auth": "' + "A" * 5_000) * 20),
+        ("wandb_key_flood", ("wandb:\n  key: " + "a" * 39 + "\n") * 2_000),
+        ("uri_long_no_at_flood", ("https://u:" + "A" * 3_000 + "/") * 20),
+        ("camel_bare_flood", ("xPassword: " + "a1" * 300 + " ") * 100),
+        ("acronym_flood", ("ABCDEFGPassword" * 4_000)),
+        ("env_fallback_flood", ('process.env.API_KEY || "' + "a" * 600) * 100),
+        ("cli_default_flood", ('add_argument("--api-key", ' + "x" * 290 + " default=\"" + "a" * 600) * 50),
+        ("env_pair_flood", ("- name: API_KEY\n" + " " * 5_000) * 10),
+        ("env_pair_spaces", " " * 60_000),
+        ("dockerfile_env_flood", ("ENV A_KEY " + "a" * 600 + "\n") * 100),
+        ("identitytoken_flood", ('"identitytoken": "' + "a" * 5_000) * 10),
+        ("npmrc_flood", ("_auth=" + "A" * 5_000 + "\n") * 10),
     ],
 )
 def test_no_rule_is_pathological(label: str, text: str) -> None:

@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+- **The credential scanner recognizes the shapes the #2000 reviews found (security).** Code
+  capture now withholds, and redaction now replaces, credentials written as: camelCase and
+  acronym fields (`postgresPassword`, `openaiApiKey`, `wandbApiKey`, `DBPassword`,
+  `SMTPPassword`, `JWTSecret`), including generated letters-and-digits passwords
+  (`postgresPassword: a8Kd93jLm2Qx`, `const dbPassword = "S3cr3tPassw0rd"`);
+  `f"..."`/`r`/`b`/`u`-prefixed literals; defaults a program falls back to
+  (`os.environ.setdefault("WANDB_API_KEY", "...")`, `os.getenv("X", default="...")`,
+  `os.environ.get("X") or "..."`, `process.env.X || "..."` / `?? "..."`,
+  `add_argument("--wandb-api-key", default="...")`, a pydantic `Field(default="...")`);
+  environment-style `*_KEY` names, `encryption_key`, `signing_key`, and vendor keys
+  (`azure_openai_key`, `openaiKey`, `azureOpenAIKey`) with a long value that has a digit
+  (so an `.env.example` holding a real `AZURE_OPENAI_KEY` is caught by its content); a
+  Kubernetes `- name: X_KEY` / `value: ...` pair; a Dockerfile `ENV X_KEY value`;
+  `wandb_key:` and a 40-hex `key:` under a `wandb:` block; netrc `machine ... password <x>`
+  and `default login ... password <x>`; `<password>...</password>`; a Gradle
+  `password "..."` line; docker `auth` values (JSON, single-quoted, YAML) that decode to
+  `user:password`, `identitytoken`, and `.npmrc` `_auth=`; and URL passwords longer than 64
+  characters made of token characters (AWS CodeArtifact, GCP `oauth2accesstoken:ya29...`).
+  New rule names on artifact rows: `env-default`, `cli-default`, `env-pair`,
+  `dockerfile-env`, `netrc-password`, `xml-password`, `docker-auth`. Kept clean on purpose,
+  each measured on 51k third-party and first-party files: a value followed by `(`, an f-string
+  with `{...}` in it, a template slot or shell variable (`{password}`, `{{ x }}`, `...`,
+  `$GH_TOKEN`), a UUID or a raw-string regex under a widened key, a camelCase field set from
+  code or described in prose (`adminPassword = _messages.StringField(1)`,
+  `postgresPassword: see 1Password`), pagination tokens (`NextToken`, `nextPageToken`),
+  public keys (`LANGFUSE_PUBLIC_KEY`), names about a credential (`secret_name`, `TOKEN_URL`),
+  owner-less keys (`cache_key`, `sortKey`), and publishable keys (`phc_`,
+  `pk_live_`/`pk_test_`). A URL password over 64 characters no longer runs through quotes
+  and commas, so a JSON row from an `https://` value to a later email's `@` is left alone.
+  What is still not read is listed in agent/TODOS.md. The tap carries the same scanner;
+  merging updates it.
+- **Code capture's credential scan stays linear on one-line files, and its time budget holds
+  for every file (security, #2034 re-review).** After a camelCase key the scanner read the rest
+  of the value's line once per match, and code capture's verdict on each key-name hit searched
+  and split the whole line around it, so a one-line file was quadratic: a 2 MB line of
+  `dbPassword=...,` took 24-37 s, a 1 MB line of `azure_openai_key=...` 550 s, a 200 KB
+  minified JSON of `"password"` rows 27 s. Each now reads a bounded stretch (1 KB after the
+  hit, 256 characters before it), a dropped hit is re-read once per distinct span, and a
+  file's words are counted once: those files take 0.2-1.4 s. Files up to 2 MiB now get
+  `PROBE_SNAPSHOT_FILE_SCAN_BUDGET_SEC` (3 s) too, checked between hits: past it the file is
+  withheld with reason `scan_budget` and the run warns, as a bigger file already was. A
+  notebook's code cells are read JSON-decoded, as Python (up to 16 MiB): `.ipynb` JSON escapes
+  every `"`, so `OPENAI_API_KEY = "..."` and `wandb.login(key="...")` in a notebook went up
+  (on main too). `OPENAI_API_KEY = "<32 letters>"`, `DJANGO_SECRET_KEY` and `GPG_PRIVATE_KEY`
+  with an all-letter value are caught again (the new `*_KEY` rule took the whole name and
+  dropped it for having no digit). No longer withheld: UI labels under camelCase keys
+  (`"forgotPassword": "Forgot password?"`, `newPassword: "New password"`,
+  `"Passwort vergessen?"`; a value with a space needs a digit, and every camelCase value 6+
+  characters, so `"n/a"` too), names of secret objects (Helm `existingSecret: pg-auth-v2`,
+  `imagePullSecret: regcred-v1`, `tlsSecret`, `certSecret`), netrc words in prose
+  (`machine gpu01 password reset`: without `login` the value needs a digit or a symbol), and
+  lower-case variables (`password "$mavenPassword"`, `password $github_token`).
 - **A job requeued onto the same run no longer fails at `init()` for 15 minutes.** When a pod is
   replaced before the server notices the old one died, the relaunch (`on_conflict="auto"`,
   `"resume"` or `probe.Rewind`) now takes the run over once it has been silent for three heartbeat
