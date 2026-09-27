@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **A run's console log reaches Probe while the run is alive (plan item (h)).** Output capture
+  uploaded what a run printed as `probe/run.log` only when it ended, so a three-day job showed
+  nothing of its console until then, and a whole-pod death could leave nothing. Now the output
+  helper also appends every byte to 1 MiB spool segments (at most 16 MiB unsent; past that the
+  OLDEST is dropped and the server marks the gap, and nothing ever waits on it), and a thread in
+  the process that owns the tee ships complete lines every 15 s (`PROBE_LOG_STREAM_SEC`, at least
+  1 s) to `POST /v1/runs/{id}/log-chunks`: `\r` redraws collapsed to their last frame, a partial
+  line (up to 64 KiB) and an unterminated private key block (up to 16 KiB) held back, redacted by
+  the same function as the final log. A line too long to hold is never cut inside a run of
+  token-shaped characters (the run waits for the next chunk; one past 20 KiB is withheld), and
+  the chunk after such a cut is redacted together with the text before it. Best effort, not
+  journaled: a failed POST is retried with the identical body (never sooner than a 429's
+  `retry_after`; one POST, the transport's own retries included, takes at most 10 s and never
+  outlives a close's or a recovery's budget), the server ignores a chunk it already has, and a recovery after a hard death
+  sends the spool's last lines as the attempt the dead process recorded; a log name whose spool
+  survived is never reused. At most 256 KiB of raw output per wake-up (about 1 s of CPU on dense
+  output: the redaction plus the transport's own scrub, in the training process), skipping to the
+  newest output past a 1 MiB backlog; the close gives the last lines at most 5 s and a quarter of
+  what it has left. Rank 0 only by default (`PROBE_LOG_STREAM=rank0|all|0`; `all` names each
+  stream `run.rank<N>`); a server that does not declare `run_log_stream` gets no spool and no
+  request, and the answer is kept for the process. The final `probe/run.log` artifact and its
+  2 MB + 8 MB budget are unchanged.
 - **The credential scanner recognizes the shapes the #2000 reviews found (security).** Code
   capture now withholds, and redaction now replaces, credentials written as: camelCase and
   acronym fields (`postgresPassword`, `openaiApiKey`, `wandbApiKey`, `DBPassword`,
