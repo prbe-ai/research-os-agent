@@ -63,6 +63,26 @@
   `PROBE_TELEMETRY=off`, self-hosted servers and offline runs send nothing, as for every other
   client event. The close's report re-reads the outbox and is handed over before the process
   exits (with a slow PostHog, exit can take up to the telemetry sender's usual ~3.5 s bound).
+- **The background delivery holds at most 2 MiB of parsed queue between passes.** Its pass cache
+  (0.191.0) kept every queued write parsed for as long as the process lived: 58 MB for 20,000
+  queued one-point writes on a training node. It keeps the oldest 2 MiB of op files (about 4,300
+  writes; 12 MB at 20,000) and reads the rest again each pass, as before 0.191.0.
+- **A queue write that never landed gives its sequence number back.** A Ctrl-C or a disk error in
+  the middle of a write left `probe outbox status` showing a producer one write ahead of anything
+  that could be delivered, with no gap to explain it (a dropped write also took a second number
+  for its gap). Now the number is returned, and a dropped write's gap takes it.
+- **`finish()` no longer waits seconds for the background worker to re-scan the queue.** The
+  detached worker re-checks every write it sends for credentials, and it ran without the scrub
+  cache the training process uses, so each point's constant keys went through the full scanner
+  again: 7.1 s of CPU for 2,000 five-key `log()` calls, which `finish()` waited out. It uses the
+  cache now (0.9 s); locally, `finish()` after 2,000 steps went from 2-3 s to 0.4 s.
+- **A close that runs out of time still tells the server it is draining (2.8).** The "draining"
+  lease beat went out under the close's already-spent deadline and was never sent, so the lease
+  expired while the worker was still delivering. It gets its own budget of at least 1 s.
+- **A revoked token shows in `probe doctor`, `probe outbox status` and the outbox banner.** Since
+  each write carries its credential, a refused one is set aside by credential and the queue-wide
+  auth block stays empty; these views now read both. "Delivery has been stopped for N min" counts
+  from the first refusal instead of the latest retry.
 
 ## 0.192.0
 
