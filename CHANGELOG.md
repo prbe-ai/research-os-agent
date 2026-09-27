@@ -38,6 +38,18 @@
   (a 503/429/502/504 on a GET or PUT) also wait at least the server's `Retry-After` instead of
   0.2 s; a `Retry-After` longer than 10 s goes straight back to the caller's loop, carried on
   the error as `retry_after`.
+- **A long-lived process no longer drops every write after 500k `log()` calls.** The
+  outbox's queue-length cap (`PROBE_OUTBOX_MAX_PENDING`, 500k) counted appends for the
+  life of the process: the detached worker's deliveries happen in another process and
+  never lowered the count, so once a process had logged 500k times every later write was
+  refused while the queue sat empty (live, with the cap at 150: 150 of 450 arrived). The
+  count now follows `status.json` (which each drain pass rewrites when it ends) on every
+  append, and a write that would still be refused first counts the queue directory itself
+  (at most once a second), so a long drain pass no longer refuses writes into a queue it has
+  mostly emptied. `finish()` also reports writes this process dropped before they reached
+  the outbox (full or unwritable): a warning, and `probe_finish.dropped_writes=N` on the
+  run; the close itself is never refused by the cap. A producer record keeps a
+  `gap_count` and its last 32 gaps instead of every one, and each drop is recorded once.
 - **A re-login no longer kills a running job's heartbeat.** `probe login` revokes the token a
   running process was built with; its heartbeat was then refused on every beat, the refusal was
   swallowed, and 15 minutes later the run was marked `crashed` while it was still training. When
