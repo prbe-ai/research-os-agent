@@ -150,6 +150,12 @@
   delivery have their own bounds and are not cut off by `probe.init()`'s retry budget. A process
   whose run was taken over says so once and stops heartbeating. Needs a server that declares `run_reopen_takeover`; an
   older one keeps the old conflict.
+- **A close that fails on its last request is queued even behind a full outbox.** When
+  `finish()`'s own terminal status write failed (a blip on the last request), its copy for the
+  outbox went through the queue-length cap, so a queue full of other runs' writes refused it:
+  the close was lost and `finish()` reported it delivered. It is admitted now, like the deferred
+  close, and a close the outbox cannot take at all is reported `close_unrecorded`. A write about
+  to be refused at the cap counts the queue without holding the append lock.
 
 ## 0.191.0
 
