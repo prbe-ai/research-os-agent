@@ -131,6 +131,16 @@
     (`openaiApiKey`), `f"..."`-prefixed literals and `os.environ.setdefault(...)` defaults, `*_KEY`
     names (`AZURE_OPENAI_KEY`), netrc/Maven password lines, URL passwords over 64 characters, and
     base64/escaped tokens in files over 2 MiB.
+- **Resuming from an older checkpoint no longer crashes the relaunch.** When a resumed run (on
+  `on_conflict="auto"`/`"resume"`, or a job that rejoins its run through `PROBE_RUN_ID` after the
+  reaper ended it) logs a step at or below the step the first attempt reached, `log()` raised a
+  `ValidationError` at the first training step. Those calls are now dropped, the way W&B does it:
+  nothing is sent, one warning names the resume point, the first dropped step and the two ways out
+  (`on_conflict=probe.Rewind(step=...)` to overwrite that range, `client.fork_run(...)` to keep
+  both curves), and one line says where logging resumed and how many calls were dropped. The
+  counts are kept on the run in a `resume_guard` diagnostic span. `run.step()` records are guarded
+  the same way, and `strict=True` still raises. A job rejoining through `PROBE_RUN_ID` now arms
+  the guard too (the reopen's resume point used to be thrown away there).
 
 ## 0.188.0
 
