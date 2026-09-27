@@ -88,9 +88,6 @@
   own verdict. Salvaged from #1710; SIGTERM and SIGKILL stay failures. `probe exec` also exits
   128+N when its command dies of signal N (143 for SIGTERM), the way a shell reports it, instead of
   the 241 it passed on for SIGTERM.
-- **Code capture no longer uploads files that hold credentials (security).** The run-open code
-  snapshot streamed every captured file's bytes without a content scan, and inside a git repo it
-  did not even apply the credential-shaped NAME filter the non-git walk uses: an untracked,
 - **Code capture no longer uploads files that hold credentials (security, #2000).** The run-open
   code snapshot streamed every captured file's bytes without a content scan, and inside a git repo
   it did not even apply the credential-shaped NAME filter the non-git walk uses: an untracked,
