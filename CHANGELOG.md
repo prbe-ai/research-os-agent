@@ -97,6 +97,23 @@
   own verdict. Salvaged from #1710; SIGTERM and SIGKILL stay failures. `probe exec` also exits
   128+N when its command dies of signal N (143 for SIGTERM), the way a shell reports it, instead of
   the 241 it passed on for SIGTERM.
+- **Code capture no longer writes into your `.git`, and works without a git identity.** The
+  run-open snapshot used to commit the whole working tree, untracked files included, into
+  `refs/probe/snapshots/<run>`. That needed a git author identity (a bare pod has none, and then
+  nothing was captured at all: no code, deps or argv), grew one repo's `.git` from 20 to 306 MB,
+  and `git push --mirror` published those refs, an untracked `.env` among them. Git is now read,
+  never written: HEAD, branch and dirty under `GIT_OPTIONAL_LOCKS=0`, so no object, ref or index
+  write. No identity, an unborn HEAD or a read-only `.git` capture normally; a repo git cannot
+  read or list (no git binary, "dubious ownership", a corrupt index) is captured as a plain
+  directory with the reason in the code-snapshot's `meta.git_error` (a corrupt index still records
+  HEAD and branch; dirty is unknown). The code-snapshot row points at what was stored
+  (`probe-manifest:`/`probe-artifact:`) instead of a shadow ref, and records `meta.head`. Old refs
+  are never deleted automatically. They are reported on stderr once per repo (again if more
+  appear, and seen even with warnings ignored) and by `probe doctor`. `probe snapshot-prune-refs`
+  removes them (loose and packed), printing `<ref> <sha>` for each so a delete can be undone. By
+  default it deletes only refs whose run's code Probe says it stored in full, and keeps the rest
+  with the reason; `--bundle FILE` backs every ref up first, `--force` deletes them as they are,
+  and `--dry-run` changes nothing.
 - **Code capture no longer uploads files that hold credentials (security, #2000).** The run-open
   code snapshot streamed every captured file's bytes without a content scan, and inside a git repo
   it did not even apply the credential-shaped NAME filter the non-git walk uses: an untracked,
