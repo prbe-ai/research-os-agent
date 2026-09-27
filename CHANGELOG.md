@@ -142,6 +142,17 @@
   the same way, and `strict=True` still raises. A job rejoining through `PROBE_RUN_ID` now arms
   the guard too (the reopen's resume point used to be thrown away there).
 
+- **A metric point is dated when your loop logged it, not when the server received it.**
+  `run.log()` / `probe.log()` now send the call time as each point's `wall_clock` (all keys in one
+  call share it). Before, the server dated a point on arrival, so points the outbox held through an
+  outage landed up to minutes late (131 s after a 90 s outage, measured) and findings saw a gap
+  followed by a burst. An explicit `wall_clock=` still wins; `log_derived` / `log_derived_series`
+  are unchanged. Side effect: findings now bin by the machine's own clock, so the SDK warns once per
+  process when that clock is more than 60 s off the server's (read from the HTTP `Date` header).
+  Stamps strictly increase within a process, so a frozen clock (freezegun) or one stepped backwards
+  cannot merge two `step=None` points into one. The stamps skip the credential scrubber (a value
+  that is exactly an ISO-8601 timestamp cannot hold a secret), so `log()` costs what it did before.
+
 ## 0.188.0
 
 - **`probe.context()` names the batch a crash happened in.** Wrap each batch or sample in

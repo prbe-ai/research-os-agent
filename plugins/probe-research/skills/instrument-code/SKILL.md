@@ -220,8 +220,9 @@ disagree.
 - Never call HTTP synchronously inside a coroutine - in an async reward it
   serialises every other sample and stalls the timers `asyncio.wait_for` depends
   on, so timeouts overshoot silently. Use `asyncio.to_thread`, or a queue
-- Pass `wall_clock=` the event's own time. Omitted, the server stamps ARRIVAL,
-  and behind the queue below that is drain time
+- `run.log`/`probe.log` date each point with its call time; pass `wall_clock=`
+  only for an event that happened earlier. `log_derived*` and older SDKs send
+  none, and the server then stamps ARRIVAL - behind the queue below, drain time
 - Prefer the SDK's durable on-disk queue to per-event network calls
 - Cache handles per process, but cache only SUCCESS - the first attempt often
   races the run's creation, and a cached miss disables capture for the life of
