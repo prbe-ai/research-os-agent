@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **`probe.init()` rides out a short API outage, and a lost create never makes a second run
+  (plan 2.5).** It retries for up to `PROBE_INIT_TIMEOUT_SEC` (default 90 s; `0` = the old
+  few quick retries) with jittered backoff and the server's `Retry-After`, then raises (a
+  refused API used to raise after 1.9 s). 401/403/404/409/422 still come back on the first
+  try. Every run create now carries a fresh `creation_key`; when a create's answer is lost
+  (read timeout, dropped connection, 502/503/504) the SDK sends the same request again only
+  on a server that declares `run_creation_key`, and gets back the run it already made
+  instead of a duplicate (or, with an `external_id`, a 409 against itself). On an older
+  server the failure stands, as before. A 429 on a create is re-sent on any server (nothing
+  was processed). A `Retry-After` is waited out whenever the budget still holds it, the same
+  for a create as for a read; one longer than the budget has left (or, with no budget, than
+  10 s) raises at once instead of sleeping. The first retry prints one stderr line. The code
+  snapshot, output capture and the heartbeat thread are outside that budget
+  (`transport.without_patience()`).
+- **`PROBE_MODE=disabled` (or `probe.init(mode="disabled")`).** `probe.init()` returns a run
+  that records nothing: no client, no network, no outbox directory, no exit hooks, and every
+  `probe.log()` / `span()` / `finish()` is a no-op. An unknown mode (`PROBE_MODE=disable`)
+  raises instead of going online; `offline` is not available yet (plan 2.12).
 - **A resumed run's dropped steps are reported more precisely (#2022 follow-ups).**
   - A job that rejoined its run through `PROBE_RUN_ID` is told what works from there:
     `probe.init()` joining a run takes no `on_conflict`. To overwrite the old range, relaunch
