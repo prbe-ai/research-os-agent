@@ -88,6 +88,52 @@
   own verdict. Salvaged from #1710; SIGTERM and SIGKILL stay failures. `probe exec` also exits
   128+N when its command dies of signal N (143 for SIGTERM), the way a shell reports it, instead of
   the 241 it passed on for SIGTERM.
+- **Code capture no longer uploads files that hold credentials (security).** The run-open code
+  snapshot streamed every captured file's bytes without a content scan, and inside a git repo it
+  did not even apply the credential-shaped NAME filter the non-git walk uses: an untracked,
+- **Code capture no longer uploads files that hold credentials (security, #2000).** The run-open
+  code snapshot streamed every captured file's bytes without a content scan, and inside a git repo
+  it did not even apply the credential-shaped NAME filter the non-git walk uses: an untracked,
+  non-ignored `.env` or a scratch file with a `probe_pat_`/HF/AWS/GitHub token was stored
+  byte-identical. Now:
+  - Untracked and walked files pass the full name filter; TRACKED files only the exact-name,
+    prefix and suffix rules (`tap_core/secrets.py` and a committed `.so` are code), and any
+    tracked-file skip is announced. Files under a credential folder (`.secrets`, `secrets`, `.aws`,
+    `.ssh`, `.gnupg`, `.docker`) are skipped on every path. Credential names include `*.env`,
+    `.env-*`, `.envrc`, `netrc`/`_netrc`/`.netrc`, `.pgpass`/`pgpass.conf`, `.dockercfg` and
+    `.git-credentials`; templates (`*.example`, `*.sample`, `*.template`) are not, and their content
+    is scanned like any file's. `include=` records a symlink as a link and never follows one out of
+    the project.
+  - Every file that could be uploaded is content-scanned before anything is presigned: the shared
+    scanner's full rules with its decoding layer (base64, `%xx`, `\u` escapes) up to 2 MiB, the
+    quick check streamed in 1 MiB chunks above that. UTF-16 is read as UTF-16 with or without a
+    byte-order mark, at any size. Compressed archives (`.tar.gz`/`.bz2`/`.xz`, `.gz`, a zip's
+    compressed members) are opened one level deep: member names against the credential-name rules,
+    member bytes through the same scan; one that cannot be read is withheld as `uninspectable`.
+  - A file with a finding is WITHHELD, never redacted (snapshots are exact): it stays in the
+    manifest as `source: "withheld"` with its size (and its sha256 only from 1 MiB up), is never
+    uploaded, and is listed under `skipped` with reason `secret`, `found_in: content` and the rule
+    names (never a value); one warning names the files. `probe snapshot-show` and restore report
+    it as withheld.
+  - A key-name hit counts unless its value is plainly not one: a template slot (`{user}`,
+    `$2::uuid`, `${VAR}`, `<TOKEN>`), a comparison, a value on the next line, a separator that
+    belongs to another key on the line (`add_argument("--token", help=...)`), or -- in source
+    files -- a value whose FIRST word is code (`tokens[0]`, `getpass.getpass()`, a type, a name used
+    elsewhere in the file). So `# password: Tr0ub4dor&3xQ (rotate monthly)`, `# api_key: <hex>.`
+    and `password: str = "..."` are withheld; `token = tokens[0]` is not. A vendor-shaped token
+    inside a dropped hit always counts.
+  - Every file up to 64 MiB is scanned (larger ones are recorded where they live, as before). The
+    scan has a time budget: a file whose scan runs past 3 s -- or a large non-source file reached
+    after the snapshot's 15 s total is spent -- is withheld with reason `scan_budget` (never
+    uploaded unscanned) and one warning says how many. `PROBE_SNAPSHOT_FILE_SCAN_BUDGET_SEC` and
+    `PROBE_SNAPSHOT_SCAN_BUDGET_SEC` change them (`0` = no limit). The scan runs whether or not the
+    snapshot uploads (so the tree's identity does not depend on it) and, when uploading, stops at
+    the upload cap (`max_upload_bytes`). It adds ~6.5 s to `probe.init()` on a 3,600-file / 64 MB
+    tree.
+  - Not yet caught (scanner rules; a follow-up in `tap_core/secrets.py`): camelCase key names
+    (`openaiApiKey`), `f"..."`-prefixed literals and `os.environ.setdefault(...)` defaults, `*_KEY`
+    names (`AZURE_OPENAI_KEY`), netrc/Maven password lines, URL passwords over 64 characters, and
+    base64/escaped tokens in files over 2 MiB.
 
 ## 0.188.0
 
