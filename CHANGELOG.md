@@ -260,6 +260,20 @@
   sends exactly the bytes it did before. Note: W&B's history uses `.` for nesting, so a run
   brought in with `probe import wandb` keeps `a.b` keys, which are a different series from `a/b`.
 
+- **`probe.log(..., commit=False)`, as in W&B.** `commit=False` holds the values in a pending row
+  instead of sending them; the next `log()` at the same step (or with `step` omitted) adds its
+  values and sends the row once (the last value per key wins). A `log()` at a different step sends
+  the held row first, and `probe.finish()`, the end of a `with` block and the exit hook send any row
+  still held. A crash before that loses it, as in W&B. A preemption handler (SLURM, submitit) that
+  interrupts a `commit=False` call and calls `log()` or `finish()` never hangs: its own values are
+  sent at once, and `finish()` warns that the interrupted row was not sent. Nothing changes for
+  calls that do not pass `commit=False`. One difference from W&B: a bare `log()` after
+  `log(step=5)` lands at step 6 (W&B: 5).
+- **Two `log()` calls with text at the same step no longer wipe each other.** The server replaces a
+  step's record on every write, so `log({"phase": "eval"}, step=3)` then `log({"note": "x"},
+  step=3)` kept only `note`. The SDK now sends both keys (the newer value wins per key), for the
+  last 64 steps a run wrote.
+
 ## 0.188.0
 
 - **`probe.context()` names the batch a crash happened in.** Wrap each batch or sample in
