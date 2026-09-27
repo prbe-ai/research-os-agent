@@ -274,6 +274,28 @@
   step=3)` kept only `note`. The SDK now sends both keys (the newer value wins per key), for the
   last 64 steps a run wrote.
 
+- **Configs arrive as configs, and can change after `probe.init()`.** `config=` now takes an
+  `argparse.Namespace` (jsonargparse's, as LightningCLI hands out, and `SimpleNamespace` too), a
+  dataclass, a Hydra/OmegaConf `DictConfig`, a pydantic model or a dict holding numpy values, and
+  stores the dict you meant. A field marked not to show (`dataclasses.field(repr=False)`, pydantic
+  `Field(repr=False)`) is left out. Interpolations resolve, except one that would reveal a secret:
+  one reading the environment (`${oc.env:KEY}`), one naming a credential (`${wandb.api_key}`) or a
+  chain to either, an alias to a whole credential group included, stays its `${...}` text. That is a deliberate difference from W&B, which resolves
+  everything. Before, each became one
+  `repr()` string or a 422. NaN and infinity become `"NaN"` / `"Infinity"`, small arrays become lists,
+  and a top level that is not a mapping is refused before any request. New
+  `run.update_config({...})` / `probe.update_config({...})`, and writes to `run.config` (`run.config["lr"]
+  = 3e-4`, `.update()`, `run.config.lr = ...`), merge into the stored config: shallow, new wins, as in
+  W&B. Changing an existing value warns once per key (`allow_val_change=True` silences it,
+  `allow_val_change=False` refuses); a value under a credential name is compared and shown only as
+  it is sent, redacted. Copies of `run.config` are plain dicts, and `run.config |= {...}` sends. It needs a server that serves `run_config_merge`; an older one
+  would silently drop the field, so the SDK does not send it there and warns once instead. Under
+  `probe exec`, `probe.init(config=...)` now records the config on the joined run from global rank 0,
+  where it used to be dropped with an "ignored" warning. `log()` reads numpy values and 1-element
+  tensors through `.item()`: no numpy deprecation warning to raise under `-W error`, and a
+  multi-element tensor goes to the step record instead of raising. A numpy scalar anywhere in a
+  request is sent as a number, not its `repr()`.
+
 ## 0.188.0
 
 - **`probe.context()` names the batch a crash happened in.** Wrap each batch or sample in
