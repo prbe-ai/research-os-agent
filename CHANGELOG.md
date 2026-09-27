@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.195.0
+
 - **A write Probe refused now fails the command.** Every `probe` write used to swallow the server's
   answer: a refusal (a run that does not exist, an invalid value, a second parent) was queued,
   printed `null` and exited 0, and the Probe daemon filed it as recorded. Now a refusal (any 4xx)
