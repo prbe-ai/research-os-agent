@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- **`.probeignore`: tell Probe which files not to capture.** Code capture stored everything git
+  could not supply and output capture everything a run wrote, so a team keeping datasets, result
+  dumps or checkpoints beside its code had no way to say "not these" short of gitignoring them.
+  Now a `.probeignore` at the git toplevel (or the working directory outside a repo; only that
+  one file, a nested one is not read), in gitignore syntax, plus `PROBE_IGNORE` (one pattern per
+  line or comma-separated) and `probe.init(ignore=[...])` / `Client.run(ignore=...)`, keep
+  matching paths out of code capture (the manifest's `skipped` lists up to 50 as `probeignore`,
+  an excluded folder once rather than each file in it, and `n_probeignore` counts them all), the
+  output sweep, and read capture (an excluded read is never recorded or hashed, matched both as
+  opened and through its symlinks; `probe exec` filters its child's reads the same way, also when
+  a later run recovers a Ctrl-C'd child's reads, and exports `PROBE_IGNORE_FILE` and its `ignore=`
+  patterns so the child uses the same rules). Under `probe exec`, a child's own
+  `probe.init(ignore=[...])` reaches the launcher's read and output capture too, but not its code
+  snapshot, taken before the child started: the child warns, and such patterns belong in
+  `.probeignore` or `PROBE_IGNORE`. Outside the repo, for an `outputs=` folder in `$SCRATCH`,
+  unanchored `.probeignore` patterns (`*.jsonl`, `ckpt/`) and every `ignore=` / `PROBE_IGNORE`
+  pattern apply relative to that folder, while an anchored `.probeignore` line (`/data`) cannot,
+  and output capture says so once; for a file read from elsewhere, only unanchored patterns apply
+  (from any source), matched against its whole path. A file under an excluded folder stays out
+  whatever a later `!` line says, as in git, and a credential stays withheld whatever a `!` line
+  says; an explicit `log_artifact` or `snapshot(include=...)` still wins. Matching is
+  case-sensitive, trailing spaces are trimmed as git trims them, and it is bounded: a pattern
+  with more than 3 `*` (whose regex could backtrack for minutes on one name), lines past 1,000
+  and bytes past 64 KB are skipped with a warning. Only a regular file is read (a FIFO no longer
+  hangs `probe.init()`), an unreadable one is warned about, and a UTF-16 one (PowerShell's `>`)
+  is decoded. Nothing changes without a file, variable or argument, and then `pathspec` (a new
+  dependency, `>=1.0`: 0.12 dropped a pattern's leading spaces) is not even imported.
 - **Python 3.10 is supported, and every installer now asks for `probe-research[all]`.**
   `probe-research` installs on Python 3.10 (it required 3.11), for ML images that are still on
   3.10. `tiktoken` is a tested range (`>=0.8,<0.14`) instead of an exact pin that clashed with

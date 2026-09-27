@@ -54,7 +54,10 @@ tell whose files are whose, so capture skips them and warns. Give each run its
 own: `probe.init(..., outputs=f"results/{seed}")` (`probe exec --outputs`).
 
 Opt out with `probe.init(capture_outputs=False)`, `PROBE_CAPTURE_OUTPUTS=0` or
-`probe exec --no-capture-outputs`. `PROBE_CAPTURE_LOG=0` keeps outputs but drops
+`probe exec --no-capture-outputs`. To keep only some paths out (datasets,
+checkpoints), list them in a `.probeignore` at the git toplevel (gitignore
+syntax) or `PROBE_IGNORE`: that covers code, output and read capture.
+`PROBE_CAPTURE_LOG=0` keeps outputs but drops
 the log - and with it capture after a hard death, which the log's helper runs.
 Nothing survives a death that takes the whole container or job step with it (the
 program as a container's PID 1): write to lasting storage there.
