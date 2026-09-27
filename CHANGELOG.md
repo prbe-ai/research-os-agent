@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A killed or crashed training process shows as `crashed` within seconds.** SIGKILL, the OOM
+  killer, a segfault or an unhandled SIGTERM runs no Python, so the run used to read `running` until
+  the server's 15-minute reaper. The output-capture helper (which outlives the process) now notices
+  the moment its parent is gone, even while a child process still holds stdout, and reports it
+  (about 1-2 s on the same host); the server ends the run only when this process was its sole
+  writer. `probe exec` launchers never report their child. If a report (or the reaper) is ever
+  wrong, the live process's next heartbeat puts the run back to `running` on the same write epoch;
+  a `crashed` a person set (`probe run end --status crashed`) is left alone. A report made during a
+  network partition is queued and delivered later; a script that daemonizes (forks, and its child
+  keeps writing the run) is not reported dead (while that child lives: a pid the kernel reused for
+  another process does not count); with `PROBE_BOX=1` on a HOME shared across machines
+  or containers, the node agent judges only its own host's runs. Needs a server that declares
+  `run_writer_gone`.
 - **A relaunch's takeover no longer strands, retires or waits on the previous attempt's close.**
   A relaunch killed hard while it held the previous attempt's queued close aside left it there
   until another relaunch ran on the same machine -- past the reaper's 15 minutes, so the run read
