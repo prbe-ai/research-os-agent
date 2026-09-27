@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The generated models know a long run's smoothing receipts.** `MetricExactness` in
+  `probe._generated.models` gains `sampled_smoothed` and `sampled_unsmoothed`, which the server's
+  chart reads (SDK reliability plan 1.8) put in `read_provenance.exactness` for a long series
+  whose smoothing came from sampled buckets, or was not drawn. Only those two members are added;
+  the rest of the file is unchanged.
 - **`.probeignore`: tell Probe which files not to capture.** Code capture stored everything git
   could not supply and output capture everything a run wrote, so a team keeping datasets, result
   dumps or checkpoints beside its code had no way to say "not these" short of gitignoring them.
