@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **A re-login no longer kills a running job's heartbeat.** `probe login` revokes the token a
+  running process was built with; its heartbeat was then refused on every beat, the refusal was
+  swallowed, and 15 minutes later the run was marked `crashed` while it was still training. When
+  the API refuses the credential itself (a 401, or a 403 saying the key's team or membership is
+  gone; never a 403 about a missing scope), the heartbeat, the in-process outbox exporter and
+  `client.flush()` now re-read it and retry once. It is re-read only where it came from:
+  `PROBE_TOKEN` from the environment, or this context's stored `probe login`. The new token is
+  used only if `/v1/me` says it belongs to the same team and user the process started as. A login
+  as anyone else, or a `PROBE_TOKEN` job on a box where someone else is logged in, keeps the old
+  token and says so, once. The exporter waits for a new `probe login` instead of stopping, and
+  does not hold the outbox's worker lock while it waits; a drain by another process still stops at
+  the same refused write. The account is looked up once, when a heartbeat or the exporter starts;
+  the config file is read at most once every 30 seconds after that, and the network is used again
+  only when the token changed. Only clients that read their
+  credential from the environment or `probe login` do this (`probe.init()`, a bare `Client()`); a
+  token passed in code is never replaced. New: `Client.refresh_credentials()`.
+
 ## 0.189.0
 
 - **A long outage no longer throws away the data queued during it.** When the server's reaper marked
