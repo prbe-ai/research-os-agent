@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **A job requeued onto the same run no longer fails at `init()` for 15 minutes.** When a pod is
+  replaced before the server notices the old one died, the relaunch (`on_conflict="auto"`,
+  `"resume"` or `probe.Rewind`) now takes the run over once it has been silent for three heartbeat
+  intervals (at least 3 minutes), waiting up to `PROBE_TAKEOVER_WAIT_SEC` (300 s; 0 in a notebook)
+  with one line on stderr. An incumbent that is still talking is a live duplicate and still
+  conflicts. Before any resume or takeover, whatever the previous attempt left queued in the outbox
+  is delivered first (up to `PROBE_TAKEOVER_DRAIN_SEC`, 120 s, which bounds every request of the
+  drain), because the new attempt's write
+  epoch would refuse it; before this, resuming a crashed run on a shared outbox threw that backlog
+  away. The previous attempt's own queued close is held aside meanwhile and retired only once the
+  takeover succeeds (the relaunch owns the verdict, and its "draining" tag is dropped); a relaunch
+  that is refused puts it back, so the finished run still closes. The wait and the backlog
+  delivery have their own bounds and are not cut off by `probe.init()`'s retry budget. A process
+  whose run was taken over says so once and stops heartbeating. Needs a server that declares `run_reopen_takeover`; an
+  older one keeps the old conflict.
+
 ## 0.191.0
 
 - **PyTorch Lightning logger: `probe.integrations.lightning.ProbeLogger`.** Pass it as
