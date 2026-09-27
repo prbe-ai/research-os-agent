@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A script that simply ends closes its run even when its last write collides** (fixed in
+  0.190.0, now pinned by a test). The exit hook runs the same `finish()` and swallowed its
+  `run … not closed` error, so the run was neither closed nor queued to close: it read
+  `running` until the reaper called it `crashed` and mailed a crash notice about a run that
+  had succeeded. Scripts launched from a coding agent hit it most, because their run writes
+  also record the agent session, which holds the run row longer. 0.190.0's `finish()` change
+  is the fix; `test_exit_close_after_busy.py` pins the exit path with and without a Claude
+  Code environment.
+
 ## 0.190.0
 
 - **`finish()` never raises over delivery, and waits for at most one deadline.** The
