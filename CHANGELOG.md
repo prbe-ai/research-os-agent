@@ -156,6 +156,20 @@
   the close was lost and `finish()` reported it delivered. It is admitted now, like the deferred
   close, and a close the outbox cannot take at all is reported `close_unrecorded`. A write about
   to be refused at the cap counts the queue without holding the append lock.
+- **The outbox delivers a backlog in a few requests instead of one per `log()`.** Delivery sent
+  one POST per queued write, about 13 a second at a real round trip, so a 2,000-step run took
+  over two minutes to drain after the loop ended. A run's consecutive metric writes now go in
+  one POST (up to 5,000 points or 2 MiB), each still removed and counted on its own once it
+  lands. Only writes whose every point has a step or a client timestamp merge, so writes queued
+  by older releases drain one by one as before. If the server refuses a merged POST for a
+  reason one write could cause (413, 422, a 500), it is split in halves until that write is
+  found: it alone is charged or dead-lettered and its neighbours land. A
+  refusal true of the whole batch (a fenced epoch, a deleted run) dead-letters it in one request;
+  a busy server (503, 429) stops at the first write, as it would unmerged. A write that already
+  failed is sent alone, and so is a batch whose answer was lost. Every metrics write (`log()`,
+  `log_derived*`, the hardware rail, `probe import wandb`) now drops, with one warning per kind, a
+  point whose step is outside 64 bits or whose key is over 2 KiB, which the server answered with a
+  500. Step records are not merged.
 
 ## 0.191.0
 
