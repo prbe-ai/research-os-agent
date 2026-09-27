@@ -16,6 +16,20 @@
   gains the OS store, urllib gains certifi. The plugin hooks and the tap keep urllib's default
   trust for now; their shared helpers only gained an optional `context` argument, which the CLI
   fills.
+- **Hardware metrics no longer collide with the run's own writes (async writes, the default).** The hardware rail (on by
+  default) wrote around the outbox: its metric batches and an env_ref `PATCH` of the run went
+  straight to the API while the outbox was delivering the run's own metrics, and the server
+  answers a metric write that meets another writer on the run with a 503. In the live audit
+  `finish()` raised on 4 of 6 ten-step runs with hardware on, 0 of 6 with `PROBE_HW=0`. Under the
+  default async writes, hardware batches and that `PATCH` now queue in the outbox like every other
+  write to the run, carry the run's writer epoch, and never hold a run's close; a full outbox or
+  the low-disk floor drops them quietly, without counting them as lost data. With
+  `PROBE_ASYNC=0` they are still sent directly, so hardware charts stay live. `finish()` still
+  raises when any queued write meets a transient error; that retry is a separate change. The
+  hardware record also stops replacing the one a code snapshot pinned: it is minted only for runs
+  with no snapshot, as it always meant to be (new read-only `run.env_ref`, the hash this handle
+  pinned). An abandoned run's collector now stops with it, and `finish()` waits at most 0.5 s for
+  the hardware inventory. `PROBE_HW=0` / `run(hw=False)` are unchanged.
 
 ## 0.188.0
 
