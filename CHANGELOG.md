@@ -67,6 +67,18 @@
   rolled `.seq` back can never sort a new write (a run's close) ahead of older ones. A run's
   terminal status keeps every fsync. A process killed right after `log()` returns still loses
   nothing; a power loss can lose only the last few queued writes, never leave a torn one.
+- **One run's stuck write no longer holds every other run on the machine.** The outbox was one
+  machine-wide queue: the first write that failed transiently (a 503 for one run, a timeout)
+  ended the drain pass, and the worker slept and started again from the same write, so every
+  other run's data waited behind it, for up to the 24 h it takes that write to be dead-lettered.
+  The drain now keeps one lane per run and visits them in turn, one write each, so a run with a
+  deep backlog does not delay a new one either. A failure parks only its own run for the rest of
+  the pass; that run backs off on its own (at least the server's `Retry-After`) while the others
+  keep flowing, and a write another run queues meanwhile wakes the worker instead of waiting out
+  that backoff. Each run's own writes still go in the order they were queued, its close last. A
+  server that cannot be reached at all (a connect failure), or that stops answering twice in one
+  pass, still stops the pass for everyone. A parked run's queued writes are not re-read every
+  pass, and a run whose writes another process delivered is forgotten, so waiting costs no CPU.
 
 ## 0.190.0
 
