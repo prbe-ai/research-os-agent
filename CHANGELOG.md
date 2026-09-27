@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.191.0
+
 - **PyTorch Lightning logger: `probe.integrations.lightning.ProbeLogger`.** Pass it as
   `Trainer(logger=ProbeLogger(experiment="...", name="..."))` (install `probe-research[lightning]`).
   It opens the run on global rank 0, or adopts one `probe.init()` already opened, and logs each
