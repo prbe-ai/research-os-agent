@@ -160,6 +160,13 @@
   `ClientTooOldError` (with `.min_version`) instead of a bare `RosError`: `probe.init()` raises it
   as-is, and a queued write that hits one is dead-lettered instead of retried. The trash's 410 is
   unaffected.
+- **`client.run_metrics()` and `client.export_metric_points()` give back NaN and infinities.**
+  A logged `float("nan")`, `inf` or `-inf` used to read back as `None`, the same for all three.
+  Against a server that names them (a `nonfinite` field on each raw point), these reads, and
+  `Reader.metrics()`, now return the float the run logged, as `wandb.Api()` history does. The
+  JSON the CLI prints (`probe run metrics`, `probe metrics export`) and the MCP `metrics` tool
+  stay strict JSON: `"value": null` plus `"nonfinite": "nan" | "inf" | "-inf"`. An older server
+  still reads `None`.
 
 ## 0.188.0
 
