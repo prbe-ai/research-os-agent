@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.193.0
+
 - **Hugging Face Trainer callback: `probe.integrations.huggingface.ProbeCallback`.** After
   `import probe.integrations.huggingface`, `TrainingArguments(report_to="probe")` works; or pass
   `Trainer(callbacks=[ProbeCallback(experiment="...", name="...")])` to choose the run (install
