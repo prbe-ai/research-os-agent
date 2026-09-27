@@ -17,6 +17,14 @@
   Both caught it: a Ctrl-C mid-write was counted a dropped write (`probe_finish.dropped_writes=1`,
   a drop warning) and training went on, and one landing inside a warning was lost. Both let
   KeyboardInterrupt and `sys.exit` through now; the interrupted write leaves no partial file.
+- **A training process reports its delivery counts to us.** Every 15 minutes while it writes,
+  and at each `finish()`, it sends one `sdk.delivery.summary` telemetry event: how many writes it
+  attempted, dropped, sent directly and had dead-lettered since its last report (dead letters by
+  HTTP status; a floor, from the last 32 the outbox records), and how many are queued, for how
+  long, and how long delivery has been auth-blocked. Counts only, never a key, body, name or path;
+  `PROBE_TELEMETRY=off`, self-hosted servers and offline runs send nothing, as for every other
+  client event. The close's report re-reads the outbox and is handed over before the process
+  exits (with a slow PostHog, exit can take up to the telemetry sender's usual ~3.5 s bound).
 
 ## 0.192.0
 
