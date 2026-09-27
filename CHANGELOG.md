@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A long outage no longer throws away the data queued during it.** When the server's reaper marked
+  a silent run `crashed`, the heartbeat thread reopened it on reconnect with a new write epoch, and
+  every point already in the outbox (stamped with the old epoch) was refused and dead-lettered;
+  `probe outbox retry` could not bring it back, and other ranks of the same job stopped delivering
+  for the rest of the run. Recovery now keeps the epoch (`keep_epoch`); against a server too old to
+  do that it leaves the run `crashed` instead of reopening it, and the data still lands. Status
+  writes (`finish()`, `set_status`, a queued `run end`) now carry the handle's epoch so a superseded
+  attempt cannot close the newer one. `probe --async log` and `probe run end --async` no longer
+  stamp epoch 1 on runs that were reopened, which dead-lettered them.
 - **Corporate CA bundles work: `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` are honoured.** Behind a
   proxy that re-signs TLS, SDK writes failed certificate checks while telemetry got through,
   because the two used different trust: httpx read only `SSL_CERT_FILE`/`SSL_CERT_DIR` else
