@@ -2,6 +2,57 @@
 
 ## Unreleased
 
+- **A `PROBE_TOKEN` job's queued writes go out with its own token (#2035).** On a machine where
+  someone had run `probe login`, the outbox worker sent a `PROBE_TOKEN` job's queued writes with
+  that stored login instead: in the same team they were written as the other person, and across
+  teams the run was not found and the writes were dead-lettered. Another job's `flush()` could do
+  the same with its own token. Each queued write now records where its credential came from
+  (`PROBE_TOKEN`, the stored login, or a token passed in code) and a one-way fingerprint of it,
+  never the token itself. Whatever drains the outbox sends a write only with the credential that
+  queued it: the worker a job starts inherits its `PROBE_TOKEN`, and the job's own
+  `flush()`/`finish()` delivers the rest. A write nothing here can match stays queued. It does not
+  count as a failed attempt and does not hold up anyone else's writes, and `probe outbox drain`
+  says how many it kept and why. Writes queued by an older release keep the old rule.
+  - A write queued under the stored login goes out with a later login of that context only when
+    `GET /v1/me` says the new login is the same team and user. It used to go out with whoever was
+    logged in by then. Which account a token is gets recorded by `probe login`, the setup wizard,
+    a job's heartbeat, and the first write that goes out with that token. A login that never
+    delivered anything before it was revoked has no recorded account: its writes wait, and
+    `probe outbox discard --held` drops them. A worker from a release before this one still sends
+    such a write with whoever is logged in -- as it does a `PROBE_TOKEN` job's writes when that
+    token is the stored login's and someone else logs in over it -- and, draining the shared
+    queue, it can close a run before writes of it queued under another credential.
+  - When the API refuses a write's credential (a revoked or logged-out login), only that
+    credential's writes are set aside. The rest of the queue keeps delivering, and nothing blocks
+    the machine's outbox. The refused credential is tried again once every 5 minutes, or at once
+    after `probe login`.
+  - A `PROBE_TOKEN` or in-code credential's writes queue apart, in
+    `credential-v1/<fingerprint>/` under the outbox, with their own worker. No older release reads
+    that folder, so none can send them as the stored login, and a job whose token nothing else
+    holds no longer waits behind another credential's busy worker. The stored login's writes stay
+    in the shared queue, and so do a `PROBE_TOKEN` job's when its token IS the stored login. A
+    run's close (on a run with writer leases, its lease release) waits for that run's earlier
+    writes in another credential's queue, for at most 10 minutes, so it lands before the server's
+    crash sweep, and never for writes of an older attempt the server would refuse anyway.
+    `finish()` and `probe run end` count the run's writes in every queue, an older attempt's
+    aside, and a relaunch taking over its run names the old attempt's writes it cannot send (a
+    rotated `PROBE_TOKEN`). A `probe run end` from a release before this one cannot see those
+    queues and may close the run first. A `PROBE_TOKEN` rotated while writes of the old token are
+    queued leaves them waiting for that token
+    (`PROBE_TOKEN=<old> probe outbox drain`, or `probe outbox discard --held --credential
+    <fingerprint>`).
+  - A worker left with only writes it may not send stays up and backs their run off, instead of
+    exiting and being forked again on the next write (about one fork a second before). Credential
+    queues left empty are removed after an hour.
+  - `probe outbox discard --held` drops queued writes no credential on this machine will send as
+    things stand: a stored login's whose account is unknown or another account's, or whose login
+    was refused and is still the stored one. Another job's `PROBE_TOKEN` writes are that job's to
+    send and stay, unless `--credential <fingerprint>` names that credential (`probe outbox drain`
+    prints it).
+  - An `/ingest` write names the ingest token it goes out with, not the personal token, so no
+    drainer sends it with its own ingest token.
+  - A client built with a token in code delivers its queued writes in-process (the detached worker
+    cannot hold that token); before, they waited for `flush()` or `finish()`.
 - **Each process writes its run under its own lease (SDK reliability 2.8).** Against a server that
   declares `run_writer_leases`, `probe.init()` (and `probe exec`, and every rank that joins through
   `PROBE_RUN_ID`) registers a lease for its process and beats that lease instead of the run-level
