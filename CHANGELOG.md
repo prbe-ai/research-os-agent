@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **`finish()` spends far less time preparing the list of files a run read.** With read capture on,
+  a run that opened 10k files spent ~4 s (6.8 s on a slower box) at `finish()` scrubbing that
+  list: the outbox's generic scrubber walked every field of every row several times. Each row is
+  now built by type -- the path scrubbed for credentials once; hashes, sizes and timestamps
+  checked against their exact shape (a malformed hash or size is sent as empty, never as text,
+  and a row whose timestamp this module did not write is dropped and counted in coverage as
+  `malformed_rows`, never re-dated to the collect time) -- and the outbox's own scrub passes skip
+  the shape-checked fields and look the paths up in a scrubber cache (strings up to 256
+  characters, 16,384 entries). 10k realistic reads (every row its own path, hash, fingerprint and
+  timestamp): 47,957 full scans -> about one per path; ~3.9 s -> ~0.7 s. The stored paths are
+  unchanged; a credential in a read path is still redacted. The cache is OFF unless a
+  researcher's run turns it on (`Client.run`, `probe.init`): the hosted MCP server forbids it,
+  the API's W&B import worker keeps it off, and the vendored server copy can never enable it, so
+  no process that serves several tenants holds one tenant's strings or reveals, by timing,
+  whether another sent one.
+
 - **A script that simply ends closes its run even when its last write collides** (fixed in
   0.190.0, now pinned by a test). The exit hook runs the same `finish()` and swallowed its
   `run … not closed` error, so the run was neither closed nor queued to close: it read
