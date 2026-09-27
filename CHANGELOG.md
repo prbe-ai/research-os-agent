@@ -193,6 +193,41 @@
   JSON the CLI prints (`probe run metrics`, `probe metrics export`) and the MCP `metrics` tool
   stay strict JSON: `"value": null` plus `"nonfinite": "nan" | "inf" | "-inf"`. An older server
   still reads `None`.
+- **The daemon keeps one conversation per session by default (`PROBE_DAEMON_MODE=conversation`).**
+  Each new stretch of the transcript is added as the next message, and nothing is re-sent at the end
+  of every request, so the prompt cache holds: the companion bench measured 96-98% of input read
+  from the cache on Claude and 30-50% lower cost than fresh bites, at the same checks. The state of
+  the record is `session(op=status)`, on demand. `PROBE_DAEMON_MODE=bites` keeps the old mode.
+- **The daemon's tools say what to fix instead of asking the researcher.** A `session(op=search)`
+  with a `kind` that is not one is refused with the list (a guessed kind used to answer "no event
+  matches"); a note written in any shape but `cat > FILE <<'TAG'` is told that shape; a `git log`,
+  `diff` or `show` missing `--no-textconv --no-ext-diff` answers "not run" with the flags to add,
+  instead of a question on the researcher's board. A line from the coding agent's harness shows as a
+  300-character preview. The coding agent's memory index comes back after a compaction. Skills
+  installed under the user base (`pip install --user`) are found, and missing ones are logged.
+- **The daemon records by the researcher's own skills, with the prompt text he approved.** Its
+  instructions now carry `track-work` and `edit-notes` whole, after a short job description that
+  keeps only the daemon's role and how its harness works; `track-work/reference.md` and the other
+  skill files are a `read` away. Every other line the daemon's model reads -- the tool
+  descriptions, the labels around the chat in a bite, the status answer, the compaction prompt, the
+  loop detector's stop, the tools' replies, the check and shell reasons, the reader's replies and
+  the notices -- is the researcher's reviewed wording: shorter, and no advice on what to record.
+  Also: a notice shows whole (it was cut at 300 characters) and a line from the coding agent's
+  harness is labelled apart from the daemon's own; a refused read counts toward the loop detector;
+  a yes that could not run says only why.
+- `probe doctor`, `probe companion authorize` and the setup text say the daemon's key can delete
+  only into the trash (since 0261; control/049 gave older keys the same), not "no delete".
+- **The daemon has three tools of its own: `shell`, `read` and `session`.** `session(op=...)` replaces
+  `session_open`, `session_search` and `record_status` (`op`: open, outline, search, logbook, status),
+  and refuses an argument that belongs to another op instead of ignoring it. `read` also opens the
+  Probe skills folder, read-only. Gone: the skills tools (`load_capability`, `read_skill_resource`)
+  and `read_tool_result`: each tool caps its own output, and the session outline now comes in pages.
+- **The daemon keeps no memory of its own.** Its per-project MEMORY.md and the memory tools
+  (`write_memory`, `read_memory`, `search_memory`, `delete_memory`) are gone, and its whole state
+  folder stays closed to its shell. It still reads the coding agent's own memory index, read-only.
+- **The daemon no longer asks a judge model which of the agent's paragraphs look unrecorded.** The
+  per-turn judge (`POST /v1/companion/judge`) and its `PROBE_DAEMON_JUDGE` switch are gone; notes
+  are optional.
 
 ## 0.188.0
 
