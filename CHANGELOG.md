@@ -76,6 +76,68 @@
   only when the token changed. Only clients that read their
   credential from the environment or `probe login` do this (`probe.init()`, a bare `Client()`); a
   token passed in code is never replaced. New: `Client.refresh_credentials()`.
+- **Nested dicts are charted: `probe.log({"eval": {"acc": 0.9}})` writes `eval/acc`.** Before, a
+  nested dict could not be a number, so the whole dict went into the step record and nothing was
+  plotted. Any mapping now flattens to `/` keys (the separator the run page sections panels by),
+  an OmegaConf `DictConfig` too, all at one step; non-numeric leaves land in the step record under
+  their flat key (`eval/text`). Lists are not flattened and an empty dict writes nothing. If you
+  log both `"a/b"` and `{"a": {"b": ...}}`, the explicit `"a/b"` wins, with one warning per key per
+  run. Nesting deeper than 16 levels, or a dict that contains itself, is kept as one step value
+  with a warning. Secrets stay redacted:
+  - A nested field named like a credential (`db.pwd`, `headers.authorization`, `wandb.apikey`) is
+    redacted exactly as it was when the whole dict went to the step record. Numbers are redacted
+    too, except under ordinary-word names (`token`, `secret`, `cookie`, `credential`), where the
+    scrubber keeps a number or plain word, as it always has.
+  - A dict under a credential name (`{"token": {...}}`, a `bytes` key included) is still dropped
+    whole.
+  - A step-record key with a `/` is judged segment by segment, so `tok/pad_token` stays a model
+    setting and `headers/authorization` is redacted even when written flat.
+  - A Hydra/OmegaConf interpolation that would reveal a secret stays its unresolved `${...}` text:
+    one reading the environment (`${oc.env:KEY}`), one naming a credential (`${wandb.api_key}`),
+    and a chain to either, including an alias to a whole credential group (`alias:
+    ${credentials}`, then `auth: ${alias}`) and a secret embedded in a string (`pw=${alias}`,
+    for a secret of 4 characters or more). Other interpolations resolve. A `???` stays `???`.
+
+  A dict keyed by data (`{"per_example_loss": {example_id: v}}`) would mint a series per id. So
+  after 1,000 distinct nested keys in a run, or for a key longer than 256 characters, that
+  top-level value is kept whole in the step record, with one warning. `dimensions` and `labels`
+  are unchanged (still flat maps), and `log_derived` does not flatten. A call with no nested dict
+  sends exactly the bytes it did before. Note: W&B's history uses `.` for nesting, so a run
+  brought in with `probe import wandb` keeps `a.b` keys, which are a different series from `a/b`.
+- **`probe.log(..., commit=False)`, as in W&B.** `commit=False` holds the values in a pending row
+  instead of sending them; the next `log()` at the same step (or with `step` omitted) adds its
+  values and sends the row once (the last value per key wins). A `log()` at a different step sends
+  the held row first, and `probe.finish()`, the end of a `with` block and the exit hook send any row
+  still held. A crash before that loses it, as in W&B. A preemption handler (SLURM, submitit) that
+  interrupts a `commit=False` call and calls `log()` or `finish()` never hangs: its own values are
+  sent at once, and `finish()` warns that the interrupted row was not sent. Nothing changes for
+  calls that do not pass `commit=False`. One difference from W&B: a bare `log()` after
+  `log(step=5)` lands at step 6 (W&B: 5).
+- **Two `log()` calls with text at the same step no longer wipe each other.** The server replaces a
+  step's record on every write, so `log({"phase": "eval"}, step=3)` then `log({"note": "x"},
+  step=3)` kept only `note`. The SDK now sends both keys (the newer value wins per key), for the
+  last 64 steps a run wrote.
+- **Configs arrive as configs, and can change after `probe.init()`.** `config=` now takes an
+  `argparse.Namespace` (jsonargparse's, as LightningCLI hands out, and `SimpleNamespace` too), a
+  dataclass, a Hydra/OmegaConf `DictConfig`, a pydantic model or a dict holding numpy values, and
+  stores the dict you meant. A field marked not to show (`dataclasses.field(repr=False)`, pydantic
+  `Field(repr=False)`) is left out. Interpolations resolve, except one that would reveal a secret:
+  one reading the environment (`${oc.env:KEY}`), one naming a credential (`${wandb.api_key}`) or a
+  chain to either, an alias to a whole credential group included, stays its `${...}` text. That is a deliberate difference from W&B, which resolves
+  everything. Before, each became one
+  `repr()` string or a 422. NaN and infinity become `"NaN"` / `"Infinity"`, small arrays become lists,
+  and a top level that is not a mapping is refused before any request. New
+  `run.update_config({...})` / `probe.update_config({...})`, and writes to `run.config` (`run.config["lr"]
+  = 3e-4`, `.update()`, `run.config.lr = ...`), merge into the stored config: shallow, new wins, as in
+  W&B. Changing an existing value warns once per key (`allow_val_change=True` silences it,
+  `allow_val_change=False` refuses); a value under a credential name is compared and shown only as
+  it is sent, redacted. Copies of `run.config` are plain dicts, and `run.config |= {...}` sends. It needs a server that serves `run_config_merge`; an older one
+  would silently drop the field, so the SDK does not send it there and warns once instead. Under
+  `probe exec`, `probe.init(config=...)` now records the config on the joined run from global rank 0,
+  where it used to be dropped with an "ignored" warning. `log()` reads numpy values and 1-element
+  tensors through `.item()`: no numpy deprecation warning to raise under `-W error`, and a
+  multi-element tensor goes to the step record instead of raising. A numpy scalar anywhere in a
+  request is sent as a number, not its `repr()`.
 
 ## 0.189.0
 
@@ -305,71 +367,6 @@
 - **The daemon no longer asks a judge model which of the agent's paragraphs look unrecorded.** The
   per-turn judge (`POST /v1/companion/judge`) and its `PROBE_DAEMON_JUDGE` switch are gone; notes
   are optional.
-
-- **Nested dicts are charted: `probe.log({"eval": {"acc": 0.9}})` writes `eval/acc`.** Before, a
-  nested dict could not be a number, so the whole dict went into the step record and nothing was
-  plotted. Any mapping now flattens to `/` keys (the separator the run page sections panels by),
-  an OmegaConf `DictConfig` too, all at one step; non-numeric leaves land in the step record under
-  their flat key (`eval/text`). Lists are not flattened and an empty dict writes nothing. If you
-  log both `"a/b"` and `{"a": {"b": ...}}`, the explicit `"a/b"` wins, with one warning per key per
-  run. Nesting deeper than 16 levels, or a dict that contains itself, is kept as one step value
-  with a warning. Secrets stay redacted:
-  - A nested field named like a credential (`db.pwd`, `headers.authorization`, `wandb.apikey`) is
-    redacted exactly as it was when the whole dict went to the step record. Numbers are redacted
-    too, except under ordinary-word names (`token`, `secret`, `cookie`, `credential`), where the
-    scrubber keeps a number or plain word, as it always has.
-  - A dict under a credential name (`{"token": {...}}`, a `bytes` key included) is still dropped
-    whole.
-  - A step-record key with a `/` is judged segment by segment, so `tok/pad_token` stays a model
-    setting and `headers/authorization` is redacted even when written flat.
-  - A Hydra/OmegaConf interpolation that would reveal a secret stays its unresolved `${...}` text:
-    one reading the environment (`${oc.env:KEY}`), one naming a credential (`${wandb.api_key}`),
-    and a chain to either, including an alias to a whole credential group (`alias:
-    ${credentials}`, then `auth: ${alias}`) and a secret embedded in a string (`pw=${alias}`,
-    for a secret of 4 characters or more). Other interpolations resolve. A `???` stays `???`.
-
-  A dict keyed by data (`{"per_example_loss": {example_id: v}}`) would mint a series per id. So
-  after 1,000 distinct nested keys in a run, or for a key longer than 256 characters, that
-  top-level value is kept whole in the step record, with one warning. `dimensions` and `labels`
-  are unchanged (still flat maps), and `log_derived` does not flatten. A call with no nested dict
-  sends exactly the bytes it did before. Note: W&B's history uses `.` for nesting, so a run
-  brought in with `probe import wandb` keeps `a.b` keys, which are a different series from `a/b`.
-
-- **`probe.log(..., commit=False)`, as in W&B.** `commit=False` holds the values in a pending row
-  instead of sending them; the next `log()` at the same step (or with `step` omitted) adds its
-  values and sends the row once (the last value per key wins). A `log()` at a different step sends
-  the held row first, and `probe.finish()`, the end of a `with` block and the exit hook send any row
-  still held. A crash before that loses it, as in W&B. A preemption handler (SLURM, submitit) that
-  interrupts a `commit=False` call and calls `log()` or `finish()` never hangs: its own values are
-  sent at once, and `finish()` warns that the interrupted row was not sent. Nothing changes for
-  calls that do not pass `commit=False`. One difference from W&B: a bare `log()` after
-  `log(step=5)` lands at step 6 (W&B: 5).
-- **Two `log()` calls with text at the same step no longer wipe each other.** The server replaces a
-  step's record on every write, so `log({"phase": "eval"}, step=3)` then `log({"note": "x"},
-  step=3)` kept only `note`. The SDK now sends both keys (the newer value wins per key), for the
-  last 64 steps a run wrote.
-
-- **Configs arrive as configs, and can change after `probe.init()`.** `config=` now takes an
-  `argparse.Namespace` (jsonargparse's, as LightningCLI hands out, and `SimpleNamespace` too), a
-  dataclass, a Hydra/OmegaConf `DictConfig`, a pydantic model or a dict holding numpy values, and
-  stores the dict you meant. A field marked not to show (`dataclasses.field(repr=False)`, pydantic
-  `Field(repr=False)`) is left out. Interpolations resolve, except one that would reveal a secret:
-  one reading the environment (`${oc.env:KEY}`), one naming a credential (`${wandb.api_key}`) or a
-  chain to either, an alias to a whole credential group included, stays its `${...}` text. That is a deliberate difference from W&B, which resolves
-  everything. Before, each became one
-  `repr()` string or a 422. NaN and infinity become `"NaN"` / `"Infinity"`, small arrays become lists,
-  and a top level that is not a mapping is refused before any request. New
-  `run.update_config({...})` / `probe.update_config({...})`, and writes to `run.config` (`run.config["lr"]
-  = 3e-4`, `.update()`, `run.config.lr = ...`), merge into the stored config: shallow, new wins, as in
-  W&B. Changing an existing value warns once per key (`allow_val_change=True` silences it,
-  `allow_val_change=False` refuses); a value under a credential name is compared and shown only as
-  it is sent, redacted. Copies of `run.config` are plain dicts, and `run.config |= {...}` sends. It needs a server that serves `run_config_merge`; an older one
-  would silently drop the field, so the SDK does not send it there and warns once instead. Under
-  `probe exec`, `probe.init(config=...)` now records the config on the joined run from global rank 0,
-  where it used to be dropped with an "ignored" warning. `log()` reads numpy values and 1-element
-  tensors through `.item()`: no numpy deprecation warning to raise under `-W error`, and a
-  multi-element tensor goes to the step record instead of raising. A numpy scalar anywhere in a
-  request is sent as a number, not its `repr()`.
 
 ## 0.188.0
 
