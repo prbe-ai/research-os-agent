@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- **`finish()` never raises over delivery, and waits for at most one deadline.** The
+  default close was a hard barrier: one delivery attempt (PR #1679, Mahit, gave it a 15 s
+  retry), then `RosError: run … not closed`. Live, one 503 `concurrent telemetry write`
+  from a colliding write failed 4 of 6 ten-step runs. Now every close drains the run's
+  writes, retrying with backoff (a 503 like any transient error, at least as long as its
+  `Retry-After`), until ONE deadline: `flush_timeout=`, else `PROBE_FINISH_TIMEOUT_SEC`,
+  else **600 s**. Whatever is still undelivered stays queued on disk and the terminal
+  status is queued BEHIND it (`probe_finish.deferred`), with a warning. Writes the server
+  permanently rejected (dead letters) warn and the run closes marked
+  `probe_finish.dead_lettered=N`. So a run with missing data never reads `completed`
+  without saying so on the run. `finish(strict=True)` (or a `fail_open=False` client)
+  keeps the old barrier: it raises and does not close. The deadline now bounds upload
+  promotion, the wait for the drain lock (a busy detached worker could hold a close
+  forever), every request's timeout, and the final status write (`finish(flush_timeout=10)`
+  behind a backlog took 170 s), including a response that trickles in byte by byte. A
+  refused credential (401/403) defers the close at once instead of waiting out the deadline,
+  and a Ctrl-C during the close still queues the verdict behind the data and hands it to the
+  background worker (a code-less `SystemExit`, Lightning's SIGTERM, too); one that lands
+  before the drain starts, while the close hashes the run's reads or joins the hardware
+  collector, queues `canceled` (a `SystemExit`: its exit code's verdict). `finish()` is
+  idempotent: `with probe.init()` followed by the exit hook closes the run once, not twice
+  (two deadlines, two terminal writes), and a second `probe.finish()` from another thread
+  waits for the running close and returns its answer instead of closing the client under it.
+  `PROBE_FINISH_RETRY_SEC` from #1679 never shipped and is folded into the one deadline;
+  `flush_timeout=0` means "queue the close, wait for nothing".
+- **One retry policy for every delivery loop.** The detached worker, the in-process exporter
+  (which re-drained on every `log()` wake, with no backoff at all) and `finish()` take their
+  waits from `durable.backoff_delays`, lengthened to the server's `Retry-After`. A write
+  that keeps failing transiently is dead-lettered only after **24 h since its first failure
+  AND at least 50 attempts** (`PROBE_OUTBOX_TRANSIENT_BUDGET_SEC`), not after 50 attempts
+  alone, so a fast-polling loop can no longer throw data away in seconds (it did in ~13 s
+  from `finish()` and ~7 s from the exporter), and a laptop that slept through a day does
+  not dead-letter on its next blip. `probe outbox retry` restarts that clock. The transport's own in-request retries
+  (a 503/429/502/504 on a GET or PUT) also wait at least the server's `Retry-After` instead of
+  0.2 s; a `Retry-After` longer than 10 s goes straight back to the caller's loop, carried on
+  the error as `retry_after`.
 - **A re-login no longer kills a running job's heartbeat.** `probe login` revokes the token a
   running process was built with; its heartbeat was then refused on every beat, the refusal was
   swallowed, and 15 minutes later the run was marked `crashed` while it was still training. When
