@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.190.0
+
 - **`finish()` never raises over delivery, and waits for at most one deadline.** The
   default close was a hard barrier: one delivery attempt (PR #1679, Mahit, gave it a 15 s
   retry), then `RosError: run … not closed`. Live, one 503 `concurrent telemetry write`
