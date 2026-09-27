@@ -130,6 +130,13 @@ checkpoints as path references, and never finishes its run mid-script - the
 process exit, or your `probe.finish()`, does. A sweep loop gets one run per
 Trainer: a new ProbeLogger closes the run the previous one opened.
 
+Hugging Face Trainer: `import probe.integrations.huggingface`, then
+`TrainingArguments(report_to="probe")` - or pass
+`callbacks=[ProbeCallback(experiment=..., name=...)]` to choose the run (install
+`probe-research[huggingface]`; use one or the other, not both). Same rules as
+the Lightning logger: world-zero process only, adopts an open run, checkpoints
+as path references, one run per Trainer, never finishes its run.
+
 A trainer integration (miles, trl, verl, Ray, etc) may mint its OWN run and
 ignore the id you supply. Steer it with the knobs it reads (project, experiment,
 run name, external id), then check where it actually wrote:

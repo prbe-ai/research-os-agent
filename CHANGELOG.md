@@ -2,6 +2,35 @@
 
 ## Unreleased
 
+- **Hugging Face Trainer callback: `probe.integrations.huggingface.ProbeCallback`.** After
+  `import probe.integrations.huggingface`, `TrainingArguments(report_to="probe")` works; or pass
+  `Trainer(callbacks=[ProbeCallback(experiment="...", name="...")])` to choose the run (install
+  `probe-research[huggingface]`). On the world-zero process only, it opens the run (or adopts one
+  `probe.init()` already opened), merges the model config, `TrainingArguments` (with `hub_token`
+  masked) and any PEFT config into the run's config, and logs every Trainer log at
+  `state.global_step`, sectioned as W&B does: `train/loss`, `eval/loss`, `test/*`. Evaluation is
+  logged once, not twice. Each saved `checkpoint-<step>` folder becomes a `checkpoint` path
+  reference whose size is the folder's, summed once per save; with `metric_for_best_model` its
+  row carries `monitor`/`score`/`best`, and a folder `save_total_limit` removed is marked
+  `deleted`. It never finishes the run. A `train()` whose exception the script caught closes the
+  run `failed` (`canceled` after a Ctrl-C) instead of `completed`, and a stop by
+  `enable_jit_checkpoint`'s SIGTERM closes it `failed` with its checkpoint recorded. A sweep loop
+  gets one run per Trainer, and so does each `hyperparameter_search` trial (named
+  `<run_name>-trial-<n>`; a trial transformers pruned closes `canceled`) and the `train()` after
+  the search; a `train()` after `probe.finish()` writes to the run open now. A run opened in a
+  forked multiprocessing worker (accelerate's `notebook_launcher`, a `Process` per trial) is
+  closed when that worker exits, with how it ended, instead of staying `running`. An
+  `evaluate()` after `train()` (the reloaded best model, a second eval set) is kept at the last
+  step with the label `repeat=1`, `2`, ..., where the server used to drop it for having that
+  step already. A second Trainer on a run it shares is warned that its curve is lost where steps
+  overlap; with two ProbeCallbacks on one Trainer the one given arguments logs. Other ranks write
+  nothing and hold no writer lease yet (a follow-up to the lease API). `import probe` still never
+  loads transformers or torch.
+- **PyTorch Lightning: a worker's run is closed even when a signal lands as its close starts.**
+  torch's launcher forwards the SIGINT it got to its workers as it shuts down; one that arrived
+  while the worker's close was setting up its signal hold skipped the close, and the run stayed
+  `running` until the reaper. The hold is now set up again after such a signal.
+
 - **A refused upload no longer stops a run's other writes (#2073).** An upload goes to a
   presigned address that carries its own signed permission and no login. When the server at that
   address refused it (401 or 403), the SDK read the refusal as a refused login and held every
