@@ -47,6 +47,15 @@
   the CLI locks out the one-line description the server writes once a run finishes. The daemon's
   pre-check now refuses `--description` on `project create|set|patch` and `run set`; an
   experiment's question stays the daemon's to write.
+- **`probe edge add` / `edge remove` help says a run may have more than one parent.** The first
+  stays the run's parent and the others are edges; removing the first makes the next-oldest one the
+  parent (server 0275). `edge add` also names the two new relations, `supersedes` (run -> run) and
+  `informed_by` (run or file -> paper, with `--provenance`).
+- **`probe edge add` takes `project:<id>` ends and the `supersedes` / `informed_by` relations.**
+  The client checks a link against its generated model before sending it, and that model predated
+  them, so `--relation supersedes` and a project or experiment end failed locally. The model is
+  regenerated from the server's lineage changes only (a project end takes `derived_from`,
+  `supersedes` or `informed_by`); the help lists the `project` type.
 
 ## 0.194.0
 
