@@ -51,6 +51,43 @@
   listed as `refused by the credential gate: <reason>` instead of `upload rejected`, and no longer
   counts toward a "storage rejected every upload" outage. A refused code-bytes archive warns once,
   with the gate's reason.
+- **A run's status now follows how the process actually exited.** `probe.init()` also wraps
+  `sys.exit` (chaining whatever was installed before, the way W&B does): a non-zero code closes the
+  run `failed` -- `sys.exit(2)` used to close it `completed` -- `sys.exit()`/`0`/`False` close it
+  `completed`, and an exit made while handling Ctrl-C closes it `canceled`. That covers Hydra, which
+  calls `sys.exit(1)` inside its own `except` (the run is now `failed`, and the exception it
+  swallowed is filed as the crash report) and Lightning's Ctrl-C, which does the same inside
+  `except KeyboardInterrupt` (now `canceled`). A non-zero exit also writes a `process` span named
+  `exit` carrying `exit_code`, which the crash email reads when there is no traceback. Only the
+  main thread's exit counts, never a notebook's, and never a forked child's: a child that inherited
+  the hooks can no longer close its parent's run. `fluent.note_exit(status, exc=None)` is the hook
+  the Lightning/HF integrations will call for endings no process hook sees (Lightning turns
+  SIGTERM into a code-less `SystemExit` that exits 0). The code stored is the one the OS reports
+  (`sys.exit(-1)` is 255, `sys.exit(256)` is 0 and completes), so it never reads as a signal. A run
+  the script already closed -- `run.finish(...)`, or a `with probe.init()` block that ended -- is
+  not closed again at exit, and the `with` block reads its body's ending the same way: `sys.exit(0)`
+  completes, Ctrl-C cancels, no crash report is filed for a `SystemExit`, and a `note_exit` made
+  inside the block outranks a code-less `SystemExit` (Lightning's SIGTERM). Under `probe exec`, a
+  job whose exit no hook saw (`sys.exit(main())` with `probe.init()` inside `main()`, which looks up
+  `sys.exit` before `probe.init()` runs) now leaves the close to the launcher, which has the real
+  exit code (`PROBE_EXEC_FINALIZES` names the launcher's run, so a run a sweep driver opens and
+  hands to its own job is still closed by that job); without a launcher that shape still closes
+  `completed`, as it does in W&B. So do `raise SystemExit(2)` and a `from sys import exit` taken
+  before `probe.init()`. A close that fails at exit is no longer silent: one line, `probe: run <id>
+  was not closed at exit (...); it will be reaped as crashed`, goes to stderr through the
+  non-raising warning channel.
+- **Interim, until per-rank liveness: only rank 0 closes a shared run.** A process that joined a
+  run through `PROBE_RUN_ID` with a `RANK`, `SLURM_PROCID` or `OMPI_COMM_WORLD_RANK` above 0 (and a
+  matching `WORLD_SIZE`, `SLURM_NTASKS` or `OMPI_COMM_WORLD_SIZE` above 1, when set) still
+  delivers everything it logged and its crash evidence, but sends no terminal status -- the first
+  rank to exit used to close the run for every rank, and a later rank's `completed` overwrote an
+  earlier one's `failed`.
+- **Ctrl-C on `probe exec` closes the run `canceled`.** The launcher takes the interrupt too, and it
+  used to re-raise without closing the run, which then sat `running` until the reaper called it
+  `crashed` and mailed the person who pressed Ctrl-C. A job that already closed itself keeps its
+  own verdict. Salvaged from #1710; SIGTERM and SIGKILL stay failures. `probe exec` also exits
+  128+N when its command dies of signal N (143 for SIGTERM), the way a shell reports it, instead of
+  the 241 it passed on for SIGTERM.
 
 ## 0.188.0
 
