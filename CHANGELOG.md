@@ -2,6 +2,65 @@
 
 ## Unreleased
 
+- **A second `probe.init()` closes the first run instead of abandoning it.** Before, the first run
+  was left open with nothing bound to it: the reaper later called it `crashed`, and while both were
+  open neither swept its output files. `probe.init(reinit=...)` takes W&B's values, and the default
+  here is `"finish_previous"` (and `True`): the open run is closed `completed` with
+  `probe_finish.closed_by: "reinit"` in its summary. The whole close, letting go of its client
+  included, takes at most 10 s (`PROBE_FINISH_TIMEOUT_SEC` if lower); whatever is left is queued
+  with the close behind it. One line says so, and a failure to close is a warning, never an
+  exception. Ctrl-C during that close queues the run `canceled` behind its data (it used to be left
+  `running` and reaped `crashed`); once its final status write is on the wire, that same status is
+  queued instead, so a `canceled` never lands later over a `completed` the server already applied.
+  Another thread logging during the swap waits for the new run instead of hitting "no active run",
+  for at most 10 s after the old run is let go; past that, `probe.log()`, `probe.log_hw()` and
+  `probe.log_artifact()` drop their writes with one warning until the new run opens, and never
+  raise; the new run's close counts them in `probe_finish.dropped_writes`. `probe.span()` and
+  `probe.update_config()` raise a `RosError` in that window, saying a reinit is still opening the
+  run. A thread whose own run was closed from elsewhere no longer falls through to another
+  thread's run. `probe.init(mode="disabled")` follows `reinit` too: it closes an open online run
+  the same way instead of leaving it for the reaper.
+  `"return_previous"` (and `False`) returns the open run and names the arguments it ignored;
+  `"create_new"` opens another run without unbinding the first (`probe.log()` still reaches the
+  first); it is closed at exit if its handle never closed it, and closing it releases the client
+  `init()` built for it. Only a run opened by the SAME scope is replaced: an `init()` in a worker
+  thread, an asyncio task, `asyncio.to_thread` or a forked child opens its own run beside the one
+  it can see, as before. A run joined through `PROBE_RUN_ID` is returned, never closed. A reinit
+  inside `with probe.init() as run:` closes that run once, and an exception after it is not filed
+  as that run's crash.
+  - **Notebooks:** a re-run cell replaces the run it opened when the kernel keeps context
+    variables across cells. Checked: ipykernel 6.17.1, 6.29.5, 7.1, 7.2 and 7.3 do; 5.5.6 and
+    7.0.1 do not; a top-level-`await` cell never does. There, and after an `await` cell,
+    `probe.log()` still reaches the newest run, but a later `init()` opens a run beside it instead
+    of closing it.
+  - **Differences from W&B:** W&B's script default is `return_previous`, and it applies
+    process-wide; here the default is `finish_previous` (D16) and every choice applies to the
+    caller's own scope. W&B's `finish_previous` finishes every active run, `create_new` ones
+    included; here it closes only the run the caller opened, and `create_new` runs close with
+    their handle or at exit.
+- **`finish()` after `run.execute()` keeps the verdict `execute()` wrote.** `execute()` closes its
+  run from the command's exit code; a `finish()` (or the exit hook, or a reinit) after it used to
+  write a second status over it (`failed` became `completed`), or, on the idempotent close, skip
+  the rest of the close, leaving the crash breadcrumb armed so the next `probe.init()` on the
+  machine filed a `hard_exit` on a run that had closed cleanly. Now the rest of the close runs
+  (breadcrumb, read capture, hardware, output capture, delivery) and only the second status write
+  is skipped. The same holds after any `set_status("completed" | "failed" | "canceled")`. Dead
+  letters or dropped writes found then are warned about and returned in `finish()`'s report, but
+  cannot be marked on a run whose close already went out. A verdict `set_status` could only queue
+  (a 503) and the server then refused for good is still reported `close_rejected`, never "already
+  sent". The close's wait for read-capture hashing is now at most half of what is left of its
+  deadline (it was up to 30 s outside it).
+- **`finish()` keeps its deadline with a hung GPU query or a held `log(commit=False)` row, and
+  Ctrl-C while it hashes the run's reads cancels the run.** The close joined the hardware collector
+  for 5 s and then sampled again on the caller's own thread, so a driver call hung on a failing GPU
+  held `finish()` with no limit; it now waits at most half of what is left of the deadline, never
+  samples from the caller, and drops the collector's unsent windows with a log warning when it
+  does not stop in time. A `log(commit=False)` row was sent before the deadline started, so under
+  `PROBE_ASYNC=0` a hung API held the close for up to 30 s past it; it is now sent inside the
+  deadline, and queued if it runs out of time. A Ctrl-C while the close waited on hashing was
+  swallowed and the run closed `completed`; it now propagates and the run is queued `canceled`,
+  as documented in 0.190.0. `Client.close(timeout=)` caps the join of the client's exporter (5 s
+  otherwise); what it could not send stays queued for the background worker.
 - **A run's console log reaches Probe while the run is alive (plan item (h)).** Output capture
   uploaded what a run printed as `probe/run.log` only when it ended, so a three-day job showed
   nothing of its console until then, and a whole-pod death could leave nothing. Now the output
