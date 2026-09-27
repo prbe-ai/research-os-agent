@@ -30,6 +30,27 @@
   with no snapshot, as it always meant to be (new read-only `run.env_ref`, the hash this handle
   pinned). An abandoned run's collector now stops with it, and `finish()` waits at most 0.5 s for
   the hardware inventory. `PROBE_HW=0` / `run(hw=False)` are unchanged.
+- **`log_artifact` no longer raises into a training loop when the upload is refused.** A file
+  over the 64 MiB inspection limit (say a 70 MB checkpoint), a credential in the file's path, or a
+  source that changed while it was being read used to raise `CredentialBlocked` out of
+  `log_artifact`. Now, unless you pass `strict=True` (or use a fail-closed client), the run records
+  a reference to the file instead -- its path, size, `meta.upload = "failed"` and the reason in
+  `meta.upload_error` (the path itself is withheld when it is the thing that looks like a
+  credential) -- warns once per reason, and carries on. `strict=True` still raises.
+  `CredentialBlocked` is now a `RosError`, so `except RosError` catches it; `except
+  CredentialBlocked` keeps working. A mistake in the call still raises, as before: a missing path
+  (`FileNotFoundError`, unless `allow_missing=True`, which records the pointer), a directory
+  (`IsADirectoryError`), or a `content_hash`/`size_bytes` that does not match the file
+  (`ValueError`). A failed upload that falls back to a reference now shares the same
+  once-per-reason warning.
+- **`probe artifact add` exits 1 when the file was not uploaded.** It used to print `(delivered)`
+  and exit 0 when the upload was refused (a 70 MB file) or failed and fell back to a pointer. Now
+  it prints `error: not uploaded (<reason>); a pointer was recorded` to stderr and exits 1; a
+  missing path is an error and records nothing.
+- **Code capture names a local refusal as one.** A code file the credential gate refuses is
+  listed as `refused by the credential gate: <reason>` instead of `upload rejected`, and no longer
+  counts toward a "storage rejected every upload" outage. A refused code-bytes archive warns once,
+  with the gate's reason.
 
 ## 0.188.0
 
