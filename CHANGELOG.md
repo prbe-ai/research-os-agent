@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A resumed run's dropped steps are reported more precisely (#2022 follow-ups).**
+  - A job that rejoined its run through `PROBE_RUN_ID` is told what works from there:
+    `probe.init()` joining a run takes no `on_conflict`. To overwrite the old range, relaunch
+    without `PROBE_RUN_ID` and with `probe.init(external_id=..., on_conflict=probe.Rewind(step=N))`
+    (a run with no external id cannot be rewound, and the message says so); to start over,
+    `probe exec --parent <run> --relation retry -- ...`; to keep both curves,
+    `probe run fork <run> --step N`.
+  - `finish()` writes the final drop count to the `resume_guard` span and closes it. The span was
+    written only on the 1st, 10th and 100th drop, so a run that finished inside its dropped range
+    left it `running`, often with a stale count.
+  - That span no longer inherits the caller's open span or unit, and each rank keeps its own
+    (`resume_guard/rank-N`).
+  - The Harbor connector records a dropped reward as `dropped`, not `queued`.
 - **`finish()` spends far less time preparing the list of files a run read.** With read capture on,
   a run that opened 10k files spent ~4 s (6.8 s on a slower box) at `finish()` scrubbing that
   list: the outbox's generic scrubber walked every field of every row several times. Each row is
@@ -17,7 +30,6 @@
   the API's W&B import worker keeps it off, and the vendored server copy can never enable it, so
   no process that serves several tenants holds one tenant's strings or reveals, by timing,
   whether another sent one.
-
 - **A script that simply ends closes its run even when its last write collides** (fixed in
   0.190.0, now pinned by a test). The exit hook runs the same `finish()` and swallowed its
   `run … not closed` error, so the run was neither closed nor queued to close: it read
