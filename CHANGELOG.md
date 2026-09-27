@@ -10,6 +10,17 @@
   also record the agent session, which holds the run row longer. 0.190.0's `finish()` change
   is the fix; `test_exit_close_after_busy.py` pins the exit path with and without a Claude
   Code environment.
+- **`log()` does a fraction of the disk and scrubbing work on the training thread.** Each call
+  made 8 fsyncs (the op file, `.seq`, `status.json` and the producer record, each file and its
+  directory) and ran the credential scrubber over the metrics body three times, plus once more
+  over `status.json`. Now it fsyncs only the op file, before renaming it into the queue, and the
+  body is scrubbed once (by `Client.write`; the journal scrubs only the op's envelope, and still
+  scrubs any body it did not get from `Client.write`). The bookkeeping files are rewritten without
+  an fsync: the drain rebuilds the status counts, and the first append of each process lifts the
+  queue sequence above every op still queued, dead-lettered or reserved, so a power loss that
+  rolled `.seq` back can never sort a new write (a run's close) ahead of older ones. A run's
+  terminal status keeps every fsync. A process killed right after `log()` returns still loses
+  nothing; a power loss can lose only the last few queued writes, never leave a torn one.
 
 ## 0.190.0
 
