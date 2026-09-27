@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.189.0
+
 - **A long outage no longer throws away the data queued during it.** When the server's reaper marked
   a silent run `crashed`, the heartbeat thread reopened it on reconnect with a new write epoch, and
   every point already in the outbox (stamped with the old epoch) was refused and dead-lettered;
