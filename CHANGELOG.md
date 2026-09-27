@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.194.0
+
 - **`log_artifact` stores files over 64 MiB (plan item (g), 2/2 SDK).** Against a server that
   declares `artifact_multipart`, a file over the 64 MiB inspection limit is no longer only a local
   pointer: `log_artifact` STAGES it and returns at once, and the outbox uploads it in parts, 4 at a
