@@ -61,8 +61,10 @@ syntax) or `PROBE_IGNORE`: that covers code, output and read capture.
 the log - and with it capture after a hard death, which the log's helper runs.
 Nothing survives a death that takes the whole container or job step with it (the
 program as a container's PID 1): write to lasting storage there.
-No signal handler is installed: a SIGTERM'd run dies as it always did and reads
-`crashed`.
+On SIGTERM (a preemption, `docker stop`, a deleted pod) the SDK spends up to
+`PROBE_SIGTERM_FLUSH_SECONDS` (20 s; `0` turns it off) sending what is queued,
+closes the run `failed` (`probe_finish.reason` = `preempted`), then exits by
+SIGTERM. A SIGTERM handler installed before `probe.init()` runs first.
 
 ## THE ONE RULE:
 
@@ -115,7 +117,8 @@ On Kubernetes the outbox sits on the container's own disk and its background
 worker dies with the pod, so writes still queued when the pod is deleted are
 lost. Put `PROBE_OUTBOX_DIR` on a persistent volume, set
 `PROBE_FINISH_TIMEOUT_SEC=600`, and give the pod a
-`terminationGracePeriodSeconds` at least that long.
+`terminationGracePeriodSeconds` at least that long. Deleting the pod sends
+SIGTERM, which gets `PROBE_SIGTERM_FLUSH_SECONDS`: raise it with the grace period.
 
 A run id names a row, not an attempt: without the EPOCH a stale process holding
 an old id attaches to a row a newer attempt reopened, and inherits its write

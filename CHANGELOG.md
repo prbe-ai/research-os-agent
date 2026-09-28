@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- **A SIGTERM no longer loses a run's queue or leaves the run `running`.** Managed jobs
+  (SageMaker, Vertex, Kubernetes, a spot reclaim, `docker stop`) stop with SIGTERM and destroy the
+  container about 30 s later. Python died at once, so the writes still queued on the container's
+  disk were lost and the run stayed `running` until the 15-minute reaper (the environment suite's
+  managed job: 0 of 900 queued points, the config and the artifact). `probe.init()` now installs a
+  SIGTERM handler (main thread only): it spends up to `PROBE_SIGTERM_FLUSH_SECONDS` (default 20;
+  `0` turns it off) sending what is queued, closes the run `failed` with
+  `probe_finish.reason = "preempted"`, `signal = "SIGTERM"` and `exit_code = 143`, then exits as
+  SIGTERM would (a container's PID 1 exits 143). A handler that was there first runs first. One
+  that returns has its own stop to make (Lightning's `SIGTERMException`, Hugging Face's JIT
+  checkpoint): that stop goes ahead, its close on the way out is marked the same way, and ours
+  closes the run only if the process is still running near the end of the budget. One that
+  raises gets the same close on its way out. A handler installed after `probe.init()` that
+  replaces ours is left alone. On a throwaway disk (a container's own layer, tmpfs), a close that
+  could not deliver everything in time is sent directly, counting what is lost as
+  `probe_finish.undelivered`, instead of queuing behind it for a worker that dies with the
+  container. The signal can land while the main thread is inside the SDK holding a lock: the
+  close runs on a thread started in advance, after the interrupted SDK call returns (at most 2 s),
+  and the process dies on time whatever it is blocked on.
+
 ## 0.198.1
 
 - **The code snapshot no longer takes the SDK's own queue as the run's code.** A job started in
