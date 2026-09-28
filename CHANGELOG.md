@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`probe.init()` works in a process with no home directory.** A container running an
+  arbitrary uid (OpenShift, `docker run --user 12345`, many managed-job runners) can start with
+  `HOME` unset and no passwd entry. There `Path.home()` raises, and `probe.init()` died with
+  `RuntimeError: Could not determine home directory` in `config.config_path()` before it opened
+  a run. The outbox already fell back to `$TMPDIR` (plan 1.5); the config, state, device-identity
+  and session-marker paths did not. They all go through `probe.sdk.homedir` now: the real home,
+  else a private `$TMPDIR/probe-home-<uid>` (0700, never one another user could have made). Like
+  the outbox fallback, it does not outlive the machine. Found by the environment suite
+  (`managed/home[unset]`).
 - **jax arrays log and configure like numpy's.** `probe.log({"x": jnp.array([3.5])})` stored no
   point: the SDK read only numpy and torch values by shape, and `float()` refuses a jax array with
   `ndim > 0`, so a size-1 jax vector went to the step record as its repr, with a "not

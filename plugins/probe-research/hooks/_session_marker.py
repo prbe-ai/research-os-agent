@@ -214,9 +214,20 @@ def valid_session_id(raw: object) -> bool:
     return isinstance(raw, str) and bool(_SESSION_RE.match(raw))
 
 
+def _home() -> Path:
+    """`~`, or the SDK's private stand-in when this process has none (HOME
+    unset and no passwd entry: `probe.sdk.homedir`). The vendored hook copy has
+    no `probe` package to import; there a missing home raises, as it always did."""
+    try:
+        from probe.sdk import homedir
+    except ImportError:
+        return Path.home()
+    return homedir.home()
+
+
 def state_dir() -> Path:
     xdg = os.environ.get("XDG_STATE_HOME")
-    base = Path(xdg) if xdg else Path.home() / ".local" / "state"
+    base = Path(xdg) if xdg else _home() / ".local" / "state"
     return base / STATE_DIRNAME
 
 
@@ -521,7 +532,7 @@ def config_path() -> Path:
     override = os.environ.get("PROBE_CONFIG_PATH")
     if override:
         return Path(override)
-    base = os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")
+    base = os.environ.get("XDG_CONFIG_HOME") or (_home() / ".config")
     return Path(base) / "probe" / "config.json"
 
 
