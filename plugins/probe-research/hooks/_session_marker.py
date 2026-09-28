@@ -363,7 +363,15 @@ def from_active_runs(payload: object) -> list[str]:
 
 
 def _fcntl():
-    """The fcntl module, or None on a platform without it (Windows)."""
+    """The flock provider: `probe._shared.oscompat` (fcntl on POSIX, msvcrt on
+    Windows). The vendored hook copy has no `probe` package to import; there it
+    is fcntl itself, or None on a platform without it."""
+    try:
+        from probe._shared import oscompat  # noqa: PLC0415
+
+        return oscompat
+    except ImportError:
+        pass
     try:
         import fcntl  # noqa: PLC0415
 
@@ -1429,7 +1437,7 @@ def _publish_atomically(path: Path, content: str) -> bool:
     tmp = "%s.tmp-%d-%d" % (str(path), os.getpid(), time.time_ns())
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        handle = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600)
     except OSError:
         return False
     try:
@@ -1500,7 +1508,7 @@ def set_session_state_if_absent(session_id: str, state: str) -> bool:
     tmp_path = "%s.tmp-%d-%d" % (str(path), os.getpid(), time.time_ns())
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        handle = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        handle = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0), 0o600)
     except OSError:
         return False
     try:
@@ -1744,7 +1752,7 @@ def _read_config_text(
     if not require_regular:
         return path.read_text(encoding="utf-8")
 
-    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_BINARY", 0)
     fd = os.open(path, flags)
     try:
         info = os.fstat(fd)

@@ -184,7 +184,7 @@ def _write_private(path: str, data: str) -> None:
     os.makedirs(parent, exist_ok=True)
     os.chmod(parent, 0o700)
     tmp = f"{path}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_BINARY", 0), 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(data)
@@ -231,7 +231,7 @@ def machine_id() -> str:
     try:
         os.makedirs(home, exist_ok=True)
         os.chmod(home, 0o700)
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(mid)
         return mid

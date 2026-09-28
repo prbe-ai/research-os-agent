@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **The SDK works on Windows.** `import probe` failed there with `ModuleNotFoundError: No
+  module named 'fcntl'`, so a training script could not log at all. The SDK path's file locks
+  now go through one helper, `probe._shared.oscompat`: `fcntl.flock` on POSIX (unchanged) and
+  `msvcrt.locking` on one byte past any lease content on Windows. Behind that import error sat
+  more Windows traps on the same path, fixed too: liveness checks used `os.kill(pid, 0)`, which
+  on Windows terminates the process, so asking whether the outbox sender was alive would have
+  killed it; the sender is now spawned detached there (`start_new_session` is ignored on
+  Windows); `os.open` gets `O_BINARY`, without which an artifact's queued copy would have had
+  every `\n` rewritten as `\r\n`; a rename retries for up to a second past another process's
+  open handle; and a lock file is deleted after its handle closes, since Windows cannot delete
+  an open file. `probe.init`, `log`, `update_config`, `log_artifact` and `finish`, the outbox
+  and its background sender, and offline mode with `probe sync` pass the `agent-os-matrix`
+  workflow on Windows (Python 3.10 and 3.12). The plugin's vendored hook copies
+  (`_session_marker.py`, `_telemetry_core.py`) carry the same change and keep using `fcntl`
+  directly where `probe` is not importable. Still POSIX-only: the console-log tee
+  (`probe/run.log`), the companion daemon, and the import and backfill commands.
 - **A SIGTERM no longer loses a run's queue or leaves the run `running`.** Managed jobs
   (SageMaker, Vertex, Kubernetes, a spot reclaim, `docker stop`) stop with SIGTERM and destroy the
   container about 30 s later. Python died at once, so the writes still queued on the container's
