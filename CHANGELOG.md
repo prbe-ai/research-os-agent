@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Every rank of a distributed Lightning or Hugging Face job now holds a writer lease.** Before,
+  `ProbeLogger` and `ProbeCallback` gave ranks other than 0 no lease at all, so the server could not
+  tell a lost node from a finished job (the 7-day soak worked around it with `PROBE_RUN_ID` +
+  `probe.init()` on each rank). Now rank 0 shares its run id and epoch with every rank (Lightning at
+  setup; Hugging Face in `on_train_begin`, through the process group's store, where rank 0 never
+  waits and the others take `PROBE_RUN_ID` when set, else wait at most 10 s, so a callback on the
+  main process only costs the other ranks their lease, never the job a hang), and each other rank
+  joins that run as a lease-only
+  writer: it beats its own `rank` lease and never logs a metric, captures anything or sends a
+  status. It releases the lease when it ends: `completed` at a clean exit, `failed` on an error or
+  Lightning's SIGTERM, `canceled` on Ctrl-C. A SIGKILLed
+  rank (or a Hugging Face rank killed by a SIGTERM with no handler) releases nothing, and its
+  lease expiring is how the server sees it lost. A server without writer leases gets nothing from
+  these ranks, never a run-level heartbeat. Rank 0 writes what it did before (plans 2.8, (a), (b)).
+
 ## 0.195.1
 
 - **A full outbox volume no longer drops writes the SDK had already queued.** On a disk full but
