@@ -2,6 +2,75 @@
 
 ## Unreleased
 
+- **The daemon's approval question records the researcher's pick again.** Claude Code 2.1.283
+  copies the pick into the question tool's `tool_input.answers`, so every real answer read as one the
+  agent had filled in itself and was dropped: the daemon never acted on it (found by the end-to-end
+  test). A pick now counts for a question call the pre-call check let through with nothing filled
+  in (matched by its tool-use id).
+- **The daemon's reader never reports this session's own fresh work as the team's prior work.**
+  The writer records the session into Probe as it goes; the reader then found those records and
+  cited them as "the team already did this" (the live bench: 4 of 4 messages). Its MCP connection
+  now names the watched session and sends `X-Probe-Hide-Session-Work: 1`, so the hosted MCP leaves
+  out every project, experiment and run that session created (needs the matching server release).
+  The writer's `probe` commands forward the watched session (`PROBE_AGENT_SESSION`), so what it
+  creates is always filed as that session's own work.
+- **Daemon reads: the Probe daemon gets a reader (off unless `PROBE_DAEMON_READS=on`; the wizard's
+  daemon profile turns it on).** Beside the writer that records the session, the worker now runs a
+  second agent that only reads: it watches the same session, looks up the team's prior work through
+  the Probe MCP (Opus 5.5 via the server's `reader` model alias; `PROBE_COMPANION_READ_MODEL`
+  overrides), and sends the coding agent short `[Probe]` messages and answers. Its instructions are
+  one approved skill file (`daemon/read_session.md`); its tools are `read`, `session`
+  (open/outline/search) and the MCP, never a shell or a write, and `search_knowledge` always leaves
+  out the watched session. A turn ends with `final_result(message)`; prose instead of the tool is
+  the answer to an ask and dropped otherwise. A turn is at most 8 model rounds and 60 s (80 s for an
+  ask); its history, cursor, ask and message are saved in one transaction and the message is
+  published by id, so a crash neither loses nor doubles one. It compacts near 120K tokens, keeps its
+  own tables (`read_*`) and never touches the writer's lease.
+  - Unasked messages: one per researcher prompt, plus one more per 10 minutes of a long turn (a
+    one-prompt autonomous session otherwise got the reader's first message and none after it,
+    corrections included; replay bench, 2026-09-28).
+  - `probe ask "<question>"` files a question and returns at once (the answer arrives as a
+    `[Probe]` message); `--wait` waits for it (up to 2 h) and prints it. An ask the reader has held
+    10 minutes without an answer fails with a reason; every ask ends answered, "nothing in the
+    team's records", or failed.
+  - The researcher sees each failure once (a hook `systemMessage`: the daemon stopped, the reader
+    failing, reads unavailable, a stopped turn, back to normal) and `probe doctor` shows the
+    reader's state, its turns and the asks.
+  - Codex gets messages at prompts and after tool calls (no wake); pi's extension delivers at each
+    prompt and steers an answer into a running agent, or starts a turn for one that lands while
+    pi is idle.
+- **The daemon's writer: 35 minutes to finish, a handover to a resumed session, long calls.** At
+  session end the worker now gets 35 minutes (was 15), so one full 30-minute model call can finish.
+  A resumed session's worker no longer waits for the old one to drain its queue: it asks for a
+  handover, and the old worker pauses at its next model round (history saved, events covered) and
+  exits; the new one carries the same conversation on. A model call may take 1,900 s client-side
+  (the server's ladder: 1,800 < 1,830 < 1,860); the write lease is renewed every 60 s WHILE a call
+  runs; the writer compacts near 950K tokens; the model connection uses TCP keepalive. The device
+  token counter is kept per lane (writer / reader), counts fresh input plus output only, and waits
+  at most 1 s for its lock.
+- **Daemon reads, Claude Code delivery (plan T3; nothing publishes messages until the reader
+  lands).** New stdlib hook `plugins/probe-research/hooks/reads_hook.py` hands the daemon's
+  `[Probe]` messages to the coding agent, reading `<state>/probe/reads/` with the same rules as
+  `probe.daemon.mailbox` (a parity test renders the same files through both). At each prompt and
+  after each main-agent tool call it claims every answer (answer, nothing found, failed) not held
+  for a waiting `probe ask --wait`, plus at most one unasked message per researcher turn, as
+  `additionalContext`. A helper agent's tool call never claims: Claude Code 2.1.283 puts `agent_id`
+  in the payload of a hook fired inside a subagent (never on the main thread, and `transcript_path`
+  stays the main transcript). A bash fast path starts no Python unless a message waits for this
+  session (`CLAUDE_CODE_SESSION_ID` / `CODEX_THREAD_ID`); at a prompt with nothing waiting it still
+  writes the new turn token, for a session the reader serves. The wake: a Stop hook with
+  `asyncRewake` (in `hooks/claude-reads.json`, declared only in the Claude Code manifest, since Codex
+  has no such key) waits up to 150 s while an ask is open and exits 2 with the answer, which wakes
+  the agent; a new prompt, or a hook or `probe ask --wait` taking the answer first, ends it quietly.
+  It runs only when `CLAUDE_CODE_SESSION_ATTENDED=1`: under `claude -p` Claude Code runs an
+  `asyncRewake` hook in the foreground, so a wait would hold the exit (measured: +8 s for an 8 s
+  hook; with this hook and an open ask, `claude -p` exits in 2.4 s). Checked live on 2.1.283: an
+  unasked message at the prompt, an answer after a tool call, and a wake after the turn ended all
+  reached the agent; a 40 KB answer after a tool call arrives as Claude Code's saved-file preview
+  (the first 2 KB and the file's path), while the same answer through the wake arrives whole.
+  Codex delivery is T11: under Codex the hook exits 0. The adapter capability table gains
+  `inject_tool` and `wake` (Claude Code both; Codex and pi neither).
+
 ## 0.200.2
 
 - **Hosted MCP: `X-Probe-Hide-Session-Work: 1` hides the caller's own session work.** With the

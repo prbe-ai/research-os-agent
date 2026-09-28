@@ -228,6 +228,27 @@ def on_pre_question(payload: dict) -> None:
                                             "options, and nothing else in it. " + _nudge(req),
             }})
             return
+    # Passed: this call asks the researcher with nothing filled in. Its answers,
+    # when they come back, are theirs (`on_post_question` accepts only these).
+    _mark_clean(payload.get("tool_use_id"))
+
+
+def _clean_path(tool_use_id: object) -> "Path | None":
+    if not isinstance(tool_use_id, str) or not tool_use_id or len(tool_use_id) > 200:
+        return None
+    safe = "".join(c for c in tool_use_id if c.isalnum() or c in "-_")
+    return _state() / "approvals" / "asked" / safe if safe else None
+
+
+def _mark_clean(tool_use_id: object) -> None:
+    path = _clean_path(tool_use_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(time.time()), encoding="utf-8")
+    except OSError:
+        pass
 
 
 def on_post_question(payload: dict) -> None:
@@ -235,8 +256,16 @@ def on_post_question(payload: dict) -> None:
     answers = response.get("answers") if isinstance(response, dict) else None
     if not isinstance(answers, dict):
         return
-    if _prefilled(payload.get("tool_input")):
-        return  # answers the agent wrote into its own call are not the researcher's pick
+    # Only a call PreToolUse passed with no answers filled in: Claude Code
+    # (2.1.283) echoes the researcher's pick into `tool_input.answers` too, so the
+    # input can no longer tell a pick from answers the agent wrote itself.
+    clean = _clean_path(payload.get("tool_use_id"))
+    if clean is None or not clean.exists():
+        return
+    try:
+        clean.unlink()
+    except OSError:
+        pass
     for q in _questions(payload.get("tool_input") or {}):
         req = _request_for(q.get("header"), payload.get("session_id"))
         if req is None or _terminal_only(req) or q.get("question") != req["question"]["question"]:

@@ -17,7 +17,8 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
 import { pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type SpawnFn } from "./daemon.js";
 import { connectAndRegisterTools, defaultMcpBridgeDeps, interactiveOAuthLogin, type ConnectResult } from "./mcpBridge.js";
-import { disabledFile, extensionLogFile, teamNoteDocumentPath } from "./paths.js";
+import { disabledFile, extensionLogFile, probeStateDir, teamNoteDocumentPath } from "./paths.js";
+import { Mailbox } from "./reads.js";
 import { checkPairing } from "./pairing.js";
 import { buildStatusReport } from "./status.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./tapRuntime.js";
@@ -105,6 +106,62 @@ function probeIsOff(): boolean {
  * session that just LEFT it runs it once more to clear the notified record.
  */
 let lastTurnInDaemon = false;
+
+// DAEMON READS (reads.ts): the daemon's reader answers `probe ask` and sends
+// team context; pi gets it at each prompt and, between prompts, from a 2 s
+// poller that steers an answer into a running agent or starts a turn for one
+// that lands while pi is idle (pi's analogue of Claude Code's Stop wake).
+const READS_POLL_MS = 2000;
+let readsCtx: { ctx: any; timer: ReturnType<typeof setInterval> } | null = null;
+
+function mailboxFor(sessionId: string): Mailbox {
+  const state = probeStateDir(process.env);
+  return new Mailbox(`${state}/reads`, `${state}/sessions`, sessionId);
+}
+
+function readsNotify(ctx: any, line: string | null): void {
+  if (line && ctx?.hasUI) {
+    try {
+      ctx.ui.notify(line, "warning");
+    } catch {
+      // a notice is best effort
+    }
+  }
+}
+
+/** Start the reads poller for this process, once a session the reader serves
+ * has had its first prompt (`before_agent_start`). */
+function startReadsPoller(pi: ExtensionAPI, ctx: any): void {
+  if (readsCtx) {
+    readsCtx.ctx = ctx;
+    return;
+  }
+  const timer = setInterval(() => {
+    try {
+      if (probeIsOff() || !readsCtx) return;
+      const live = readsCtx.ctx;
+      const sid = live?.sessionManager?.getSessionId();
+      if (!sid) return;
+      const box = mailboxFor(sid);
+      if (!box.served()) return;
+      const idle = typeof live.isIdle === "function" ? live.isIdle() : true;
+      // Idle: answers only, and they start a turn. Running: one unasked
+      // message per turn too, steered in after the current tool calls.
+      const texts = box.deliver(box.currentTurn(), "pi poller", !idle);
+      if (texts.length) {
+        pi.sendMessage(
+          { customType: "probe-reads", content: texts.join("\n\n"), display: true },
+          { deliverAs: "steer", triggerTurn: true },
+        );
+      }
+      readsNotify(live, box.researcherNotice());
+    } catch (err) {
+      logLine(`reads poller: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, READS_POLL_MS);
+  timer.unref?.();
+  readsCtx = { ctx, timer };
+}
 
 function realTurnSignalDeps(): TurnSignalDeps {
   return {
@@ -266,6 +323,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     const sessionId = ctx.sessionManager.getSessionId();
     const transcriptPath = ctx.sessionManager.getSessionFile();
 
+
     // THE SWITCH IS RESOLVED FIRST, and it did not used to be. The note sync
     // below is a network call and the read after it becomes text in every
     // prompt, so both have to know whether this session is `off` -- and they
@@ -421,6 +479,10 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   });
 
   pi.on("session_shutdown", async (event, ctx) => {
+    if (readsCtx) {
+      clearInterval(readsCtx.timer);
+      readsCtx = null;
+    }
     if (event.reason === "reload") {
       // Extensions are reloading, not the session — the SAME session id fires
       // session_start again right after this. Leave the daemon running:
@@ -487,6 +549,22 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       if (sessionId) notice = daemonNotice(sessionId, inDaemon, realDaemonNoticeDeps());
     }
     lastTurnInDaemon = inDaemon;
+    // Daemon reads: a new turn, every waiting answer and this turn's one
+    // unasked message (reads.ts), beside the daemon notice.
+    const readsSession = ctx?.sessionManager?.getSessionId();
+    if (readsSession) {
+      try {
+        const box = mailboxFor(readsSession);
+        if (box.served()) {
+          startReadsPoller(pi, ctx);
+          const texts = box.deliver(box.newTurn(), "before_agent_start");
+          if (texts.length) notice = [notice, ...texts].filter(Boolean).join("\n\n");
+          readsNotify(ctx, box.researcherNotice());
+        }
+      } catch (err) {
+        logLine(`reads at prompt: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
     if (systemPrompt === event.systemPrompt && !notice) return;
     return {
       ...(systemPrompt !== event.systemPrompt ? { systemPrompt } : {}),
