@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.196.1
+
 - **One team-note audit per machine at a time.** The audit line was asked once per session and
   silenced only when the auditor stamped the note, so every session that submitted a prompt in
   between was told to spawn its own background auditor (9 sessions on one box, up to 9 subagents
