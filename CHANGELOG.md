@@ -39,6 +39,19 @@
   in the new environment test lost their 70 MiB artifact that way. The sender now counts the
   multipart queue before it exits.
 
+- **The Probe daemon records what is said about a write the agent made itself.** When the
+  researcher asks for a write, the agent makes it with `--directed` and the daemon does not
+  repeat it; the daemon read that as "this topic is the agent's", so what the session only
+  SAID about it was never recorded (a side-by-side trial on 2026-09-28: the agent saved two
+  papers with `--directed` and said which setting each informs; the daemon recorded neither).
+  track-work now says `--directed` covers only that write. On the replay bench
+  (`sxs-mlp-daemon-a`, Opus 5.5, 3 runs each) the paper "why" went from 2/3 to 3/3 and every
+  check from 5.0/6 to 6/6.
+- **Bench: `fixtures.py --also-project` freezes a sibling project** the session made or used
+  (a lit review beside the work), so a replay sees it where the live session did; and
+  `score.py` resolves a slug two entities share (a replay's duplicate of a frozen one) to
+  both instead of one.
+
 ## 0.198.0
 
 - **`probe.init()` works in a process with no home directory.** A container running an

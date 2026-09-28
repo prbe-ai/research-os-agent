@@ -41,7 +41,8 @@ no projects, experiments or groups, and write no notes, artifacts, papers, tags,
 names, descriptions or lineage: the daemon does all of that from the session.
 Say your caveats and decision rules, with their numbers, in your end-of-turn
 message - the daemon records what you state. A write the researcher asks for
-takes `--directed`, so the daemon does not repeat it.
+takes `--directed`, so the daemon does not repeat it. `--directed` covers only
+that write; what the session says about it is still the daemon's to record.
 
 ## 1. THE MAP
 
