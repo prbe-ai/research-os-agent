@@ -19,6 +19,11 @@
   bfloat16) are now read like numpy's: one element becomes a number, a small array a list. 0-d
   jax arrays, which `float()` accepts, were already stored correctly, and so were plain numpy
   scalars (found by the environment matrix, E2).
+- **The wizard offers daemon recording only to teams on a paid plan.** The Settings screen asks
+  the server (`GET /v1/companion/availability`) and, on a no, the "Probe in new sessions" row
+  walks `on → read → off` without `daemon` and says "Daemon recording is on paid plans." A row
+  already on `daemon` keeps it, so leaving it alone changes nothing. Signed out, offline or on
+  an older server it keeps offering the daemon; the key's grant still refuses a free team.
 
 ## 0.197.1
 
