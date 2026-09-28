@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The daemon's device token fuse is gone.** A device past 60M tokens in a UTC day
+  (`PROBE_DAEMON_DAILY_TOKENS`) no longer stops its daemons until tomorrow; `device.json` still
+  counts tokens for `probe companion` status. And a model failure whose text says "refused"
+  (`Connection refused`, a provider refusal) no longer releases the lease as `budget`: the old
+  `"fuse" in text` test matched it. Richard 2026-09-28: "we dont want any limit".
+
 ## 0.196.1
 
 - **One team-note audit per machine at a time.** The audit line was asked once per session and
