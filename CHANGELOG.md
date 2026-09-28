@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A full outbox volume no longer drops writes the SDK had already queued.** On a disk full but
+  for a few KB, a write's op file could land and its status bookkeeping then fail with
+  `No space left on device`: the SDK counted a drop for a write it later delivered, queued the op a
+  second time on its retry, and never woke the drainer, so that stranded op kept the run's lane
+  non-empty and every later write of the run was dropped instead of sent directly (a 7-day soak
+  rehearsal on a real 1 GiB tmpfs lost 118 of 119 writes over a 120 s full window, 0.195.0). The
+  op now counts as queued once and the drainer is woken; a write is dropped only while the run
+  has other writes queued (plan 1.5).
+
 ## 0.195.0
 
 - **A write Probe refused now fails the command.** Every `probe` write used to swallow the server's
