@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.200.2
+
 - **Hosted MCP: `X-Probe-Hide-Session-Work: 1` hides the caller's own session work.** With the
   header and the caller's ambient `X-Probe-Agent-Session`, `search_knowledge` and `browse` ask the
   backend to leave out the projects, experiments and runs that session created, browse's
