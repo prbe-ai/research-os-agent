@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.198.1
+
 - **The code snapshot no longer takes the SDK's own queue as the run's code.** A job started in
   `$TMPDIR` (`docker run -w /tmp`) with no usable home queues in `$TMPDIR/probe-outbox-<uid>` and
   keeps state in `$TMPDIR/probe-home-<uid>`, and the snapshot swept those queue files into the
