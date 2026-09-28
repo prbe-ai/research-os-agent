@@ -86,7 +86,7 @@ def _looks_like_the_uploader(pid: int) -> bool:
     try:
         # Fixed binary, no shell: argv is ours end to end.
         completed = subprocess.run(
-            ["/bin/ps", "-p", str(pid), "-o", "command="],
+            ["/bin/ps", "-ww", "-p", str(pid), "-o", "command="],
             capture_output=True,
             text=True,
             timeout=5,

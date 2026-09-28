@@ -101,7 +101,7 @@ def _proc_linux(pid: int) -> _Proc | None:
 def _proc_ps(pid: int) -> _Proc | None:
     try:
         out = subprocess.run(
-            ["ps", "-o", "ppid=,stat=,lstart=,args=", "-p", str(pid)],
+            ["ps", "-ww", "-o", "ppid=,stat=,lstart=,args=", "-p", str(pid)],
             capture_output=True,
             text=True,
             timeout=_PS_TIMEOUT_S,

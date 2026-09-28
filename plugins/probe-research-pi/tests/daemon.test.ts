@@ -65,8 +65,9 @@ function fakeDeps(overrides: Partial<DaemonDeps> = {}): DaemonDeps & { files: Ma
     kill: () => {
       throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
     },
-    // What `ps -p <pid> -o command=` prints for a real wrapper (verified
-    // against a live one: the whole script text plus its positional args, so
+    // What `ps -ww -p <pid> -o command=` prints for a real wrapper (verified
+    // against a live one: the whole script text plus its positional args -- only
+    // with `-ww`; without it `ps` cuts the line at `$COLUMNS` -- so
     // both `-m tap watch` and the `probe-research-tap` prefix are in there).
     // Tests that care about the identity check override this.
     commandForPid: () =>

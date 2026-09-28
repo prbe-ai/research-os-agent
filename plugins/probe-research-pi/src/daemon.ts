@@ -71,7 +71,7 @@ export interface DaemonDeps {
  * Ask the OS what a pid actually IS. The default `commandForPid`.
  *
  * Byte-for-byte the same question `tap/start.py::_looks_like_the_uploader`
- * asks (`/bin/ps -p <pid> -o command=`, 5s bound, any failure reads as "not
+ * asks (`/bin/ps -ww -p <pid> -o command=`, 5s bound, any failure reads as "not
  * the tap"), because the two answers have to match — see `isDaemonAlive`.
  *
  * Never throws: an unreadable `ps` is indistinguishable, from here, from a
@@ -80,7 +80,7 @@ export interface DaemonDeps {
  */
 function psCommandForPid(pid: number): string | null {
   try {
-    return execFileSync("/bin/ps", ["-p", String(pid), "-o", "command="], {
+    return execFileSync("/bin/ps", ["-ww", "-p", String(pid), "-o", "command="], {
       encoding: "utf-8",
       timeout: 5_000,
       stdio: ["ignore", "pipe", "ignore"],

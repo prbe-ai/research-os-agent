@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **`probe session status` no longer reports a running transcript uploader as `not started`
+  when `COLUMNS` is set.** The check that confirms a pid really is the uploader asked `ps` without
+  `-ww`, so `ps` cut its output at `$COLUMNS`. The uploader's command line has ~550 characters of
+  wrapper script before its first `tap`, so the check failed on a live daemon. The same check
+  decides whether capture-off signals a pid and whether the tap's spawner and the pi extension
+  count a daemon as alive; all four copies now pass `-ww`.
+- **The agent test suite no longer stops every session's transcript uploader.** Tests that call
+  `capture.turn_off()` reached the real `/tmp/probe-research-tap-watcher-*.pid` files and sent
+  SIGTERM to every live session's daemon on the machine. On a shared dev box that made status
+  lines read `not capturing session transcript: not started` until each session's next prompt
+  restarted its uploader (7 times in one morning). `turn_off` now reads its pid directory from
+  `PROBE_TEST_TAP_PID_DIR` (default `/tmp`), and the suite points it at a temp dir for every test.
+
 ## 0.197.0
 
 - **The daemon's device token fuse is gone.** A device past 60M tokens in a UTC day

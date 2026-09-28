@@ -137,3 +137,26 @@ def test_a_stale_shutdown_sentinel_is_cleared_before_spawning(paired, tmp_path):
 def test_heal_marker_is_under_the_plugin_state_dir(plugin_dir):
     """The bash hook stats this exact path — see hooks/ensure-daemon.sh."""
     assert cfg.heal_marker(SID) == Path(plugin_dir) / "heal" / SID
+
+
+def test_a_live_uploader_is_recognised_in_a_narrow_terminal(monkeypatch):
+    """`ps` cuts at `$COLUMNS` unless told `-ww`, and the wrapper's first `tap`
+    sits ~550 characters in, so a narrow caller read a live daemon as stale
+    and spawned a second one. Same check as probe's `capture_state`."""
+    import subprocess
+    import sys
+
+    # argv[0] fixed so only the args can carry `tap` (see test_capture_state.py).
+    proc = subprocess.Popen(
+        ["sleeper", "-c", "import time; time.sleep(30)", "x" * 600, "tap"], executable=sys.executable
+    )
+    try:
+        monkeypatch.setenv("COLUMNS", "80")
+        cut = subprocess.run(
+            ["/bin/ps", "-p", str(proc.pid), "-o", "command="], capture_output=True, text=True
+        ).stdout
+        assert "tap" not in cut, "precondition: without -ww the line must be cut before `tap`"
+        assert tap_start._looks_like_the_uploader(proc.pid) is True
+    finally:
+        proc.kill()
+        proc.wait()
