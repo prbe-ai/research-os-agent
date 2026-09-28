@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **One team-note audit per machine at a time.** The audit line was asked once per session and
+  silenced only when the auditor stamped the note, so every session that submitted a prompt in
+  between was told to spawn its own background auditor (9 sessions on one box, up to 9 subagents
+  rewriting one file). `probe notes audit-advisory` now claims a machine-wide lease
+  (`<state>/team-note/audit-lease.json`, 2 hours) when it prints the line and prints nothing while
+  another session holds it. The session holding it is told again if the first telling never
+  arrived; a claim nobody acts on holds the audit for 2 hours, then the next prompt takes it over.
+  `--peek` prints the line without claiming it. The plugin's `note_audit` hook no longer asks in a
+  session whose tracking is `read` or `off`, or on a prompt that is itself a `/probe` switch
+  command, since either would claim the audit and then skip it.
+
 ## 0.196.0
 
 - **Every rank of a distributed Lightning or Hugging Face job now holds a writer lease.** Before,
