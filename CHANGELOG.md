@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.198.0
+
 - **`probe.init()` works in a process with no home directory.** A container running an
   arbitrary uid (OpenShift, `docker run --user 12345`, many managed-job runners) can start with
   `HOME` unset and no passwd entry. There `Path.home()` raises, and `probe.init()` died with
