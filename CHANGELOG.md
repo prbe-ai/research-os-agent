@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **An artifact over 64 MiB waiting on another upload of the same bytes tries again at least
+  every minute.** The lane's backoff used to climb to 300 s while the server answered 409; the
+  server now hands the bytes over once that upload has been idle 10 min (its uploader gone), so
+  the wait is capped at 60 s (`BUSY_MAX_WAIT_SECONDS`), and a `strict=True` upload waits 12 min
+  instead of 10 before giving up. An upload the server ended as `superseded_idle` (this machine
+  went quiet and another run's create took it over) is started again from the staged copy -- and
+  becomes a HAVE once the other one verifies -- instead of being recorded as a reference row.
 ## 0.200.0
 
 - **A run now records what it WRITES, not only what it reads (lineage plan 3, F2).** The read
