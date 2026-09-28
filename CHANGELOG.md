@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.200.1
+
 - **An artifact over 64 MiB waiting on another upload of the same bytes tries again at least
   every minute.** The lane's backoff used to climb to 300 s while the server answered 409; the
   server now hands the bytes over once that upload has been idle 10 min (its uploader gone), so
