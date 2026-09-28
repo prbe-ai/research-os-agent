@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`PROBE_OUTBOX_DIR` is split per rank, like the default outbox.** A distributed job queues
+  each rank's writes in `<PROBE_OUTBOX_DIR>/rank-<N>/`. Before, an explicit `PROBE_OUTBOX_DIR`
+  (the setting the reliability plan's rollout note gives a cluster) put every rank of every node
+  on one queue and one append lock. On an NFS home that lock is shared between machines, and
+  the Linux NFS client retries a busy lock with a backoff of up to 30 s. Each `log()` waited
+  that long: a two-node Slurm job made 10 steps in 5 minutes instead of 200 in 25 s. The
+  directory itself is still the root that `probe outbox status`, `drain` and `sync` read, and
+  they find every `rank-*` queue under it. The session-start hook's copy of this rule changes
+  with it.
 - **A > 64 MiB artifact logged just before a job ends is uploaded, not stranded.** Its upload
   queues in the outbox's own multipart queue, which `status.json` does not count. When it landed
   while the background sender was in its last seconds, the producer's kick saw the sender still

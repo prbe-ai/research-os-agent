@@ -625,10 +625,12 @@ def _outbox_dir() -> Path:
     """
     configured = os.environ.get("PROBE_OUTBOX_DIR")
     if configured:
-        return Path(configured).expanduser()
-    base = os.environ.get("XDG_STATE_HOME")
-    root = Path(base) if base else Path.home() / ".local" / "state"
-    outbox = root / "probe" / "outbox"
+        outbox = Path(configured).expanduser()
+    else:
+        base = os.environ.get("XDG_STATE_HOME")
+        root = Path(base) if base else Path.home() / ".local" / "state"
+        outbox = root / "probe" / "outbox"
+    # The rank split applies under an explicit PROBE_OUTBOX_DIR as well.
     suffix = _outbox_rank_suffix()
     return outbox / suffix if suffix else outbox
 
