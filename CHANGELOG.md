@@ -109,6 +109,28 @@
   Codex delivery is T11: under Codex the hook exits 0. The adapter capability table gains
   `inject_tool` and `wake` (Claude Code both; Codex and pi neither).
 
+- **The daemon writes a folder per session you can read: its log and each agent's full trace.**
+  `~/.local/state/probe/daemon/sessions/<session id>/` holds `worker.log` (what the process did;
+  the one-line-per-HTTP-request noise is gone), `writer.jsonl` and, with reads on, `reader.jsonl`:
+  one JSON object per line, each standing alone (run, trace, span and parent ids) -- every run's
+  start and end, the job description and tool definitions (once per process, again when they
+  change), each model call as ONE line with what it ADDED to the conversation and what it answered
+  (text, thinking, tool calls, tokens, latency, dollars), every tool run (arguments, duration,
+  outcome, full result) and each compaction with its summary. Pydantic AI's own message JSON,
+  logged as deltas so a long conversation grows the file linearly. `probe daemon status` names
+  each session's folder. Files are 0600, the folder 0700; swept with the session's store after 30
+  idle days; a file stops at 256 MB (`PROBE_DAEMON_TRACE_MAX_MB`); `PROBE_DAEMON_TRACE=off` turns
+  it off. Tracing only observes: the model receives the same bytes with it on or off, and a trace
+  that cannot be written never fails a bite.
+- **The daemon uploads those traces to Probe, beside its work and never in its way.** A background
+  task sends new lines to `POST /v1/companion/traces` (Probe's agent-traces store) in batches of
+  at most 1 MB, moving a cursor kept beside each file only when Probe takes the batch, so a crash,
+  a refusal or an outage loses nothing and a re-send is never a duplicate. A line over 900 KB is
+  trimmed before it goes (the local file keeps it whole); a session that crashed ships at the next
+  start; while tracing is off for the team the lines wait. A folder ships only under the server
+  and key that recorded it: a session resumed under another account keeps tracing locally and is
+  never uploaded. `PROBE_DAEMON_TRACE_UPLOAD=off` turns uploads off.
+
 ## 0.200.2
 
 - **Hosted MCP: `X-Probe-Hide-Session-Work: 1` hides the caller's own session work.** With the
