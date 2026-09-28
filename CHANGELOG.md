@@ -27,6 +27,15 @@
   already on `daemon` keeps it, so leaving it alone changes nothing. Signed out, offline or on
   an older server it keeps offering the daemon; the key's grant still refuses a free team.
 
+- **A > 64 MiB artifact logged just before a job ends is uploaded, not stranded.** Its upload
+  queues in the outbox's own multipart queue, which `status.json` does not count. When it landed
+  while the background sender was in its last seconds, the producer's kick saw the sender still
+  running and did nothing, and the sender checked only `status.json` and exited. The upload then
+  sat queued until some later `probe` command on a machine that could see that queue. In a Slurm
+  job (`log_artifact` then `finish`, then the job ends) that was never: 2 of about 7 two-node runs
+  in the new environment test lost their 70 MiB artifact that way. The sender now counts the
+  multipart queue before it exits.
+
 ## 0.197.1
 
 - **`probe session status` no longer reports a running transcript uploader as `not started`
