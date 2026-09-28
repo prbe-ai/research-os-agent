@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.199.0
+
 - **The SDK works on Windows.** `import probe` failed there with `ModuleNotFoundError: No
   module named 'fcntl'`, so a training script could not log at all. The SDK path's file locks
   now go through one helper, `probe._shared.oscompat`: `fcntl.flock` on POSIX (unchanged) and
