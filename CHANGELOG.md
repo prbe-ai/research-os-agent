@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **jax arrays log and configure like numpy's.** `probe.log({"x": jnp.array([3.5])})` stored no
+  point: the SDK read only numpy and torch values by shape, and `float()` refuses a jax array with
+  `ndim > 0`, so a size-1 jax vector went to the step record as its repr, with a "not
+  JSON-serialisable" warning. A jax value in `config=` or `update_config` (`jnp.float32(0.1)`) was
+  stored as the string `"Array(0.1, dtype=float32)"`. jax arrays (and `ml_dtypes` scalars such as
+  bfloat16) are now read like numpy's: one element becomes a number, a small array a list. 0-d
+  jax arrays, which `float()` accepts, were already stored correctly, and so were plain numpy
+  scalars (found by the environment matrix, E2).
+
 ## 0.197.1
 
 - **`probe session status` no longer reports a running transcript uploader as `not started`
