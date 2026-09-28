@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.199.1
+
 - **A multi-node job opened by `probe exec -- sbatch` or `--detached-launcher` follows the
   per-writer lease rules.** Such a run is opened awaiting attach, and it never asked for leases,
   so it stayed on the old rules: a lost node was invisible to `writer_lost`, and ranks killed
