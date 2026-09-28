@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.200.0
+
 - **A run now records what it WRITES, not only what it reads (lineage plan 3, F2).** The read
   recorder's audit hook notes each file the run opens for writing (and the new name of one it
   renames); at the close a noted file counts only if it still exists, is a regular file and is no
