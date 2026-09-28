@@ -7,6 +7,32 @@
   agent had filled in itself and was dropped: the daemon never acted on it (found by the end-to-end
   test). A pick now counts for a question call the pre-call check let through with nothing filled
   in (matched by its tool-use id).
+- **The tracking guard sees `probe` behind a wrapper.** `command probe ...`, `env X=1 probe ...`,
+  `nohup`, `timeout 30`, `nice`, `python -m probe ...` and `bash -c "probe ..."` are now read as the
+  `probe` command they run, so a `read` or `off` session refuses them like a bare `probe` write
+  (before, the wrapper hid them from the guard; the CLI's own write gate still applied).
+- **Daemon reads: a "Who records" choice per coding agent, behind `probe wizard --experimental`
+  (plan T7 + T8).** Settings › Who records in Claude Code / Codex: `the agent` (today, unchanged)
+  or `the daemon`. Picking the daemon mints the Probe daemon's key if it has none (the same
+  browser approval as the `daemon` tracking default), installs the capture plugin if missing and
+  the new lean plugin `probe-research-daemon`, records the choice in the config
+  (`defaults.recorders`), writes the daemon profile's Probe section into that agent's CLAUDE.md /
+  AGENTS.md, sets new sessions to `daemon`, and only then removes `probe-research`; picking the
+  agent reverses it. Each step reports its own failure, and nothing before the config write is
+  left half done. The lean plugin carries only `instrument-code`, the daemon's `[Probe]` messages
+  and the Stop wake, the daemon's approval questions, the guard (which refuses every `probe`
+  command but `ask`, `exec`, the runs' own data and `session status`), the status line and the
+  team note sync: no Probe MCP, no other skills, no setup command. Update, stuck-write and
+  team-note notices go to you as a one-line message and `probe doctor`, never into the agent's
+  context. With the daemon profile on, the daemon's reader runs for that agent's sessions (the
+  `PROBE_DAEMON_READS=on` switch still works for development), `probe ask` answers by the calling
+  agent's profile, and `probe session track` turns a session back to `daemon`. `probe update`,
+  a re-run install, `probe doctor` and the status line all follow the profile's plugin. The row
+  is hidden without `--experimental` unless an agent is already on the daemon; the existing
+  "Probe in new sessions" row is unchanged, so a machine whose default is `daemon` keeps today's
+  behaviour. A team the daemon is not open to (the paid-plan check) does not see a row still on
+  `the agent`. pi has no row yet (T11).
+
 - **The daemon's reader never reports this session's own fresh work as the team's prior work.**
   The writer records the session into Probe as it goes; the reader then found those records and
   cited them as "the team already did this" (the live bench: 4 of 4 messages). Its MCP connection

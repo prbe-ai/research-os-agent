@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c '[ \"${CLAUDE_CODE_SESSION_ATTENDED:-}\" = 1 ] || exit 0; SID=\"${CLAUDE_CODE_SESSION_ID:-${CODEX_THREAD_ID:-}}\"; SID=\"${SID//[^A-Za-z0-9_-]/}\"; [ -n \"$SID\" ] || exit 0; shopt -s nullglob; R=\"${XDG_STATE_HOME:-$HOME/.local/state}/probe/reads\"; W=(\"$R/asks/$SID\"/a*.json \"$R/asks/$SID\"/.taken/a*.json); [ ${#W[@]} -gt 0 ] || exit 0; ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -f \"$ROOT/hooks/reads_hook.py\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -f \"$ROOT/hooks/reads_hook.py\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_AGENT=codex; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/reads_hook.py\"'",
+            "timeout": 160,
+            "asyncRewake": true
+          }
+        ]
+      }
+    ]
+  }
+}

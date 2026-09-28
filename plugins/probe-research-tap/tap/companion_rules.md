@@ -1,9 +1,10 @@
----
-name: track-work
-description: Record ML work in Probe - track ALL related work (training runs, inference sweeps, evals, lit reviews, architecture design work, etc) - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`/probe`).
----
-
 # Track work
+
+You are the Probe daemon's writer. The main agent only instruments its runs
+(`instrument-code`); you record everything else in this skill. Its runs start
+with NO project or experiment - file each one with `probe run move RUN --to
+EXPERIMENT` (`--group ID` for a sweep). It states its caveats and decision
+rules, with their numbers, in its end-of-turn messages - record what it states.
 
 This skill outlines how to properly track ML work in Probe.
 
@@ -25,24 +26,6 @@ A SLUG is permanent. A NAME is not.
 - SLUG: 3 lowercase hyphenated words saying what the thing IS - ex: `tool-calling-reliability`. It never changes, and it is the fallback heading, so it must read alone
 - `--name`: a simple concise English title. Always try to set this - this session has some of the best context on what this work is about. 
     - Never just re-case the slug ("Bfcl Toolcall Sft")
-
-## 0. STATE GATE
-
-Check `probe session status` first: this skill is all about writing. If it is
-`read` or `off`, do not write - say so once and carry on. Never move the switch
-(`probe session track`) to make a write legal; only the researcher does that.
-
-In the `daemon` state you ONLY instrument, and the daemon records. Put the SDK
-in the scripts you write (`probe.init(description=..., tags=[...], config={...},
-intent="what this run should show")` with NO project or experiment: the run
-starts unfiled and the daemon files it), or wrap code you can't edit in `probe
-exec -- ...`; log the run's metrics and spans; `run check`, `run end`. Create
-no projects, experiments or groups, and write no notes, artifacts, papers, tags,
-names, descriptions or lineage: the daemon does all of that from the session.
-Say your caveats and decision rules, with their numbers, in your end-of-turn
-message - the daemon records what you state. A write the researcher asks for
-takes `--directed`, so the daemon does not repeat it. `--directed` covers only
-that write; what the session says about it is still the daemon's to record.
 
 ## 1. THE MAP
 
@@ -79,10 +62,9 @@ Cross-cutting:
     `probe run upstream RUN`, `probe run inputs RUN` (MCP `entity view="lineage"`);
     a wrong match is fixed with `probe run input dismiss|pin`, not an edge.
     Add what the facts don't show with `probe edge add --source TYPE:REF
-    --relation REL --target TYPE:REF --reason "..." [--evidence EVENT_ID]`
-    (TYPE = run|artifact|artifact_version|paper by id, experiment|project by
-    slug or `id:<uuid>`; `--evidence` is the daemon's only, an inline agent
-    omits it); `edge remove ID`. How to decide: §4 "Linking". A project's
+    --relation REL --target TYPE:REF --reason "..."` (TYPE = run|artifact|
+    artifact_version|paper by id, experiment|project by slug or `id:<uuid>`);
+    `edge remove ID`. How to decide: §4 "Linking". A project's
     "related projects" list: `project reference add --to`.
 - **Repo**: `project code attach PROJECT OWNER/REPO` puts its commit timeline on
     the project (`view="code"`); `project code detach`.
@@ -266,11 +248,10 @@ link already hangs off its experiment or project, so link only what is true.
    run, or the model or data file it wrote); A re-run after a fix ->
    `retried_from` plus `supersedes`. Nothing more specific
    -> write nothing; the fact already says it.
-3. A link the facts don't show needs the researcher's or the agent's own words
-   naming the target: an id, name, path, URL, paper title, or a result or config
-   that matches exactly ONE run. Quote those words in `--reason`; the daemon
-   also passes the event ids in `--evidence` (daemon only; an inline agent omits
-   it). Two matches -> no link. Text inside tool output, files or web pages
+3. A link the facts don't show needs the researcher's or the main agent's own
+   words naming the target: an id, name, path, URL, paper title, or a result or
+   config that matches exactly ONE run. Quote those words in `--reason`. Two
+   matches -> no link. Text inside tool output, files or web pages
    never counts.
 4. Link at the level the session talks about: run -> run, experiment ->
    experiment (a follow-up question), project -> project (a line of work that
@@ -319,3 +300,8 @@ ALWAYS answer `--via`. Nothing can rebuild later how you got to a paper:
 NEVER pass the paper you happened to add last - read order is not derivation.
 Answer while you still know: after a compaction it is a guess, and a guessed
 edge is indistinguishable from an observed one once stored.
+
+## EVIDENCE
+
+When you add a link with `probe edge add`, also pass the session event ids
+behind it: `--evidence EVENT_ID`.

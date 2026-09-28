@@ -1,0 +1,31 @@
+{
+  "name": "probe-research-daemon",
+  "version": "0.110.0",
+  "description": "Probe Research, daemon profile: the Probe daemon records and reads the team's work for this agent.",
+  "author": {
+    "name": "Probe",
+    "email": "team@prbe.ai",
+    "url": "https://github.com/prbe-ai"
+  },
+  "homepage": "https://github.com/prbe-ai/research-os-agent",
+  "repository": "https://github.com/prbe-ai/research-os-agent",
+  "license": "MIT",
+  "keywords": [
+    "mlops",
+    "experiment-tracking",
+    "research"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Probe Research (daemon)",
+    "shortDescription": "The Probe daemon records and reads for this agent",
+    "longDescription": "The Probe daemon records this agent's research sessions and reads the team's prior work for it. Installs the instrument-code skill, the daemon's messages and questions, and the guard; no MCP.",
+    "developerName": "Probe",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Skills",
+      "Lifecycle hooks"
+    ],
+    "websiteURL": "https://research.prbe.ai"
+  }
+}

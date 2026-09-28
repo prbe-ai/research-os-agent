@@ -15,6 +15,11 @@
       "description": "Experiment-tracking skills (probe-research:probe, probe-research:track-work, probe-research:visualize-progress, probe-research:instrument-code) wired to a read-only Probe Research MCP server; writes via the `probe` CLI."
     },
     {
+      "name": "probe-research-daemon",
+      "source": "./plugins/probe-research-daemon",
+      "description": "The daemon profile (installed by `probe wizard` in place of probe-research): the Probe daemon records and reads for your coding agent. Carries instrument-code, the daemon's messages and questions, and the guard; no MCP."
+    },
+    {
       "name": "probe-research-tap",
       "source": "./plugins/probe-research-tap",
       "description": "Ships client-sanitized per-session Claude Code or Codex transcripts to Research OS with source-bound device authentication."

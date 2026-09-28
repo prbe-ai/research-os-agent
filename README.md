@@ -9,7 +9,9 @@ overwrite them.
 What it serves:
 
 - **Claude Code / Codex plugin marketplace** — `probe-research@research-os-agent`
-  (experiment-tracking skills + read-only MCP wiring) and
+  (experiment-tracking skills + read-only MCP wiring),
+  `probe-research-daemon@research-os-agent` (the daemon profile: the Probe daemon
+  records and reads, installed by `probe wizard` in place of `probe-research`) and
   `probe-research-tap@research-os-agent` (client-sanitized transcript capture).
   Installed plugins update from this repo's `main`.
 - **`client-version.json`** — the version/staleness advisory manifest the

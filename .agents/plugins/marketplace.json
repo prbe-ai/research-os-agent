@@ -17,6 +17,18 @@
       "category": "Developer Tools"
     },
     {
+      "name": "probe-research-daemon",
+      "source": {
+        "source": "local",
+        "path": "./plugins/probe-research-daemon"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    },
+    {
       "name": "probe-research-tap",
       "source": {
         "source": "local",
