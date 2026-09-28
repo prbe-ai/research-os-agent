@@ -140,6 +140,14 @@ Hugging Face Trainer: `import probe.integrations.huggingface`, then
 the Lightning logger: world-zero process only, adopts an open run, checkpoints
 as path references, one run per Trainer, never finishes its run.
 
+Ray Tune: one run per trial, opened inside the trainable. A function
+trainable's run closes itself when Tune ends the trial - after its last
+iteration, or at a scheduler's early stop (ASHA, median stopping) - as
+`completed`. A `tune.Trainable` class must call `probe.finish()` in `cleanup()`:
+Tune waits for `cleanup()`, then SIGKILLs the trial's processes 200 ms after
+its SIGTERM, too soon for the exit hook's close. Not closed there, the run
+stays `running`, or reads `failed` (the SIGTERM taken for a preemption).
+
 A trainer integration (miles, trl, verl, Ray, etc) may mint its OWN run and
 ignore the id you supply. Steer it with the knobs it reads (project, experiment,
 run name, external id), then check where it actually wrote:

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A Ray Tune trial's run closes when Tune ends the trial, even over a slow network.** A
+  scheduler's early stop (ASHA, median stopping), or a function trainable that simply returns,
+  left its run `running` with its lease held on prod: Ray ends the trial's thread with
+  `sys.exit(0)` from `tune.report()`, then SIGTERMs the actor's process group and SIGKILLs it
+  200 ms later, and the exit hook's close was killed mid-request. That `sys.exit` on Ray's
+  `RunnerThread` now closes the run the thread opened, at once and queue-only
+  (`flush_timeout=0`: `completed` for Ray's stop, `failed` for a non-zero code), and the outbox
+  worker is started again at exit, after Ray's core worker has SIGKILLed the actor's children. A
+  `tune.Trainable` class closes in `cleanup()`, which Tune waits for (`instrument-code` skill).
+
 ## 0.200.1
 
 - **An artifact over 64 MiB waiting on another upload of the same bytes tries again at least
