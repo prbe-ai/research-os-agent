@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.197.1
+
 - **`probe session status` no longer reports a running transcript uploader as `not started`
   when `COLUMNS` is set.** The check that confirms a pid really is the uploader asked `ps` without
   `-ww`, so `ps` cut its output at `$COLUMNS`. The uploader's command line has ~550 characters of
