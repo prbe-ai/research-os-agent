@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Hosted MCP: `X-Probe-Hide-Session-Work: 1` hides the caller's own session work.** With the
+  header and the caller's ambient `X-Probe-Agent-Session`, `search_knowledge` and `browse` ask the
+  backend to leave out the projects, experiments and runs that session created, browse's
+  floating-run list is filtered server-side, and every `entity` view drops the rows, edges and
+  origins naming that work (the entity asked for by address is still shown). The session is
+  always the header's, never a tool argument, so the model cannot redirect it; `exclude_session`
+  still drives the transcript self-exclusion. A backend that cannot confirm it is marked
+  `session_work_exclusion_unsupported`. The Probe daemon's reader sends it; no tool parameter or
+  description changed, and a caller without the header sends exactly the requests it sent before.
+  `Client.search` and `Client.browse` gain `exclude_origin_session`, `Client.session_created`
+  reads `GET /v1/sessions/{id}/created`, and the header name is
+  `probe.sdk.agent_session.HIDE_SESSION_WORK_HEADER`.
 - **A Ray Tune trial's run closes when Tune ends the trial, even over a slow network.** A
   scheduler's early stop (ASHA, median stopping), or a function trainable that simply returns,
   left its run `running` with its lease held on prod: Ray ends the trial's thread with
