@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **A SIGTERM close with read/write capture on could spend its whole budget on local work and
+  leave the run `running`.** `_close_finalize`'s lineage-hashing wait and the hardware collector's
+  stop each correctly bounded themselves to half of what was left of the close's deadline -- but
+  chained one after the other that is 75% of the WHOLE budget, and the drain's delivery reserve was
+  computed from the ORIGINAL deadline, not from what was left once they were done: under real
+  scheduling delay both routinely spent their full share, so the drain and the terminal status
+  write were left with ~0s and the process died of SIGTERM with the close still unfinished (found
+  under CPU contention in a release dry run, `test_a_sigterm_close_still_sends_what_the_run_read_and_wrote`,
+  #2119 on #2124). Both are now bounded to `deadline - the drain's own reserve` (`_close_reserve`,
+  `run.py`), so that reserve always reaches the drain and the terminal write regardless of how long
+  the local finalizers take. New deterministic regression test (no CPU load needed):
+  `test_a_sigterm_close_survives_local_finalizers_that_use_their_whole_budget`.
 - **The daemon's approval question records the researcher's pick again.** Claude Code 2.1.283
   copies the pick into the question tool's `tool_input.answers`, so every real answer read as one the
   agent had filled in itself and was dropped: the daemon never acted on it (found by the end-to-end
