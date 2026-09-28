@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- **The code snapshot no longer takes the SDK's own queue as the run's code.** A job started in
+  `$TMPDIR` (`docker run -w /tmp`) with no usable home queues in `$TMPDIR/probe-outbox-<uid>` and
+  keeps state in `$TMPDIR/probe-home-<uid>`, and the snapshot swept those queue files into the
+  run's manifest. So did any working folder holding the outbox or the state folder
+  (`PROBE_OUTBOX_DIR` or `XDG_STATE_HOME` inside the project, an explicit `spool_dir`). Every
+  folder the SDK keeps files in is now skipped by the code snapshot (reported once per folder as
+  `probe_state`), by read capture and by the output sweep, whatever the working folder. Found by
+  the environment suite (E3).
+- **Hardware metrics include a run's last partial minute.** Hardware points are 60 s windows,
+  sent only once a window closed, so a run under a minute recorded no hardware at all and every
+  run lost its last partial minute. At `finish()` the collector now takes one last sample on its
+  own thread and sends the open window too, within the close's time: a hung sensor is abandoned
+  as before, never waited on past the deadline. The first CPU sample also measures the run now,
+  not psutil's meaningless first 0 %. Found by the environment suite (E3).
+- **Output and read capture start when `HOME` cannot be written.** With `HOME=/` (what Docker
+  gives an unknown uid) or a read-only home, the outbox fell back to `$TMPDIR` but output and read
+  capture stopped with `Permission denied: '/.local'`, so the run had no `probe/run.log` and no
+  read list. Their state now falls back to the same private `$TMPDIR/probe-home-<uid>` a process
+  with no home uses. Found by the environment suite (`managed/home[slash]`).
 - **`PROBE_OUTBOX_DIR` is split per rank, like the default outbox.** A distributed job queues
   each rank's writes in `<PROBE_OUTBOX_DIR>/rank-<N>/`. Before, an explicit `PROBE_OUTBOX_DIR`
   (the setting the reliability plan's rollout note gives a cluster) put every rank of every node
