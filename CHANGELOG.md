@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.195.1
+
 - **A full outbox volume no longer drops writes the SDK had already queued.** On a disk full but
   for a few KB, a write's op file could land and its status bookkeeping then fail with
   `No space left on device`: the SDK counted a drop for a write it later delivered, queued the op a
