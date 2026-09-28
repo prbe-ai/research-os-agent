@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.201.0
+
 - **A SIGTERM close with read/write capture on could spend its whole budget on local work and
   leave the run `running`.** `_close_finalize`'s lineage-hashing wait and the hardware collector's
   stop each correctly bounded themselves to half of what was left of the close's deadline -- but
