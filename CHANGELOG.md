@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **A multi-node job opened by `probe exec -- sbatch` or `--detached-launcher` follows the
+  per-writer lease rules.** Such a run is opened awaiting attach, and it never asked for leases,
+  so it stayed on the old rules: a lost node was invisible to `writer_lost`, and ranks killed
+  with no close (their output helpers' "writer gone" reports) left the run `running` until the
+  15-minute reaper. The hand-off now asks for leases without holding one itself (the submitter
+  exits once the scheduler accepts the job), every rank registers its lease when it attaches, and
+  the run closes by the lease rules: after `scancel` each rank's SIGTERM close releases `failed`
+  (preempted) and the run reads `failed` within seconds; ranks killed with no close read
+  `crashed` at the second report; a clean finish reads `completed`. A requeued job (`scontrol
+  requeue`) reopens the run its first attempt left behind instead of refusing `probe.init()`:
+  attach now also reopens `crashed` and a `failed` that the SIGTERM close marked preempted. Any
+  other `failed`, and `canceled`, is still refused. Found by the environment suite (E1).
+
 ## 0.199.0
 
 - **The SDK works on Windows.** `import probe` failed there with `ModuleNotFoundError: No
