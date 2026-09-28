@@ -58,7 +58,7 @@ What to do, per entity:
 | project | high level organization for a given effort; `--kind` required; a phase nests via `--parent` | `project create` | `project set\|tag` | `project move` (parent, top level, workspace); `delete` is PERMANENT | §2 |
 | experiment | one question inside a project; IS a project, `kind=experiment` | `experiment create --question` | `experiment set --question\|--name\|--summary`, `tag`; `freeze` pins its runs (NO `--description`: the question is it) | `delete` PERMANENT | §2 |
 | run | one execution, in an experiment or project-direct | `probe exec CMD` / SDK `run()` | `run set\|tag`, `run end --status` | `exec --parent RUN --relation retry\|resume\|fork\|branch`; `run fork SRC --step`, `run start --rewind-to-step` (see `instrument-code`, RELAUNCHING); `delete` PERMANENT | §3 |
-| group | a sweep's runs; needs an experiment | `group create EXP --name NAME` then `run start --group ID` | `group set` | - | reference §1 |
+| group | a sweep's runs; needs an experiment | `group create EXP --name NAME` then `run start --group ID`; run the work under it with `probe exec RUN -- cmd` | `group set` | - | reference §1 |
 | trial | one rollout under a run; `--name` only, no notes | `trial add DIR --step N`; the Harbor/Miles pipeline is in `instrument-code` | `trial set` | - | reference §1, §9 |
 | span | a timed phase inside a run | `probe span add` / SDK `run.span` | - | - | `instrument-code` |
 | metric | a value over steps, on a run | `probe log` / SDK `log()` | - | derived: `views preview`, `views create` | §3 / `instrument-code` |
@@ -148,6 +148,9 @@ are currently only three possible owners:
 - `probe exec` runs your command and owns the run. It keeps the heartbeat going,
   sets `PROBE_RUN_ID` and `PROBE_RUN_EPOCH` for the command, and closes the run
   with the command's exit code. Script in `instrument-code` skill.
+- A run opened on the CLI (`run start`, deprecated) records nothing of what its
+  work reads or writes. Run the work under it with `probe exec RUN -- cmd`, or
+  `probe.init()` in the job: those record both.
 - Some launchers only submit the job and return: `sbatch`, `ray job submit`,
   `modal deploy`. Wrapping them would track the launcher, not the job, so `probe
   exec` opens the run as AWAITING ATTACH and the job claims it when it starts.

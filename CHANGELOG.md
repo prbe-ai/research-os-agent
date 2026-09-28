@@ -2,6 +2,144 @@
 
 ## Unreleased
 
+- **A run now records what it WRITES, not only what it reads (lineage plan 3, F2).** The read
+  recorder's audit hook notes each file the run opens for writing (and the new name of one it
+  renames); at the close a noted file counts only if it still exists, is a regular file and is no
+  longer what it was just before the run opened it (device, inode, size, mtime, ctime -- an empty
+  append, a failed open or a read-only `r+` is not an output and is never hashed), and its FINAL
+  bytes are hashed (fingerprinted over 1 GiB, the read side's scheme) and sent to
+  `POST /v1/runs/{id}/outputs` -- only to a server that declares `run_outputs`. Never recorded:
+  Probe's own folders, caches (`.cache/`, `$XDG_CACHE_HOME`, `$HF_HOME`...: a write there is a
+  download, also through a symlink), the interpreter's files, credential-shaped paths,
+  `.probeignore`d files, temp files gone at the close. `probe exec`'s Python child records writes
+  too, and its own `probe.init(capture_outputs=False)` drops what it spooled before. A crashed
+  run's writes, sent later by a recovery, are hashed only if the file is still what the writer last
+  saw (it checks every 30 s while alive); otherwise they go unhashed (`unverified_after_exit`), never
+  with another run's bytes. Unseen, and said so: `torch.save` (C++), C/Rust writers. Off with
+  `capture_reads=False`, `capture_outputs=False` / `PROBE_CAPTURE_OUTPUTS=0`, or
+  `PROBE_CAPTURE_WRITES=0` alone.
+- **One I/O budget per run, reads first (F2c).** The run's 10 GB hashing budget now pays for every
+  byte hashed: reads during the run, then at the close the reads still unhashed, then the writes,
+  then output capture's references (one budget however many capture windows the run closes). The
+  close looks at written files first, on a thread of its own, and waits for a busy hashing worker
+  instead of skipping. A fingerprint past the budget is charged the edges it reads and
+  none is started without budget or past the close's deadline (before, each cost up to 8 MiB,
+  uncharged and unbounded in count). What was cut is counted in the coverage (`hash_cut`: budget /
+  deadline). The hash cache now writes a close's answers in one transaction (2,000 small outputs:
+  4.4 s to 0.35 s at the close). Measured with `scripts/bench_write_capture.py`.
+- **Capture's redacted uploads carry the original's hash (F1).** `meta.source_sha256` is taken
+  from the same read as the redacted bytes (`secret_gate.read_upload_redacted_sourced`), so a later
+  run reading the original matches it. Two originals that redact to the same bytes stay ONE stored
+  version with the first original's hash; the later one is not re-uploaded, and its hash rides the
+  run's write list.
+- **Capture references carry a hash (F3).** A file captured as a reference (64 MB to 1 GiB, or past
+  the close budget) now sends `content_hash`, hashed from what the run's I/O budget has left and
+  within the close's deadline; one the budget or the time did not reach is sent without.
+- **Offline runs record reads and writes (F6).** `probe.init(mode="offline")` records both and
+  queues them ahead of the close (within half its time, as online); `probe sync` first moves a
+  crashed offline run's own leftovers into its queue, then delivers, dropping (with a warning) a
+  list the sync server does not declare it takes -- checked again at delivery, so a list queued
+  meanwhile is gated too. Offline runs now honour `capture_reads`, `capture_outputs` and `ignore=`
+  for this. A dead offline run's leftovers go into its own queue, never to a server.
+- **Write recording costs less per open, and stops cleanly (review of F2).** Past the 10,000-path
+  cap a write-open is no longer judged at all (it used to resolve the path and run every exclusion
+  first), and a new path is resolved from its folder's cached resolution plus one lstat instead of
+  one lstat per component: per new write-open, 43 -> 25 µs past the cap and 61 -> 52 µs below it
+  (no recorder: 21 µs; `scripts/bench_write_capture.py --hook`). What a recorder last saw of each
+  file it wrote is kept as ONE identity per path in a `<host>.<pid>.wf.json` sidecar, rewritten
+  atomically, instead of a spool line per change every 30 s (a week-long run grew it without
+  bound, and the close parsed it outside its wait). A sweep under way when the run closes no longer
+  re-creates the folder the close removed (a later recovery then sent an empty list for a closed
+  run). A close no longer waits on a hashing worker stuck on a stalled mount: one still alive 5 s
+  past its own deadline is left to it.
+- **Reads (and two writes) made from C are recorded (lineage plan 3, F4).** Python's `open` audit
+  event never fires for a library that opens its files from C or Rust, so the recorder now wraps
+  the ones that matter, only once each is imported: `pyarrow.parquet` (`ParquetFile`,
+  `read_metadata`, `read_schema`, and `ParquetDataset.read`, which `read_table`, `read_pandas` and
+  pandas' `read_parquet` go through), `pyarrow.memory_map` (the Hugging Face `datasets` cache),
+  `h5py.File` (`"r"` is a read; `"w"`, `"w-"`, `"x"`, `"a"`, `"r+"` are writes), `safetensors`
+  (`safe_open`, every framework's `load_file`), and `torch.save`, a write from C++. A dataset's
+  files are recorded when a read scans them -- after the partition filter, at most 10,000 per read
+  -- never when it is opened. `probe exec`'s child and spawned workers run the same wrappers.
+  `torch.load` needs none (it opens with Python's `open`). A function a library imported by name
+  before `probe.init()` (transformers' `from safetensors import safe_open`) is pointed at its
+  wrapper once, at init. `inputs.note_read(path)` records a read for any other reader. Still
+  unseen, and named in the coverage: a `pyarrow.dataset` Dataset read directly (its types are
+  immutable C++ wrappers), pyarrow's feather/ipc/csv/json readers, other C/Rust readers and
+  writers, and a wrapped function held before `probe.init()` other than as a module global.
+- **Spawned workers record into the run (lineage plan 3, F5).** A fork inherits the recorder; a
+  Python worker started by spawn or forkserver (a DataLoader's, a multiprocessing Pool's, a
+  `python` subprocess) did not. `probe.init()` now binds them, while its run is the only one
+  recording in the process: new workers get the `probe exec` child hook through `PYTHONPATH`
+  (`PROBE_READS_DIR`, `PROBE_READS_OWNER_PID`, `PROBE_READS_BIND`), and a binding file tells the
+  ones already running which run they belong to -- a persistent worker stops recording a run that
+  closed and follows its process to the next run (it looks every 0.25 s; what it spooled in between
+  is cut at the close, so nothing lands in the wrong run). Each spool's first line names its run
+  and the process whose close takes it; that close takes its live workers' spools too, never a
+  rank's. The environment is restored at `finish()` (or when a second run opens). A worker that
+  opens a run of its own, or opts out, leaves the binding, and its own workers with it; a run with
+  `capture_outputs=False` binds its workers without writes. Only `probe.init()` binds: a CLI or
+  service opening runs does not, and `probe exec`'s child stays a plain exec child.
+- **Hashes that arrive late replace their unhashed read (lineage plan 3, F7).** Each read row now
+  carries an `observation_id`, derived from the run, host, path and the file's identity when read,
+  so every report of a read (the close's, a replay, a recovery) names the same observation, and the
+  server (0290) replaces the unhashed row instead of adding one. What a close ran out of TIME to
+  hash (not what the budget cut) is kept beside the run's `owner.json` and hashed and re-sent under
+  the same ids by the next process on the host -- or the next run this process opens, since a
+  sweep's runs each close within a short budget -- only if the file is still exactly what was read
+  (or written), and with no coverage, which would replace the run's own. During the run the owner's
+  hasher now also tails its workers' spools (forked or spawned; never a rank's), so their reads are
+  hashed as they happen rather than all at the close. The id, and the late re-sends, go only to a
+  server declaring `run_outputs` (shipped with 0290): an older one would keep a late hash as a
+  second row.
+- **`probe run input pin --writer RUN` pins a read to the run that wrote it.** A read matched only
+  to a write that run RECORDED (lineage plan 3) has no stored version to pin with `--version`;
+  `--writer` (an id or slug) names the run instead (`PATCH /v1/runs/{id}/inputs` with
+  `writer_run_id`). Exactly one of the two; a pin replaces the one before and `reset` undoes it; a
+  refusal (the reader itself or an unknown run: 422, a run in the trash: 410, no read at that path:
+  404) exits 1. The SDK has `Client.correct_run_input(..., writer_run_id=)`, and
+  `Client.run_outputs` / `Client.record_run_outputs` for `GET`/`POST /v1/runs/{id}/outputs`.
+- **Docs: a CLI-opened run records its reads and writes only under `probe exec` (lineage plan 3,
+  F8).** `track-work` (and the daemon's vendored copy) now says a run `run start` opened
+  (deprecated) records nothing of what its work reads or writes, and points it at
+  `probe exec RUN -- cmd` or `probe.init()` in the job; `instrument-code` says writes are recorded
+  too, names their switches (`capture_outputs=False`, `PROBE_CAPTURE_OUTPUTS=0`,
+  `PROBE_CAPTURE_WRITES=0`), and lists the C readers now seen. Same in the README.
+- **Spawned-worker binding, C-reader wrappers and late hashes: review fixes (lineage plan 3).**
+  Workers are bound only while exactly ONE run is open in the process, counting runs that opted
+  out of recording, disabled and offline ones (a second run opened with `capture_reads=False`
+  used to leave the first run's binding, so its workers recorded into the first run). A worker
+  stops recording once its owner has died: the owner holds an exclusive lock on its binding for
+  its life, and the binding's name carries a nonce, so a new process reusing the owner's pid is
+  not followed. Binding keeps `PYTHONPATH` entries as given (an empty one is the working folder),
+  and `finish()` restores it exactly. The close takes a live worker's spool only from a worker
+  that FOLLOWS its binding (not one that merely inherited the run by a fork), and a header is
+  written at every spool open, so a worker that joins the run itself is not taken for the owner's.
+  The folder-resolution cache is re-checked against the folder's identity, so a retargeted link
+  into a cache is a download again. Each wrapped C reader is ONE object at every name it has
+  (`torch.save is torch.serialization.save`), so `Pool.map(pq.read_metadata, ...)` and
+  `ProcessPoolExecutor().submit(torch.save, ...)` pickle again; `safetensors.safe_open` stays a
+  class (`isinstance` works); `ParquetDataset.read()` lists nothing while nothing records. A late
+  read re-send carries a full hash only (the server keeps a hash-less report as a retry), every
+  read-list batch carries the coverage, and `probe sync` to a server without `run_outputs` strips
+  observation ids and drops late re-sends (they would become second rows). `pyarrow`, `h5py` and
+  `safetensors` join the `dev` extras, so CI runs the reader tests; `torch.save` is tested through
+  a stub. On an NFS home the owner never tests its own binding lock (there flock is a POSIX lock,
+  which the owner's own test would release), workers ask whether their owner lives about once a
+  second (the binding itself still every 0.25 s), a late re-send is tagged in the offline queue
+  (a caller's own list without coverage is no longer taken for one), a run handle collected
+  without being finished stops counting as open, and a fork while the owner's lock opens never
+  hands the child its fd. The background hasher marks each item done on the queue it took it
+  from, and a close waits only on a live hasher (a swapped queue killed it and left a count that
+  made every later close in the process wait its whole wait and send reads unhashed).
+- **`pd.read_parquet(file)` no longer crashes a recording run, and an offline run's spawned
+  workers record (lineage plan 3).** `ParquetDataset.read()` lists files only for a dataset made
+  from local paths, judged from the constructor's arguments: on one made from a file object (what
+  pandas and `pq.read_table(open(...))` build) `_dataset.filesystem` segfaults pyarrow, and the
+  audit hook already saw that `open`. A run's spool folder escapes `%`, `:`, `;`, `/` and `\` in
+  its id (`local:<key>` is `local%3A<key>`): the colon split the workers' hook folder on
+  `PYTHONPATH`, so no spawned worker of an offline run loaded the hook.
+
 ## 0.199.1
 
 - **A multi-node job opened by `probe exec -- sbatch` or `--detached-launcher` follows the

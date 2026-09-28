@@ -288,12 +288,16 @@ sends the list when the run finishes; the server links each one to the run that
 WROTE those bytes, which is how a follow-up run gets its real parent. `probe
 exec` does the same for a Python child. Nothing to add - but know its edges:
 
-- It sees `open`, `pathlib`, numpy, pandas, `torch.load`, PIL, pickle. It does
-  NOT see readers that open files from C - `pyarrow.parquet.read_table` called
-  directly, `h5py`, `safetensors`. For those, say it yourself:
+- It sees `open`, `pathlib`, numpy, pandas, `torch.load`, PIL, pickle, and
+  `pyarrow.parquet`, `pyarrow.memory_map`, `h5py`, `safetensors`. It does NOT
+  see other readers that open files from C - a `pyarrow.dataset` read directly,
+  feather, sqlite. For those, say it yourself:
   `probe edge add --source run:$RUN --target artifact:$ID --relation consumes`
 - `Client.run(...)` handles record only with `capture_reads=True`
-- Opt out: `probe.init(capture_reads=False)` or `PROBE_CAPTURE_READS=0`
+- Opt out: `probe.init(capture_reads=False)` or `PROBE_CAPTURE_READS=0` (reads
+  and writes). The files it WRITES are recorded too (path + final sha256); off
+  alone with `capture_outputs=False`, `PROBE_CAPTURE_OUTPUTS=0` or
+  `PROBE_CAPTURE_WRITES=0`
 - A wrong match is corrected, never deleted: `client.correct_run_input(run,
   path, dismissed=True)` drops it, `version_id=` pins the version really read
 
