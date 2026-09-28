@@ -7,11 +7,9 @@ one of those asks for a background agent it cannot spawn, for a researcher who i
 not there to read the result. Prompt submission is the one event that means a
 person is present, so the dispatch moved here.
 
-WHAT IT DOES NOT DECIDE. Whether the note is due, which half to run, whether
-the session is automated, and which ONE session on the machine gets the audit
-are all answered by `probe notes audit-advisory`. This file finds the CLI, asks
-once per session, and prints what it said. The one thing it decides is the one
-only it can see: whether THIS session's research tracking is on.
+WHAT IT DOES NOT DECIDE. Whether the note is due, which half to run, and whether
+the session is automated are all answered by `probe notes audit-advisory`. This
+file finds the CLI, asks once per session, and prints what it said.
 
 STDLIB ONLY, PYTHON 3.9, FAIL-SOFT. It runs under the system python3 on a
 prompt-submit budget: every failure path is "say nothing", never an error into
@@ -77,42 +75,6 @@ def _marker(session_id):
         return None
 
 
-def _recording(session_id, cwd) -> bool:
-    """Will this session run the audit it is handed?
-
-    The line says to skip it when tracking is off, and asking is what claims the
-    machine's audit lease: a read-only session that asked would hold the audit
-    for every other session on the box and then do nothing with it. Same
-    resolution as the tracking guard -- this session's decision, else the folder
-    and machine default. Anything unreadable asks, as before this existed.
-    """
-    try:
-        state = _session_marker.session_state(session_id)
-        if state is None:
-            state, _source = _session_marker.resolve_state_default(cwd)
-        return _session_marker.state_allows_writes(state)
-    except Exception:
-        return True
-
-
-def _is_switch_prompt(payload) -> bool:
-    """Is this prompt itself a `/probe` switch command?
-
-    The UserPromptSubmit hooks run IN PARALLEL, so on `/probe off` this file can
-    read the state `tracking_guard.py` is about to replace: the session would
-    claim the machine's audit as `on` and then be told by its own line to skip
-    it. Asking on the NEXT prompt reads the settled state. The guard's own
-    parser decides, so the two cannot disagree about what a switch is.
-    """
-    try:
-        import tracking_guard
-
-        direction, _shape, _slug = tracking_guard.prompt_direction(payload.get("prompt"))
-    except Exception:
-        return False
-    return direction is not None
-
-
 def _source() -> str:
     """Which harness's block this session reads, and therefore which budget.
 
@@ -145,12 +107,6 @@ def main() -> int:
     # once-per-session rule exists to prevent.
     if marker is None or marker.exists():
         return 0
-    # NOT MARKED either: the switch can be turned on later in this session.
-    cwd = payload.get("cwd") if isinstance(payload, dict) else None
-    if _is_switch_prompt(payload) or not _recording(
-        session_id, cwd if isinstance(cwd, str) and cwd else None
-    ):
-        return 0
 
     binary = _probe_bin()
     if binary is None:
@@ -163,10 +119,6 @@ def main() -> int:
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             timeout=4,
-            # Names the holder of the machine's audit lease, so this session is
-            # told again if this telling never reaches the model. An env var,
-            # not a flag: an older CLI would refuse an unknown option.
-            env=dict(os.environ, PROBE_NOTE_AUDIT_SESSION=session_id),
         )
     except Exception:
         return 0
@@ -178,31 +130,23 @@ def main() -> int:
         # may cross its threshold later in the same session.
         return 0
 
-    event = payload.get("hook_event_name") if isinstance(payload, dict) else None
-    try:
-        sys.stdout.write(
-            json.dumps(
-                {
-                    "hookSpecificOutput": {
-                        "hookEventName": event if isinstance(event, str) and event else "UserPromptSubmit",
-                        "additionalContext": advisory,
-                    }
-                }
-            )
-        )
-        sys.stdout.flush()
-    except Exception:
-        # NOT MARKED: nothing reached the model. This session now holds the
-        # machine's audit lease, so its next prompt is told again.
-        return 0
-
-    # MARKED ONLY AFTER THE WRITE. Marking first meant a failed write left the
-    # session "told" with nothing said, and the lease it holds silenced everyone.
     try:
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text("", encoding="utf-8")
     except Exception:
         pass
+
+    event = payload.get("hook_event_name") if isinstance(payload, dict) else None
+    sys.stdout.write(
+        json.dumps(
+            {
+                "hookSpecificOutput": {
+                    "hookEventName": event if isinstance(event, str) and event else "UserPromptSubmit",
+                    "additionalContext": advisory,
+                }
+            }
+        )
+    )
     return 0
 
 
