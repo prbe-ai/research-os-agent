@@ -78,6 +78,11 @@ def resolve_session_id(payload: dict) -> str:
     return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or ""
 
 
+#: The status line is Claude Code's (`statusLine` in its settings.json): who
+#: records for THIS coding agent decides a session not yet marked.
+AGENT = "claude_code"
+
+
 def segment(payload: dict) -> str:
     marker = _load("_session_marker")
 
@@ -93,22 +98,26 @@ def segment(payload: dict) -> str:
     cwd = cwd if isinstance(cwd, str) and cwd else None
     if not session_id:
         switch, _source = marker.resolve_state_default(cwd, config)
+        switch = marker.seed_state("", switch, AGENT)
         return marker.render(
             None,
             configured=True,
             tracking=marker.state_allows_writes(switch),
             color=_color(),
             session_state=switch,
+            daemon=marker.daemon_session("", AGENT),
         )
 
     state = marker.read(session_id)
     switch = marker.session_state(session_id)
     if switch is None:
-        # No decision on disk. SessionStart normally settles this, so reaching
-        # here means a session that predates the seed or a hook that could not
-        # write -- resolve it against the same ladder rather than inventing a
-        # third behaviour.
+        # No decision on disk YET, most often: Claude Code draws this line once
+        # while SessionStart is still running, and does not draw it again until
+        # the conversation moves. So resolve exactly as that hook is about to
+        # seed it (`seed_state`: `on` by who records), or a new daemon session
+        # shows the agent's words until its first prompt (Richard 2026-09-29).
         switch, _source = marker.resolve_state_default(cwd, config)
+        switch = marker.seed_state(session_id, switch, AGENT)
     tracking = marker.state_allows_writes(switch)
     daemon = marker.daemon_status(session_id, switch)
     return marker.render(
@@ -118,9 +127,17 @@ def segment(payload: dict) -> str:
         live=tracking and marker.is_live(state),
         color=_color(),
         session_state=switch,
-        daemon_live=daemon is not None and daemon[0] == marker.DAEMON_LIVE,
-        # `read only (daemon)` in a session the daemon reads for.
-        daemon=marker.daemon_session(session_id),
+        # A worker that has not taken its first lease yet is STARTING, not down,
+        # when it can start at all (the daemon holds its key) -- the grace the
+        # prompt hook gives (`tracking_guard._daemon_notice`). This line is drawn
+        # right at session start and not again until the conversation moves.
+        daemon_live=daemon is not None and (
+            daemon[0] == marker.DAEMON_LIVE
+            or (daemon[1] == marker.DAEMON_NOT_STARTED and marker.companion_key_held(config))
+        ),
+        # `read only (daemon)` in a session the daemon reads for; a session the
+        # lean plugin has not marked yet goes by who records for Claude Code.
+        daemon=marker.daemon_session(session_id, AGENT),
     )
 
 

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **A new daemon session's status line says `(daemon)` from its first frame.** Claude Code draws the
+  status line once while its SessionStart hook is still running and not again until the
+  conversation moves, so a brand-new session on the daemon showed the agent's `read-only` (or `on
+  (daemon degraded)`) until its first prompt. A session not seeded yet now resolves as the hook is
+  about to seed it -- who records for Claude Code decides -- and a daemon that holds its key but has
+  not taken its first lease reads as starting, not degraded (the prompt hook's grace). A daemon with
+  no key still reads degraded.
+
 - **MCP answers drop bookkeeping that only says "this is all of it".** A complete result no
   longer carries `"completeness": {"missing": [], "state": "complete"}`, a last page no longer
   carries `"next_cursor": null`, an `entity` batch whose refs all resolved no longer carries
