@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **A Ray Tune trial torn down while its outbox worker is sending the close now still closes the
+  run.** Ray's shutdown SIGKILLs the trial actor's direct children, the outbox worker among them,
+  and the SDK starts a new worker at exit to deliver the queued close. A SIGKILLed worker keeps its
+  lease until the kernel has torn it down, and that exit kick ran a fraction of a millisecond after
+  the kill: it read the held lease as a live worker delivering the queue and started none, so the
+  lease release stayed queued and the run stayed `running` with its lease held (the cli 0.201.3
+  release gate; 13 of 13 local runs once the teardown lands while the close is in flight, the usual
+  case for a trial that ran for more than a moment). The kick now waits up to 0.5 s for the killed
+  worker's lease to be let go (about 5 ms in practice) before it decides; a lease still held after
+  that is a live worker's, a sibling trial's on the same queue, and delivery is left to it.
+
 ## 0.201.4
 
 - **`probe version create` is a write.** It mints an experiment version, but `version` was missing
