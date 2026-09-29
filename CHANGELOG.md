@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`probe version create` is a write.** It mints an experiment version, but `version` was missing
+  from the write gate's groups, so the command ran in a `read` or `off` session, and the daemon
+  profile's guard allowed it as if `probe version` printed the CLI's version (found live by the
+  end-to-end test on the released 0.111.2 plugin). `version create` is now gated like every other
+  recorder write and `version list` stays a read; `probe --version` is unchanged.
+
 ## 0.201.3
 
 - **A SIGTERM to one rank of a Lightning DDP job closes the run `failed`/preempted again.** When a

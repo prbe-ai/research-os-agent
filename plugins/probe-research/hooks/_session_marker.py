@@ -921,6 +921,11 @@ WRITE_GROUPS = frozenset(
         "views",
         "paper",
         "wandb",
+        # `probe version create` mints an experiment version (a recorder's
+        # write, track-work reference; `version list` reads). Missing here, the
+        # write gate and the daemon profile's guard both let it through (live
+        # T13 on the released 0.111.2 plugin, 2026-09-29).
+        "version",
     }
 )
 
@@ -1146,7 +1151,9 @@ def daemon_allows_agent(matched: str) -> bool:
 #: and `session status`. The guard in that plugin refuses every other `probe`
 #: command, reads included, with `DAEMON_PROFILE_DENY` (the approved text:
 #: `~/daemon-prompts/reads/agent-facing/guard-refusal.NEW.md`).
-DAEMON_PROFILE_ALLOWED = frozenset({"ask", "session status", "run expect", "doctor", "version"})
+#: `probe --version` needs no entry (no command words); `probe version` is the
+#: experiment-versions group, a write.
+DAEMON_PROFILE_ALLOWED = frozenset({"ask", "session status", "run expect", "doctor"})
 
 DAEMON_PROFILE_DENY = (
     'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team\'s prior work: `probe ask "<question>"`.'
