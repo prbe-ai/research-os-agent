@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.203.0
+
 - **The daemon is chosen in the wizard, and the switch is on / read / off everywhere.** `/probe
   daemon`, `probe session state daemon` and `probe session default daemon` no longer move anything:
   each answers that the daemon is set in `probe wizard --experimental` › Settings › Who records
