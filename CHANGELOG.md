@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **The daemon can see why the agent chose what it did, in Claude Code and Codex.** Both agents write
+  their reasoning to the chat log only as a summary, and only when a setting asks: Claude Code's
+  `showThinkingSummaries` (else each thinking block is an empty string) and Codex's
+  `model_reasoning_summary` (its default wrote none in our tests). So the daemon saw what
+  the agent did but never its reasons. Moving an agent's "Who records" to the daemon now turns its
+  summaries on where you never chose (`true` in `~/.claude/settings.json`; `"detailed"` at the top of
+  `~/.codex/config.toml`, where `auto` counts as not chosen), and says so; moving back or
+  uninstalling puts back what was there, only if Probe's value still is. A value you set yourself
+  (`false`, `"none"`, `"concise"`) is never changed. One new Settings row under Who records, "Daemon
+  sees the agent's reasoning", sets it for every agent set up on the device, and `probe doctor` shows
+  it for each agent the daemon records. The summaries also show in your terminal and are uploaded
+  with the session; new sessions only (headless `claude -p` needs `--thinking-display summarized`).
+  On a replay bench whose reasons lived only in thinking, the daemon recorded them in 5 of 7 runs
+  with summaries and 0 of 7 without.
+
 ## 0.203.0
 
 - **The daemon is chosen in the wizard, and the switch is on / read / off everywhere.** `/probe
