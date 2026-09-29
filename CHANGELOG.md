@@ -26,7 +26,17 @@
 - **An `entity` batch row puts the answer one level down: `rows[i].data`, not `rows[i].data.data`.**
   Each row used to wrap its ref's whole response under `data`, so the answer sat in a box inside a
   box. A row is now `{ref, data}`, plus that row's own `completeness` when it is partial and its
-  `next_cursor` when that entity has more. Ships with the hosted MCP deploy.
+  `next_cursor` when that entity has more (a row cut for size leaves it to the top-level cursor).
+  Ships with the hosted MCP deploy.
+
+- **A multi-ref `entity` read works at the minimum budget.** At `token_budget: 512`, reading the
+  notes of two or more entities could fail before any note arrived. Each page carried its
+  ~200-token cursor twice (on the row and at the top level), which left no room for text ("Request
+  metadata exceeds this budget"); and when the first note fit but the second did not, the page sent
+  had never been measured, came out at up to ~630 tokens, and was refused on every retry. A row
+  cut for size (`truncated_by_token_budget`) now leaves the cursor to the top level, and the page
+  sent is the one measured. A row that is partial for another reason, or that ends at its fetch
+  window, keeps its cursor. Ships with the hosted MCP deploy.
 
 ## 0.204.4
 
