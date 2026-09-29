@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Who records is a toggle on the main menu, next to the default for new sessions.** Defaults now
+  opens with `Who records ‹ agent ›`: `←`/`→` switch it between the agent and the Probe daemon for
+  every coding agent on this device at once (no Claude Code / Codex split), and the switch applies
+  right away, no Enter. Switching to the daemon asks for the daemon's own sign-in when it has no key
+  yet (one browser approval), moves the plugins, and opens the daemon's page, which asks whether the
+  daemon sees the agents' reasoning; Enter on the row while it reads `daemon` opens that page again.
+  A team the daemon is not open to is told so on the switch and nothing moves. Settings is back to
+  automatic updates only.
+
 ## 0.204.1
 
 - **The daemon's "Who records" row is in the wizard for every team the daemon is open to, with no
