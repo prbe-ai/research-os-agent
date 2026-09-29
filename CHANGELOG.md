@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A SIGTERM to one rank of a Lightning DDP job closes the run `failed`/preempted again.** When a
+  node is preempted alone (its pod deleted), only its rank gets SIGTERM, and Lightning 2.6's handler
+  broadcasts to the other ranks from inside the handler: a collective nobody else joins, so rank 0's
+  main thread blocked in gloo until torchrun SIGKILLed it 30 s later. The SDK's handler, which
+  Lightning composes after that notifier, never ran, and the run stayed `running` until the lease
+  expired (the 7-day soak's F2, confirmed on 0.201.0 with a stack dump of rank 0 during the grace).
+  Now the first `log` after Lightning installs its handler moves the SDK's to the front of it, the
+  grace is armed before any other handler runs, and when the main thread does not answer the
+  SDK's re-signal (a C call runs no Python handler) the SDK closes the run from its own thread and
+  ends the process (exit code 143) within `PROBE_SIGTERM_FLUSH_SECONDS`.
 - **A SIGTERM that lands inside a `print` no longer leaves the run `running`.** CPython checks for
   signals between the writes of a buffered flush with the stream's lock held, so the SIGTERM handler
   can run inside a `print` (or a progress bar's redraw), and the main thread then holds
