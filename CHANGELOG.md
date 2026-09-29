@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The daemon now sees what you type while the Claude Code agent is working.** Claude Code saves a
+  message typed mid-turn (without Esc) as a `queued_command` attachment, never as a user line, and the
+  daemon read no attachments but its own `[Probe]` messages: 221 of 228 such prompts in 300 real
+  sessions reached neither the writer nor the reader. A queued message from you is now your prompt,
+  placed where the agent picked it up, so a correction like "stop, use lr 1e-4" is recorded as yours
+  and wakes the reader. A queued message from another agent session or an auto-continuation is shown
+  to the daemon as harness text, never as you. Mid-turn background-task notices are still not read.
+  A chat log read again from the start (Claude Code rewrote it) no longer pushes the daemon's turn
+  count up, which aged out waiting messages early.
+
 ## 0.201.5
 
 - **Daemon reads repeat themselves less.** Found by the live end-to-end test: (1) when the
