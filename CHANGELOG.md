@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.204.2
+
 - **Who records is a toggle on the main menu, next to the default for new sessions.** Defaults now
   opens with `Who records ‹ agent ›`: `←`/`→` switch it between the agent and the Probe daemon for
   every coding agent on this device at once (no Claude Code / Codex split), and the switch applies
