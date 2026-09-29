@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The daemon's "Who records" row is in the wizard for every team the daemon is open to, with no
+  flag.** `probe wizard` › Settings › Who records (the agent or the Probe daemon, per coding agent)
+  used to show only under `probe wizard --experimental`, which contradicted the paid-plan rollout:
+  now the server's answer is the only gate (a free team's NO hides it, an unknown answer offers
+  it, and a machine already on the daemon always sees it). `--experimental` is still accepted and
+  does nothing. The switch's refusal and the reasoning row's hint now point at `probe wizard` ›
+  Settings.
+
 ## 0.204.0
 
 - **The daemon can see why the agent chose what it did, in Claude Code and Codex.** Both agents write

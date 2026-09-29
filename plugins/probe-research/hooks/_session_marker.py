@@ -783,8 +783,8 @@ STATE_WORDS = tuple(STATE_LABELS[state] for state in SWITCH_STATES)
 
 #: What a TYPED `daemon` gets back instead of a state change.
 DAEMON_SWITCH_REFUSAL = (
-    "Whether the Probe daemon records is set in `probe wizard --experimental` (Settings › "
-    "Who records), not by this switch, which is on / read / off. Nothing changed."
+    "Whether the Probe daemon records is set in `probe wizard` (Settings › Who records), "
+    "not by this switch, which is on / read / off. Nothing changed."
 )
 
 #: WHAT A PERSON READS for each state when the daemon is the one recording and
