@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.202.0
+
 - **The wizard's menu folds to fit, and Settings no longer turns single parts of Probe off.** The
   default for new sessions (`on`/`daemon`/`read`/`off`) is now the menu's first row, under a new
   `Defaults` heading, wearing its current state as `‹ on ›`: `←`/`→` walk it right there and Enter
