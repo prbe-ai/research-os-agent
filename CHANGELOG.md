@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Switching Who records shows the spinner instead of a blank screen.** Moving the main menu's
+  Who records row to the daemon checks with the server whether the daemon is open to your team,
+  then moves your coding agents' plugins; both now run under the wizard's working indicator
+  ("Checking the Probe daemon is open to your team", "Moving your coding agents to the daemon").
+  The daemon's sign-in (its browser approval) still runs on its own screen, before the move.
+
 ## 0.204.2
 
 - **Who records is a toggle on the main menu, next to the default for new sessions.** Defaults now
