@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.201.3
+
 - **A SIGTERM to one rank of a Lightning DDP job closes the run `failed`/preempted again.** When a
   node is preempted alone (its pod deleted), only its rank gets SIGTERM, and Lightning 2.6's handler
   broadcasts to the other ranks from inside the handler: a collective nobody else joins, so rank 0's
