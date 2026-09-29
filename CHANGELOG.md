@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The wizard's first section is called `Install/update/uninstall`,** with its rows in that order:
+  Install, Update, then Uninstall last, so the cursor reaches the one that removes everything only on
+  purpose.
+
 ## 0.202.1
 
 - **The setup wizard opens in about a second instead of nine.** "Checking what's installed on this
