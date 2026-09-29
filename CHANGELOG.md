@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.204.1
+
 - **The daemon's "Who records" row is in the wizard for every team the daemon is open to, with no
   flag.** `probe wizard` › Settings › Who records (the agent or the Probe daemon, per coding agent)
   used to show only under `probe wizard --experimental`, which contradicted the paid-plan rollout:
