@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.201.2
+
 - **Daemon reads on Codex: a prompt starts a new turn, and the wizard says to approve the hooks.**
   Codex passes the session id only in the hook payload, never in the environment, so the reads
   hook's shell fast path could not write the turn token and the one-message-per-turn pacing fell
