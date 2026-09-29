@@ -1,8 +1,9 @@
 /**
  * Proves the package.json "pi.skills" manifest actually reaches pi's own
- * resource loader, using pi 0.84.3's REAL, PUBLIC resource-loading code
+ * resource loader, using pi's REAL, PUBLIC resource-loading code
  * (`DefaultResourceLoader` / `SettingsManager`, exported from the package's
- * own "." entry point) rather than re-implementing pi's discovery rules.
+ * own "." entry point) rather than re-implementing pi's discovery rules. Runs
+ * against the devDependency, pi 0.86.0; the same assertions passed on 0.84.3.
  *
  * This exists because declaring "pi.skills" in package.json is necessary but
  * NOT sufficient: it only takes effect once this package is registered as a

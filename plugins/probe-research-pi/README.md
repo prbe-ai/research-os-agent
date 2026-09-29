@@ -34,9 +34,10 @@ separate install step for any of the three.
 project trust, and the default trust policy (`defaultProjectTrust: ask`)
 only prompts in interactive UI — non-interactive invocations (`pi -p`,
 `--mode json`, `--mode rpc`) never show that prompt, and with no saved trust
-decision `resolveProjectTrusted()` (verified against pi 0.84.3's own source,
-`dist/core/project-trust.js`) returns `false`, so an untrusted project simply
-never loads its local packages. Those non-interactive modes are exactly the
+decision `resolveProjectTrusted()` (verified against pi 0.86.0's own source,
+`dist/core/project-trust.js`, byte-identical to 0.84.3's) returns `false`, so
+an untrusted project simply never loads its local packages. Those
+non-interactive modes are exactly the
 ones most worth capturing (scripted/agentic pi runs), so a project-scope
 install would silently not run for the sessions that matter most. Route A
 below always writes user scope; if you hand-edit `<cwd>/.pi/settings.json`
@@ -93,8 +94,9 @@ For anyone not using the `probe` CLI (or pointing at a non-default
 
 This is exactly the entry Route A writes for you. An entry may be a bare
 string (as above) or `{"source": "..."}` — pi reads both shapes identically
-(`getPackageSourceString`, pi 0.84.3's `dist/core/package-manager.js`). A
-relative path resolves against the agent dir, not this process's cwd or the
+(`getPackageSourceString`, pi 0.86.0's `dist/core/package-manager.js`,
+byte-identical to 0.84.3's). A relative path resolves against the agent dir,
+not this process's cwd or the
 package root — pi-mcp-adapter's own loader resolves relative `packages`
 sources the same way, against that same `settings.json`'s directory, so a
 relative entry means the same thing to both readers. pi's own `pi install
@@ -147,8 +149,9 @@ drift). Edit `skills/`, never `plugins/probe-research-pi/skills/` directly.
 unrelated discovery mechanisms. The legacy symlink into
 `~/.pi/agent/extensions/` (see "Install" → "Legacy" above) goes through pi's
 *auto-discovery* scan of that directory (`collectAutoExtensionEntries` in pi
-0.84.3's `core/package-manager.js`), which finds `index.ts` by convention and
-never reads this package's `package.json` at all. The `"pi": {"skills":
+0.86.0's `core/package-manager.js`, as in 0.84.3), which finds `index.ts` by
+convention and never reads this package's `package.json` at all. The
+`"pi": {"skills":
 [...]}` manifest is read only by `collectPackageResources` — the code path
 that runs for a directory pi's own package manager has registered as a
 source, i.e. anything in the `packages` array. So Route A and Route B in
@@ -159,7 +162,7 @@ only symlinked into `extensions/`, pi's own `DefaultResourceLoader` resolves
 the extension but zero skills; with the package additionally registered via
 a `packages` entry, the same loader resolves the extension AND all three
 skills. See `tests/skillsManifest.test.ts`, which asserts both states
-against pi 0.84.3's real, public resource-loading code (not a
+against pi 0.86.0's real, public resource-loading code (not a
 re-implementation of its discovery rules).
 
 ### Skills only, no capture: the drop-in skills directory
@@ -360,8 +363,9 @@ solved by this extension.
 ## Probe MCP read tools
 
 Independent of the capture daemon and the team note above — pi has no MCP
-client of its own (verified against pi 0.84.3's own source: no MCP file
-anywhere in the package, no MCP reference in the extension API types), so
+client of its own (verified against pi 0.86.0's own source, as in 0.84.3: no
+MCP file anywhere in the package, no MCP reference in the extension API
+types), so
 this extension acts as one. On `session_start`, it connects to Probe
 Research's read-only MCP server (`https://mcp.research.prbe.ai/mcp` — the
 same server Claude Code and Codex already use), lists its tools, and

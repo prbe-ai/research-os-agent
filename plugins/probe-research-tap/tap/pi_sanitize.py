@@ -160,7 +160,7 @@ def _safe_metadata_str(value: Any, *, max_len: int = _METADATA_MAX_LEN) -> str:
 
 
 #: Argument keys worth summarizing, most informative first.
-#: VERIFIED against pi 0.84.3's own typebox schemas in
+#: VERIFIED against pi 0.86.0's own typebox schemas (unchanged from 0.84.3) in
 #: node_modules/@earendil-works/pi-coding-agent/dist/core/tools/*.d.ts:
 #:   bash  {command, timeout?}      read {path, offset?, limit?}
 #:   write {path, content}          grep {pattern, path?, glob?, ...}
@@ -304,7 +304,7 @@ def _edit_stats(name: str, arguments: Any) -> dict | None:
 
     if name == "edit":
         # TWO SHAPES IN THE WILD, and the translator must read both.
-        #   current (pi 0.84.3): {path, edits: [{oldText, newText}, ...]}
+        #   current (pi 0.84.3-0.86.0): {path, edits: [{oldText, newText}, ...]}
         #   legacy  (published sessions, Jan 2026): {path, oldText, newText}
         # The schema changed between those versions. Handling only the current
         # one silently returns None for every historical session — a backfill

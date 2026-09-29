@@ -13,6 +13,10 @@
   vitest 4.1.11 (was 3.2.7; GHSA-82fw-gwwq-j7x9), qs 6.16.0, fast-uri 3.1.8 and ip-address
   10.7.2.
 
+- The pi plugin is now typechecked and tested against pi 0.86.0 (devDependency, was 0.84.3),
+  whose locked undici is 8.10.2 (was 8.9.0; GHSA-3wwx-pv8p-q78v). Development only: the
+  plugin's runtime dependencies and the pi versions it works with are unchanged.
+
 ## 0.204.3
 
 - **Switching Who records shows the spinner instead of a blank screen.** Moving the main menu's

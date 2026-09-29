@@ -62,8 +62,9 @@ export function pluginDir(env: PathEnv = process.env): string {
 /**
  * The env var that relocates pi's OWN global config directory
  * (`~/.pi/agent`) -- distinct from `PLUGIN_DIR_ENV` above, which relocates
- * only this extension's private state. Not a guess: pi 0.84.3's own
- * `dist/config.js` derives it as `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`
+ * only this extension's private state. Not a guess: pi 0.86.0's own
+ * `dist/config.js` (same derivation as 0.84.3's) derives it as
+ * `${APP_NAME.toUpperCase()}_CODING_AGENT_DIR`
  * (`APP_NAME` is `"pi"` absent a white-label `piConfig.name` in its own
  * package.json, which the installed package does not set), and `getAgentDir()`
  * -- read by every pi entry point, including the one that resolves the global

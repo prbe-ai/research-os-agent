@@ -3,20 +3,26 @@
  * a TypeBox `TSchema` for `pi.registerTool({ parameters })`, and its name
  * into something namespaced and provider-safe.
  *
- * WHY `Type.Unsafe`, NOT A HAND-WRITTEN RECURSIVE TRANSLATOR. Verified live
- * against pi 0.84.3's own installed dist (`node_modules/@earendil-works/pi-coding-agent/dist`):
- * `tool.parameters` is used at runtime for exactly two things, and neither
- * ever calls into TypeBox's type-checking machinery.
- *   1. `getJsonSchemaToolParameters()` (`dist/bundle/chunks/chunk-AXIIZGTV.js`)
- *      hands `tool.parameters` to the model provider AS a plain JSON Schema
- *      object — reading `.type`/`.properties`/`.required` directly, the same
- *      way `makeStrictJsonSchema()` right next to it does for pi's own
- *      built-in tools.
- *   2. `Static<TParams>` — a compile-time-only TypeScript mechanism, gone by
+ * WHY `Type.Unsafe`, NOT A HAND-WRITTEN RECURSIVE TRANSLATOR. Verified
+ * against pi 0.86.0's installed source (`node_modules/@earendil-works/pi-coding-agent`
+ * and the `pi-ai` it ships; both files below are the same in 0.84.3):
+ * `tool.parameters` is used at runtime for three things, and all three read
+ * it as a plain JSON Schema object.
+ *   1. `getJsonSchemaToolParameters()` (`pi-ai`'s `dist/api/constrained-sampling.js`,
+ *      bundled into the CLI) hands `tool.parameters` to the model provider AS
+ *      a plain JSON Schema object. Only a tool that sets `constrainedSampling`
+ *      (pi's own built-ins; never these) gets `makeStrictJsonSchema()` instead.
+ *   2. `validateToolArguments()` (`pi-ai`'s `dist/utils/validation.js`) checks
+ *      every call's arguments before `execute` runs: `Value.Convert`, then
+ *      `Compile(tool.parameters).Check`. TypeBox 1.x compiles raw JSON Schema,
+ *      so a `Type.Unsafe` schema validates exactly as the server wrote it
+ *      (checked against pi 0.86.0: `"5"` for an integer is coerced to 5; a
+ *      missing required key, a bad enum value, an extra key under
+ *      `additionalProperties: false` and a value under `minimum` are all
+ *      rejected).
+ *   3. `Static<TParams>` — a compile-time-only TypeScript mechanism, gone by
  *      the time anything runs.
- *   Nowhere in `dist/` does pi call `Value.Check`, `Value.Parse`, or
- *   `TypeCompiler` on a tool's `parameters` (grepped the whole tree). So the
- *   one thing an incoming TSchema actually needs to be is a faithful,
+ *   So the one thing an incoming TSchema actually needs to be is a faithful,
  *   complete JSON Schema object — which is precisely what TypeBox's own
  *   `Type.Unsafe<T>(schema)` produces: it clones the given schema and tags
  *   it (via `Memory.Update`, verified in the installed `typebox` 1.3.7

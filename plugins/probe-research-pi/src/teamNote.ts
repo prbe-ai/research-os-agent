@@ -9,11 +9,17 @@
  * that file — like any instruction file — at the START of their NEXT
  * session. pi gets the same content by appending it to `event.systemPrompt`
  * in a `before_agent_start` handler instead (see `extension.ts`'s wiring).
+ * Since pi 0.86.0 a returned `systemPrompt` becomes that run's
+ * `forceSystemPrompt`, sent as the leading system prompt; `event.systemPrompt`
+ * is re-rendered each run from the session's base options, which never carry
+ * the forced text, so the note is appended once per turn and never stacks
+ * (`agent-session.js` passes `_baseSystemPromptOptions` to
+ * `emitBeforeAgentStart`, and `runner.js` copies them first).
  * This sidesteps two things the render path has to deal with: it never
  * writes to a file the researcher owns (an `AGENTS.md` a person edits by
  * hand), and it can never collide with `AGENTS.override.md` shadowing a
- * project's `AGENTS.md` (pi 0.84.3's `resource-loader.js` checks
- * `AGENTS.override.md` before `AGENTS.md` in the same directory — irrelevant
+ * project's `AGENTS.md` (pi 0.86.0's `resource-loader.js`, same as 0.84.3's,
+ * checks `AGENTS.override.md` before `AGENTS.md` in the same directory — irrelevant
  * to text injected straight into the prompt, and a real hazard for anything
  * written to disk instead).
  *
@@ -47,16 +53,16 @@
  * exists to survive Codex's 3-second `SessionEnd` timeout — the hook's
  * process group would otherwise be killed mid-flight along with the timed-
  * out parent. pi imposes NO timeout at all on an extension's event handlers
- * (verified against pi 0.84.3's `dist/core/extensions/runner.js`: every
- * handler call is `await`ed inside a bare try/catch — no `Promise.race`, no
- * wrapper, no deadline). So detaching here is not about surviving a clock —
- * there isn't one. It is because an in-process, un-detached spawn that hangs
- * (a dead network, a stuck DNS lookup) would hang INSIDE the `agent_settled`
- * handler with nothing to interrupt it, stalling the researcher's actual pi
- * session indefinitely. Same mechanism as Codex's `setsid` (spawn a child,
- * do not wait on it), opposite justification — a future reader who assumes
- * this was copied for the timeout reason would be wrong; say so if this
- * comment ever moves.
+ * (verified against pi 0.86.0's `dist/core/extensions/runner.js`, and
+ * 0.84.3's: every handler call is `await`ed inside a bare try/catch — no
+ * `Promise.race`, no wrapper, no deadline). So detaching here is not about
+ * surviving a clock — there isn't one. It is because an in-process,
+ * un-detached spawn that hangs (a dead network, a stuck DNS lookup) would
+ * hang INSIDE the `agent_settled` handler with nothing to interrupt it,
+ * stalling the researcher's actual pi session indefinitely. Same mechanism
+ * as Codex's `setsid` (spawn a child, do not wait on it), opposite
+ * justification — a future reader who assumes this was copied for the
+ * timeout reason would be wrong; say so if this comment ever moves.
  *
  * FAIL OPEN AND SILENT, matching every hook in `probe-research`'s plugin: a
  * missing `probe` CLI, a dead network, or a server-side conflict must all

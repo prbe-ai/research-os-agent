@@ -36,12 +36,13 @@
  * mcpAuth.ts/pairing.ts: deciding whether to connect must never itself
  * require anything more than a synchronous local file read.
  *
- * Identity rules mirror pi 0.84.3's REAL package-source resolution
+ * Identity rules mirror pi 0.86.0's REAL package-source resolution
  * (`dist/core/package-manager.js`'s `parseSource`/`parseNpmSpec`/
  * `getSourceMatchKeyForSettings`, and `dist/utils/paths.js`'s
  * `isLocalPath`/`resolvePath` — read directly out of this package's own
  * `node_modules/@earendil-works/pi-coding-agent`, a devDependency of this
- * package for exactly this kind of verification, see skillsManifest.test.ts):
+ * package for exactly this kind of verification, see skillsManifest.test.ts;
+ * both files are byte-identical in 0.84.3):
  *   - `npm:<name>[@version]` -> name is `parseNpmSpec`'s
  *     `/^(@?[^@]+(?:\/[^@]+)?)(?:@(.+))?$/` capture group 1, copied
  *     verbatim so a scoped name like `@scope/pi-mcp-adapter` is captured
