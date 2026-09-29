@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.202.2
+
 - **The wizard's first section is called `Install/update/uninstall`,** with its rows in that order:
   Install, Update, then Uninstall last, so the cursor reaches the one that removes everything only on
   purpose.
