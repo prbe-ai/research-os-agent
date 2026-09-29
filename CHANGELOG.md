@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.204.0
+
 - **The daemon can see why the agent chose what it did, in Claude Code and Codex.** Both agents write
   their reasoning to the chat log only as a summary, and only when a setting asks: Claude Code's
   `showThinkingSummaries` (else each thinking block is an empty string) and Codex's
