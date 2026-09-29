@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **A SIGTERM that lands inside a `print` no longer leaves the run `running`.** CPython checks for
+  signals between the writes of a buffered flush with the stream's lock held, so the SIGTERM handler
+  can run inside a `print` (or a progress bar's redraw), and the main thread then holds
+  `sys.stdout`'s or `sys.stderr`'s lock while it waits for the close. The close, on its own thread,
+  flushed those streams before it stopped the log capture and waited on that lock for its whole
+  budget: the process died of SIGTERM on time and the run was never closed (the 0.201.1 release
+  gate, `test_a_sigterm_close_still_sends_what_the_run_read_and_wrote`, 2 to 3 runs in 12 on a busy
+  box). The close's thread now keeps off both streams: its warnings go straight to fd 2 and the log
+  capture skips that flush.
+
 ## 0.201.2
 
 - **Daemon reads on Codex: a prompt starts a new turn, and the wizard says to approve the hooks.**
