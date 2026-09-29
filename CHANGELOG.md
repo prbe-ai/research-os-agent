@@ -21,6 +21,13 @@
   entry moves 2.13.0 -> 2.14.0 (GHSA-w6j9-cwv2-h6wq); no pyproject.toml in this repo pins pyjwt,
   so an installed CLI already resolves 2.14.0 on its own without this change.
 
+- **Switching Who records reports `wizard.recorder_changed`.** Every switch of the main menu's
+  Who records row sends one event: `recorder` (`daemon` or `agent`), `outcome` (`moved`,
+  `partial`, `failed`, `refused_plan` when the team's plan does not include the daemon, `no_key`
+  when the daemon's browser approval did not complete), the agents that ended on the chosen side
+  (read back from the saved config), `agent_count` and `duration_seconds`. Enter on the row sends
+  nothing. `PROBE_TELEMETRY=off` still turns it off.
+
 ## 0.204.3
 
 - **Switching Who records shows the spinner instead of a blank screen.** Moving the main menu's
