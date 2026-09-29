@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The wizard's menu breathes under its headings, and Sign out asks first.** Each section heading
+  on the main menu now has a blank line under it (folded sections still take one line each). Sign
+  out is drawn red, and choosing it opens a confirmation page ("Sign out of Probe on this
+  device", naming the account) with "Stay signed in" first; staying goes back to the menu with
+  nothing changed. `probe wizard --action logout --yes` still signs out without asking.
+
 ## 0.204.3
 
 - **Switching Who records shows the spinner instead of a blank screen.** Moving the main menu's
