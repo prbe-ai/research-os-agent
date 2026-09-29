@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Daemon reads repeat themselves less.** Found by the live end-to-end test: (1) when the
+  researcher's prompt raised a topic, the reader sent an unasked message on it, the agent then asked,
+  and the answer arrived in the same hook with the same facts. An answer now replaces an unasked
+  message still waiting that was made before its ask was filed (the reader wrote the answer with
+  that message in its own conversation); a later unasked message, and one beside a "nothing found"
+  ending, stay. (2) Claude Code runs the Stop waiter's wake through the prompt hook, which started a
+  new turn and handed over one more unasked message; the wake now leaves a marker and the prompt it
+  causes (within 2 minutes) keeps the turn. pi's poller does the same for the turn it starts to hand
+  an idle pi an answer.
+
 - **A Ray Tune trial torn down while its outbox worker is sending the close now still closes the
   run.** Ray's shutdown SIGKILLs the trial actor's direct children, the outbox worker among them,
   and the SDK starts a new worker at exit to deliver the queued close. A SIGKILLed worker keeps its

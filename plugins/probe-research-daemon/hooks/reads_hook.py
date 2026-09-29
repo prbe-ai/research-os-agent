@@ -7,9 +7,10 @@ this hook delivers them. It reads the SAME files with the SAME rules as
 the few functions it needs are mirrored below and a parity test renders the
 same files through both.
 
-    UserPromptSubmit   start a new turn token; deliver every waiting answer
-                       (answer / nothing found / failed) plus at most ONE
-                       unasked message for the turn, as `additionalContext`
+    UserPromptSubmit   start a new turn token (not for the Stop waiter's own
+                       wake, which is the same turn going on); deliver every
+                       waiting answer (answer / nothing found / failed) plus at
+                       most ONE unasked message for the turn, as `additionalContext`
     PostToolUse        the same, after each MAIN-agent tool call. A helper
                        agent's tool call never claims: its context is not the
                        main agent's, and a message put there would vanish with it
@@ -93,6 +94,10 @@ WAKE_MAX_S = 150.0
 #: The turn token used before any prompt hook has run in this session (a plugin
 #: installed mid-session, a resumed one): the unasked slot still counts once.
 NO_TURN = "start"
+#: A prompt this soon after the Stop waiter woke the agent is that wake (Claude
+#: Code runs the woken turn through the prompt hook), not the researcher's: the
+#: turn goes on, so it gets no second unasked message.
+WOKE_PROMPT_S = 120.0
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +344,33 @@ def new_turn(sid: str) -> str:
     return token
 
 
+def _woke_path(sid: str) -> Path:
+    return _turn_path(sid).with_name(f"{_safe(sid)}.woke")
+
+
+def _mark_woke(sid: str) -> None:
+    try:
+        _write_atomic(_woke_path(sid), str(time.time()))
+    except OSError:
+        pass
+
+
+def _was_woken(sid: str, now: "float | None" = None) -> bool:
+    """Whether this prompt is the Stop waiter's wake (the marker it left is
+    fresh); the marker is used up either way."""
+    now = time.time() if now is None else now
+    path = _woke_path(sid)
+    try:
+        fresh = now - path.stat().st_mtime <= WOKE_PROMPT_S
+    except OSError:
+        return False
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    return fresh
+
+
 def current_turn(sid: str) -> str:
     try:
         token = _turn_path(sid).read_text(encoding="utf-8").strip()
@@ -448,7 +480,9 @@ def on_prompt(payload: dict) -> int:
     sid = _session(payload)
     if not sid:
         return 0
-    token = new_turn(sid)
+    # The Stop waiter's wake runs through this hook too: that turn goes on
+    # (live end-to-end test: the woken turn got a second unasked message).
+    token = current_turn(sid) if _was_woken(sid) else new_turn(sid)
     _emit("UserPromptSubmit", deliver(sid, token, "UserPromptSubmit"), researcher_notice(sid))
     return 0
 
@@ -482,6 +516,7 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
             if got is not None:
                 texts.append(rendered(got))
         if texts:
+            _mark_woke(sid)
             sys.stderr.write("\n\n".join(texts))
             return 2
         if time.monotonic() >= deadline or current_turn(sid) != turn:

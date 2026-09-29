@@ -112,3 +112,24 @@ describe("long turns", () => {
     ]);
   });
 });
+
+describe("the poller's wake", () => {
+  it("keeps the turn it woke, so that turn gets no second unasked message", () => {
+    const token = box.newTurn();
+    publish("m1", "message", { text: "first" }, 1);
+    expect(box.deliver(token, "test")).toHaveLength(1);
+    box.markWoke();
+    expect(box.wasWoken()).toBe(true);
+    expect(box.wasWoken()).toBe(false); // used up
+  });
+
+  it("ignores a stale marker", () => {
+    box.newTurn();
+    box.markWoke();
+    const marker = join(tmp, "reads", "turns", `${SID}.woke`);
+    const old = Date.now() / 1000 - 200;
+    utimesSync(marker, old, old);
+    expect(box.wasWoken()).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+  });
+});

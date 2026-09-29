@@ -149,6 +149,7 @@ function startReadsPoller(pi: ExtensionAPI, ctx: any): void {
       // message per turn too, steered in after the current tool calls.
       const texts = box.deliver(box.currentTurn(), "pi poller", !idle);
       if (texts.length) {
+        if (idle) box.markWoke(); // the turn this starts is the same turn going on
         pi.sendMessage(
           { customType: "probe-reads", content: texts.join("\n\n"), display: true },
           { deliverAs: "steer", triggerTurn: true },
@@ -557,7 +558,8 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
         const box = mailboxFor(readsSession);
         if (box.served()) {
           startReadsPoller(pi, ctx);
-          const texts = box.deliver(box.newTurn(), "before_agent_start");
+          const turn = box.wasWoken() ? box.currentTurn() : box.newTurn();
+          const texts = box.deliver(turn, "before_agent_start");
           if (texts.length) notice = [notice, ...texts].filter(Boolean).join("\n\n");
           readsNotify(ctx, box.researcherNotice());
         }

@@ -60,6 +60,10 @@ const QUIET_RELEASES = new Set(["stopped", "handover"]);
 export const UNASKED_WINDOW_S = 600;
 /** The turn token used before any prompt in this process. */
 export const NO_TURN = "start";
+/** A turn start this soon after the poller woke an idle pi is that wake, not the
+ * researcher's prompt: the turn goes on, so it gets no second unasked message
+ * (mirrors `reads_hook.WOKE_PROMPT_S`). */
+export const WOKE_PROMPT_S = 120;
 
 export interface Message {
   id: string;
@@ -196,6 +200,33 @@ export class Mailbox {
       // no token: this turn's unasked slot is shared with the last one
     }
     return token;
+  }
+
+  private wokePath(): string {
+    return this.turnPath() + ".woke";
+  }
+
+  /** The poller started a turn to hand over an answer (an idle pi's wake). */
+  markWoke(): void {
+    try {
+      fs.mkdirSync(join(this.root, "turns"), { recursive: true });
+      fs.writeFileSync(this.wokePath(), String(Date.now() / 1000));
+    } catch {
+      // no marker: the woken turn counts as a new one
+    }
+  }
+
+  /** Whether this turn start is the poller's wake (a fresh marker); the marker
+   * is used up either way. */
+  wasWoken(now = Date.now() / 1000): boolean {
+    let fresh = false;
+    try {
+      fresh = now - fs.statSync(this.wokePath()).mtimeMs / 1000 <= WOKE_PROMPT_S;
+    } catch {
+      return false;
+    }
+    fs.rmSync(this.wokePath(), { force: true });
+    return fresh;
   }
 
   currentTurn(): string {
