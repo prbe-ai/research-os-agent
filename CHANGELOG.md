@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.204.4
+
 - **The wizard's menu breathes under its headings, and Sign out asks first.** Each section heading
   on the main menu now has a blank line under it (folded sections still take one line each). Sign
   out is drawn red, and choosing it opens a confirmation page ("Sign out of Probe on this
