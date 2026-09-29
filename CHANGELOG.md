@@ -23,6 +23,11 @@
   the hosted MCP deploy; a paged JSON read in flight across it restarts once
   (`source_changed`).
 
+- **An `entity` batch row puts the answer one level down: `rows[i].data`, not `rows[i].data.data`.**
+  Each row used to wrap its ref's whole response under `data`, so the answer sat in a box inside a
+  box. A row is now `{ref, data}`, plus that row's own `completeness` when it is partial and its
+  `next_cursor` when that entity has more. Ships with the hosted MCP deploy.
+
 ## 0.204.4
 
 - **The wizard's menu breathes under its headings, and Sign out asks first.** Each section heading
