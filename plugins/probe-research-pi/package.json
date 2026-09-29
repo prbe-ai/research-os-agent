@@ -32,6 +32,6 @@
     "@earendil-works/pi-coding-agent": "^0.84.3",
     "@types/node": "^20",
     "typescript": "^5",
-    "vitest": "^3"
+    "vitest": "^4.1.11"
   }
 }

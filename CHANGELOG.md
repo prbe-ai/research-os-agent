@@ -8,6 +8,11 @@
   device", naming the account) with "Stay signed in" first; staying goes back to the menu with
   nothing changed. `probe wizard --action logout --yes` still signs out without asking.
 
+- Development dependencies only; nothing an installed CLI, SDK or plugin runs changes.
+  `uv.lock` takes cryptography 50.0.1 (GHSA-g6cj-pr64-35w5), and the pi plugin's lockfile takes
+  vitest 4.1.11 (was 3.2.7; GHSA-82fw-gwwq-j7x9), qs 6.16.0, fast-uri 3.1.8 and ip-address
+  10.7.2.
+
 ## 0.204.3
 
 - **Switching Who records shows the spinner instead of a blank screen.** Moving the main menu's
