@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.201.1
+
 - **The daemon profile's guard sees `python -m probe.cli`.** It knew only `python -m probe`, which
   cannot run (`probe` has no `__main__`), so `python -m probe.cli project list` got past the lean
   plugin and returned data (found by the end-to-end test on the released 0.111.0 plugin).
