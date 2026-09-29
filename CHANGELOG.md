@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.202.1
+
 - **The setup wizard opens in about a second instead of nine.** "Checking what's installed on this
   device" used to ask the server seven things one after another on a two-agent machine: who you
   are, your unfiled runs and your capture key once PER AGENT, plus a separate manifest fetch. It now
