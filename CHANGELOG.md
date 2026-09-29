@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.201.5
+
 - **Daemon reads repeat themselves less.** Found by the live end-to-end test: (1) when the
   researcher's prompt raised a topic, the reader sent an unasked message on it, the agent then asked,
   and the answer arrived in the same hook with the same facts. An answer now replaces an unasked
