@@ -14,6 +14,17 @@
   no longer runs `probe --version` on itself (0.9 s) or imports the daemon's AI library just to
   print its version (1.5 s).
 
+- **The wizard runs in a window of its own, and the arrow keys stay in it.** Every prompt was
+  meant to take the whole terminal but never did (the full-screen flag was set after prompt_toolkit
+  had built its renderer), so the wizard drew inline, and Warp scrolled its own blocks when ↑/↓ were
+  pressed on the menu instead of moving the cursor. The wizard now switches to the terminal's
+  alternate screen for its whole run, like Claude Code or vim: everything scrolls inside the window
+  under the wizard's keys, the shell's screen and scrollback come back untouched on exit (clearing
+  between screens no longer wipes the terminal's scrollback), and whatever the last screen said is
+  printed again after the window closes. Section headings lose their leading `──`, and the key
+  hints sit on the window's bottom row, spelled out on the main menu ("Use ↑ ↓ to move through the
+  options · enter to choose · esc to go back").
+
 ## 0.202.0
 
 - **The wizard's menu folds to fit, and Settings no longer turns single parts of Probe off.** The
