@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- **MCP answers drop bookkeeping that only says "this is all of it".** A complete result no
+  longer carries `"completeness": {"missing": [], "state": "complete"}`, a last page no longer
+  carries `"next_cursor": null`, an `entity` batch whose refs all resolved no longer carries
+  `"missing": []`, and an entity with no summary no longer shows `"summary": {}`. The capability
+  map (static for the hosted backend; its one False flag, `portable_snapshots`, rode every read)
+  leaves the compact envelope. That was ~30 o200k tokens per envelope, repeated per row of an
+  `entity` batch, ahead of the content asked for. Partial, `no_match`, any `missing` marker and
+  any cursor are unchanged; the server instructions now say `completeness` appears only when
+  the answer is partial, `no_match` or names a missing item, and `next_cursor` only when there
+  is more, and the cursor docs no longer tie paging to `state="partial"`. `verbose=true` still returns the full envelope. Ships with
+  the hosted MCP deploy; a paged JSON read in flight across it restarts once
+  (`source_changed`).
+
 ## 0.204.4
 
 - **The wizard's menu breathes under its headings, and Sign out asks first.** Each section heading
