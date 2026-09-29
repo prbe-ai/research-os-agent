@@ -894,9 +894,11 @@ describe("registerExtension — the daemon state", () => {
     expect(third?.message).toBeUndefined(); // announced once
   });
 
-  it("tells the model the whole split on the turn the switch moves to daemon", async () => {
-    // A session that STARTS in `on` never saw the daemon's session-start text,
-    // so the turn after the flip is where it must arrive, in full.
+  it("tells the model the whole split on the turn the switch lands on daemon", async () => {
+    // A session that did not START in `daemon` never saw the daemon's
+    // session-start text, so the turn after `/probe on` lands on `daemon` (the
+    // CLI stores `on` as `daemon` where the daemon records) is where it must
+    // arrive, in full.
     const { DAEMON_CONTEXT } = await import("../src/daemonNotice.js");
     installProbeCli();
     const config = join(tmp, "config.json");
@@ -931,13 +933,27 @@ describe("registerExtension — the daemon state", () => {
         "",
       );
     });
-    await handlers.get("input")!({ text: "/probe daemon", source: "interactive" }, ctx);
+    await handlers.get("input")!({ text: "/probe on", source: "interactive" }, ctx);
 
     const flipTurn = await before({ systemPrompt: "BASE" }, ctx);
     expect(flipTurn!.systemPrompt).toContain(DAEMON_CONTEXT);
     for (const word of ["project", "experiment", "group", "run end", "--directed"]) {
       expect(DAEMON_CONTEXT).toContain(word);
     }
+  });
+
+  it("moves nothing on a typed `/probe daemon`: the daemon is the wizard's", async () => {
+    installProbeCli();
+    const sessionId = uniqueSessionId("daemon-typed");
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId, sessionFile: undefined });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    const switchCalls = () =>
+      spawnMock.mock.calls.filter(([, args]) => Array.isArray(args) && args[0] === "session" && args[1] === "state");
+    const before = switchCalls().length;
+    await handlers.get("input")!({ text: "/probe daemon", source: "interactive" }, ctx);
+    expect(switchCalls()).toHaveLength(before);
   });
 
   it("never claims a keyless daemon records", async () => {

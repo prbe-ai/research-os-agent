@@ -78,16 +78,15 @@ _GLYPH_WIDTH = 2  # the dot plus its trailing space
 #: does not, and a status line is read by people who did not install it.
 _LABEL_TRACKED = "tracking " + _ARROW + " "
 _LABEL_TRACKING_BARE = "tracking"
-#: The `daemon` state's words: the same "tracking" as `on`, because the work
-#: lands either way, with the switch's position in parentheses so the reader can
-#: see which of the four positions the session is in.
-_LABEL_DAEMON = "tracking (daemon) " + _ARROW + " "
-_LABEL_DAEMON_BARE = "tracking (daemon)"
-#: Still the `daemon` state, but the daemon holds no live lease (no key, out of
-#: budget, gateway down, not started yet), so the AGENT is recording. The mode
-#: stays on screen; `degraded` says the daemon is not the one doing it.
-_LABEL_DAEMON_DEGRADED = "tracking (daemon degraded) " + _ARROW + " "
-_LABEL_DAEMON_DEGRADED_BARE = "tracking (daemon degraded)"
+#: The `daemon` state's words: `on (daemon)`, the switch's `on` with who records
+#: in parentheses (Richard 2026-09-29; `DAEMON_STATE_DISPLAY`).
+_LABEL_DAEMON = "on (daemon) " + _ARROW + " "
+_LABEL_DAEMON_BARE = "on (daemon)"
+#: Still `on (daemon)`, but the daemon holds no live lease (no key, out of
+#: budget, gateway down, not started yet). The mode stays on screen; `degraded`
+#: says the daemon is not the one doing it.
+_LABEL_DAEMON_DEGRADED = "on (daemon degraded) " + _ARROW + " "
+_LABEL_DAEMON_DEGRADED_BARE = "on (daemon degraded)"
 #: Kept for readers that still resolve the switch to a BOOLEAN. `render` only
 #: reaches it when no three-valued state was passed in, which is the shape a
 #: pre-three-state caller has. New callers pass `session_state` and get one of
@@ -161,8 +160,8 @@ _MIN_SLUG_CHARS_DEGRADED = 8
 #: `test_this_labs_project_names_mostly_fit_whole` pins the name budget.
 #:
 #: The bare label is the WIDER of the two that can carry the capture suffix:
-#: `tracking (daemon)` does too (see `_recording_labels`), and it is nine
-#: columns longer than `tracking`.
+#: `on (daemon)` does too (see `_recording_labels`), and it is three columns
+#: longer than `tracking`.
 MAX_SEGMENT_CHARS = (
     len(_INDENT)
     + _GLYPH_WIDTH
@@ -721,12 +720,18 @@ def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
 STATE_FULL = "full"
 STATE_READ_ONLY = "read-only"
 STATE_OFF = "off"
-#: THE FOURTH STATE: the session is recorded, by the Probe daemon beside it
-#: rather than by the agent. The agent still searches, still launches runs and
-#: still makes the writes the researcher asks for (`--directed`); the `probe`
+#: THE STORED FORM OF `on (daemon)`: the session is recorded by the Probe daemon
+#: beside it rather than by the agent. The agent still launches runs; the `probe`
 #: CLI refuses the rest while the daemon holds the write lease (see
-#: `daemon_status`). Reached only by NAME -- `/probe daemon`, a folder default,
-#: or the wizard's machine default -- never by a bare press (see `_NEXT_STATE`).
+#: `daemon_status`).
+#:
+#: NOT A SWITCH POSITION (Richard 2026-09-29: "the daemon should only be swappable
+#: through the wizard"). Whether the daemon records is the wizard's "Who records"
+#: setting (`recorder`); the switch is on / read / off, and `on` in a session the
+#: daemon records for is WRITTEN as this value (`on_state`). No typed word reaches
+#: it -- `/probe daemon`, `probe session state daemon` and `probe session default
+#: daemon` are refused with `DAEMON_SWITCH_REFUSAL`. A stored `daemon` from before
+#: (a session, a folder or machine default) still reads, never an error.
 #:
 #: OLDER CLIENTS READ IT AS `full`. They do not know this word, so they fall
 #: through to the compat `<sid>.tracking` file, which projects `daemon` to `on`
@@ -769,8 +774,36 @@ STATE_LABELS = {
     STATE_OFF: "off",
 }
 
-#: The words in STATES order, for anything that has to offer all four.
-STATE_WORDS = tuple(STATE_LABELS[state] for state in STATES)
+#: THE SWITCH: the three positions a person can type or press. `daemon` is not one
+#: of them -- see STATE_DAEMON.
+SWITCH_STATES = (STATE_FULL, STATE_READ_ONLY, STATE_OFF)
+
+#: The switch's words, for anything that has to offer them.
+STATE_WORDS = tuple(STATE_LABELS[state] for state in SWITCH_STATES)
+
+#: What a TYPED `daemon` gets back instead of a state change.
+DAEMON_SWITCH_REFUSAL = (
+    "Whether the Probe daemon records is set in `probe wizard --experimental` (Settings › "
+    "Who records), not by this switch, which is on / read / off. Nothing changed."
+)
+
+#: WHAT A PERSON READS for each state when the daemon is the one recording and
+#: reading (Richard 2026-09-29). Display only: JSON keeps `state_label`'s words
+#: (`daemon` included), because pi's `parseState` and older hooks read them.
+DAEMON_STATE_DISPLAY = {
+    STATE_DAEMON: "on (daemon)",
+    STATE_READ_ONLY: "read only (daemon)",
+    STATE_OFF: "off",
+}
+
+
+def state_display(state: "str | None", daemon: bool = False) -> str:
+    """The state as a person reads it: `on` / `read` / `off`, and in a session the
+    daemon records for (`daemon`, see `daemon_session`) `on (daemon)` /
+    `read only (daemon)` / `off`. A stored `daemon` always reads `on (daemon)`."""
+    if state == STATE_DAEMON or (daemon and state in DAEMON_STATE_DISPLAY):
+        return DAEMON_STATE_DISPLAY[state]
+    return state_label(state)
 
 
 def state_label(state: "str | None") -> str:
@@ -1521,6 +1554,43 @@ def set_session_state(session_id: str, state: str) -> bool:
         return False
     _write_compat_tracking(session_id, state)
     return True
+
+
+def daemon_session(session_id: str, source: "str | None" = None) -> bool:
+    """Does the Probe daemon record and read for this session (the wizard's "Who
+    records")? The lean plugin's `<sid>.profile` mark decides when present; without
+    one, the machine's setting for the coding agent (`recorder`) does."""
+    marked = session_profile(session_id)
+    if marked is not None:
+        return marked == RECORDER_DAEMON
+    return recorder(source) == RECORDER_DAEMON if source else False
+
+
+def on_state(session_id: str, source: "str | None" = None) -> str:
+    """What `on` is STORED as in this session: `daemon` where the daemon records
+    (`daemon_session`), else `full`. The one place the switch's `on` meets the
+    wizard's "Who records"."""
+    return STATE_DAEMON if daemon_session(session_id, source) else STATE_FULL
+
+
+def switch_target(session_id: str, state: str, source: "str | None" = None) -> "str | None":
+    """The state a switch move to `state` STORES, or None for a move the switch
+    does not make. `full` is `on` and resolves by `on_state`; `read-only` and
+    `off` are themselves. `daemon` asked for BY NAME is the one refusal (None):
+    the caller answers `DAEMON_SWITCH_REFUSAL`."""
+    if state == STATE_FULL:
+        return on_state(session_id, source)
+    return state if state in SWITCH_STATES else None
+
+
+def seed_state(session_id: str, default: str, source: "str | None" = None) -> str:
+    """The state a NEW session starts at from `default`: `on` (and a `daemon`
+    default stored before the switch lost that position) is stored by who records
+    (`on_state`); `read-only` and `off` are themselves. Every seeding path uses it
+    -- the session-start hook, and `probe session initialize` for pi."""
+    if default in (STATE_FULL, STATE_DAEMON):
+        return on_state(session_id, source)
+    return default
 
 
 def profile_path(session_id: str) -> Path:
@@ -2466,7 +2536,7 @@ def _recording_labels(session_state: "str | None", daemon_live: bool, capture_re
 
     In the `daemon` state the capture suffix already explains a daemon that is
     not running (the worker is a child of capture), so that line keeps the
-    shorter `tracking (daemon)` and its columns go to the reason.
+    shorter `on (daemon)` and its columns go to the reason.
     """
     if session_state != STATE_DAEMON:
         return _LABEL_TRACKED, _LABEL_TRACKING_BARE
@@ -2525,13 +2595,14 @@ def render(
     color: bool = True,
     session_state: "str | None" = None,
     daemon_live: bool = False,
+    daemon: bool = False,
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
-    In the `daemon` state "tracking" carries the switch's position:
-    `tracking (daemon)` while the daemon holds a live lease (`daemon_live`), and
-    `tracking (daemon degraded)` when it does not, because then the AGENT is the
-    one recording and that is what the reader needs to know.
+    In the `daemon` state the label is `on (daemon)` while the daemon holds a
+    live lease (`daemon_live`), and `on (daemon degraded)` when it does not.
+    `daemon` says the daemon records and reads for this session (`daemon_session`),
+    so its `read-only` reads `read only (daemon)`.
 
     TWO STATES OF THE SWITCH: tracking, or not. The caller resolves which via
     `is_tracking`; this only renders it. An earlier version carried a third —
@@ -2581,6 +2652,9 @@ def render(
         # rather than a guess: yellow, because the one state red is reserved for
         # is the one such a caller cannot tell us it is in.
         label, hue = _STATE_SEGMENT.get(session_state, (_LABEL_NOT_TRACKING, _YELLOW))
+        if daemon and session_state == STATE_READ_ONLY:
+            # The daemon still reads for this session; it records nothing.
+            label = DAEMON_STATE_DISPLAY[STATE_READ_ONLY]
         return _INDENT + _paint(_DOT, hue, color) + " " + label
 
     # Read PAST the `not tracking` return above on purpose: capture is a fact

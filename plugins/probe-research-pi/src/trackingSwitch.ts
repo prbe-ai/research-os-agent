@@ -41,9 +41,6 @@ const ON_WORDS = new Set(["on", "start", "resume", "full"]);
 // people to type, and every one of them keeps working. Mirrors
 // `session_marker.TRACKING_READ_ONLY_VALUES` and the guard's `READ_ONLY_WORDS`.
 const READ_ONLY_WORDS = new Set(["read", "read-only", "readonly", "read_only", "ro"]);
-// The fourth state: a background daemon records, the agent keeps its reads.
-// Mirrors the guard's `DAEMON_WORDS`.
-const DAEMON_WORDS = new Set(["daemon"]);
 const TOGGLE_WORDS = new Set(["toggle", "flip", "cycle", "next"]);
 const STATUS_WORDS = new Set(["status"]);
 
@@ -87,8 +84,13 @@ const SPELLINGS = [
 const CANONICAL = "/skill:probe";
 const LEGACY_CANONICAL = "/skill:track-work";
 
-/** The four states, plus the relative request. Mirrors `session_marker.STATES`. */
-export type SwitchDirection = "full" | "daemon" | "read-only" | "off" | "cycle";
+/**
+ * The switch's three positions, plus the relative request. Mirrors
+ * `session_marker.SWITCH_STATES`. The daemon is not a position (Richard
+ * 2026-09-29): it is chosen in `probe wizard`, and a typed `daemon` moves
+ * nothing -- it canonicalises like any unrecognised word and the skill says so.
+ */
+export type SwitchDirection = "full" | "read-only" | "off" | "cycle";
 
 export interface SwitchIntent {
   direction: SwitchDirection | null;
@@ -126,7 +128,6 @@ export function parseSwitchIntent(text: string): SwitchIntent | null {
   // guard's `RESEARCHER_SHAPES` branch, reached by a field instead of a guess.
   if (!first) return { direction: "cycle", canonicalText };
   if (READ_ONLY_WORDS.has(first)) return { direction: "read-only", canonicalText };
-  if (DAEMON_WORDS.has(first)) return { direction: "daemon", canonicalText };
   // THE SLUG DECIDES WHAT `off` MEANS. See LEGACY_SLUGS.
   if (OFF_WORDS.has(first)) {
     return { direction: legacy ? "read-only" : "off", canonicalText };
@@ -175,9 +176,6 @@ export function switchAppliedNotice(direction: SwitchDirection): string {
 // `read-only` are understood by every version, old and new.
 const SUBCOMMAND: Record<SwitchDirection, readonly string[]> = {
   full: ["state", "full"],
-  // A probe that predates the daemon rejects this word and the switch reports
-  // it did not move -- the right outcome, since that probe has no daemon.
-  daemon: ["state", "daemon"],
   "read-only": ["state", "read-only"],
   off: ["state", "off"],
   cycle: ["toggle"],

@@ -119,6 +119,8 @@ def segment(payload: dict) -> str:
         color=_color(),
         session_state=switch,
         daemon_live=daemon is not None and daemon[0] == marker.DAEMON_LIVE,
+        # `read only (daemon)` in a session the daemon reads for.
+        daemon=marker.daemon_session(session_id),
     )
 
 

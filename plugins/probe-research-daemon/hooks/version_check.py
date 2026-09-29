@@ -381,10 +381,12 @@ def _seed_tracking_signal() -> None:
             return
         cwd = os.environ.get(SESSION_CWD_ENV) or None
         state, _source = _session_marker.resolve_state_default(cwd)
-        if _daemon_profile() and state == _session_marker.STATE_FULL:
-            # The daemon profile's `on` is `daemon`: its agent has nothing to
-            # record with, so a session starting `on` would record nothing.
-            state = _session_marker.STATE_DAEMON
+        # `on` is stored by who records (the wizard's "Who records", `seed_state`):
+        # `daemon` in the lean plugin's sessions, whose agent has nothing to
+        # record with, and `full` everywhere else -- including a default still
+        # reading `daemon` from when the switch had that position (Richard
+        # 2026-09-29: the daemon is the wizard's alone).
+        state = _session_marker.seed_state(session_id, state)
         _session_marker.set_session_state_if_absent(session_id, state)
     except Exception:
         pass

@@ -119,3 +119,25 @@ def session_state(session_id: str) -> str | None:
     except OSError:
         return None
     return raw.strip().lower() or None
+
+
+#: `read-only` as `<sid>.state` stores it.
+STATE_READ_ONLY = "read-only"
+
+
+def daemon_profile(session_id: str) -> bool:
+    """Did the lean daemon-profile plugin start this session (`<sid>.profile` reads
+    `daemon`, written at SessionStart)? There the daemon records AND reads."""
+    try:
+        raw = (sessions_dir() / (session_id + ".profile")).read_text(encoding="utf-8")
+    except OSError:
+        return False
+    return raw.strip().lower() == "daemon"
+
+
+def reads_only(session_id: str, state: str | None = None) -> bool:
+    """`read only (daemon)` (Richard 2026-09-29): the switch reads `read-only` in a
+    session the daemon reads for. Its reader keeps running; its writer records
+    nothing."""
+    state = session_state(session_id) if state is None else state
+    return state == STATE_READ_ONLY and daemon_profile(session_id)

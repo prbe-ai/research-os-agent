@@ -790,6 +790,17 @@ def test_shadow_never_runs_outside_on(tmp_path, monkeypatch):
     assert worker.run() == 0 and worker.api.completions == 0
 
 
+def test_read_only_in_a_daemon_profile_session_keeps_the_worker_for_its_reader(tmp_path):
+    # `read only (daemon)` (Richard 2026-09-29): the reader keeps reading, the
+    # writer records nothing. Only the lean plugin's sessions are marked.
+    sup = supervisor_mod.Supervisor(session_id=SID, transcript=tmp_path / "t.jsonl", cwd=tmp_path)
+    _set_state("full")
+    (lease.sessions_dir() / f"{SID}.profile").write_text("daemon")
+    for state, wanted in (("full", False), ("read-only", True), ("off", False), ("daemon", True)):
+        _set_state(state)
+        assert sup.wanted() is wanted, state
+
+
 def test_the_supervisor_honours_do_not_respawn(tmp_path, monkeypatch):
     spawned = []
 

@@ -138,6 +138,31 @@ FLIP_NOTICE = {
     ),
 }
 
+#: Where the switch landed in a session the daemon records and reads for (the
+#: lean plugin; Richard 2026-09-29: on (daemon) / read only (daemon) / off). The
+#: agent there has no Probe work of its own, so each says only what the daemon
+#: does now.
+DAEMON_PROFILE_FLIP_NOTICE = {
+    "daemon": (
+        "Probe is now `on (daemon)` for this conversation: the Probe daemon records "
+        "this session and reads the team's work for you."
+    ),
+    "read-only": (
+        "Probe is now `read only (daemon)` for this conversation: the Probe daemon "
+        "keeps reading the team's work for you and records nothing new. "
+        "Already-recorded work is untouched."
+    ),
+    "off": (
+        "Probe is now OFF for this conversation: the Probe daemon neither records "
+        "nor reads, and `probe ask` is refused. Do not raise Probe again, including "
+        "as a reminder or a closing caveat."
+    ),
+}
+
+#: What `_apply_direction` returns for a typed `daemon`: nothing moved, and the
+#: researcher is told where the daemon is chosen instead.
+REFUSED_DAEMON = "refused-daemon"
+
 #: The daemon's handback notice and its reason phrases live in `_session_marker`
 #: (the session-start hook says the same thing when the daemon has no key).
 DAEMON_DEGRADED_NOTICE = _session_marker.DAEMON_DEGRADED_NOTICE
@@ -209,7 +234,9 @@ ON_WORDS = frozenset({"on", "start", "resume", "full"})
 #: `session_marker.TRACKING_READ_ONLY_VALUES`; the two are checked against each
 #: other in `test_probe_three_states.py`.
 READ_ONLY_WORDS = frozenset({"read", "read-only", "readonly", "read_only", "ro"})
-#: The fourth state is reached only by NAME, never by a press.
+#: NOT a position: whether the daemon records is the wizard's "Who records"
+#: (Richard 2026-09-29). Still recognised, so a typed `/probe daemon` is answered
+#: with where to go (`DAEMON_SWITCH_REFUSAL`) rather than read as prose.
 DAEMON_WORDS = frozenset({"daemon"})
 TOGGLE_WORDS = frozenset({"toggle", "flip", "cycle", "next"})
 STATUS_WORDS = frozenset({"status"})
@@ -908,6 +935,9 @@ def _apply_direction(
         # how a guarded write grows an unguarded sibling, and this one escaped
         # the sessions directory entirely on a traversal id.
         return
+    if direction == "daemon":
+        # Not the switch's to move: the daemon is the wizard's "Who records".
+        return REFUSED_DAEMON
     if direction != CYCLE:
         # Clear the claim rather than ignoring it. An explicit setter is
         # absolute and needs no claim of its own, but LEAVING one behind
@@ -919,8 +949,10 @@ def _apply_direction(
             _claim_path(session_id).unlink()
         except OSError:
             pass
-        _session_marker.set_session_state(session_id, direction)
-        return direction
+        # `on` is STORED by who records: `daemon` where the daemon records.
+        target = _session_marker.switch_target(session_id, direction) or direction
+        _session_marker.set_session_state(session_id, target)
+        return target
 
     claim = _read_claim(session_id)
     same_invocation = claim is not None and claim["slug"] in (slug, None)
@@ -948,6 +980,7 @@ def _apply_direction(
         # two states away), and storing the state is the shape that does not have
         # to be revisited the next time the cycle changes.
         target = _session_marker.next_state(_state(session_id, cwd))
+        target = _session_marker.switch_target(session_id, target) or target
         _write_claim(session_id, target, [shape], slug)
     _session_marker.set_session_state(session_id, target)
     return target
@@ -1088,9 +1121,14 @@ def _daemon_bypass(payload: dict, session_id: str) -> "str | None":
     return matched
 
 
-def _announce(hook_event: str, landed: "str | None") -> None:
-    """Tell the model where the switch landed. Silent when nothing resolved."""
-    notice = FLIP_NOTICE.get(landed) if landed else None
+def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False) -> None:
+    """Tell the model where the switch landed. Silent when nothing resolved.
+    `daemon`: the lean plugin, whose sessions the daemon records and reads for."""
+    if landed == REFUSED_DAEMON:
+        notice = _session_marker.DAEMON_SWITCH_REFUSAL
+    else:
+        notices = DAEMON_PROFILE_FLIP_NOTICE if daemon else FLIP_NOTICE
+        notice = notices.get(landed) if landed else None
     if not notice:
         return
     sys.stdout.write(
@@ -1177,7 +1215,8 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     """The daemon profile's PreToolUse: the daemon records and reads, so every
     `probe` command but `ask`, `exec`, the runs' own data and `session status`
     is refused (`DAEMON_PROFILE_DENY`), and so is a Probe MCP call. A session
-    the researcher turned off keeps the off refusals (`_deny`)."""
+    the researcher turned off keeps the off refusals (`_deny`); one set to read
+    only also loses the runs' own data (a write)."""
     aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"))
     if aimed:
         _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
@@ -1202,6 +1241,12 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
         if not allowed:
             _refuse(_session_marker.DAEMON_PROFILE_DENY.format(matched=matched))
             return
+    if _state(session_id, _payload_cwd(payload)) == _session_marker.STATE_READ_ONLY:
+        # `read only (daemon)`: the runs' own data is a write like any other.
+        # `probe exec` still runs, unrecorded (`write_gate.exec_child`).
+        matched = probe_write(command)
+        if matched and matched != _EXEC:
+            _refuse(DENY_REASON.format(matched=matched))
 
 
 def _refuse(reason: str) -> None:
@@ -1230,10 +1275,24 @@ def main() -> None:
         return
     hook_event = payload.get("hook_event_name")
     if daemon_profile():
-        # The lean plugin: no switch words, no notices, no after-the-fact
-        # warnings -- the refusal before a call is the whole guard.
+        # The lean plugin: the switch (on / read / off; Richard 2026-09-29) and
+        # the refusal before a call. No daemon notices, no after-the-fact
+        # warnings. Its sessions are the daemon's: a mark SessionStart could not
+        # write is written here, or `on` would store `full` and nothing records.
+        if _session_marker.session_profile(session_id) is None:
+            _session_marker.mark_session_profile(session_id, _session_marker.RECORDER_DAEMON)
         if hook_event == "PreToolUse":
             _deny_daemon_profile(payload, session_id)
+        elif hook_event == "UserPromptSubmit":
+            direction, shape, slug = prompt_direction(payload.get("prompt"))
+            if direction is not None:
+                landed = _apply_direction(direction, session_id, shape, slug, _payload_cwd(payload))
+                _announce("UserPromptSubmit", landed, daemon=True)
+        elif payload.get("tool_name") in ("Skill", "SlashCommand"):
+            direction, slug = toggle_direction(payload.get("tool_name"), payload.get("tool_input"))
+            if direction is not None:
+                landed = _apply_direction(direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload))
+                _announce("PostToolUse", landed, daemon=True)
         return
     if hook_event == "UserPromptSubmit":
         direction, shape, slug = prompt_direction(payload.get("prompt"))

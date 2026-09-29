@@ -196,7 +196,7 @@ probe logout                                             # stop imports, revoke 
 - Allowing the daemon in `--action settings` mints a third token for it: it
   can read and write, and its deletes go to the trash or ask the researcher
   first (unless the agent runs with permission prompts off). Turning it off
-  there revokes it. Without that token, `/probe daemon` in a session reads as
-  `daemon (degraded)` and the agent records as in `on`.
+  there revokes it. Without that token the daemon cannot record: a session
+  it records for reads `on (daemon degraded)`.
 - Never echo a token. `probe mcp status` reports health without printing it.
 - `probe logout` revokes the calling token; it does not touch other devices.

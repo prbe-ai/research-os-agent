@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **The daemon is chosen in the wizard, and the switch is on / read / off everywhere.** `/probe
+  daemon`, `probe session state daemon` and `probe session default daemon` no longer move anything:
+  each answers that the daemon is set in `probe wizard --experimental` › Settings › Who records
+  (the CLI exits 2). The wizard's "Probe in new sessions" row is on / read / off; the daemon's key
+  is minted and revoked by the Who-records row alone (kept while a session it records is still
+  open). Where the daemon records, `on` is stored as
+  `daemon` as before, and the states now read `on (daemon)`, `read only (daemon)` and `off` — on the
+  status line (`tracking (daemon)` is now `on (daemon)`), in `probe session state|status|toggle`
+  (a new `label` field; `state` keeps its word for older readers) and in the flip notices. The
+  daemon profile's lean plugin gets the switch: a `probe` skill and the guard on every prompt, so
+  `/probe on|read|off` works there too. In `read only (daemon)` the daemon's reader keeps answering
+  `probe ask` and sending `[Probe]` messages while its writer records nothing; turns spent there
+  stay unrecorded after the switch is back on, and the writer is told which. A machine or folder
+  default still reading `daemon` starts new sessions `on`, recorded by whoever Who records names;
+  a session already stored as `daemon` keeps it until the switch moves. pi's `/probe daemon` moves
+  nothing too. Capture (probe-research-tap) 0.9.2 keeps the daemon's worker running in `read only
+  (daemon)` for its reader.
+
 ## 0.202.2
 
 - **The wizard's first section is called `Install/update/uninstall`,** with its rows in that order:

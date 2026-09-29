@@ -1,6 +1,6 @@
 ---
 name: probe
-description: The skill for setting the Probe plugin state - `on` (r/w), `daemon` (daemon writes), `read`, `off` (no r/w).
+description: The skill for setting the Probe plugin state - `on` (r/w), `read`, `off` (no r/w).
 ---
 # Probe
 
@@ -10,20 +10,19 @@ This skill only changes the state of Probe - it doesn't actually track any work.
 /probe on      reads and writes        /probe          advance one step
 /probe read    search yes, record no   /probe status   print it, change nothing
 /probe off     no calls at all
-/probe daemon  the daemon records
 ```
 
-## The four states
+## The three states
 
 | state | reads | writes | what you do |
 |---|---|---|---|
 | `on` | yes | yes | Default. Record work as it happens, per the `track-work` skill, and search the team's history for context worth injecting. |
-| `daemon` | yes | the daemon | You launch and instrument runs, the daemon records. Yours: start runs (`probe exec` or the SDK, no project needed), the run's own data (metrics, spans, trials, files the run itself attaches) and `run end`. The daemon's: everything else, including creating the project, experiment and sweep group a run is filed in, and its notes, artifacts, papers, tags, names, descriptions and lineage. If the researcher asks for one of the daemon's writes, add `--directed`. If status says `daemon (degraded)`, the daemon is down: record as in `on`. |
 | `read` | yes | no | Create no projects, experiments or runs; write no notes, artifacts or visible entity Markdown. Keep searching and keep reporting what you find. If the researcher asks for something that would be recorded, say once that `/probe on` would record it — never as a reminder, never as a closing caveat. |
 | `off` | no | no | Make no Probe calls, reads included. Say you could not look; never report that no prior work exists. |
 
-Bare `/probe` toggles `on` <-> `read`. `daemon` and `off` are reached only by
-typing them; one press leaves either for `read`.
+Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing it; one
+press leaves it for `read`. Whether the Probe daemon records is set in
+`probe wizard`, not by this switch: `/probe daemon` changes nothing.
 
 FYI:
 
@@ -38,12 +37,6 @@ FYI:
 
 > Probe is off for this session - no calls at all, so I will not be able to
 > check prior work or write. `/probe [read/on]` to turn back on.
-
-> Recording moved to the Probe daemon for this session - I launch runs and
-> write only what you ask for.
-
-> Recording is back with me for this session - the daemon is off or degraded,
-> so I record as usual.
 
 In the `off` state, do not fabricate information - do not report "no info"
 during lookup - clearly state that you couldn't look due to the state.

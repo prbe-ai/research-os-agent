@@ -7,7 +7,9 @@ rides it as a CHILD PROCESS -- not a thread, because it makes network calls and
 must be killable without touching capture.
 
     tap watch tick ──> poll()
-                         state == daemon and no child ─> spawn `probe daemon worker` (v2)
+                         state == daemon (or read only in a daemon-profile
+                           session: the reader alone) and no child ─> spawn
+                           `probe daemon worker` (v2)
                          child died ─> respawn, at most RESPAWNS_PER_MINUTE; after a
                            crash (EXIT_CRASHED, or any other failing exit) not
                            before a growing wait; after EXIT_RESPAWN_LATER (it left
@@ -128,8 +130,9 @@ class Supervisor:
             self.gave_up_in = None
         else:
             return False
-        # Daemon v2 has no shadow mode: it runs only in `daemon`.
-        return state == worker.STATE_DAEMON
+        # Daemon v2 has no shadow mode: it runs in `daemon`, and in `read only
+        # (daemon)` for its reader alone (the worker records nothing there).
+        return state == worker.STATE_DAEMON or lease.reads_only(self.session_id, state)
 
     def _open_socket(self) -> None:
         """Listen for SDK messages (a UNIX datagram socket): nothing to accept, nothing

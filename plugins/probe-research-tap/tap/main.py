@@ -88,7 +88,8 @@ ORPHAN_CHECK_EVERY_TICKS = 12
 # hard-killed agent forever.
 UNKNOWN_OWNER_QUIET_SECONDS = 24 * 60 * 60
 #: How often, inside a tick's sleep, the daemon worker's supervisor looks at the
-#: session's switch -- the delay between `/probe daemon` and the worker starting.
+#: session's switch -- the delay between `/probe on` (or `read`) in a daemon
+#: session and the worker starting.
 COMPANION_POLL_SECONDS = 5
 
 # Hard cap on how long we'll wait for lsof to return; if it hangs, we'd
