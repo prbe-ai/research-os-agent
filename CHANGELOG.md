@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **Daemon reads on Codex: a prompt starts a new turn, and the wizard says to approve the hooks.**
+  Codex passes the session id only in the hook payload, never in the environment, so the reads
+  hook's shell fast path could not write the turn token and the one-message-per-turn pacing fell
+  back to 10-minute windows (live Codex 0.158.0 test, 2026-09-29). At a prompt with no session id
+  in the environment the hook now starts Python whenever a reader has served a session on this
+  machine; the tool-call path is unchanged. Codex also skips a hook nobody approved, silently, so
+  moving Codex to the daemon profile in `probe wizard --experimental` now ends with "In the new
+  Codex session: `/hooks` › approve the Probe hooks."
+
 ## 0.201.1
 
 - **The daemon profile's guard sees `python -m probe.cli`.** It knew only `python -m probe`, which
