@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **The setup wizard opens in about a second instead of nine.** "Checking what's installed on this
+  device" used to ask the server seven things one after another on a two-agent machine: who you
+  are, your unfiled runs and your capture key once PER AGENT, plus a separate manifest fetch. It now
+  asks once (`POST /v1/device-state`), while it checks the local tools, and asks again only after a
+  step that changed something (signing in, installing, uninstalling). A server that cannot check a
+  credential no longer reads as a refusal, so a slow or flaky API never sends you back through
+  sign-in. Each capture key goes only to the server its own uploader sends to, and the request
+  never follows a redirect. On an older server without the route (or a proxy answering for it)
+  the wizard asks the old way. Two local waits are gone too: the wizard
+  no longer runs `probe --version` on itself (0.9 s) or imports the daemon's AI library just to
+  print its version (1.5 s).
+
 ## 0.202.0
 
 - **The wizard's menu folds to fit, and Settings no longer turns single parts of Probe off.** The
