@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.201.6
+
 - **The daemon now sees what you type while the Claude Code agent is working.** Claude Code saves a
   message typed mid-turn (without Esc) as a `queued_command` attachment, never as a user line, and the
   daemon read no attachments but its own `[Probe]` messages: 221 of 228 such prompts in 300 real
