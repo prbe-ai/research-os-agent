@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- **The wizard's menu folds to fit, and Settings no longer turns single parts of Probe off.** The
+  default for new sessions (`on`/`daemon`/`read`/`off`) is now the menu's first row, under a new
+  `Defaults` heading, wearing its current state as `‹ on ›`: `←`/`→` walk it right there and Enter
+  saves (nothing is written before Enter, and moving off the row puts it back). Enter on an unmoved
+  row opens a picker with the settings screen's keys — Enter ticks a state, `→` saves it, `←` backs
+  out, with the `‹ Back ←` / `→ Set default ›` bar — also reachable as `probe wizard --action
+  defaults`. The daemon is still offered only to paid teams (asked on the save), and a held
+  `PROBE_SESSION_STATE` is still named instead of overridden. Only the cursor's group is drawn open;
+  every other group is its heading alone, and the arrow keys still walk every row in order, opening
+  each group as the cursor enters it. The groups are renamed `Install/uninstall`, `Backfill` and
+  `Exit/sign out` (Exit now sits with Sign out). The Settings screen keeps automatic updates (and
+  the experimental "Who records" rows): its CLI + MCP, session capture and instruction-rules rows
+  are gone, because a device running part of Probe is the broken state the complete install exists
+  to prevent — Probe comes off whole, through Uninstall. The `--no-capture`-style flags are
+  unchanged for scripts. Every step screen now also scrolls far enough to show the pointed row's
+  description, not only its title, on a short terminal.
+
 ## 0.201.6
 
 - **The daemon now sees what you type while the Claude Code agent is working.** Claude Code saves a
