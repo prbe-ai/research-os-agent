@@ -17,6 +17,10 @@
   whose locked undici is 8.10.2 (was 8.9.0; GHSA-3wwx-pv8p-q78v). Development only: the
   plugin's runtime dependencies and the pi versions it works with are unchanged.
 
+- Development dependencies only — `agent/uv.lock` is not what installed CLIs use. Its pyjwt
+  entry moves 2.13.0 -> 2.14.0 (GHSA-w6j9-cwv2-h6wq); no pyproject.toml in this repo pins pyjwt,
+  so an installed CLI already resolves 2.14.0 on its own without this change.
+
 ## 0.204.3
 
 - **Switching Who records shows the spinner instead of a blank screen.** Moving the main menu's
