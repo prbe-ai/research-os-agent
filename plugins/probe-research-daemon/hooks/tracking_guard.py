@@ -465,12 +465,16 @@ _WRAPPERS = frozenset({"command", "env", "nohup", "exec", "time", "timeout", "ni
 _WRAPPER_VALUE_OPTS = frozenset({"-n", "-s", "-k", "--signal", "--kill-after", "-u", "-i", "-o", "-e"})
 _SHELLS = frozenset({"sh", "bash", "zsh", "dash"})
 _PYTHONS = re.compile(r"^python(\d+(\.\d+)?)?$")
+#: The modules `python -m` runs the CLI as: `probe.cli` is the one that runs
+#: (`probe` has no `__main__`); a guard that knew only `probe` let
+#: `python -m probe.cli ...` through (T13 on the released plugin, 2026-09-29).
+_PROBE_MODULES = frozenset({"probe", "probe.cli", "probe.cli.main"})
 
 
 def _probe_invocations(command: str, _depth: int = 0):
     """The args after `probe`, for every `probe` invocation in a shell line --
     behind env assignments, a leading redirection, a wrapper (`command`, `env`,
-    `nohup`, `timeout 30`, ...), as `python -m probe`, or inside `bash -c "..."`."""
+    `nohup`, `timeout 30`, ...), as `python -m probe.cli`, or inside `bash -c "..."`."""
     for tokens in _segments(command):
         index = 0
         while index < len(tokens):
@@ -493,7 +497,8 @@ def _probe_invocations(command: str, _depth: int = 0):
         head = os.path.basename(tokens[index])
         if head == "probe":
             yield tokens[index + 1 :]
-        elif _PYTHONS.match(head) and tokens[index + 1 : index + 3] == ["-m", "probe"]:
+        elif (_PYTHONS.match(head) and tokens[index + 1 : index + 2] == ["-m"]
+              and tokens[index + 2 : index + 3] and tokens[index + 2] in _PROBE_MODULES):
             yield tokens[index + 3 :]
         elif head in _SHELLS and _depth < 2 and "-c" in tokens[index + 1 :]:
             at = tokens.index("-c", index + 1)

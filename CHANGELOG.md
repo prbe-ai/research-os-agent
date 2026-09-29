@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The daemon profile's guard sees `python -m probe.cli`.** It knew only `python -m probe`, which
+  cannot run (`probe` has no `__main__`), so `python -m probe.cli project list` got past the lean
+  plugin and returned data (found by the end-to-end test on the released 0.111.0 plugin).
+  `python -m probe.cli ...` and `python -m probe.cli.main ...` are now read as the `probe` command
+  they run, in both plugins.
 - **A full outbox volume no longer strands the op that landed, and with it every later write.**
   On a disk full but for the few KB a delivered op freed, a write's op lands and its status count
   does not (#2090). The running drainer's exit check and the kick that starts a new one both read
