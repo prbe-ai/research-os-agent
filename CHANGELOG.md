@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.201.4
+
 - **`probe version create` is a write.** It mints an experiment version, but `version` was missing
   from the write gate's groups, so the command ran in a `read` or `off` session, and the daemon
   profile's guard allowed it as if `probe version` printed the CLI's version (found live by the
