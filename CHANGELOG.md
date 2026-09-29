@@ -12,6 +12,13 @@
   A chat log read again from the start (Claude Code rewrote it) no longer pushes the daemon's turn
   count up, which aged out waiting messages early.
 
+- **The setup screen no longer says the daemon's key "cannot delete".** It has held `delete` since
+  the trash (0261), and its write access can remove artifacts, sub-notes, papers, views, lineage
+  edges and project links for good. Both "daemon" rows in `probe setup --action settings` now say
+  where its deletes stop: "Deletes go to the trash or ask you first, unless prompts are off."
+  (`precheck.PERMANENT_DELETES` is a question except in bypass mode.) The setup command doc and
+  two code comments said the same stale thing and are corrected too.
+
 ## 0.201.5
 
 - **Daemon reads repeat themselves less.** Found by the live end-to-end test: (1) when the

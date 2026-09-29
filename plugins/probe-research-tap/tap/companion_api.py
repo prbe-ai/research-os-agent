@@ -1,7 +1,8 @@
 """The Probe daemon's network: the model gateway and the write routes. Stdlib only.
 
 Authenticates with the context's `companion_token` -- the daemon's own
-`[read, write]` credential, minted by device approval (`probe companion
+`[read, write, delete]` credential (`delete` opens only the move-to-trash
+routes, 0261), minted by device approval (`probe companion
 authorize`, or choosing `daemon` in the wizard). Never the capture token (that
 can only upload transcripts) and never the CLI's PAT (that can delete).
 

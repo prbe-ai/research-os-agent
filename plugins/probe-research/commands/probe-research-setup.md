@@ -194,8 +194,9 @@ probe logout                                             # stop imports, revoke 
 - The write token and the read-only MCP token are different credentials. The
   MCP one cannot write.
 - Allowing the daemon in `--action settings` mints a third token for it: it
-  can read and write, never delete. Turning it off there revokes it. Without
-  that token, `/probe daemon` in a session reads as `daemon (degraded)` and
-  the agent records as in `on`.
+  can read and write, and its deletes go to the trash or ask the researcher
+  first (unless the agent runs with permission prompts off). Turning it off
+  there revokes it. Without that token, `/probe daemon` in a session reads as
+  `daemon (degraded)` and the agent records as in `on`.
 - Never echo a token. `probe mcp status` reports health without printing it.
 - `probe logout` revokes the calling token; it does not touch other devices.
