@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **A full outbox volume no longer strands the op that landed, and with it every later write.**
+  On a disk full but for the few KB a delivered op freed, a write's op lands and its status count
+  does not (#2090). The running drainer's exit check and the kick that starts a new one both read
+  only that count, so the drainer exited with the op still queued and none was started again; every
+  later write of the run was then held back behind that op and dropped (a 15-min full window in the
+  7-day soak dropped 891 of 901 steps on 0.200.2). The drainer now also looks in its queue before it
+  exits, the kick does the same when the count reads zero, and a write held back behind queued ops
+  wakes the drainer. What remains is plan 1.5's rule: a write waits behind its run's queued ops.
+
 ## 0.201.0
 
 - **A SIGTERM close with read/write capture on could spend its whole budget on local work and
