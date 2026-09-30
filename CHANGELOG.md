@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **The daemon says why it was turned away when the cause is the team, not its key.** A 403 from
+  the daemon's model route used to always read "the daemon's key was refused … Enter on Who records
+  approves a new one", but two of its three causes refuse a new key the same way:
+  `companion_paid_plan_required` now reads "daemon recording is on paid plans, and this team's plan
+  does not include it", and `companion_disabled` "daemon recording is turned off for this team",
+  each saying a new key will not change it. Only `companion_credential_required` (the saved key is
+  not the daemon's) still points at Enter on Who records. The daemon still steps aside and the agent
+  records in the meantime.
+
 ## 0.205.0
 
 - **Setup goes through the wizard only (release 1 of 2: nothing is removed yet).** Every message,
