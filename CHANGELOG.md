@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.205.0
+
 - **Setup goes through the wizard only (release 1 of 2: nothing is removed yet).** Every message,
   hint and doc that told someone to run `probe login`, `probe install`, `probe update`, `probe
   daemon install`, `probe companion authorize`, `probe statusline install`, `probe mcp token set`
