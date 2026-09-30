@@ -105,7 +105,7 @@ fi
 # tap/config.py's load_token(): a paired device token ($PLUGIN_DIR/.token,
 # written by `tap pair` — the primary path) OR the PROBE_INGEST_TOKEN env OR
 # the probe CLI's config file ($XDG_CONFIG_HOME/probe/config.json, default
-# ~/.config/probe/config.json, written by `probe login`; PROBE_CONFIG_PATH
+# ~/.config/probe/config.json, written by the Probe wizard's sign-in; PROBE_CONFIG_PATH
 # overrides for tests/dev). Surface once and no-op when none is present.
 TOKEN_ENV="${PROBE_INGEST_TOKEN:-}"
 [ "$SOURCE" = "codex" ] && TOKEN_ENV="${PRBE_CODEX_TAP_TOKEN:-}"
@@ -145,7 +145,7 @@ PYEOF
 )
     fi
     if [ -z "$HAS_TOKEN" ]; then
-        echo "[$(date -u +%FT%TZ)] probe-research-tap: no token configured; run 'python3 -m tap pair <token>' (or 'probe login'); skipping" >>"$LOG_FILE"
+        echo "[$(date -u +%FT%TZ)] probe-research-tap: no token configured; run 'python3 -m tap pair <token>' (or run the Probe wizard: probe wizard or npx probe-research); skipping" >>"$LOG_FILE"
         printf '{"continue": true}\n'
         exit 0
     fi

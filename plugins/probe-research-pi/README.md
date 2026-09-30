@@ -255,7 +255,8 @@ Capture needs a device token, checked in the same order
    (written by `PROBE_TAP_SOURCE=pi python3 -m tap pair <token>`, using a
    pairing token minted from the Research OS dashboard).
 2. The `PROBE_PI_TAP_TOKEN` env var.
-3. The probe CLI's own config (`probe login`) —
+3. The probe CLI's own config (written when you run the Probe wizard:
+   `npx probe-research`) —
    `$XDG_CONFIG_HOME/probe/config.json` (default `~/.config/probe/config.json`).
 
 If none resolve, the extension refuses to spawn a daemon for that session —
@@ -321,7 +322,7 @@ to a file the researcher owns, and it can never collide with
    and waits up to 2s for it, then reads
    `~/.local/state/probe/team-note/probe-team-note.md` into an in-memory cache.
    Syncing first matters because the file is shared: read cold, right after a
-   `probe login`/`probe context use`, it would still hold the PREVIOUS
+   new sign-in or a context switch, it would still hold the PREVIOUS
    credential's note. On timeout the sync is left running (its result reaches
    the next session) and the file is read as it stands. Absent, empty, or
    unreadable all just mean "nothing to brief this session with"; nothing
@@ -382,8 +383,8 @@ see "pi-mcp-adapter" below.
 
 **Two auth paths, same resolution order as `probe-mcp-headers`.** The fast
 path is a Probe MCP bearer token — the same `mcp_token` Claude Code's MCP
-connection already uses, minted on any device that has run `probe login` or
-the setup wizard. Resolution order mirrors
+connection already uses, minted on any device that has run the Probe wizard
+(`npx probe-research`). Resolution order mirrors
 `agent/plugins/probe-research/bin/probe-mcp-headers` exactly: `PROBE_MCP_TOKEN`
 env first, then the probe CLI config file's `mcp_token`, read from BOTH
 shapes (v2 named-contexts, v1 flat) — reading only v1 is the exact bug that
@@ -391,8 +392,8 @@ script's own comments record making the fast path silently return nothing on
 every install the wizard has ever produced. **The write-scoped `ingest_token`
 in the same file is never read** — this surface is read-only. A token is
 re-resolved on every connect and again after a 401/403 from a tool call, so
-a rotated token (or one written by `probe mcp token set` after this session
-started) is picked up without restarting, matching Claude Code's behaviour.
+a rotated token (or one the wizard wrote after this session started) is
+picked up without restarting, matching Claude Code's behaviour.
 
 If no bearer token exists anywhere, the fallback is the standard OAuth
 authorization-code + PKCE flow via the official `@modelcontextprotocol/sdk`
@@ -573,8 +574,8 @@ yet do: today `probe wizard --agent pi` only offers the **capture**
 capability for pi — `setup.py`'s `restart_notice` says so explicitly ("pi is
 capture-only through this wizard") — and the **tracking** capability is what
 requests the `mcp` grant that mints a Probe MCP bearer token
-(`CAPABILITY_GRANTS`). So on a device that has never run `probe login`/the
-wizard for Claude Code or Codex first, `/probe-mcp-login`'s interactive
+(`CAPABILITY_GRANTS`). So on a device that has never run the wizard for
+Claude Code or Codex first, `/probe-mcp-login`'s interactive
 OAuth flow (see "Probe MCP read tools" and "pi-mcp-adapter" above) remains
 the only way to get Probe's read tools into pi.
 
@@ -589,8 +590,8 @@ token and no interactive pi session available, there is currently no way to
 authorize Probe's MCP tools for pi at all — other than installing
 pi-mcp-adapter and letting *its* OAuth flow run instead (see
 "pi-mcp-adapter" above, which does not have this restriction). This is
-expected to be rare — any device already paired with `probe login`/the
-wizard for *any* agent already has the bearer token this bridge prefers —
+expected to be rare — any device already set up with the wizard for *any*
+agent already has the bearer token this bridge prefers —
 but it is a real, narrower gap than the tap's, flagged here rather than
 papered over.
 

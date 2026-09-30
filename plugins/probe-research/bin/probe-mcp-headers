@@ -7,12 +7,12 @@
 # profile is ever sourced and ~/.local/bin is not on PATH.
 #
 # Resolution matches sdk.config.resolve: PROBE_MCP_TOKEN first, so a shell that
-# already exports it keeps working untouched, then the `mcp_token` that
-# `probe mcp token set` writes. The write token in the same file is never read —
+# already exports it keeps working untouched, then the `mcp_token` that the
+# Probe wizard writes. The write token in the same file is never read —
 # this surface is read-only.
 #
 # Caveat of that order: if the launching shell exports a *stale* PROBE_MCP_TOKEN, this
-# re-emits it after every 401 and the token can never heal — `probe mcp token set` writes
+# re-emits it after every 401 and the token can never heal — the wizard writes
 # a config the export keeps shadowing. `probe mcp status` names that case; the fix is to
 # drop the export and let the config win.
 #
@@ -180,5 +180,7 @@ do
   fi
 done
 
-echo "no Probe MCP token: run \`probe mcp token set\` (or export PROBE_MCP_TOKEN)" >&2
+# The wording is probe.sdk.session_marker.WIZARD_HINT, inlined: a shell script
+# cannot import it (tests/test_wizard_hint_sync.py pins the two together).
+echo "no Probe MCP token: run the Probe wizard: probe wizard or npx probe-research (or export PROBE_MCP_TOKEN)" >&2
 exit 1

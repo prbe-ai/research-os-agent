@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+- **Setup goes through the wizard only (release 1 of 2: nothing is removed yet).** Every message,
+  hint and doc that told someone to run `probe login`, `probe install`, `probe update`, `probe
+  daemon install`, `probe companion authorize`, `probe statusline install`, `probe mcp token set`
+  or `probe context use` now points at the Probe wizard (`npx probe-research`). What those
+  commands did now lives in the wizard (the transcript tap moves to 0.9.3 for its own messages):
+  - **Sign in only** (a remote GPU box, a self-hosted server): `probe wizard --action login`, with
+    `--token`, `--base-url`, `--context`, `--ingest-token`, `--hmac-secret`, `--no-browser` and
+    `--endpoint-only`. It signs in and installs nothing; the same flags with any other action, or
+    with an install flag or a sign-in code they would silently drop, are refused.
+  - **Who records, headless**: `probe wizard --yes --who-records agent|daemon`. It needs a
+    signed-in machine, prints the daemon's approval link instead of opening a browser, and leaves
+    an agent already on the chosen side alone.
+  - **Enter on Who records repairs the daemon**: while it reads daemon, Enter approves a new key
+    when the server refuses the saved one (revoked under Connected clients) and installs missing
+    AI libraries, before the daemon's page. The daemon's "key refused" and "libraries missing"
+    messages point there; `probe companion authorize` always approves a new key again, and exits 1
+    unless it got one. A declined re-approval leaves no key, so nothing moves onto a dead one.
+  - **Switching to the daemon installs what is missing and only that.** The daemon's key is
+    approved only when this machine has none, and its AI libraries install, with no approval, when
+    they are missing. A machine that held the key but not the libraries used to refuse the switch
+    for "missing packages".
+  - **Install asks for the MCP token on its own.** It rode along with the API sign-in, so a
+    machine signed in with a pasted token never got one. A headless install missing only that
+    token does not wait on a browser; the next interactive Install asks.
+  - **Uninstall puts the status line back** to the command it wrapped, or removes it.
+  - **The account screen** (`probe wizard --action account`) switches to, and removes, another
+    saved account.
+  - **Update reads a fresh package index** when it reinstalls, instead of uv's cached copy that
+    can predate a release by minutes.
+  - **The `npx probe-research` launcher (0.13.0) hands everything to `probe wizard`**: a bare
+    code, flags alone (`npx probe-research --agent codex` used to reach the CLI root and exit 2),
+    and `install [CODE]` as the guided install (`--action configure`). A call starting with a root
+    option (`--base-url X doctor`) still reaches the CLI untouched.
+  - **`/probe-research-setup`** runs the wizard's flags throughout.
+  The commands themselves still work in this release; the next one removes them.
+
 - **A new daemon session's status line says `(daemon)` from its first frame.** Claude Code draws the
   status line once while its SessionStart hook is still running and not again until the
   conversation moves, so a brand-new session on the daemon showed the agent's `read-only` (or `on

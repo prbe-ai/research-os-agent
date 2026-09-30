@@ -73,8 +73,8 @@ def run() -> int:
     token = cfg.load_token()
     if not token:
         print(
-            "probe-research-tap: not configured — run `probe login` with an "
-            "ingest token, or set PROBE_INGEST_TOKEN"
+            f"probe-research-tap: not configured — {cfg.WIZARD_HINT}, "
+            "or set PROBE_INGEST_TOKEN"
         )
         return 1
 
@@ -83,8 +83,8 @@ def run() -> int:
     except cfg.APIBaseURLUnset:
         print("probe-research-tap: no backend base URL configured")
         print(
-            "  Run `probe login` (writes base_url to "
-            f"{cfg.probe_config_path()}) or set PROBE_BASE_URL."
+            f"  To fix it, {cfg.WIZARD_HINT} (it writes base_url to "
+            f"{cfg.probe_config_path()}), or set PROBE_BASE_URL."
         )
         return 1
 
@@ -102,8 +102,7 @@ def run() -> int:
                     f"(ingest token rejected {_relative(last_401)})"
                 )
                 print(
-                    "  Fix PROBE_INGEST_TOKEN or run `probe login` with a "
-                    "valid ingest token to resume."
+                    f"  To resume, fix PROBE_INGEST_TOKEN or {cfg.WIZARD_HINT}."
                 )
                 return 1
 

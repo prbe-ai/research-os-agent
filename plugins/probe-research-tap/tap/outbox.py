@@ -24,8 +24,8 @@ log = logging.getLogger("probe-research-tap.outbox")
 
 class HaltError(Exception):
     """Raised when the server returns 401 — the ingest token is dead, daemon
-    must exit. Fixed by setting a valid PROBE_INGEST_TOKEN or re-running
-    `probe login`, NOT by any pairing step (there is none)."""
+    must exit. Fixed by setting a valid PROBE_INGEST_TOKEN or signing in again
+    with the Probe wizard, NOT by any pairing step (there is none)."""
 
 
 class SanitizerNotAvailable(RuntimeError):
@@ -307,8 +307,7 @@ def drain_once(
             token_fingerprint(token),
         )
         raise HaltError(
-            "ingest token rejected (401) — fix PROBE_INGEST_TOKEN or run "
-            "`probe login` with a valid ingest token"
+            f"ingest token rejected (401) — fix PROBE_INGEST_TOKEN or {cfg.WIZARD_HINT}"
         )
 
     msg = resp.error or f"http {resp.status}"

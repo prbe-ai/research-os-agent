@@ -99,9 +99,10 @@ TIMEOUT = version_policy.TIMEOUT
 DEFAULT_BASE = version_policy.DEFAULT_BASE
 
 
-# The CLI release that introduced `probe update`. The nudge points at that one
-# command only for CLIs >= this; older ones get the raw commands (which get them
-# to a version that has it). CI keeps this == the released version (see release.yml).
+# The CLI release that introduced the one-step update, which the wizard now runs
+# (setup is wizard-only, Richard 2026-09-29). The nudge points at the wizard only
+# for CLIs >= this; older ones get the raw commands (which get them to a version
+# that has it). CI keeps this == the released version (see release.yml).
 UPDATE_CMD_MIN_CLI = "0.8.1"
 
 # Which hook event we are running under. hooks.json exports this ONLY for
@@ -1025,22 +1026,22 @@ def _local_tap():
 
 
 # ---------------------------------------------------------------------------
-# Auto-update (opt-in via `probe setup`).
+# Auto-update (opt-in via the wizard).
 #
 # The upgrade is spawned DETACHED and this hook returns immediately. The hook is
 # synchronous by contract -- its systemMessage cannot come from a background
-# process -- and `probe update` allows itself 300s, so applying inline would let
+# process -- and the update allows itself 300s, so applying inline would let
 # a Claude Code session hang for up to five minutes before you could type.
 # Nothing is lost by deferring: a plugin update only takes effect on restart
 # anyway, so a background upgrade lands for the NEXT session either way.
 #
-# `probe update --yes` records its own outcome, which is the only way a detached
-# run can report failure. `probe doctor` prints it.
+# `probe wizard --action update --yes` records its own outcome, which is the only
+# way a detached run can report failure. `probe doctor` prints it.
 # ---------------------------------------------------------------------------
 
 
 def _autoupdate_settings() -> dict:
-    """Read the opt-in state written by `probe setup`. Fail-soft to OFF.
+    """Read the opt-in state written by the wizard. Fail-soft to OFF.
 
     This used to recompute the state path that autoupdate.py owns. It now shares
     one definition -- the divergence that duplication invited would have stopped
@@ -1116,7 +1117,7 @@ def _stale_manifest_notice(fetched_at, now=None) -> str | None:
     return (
         "Probe Research could not confirm your client version "
         f"(last successful check: {when}). Your install may be out of date. "
-        "Run `probe doctor` to compare, or `probe update` to upgrade."
+        f"Run `probe doctor` to compare; to upgrade, {_session_marker.WIZARD_HINT}."
     )
 
 
@@ -1231,24 +1232,30 @@ def main() -> None:
     def _fmt(items):  # items: (label, current, target)
         return ", ".join(f"{label} {cur} → {target}" for label, cur, target in items)
 
-    # Prefer the single `probe update` command, but only for CLIs new enough to have
-    # it; older CLIs get the raw sequence (which upgrades them to one that does).
+    # Prefer the wizard, which updates everything in one step, but only for CLIs
+    # new enough to have that step; older CLIs get the raw sequence (which
+    # upgrades them to one that does).
     local_cli = local.get("cli")
     has_update_cmd = bool(local_cli) and not _remote_gt_local(local_cli, UPDATE_CMD_MIN_CLI)
     # The raw sequence updates the tap too when that is what is stale —
     # otherwise the nudge names a component and then hands over commands that
-    # cannot fix it. `probe update` covers all three itself.
+    # cannot fix it. The wizard's update covers all three itself.
     tap_stale = any(label == "transcript tap" for label, _, _ in nudges + needs_update + below_min)
     cmds = (
-        "probe update"
-        if has_update_cmd
-        else (
-            "uv tool upgrade probe-research && "
-            "claude plugin marketplace update research-os-agent && "
-            "claude plugin update probe-research@research-os-agent"
-            + (" && claude plugin update probe-research-tap@research-os-agent" if tap_stale else "")
-        )
+        "uv tool upgrade probe-research && "
+        "claude plugin marketplace update research-os-agent && "
+        "claude plugin update probe-research@research-os-agent"
+        + (" && claude plugin update probe-research-tap@research-os-agent" if tap_stale else "")
     )
+    # What to do, said two ways: `run_line` for the person, `tell` for the
+    # agent's instructions. The wizard is a sentence, not a command to paste
+    # after "Run:" -- no user-facing text names a `probe` setup command.
+    if has_update_cmd:
+        run_line = f"To update, {_session_marker.WIZARD_HINT}"
+        tell = f"to {_session_marker.WIZARD_HINT}"
+    else:
+        run_line = f"Run: {cmds}"
+        tell = f"to run `{cmds}`"
     advisory = manifest.get("advisory")
 
     # THE ROUTINE NUDGE IS WHAT CHANGED AND WHAT TO RUN, AND NOTHING ELSE. It
@@ -1320,7 +1327,7 @@ def main() -> None:
     # advisory applies to is now a tier the server can name, so the note reaches
     # that machine and stays off everyone else's screen.
     if urgent:
-        lines.append(f"Run: {cmds} (restart Claude Code to apply)")
+        lines.append(f"{run_line} (restart Claude Code to apply)")
         if isinstance(advisory, str) and advisory.strip():
             # Human-facing only, and bounded: one line, capped, so a hostile
             # manifest cannot paste paragraphs of instructions into the session.
@@ -1328,7 +1335,7 @@ def main() -> None:
             # channel is read as instructions.
             lines.append(f"Note: {_clip_advisory(' '.join(advisory.split()))}")
     else:
-        lines.append(f"Run: {cmds}")
+        lines.append(run_line)
     sys_msg = "\n".join(lines)
 
     # THE AGENT IS TOLD THE TIER TOO, because its standing instruction is not to
@@ -1339,7 +1346,7 @@ def main() -> None:
         ctx = (
             f"The Probe Research client is out of date ({summary}) and known to "
             "misbehave at that version: features may fail until it is updated. "
-            f"Tell the user to run `{cmds}` and restart Claude Code, and say so "
+            f"Tell the user {tell}, then restart Claude Code, and say so "
             "again if they hit an error that could be explained by the stale "
             "client. This one is worth raising unprompted; do not repeat it more "
             "than once unless something fails."
@@ -1347,7 +1354,7 @@ def main() -> None:
     else:
         ctx = (
             f"The Probe Research client is out of date ({summary}). If the user wants "
-            f"to update, tell them to run `{cmds}`, then restart Claude Code. "
+            f"to update, tell them {tell}, then restart Claude Code. "
             "Do not nag; only act if they ask."
         )
 

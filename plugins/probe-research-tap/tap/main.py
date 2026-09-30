@@ -260,8 +260,9 @@ def main(argv: list[str] | None = None) -> int:
     if not token:
         log.info(
             "no ingest token configured (PROBE_INGEST_TOKEN or ingest_token in %s); "
-            "run `probe login` first — skipping",
+            "%s — skipping",
             cfg.probe_config_path(),
+            cfg.WIZARD_HINT,
         )
         return 0
 

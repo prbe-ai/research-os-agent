@@ -59,6 +59,13 @@ SESSIONS_DIRNAME = "sessions"
 #: confident glyph on it; saying nothing is the honest answer.
 MAX_AGE_SECONDS = 30 * 86400
 
+#: The ONE way any message sends a person to set up, sign in, update or repair
+#: this device: setup is wizard-only (Richard 2026-09-29), so no user-facing text
+#: names a `probe <setup command>`. Lives here because this file is the one every
+#: surface can reach (the SDK imports it, the plugin hooks vendor it); the tap and
+#: the pi extension carry copies that tests/test_wizard_hint_sync.py pins to it.
+WIZARD_HINT = "run the Probe wizard: probe wizard or npx probe-research"
+
 _ELLIPSIS = "…"  # …
 #: ONE glyph for both states, and it is FILLED in both. A hollow ring is faint
 #: at terminal font sizes and reads as a rendering artefact rather than a mark.
@@ -1820,7 +1827,7 @@ DEFAULT_TRACKING = True
 #: Where a researcher's own default lives in the config file. TOP LEVEL, never
 #: inside a context: `sdk.config.clear_context` replaces a context wholesale
 #: (`contexts[name] = {}`, a deliberate fail-closed wipe), so a preference
-#: stored there would be erased by `probe logout` and tracking would silently
+#: stored there would be erased by signing out and tracking would silently
 #: come back on. It would also make the default follow whichever TENANT is
 #: selected, which is not what "all my sessions" means.
 DEFAULTS_KEY = "defaults"
@@ -2270,7 +2277,7 @@ def write_default_tracking(on: bool) -> Path:
     config module's own primitives, and each one guards a real loss:
 
     * `_config_lock` -- `save_file` alone is atomic but not isolated, so this
-      write racing a `probe login` would restore its stale snapshot over the
+      write racing a sign-in would restore its stale snapshot over the
       fresh token and report success doing it.
     * `load_file(strict=True)` -- the raw file may be a v1 flat blob. A raw
       read-modify-write leaves `defaults` beside the v1 keys, and the NEXT

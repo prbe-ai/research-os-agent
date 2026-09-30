@@ -3,7 +3,7 @@
 Install + registration are owned by the Claude Code or Codex plugin system.
 Auth is device pairing: `python -m tap pair <token>` exchanges a
 dashboard-minted pairing token for a device token (the manual/self-host
-alternative is the probe CLI's `probe login`). This CLI covers the plugin's
+alternative is the Probe wizard's sign-in, `npx probe-research`). This CLI covers the plugin's
 runtime behavior (the daemon, pairing, and status).
 """
 

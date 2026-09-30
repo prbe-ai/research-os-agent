@@ -24,6 +24,7 @@
 import { readFileSync } from "node:fs";
 
 import { probeConfigPath, tokenFile, TOKEN_ENV, type PathEnv } from "./paths.js";
+import { WIZARD_HINT } from "./wizardHint.js";
 
 export type PairingResult =
   | { paired: true; source: "device-token" | "env" | "probe-cli"; detail: string }
@@ -89,6 +90,6 @@ export function checkPairing(env: PathEnv = process.env): PairingResult {
     reason:
       `probe-research-pi: not paired — no device token at ${devicePath}, ` +
       `${TOKEN_ENV} is unset, and ${probeConfigPath(env)} carries no ingest_token. ` +
-      "Pair this device (see the probe-research-pi README) or run `probe login`; skipping capture for this session.",
+      `Pair this device (see the probe-research-pi README) or ${WIZARD_HINT}; skipping capture for this session.`,
   };
 }

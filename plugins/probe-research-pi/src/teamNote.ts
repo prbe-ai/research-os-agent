@@ -239,7 +239,7 @@ export const SYNC_BEFORE_READ_TIMEOUT_MS = 2_000;
  * WHY WAIT AT ALL. The document is one file per machine, shared by every
  * harness and written by whichever credential last synced. Reading it before
  * this session's own sync has run means briefing the model from whatever was
- * left there -- and after a `probe context use` / `probe login`, what was left
+ * left there -- and after a context switch or a new sign-in, what was left
  * there is the PREVIOUS credential's note. The sync is what parks that copy and
  * installs this credential's; doing it first turns a possible cross-tenant read
  * into an ordinary one.

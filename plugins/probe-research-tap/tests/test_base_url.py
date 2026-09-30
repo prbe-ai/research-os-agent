@@ -3,7 +3,7 @@
 The ingest token and backend base URL come from the environment
 (PROBE_INGEST_TOKEN / PROBE_BASE_URL) or from the probe CLI's config file
 ($XDG_CONFIG_HOME/probe/config.json, default ~/.config/probe/config.json,
-written by `probe login`; PROBE_CONFIG_PATH overrides the file path). Env
+written by the Probe wizard's sign-in; PROBE_CONFIG_PATH overrides the file path). Env
 wins over the file. There is deliberately no baked-in default host — an
 unconfigured plugin must fail loudly (APIBaseURLUnset) rather than guess —
 and a missing ingest token means "not configured": the daemon and hooks

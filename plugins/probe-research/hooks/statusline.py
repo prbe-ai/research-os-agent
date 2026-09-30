@@ -29,7 +29,7 @@ CONTRACT — this runs on a RENDER PATH, once per status-line update:
 STDIN MAY BE EMPTY, and that is a supported case rather than a bug. The
 status line is a single global slot, so this command is typically CHAINED
 after somebody else's — and a predecessor that does `input=$(cat)` has already
-drained the pipe. `probe statusline install` builds a chain that tees stdin to
+drained the pipe. The wizard's status-line step builds a chain that tees stdin to
 both sides, but a hand-written chain will not, so fall back to the session id
 in the environment before giving up.
 """

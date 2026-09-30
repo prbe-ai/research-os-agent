@@ -19,7 +19,7 @@
  *      snippet and `pairing.ts`'s `readProbeConfigIngestToken`), and v1
  *      (flat top-level `mcp_token`).
  *
- * NEVER READS THE WRITE TOKEN. `probe mcp token set` writes `mcp_token`
+ * NEVER READS THE WRITE TOKEN. The Probe wizard writes `mcp_token`
  * (read-only) alongside `ingest_token` (capture) in the same config file;
  * this module reads only the former, on purpose — this whole surface is
  * read-only, and the day it accidentally reads a write-scoped credential
@@ -90,7 +90,7 @@ function readProbeConfigMcpToken(env: PathEnv): string | null {
  *
  * Call this AGAIN on every connect attempt and again after a 401/403 rather
  * than caching its result — see `mcpBridge.ts` — so a token rotated via
- * `probe mcp token set` (or a device re-paired) is picked up without
+ * the wizard (or a device re-paired) is picked up without
  * restarting the session, matching Claude Code's behaviour.
  */
 export function resolveMcpBearerToken(env: PathEnv = process.env): McpBearerToken | null {

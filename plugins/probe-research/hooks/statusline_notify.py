@@ -18,7 +18,7 @@ finishing — which in a normal session is three or four lines total.
     Probe: tracked → session-tracking-indicator · running
     Probe: this session is not tracked yet.
 
-OPT-IN, exactly like the segment. `probe statusline install` under Codex sets the
+OPT-IN, exactly like the segment. The wizard's status-line step under Codex sets the
 flag this reads; nothing here runs for anyone who did not ask for it.
 
 CONTRACT:

@@ -42,7 +42,7 @@ def classify(status: int, err: bool) -> Classification:
 
     - 2xx                -> SUCCESS
     - 401                -> HALT (dead ingest token; fixed via PROBE_INGEST_TOKEN
-                            / `probe login`, checked ahead of the 4xx bucket)
+                            / the wizard's sign-in, checked ahead of the 4xx bucket)
     - any other 4xx      -> POISON (drop + log). A 4xx is a client-side defect the
                             SAME batch can never fix on retry: 400/404 malformed or
                             unroutable, 403 a QUARANTINED session, 413 a body over

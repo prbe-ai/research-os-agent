@@ -34,9 +34,9 @@ claude plugin install probe-research@research-os-agent
 /probe-research-setup
 ```
 
-`/probe-research-setup` installs the `probe` CLI, runs `probe login` (write token), and stores a
-separate read-only token for the MCP via `probe mcp token set`. (Once the plugin is added to the
-central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
+`/probe-research-setup` runs the Probe wizard (`npx probe-research`), which installs the `probe`
+CLI, signs you in (write token), and stores a separate read-only token for the MCP. (Once the
+plugin is added to the central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
 
 ## What's inside
 
@@ -99,8 +99,8 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   an opt-in segment under Claude Code's input box saying whether this session's
   work is landing in Probe — `● tracking`, `● tracking → <project>`, or
   `● tracking → <project> · running` in green; `● read-only` in yellow and
-  `● off` in RED when it is not. Turn it on with `probe statusline install`; off with
-  `probe statusline uninstall`, or `PROBE_STATUSLINE=off` to mute the refresh.
+  `● off` in RED when it is not. The Probe wizard's Install turns it on and its
+  Uninstall removes it (`npx probe-research`); set `PROBE_STATUSLINE=off` to mute the refresh.
 
   `statusLine` is a single global slot in the user's settings and there is no
   plugin manifest field for it, so the installer CHAINS: it keeps whatever was
@@ -118,9 +118,9 @@ central prbe-ai marketplace, the install becomes `probe-research@prbe-ai`.)
   and an unrecognised entry is ignored, not executed) — there is no command hook
   for a plugin to render into. So `hooks/statusline_notify.py` emits the same
   information as a message when it CHANGES (`Stop` hook, ~4 lines a session), and
-  `probe statusline install` turns that on when run under Codex. `hooks/hooks.json` is shared by both
-  flavours, so the refresh hook gates on whether `probe statusline install` was
-  ever run: without that it is one `stat` and a return, and it never reaches the
+  the wizard's status-line setting turns that on when run under Codex. `hooks/hooks.json` is shared by both
+  flavours, so the refresh hook gates on whether the status line was ever
+  installed: without that it is one `stat` and a return, and it never reaches the
   network for a user who did not opt in.
 
 Skills here are copies of the repo's canonical `skills/` (kept in sync with

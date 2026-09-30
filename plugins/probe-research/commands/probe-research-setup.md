@@ -24,7 +24,7 @@ Safe for any coding agent and safe to re-run. Prefer resolved binary paths over 
 
 - Needs `uv`, `curl`, `git`, `python3`. If `uv` is missing:
   `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- `node` only for the `npx` launcher; `probe setup` is the same thing once the
+- `node` only for the `npx` launcher; `probe wizard` is the same thing once the
   CLI is installed.
 - Claude Code users: check `claude --version` >= 2.1.195. The plugin's MCP
   resolves its credential through a headers helper that older builds ignore.
@@ -35,9 +35,8 @@ Safe for any coding agent and safe to re-run. Prefer resolved binary paths over 
 
 ```bash
 npx probe-research          # install + guided setup
-probe setup                 # same menu, once the CLI exists
-probe install               # skip the menu, go straight to the guided install
-probe setup --action configure   # the same thing, named: tracking, capture, updates
+probe wizard                # same menu, once the CLI exists
+probe wizard --action configure   # skip the menu, go straight to the guided install: tracking, capture, updates
 ```
 
 **The flags are the contract; the menu is a front end over them.** An omitted flag
@@ -56,7 +55,7 @@ capability someone turned on.
 Headless example:
 
 ```bash
-probe setup --agent both --tracking --capture --agent-rules --yes
+probe wizard --agent both --tracking --capture --agent-rules --yes
 ```
 
 ## 2. Sign in
@@ -64,10 +63,10 @@ probe setup --agent both --tracking --capture --agent-rules --yes
 Sign-in happens before the menu, so step 1 usually covers it. On its own:
 
 ```bash
-probe setup <auth_code>          # the 10-character code the website hands you
-probe login                      # browser handoff (RFC 8628), nothing to paste
-probe login --token probe_pat_…  # air-gapped paste path
-probe login --context staging    # a second endpoint or tenant on one machine
+probe wizard <auth_code>                         # the 10-character code the website hands you
+probe wizard --action login                      # browser handoff (RFC 8628), nothing to paste
+probe wizard --action login --token probe_pat_…  # air-gapped paste path
+probe wizard --action login --context staging    # a second endpoint or tenant on one machine
 ```
 
 Only the researcher types `--token`, in their own terminal - never from an agent tool
@@ -78,7 +77,7 @@ Switching accounts, or signing in as someone else on a device that already holds
 credentials:
 
 ```bash
-probe setup --action account     # sign in, switch to an account saved here, or sign out
+probe wizard --action account    # sign in, switch to an account saved here, or sign out
 ```
 
 **Do not gate success on the exit code alone.** Confirm independently:
@@ -93,8 +92,8 @@ A fresh install sees only what happens next. Everything below runs as a backgrou
 can leave and come back to.
 
 ```bash
-probe setup --action import-research    # the menu: sessions, a folder, or both
-probe setup --action imports            # monitor, see results, resume interrupted work
+probe wizard --action import-research   # the menu: sessions, a folder, or both
+probe wizard --action imports           # monitor, see results, resume interrupted work
 ```
 
 **Saved coding sessions.** Past Claude Code / Codex / pi sessions already on disk,
@@ -102,7 +101,7 @@ imported into the knowledgebase and searchable alongside everything else. Distin
 `--capture`, which streams sessions from now on - one is history, the other is the feed.
 
 ```bash
-probe setup --action transcripts
+probe wizard --action transcripts
 ```
 
 **A project folder.** Point it at work already done: it uploads what it finds, describes
@@ -110,8 +109,8 @@ each artifact, and reports how much of the folder it accounted for. Large files
 (checkpoints, datasets) are recorded as references, not copied.
 
 ```bash
-probe setup --action backfill
-probe setup --action backfill --folder /path/to/project   # headless
+probe wizard --action backfill
+probe wizard --action backfill --folder /path/to/project   # headless
 ```
 
 **W&B runs.** Mirrors one W&B run's metric history into an existing probe run, so it is a
@@ -136,11 +135,11 @@ configured in the dashboard, not here.
 ## 4. Confirm
 
 ```bash
-probe doctor                  # install, sign-in, capture pairing, daemon health, staleness
-probe setup --action diagnose # the same ground from the menu
-probe session status          # which state THIS conversation is in (on / daemon / read / off), and why
-probe mcp status              # where the read credential comes from, is it valid
-probe setup --action imports  # did the background imports finish
+probe doctor                   # install, sign-in, capture pairing, daemon health, staleness
+probe wizard --action diagnose # the same ground from the menu
+probe session status           # which state THIS conversation is in (on / daemon / read / off), and why
+probe mcp status               # where the read credential comes from, is it valid
+probe wizard --action imports  # did the background imports finish
 ```
 
 In a fresh agent session, the MCP is connected when its tools appear
@@ -150,9 +149,9 @@ defers MCP tools, so they may be names only until something loads them.
 ## Manual and air-gapped installs
 
 ```bash
-probe mcp token set                          # mint the read token FIRST: the plugin's
-/plugin install probe-research@research-os-agent   # headers helper reads it on first use
-probe setup --action manual
+probe wizard --action login                        # sign in FIRST: it mints the read token the plugin's
+/plugin install probe-research@research-os-agent   # headers helper reads on first use
+probe wizard --action manual
 ```
 
 Deliberately not in the menu - it is the rarest path. Use it when the browser handoff
@@ -173,8 +172,10 @@ cannot work, or when the MCP has to be wired by hand:
 ## Keeping it updated
 
 ```bash
-probe update                        # CLI + plugins
-probe setup --action settings       # turn auto-update on; set the default Probe state (on / daemon / read / off - daemon needs capture)
+probe wizard --action update --yes  # CLI + plugins
+probe wizard --action settings      # turn auto-update on
+probe wizard --action defaults      # the default Probe state (on / read / off); Who records (agent or daemon - daemon needs capture) sits beside it
+probe session default read --folder /path/to/project   # one folder's own default
 ```
 
 The CLI and the plugins ship together. Running one without the other is the usual cause of
@@ -183,10 +184,10 @@ a capability that is configured but does nothing.
 ## Removing it
 
 ```bash
-probe setup --action configure --no-capture              # stop capture (and the daemon), keep the plugin
-probe setup --action configure --no-capture --uninstall  # stop capture AND remove the plugin
-probe setup --action uninstall                           # remove Probe's plugins from the agents you pick, and sign this device out
-probe logout                                             # stop imports, revoke this token, clear local config
+probe wizard --action configure --no-capture              # stop capture (and the daemon), keep the plugin
+probe wizard --action configure --no-capture --uninstall  # stop capture AND remove the plugin
+probe wizard --action uninstall                           # remove Probe's plugins from the agents you pick, and sign this device out
+probe wizard --action logout                              # stop imports, revoke this token, clear local config
 ```
 
 ## Security notes
@@ -199,4 +200,4 @@ probe logout                                             # stop imports, revoke 
   there revokes it. Without that token the daemon cannot record: a session
   it records for reads `on (daemon degraded)`.
 - Never echo a token. `probe mcp status` reports health without printing it.
-- `probe logout` revokes the calling token; it does not touch other devices.
+- `probe wizard --action logout` revokes the calling token; it does not touch other devices.

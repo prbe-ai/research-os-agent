@@ -18,7 +18,7 @@ dashboard-minted pairing token for a device token (written to .token) and pins
 the backend host — read from the token's unverified `iss` claim, host-allowed
 to *.prbe.ai — into .config. The manual/self-host path is the probe CLI's file,
 config.json = $XDG_CONFIG_HOME/probe/config.json (default
-~/.config/probe/config.json), written by `probe login`; a PROBE_CONFIG_PATH env
+~/.config/probe/config.json), written by the Probe wizard's sign-in; a PROBE_CONFIG_PATH env
 override points at an alternate file (tests, dev). Either path works; a paired
 .token is preferred so a paired device keeps shipping even when the probe CLI is
 separately logged in with a different ingest token.
@@ -70,6 +70,12 @@ REVOKE_PATH = "/agent-tap/revoke"
 # server reads that as "unknown", never as an uninstall.
 REVOKE_REASON_UNINSTALL = "uninstall"
 REVOKE_REASON_REPAIR = "repair"
+
+#: Where every message sends a person to set up or repair this device: setup is
+#: wizard-only (Richard 2026-09-29). A copy of probe.sdk.session_marker.WIZARD_HINT,
+#: because this plugin is stdlib-only and cannot import `probe`;
+#: agent/tests/test_wizard_hint_sync.py fails when the two differ.
+WIZARD_HINT = "run the Probe wizard: probe wizard or npx probe-research"
 
 # Env overrides for the credential pair. There is deliberately NO hardcoded
 # base-URL fallback: a baked-in default is exactly what silently broke the
@@ -234,7 +240,7 @@ class APIBaseURLUnset(RuntimeError):
 
     Raised instead of falling back to a hardcoded host. There is no baked-in
     default by design — the host comes from the probe CLI's config file
-    (written by `probe login`) or an explicit env override, and if neither is
+    (written by the Probe wizard's sign-in) or an explicit env override, and if neither is
     present we fail loudly rather than silently ship to a guessed URL.
     """
 
@@ -244,7 +250,7 @@ def probe_config_path() -> Path:
 
     PROBE_CONFIG_PATH env override (tests/dev) > $XDG_CONFIG_HOME/probe/config.json
     > ~/.config/probe/config.json. Mirrors the probe CLI's own resolution so
-    `probe login` and this plugin always agree on the file.
+    the probe CLI and this plugin always agree on the file.
     """
     env = os.environ.get(ENV_CONFIG_PATH)
     if env:
@@ -297,14 +303,14 @@ def api_base_url() -> str:
     pinned = _read_config_dict().get(CONFIG_API_BASE_URL_KEY)
     if isinstance(pinned, str) and pinned.strip():
         return pinned.strip().rstrip("/")
-    # Manual/self-host path: the probe CLI's config file (written by `probe login`).
+    # Manual/self-host path: the probe CLI's config file (written by the wizard's sign-in).
     persisted = _read_probe_config().get("base_url")
     if isinstance(persisted, str) and persisted.strip():
         return persisted.strip().rstrip("/")
     raise APIBaseURLUnset(
         "no backend base URL configured — pair this device with "
-        "`python -m tap pair <token>` (the host is read from the token), run "
-        f"`probe login`, or set {ENV_BASE_URL}"
+        "`python -m tap pair <token>` (the host is read from the token), "
+        f"{WIZARD_HINT}, or set {ENV_BASE_URL}"
     )
 
 

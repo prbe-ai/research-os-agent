@@ -61,7 +61,7 @@ def _load(name: str):
     return module
 
 
-#: Files `probe statusline install` copies out of this directory, and that this
+#: Files the status-line install copies out of this directory, and that this
 #: hook keeps current. See `probe.cli.statusline.RENDERER_FILES` -- the installer
 #: side owns the list; this is its runtime twin.
 RENDERER_FILES = ("statusline.py", "_session_marker.py")
@@ -81,8 +81,8 @@ def sync_renderer() -> None:
     closes the loop at the one moment it is free: SessionStart, right after an
     update would have landed.
 
-    ONLY WHEN ALREADY INSTALLED. An absent directory means the user never ran
-    `probe statusline install`, and a hook that created it would be installing a
+    ONLY WHEN ALREADY INSTALLED. An absent directory means the user never turned
+    the status line on in the wizard, and a hook that created it would be installing a
     status line nobody asked for.
     """
     target = install_dir()
@@ -111,7 +111,7 @@ def sync_renderer() -> None:
 
 
 def installed() -> bool:
-    """Whether `probe statusline install` was ever run. THE GATE FOR ALL OF THIS.
+    """Whether the status line was ever installed. THE GATE FOR ALL OF THIS.
 
     Nothing here is worth a single request unless something will render the
     answer. Without this gate every plugin user paid three API calls per refresh
@@ -120,8 +120,8 @@ def installed() -> bool:
     manifest declares skills, mcpServers and interface, and there is nowhere for
     a rendered line to go.
 
-    The install directory is the right signal because `probe statusline install`
-    is the only thing that creates it, and `uninstall` is the only thing that
+    The install directory is the right signal because the status-line install
+    (the wizard's step) is the only thing that creates it, and `uninstall` is the only thing that
     would have a reason to remove it. An opt-in feature should cost nothing at
     all to the people who did not opt in.
 
