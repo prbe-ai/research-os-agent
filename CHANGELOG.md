@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.205.1
+
 - **The daemon says why it was turned away when the cause is the team, not its key.** A 403 from
   the daemon's model route used to always read "the daemon's key was refused … Enter on Who records
   approves a new one", but two of its three causes refuse a new key the same way:
