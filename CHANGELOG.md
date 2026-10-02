@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **The wizard says less.** Every screen's text is cut to short, plain lines: the main menu,
+  install, Defaults, Who records, Settings, the account screens, uninstall and sign-out, imports and
+  the finish screen. The main menu's key hint fits on one line (`↑ ↓ move · enter choose · esc
+  back`), and "Update to the latest version" is now "Update Probe". The facts stay: what leaves the
+  device, where daemon deletes go, what read and off stop, and what sign-out revokes.
+
 ## 0.205.2
 
 - **Switching Who records to the daemon works after an update.** When the installed `probe` is
