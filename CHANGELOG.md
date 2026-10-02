@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.206.1
+
 - **The npm page for `npx probe-research` names no particular coding agent.** Its description,
   keywords and README now say "your coding agents" (the wizard lists the ones it supports), so
   adding an agent no longer needs an npm release. Launcher 0.13.1; nothing it runs changed.
