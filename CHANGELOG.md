@@ -50,6 +50,15 @@
     - The footer shows pi's own capture state when `PI_CODING_AGENT_DIR` or
       `PROBE_PI_TAP_PLUGIN_DIR` moves pi's folders, instead of "not installed".
 
+- **Releases and the public mirror read the harness registry.** `release.yml` bumps plugin
+  versions through `agent/tools/release_bump.py`, which moves every released plugin's manifest for
+  every hook-plugin harness in the registry: today the same four `plugin.json` files it named by
+  hand. The mirror render takes its marketplace files and pi's package dir from the registry
+  (new `plugin.marketplace` and `package_dir` fields); its output is byte-identical. The literal
+  ratchet counts the ids and env markers the registry lists, and the Makefile's skill syncs read
+  `agent/skills/profiles.json`. `agent/docs/adding-a-harness.md` says how to add the next harness,
+  and which files still name harnesses by hand. No behaviour change.
+
 ## 0.205.4
 
 - **Daemon recording is no longer described as paid-only.** Every plan can run the Probe daemon

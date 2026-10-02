@@ -51,8 +51,11 @@
       },
       "plugin": {
         "root_env": "CLAUDE_PLUGIN_ROOT",
-        "manifest_dir": ".claude-plugin"
+        "manifest_dir": ".claude-plugin",
+        "marketplace": ".claude-plugin/marketplace.json",
+        "marketplace_source": "string"
       },
+      "package_dir": null,
       "instructions": {
         "global": "CLAUDE.md",
         "project": [
@@ -94,6 +97,7 @@
       "transcripts": null,
       "capture": null,
       "plugin": null,
+      "package_dir": null,
       "instructions": null,
       "team_note": null,
       "mcp": null,
@@ -150,8 +154,11 @@
       },
       "plugin": {
         "root_env": "PLUGIN_ROOT",
-        "manifest_dir": ".codex-plugin"
+        "manifest_dir": ".codex-plugin",
+        "marketplace": ".agents/plugins/marketplace.json",
+        "marketplace_source": "object"
       },
+      "package_dir": null,
       "instructions": {
         "global": "AGENTS.md",
         "project": [
@@ -211,6 +218,7 @@
         "legacy_plugin_dir": null
       },
       "plugin": null,
+      "package_dir": "plugins/probe-research-pi",
       "instructions": {
         "global": "AGENTS.md",
         "project": [

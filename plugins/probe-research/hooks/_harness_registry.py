@@ -52,6 +52,15 @@ CAPABILITY_WAKE = "wake"  # start a turn for a late answer
 SESSION_ID_STEM = "stem"  # the whole stem is the id
 SESSION_ID_UUID_SUFFIX = "uuid_suffix"  # the trailing UUID of a longer stem
 
+#: What every hook-plugin harness's `plugin` object names.
+PLUGIN_KEYS = ("root_env", "manifest_dir", "marketplace", "marketplace_source")
+
+#: How a marketplace file names a plugin's directory: Claude Code's
+#: `"source": "./plugins/x"`, or Codex's `{"source": "local", "path": "./plugins/x"}`.
+MARKETPLACE_SOURCE_STRING = "string"
+MARKETPLACE_SOURCE_OBJECT = "object"
+MARKETPLACE_SOURCES = (MARKETPLACE_SOURCE_STRING, MARKETPLACE_SOURCE_OBJECT)
+
 SUPPORTED_VERSION = 1
 
 
@@ -116,7 +125,10 @@ class Harness:
     #: {"root": relative to HOME, "session_id": SESSION_ID_*}.
     transcripts: Mapping[str, str] | None
     capture: Capture | None
-    #: {"root_env": ..., "manifest_dir": ...} for hook-plugin harnesses.
+    #: {"root_env", "manifest_dir", "marketplace", "marketplace_source"} for
+    #: hook-plugin harnesses: the plugin-root variable its hooks see, the
+    #: manifest dir inside every released plugin, its marketplace file (relative
+    #: to agent/) and how that file names a plugin (MARKETPLACE_SOURCE_*).
     plugin: Mapping[str, str] | None
     #: {"global": filename in the harness home, "project": [filenames]}.
     instructions: Mapping[str, Any] | None
@@ -133,6 +145,9 @@ class Harness:
     #: Where the harness's "write reasoning summaries" setting lives, if it has
     #: one ("settings-json" | "config-toml"); None means nothing to switch.
     reasoning_setting: str | None = None
+    #: The package an extension-family harness installs (a dir under agent/,
+    #: rendered into the public mirror); None for the other families.
+    package_dir: str | None = None
 
     def can(self, capability: str) -> bool:
         """Whether this harness has a CAPABILITY_* (unknown means no)."""
@@ -314,13 +329,22 @@ def _harness(row: Any, index: int) -> Harness:
         capabilities=row.get("capabilities") or {},
         statusline=_bool(row.get("statusline"), f"{where}.statusline"),
         reasoning_setting=_str_or_none(row.get("reasoning_setting"), f"{where}.reasoning_setting"),
+        package_dir=_str_or_none(row.get("package_dir"), f"{where}.package_dir"),
     )
     if harness.captured and (
         harness.route is None or harness.capture is None or harness.transcripts is None
     ):
         raise RegistryError(f"{where} is captured, so it needs route, capture and transcripts")
-    if harness.family == FAMILY_HOOK_PLUGIN and not harness.plugin:
-        raise RegistryError(f"{where} is a hook-plugin harness, so it needs plugin")
+    if harness.family == FAMILY_HOOK_PLUGIN:
+        if not harness.plugin:
+            raise RegistryError(f"{where} is a hook-plugin harness, so it needs plugin")
+        for key in PLUGIN_KEYS:
+            if not isinstance(harness.plugin.get(key), str) or not harness.plugin[key]:
+                raise RegistryError(f"{where}.plugin.{key} must be a non-empty string")
+        if harness.plugin["marketplace_source"] not in MARKETPLACE_SOURCES:
+            raise RegistryError(f"{where}.plugin.marketplace_source must be one of {MARKETPLACE_SOURCES}")
+    if harness.family == FAMILY_EXTENSION and harness.installable and not harness.package_dir:
+        raise RegistryError(f"{where} is an installable extension harness, so it needs package_dir")
     if not harness.detect_env:
         raise RegistryError(f"{where}.detect_env must name at least one variable")
     return harness
