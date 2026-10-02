@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **`search_knowledge` stops calling complete answers incomplete.** The hosted MCP marks a search
+  `truncated_by_response_budget` only when whole documents are missing from it, not when the
+  server cut passage text that search cards never show. Ships with the hosted MCP's deploy.
+
 ## 0.205.4
 
 - **Daemon recording is no longer described as paid-only.** Every plan can run the Probe daemon
