@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.205.3
+
 - **The wizard says less.** Every screen's text is cut to short, plain lines: the main menu,
   install, Defaults, Who records, Settings, the account screens, uninstall and sign-out, imports and
   the finish screen. The main menu's key hint fits on one line (`↑ ↓ move · enter choose · esc
