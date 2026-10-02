@@ -113,6 +113,18 @@
 - **`probe project set` and `probe experiment set` change tags in the same write**
   (`--add-tag`, `--remove-tag`, `--set-tags`), so renaming and retagging land together or not at
   all. `probe project set` with nothing to change now says so instead of crashing.
+- **The MCP reads what the dashboard assistant could, for every agent.** `browse` takes a `mode`:
+  `runs` (every run filed under a project, newest first; `active=true` for what is running
+  now), `workspaces` (names for a `workspace_id`), `notes` (the notes catalog, searchable
+  with `query`) and `files` (the Shared folder, or one workspace's), beside the default
+  `tree`; a listing resumes after the last row it sent, so a row that ends or is deleted
+  between pages skips nothing. `entity` gains a run's saved `views`, its sandbox `diff`
+  (`view_options.trial`) and its `sessions`, an artifact's `sessions`, a project's `readme`
+  (saying why when there is no text), and `sub_note:<id>` for one sub-note whole (the
+  `notes` view now hands out that address). `metrics` gains `mode="series"`: several runs
+  and keys in one read, for comparing curves; a series too big for the budget is refused
+  with the budget it needs, and only a series the downsample actually cut is labelled
+  sampled. Ships with the hosted MCP's deploy.
 
 ## 0.205.4
 
