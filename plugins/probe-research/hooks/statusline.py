@@ -75,12 +75,12 @@ def resolve_session_id(payload: dict) -> str:
         stem = os.path.splitext(os.path.basename(transcript))[0]
         if stem:
             return stem
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or ""
+    return _load("_hook_harness").session_id()
 
 
 #: The status line is Claude Code's (`statusLine` in its settings.json): who
 #: records for THIS coding agent decides a session not yet marked.
-AGENT = "claude_code"
+AGENT = "claude_code"  # harness-literal-ok: the status line is a Claude Code feature
 
 
 def segment(payload: dict) -> str:

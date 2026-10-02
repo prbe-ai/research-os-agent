@@ -50,6 +50,21 @@ REFRESH_SECONDS = 5
 FETCH_TIMEOUT = 10
 
 
+
+def _hook_harness():
+    """The harness resolver beside this file, loaded by explicit path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._hook_harness"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hook_harness.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
+
 def _load(name: str):
     """A vendored sibling module by explicit path — see statusline.py's `_load`."""
     import importlib.util  # noqa: PLC0415
@@ -222,69 +237,46 @@ def fetch_active_run_ids(base_url: str, token: str, session_id: str, marker) -> 
 
 
 #: The `/tmp` filename prefix the tap's watcher files carry, per agent. A
-#: MIRROR of `tap.config.watcher_prefix` and `probe.cli.capture_state`, kept by
-#: hand because this file is a hook: it runs with no `probe` package and no
-#: `tap` package on its path, so it cannot import either of them. The parity
-#: test in `agent/tests/test_watcher_prefix_parity.py` is what keeps the copies
-#: equal — the drift is otherwise silent, because a wrong prefix just never
-#: finds a pid file and reads as "no daemon".
-_WATCHER_PREFIX = {"codex": "prbe-codex-tap"}
-_WATCHER_PREFIX_DEFAULT = "probe-research-tap"
-
-#: The tap's durable state directory, per agent — the SECOND convention this
-#: file mirrors by hand, for the same reason and under the same parity test.
-#: Canonically `tap.config.plugin_dir()` (which reads the env name and the
-#: state root off `tap.sources`) and `probe.cli.capabilities.tap_plugin_dir`.
+#: The watcher prefix and the tap's state directory come from the harness
+#: registry copy beside this file (`_hook_harness`), the same rows
+#: `tap.config` and `probe.cli.capabilities` read from their own copies.
+#: `agent/tests/test_watcher_prefix_parity.py` still runs every home and
+#: compares them.
 #:
 #: WHY THE STATE DIR AND NOT JUST THE PID FILE. A missing pid file has two
 #: causes that are nothing alike: a daemon that died, and a tap that was never
 #: installed. Reading only `/tmp` collapses them into `not started`, so the
-#: segment on a tracking-only machine blames a crashed daemon that never
-#: existed, and the one row in the spec's edge-case table that exists to say
-#: "an explicit opt-out is never silently reversed" renders as a fault report.
-_TAP_PLUGIN_NAME = "probe-research-tap"
-#: The standalone Codex tap's directory, kept as a ONE-WAY fallback exactly as
-#: `tap.config.plugin_dir()` keeps it: an existing install stays where its
-#: state already is, a clean install gets the unified name.
-_CODEX_LEGACY_PLUGIN_NAME = "prbe-codex-tap-plugin"
-_TAP_PLUGIN_DIR_ENV = {
-    "codex": "PRBE_CODEX_TAP_PLUGIN_DIR",
-    "pi": "PROBE_PI_TAP_PLUGIN_DIR",
-}
-_TAP_PLUGIN_DIR_ENV_DEFAULT = "PROBE_RESEARCH_TAP_PLUGIN_DIR"
+#: segment on a tracking-only machine would blame a crashed daemon that never
+#: existed.
 
 
 def _agent_source(env=None) -> str:
-    """Which harness this session belongs to, by the hook's own evidence.
+    """Which harness this session belongs to, by the hook's own evidence
+    (`_hook_harness.current`: PROBE_AGENT, the plugin-root variable, the
+    harness marker, else the registry default)."""
+    return _hook_harness().current(env).id
 
-    `PROBE_AGENT` when the plugin exported one, else Codex's own thread id as
-    the tell, else claude_code — the same default `tap.sources.DEFAULT_SOURCE_ID`
-    and `tap.config.capture_source()` fall back to when nothing says otherwise.
-    """
-    active = os.environ if env is None else env
-    return active.get("PROBE_AGENT") or ("codex" if active.get("CODEX_THREAD_ID") else "claude_code")
+
+def _harness(source: str):
+    reg = _hook_harness().registry()
+    found = reg.find(source)
+    if found is None or found.capture is None:
+        return reg.get(reg.default)
+    return found
 
 
 def _tap_plugin_dir(source: str, env=None) -> str:
-    """Where the tap keeps its durable state for `source`. Never raises.
+    """Where the tap keeps its durable state for `source`. Never raises: an
+    unknown source reads the default harness's folder (a status line only
+    reports; it never writes there)."""
+    try:
+        return str(_harness(source).capture.state_dir(os.environ if env is None else env))
+    except Exception:  # noqa: BLE001 - the status line must render
+        return os.path.join(os.path.expanduser("~"), ".claude", "plugins", "probe-research-tap")
 
-    A hand mirror of `tap.config.plugin_dir()`; an unrecognized source falls to
-    claude_code's row, matching `probe.cli.capabilities.tap_plugin_dir`.
-    """
-    active = os.environ if env is None else env
-    override = active.get(_TAP_PLUGIN_DIR_ENV.get(source, _TAP_PLUGIN_DIR_ENV_DEFAULT))
-    if override:
-        return override
-    home = os.path.expanduser("~")
-    if source == "codex":
-        current = os.path.join(home, ".codex", "state", _TAP_PLUGIN_NAME)
-        legacy = os.path.join(home, ".codex", "state", _CODEX_LEGACY_PLUGIN_NAME)
-        if os.path.exists(legacy) and not os.path.exists(current):
-            return legacy
-        return current
-    if source == "pi":
-        return os.path.join(home, ".pi", "agent", "state", _TAP_PLUGIN_NAME)
-    return os.path.join(home, ".claude", "plugins", _TAP_PLUGIN_NAME)
+
+def _watcher_prefix(source: str) -> str:
+    return _harness(source).capture.watcher_prefix
 
 
 def _capture_reading(session_id: str) -> dict:
@@ -325,7 +317,7 @@ def _capture_reading(session_id: str) -> dict:
     if os.path.exists(os.path.join(plugin_dir, ".disabled")):
         return {"running": False, "reason": "killswitch"}
 
-    prefix = _WATCHER_PREFIX.get(source, _WATCHER_PREFIX_DEFAULT)
+    prefix = _watcher_prefix(source)
     path = os.path.join("/tmp", prefix + "-watcher-" + session_id + ".pid")
     try:
         with open(path, encoding="utf-8") as handle:

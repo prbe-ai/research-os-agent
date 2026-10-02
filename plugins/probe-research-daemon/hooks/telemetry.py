@@ -54,6 +54,21 @@ import sys
 import time
 
 
+
+def _hook_harness():
+    """The harness resolver beside this file, loaded by explicit path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._hook_harness"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hook_harness.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
+
 def _load_core():
     """The vendored contract module, loaded by EXPLICIT sibling path only.
 
@@ -193,11 +208,11 @@ def _tap_customer_id() -> str | None:
     try:
         import sqlite3
 
-        db = os.path.join(
-            os.environ.get("PROBE_RESEARCH_TAP_PLUGIN_DIR")
-            or os.path.join(os.path.expanduser("~"), ".claude", "plugins", "probe-research-tap"),
-            "state.db",
-        )
+        # THIS harness's tap folder (it used to read Claude Code's for every one).
+        capture = _hook_harness().current().capture
+        if capture is None:
+            return None
+        db = os.path.join(str(capture.state_dir()), "state.db")
         if not os.path.exists(db):
             return None
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=1)
@@ -220,7 +235,8 @@ def plugin_version() -> str | None:
     path = os.environ.get("PROBE_PLUGIN_JSON")
     if not path:
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        flavor = ".codex-plugin" if os.environ.get("PROBE_AGENT") == "codex" else ".claude-plugin"
+        plugin = _hook_harness().current().plugin or {}
+        flavor = plugin.get("manifest_dir") or ".claude-plugin"
         path = os.path.join(root, flavor, "plugin.json")
     try:
         with open(path, encoding="utf-8") as f:

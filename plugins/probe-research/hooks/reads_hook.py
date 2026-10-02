@@ -105,6 +105,21 @@ WOKE_PROMPT_S = 120.0
 # ---------------------------------------------------------------------------
 
 
+
+def _hook_harness():
+    """The harness resolver beside this file, loaded by explicit path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._hook_harness"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hook_harness.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
+
 def _root() -> Path:
     base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
     return Path(base) / "probe" / "reads"
@@ -442,7 +457,7 @@ def deliver(sid: str, token: str, by: str) -> "list[str]":
 def _session(payload: dict) -> "str | None":
     sid = payload.get("session_id")
     if not isinstance(sid, str) or not sid:
-        sid = os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or ""
+        sid = _hook_harness().session_id()
     return sid or None
 
 
@@ -497,7 +512,7 @@ def on_tool(payload: dict) -> int:
 
 def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_POLL_S) -> int:
     sid = _session(payload)
-    if not sid or codex() or not attended() or from_helper_agent(payload):
+    if not sid or no_wake() or not attended() or from_helper_agent(payload):
         return 0
     asks = set(open_asks(sid))
     if not asks:
@@ -527,12 +542,12 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
         time.sleep(poll_s)
 
 
-def codex() -> bool:
-    """Under Codex (its hooks.json wrapper exports PROBE_AGENT=codex): messages at
-    prompts and after tool calls in the same `additionalContext` shape, and no
-    wake (Codex has no rewake: a late answer waits for the next prompt or tool
-    call)."""
-    return os.environ.get("PROBE_AGENT") == "codex"
+def no_wake() -> bool:
+    """A harness that cannot start a turn for a late answer (Codex): messages
+    still arrive at prompts and after tool calls in the same
+    `additionalContext` shape, but a late answer waits for the next one. From
+    the harness registry's `wake` capability, not a name."""
+    return not _hook_harness().current().can("wake")
 
 
 def main() -> int:

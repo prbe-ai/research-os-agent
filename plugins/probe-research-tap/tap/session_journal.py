@@ -75,12 +75,29 @@ _FIELDS = (
     "snapshot_byte_end",
     "snapshot_sha256",
 )
-_SANITIZERS = {
-    "claude_code": sanitize.sanitize_event,
-    "codex": codex_sanitize.sanitize_event,
-    "pi": pi_sanitize.sanitize_event,
+#: The sanitizer modules a registry row can name (`capture.sanitizer`). A new
+#: harness adds its module here and in the Makefile's sync-tap-core list.
+_SANITIZER_MODULES = {
+    "sanitize": sanitize,
+    "codex_sanitize": codex_sanitize,
+    "pi_sanitize": pi_sanitize,
 }
-_ROUTES = {"claude_code": "claude-code", "codex": "codex", "pi": "pi"}
+
+
+def _harness(source: str):
+    """The registry row for a capture source. KeyError for an unknown source:
+    an upload never guesses a route or a sanitizer."""
+    from . import harness_registry  # the copy beside this module (tap_core and the tap both carry one)
+
+    return harness_registry.get_registry().get(source)
+
+
+def _sanitizer(source: str):
+    return _SANITIZER_MODULES[_harness(source).capture.sanitizer].sanitize_event
+
+
+def _route(source: str) -> str:
+    return _harness(source).route
 
 
 class ReconciliationRequired(RuntimeError):
@@ -366,7 +383,7 @@ class Wire:
         return body
 
     def post(self, body: bytes) -> tuple[int, dict]:
-        return self._request(f"/ingest/v1/sessions/{_ROUTES[self.source]}", body)
+        return self._request(f"/ingest/v1/sessions/{_route(self.source)}", body)
 
 
 class Journal:
@@ -910,7 +927,7 @@ class Journal:
                             )
                         break
                     try:
-                        value = _SANITIZERS[self.source](json.loads(raw)) if raw.strip() else None
+                        value = _sanitizer(self.source)(json.loads(raw)) if raw.strip() else None
                     except (ValueError, UnicodeDecodeError):
                         value = None
                     retained = (

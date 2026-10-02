@@ -7,8 +7,7 @@
       "label": "Claude Code",
       "display": "Claude Code session",
       "aliases": [
-        "claude",
-        "claude-code"
+        "claude"
       ],
       "binary": "claude",
       "cli_flag": "claude",
@@ -35,7 +34,11 @@
       },
       "transcripts": {
         "root": ".claude/projects",
-        "session_id": "stem"
+        "session_id": "stem",
+        "format": "claude_jsonl",
+        "watch": "file",
+        "root_env": "PROBE_RESEARCH_TAP_PROJECTS_DIR",
+        "discovery": "glob"
       },
       "capture": {
         "token_env": "PROBE_INGEST_TOKEN",
@@ -43,7 +46,8 @@
         "plugin_dir": ".claude/plugins/probe-research-tap",
         "watcher_prefix": "probe-research-tap",
         "sanitizer": "sanitize",
-        "cli_token_fallback": true
+        "cli_token_fallback": true,
+        "legacy_plugin_dir": null
       },
       "plugin": {
         "root_env": "CLAUDE_PLUGIN_ROOT",
@@ -58,7 +62,12 @@
       "team_note": "render",
       "mcp": "plugin-file",
       "question_tool": "AskUserQuestion",
-      "lean_profile": "second-plugin"
+      "lean_profile": "second-plugin",
+      "attribution_requires_pairing": false,
+      "capabilities": {
+        "prompt_context": true,
+        "wake": true
+      }
     },
     {
       "id": "cursor",
@@ -87,7 +96,12 @@
       "team_note": null,
       "mcp": null,
       "question_tool": null,
-      "lean_profile": null
+      "lean_profile": null,
+      "attribution_requires_pairing": false,
+      "capabilities": {
+        "prompt_context": false,
+        "wake": false
+      }
     },
     {
       "id": "codex",
@@ -115,7 +129,11 @@
       },
       "transcripts": {
         "root": ".codex/sessions",
-        "session_id": "uuid_suffix"
+        "session_id": "uuid_suffix",
+        "format": "codex_rollout",
+        "watch": "dir",
+        "root_env": "PRBE_CODEX_SESSIONS_DIR",
+        "discovery": "glob"
       },
       "capture": {
         "token_env": "PRBE_CODEX_TAP_TOKEN",
@@ -123,7 +141,8 @@
         "plugin_dir": ".codex/state/probe-research-tap",
         "watcher_prefix": "prbe-codex-tap",
         "sanitizer": "codex_sanitize",
-        "cli_token_fallback": false
+        "cli_token_fallback": false,
+        "legacy_plugin_dir": ".codex/state/prbe-codex-tap-plugin"
       },
       "plugin": {
         "root_env": "PLUGIN_ROOT",
@@ -138,7 +157,12 @@
       "team_note": "render",
       "mcp": "config-toml",
       "question_tool": null,
-      "lean_profile": "second-plugin"
+      "lean_profile": "second-plugin",
+      "attribution_requires_pairing": true,
+      "capabilities": {
+        "prompt_context": false,
+        "wake": false
+      }
     },
     {
       "id": "pi",
@@ -165,7 +189,11 @@
       },
       "transcripts": {
         "root": ".pi/agent/sessions",
-        "session_id": "uuid_suffix"
+        "session_id": "uuid_suffix",
+        "format": "pi_jsonl",
+        "watch": "file",
+        "root_env": "PROBE_PI_SESSION_ROOTS",
+        "discovery": "header_scan"
       },
       "capture": {
         "token_env": "PROBE_PI_TAP_TOKEN",
@@ -173,7 +201,8 @@
         "plugin_dir": ".pi/agent/state/probe-research-tap",
         "watcher_prefix": "probe-research-tap",
         "sanitizer": "pi_sanitize",
-        "cli_token_fallback": false
+        "cli_token_fallback": false,
+        "legacy_plugin_dir": null
       },
       "plugin": null,
       "instructions": {
@@ -185,7 +214,12 @@
       "team_note": "inject",
       "mcp": "extension-bridge",
       "question_tool": null,
-      "lean_profile": "settings-filter"
+      "lean_profile": "settings-filter",
+      "attribution_requires_pairing": false,
+      "capabilities": {
+        "prompt_context": false,
+        "wake": true
+      }
     }
   ]
 }

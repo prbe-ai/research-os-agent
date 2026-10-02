@@ -234,6 +234,21 @@ PARKED_COPIES_CONTEXT = (
 )
 
 
+
+def _hook_harness():
+    """The harness resolver beside this file, loaded by explicit path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._hook_harness"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hook_harness.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
+
 def _render_failures() -> list[str]:
     """What the last background render could not do. NEVER raises.
 
@@ -300,12 +315,10 @@ def _parked_copies() -> list:
     printed would reach nobody.
     """
     roots = [_team_note_dir()]
-    for env_name, default in (
-        ("CLAUDE_CONFIG_DIR", os.path.join("~", ".claude")),
-        ("CODEX_HOME", os.path.join("~", ".codex")),
-        ("PI_CODING_AGENT_DIR", os.path.join("~", ".pi", "agent")),
-    ):
-        roots.append(os.path.expanduser(os.environ.get(env_name) or default))
+    for harness in _hook_harness().registry().all():
+        home = harness.home_dir()
+        if home is not None:
+            roots.append(str(home))
     # WHOSE THE LIVE DOCUMENT IS, read straight off disk. This hook has no
     # credential and cannot compute an owner key, but it does not need one: the
     # question is only "same hand as the file being synced right now", and both
@@ -1007,17 +1020,10 @@ def _local_tap():
     component whose local version is unknown, so users without the tap are
     never nudged about it.
     """
-    if os.environ.get("PROBE_AGENT") == "codex":
-        path = os.environ.get("PRBE_CODEX_TAP_PLUGIN_DIR")
-        if not path:
-            state = os.path.join(os.path.expanduser("~"), ".codex", "state")
-            current = os.path.join(state, "probe-research-tap")
-            legacy = os.path.join(state, "prbe-codex-tap-plugin")
-            path = legacy if os.path.isdir(legacy) and not os.path.exists(current) else current
-    else:
-        path = os.environ.get("PROBE_RESEARCH_TAP_PLUGIN_DIR") or os.path.join(
-            os.path.expanduser("~"), ".claude", "plugins", "probe-research-tap"
-        )
+    capture = _hook_harness().current().capture
+    if capture is None:
+        return None
+    path = str(capture.state_dir())
     try:
         with open(os.path.join(path, ".installed_version")) as f:
             return (f.read() or "").strip() or None

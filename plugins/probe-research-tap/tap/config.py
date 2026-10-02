@@ -60,7 +60,7 @@ DEFAULT_IDLE_INTERVAL_SECONDS = 300
 # Alias, not a duplicate literal: kept for existing callers/tests, but the
 # value itself lives on the registry row (tap/sources.py) so it cannot drift
 # from what claude_code's Source actually carries.
-WEBHOOK_PATH = sources.SOURCES["claude_code"].webhook_path
+WEBHOOK_PATH = sources.SOURCES[sources.DEFAULT_SOURCE_ID].webhook_path
 PAIR_PATH = "/agent-tap/pair"
 REVOKE_PATH = "/agent-tap/revoke"
 # Why we are revoking. The server cannot tell these apart on its own -- both
@@ -106,14 +106,10 @@ def plugin_dir() -> Path:
     env = os.environ.get(source.plugin_dir_env)
     if env:
         return Path(env)
-    current = sources.plugin_state_dir(source, PLUGIN_NAME)
-    if source.source_id == "codex":
-        # Preserve a standalone tap's durable state during the merge, while
-        # giving clean installs the unified plugin name.
-        legacy = current.parent / CODEX_LEGACY_PLUGIN_NAME
-        if legacy.exists() and not current.exists():
-            return legacy
-    return current
+    # The registry row's state folder, including a legacy folder an older
+    # install left (Codex's retired standalone plugin name), which keeps that
+    # tap's durable state while clean installs get the unified name.
+    return sources.harness(source).capture.state_dir()
 
 
 def config_file() -> Path:
@@ -152,7 +148,7 @@ def watcher_prefix() -> str:
     three other homes (`probe-research-pi/src/paths.ts`, `cli/capture.py`,
     the hooks) mirror it by hand. Task 12's parity test pins them together.
     """
-    return "prbe-codex-tap" if capture_source() == "codex" else PLUGIN_NAME
+    return sources.harness(current_source()).capture.watcher_prefix
 
 
 def pid_file(session_id: str) -> Path:
@@ -421,7 +417,7 @@ def load_token() -> str | None:
     env = os.environ.get(token_env, "").strip()
     if env:
         return env
-    if capture_source() != "claude_code":
+    if not sources.harness(current_source()).capture.cli_token_fallback:
         # The CLI config's `ingest_token` is Claude Code's capture token; the
         # server refuses it on every other agent's route.
         return None

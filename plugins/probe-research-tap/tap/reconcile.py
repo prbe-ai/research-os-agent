@@ -176,12 +176,11 @@ def transcript_root() -> Path:
     output), which is why it is not deleted outright.
     """
     source = cfg.current_source()
-    if source.source_id == "codex":
-        env = os.environ.get("PRBE_CODEX_SESSIONS_DIR")
-        return Path(env) if env else Path.home() / source.default_session_root
-    if source.source_id == "claude_code":
-        env = os.environ.get("PROBE_RESEARCH_TAP_PROJECTS_DIR")
-        return Path(env) if env else Path.home() / source.default_session_root
+    transcripts = sources.harness(source).transcripts
+    if transcripts.get("discovery") == "glob":
+        env = os.environ.get(transcripts.get("root_env") or "")
+        if env:
+            return Path(env)
     return Path.home() / source.default_session_root
 
 
@@ -201,7 +200,7 @@ def _candidate_transcripts() -> list[Path]:
     `.jsonl` files (a project's own logs, a fork's other state) from being
     treated as candidate sessions.
     """
-    if cfg.current_source().source_id == "pi":
+    if sources.harness(cfg.current_source()).transcripts.get("discovery") == "header_scan":
         return pi_discovery.discover_session_files()
     root = transcript_root()
     if not root.is_dir():

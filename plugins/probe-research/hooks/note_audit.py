@@ -49,6 +49,21 @@ CANDIDATES = (
 )
 
 
+
+def _hook_harness():
+    """The harness resolver beside this file, loaded by explicit path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._hook_harness"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hook_harness.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
+
 def _probe_bin():
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         candidate = os.path.join(directory, "probe")
@@ -64,7 +79,7 @@ def _session_id(payload):
     value = payload.get("session_id") if isinstance(payload, dict) else None
     if isinstance(value, str) and value:
         return value
-    return os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or ""
+    return _hook_harness().session_id()
 
 
 def _marker(session_id):
@@ -116,20 +131,12 @@ def _is_switch_prompt(payload) -> bool:
 def _source() -> str:
     """Which harness's block this session reads, and therefore which budget.
 
-    WHY NOT JUST `PROBE_AGENT`: the hook group this file joined does not export
-    it -- only the six that already needed it do -- so reading it alone answered
-    `claude_code` inside Codex, which is both the wrong `available_bytes` and
-    the Codex session inheriting Claude Code's "spawn a BACKGROUND subagent"
-    dispatch. The wrapper now exports it the way `session-start.sh`'s does, and
-    `PLUGIN_ROOT` (Codex's own variable; Claude Code sets CLAUDE_PLUGIN_ROOT)
-    is the same discriminator read directly, so a wrapper that is ever edited
-    out does not silently mislabel every Codex session.
+    The hook group this file joined does not export `PROBE_AGENT`, so the
+    resolver also reads each harness's own plugin-root variable (Codex's
+    `PLUGIN_ROOT`, Claude Code's `CLAUDE_PLUGIN_ROOT`): a wrapper that is ever
+    edited out does not silently mislabel every Codex session.
     """
-    if os.environ.get("PROBE_AGENT") == "codex":
-        return "codex"
-    if os.environ.get("PLUGIN_ROOT") and not os.environ.get("CLAUDE_PLUGIN_ROOT"):
-        return "codex"
-    return "claude_code"
+    return _hook_harness().current().id
 
 
 def main() -> int:

@@ -15,6 +15,7 @@ and the JSON are copied next to each consumer by ``make sync-harnesses``:
     agent/plugins/probe-research/hooks/{_harness_registry.py,harnesses.json}
     agent/plugins/probe-research-daemon/hooks/{_harness_registry.py,harnesses.json}
     agent/plugins/probe-research-tap/tap/{harness_registry.py,harnesses.json}
+    agent/src/probe/tap_core/{harness_registry.py,harnesses.json}
     app/ingestion/{harness_registry.py,harnesses.json}
     dashboard/src/lib/harnesses.json, agent/plugins/probe-research-pi/src/harnesses.json
 
@@ -42,6 +43,11 @@ FAMILY_EXTENSION = "extension"  # a package whose extension calls the probe CLI 
 FAMILY_DETECT_ONLY = "detect-only"  # recognised in the environment, never integrated (Cursor)
 FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION, FAMILY_DETECT_ONLY)
 
+#: What a hook or the extension can do inside the harness (mirrors the daemon
+#: adapters' Capabilities.inject_line / .wake; the conformance test pins them).
+CAPABILITY_PROMPT_CONTEXT = "prompt_context"  # add text to the next prompt from a hook
+CAPABILITY_WAKE = "wake"  # start a turn for a late answer
+
 #: How a transcript's filename yields its session id.
 SESSION_ID_STEM = "stem"  # the whole stem is the id
 SESSION_ID_UUID_SUFFIX = "uuid_suffix"  # the trailing UUID of a longer stem
@@ -65,6 +71,23 @@ class Capture:
     #: Whether the uploader may fall back to the probe CLI config's
     #: `ingest_token` (only the harness that token was minted for).
     cli_token_fallback: bool
+    #: A plugin dir an older install used, still read when it exists and the
+    #: current one does not (relative to the home directory).
+    legacy_plugin_dir: str | None = None
+
+    def state_dir(self, env: Mapping[str, str] | None = None) -> Path:
+        """The capture plugin's state folder: the override variable, else the
+        current folder, else a legacy folder an older install left behind."""
+        values = os.environ if env is None else env
+        override = (values.get(self.plugin_dir_env) or "").strip()
+        if override:
+            return Path(override)
+        current = Path.home() / self.plugin_dir
+        if self.legacy_plugin_dir:
+            legacy = Path.home() / self.legacy_plugin_dir
+            if legacy.exists() and not current.exists():
+                return legacy
+        return current
 
 
 @dataclass(frozen=True)
@@ -101,6 +124,14 @@ class Harness:
     mcp: str | None
     question_tool: str | None
     lean_profile: str | None
+    #: Attribute a shell's session to this harness only when its capture is
+    #: paired (its session variable is set in every shell, Probe or not).
+    attribution_requires_pairing: bool = False
+    capabilities: Mapping[str, bool] | None = None
+
+    def can(self, capability: str) -> bool:
+        """Whether this harness has a CAPABILITY_* (unknown means no)."""
+        return bool((self.capabilities or {}).get(capability))
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -272,6 +303,10 @@ def _harness(row: Any, index: int) -> Harness:
         mcp=_str_or_none(row.get("mcp"), f"{where}.mcp"),
         question_tool=_str_or_none(row.get("question_tool"), f"{where}.question_tool"),
         lean_profile=_str_or_none(row.get("lean_profile"), f"{where}.lean_profile"),
+        attribution_requires_pairing=_bool(
+            row.get("attribution_requires_pairing"), f"{where}.attribution_requires_pairing"
+        ),
+        capabilities=row.get("capabilities") or {},
     )
     if harness.captured and (
         harness.route is None or harness.capture is None or harness.transcripts is None

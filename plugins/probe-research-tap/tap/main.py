@@ -49,7 +49,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tap import config as cfg
-from tap import killswitch, outbox, reconcile
+from tap import killswitch, outbox, reconcile, sources
 from tap import owner as session_owner
 from tap.companion_supervisor import Supervisor
 from tap.outbox import HaltError
@@ -229,12 +229,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.transcript is None and args.transcript_dir is None:
         parser.error("--transcript or --transcript-dir is required")
-    if cfg.capture_source() != "codex" and args.transcript is None:
-        # Codex resolves its transcript by scanning --transcript-dir instead.
-        # Every other source (including pi) is required to pass --transcript
-        # directly — correct for pi too, since its extension already knows
-        # its own session file path. The message names whichever source that
-        # actually is, off the registry row, not a hardcoded "Claude Code".
+    if sources.harness(cfg.current_source()).transcripts.get("watch") != "dir" and args.transcript is None:
+        # A harness whose row says `watch: dir` (Codex) resolves its transcript
+        # by scanning --transcript-dir. Every other one is required to pass
+        # --transcript directly (pi's extension already knows its own session
+        # file). The message names whichever source that actually is.
         parser.error(f"--transcript is required for {cfg.current_source().display_name} capture")
 
     log_dir = cfg.log_dir()

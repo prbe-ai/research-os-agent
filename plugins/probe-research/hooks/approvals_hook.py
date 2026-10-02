@@ -37,7 +37,7 @@ The agent never records an answer itself and `probe` has no approve command, so
 planted text cannot say yes. Where the harness has no question tool, the
 researcher answers in their own terminal: `probe approvals`.
 
-Harness differences stay in the small SHIMS table below (the daemon's adapters
+Harness differences come from the harness registry beside this file (the daemon's adapters
 carry the same facts for the core); the logic is one program.
 """
 
@@ -49,11 +49,28 @@ import sys
 import time
 from pathlib import Path
 
-#: Per harness: its question tool, and whether it can take an injected line.
-SHIMS = {
-    "claude_code": {"question_tool": "AskUserQuestion", "inject": True},
-    "codex": {"question_tool": None, "inject": False},
-}
+
+
+def _hook_harness():
+    """The harness resolver beside this file, loaded by explicit path."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._hook_harness"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hook_harness.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
+
+def _shim() -> dict:
+    """How this harness asks the researcher: its question tool (None means the
+    terminal `probe approvals`) and whether a hook can add a line to the next
+    prompt. Read from the harness registry beside this file."""
+    harness = _hook_harness().current()
+    return {"question_tool": harness.question_tool, "inject": harness.can("prompt_context")}
 HEADER_PREFIX = "Probe "
 
 
@@ -63,7 +80,7 @@ def _state() -> Path:
 
 
 def _harness() -> str:
-    return "codex" if os.environ.get("PROBE_AGENT") == "codex" else "claude_code"
+    return _hook_harness().current().id
 
 
 FULL_ACCESS = "danger-full-access"
@@ -186,7 +203,7 @@ def _labels(q: dict) -> list[str]:
 
 def on_prompt(payload: dict, event: str) -> None:
     _record_mode(payload)
-    shim = SHIMS[_harness()]
+    shim = _shim()
     if not shim["inject"]:
         return
     waiting = _waiting(payload.get("session_id"))
@@ -292,7 +309,7 @@ def main() -> int:
         return 0
     event = payload.get("hook_event_name") or ""
     tool = payload.get("tool_name")
-    question_tool = SHIMS[_harness()]["question_tool"]
+    question_tool = _shim()["question_tool"]
     try:
         if event in ("UserPromptSubmit", "SessionStart"):
             on_prompt(payload, event)

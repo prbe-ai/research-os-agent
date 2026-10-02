@@ -43,24 +43,33 @@ SEND_TIMEOUT = 3  # seconds; senders are detached/daemonized so this bounds noth
 ME_CACHE_TTL = 24 * 3600
 DEFAULT_BASE = "https://api.research.prbe.ai"
 
-#: Which coding agent is driving this process, by environment marker. MIRRORS the
-#: ``detect_env`` column of ``probe.sdk.agent_session.AGENTS`` and must stay in the
-#: same ORDER (first match wins), which tests/test_agent_label_parity.py enforces.
-#:
-#: Duplicated rather than imported for the reason this whole file is duplicated: the
-#: plugin hook runs under the SYSTEM python3 with no ``probe`` package importable, so
-#: it cannot reach agent_session. Detection is pure environment reading, so the mirror
-#: is a table of strings rather than a second implementation of any logic.
-AGENT_DETECT_ENV: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("claude_code", ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")),
-    ("cursor", ("CURSOR_TRACE_ID",)),
-    ("codex", ("CODEX_SANDBOX", "CODEX_THREAD_ID")),
-    # PI_CODING_AGENT only, NOT the generic AI_AGENT pi also sets: detection
-    # here is presence-based, and a variable named for "any AI agent" is the
-    # one the next harness will export too -- same reasoning as
-    # sdk/agent_session.py's AGENTS table.
-    ("pi", ("PI_CODING_AGENT",)),
-)
+def _harness_rows():
+    """The harness registry's rows: the plugin hooks' copy beside this file
+    when there is one (loaded by explicit path -- a hook runs under the system
+    python3, where a bare import could pick up a same-named module from the
+    user's project), else the CLI's own package. Telemetry never raises: an
+    unreadable registry detects nothing."""
+    try:
+        beside = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_harness_registry.py")
+        if os.path.exists(beside):
+            import importlib.util
+            import sys
+
+            spec = importlib.util.spec_from_file_location("_probe_hooks._harness_registry", beside)
+            module = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = module
+            spec.loader.exec_module(module)
+        else:
+            from probe.harness import registry as module
+        return module.get_registry().all()
+    except Exception:  # noqa: BLE001 - telemetry must never break its caller
+        return ()
+
+
+#: Which coding agent is driving this process, by environment marker, in the
+#: registry's detection order (first match wins). The registry also feeds
+#: sdk/agent_session.py's AGENTS, so the two cannot drift.
+AGENT_DETECT_ENV: tuple[tuple[str, tuple[str, ...]], ...] = tuple((h.id, h.detect_env) for h in _harness_rows())
 
 
 def telemetry_disabled() -> bool:

@@ -294,12 +294,27 @@ def _pi(obj: dict, offset: int) -> list[Event]:
     return []
 
 
-PARSERS = {"claude_code": _claude, "codex": _codex, "pi": _pi}
+#: One parser per transcript format (a registry row's `transcripts.format`).
+PARSERS = {"claude_jsonl": _claude, "codex_rollout": _codex, "pi_jsonl": _pi}
+
+
+def _parser_for(source: str):
+    """The parser for a capture source's transcript format, or None. A source
+    or format this module does not know is skipped, never parsed as Claude."""
+    from tap import harness_registry
+
+    harness = harness_registry.get_registry().find(source)
+    if harness is None or not harness.transcripts:
+        return None
+    return PARSERS.get(harness.transcripts.get("format"))
 
 
 def parse_lines(source: str, lines: list[tuple[int, bytes]]) -> list[Event]:
-    """`lines` is `[(end_offset, raw_line)]`; malformed lines are skipped."""
-    parser = PARSERS.get(source, _claude)
+    """`lines` is `[(end_offset, raw_line)]`; malformed lines are skipped.
+    An unknown source yields no events (its shapes are skipped, never guessed)."""
+    parser = _parser_for(source)
+    if parser is None:
+        return []
     events: list[Event] = []
     for offset, raw in lines:
         try:

@@ -15,6 +15,12 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["tap*"]
 
+# The data files the tap reads at import or run time: the harness registry
+# copy (tap/sources.py loads it on import) and the companion's prompt texts.
+# Without these a pip-installed tap -- pi's fallback runtime -- dies on import.
+[tool.setuptools.package-data]
+tap = ["*.json", "*.md"]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"
