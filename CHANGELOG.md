@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.205.2
+
 - **Switching Who records to the daemon works after an update.** When the installed `probe` is
   behind, `npx probe-research` runs the newest wizard from a temporary copy in uv's cache. The
   switch checked that copy for the daemon's AI libraries (never there) and refused to install into
