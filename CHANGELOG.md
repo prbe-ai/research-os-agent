@@ -83,6 +83,36 @@
   ("Setup wizard for Probe Research in Claude Code, Codex and pi"). `release.yml` publishes the
   launcher only when `agent/npm/package.json`'s version moves, which this does not do, so npm
   shows it from the next launcher version on.
+- **Notes can be added to and corrected without a file.** `probe notes append --text "..."` adds
+  a paragraph to the end of a project, experiment, run, group or artifact note (or a sub-note with
+  `--note`). `probe notes edit --old "..." --new "..."` replaces one exact piece of text; it
+  writes nothing and exits 1 when `--old` matches nowhere or more than once. Text is always
+  literal, never a file or stdin. Both keep what a teammate wrote in the meantime: the note is
+  re-read and the change applied again. `--team` writes the team note the same way, for a
+  caller without the team-note file (a session that has the file keeps editing it and syncing).
+  The Probe daemon may not pass `--team`: its team-note changes still go through the file, where
+  the researcher sees each one first.
+  - Nothing already in a note changes except the text you named. A note holding text the
+    credential scrubber would rewrite (written before the server scrubbed, or caught by a newer
+    rule) is refused, exit 1: review it with `probe notes checkout` and `push`. So is new text
+    whose scrub would rewrite the rest of the note, and an `--old` the scrubber would rewrite.
+  - A write whose reply is lost, or is not Probe's, is never sent again. The note is read back
+    instead: the write landed (exit 0), or exit 1 with what is known. After a timeout or a
+    502/504 an unchanged note is "not there yet": Probe may still be applying the write for a
+    few minutes, so read the note before running it again. Only when Probe itself answered (a
+    500/503, a redirect, a page that is not Probe's) does unchanged mean nothing was written. A
+    note read without its version is refused rather than overwritten.
+- **`probe views update VIEW` changes a view's expression**, not just its name (`--spec`,
+  `--spec-file`, `--name`). With `--expected-updated-at` it refuses an edit made since you read
+  the view and prints the view as it is now.
+- **`probe run set --status` corrects a finished run's status and keeps its times.** `probe run
+  end --status` stamps the end time now, which rewrites a finished run's duration; `run set`
+  sends only the status. It takes `completed`, `failed`, `crashed` or `canceled`; `failed`
+  emails the run's launcher. `running` and `created` are refused: on a finished run the reaper
+  would later mark it crashed.
+- **`probe project set` and `probe experiment set` change tags in the same write**
+  (`--add-tag`, `--remove-tag`, `--set-tags`), so renaming and retagging land together or not at
+  all. `probe project set` with nothing to change now says so instead of crashing.
 
 ## 0.205.4
 
