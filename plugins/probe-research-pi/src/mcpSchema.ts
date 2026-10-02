@@ -55,7 +55,7 @@ export function jsonSchemaToTypeBox(schema: unknown): TSchema {
  * accepts (OpenAI's function-name pattern, `^[a-zA-Z0-9_-]{1,64}$`, is the
  * tightest of the ones pi supports, so it is the one this targets).
  */
-const TOOL_NAME_PREFIX = "probe_mcp_";
+export const TOOL_NAME_PREFIX = "probe_mcp_";
 const MAX_TOOL_NAME_LENGTH = 64;
 
 export function prefixToolName(mcpToolName: string): string {

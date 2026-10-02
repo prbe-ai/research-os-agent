@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { OAUTH_REDIRECT_URL, ProbeOAuthClientProvider, type OAuthStorageDeps } from "../src/mcpOAuth.js";
-import { mcpOAuthStateFile } from "../src/paths.js";
+import { mcpOAuthStateFile } from "../src/core/paths.js";
 
 /** In-memory storage standing in for real fs — no test in this file ever touches disk. */
 function fakeStorage(): OAuthStorageDeps & { files: Map<string, string> } {

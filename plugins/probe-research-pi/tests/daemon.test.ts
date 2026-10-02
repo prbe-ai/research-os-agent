@@ -4,9 +4,9 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { isDaemonAlive, pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type PruneDeps } from "../src/daemon.js";
-import { pidFile, shutdownSentinelFile } from "../src/paths.js";
-import type { TapRuntime } from "../src/tapRuntime.js";
+import { isDaemonAlive, pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type PruneDeps } from "../src/core/daemon.js";
+import { pidFile, shutdownSentinelFile } from "../src/core/paths.js";
+import type { TapRuntime } from "../src/core/tapRuntime.js";
 
 /**
  * The `tap start` argv, built from the contract the Python side reads too.
@@ -117,7 +117,7 @@ describe("spawnDaemon", () => {
   });
 
   it("no longer builds a wrapper script of its own", async () => {
-    const mod = await import("../src/daemon.js");
+    const mod = await import("../src/core/daemon.js");
     expect("buildWrapperScript" in mod).toBe(false);
   });
 

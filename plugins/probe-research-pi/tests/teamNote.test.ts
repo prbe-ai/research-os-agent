@@ -1,6 +1,7 @@
 /**
- * Unit tests for the team-note logic in src/teamNote.ts and the path helpers
- * it depends on in src/paths.ts. Everything here is pure-function or
+ * Unit tests for the team-note logic in src/core/teamNote.ts (and the prompt
+ * text in src/teamNotePrompt.ts) and the path helpers it depends on in
+ * src/core/paths.ts. Everything here is pure-function or
  * deps-injected: no real spawn, no real network, no touching the actual
  * `~/.pi` on the machine running the suite.
  */
@@ -12,8 +13,43 @@ import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { piAgentDir, teamNoteDocumentPath } from "../src/paths.js";
-import { findProbeBinary, readTeamNote, renderTeamNoteForPrompt, spawnTeamNoteSync, syncTeamNoteThenRead, type ProbeBinaryDeps, type TeamNoteSyncDeps } from "../src/teamNote.js";
+import { piAgentDir, piAgentsFile, teamNoteDocumentPath } from "../src/core/paths.js";
+import {
+  findProbeBinary,
+  hasProbePointer,
+  POINTER_BEGIN_MARKER,
+  POINTER_END_MARKER,
+  readTeamNote,
+  spawnTeamNoteSync,
+  syncTeamNoteThenRead,
+  type ProbeBinaryDeps,
+  type TeamNoteSyncDeps,
+} from "../src/core/teamNote.js";
+import { renderTeamNoteForPrompt } from "../src/teamNotePrompt.js";
+
+describe("hasProbePointer", () => {
+  const env = { PI_CODING_AGENT_DIR: "/custom/pi-dir" };
+  const reading = (text: string) => (path: string) => {
+    expect(path).toBe(piAgentsFile(env));
+    expect(path).toBe(join("/custom/pi-dir", "AGENTS.md"));
+    return text;
+  };
+
+  it("finds Probe's block in pi's AGENTS.md, a damaged one included", () => {
+    expect(hasProbePointer(env, reading(`# rules\n${POINTER_BEGIN_MARKER}\nbody\n${POINTER_END_MARKER}\n`))).toBe(true);
+    expect(hasProbePointer(env, reading(`${POINTER_BEGIN_MARKER}\nbody, end lost`))).toBe(true);
+    expect(hasProbePointer(env, reading(`body, begin lost\n${POINTER_END_MARKER}`))).toBe(true);
+  });
+
+  it("is false for a file without it, and for a file that cannot be read", () => {
+    expect(hasProbePointer(env, reading("# my own rules\n<!-- probe-team-note:begin -->\n"))).toBe(false);
+    expect(
+      hasProbePointer(env, () => {
+        throw new Error("ENOENT");
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("piAgentDir / teamNoteDocumentPath", () => {
   it("PI_CODING_AGENT_DIR relocates the agent dir directly -- nothing appended", () => {
@@ -270,6 +306,30 @@ describe("syncTeamNoteThenRead", () => {
     expect(outcome).toBe("timeout");
     // Unref'd, not killed: it still finishes, and its result reaches the NEXT
     // session's read. Killing it would make a slow network mean no sync at all.
+    expect(unrefs).toBe(1);
+  });
+
+  it("keeps the child referenced while it waits, so print mode stays alive", async () => {
+    // Unref'd up front, nothing held Node's event loop during the wait and
+    // `pi -p` exited mid-session_start with no answer.
+    let unrefs = 0;
+    let exit: ((code?: unknown) => void) | undefined;
+    const pending = syncTeamNoteThenRead(
+      deps({
+        spawn: () => ({
+          pid: 1,
+          unref: () => { unrefs += 1; },
+          once: (event: string, cb: (v?: unknown) => void) => {
+            if (event === "exit") exit = cb;
+          },
+        }),
+      }),
+      1_000,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(unrefs).toBe(0);
+    exit?.(0);
+    expect(await pending).toBe("synced");
     expect(unrefs).toBe(1);
   });
 

@@ -145,7 +145,7 @@ def watcher_prefix() -> str:
     """The `/tmp` filename prefix this source's watcher files share.
 
     ONE definition. `shutdown_sentinel` below inlined the same ternary, and
-    three other homes (`probe-research-pi/src/paths.ts`, `cli/capture.py`,
+    three other homes (`probe-research-pi/src/core/paths.ts`, `cli/capture.py`,
     the hooks) mirror it by hand. Task 12's parity test pins them together.
     """
     return sources.harness(current_source()).capture.watcher_prefix

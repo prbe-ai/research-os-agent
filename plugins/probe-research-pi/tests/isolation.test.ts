@@ -2,7 +2,7 @@ import { tmpdir } from "node:os";
 
 import { describe, expect, it } from "vitest";
 
-import { probeConfigPath } from "../src/paths.js";
+import { probeConfigPath } from "../src/core/paths.js";
 
 // Guards tests/setup.ts: without it the suite reads the developer's real
 // Probe config, and the MCP OAuth tests pass or fail by whose machine it is.

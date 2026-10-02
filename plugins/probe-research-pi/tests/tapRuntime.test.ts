@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { resolveTapRuntime, type TapRuntimeDeps } from "../src/tapRuntime.js";
+import { resolveTapRuntime, type TapRuntimeDeps } from "../src/core/tapRuntime.js";
 
 function fakeFs(existing: Set<string>, executable: Set<string>): Pick<TapRuntimeDeps, "existsSync" | "isExecutable"> {
   return {

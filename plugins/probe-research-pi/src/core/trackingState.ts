@@ -31,6 +31,21 @@ export const ProbeState = {
 } as const;
 export type ProbeStateValue = (typeof ProbeState)[keyof typeof ProbeState];
 
+/**
+ * Who records this session: the coding agent, or the Probe daemon (the
+ * wizard's "Who records"). Mirrors `session_marker.RECORDERS`.
+ *
+ * The CLI owns it (`<sid>.profile`, refreshed from `defaults.recorders.pi` on
+ * every `session initialize`) and reports it as `profile`. In the daemon
+ * profile this extension switches itself to the lean set: no MCP bridge, the
+ * daemon's `probe` skill, the guard's allowlist. See `profile.ts`.
+ */
+export const Recorder = {
+  Agent: "agent",
+  Daemon: "daemon",
+} as const;
+export type RecorderValue = (typeof Recorder)[keyof typeof Recorder];
+
 export interface TrackingState {
   tracking: boolean;
   signal: "on" | "off";
@@ -42,6 +57,11 @@ export interface TrackingState {
    * `read-only` and `off` both project to `off`, which is true of both.
    */
   state?: ProbeStateValue;
+  /**
+   * Never absent: a CLI that predates the field is one that cannot put pi on
+   * the daemon, so its sessions are the agent's -- see `parseProfile`.
+   */
+  profile: RecorderValue;
   seeded: boolean;
   source: string;
   /**
@@ -98,6 +118,11 @@ const CHILD_ENV_KEYS = [
   // seeding `full`, and PERSISTING that -- so the override did not merely fail
   // to apply, it was overwritten by a decision nobody made.
   "PROBE_SESSION_STATE",
+  // Where pi and its capture live. Dropped, the CLI read pi's capture state
+  // from the default folders, so a moved pi home or tap folder showed "not
+  // capturing session transcript: not installed" over a running capture.
+  "PI_CODING_AGENT_DIR",
+  "PROBE_PI_TAP_PLUGIN_DIR",
 ] as const;
 
 function trackingChildEnv(env: PathEnv): PathEnv {
@@ -194,6 +219,7 @@ export async function initializeTrackingState(
       tracking: value.tracking,
       signal: value.signal,
       state: parseState(value.state),
+      profile: parseProfile(value.profile),
       seeded: value.seeded,
       source: value.source,
       capture: parseCapture(value.capture),
@@ -236,6 +262,18 @@ function parseState(raw: unknown): ProbeStateValue | undefined {
 }
 
 /**
+ * The recorder, read leniently: only an exact `daemon` is the daemon.
+ *
+ * Missing or unrecognised is `agent`, which is what every session was before
+ * the field existed. The direction is the safe one: the agent profile is
+ * today's full extension, so a CLI this side cannot understand costs the lean
+ * set, never the agent's tools.
+ */
+export function parseProfile(raw: unknown): RecorderValue {
+  return raw === Recorder.Daemon ? Recorder.Daemon : Recorder.Agent;
+}
+
+/**
  * The optional half of the payload, read LENIENTLY on purpose.
  *
  * Every other field above is validated strictly and a failure discards the
@@ -267,14 +305,14 @@ function parseCapture(raw: unknown): CaptureReading | undefined {
 /** The footer's word for a recording session; mirrors `session_marker._recording_labels`. */
 export const RecordingLabel = {
   Tracking: "tracking",
-  Daemon: "tracking (daemon)",
-  DaemonDegraded: "tracking (daemon degraded)",
+  Daemon: "on (daemon)",
+  DaemonDegraded: "on (daemon degraded)",
 } as const;
 
 /**
  * `daemonLive` is undefined outside the `daemon` state. Inside it the footer
- * names the switch's position: `tracking (daemon)` while the daemon holds a
- * live lease, `tracking (daemon degraded)` while the agent has recording back. With
+ * names the switch's position: `on (daemon)` while the daemon holds a
+ * live lease, `on (daemon degraded)` while the agent has recording back. With
  * capture down the suffix already explains a daemon that cannot run (it is
  * capture's child), so that line keeps the shorter label.
  */

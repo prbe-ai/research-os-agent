@@ -90,6 +90,17 @@ export function piAgentDir(env: PathEnv = process.env): string {
 }
 
 /**
+ * pi's own global instruction file, `<piAgentDir>/AGENTS.md` -- where the
+ * wizard installs Probe's managed block for pi. Mirrors
+ * `agent_rules.memory_path` for this harness.
+ */
+export const PI_AGENTS_FILE = "AGENTS.md";
+
+export function piAgentsFile(env: PathEnv = process.env): string {
+  return join(piAgentDir(env), PI_AGENTS_FILE);
+}
+
+/**
  * pi's own USER-scope settings.json -- `<piAgentDir>/settings.json`. This is
  * the file pi's package manager reads its `packages` array from at user
  * scope (`dist/core/package-manager.js`'s `resolvePackageSources`), and the
@@ -123,6 +134,21 @@ export function probeStateDir(env: PathEnv = process.env): string {
   const xdg = env.XDG_STATE_HOME;
   const base = xdg && xdg.trim() ? xdg : join(homedir(), ".local", "state");
   return join(base, "probe");
+}
+
+/** `session_marker.APPROVALS_DIRNAME`: the Probe daemon's held questions, under the state dir. */
+export const APPROVALS_DIRNAME = "approvals";
+
+/**
+ * Where the Probe daemon keeps the questions it holds for the researcher and
+ * their answers: `requests/<id>.json` and `answers/<id>.json`, in
+ * `APPROVALS_DIRNAME` under `probeStateDir`. Mirrors
+ * `probe.daemon.approvals.approvals_dir` and `session_marker.approvals_dir`.
+ * `guard.ts` keeps the agent out of it; `approvals.ts` writes the
+ * researcher's answers into it.
+ */
+export function approvalsDir(env: PathEnv = process.env): string {
+  return join(probeStateDir(env), APPROVALS_DIRNAME);
 }
 
 /**

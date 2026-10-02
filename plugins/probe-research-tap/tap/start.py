@@ -2,7 +2,7 @@
 
 Before this, the same detached crash-recovery spawn existed twice: as a bash
 string in `hooks/session-start.sh` and as a TypeScript string in
-`probe-research-pi/src/daemon.ts::buildWrapperScript`. Two copies of a
+`probe-research-pi/src/core/daemon.ts::buildWrapperScript`. Two copies of a
 process-lifecycle contract (pid file, shutdown sentinel, restart window,
 TERM forwarding) is where lifecycle bugs live, and a third caller was about
 to arrive: the probe CLI's self-heal.

@@ -42,13 +42,14 @@ import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import { resolveMcpBearerToken } from "./mcpAuth.js";
+import { resolveMcpBearerToken } from "./core/mcpAuth.js";
 import { defaultOAuthStorageDeps, ProbeOAuthClientProvider, type OAuthStorageDeps } from "./mcpOAuth.js";
 import { jsonSchemaToTypeBox, prefixToolName } from "./mcpSchema.js";
-import { MCP_SERVER_URL, MCP_URL_ENV, type PathEnv } from "./paths.js";
-import { WIZARD_HINT } from "./wizardHint.js";
+import { packageVersion } from "./packageVersion.js";
+import { MCP_SERVER_URL, MCP_URL_ENV, type PathEnv } from "./core/paths.js";
+import { WIZARD_HINT } from "./core/wizardHint.js";
 
-const CLIENT_INFO = { name: "probe-research-pi", version: "0.1.0" };
+const CLIENT_INFO = { name: "probe-research-pi", version: packageVersion() };
 
 export interface McpBridgeTimeouts {
   connectMs: number;

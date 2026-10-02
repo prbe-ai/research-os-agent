@@ -3,9 +3,11 @@ import { vi } from "vitest";
 
 import {
   initializeTrackingState,
+  parseProfile,
+  Recorder,
   trackingStatusText,
   type TrackingExecFileFn,
-} from "../src/trackingState.js";
+} from "../src/core/trackingState.js";
 
 describe("initializeTrackingState", () => {
   it("delegates initialization to the atomic CLI bridge and parses its state", async () => {
@@ -49,9 +51,36 @@ describe("initializeTrackingState", () => {
     expect(state).toEqual({
       tracking: false,
       signal: "off",
+      // An older CLI sends no `profile`: the session is the agent's.
+      profile: Recorder.Agent,
       seeded: true,
       source: "/repo/.probe/config.json",
     });
+  });
+
+  it.each([
+    { sent: Recorder.Daemon, read: Recorder.Daemon },
+    { sent: Recorder.Agent, read: Recorder.Agent },
+    { sent: undefined, read: Recorder.Agent },
+    { sent: "lean", read: Recorder.Agent },
+    { sent: 1, read: Recorder.Agent },
+  ])("reads profile $sent as $read, and never fails the payload over it", async ({ sent, read }) => {
+    const execFile: TrackingExecFileFn = (_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({ session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine", profile: sent }),
+        "",
+      );
+    };
+    const state = await initializeTrackingState("pi-session-1", "/repo", {
+      execFile,
+      existsSync: () => true,
+      isExecutable: () => true,
+      env: { PATH: "/usr/bin", HOME: "/home/x" },
+      log: () => {},
+    });
+    expect(state?.profile).toBe(read);
+    expect(parseProfile(sent)).toBe(read);
   });
 
   it("fails open when the CLI does not return a valid tracking state", async () => {
@@ -155,6 +184,8 @@ describe("initializeTrackingState", () => {
         PATH: "/usr/bin",
         HOME: "/home/x",
         XDG_STATE_HOME: "/state",
+        PI_CODING_AGENT_DIR: "/pi-home",
+        PROBE_PI_TAP_PLUGIN_DIR: "/pi-tap",
         PRBE_API_KEY: "must-not-leak",
       },
       log: () => {},
@@ -164,6 +195,10 @@ describe("initializeTrackingState", () => {
       PATH: "/usr/bin",
       HOME: "/home/x",
       XDG_STATE_HOME: "/state",
+      // pi's home and tap folder: without them the CLI reads capture state
+      // from the default folders and the footer says "not installed".
+      PI_CODING_AGENT_DIR: "/pi-home",
+      PROBE_PI_TAP_PLUGIN_DIR: "/pi-tap",
       PROBE_AGENT: "pi",
     });
     expect(childEnv).not.toHaveProperty("PRBE_API_KEY");
@@ -193,16 +228,16 @@ describe("trackingStatusText", () => {
   });
 
   it("names the switch position in the daemon state", () => {
-    expect(trackingStatusText(true, undefined, true)).toBe("● tracking (daemon)");
-    expect(trackingStatusText(true, undefined, false)).toBe("● tracking (daemon degraded)");
+    expect(trackingStatusText(true, undefined, true)).toBe("● on (daemon)");
+    expect(trackingStatusText(true, undefined, false)).toBe("● on (daemon degraded)");
     expect(trackingStatusText(true, { running: true, reason: "running" }, false)).toBe(
-      "● tracking (daemon degraded)",
+      "● on (daemon degraded)",
     );
   });
 
   it("keeps the short daemon label when capture is down, so the reason reads whole", () => {
     expect(trackingStatusText(true, { running: false, reason: "halted" }, false)).toBe(
-      "◐ tracking (daemon) · not capturing session transcript: halted",
+      "◐ on (daemon) · not capturing session transcript: halted",
     );
     expect(trackingStatusText(true, { running: false, reason: "halted" })).toBe(
       "◐ tracking · not capturing session transcript: halted",

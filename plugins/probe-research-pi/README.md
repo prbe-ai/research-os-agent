@@ -222,6 +222,38 @@ capture or the MCP bridge.
 This controls structured research tracking only. Transcript capture remains a
 separate machine capability with its own credential and killswitches.
 
+## The daemon profile
+
+When `probe wizard` sets Who records to the daemon for pi, the CLI reports
+`"profile": "daemon"` from the same `session initialize` call (re-read on every
+start, resume and `/reload`). The extension then narrows itself to what Claude
+Code's lean `probe-research-daemon` plugin offers:
+
+- the prompt lists only `instrument-code` and the daemon's `probe` skill
+  (`daemon-skills/probe`, a byte copy of the lean plugin's, added through
+  `resources_discover` and never named in `package.json`);
+- no Probe MCP tools: the bridge stays off and pi-mcp-adapter's Probe tools are
+  deactivated (the daemon reads, through `probe ask`);
+- the agent is told nothing about the daemon; when the daemon stops recording,
+  the researcher gets one pi notification and the footer marks the daemon
+  degraded.
+
+A CLI that sends no `profile` (or one this extension does not know) means the
+agent profile, which is everything else in this README.
+
+In the daemon profile a `tool_call` guard also refuses every `probe` command
+except `ask`, `session status`, `run expect`, `doctor` and the runs' own data
+(`exec`, `run start`/`end`, ...), and every Probe MCP call, with the same
+refusal Claude Code's lean plugin gives.
+
+**The daemon's questions (both profiles).** When the daemon holds an action
+for the researcher's yes, pi asks it in its own pick-one dialog, word for word,
+at the next prompt or within 2 s, and writes the pick where the daemon reads
+it. Esc asks again at the next prompt. In print or json mode nothing is asked:
+answer with `probe approvals` in a terminal (always the case for a question too
+long for a dialog). The guard refuses any agent tool call that would write
+there itself.
+
 ## Prerequisite: `probe-research-tap` must be reachable
 
 This extension does not ship the capture daemon itself — it spawns
@@ -317,6 +349,13 @@ onto `event.systemPrompt` in a `before_agent_start` handler — it never writes
 to a file the researcher owns, and it can never collide with
 `AGENTS.override.md` shadowing a project's `AGENTS.md`.
 
+**No pointer, no note.** Both the injection and the sync below run only while
+pi's `AGENTS.md` (`$PI_CODING_AGENT_DIR/AGENTS.md`, else
+`~/.pi/agent/AGENTS.md`) carries Probe's managed block, the rule the CLI
+applies to the other harnesses' files. A file without it is the
+`--no-agent-rules` opt-out; a damaged block still counts as opted in. This
+holds in the daemon profile too.
+
 **What happens, and when:**
 
 1. `session_start` (every reason, including `reload`) fires `probe notes sync`
@@ -330,7 +369,7 @@ to a file the researcher owns, and it can never collide with
    throws.
 2. `before_agent_start` (every turn) appends the cached note, unchanged, to
    the system prompt. It never re-reads the file — see the module docstring
-   in `src/teamNote.ts` for why a fresh install's first session has no note
+   in `src/core/teamNote.ts` for why a fresh install's first session has no note
    yet, and why that's fine.
 3. `agent_settled` (pi's analogue of Claude Code's `Stop` — fires once an
    agent run has fully settled) fires a **detached** `probe notes sync`, with
@@ -532,7 +571,7 @@ Then, still inside `session_start`:
    watcher for it (a pidfile + liveness check, same convention Claude Code's
    hook uses: `/tmp/probe-research-tap-watcher-<session_id>.{pid,shutdown}`,
    the **same prefix Claude Code uses**, not a pi-specific one — see
-   `src/paths.ts` for why that's load-bearing).
+   `src/core/paths.ts` for why that's load-bearing).
 5. Refuse loudly (stderr + log + UI toast where a UI exists), once, if
    unpaired or if no Python interpreter can be found.
 6. Otherwise spawn a detached crash-recovery wrapper
@@ -603,6 +642,16 @@ npm install
 npm run typecheck
 npm test
 ```
+
+**Layout.** `src/core/` holds the modules that re-state Probe's Python
+behaviour (paths, the capture daemon's spawn, the switch, the tracking state,
+pairing, the MCP token, the daemon's messages, reads and questions, the team
+note's read and sync, the `probe` command parse) and import nothing from pi.
+`src/` holds the pi glue: `extension.ts`, the MCP bridge, pi-mcp-adapter's
+hand-off, the daemon profile, the guard and the prompt text. Each copied
+constant in `src/core/` is pinned to its Python original by a test in
+`agent/tests/` (`test_pi_*_parity.py`, `test_companion_pi_parity.py`,
+`test_reads_hook.py`, `test_watcher_prefix_parity.py`).
 
 `tests/skillsManifest.test.ts` additionally exercises pi's own, real
 `DefaultResourceLoader`/`SettingsManager` (from the

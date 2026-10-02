@@ -28,7 +28,7 @@ import {
   type OAuthLoginStart,
 } from "../src/mcpBridge.js";
 import type { OAuthStorageDeps } from "../src/mcpOAuth.js";
-import { mcpOAuthStateFile } from "../src/paths.js";
+import { mcpOAuthStateFile } from "../src/core/paths.js";
 
 // ---------------------------------------------------------------------------
 // Fakes

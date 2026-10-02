@@ -62,7 +62,7 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 
-import { piAgentDir, piProjectSettingsPath, piSettingsPath, type PathEnv } from "./paths.js";
+import { piAgentDir, piProjectSettingsPath, piSettingsPath, type PathEnv } from "./core/paths.js";
 
 /** The exact phrase D6 requires in the extension log and /probe-status when standing down. */
 export const MCP_SERVED_VIA_ADAPTER_MESSAGE = "Probe MCP served via pi-mcp-adapter";

@@ -9,7 +9,7 @@
  * install location that actually loads in non-interactive modes.
  *
  * All real logic lives in ./src — this file only computes `__dirname`
- * (needed for the sibling-checkout tap-root default; see src/tapRuntime.ts)
+ * (needed for the sibling-checkout tap-root default; see src/core/tapRuntime.ts)
  * and calls into the wiring layer.
  */
 

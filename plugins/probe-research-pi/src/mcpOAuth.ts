@@ -53,7 +53,7 @@ import { dirname } from "node:path";
 import type { OAuthClientInformationFull, OAuthClientInformationMixed, OAuthClientMetadata, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 
-import { mcpOAuthStateFile, type PathEnv } from "./paths.js";
+import { mcpOAuthStateFile, type PathEnv } from "./core/paths.js";
 
 /**
  * A syntactically valid loopback redirect URI. Nothing listens on it — see

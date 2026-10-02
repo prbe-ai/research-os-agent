@@ -1,34 +1,9 @@
 /**
- * The team note for pi: read the local file a session should be briefed
- * with, and push local edits + pull the team's latest via a DETACHED
- * `probe notes sync`.
- *
- * INJECT, DO NOT RENDER. Claude Code and Codex get the note by having a
- * managed block rewritten into their global instruction file
- * (`~/.claude/CLAUDE.md` / `~/.codex/AGENTS.md`) at sync time, and reading
- * that file — like any instruction file — at the START of their NEXT
- * session. pi gets the same content by appending it to `event.systemPrompt`
- * in a `before_agent_start` handler instead (see `extension.ts`'s wiring).
- * Since pi 0.86.0 a returned `systemPrompt` becomes that run's
- * `forceSystemPrompt`, sent as the leading system prompt; `event.systemPrompt`
- * is re-rendered each run from the session's base options, which never carry
- * the forced text, so the note is appended once per turn and never stacks
- * (`agent-session.js` passes `_baseSystemPromptOptions` to
- * `emitBeforeAgentStart`, and `runner.js` copies them first).
- * This sidesteps two things the render path has to deal with: it never
- * writes to a file the researcher owns (an `AGENTS.md` a person edits by
- * hand), and it can never collide with `AGENTS.override.md` shadowing a
- * project's `AGENTS.md` (pi 0.86.0's `resource-loader.js`, same as 0.84.3's,
- * checks `AGENTS.override.md` before `AGENTS.md` in the same directory — irrelevant
- * to text injected straight into the prompt, and a real hazard for anything
- * written to disk instead).
- *
- * CACHE ONCE PER SESSION. `before_agent_start` fires on every turn; reading
- * and re-parsing the note file that often would be pure waste for content
- * that — by design — only ever changes between sessions (see below). The
- * cache lives in `extension.ts`'s module scope, populated once at
- * `session_start` by `readTeamNote()`, and injected unchanged into every
- * `before_agent_start` of that session by `renderTeamNoteForPrompt()`.
+ * The team note, the half every harness shares: read the local document a
+ * session is briefed with, decide whether this machine opted in (the pointer
+ * block), and push local edits + pull the team's latest via a DETACHED
+ * `probe notes sync`. How pi puts the note into a prompt is pi's own:
+ * `../teamNotePrompt.ts`.
  *
  * ONE SYNC TRIGGER, NOT TWO. Claude Code/Codex split the job across two
  * hooks: `Stop` fires every turn and only pushes (cheap — get this turn's
@@ -42,7 +17,7 @@
  * own... two sessions editing at once is fine," depends on the pull half
  * running SOMEWHERE), `spawnTeamNoteSync()` below runs a FULL `probe notes
  * sync` every time. That refreshed copy does not reach the CURRENT session's
- * cache (see "cache once" above) — it reaches the NEXT `session_start`'s
+ * cache (`../teamNotePrompt.ts`'s CACHE ONCE PER SESSION) — it reaches the NEXT `session_start`'s
  * read, exactly like a Claude Code edit at session N first reaching the
  * block session N+2 reads (team-note-sync.sh's own comment). This is a
  * deliberate departure from mirroring Stop's push-only cheapness, made
@@ -74,7 +49,39 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, isAbsolute, join } from "node:path";
 
-import { teamNoteDocumentPath, type PathEnv } from "./paths.js";
+import { piAgentsFile, teamNoteDocumentPath, type PathEnv } from "./paths.js";
+
+// ---------------------------------------------------------------------------
+// No pointer, no note
+// ---------------------------------------------------------------------------
+
+/** `agent_rules.BEGIN_MARKER` / `END_MARKER`: Probe's managed pointer block. */
+export const POINTER_BEGIN_MARKER = "<!-- probe-research:begin (managed by `probe wizard`) -->";
+export const POINTER_END_MARKER = "<!-- probe-research:end -->";
+
+/**
+ * Does pi's `AGENTS.md` carry Probe's pointer block? `agent_rules.has_block`:
+ * either marker counts, a damaged block included; an unreadable or missing
+ * file has none.
+ *
+ * THE ABSENT POINTER IS THE OPT-OUT (`probe wizard --no-agent-rules`, cli
+ * 0.205.4): the CLI renders the team note only into an instruction file that
+ * carries the pointer, and removes it where the pointer is gone. pi gets the
+ * note by injection rather than by that render, so the same rule is applied
+ * here: no pointer, no note in the prompt and no note sync from this session.
+ * A damaged pointer is still somebody's opt-in, as on the CLI's side.
+ */
+export function hasProbePointer(
+  env: PathEnv = process.env,
+  read: (path: string) => string = (path) => readFileSync(path, "utf-8"),
+): boolean {
+  try {
+    const text = read(piAgentsFile(env));
+    return text.includes(POINTER_BEGIN_MARKER) || text.includes(POINTER_END_MARKER);
+  } catch {
+    return false;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Reading the cached note
@@ -101,21 +108,6 @@ export function readTeamNote(env: PathEnv = process.env, deps: TeamNoteReadDeps 
   } catch {
     return null;
   }
-}
-
-/**
- * Format the cached note for appending to `event.systemPrompt`. Named the
- * real, absolute file path — the whole point of the team note is that "you
- * edit that file like any other markdown," and an agent that cannot see
- * where the file lives cannot do that.
- */
-export function renderTeamNoteForPrompt(note: string, documentPath: string): string {
-  return (
-    `\n\n## Probe team note\n\n` +
-    `The lab's shared memory -- what this team is working on, has decided, and what not to repeat. ` +
-    `Edit \`${documentPath}\` directly to change it for the team; edits sync automatically.\n\n` +
-    `${note.trim()}\n`
-  );
 }
 
 // ---------------------------------------------------------------------------
@@ -265,12 +257,18 @@ export function syncTeamNoteThenRead(
   }
   return new Promise((resolve) => {
     let settled = false;
+    // The child and the timer stay REF'D while this waits, and the child is let
+    // go only once the wait is over. With both unref'd up front, nothing kept
+    // Node's event loop alive during the wait, so `pi -p` (print mode: no TUI
+    // holding stdin) exited mid-session_start with code 0 and no answer, every
+    // time pi's AGENTS.md had Probe's block.
+    let child: ReturnType<TeamNoteSyncDeps["spawn"]> | undefined;
     const finish = (outcome: "synced" | "timeout" | "skipped") => {
       if (settled) return;
       settled = true;
+      child?.unref();
       resolve(outcome);
     };
-    let child;
     try {
       child = deps.spawn(binary, ["notes", "sync"], {
         detached: true,
@@ -285,9 +283,6 @@ export function syncTeamNoteThenRead(
       deps.log(`team-note sync still running after ${timeoutMs}ms; reading the file as it stands`);
       finish("timeout");
     }, timeoutMs);
-    if (typeof timer === "object" && timer && "unref" in timer) {
-      (timer as { unref: () => void }).unref();
-    }
     const done = () => {
       clearTimeout(timer as never);
       finish("synced");
@@ -298,6 +293,5 @@ export function syncTeamNoteThenRead(
       clearTimeout(timer as never);
       finish("skipped");
     });
-    child.unref();
   });
 }

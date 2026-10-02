@@ -24,6 +24,31 @@
   - On a machine where the other agents already record through the daemon, Enter on Who records
     brings pi along; nothing moves on its own.
   - `probe doctor` shows who records for each agent and pi's package version.
+- **pi's extension (0.3.0) is ready for the Probe daemon.** Ships when it merges; it changes
+  nothing until a CLI release reports the daemon profile for pi.
+  - In the daemon profile pi gets what Claude Code's lean daemon plugin gives: only
+    `instrument-code` and the daemon's `probe` skill, no Probe MCP tools, and no daemon messages
+    to the agent. `probe` commands other than `ask`, `session status`, `run expect`, `doctor`
+    and a run's own data are refused before they run. When the daemon stops recording, you get
+    one pi notification.
+  - The daemon's questions (a delete of a teammate's work, a command off the safe list) open in
+    pi's own yes/no dialog, word for word. Esc asks again at your next prompt. Without a UI,
+    answer with `probe approvals`. A tool call from pi's agent that would write an answer itself
+    is refused.
+  - The team note reaches pi's prompt, and syncs from pi, only while pi's `AGENTS.md` has
+    Probe's block. Declining the rules in the wizard now keeps it out of pi too.
+  - pi's footer reads `on (daemon)`, like every other status line.
+  - Fixes found running real pi 1.0.0 (these affect pi with Probe on main today too):
+    - A new interactive pi session is captured now. pi 1.0 writes a session's file at the first
+      message, after the extension tried to start capture once and gave up, so the session was
+      never uploaded and the Probe daemon never started for it. Capture now starts at the first
+      tool call or the end of the first turn.
+    - `pi -p` (print mode) answers again with Probe's block in pi's `AGENTS.md`. It used to exit
+      with no output while the team-note sync ran.
+    - A `probe ask` answer arrives while pi is idle instead of at your next prompt, and the
+      footer is redrawn as each turn ends.
+    - The footer shows pi's own capture state when `PI_CODING_AGENT_DIR` or
+      `PROBE_PI_TAP_PLUGIN_DIR` moves pi's folders, instead of "not installed".
 
 ## 0.205.4
 

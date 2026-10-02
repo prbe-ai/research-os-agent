@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { Mailbox, MSG_BACK_TO_NORMAL, MSG_READER_FAILING } from "../src/reads.js";
+import { Mailbox, MSG_BACK_TO_NORMAL, MSG_READER_FAILING } from "../src/core/reads.js";
 
 const SID = "11111111-2222-3333-4444-555555555555";
 let tmp: string;

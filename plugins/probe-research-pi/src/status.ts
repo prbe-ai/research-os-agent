@@ -14,10 +14,10 @@
  */
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
-import { isDaemonAlive } from "./daemon.js";
-import { checkPairing } from "./pairing.js";
-import { pidFile, pluginDir, sessionLogFile, type PathEnv } from "./paths.js";
-import { resolveTapRuntime, type TapRuntimeDeps } from "./tapRuntime.js";
+import { isDaemonAlive } from "./core/daemon.js";
+import { checkPairing } from "./core/pairing.js";
+import { pidFile, pluginDir, sessionLogFile, type PathEnv } from "./core/paths.js";
+import { resolveTapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
 
 export interface StatusDeps {
   existsSync: (path: string) => boolean;

@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { resolveMcpBearerToken } from "../src/mcpAuth.js";
+import { resolveMcpBearerToken } from "../src/core/mcpAuth.js";
 
 describe("resolveMcpBearerToken", () => {
   let dir: string;

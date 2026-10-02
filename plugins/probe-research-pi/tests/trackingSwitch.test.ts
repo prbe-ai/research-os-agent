@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild } from "../src/trackingSwitch.js";
+import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild } from "../src/core/trackingSwitch.js";
 
 describe("parseSwitchIntent", () => {
   it("reads every direction word the Python guard reads", () => {

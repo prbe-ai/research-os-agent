@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { TURN_SUFFIX, writeTurnSignal, type TurnSignalDeps } from "../src/turnSignal.js";
+import { TURN_SUFFIX, writeTurnSignal, type TurnSignalDeps } from "../src/core/turnSignal.js";
 
 const SID = "11111111-2222-3333-4444-555555555555";
 
