@@ -1,0 +1,191 @@
+{
+  "version": 1,
+  "default": "claude_code",
+  "harnesses": [
+    {
+      "id": "claude_code",
+      "label": "Claude Code",
+      "display": "Claude Code session",
+      "aliases": [
+        "claude",
+        "claude-code"
+      ],
+      "binary": "claude",
+      "cli_flag": "claude",
+      "family": "hook-plugin",
+      "captured": true,
+      "installable": true,
+      "searchable": true,
+      "route": "claude-code",
+      "icon": "/icons/claude-code.svg",
+      "detect_env": [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT"
+      ],
+      "session_env": "CLAUDE_CODE_SESSION_ID",
+      "version_env": "CLAUDE_CODE_VERSION",
+      "min_version": [
+        2,
+        1,
+        132
+      ],
+      "home": {
+        "path": ".claude",
+        "env": "CLAUDE_CONFIG_DIR"
+      },
+      "transcripts": {
+        "root": ".claude/projects",
+        "session_id": "stem"
+      },
+      "capture": {
+        "token_env": "PROBE_INGEST_TOKEN",
+        "plugin_dir_env": "PROBE_RESEARCH_TAP_PLUGIN_DIR",
+        "plugin_dir": ".claude/plugins/probe-research-tap",
+        "watcher_prefix": "probe-research-tap",
+        "sanitizer": "sanitize",
+        "cli_token_fallback": true
+      },
+      "plugin": {
+        "root_env": "CLAUDE_PLUGIN_ROOT",
+        "manifest_dir": ".claude-plugin"
+      },
+      "instructions": {
+        "global": "CLAUDE.md",
+        "project": [
+          "CLAUDE.md"
+        ]
+      },
+      "team_note": "render",
+      "mcp": "plugin-file",
+      "question_tool": "AskUserQuestion",
+      "lean_profile": "second-plugin"
+    },
+    {
+      "id": "cursor",
+      "label": "Cursor",
+      "display": "Cursor session",
+      "aliases": [],
+      "binary": null,
+      "cli_flag": null,
+      "family": "detect-only",
+      "captured": false,
+      "installable": false,
+      "searchable": false,
+      "route": null,
+      "icon": null,
+      "detect_env": [
+        "CURSOR_TRACE_ID"
+      ],
+      "session_env": "CURSOR_TRACE_ID",
+      "version_env": null,
+      "min_version": null,
+      "home": null,
+      "transcripts": null,
+      "capture": null,
+      "plugin": null,
+      "instructions": null,
+      "team_note": null,
+      "mcp": null,
+      "question_tool": null,
+      "lean_profile": null
+    },
+    {
+      "id": "codex",
+      "label": "Codex",
+      "display": "Codex session",
+      "aliases": [],
+      "binary": "codex",
+      "cli_flag": "codex",
+      "family": "hook-plugin",
+      "captured": true,
+      "installable": true,
+      "searchable": true,
+      "route": "codex",
+      "icon": "/icons/codex.svg",
+      "detect_env": [
+        "CODEX_SANDBOX",
+        "CODEX_THREAD_ID"
+      ],
+      "session_env": "CODEX_THREAD_ID",
+      "version_env": null,
+      "min_version": null,
+      "home": {
+        "path": ".codex",
+        "env": "CODEX_HOME"
+      },
+      "transcripts": {
+        "root": ".codex/sessions",
+        "session_id": "uuid_suffix"
+      },
+      "capture": {
+        "token_env": "PRBE_CODEX_TAP_TOKEN",
+        "plugin_dir_env": "PRBE_CODEX_TAP_PLUGIN_DIR",
+        "plugin_dir": ".codex/state/probe-research-tap",
+        "watcher_prefix": "prbe-codex-tap",
+        "sanitizer": "codex_sanitize",
+        "cli_token_fallback": false
+      },
+      "plugin": {
+        "root_env": "PLUGIN_ROOT",
+        "manifest_dir": ".codex-plugin"
+      },
+      "instructions": {
+        "global": "AGENTS.md",
+        "project": [
+          "AGENTS.md"
+        ]
+      },
+      "team_note": "render",
+      "mcp": "config-toml",
+      "question_tool": null,
+      "lean_profile": "second-plugin"
+    },
+    {
+      "id": "pi",
+      "label": "pi",
+      "display": "pi session",
+      "aliases": [],
+      "binary": "pi",
+      "cli_flag": "pi",
+      "family": "extension",
+      "captured": true,
+      "installable": true,
+      "searchable": true,
+      "route": "pi",
+      "icon": "/icons/pi.svg",
+      "detect_env": [
+        "PI_CODING_AGENT"
+      ],
+      "session_env": "PI_SESSION_ID",
+      "version_env": null,
+      "min_version": null,
+      "home": {
+        "path": ".pi/agent",
+        "env": "PI_CODING_AGENT_DIR"
+      },
+      "transcripts": {
+        "root": ".pi/agent/sessions",
+        "session_id": "uuid_suffix"
+      },
+      "capture": {
+        "token_env": "PROBE_PI_TAP_TOKEN",
+        "plugin_dir_env": "PROBE_PI_TAP_PLUGIN_DIR",
+        "plugin_dir": ".pi/agent/state/probe-research-tap",
+        "watcher_prefix": "probe-research-tap",
+        "sanitizer": "pi_sanitize",
+        "cli_token_fallback": false
+      },
+      "plugin": null,
+      "instructions": {
+        "global": "AGENTS.md",
+        "project": [
+          "AGENTS.md"
+        ]
+      },
+      "team_note": "inject",
+      "mcp": "extension-bridge",
+      "question_tool": null,
+      "lean_profile": "settings-filter"
+    }
+  ]
+}
