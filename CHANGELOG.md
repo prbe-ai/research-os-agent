@@ -6,6 +6,16 @@
   now (the server decides; a free team's daemon stops at $500 of model spend a month and hands
   recording back to the coding agent). The wizard and the daemon drop their "on paid plans"
   lines; a team the server closes the daemon to still hears why.
+- **`--no-agent-rules` is obeyed everywhere.** Declining the rules now keeps every Probe block out
+  of the global `CLAUDE.md` / `AGENTS.md`. Three paths ignored it. Switching Who records to the
+  daemon wrote the daemon's block into files that had none. `--agent-rules/--no-agent-rules` passed
+  beside `--who-records` was accepted and ignored. The team-note sync wrote its block into every
+  harness's file after each session, opted out or not, and created `~/.codex/AGENTS.md` on
+  machines without Codex. Opting out now removes the team-note block as well as the rules, and
+  the next sync takes out a note left behind by an earlier opt-out. A machine already on the
+  daemon cleans up with `probe wizard --who-records daemon --no-agent-rules --yes`.
+- **The Who records switch names the agents it leaves behind.** pi has no daemon profile yet, so
+  it keeps recording itself; the switch now says so instead of listing only Claude Code and Codex.
 
 ## 0.205.3
 
