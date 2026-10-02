@@ -58,6 +58,10 @@
   ratchet counts the ids and env markers the registry lists, and the Makefile's skill syncs read
   `agent/skills/profiles.json`. `agent/docs/adding-a-harness.md` says how to add the next harness,
   and which files still name harnesses by hand. No behaviour change.
+- **The npm launcher's description and keywords name pi** beside Claude Code and Codex
+  ("Setup wizard for Probe Research in Claude Code, Codex and pi"). `release.yml` publishes the
+  launcher only when `agent/npm/package.json`'s version moves, which this does not do, so npm
+  shows it from the next launcher version on.
 
 ## 0.205.4
 
