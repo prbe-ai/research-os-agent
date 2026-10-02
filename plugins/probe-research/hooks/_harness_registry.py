@@ -128,6 +128,11 @@ class Harness:
     #: paired (its session variable is set in every shell, Probe or not).
     attribution_requires_pairing: bool = False
     capabilities: Mapping[str, bool] | None = None
+    #: Whether Probe installs its status-line segment into this harness.
+    statusline: bool = False
+    #: Where the harness's "write reasoning summaries" setting lives, if it has
+    #: one ("settings-json" | "config-toml"); None means nothing to switch.
+    reasoning_setting: str | None = None
 
     def can(self, capability: str) -> bool:
         """Whether this harness has a CAPABILITY_* (unknown means no)."""
@@ -307,6 +312,8 @@ def _harness(row: Any, index: int) -> Harness:
             row.get("attribution_requires_pairing"), f"{where}.attribution_requires_pairing"
         ),
         capabilities=row.get("capabilities") or {},
+        statusline=_bool(row.get("statusline"), f"{where}.statusline"),
+        reasoning_setting=_str_or_none(row.get("reasoning_setting"), f"{where}.reasoning_setting"),
     )
     if harness.captured and (
         harness.route is None or harness.capture is None or harness.transcripts is None

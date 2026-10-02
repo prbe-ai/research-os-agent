@@ -67,7 +67,9 @@
       "capabilities": {
         "prompt_context": true,
         "wake": true
-      }
+      },
+      "statusline": true,
+      "reasoning_setting": "settings-json"
     },
     {
       "id": "cursor",
@@ -101,7 +103,9 @@
       "capabilities": {
         "prompt_context": false,
         "wake": false
-      }
+      },
+      "statusline": false,
+      "reasoning_setting": null
     },
     {
       "id": "codex",
@@ -162,7 +166,9 @@
       "capabilities": {
         "prompt_context": false,
         "wake": false
-      }
+      },
+      "statusline": false,
+      "reasoning_setting": "config-toml"
     },
     {
       "id": "pi",
@@ -219,7 +225,9 @@
       "capabilities": {
         "prompt_context": false,
         "wake": true
-      }
+      },
+      "statusline": false,
+      "reasoning_setting": null
     }
   ]
 }
