@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.206.0
+
 - **`search_knowledge` stops calling complete answers incomplete.** The hosted MCP marks a search
   `truncated_by_response_budget` only when whole documents are missing from it, not when the
   server cut passage text that search cards never show. Ships with the hosted MCP's deploy.
