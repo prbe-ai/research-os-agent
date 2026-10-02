@@ -14,6 +14,16 @@
     sign-in left behind, but only while pi holds no token of its own. A deliberate off is
     never touched.
   - Turning Claude Code's capture off now clears its token even when pi is installed.
+- **pi can use the Probe daemon.**
+  - "Who records" in `probe wizard` now moves pi too. Its Probe package switches to the daemon's
+    lean set: only the skill for instrumenting code; the daemon records and reads for pi.
+  - Before the switch, the wizard pairs pi's own session capture (one browser approval) if needed,
+    and updates pi's Probe package (`pi update`) if it is older than 0.3.0. If either cannot
+    happen, pi stays on agent and the wizard says what to run.
+  - New pi sessions start on the daemon, and a resumed session follows the current setting.
+  - On a machine where the other agents already record through the daemon, Enter on Who records
+    brings pi along; nothing moves on its own.
+  - `probe doctor` shows who records for each agent and pi's package version.
 
 ## 0.205.4
 
