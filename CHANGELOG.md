@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Updating Probe updates pi's Probe package too, and pi auto-updates.** The wizard's Update and
+  every automatic update said "pi: not managed by this CLI" for pi and skipped it for every other
+  agent, so pi stayed on the package it was installed with (a 0.2.x package under a 0.206 CLI never
+  switched to the daemon). They now run `pi update` for Probe's package whenever pi has it, and say
+  what moved. With Automatic updates on, pi's session start now applies an available update, as
+  Claude Code's session-start hook does; every `probe` call pi makes is off a terminal, and the
+  update check refused all of them. An update pi's session start asks for runs once that pi exits
+  (it rewrites the folder pi loads from). Any update skips pi's step while this user has pi
+  running and leaves it owed: pi's next session start retries it after pi exits, even with the CLI
+  already current. pi's step runs one at a time, counts a failed one as a failed update in
+  `probe doctor`, and treats pi being gone as nothing to do. Not on Windows yet.
+- **The wizard's Who records row names an agent still recording itself.** On a machine on the
+  daemon it read "daemon" while pi recorded itself; it now says "pi still records itself: Enter
+  moves it to the daemon."
+
 ## 0.206.1
 
 - **The npm page for `npx probe-research` names no particular coding agent.** Its description,
