@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.205.4
+
 - **Daemon recording is no longer described as paid-only.** Every plan can run the Probe daemon
   now (the server decides; a free team's daemon stops at $500 of model spend a month and hands
   recording back to the coding agent). The wizard and the daemon drop their "on paid plans"
