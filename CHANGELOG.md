@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **Switching Who records to the daemon works after an update.** When the installed `probe` is
+  behind, `npx probe-research` runs the newest wizard from a temporary copy in uv's cache. The
+  switch checked that copy for the daemon's AI libraries (never there) and refused to install into
+  it, so it ended "The Probe daemon's AI libraries are missing, so nothing moved" until Probe was
+  installed again. It now checks the installed `probe`, the copy the daemon runs from, and
+  installs any missing libraries into it with that copy's own `probe daemon install`.
+
 ## 0.205.1
 
 - **The daemon says why it was turned away when the cause is the team, not its key.** A 403 from
