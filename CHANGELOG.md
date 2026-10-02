@@ -6,6 +6,19 @@
   keywords and README now say "your coding agents" (the wizard lists the ones it supports), so
   adding an agent no longer needs an npm release. Launcher 0.13.1; nothing it runs changed.
 
+- **Switching a wizard setting saves it.** The main menu's "Probe in new sessions" row saved
+  only on Enter, and moving off it put the old value back without a word. Each `←`/`→` press now
+  saves it, like the Who records rows beside it; a save that fails puts the row back and says why.
+  The Settings screen, the daemon's page and the Defaults picker used to drop what you switched
+  when you left with `←` or Esc; leaving now applies it, as `→` does.
+- **`npx probe-research` leaves your installed `probe` on the version it ran.** When the installed
+  CLI is behind, the launcher runs the latest one in a throwaway environment, and the wizard's
+  first step upgrades the installed copy. That reinstall was unpinned, and uv could satisfy it
+  from its cache with the same old version: a 0.206.0 wizard left 0.205.4 installed, so the
+  coding agents kept calling the old CLI (pi never saw the daemon the wizard had just set). It is
+  now pinned to the running version, re-reads the package index, and checks the result: "Updated
+  the installed `probe` 0.205.4 → 0.206.1", or the command to run if it is still behind.
+
 ## 0.206.0
 
 - **`search_knowledge` stops calling complete answers incomplete.** The hosted MCP marks a search
