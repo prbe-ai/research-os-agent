@@ -2,12 +2,6 @@
 
 ## Unreleased
 
-- **`search_knowledge` no longer describes a top-up that is gone.** The knowledge engine stopped
-  padding answers with raw-pool documents (prbe-knowledge, 2026-10-02): a search returns what its
-  selector picked, however few, and the raw pool answers alone only when no selector could. So
-  `curated_only` has nothing to switch off. It is still accepted, now marked deprecated with "no
-  effect", and dropped from the tool's parameter list.
-
 ## 0.206.2
 
 - **Updating Probe updates pi's Probe package too, and pi auto-updates.** The wizard's Update and
