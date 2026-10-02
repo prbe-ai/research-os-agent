@@ -86,68 +86,28 @@ describe("checkPairing", () => {
     }
   });
 
-  it("is paired via the probe CLI's v1 flat config.json", () => {
+  // D3 (2026-09-09): the probe CLI config's `ingest_token` is Claude Code's
+  // capture token; the server 403s it on /sessions/pi, so it must never count
+  // as pi being paired, in either config shape.
+  it("is NOT paired by the probe CLI's v1 flat config.json ingest_token", () => {
     const configPath = join(dir, "config.json");
     writeFileSync(configPath, JSON.stringify({ ingest_token: "cli-token-v1", base_url: "https://api.example" }));
 
-    const env = {
-      PROBE_PI_TAP_PLUGIN_DIR: join(dir, "state"),
-      PROBE_CONFIG_PATH: configPath,
-    };
+    const result = checkPairing({ PROBE_PI_TAP_PLUGIN_DIR: join(dir, "state"), PROBE_CONFIG_PATH: configPath });
 
-    const result = checkPairing(env);
-
-    expect(result.paired).toBe(true);
-    if (result.paired) {
-      expect(result.source).toBe("probe-cli");
-    }
+    expect(result.paired).toBe(false);
   });
 
-  it("is paired via the probe CLI's v2 named-contexts config.json", () => {
+  it("is NOT paired by the probe CLI's v2 named-contexts config.json ingest_token", () => {
     const configPath = join(dir, "config.json");
     writeFileSync(
       configPath,
-      JSON.stringify({
-        current_context: "work",
-        contexts: {
-          default: { ingest_token: "wrong-context-token" },
-          work: { ingest_token: "cli-token-v2" },
-        },
-      }),
+      JSON.stringify({ current_context: "work", contexts: { work: { ingest_token: "cli-token-v2" } } }),
     );
 
-    const env = {
-      PROBE_PI_TAP_PLUGIN_DIR: join(dir, "state"),
-      PROBE_CONFIG_PATH: configPath,
-    };
+    const result = checkPairing({ PROBE_PI_TAP_PLUGIN_DIR: join(dir, "state"), PROBE_CONFIG_PATH: configPath });
 
-    const result = checkPairing(env);
-
-    expect(result.paired).toBe(true);
-    if (result.paired) {
-      expect(result.source).toBe("probe-cli");
-    }
-  });
-
-  it("falls back to the v2 'default' context when current_context is unset", () => {
-    const configPath = join(dir, "config.json");
-    writeFileSync(
-      configPath,
-      JSON.stringify({
-        contexts: {
-          default: { ingest_token: "default-context-token" },
-        },
-      }),
-    );
-
-    const env = {
-      PROBE_PI_TAP_PLUGIN_DIR: join(dir, "state"),
-      PROBE_CONFIG_PATH: configPath,
-    };
-
-    const result = checkPairing(env);
-
-    expect(result.paired).toBe(true);
+    expect(result.paired).toBe(false);
   });
 
   it("is unpaired when config.json is malformed JSON", () => {

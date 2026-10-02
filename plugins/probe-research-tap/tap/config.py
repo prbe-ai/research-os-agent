@@ -397,7 +397,9 @@ def load_token() -> str | None:
     The paired device token (plugin-local .token, written by `tap pair`) is the
     primary path and takes precedence so a paired device keeps shipping even
     when the probe CLI is separately logged in with a different ingest token.
-    The manual/self-host fallback is PROBE_INGEST_TOKEN env > config.json.
+    The manual/self-host fallback is the source's token env var, then (Claude
+    Code ONLY) the probe CLI config's `ingest_token`: that token is Claude
+    Code's, and the server refuses it on every other agent's route.
 
     Returns None when unconfigured — callers treat that as a no-op state
     ("not configured"), never an error.
@@ -419,7 +421,9 @@ def load_token() -> str | None:
     env = os.environ.get(token_env, "").strip()
     if env:
         return env
-    if capture_source() == "codex":
+    if capture_source() != "claude_code":
+        # The CLI config's `ingest_token` is Claude Code's capture token; the
+        # server refuses it on every other agent's route.
         return None
     tok = _read_probe_config().get("ingest_token")
     if isinstance(tok, str) and tok.strip():

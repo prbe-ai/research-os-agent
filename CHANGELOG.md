@@ -5,6 +5,15 @@
 - **`search_knowledge` stops calling complete answers incomplete.** The hosted MCP marks a search
   `truncated_by_response_budget` only when whole documents are missing from it, not when the
   server cut passage text that search cards never show. Ships with the hosted MCP's deploy.
+- **pi capture uses only pi's own token.**
+  - pi no longer falls back to the capture token in the probe CLI config. That token is Claude
+    Code's, and the server refused it on pi's route, so every pi upload and every pi session
+    import failed with a 403.
+  - An unpaired pi is now reported as unpaired; pair it in `probe wizard`.
+  - A sign-in no longer leaves pi's capture off, and the wizard removes the marker an older
+    sign-in left behind, but only while pi holds no token of its own. A deliberate off is
+    never touched.
+  - Turning Claude Code's capture off now clears its token even when pi is installed.
 
 ## 0.205.4
 

@@ -255,9 +255,10 @@ Capture needs a device token, checked in the same order
    (written by `PROBE_TAP_SOURCE=pi python3 -m tap pair <token>`, using a
    pairing token minted from the Research OS dashboard).
 2. The `PROBE_PI_TAP_TOKEN` env var.
-3. The probe CLI's own config (written when you run the Probe wizard:
-   `npx probe-research`) —
-   `$XDG_CONFIG_HOME/probe/config.json` (default `~/.config/probe/config.json`).
+
+The probe CLI's own config is NOT a source: its `ingest_token` is the capture
+token minted for Claude Code, and the server refuses it on pi's route. Pair pi
+through the Probe wizard (`npx probe-research`), which mints pi its own token.
 
 If none resolve, the extension refuses to spawn a daemon for that session —
 loudly, once, on stderr (never stdout: `--mode json` reserves stdout for

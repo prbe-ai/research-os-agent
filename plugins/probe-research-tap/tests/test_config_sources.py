@@ -76,3 +76,23 @@ def test_an_unset_source_falls_back_quietly(monkeypatch, caplog):
     with caplog.at_level(logging.WARNING):
         assert cfg.capture_source() == "claude_code"
     assert not [r for r in caplog.records if "PROBE_TAP_SOURCE" in r.getMessage()]
+
+
+def test_pi_never_reads_the_cli_configs_capture_token(monkeypatch, tmp_path):
+    """The CLI config's `ingest_token` is Claude Code's capture token; the
+    server 403s it on pi's route, so an unpaired pi is unpaired (D3)."""
+    import json
+
+    config = tmp_path / "config.json"
+    config.write_text(json.dumps({"ingest_token": "ros_ing_claude"}))
+    monkeypatch.setenv("PROBE_CONFIG_PATH", str(config))
+    monkeypatch.delenv("PROBE_INGEST_TOKEN", raising=False)
+    monkeypatch.delenv("PROBE_PI_TAP_TOKEN", raising=False)
+    monkeypatch.setenv("PROBE_PI_TAP_PLUGIN_DIR", str(tmp_path / "pi-state"))
+    monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(tmp_path / "claude-state"))
+
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "pi")
+    assert cfg.load_token() is None
+
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "claude_code")
+    assert cfg.load_token() == "ros_ing_claude"
