@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **The daemon is told why a long command was refused.** A refused shell command over 300 characters
+  said only "a question shows the researcher at most 300", never what the check refused, so the
+  daemon shortened a note write whose shape was the problem (a `probe notes push` after the
+  heredoc) until the loop detector cut its run short: 89 of these in 30 days. The refusal now
+  leads with the check's reason, and a long note write in another shape names the one that runs.
+- **Fix (P1, #2227): a refused heredoc no longer skips the daemon's every-mode refusals.** The
+  note-write check ran first, so text after a note (or a heredoc in another shape) was never
+  checked against the rules no mode waives: in bypass mode a write to Probe's own config placed
+  after a note's text ran. The whole command is now checked first.
+
 ## 0.206.3
 
 - **`search_knowledge` no longer describes a top-up that is gone.** The knowledge engine stopped
