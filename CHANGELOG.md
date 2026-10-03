@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.206.4
+
 - **The daemon is told why a long command was refused.** A refused shell command over 300 characters
   said only "a question shows the researcher at most 300", never what the check refused, so the
   daemon shortened a note write whose shape was the problem (a `probe notes push` after the
