@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.207.0
+
 - **The `inference` project kind is now `evaluation` in the CLI, SDK, agent rules and skills.**
   The server made `evaluation` canonical (frozen weights: sweeps, ablations, evals). `probe
   project create --kind` and `probe project move --kind` offer `evaluation`, and help and the
