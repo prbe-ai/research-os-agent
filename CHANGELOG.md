@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Tests prove the hosted MCP's experiment reads give the same answer in both storage shapes**
+  (light experiments, task X9). Until the server's R2 job, an experiment's runs, files and groups
+  are stored at the experiment's own id. After it, they are stored at the project with an
+  `experiment_id` label. `test_mcp_experiment_shapes.py` stores one tenant both ways behind a fake
+  server that answers by the R1 server's rules: dual-shape reads, with every row served in the leaf
+  shape (an experiment's file says `project_id = experiment_id = E`) until R6. It runs 17 MCP reads
+  against both stores -- the experiment card, a bare id, files, groups, the group card, lineage,
+  notes, summary, a run's card and handoff (the run's question), runs lists, browse and
+  `research_context` -- and every answer is byte-equal across the two. Every experiment file row
+  names its experiment in `experiment_id`. No MCP code changed: no MCP read decides anything from
+  where a row is stored.
+
 ## 0.208.0
 
 - **Read a paper's citation links from the CLI and the SDK.** `probe paper citations <paper id>`
