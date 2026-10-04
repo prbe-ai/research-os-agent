@@ -1026,6 +1026,10 @@ READ_VERBS = frozenset(
         # `run inputs|upstream`: what a run read and built on (lineage plan L5).
         "inputs",
         "upstream",
+        # `paper citations|graph`: the citation links the server read from
+        # bibliographies (citation graph, Track C).
+        "citations",
+        "graph",
     }
 )
 

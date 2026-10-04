@@ -80,6 +80,8 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "preview",
   "inputs",
   "upstream",
+  "citations",
+  "graph",
 ]);
 
 /** `session_marker.REMOVAL_VERBS`. */

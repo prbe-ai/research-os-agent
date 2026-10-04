@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **Read a paper's citation links from the CLI and the SDK.** `probe paper citations <paper id>`
+  lists every link the server read from that paper's bibliographies, each with its proof: the
+  bibliography it came from, the entry number, and whether the id was printed in the entry or
+  deposited by the publisher (entries with no id are shown as text and never become a link).
+  `probe paper graph --project <ref>` shows a project's papers, the works they cite or are cited
+  by that the project has not recorded (ranked by how many of its papers link to each), and the
+  `cites` edges between them. Both print a table, or the server's answer with `--json`, and say so
+  plainly when a team's citation links are not switched on yet. SDK: `Client.citation_graph`,
+  `Client.paper_citations` and `Client.refresh_paper_citations` (a 202 that is refused with 429 and
+  `retry_after` within an hour of the last fetch). Needs a server with the citation graph.
+- **`provider_citation` says what it means.** The `--via-provenance` and `edge add --provenance`
+  help now say it means you found the paper in a reference list, a record of your path through the
+  literature, and point at `cites` links for the fact that one paper's bibliography names another.
+
 ## 0.207.0
 
 - **The `inference` project kind is now `evaluation` in the CLI, SDK, agent rules and skills.**
