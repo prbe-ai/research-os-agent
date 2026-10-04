@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Exiting Claude Code no longer prints "SessionEnd hook [...] failed: Hook cancelled"** (tap
+  0.9.4). Claude Code gives SessionEnd hooks 1.5s in all at exit unless
+  `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS` (or a SessionEnd hook in your own settings) says
+  longer, and a plugin's own `timeout` does not count. The tap's hook waited up to 15s for its
+  daemon's last delivery, so Claude Code cancelled it on most exits. Under Claude Code the wait
+  now ends inside that budget, about 1.2s by default, and the hook exits cleanly. On a laptop the
+  daemon finishes on its own after Claude Code exits. In a container or CI job, where the exit
+  can take the daemon with it, set `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS=16000` so the
+  session's last delivery gets the full 15s. Codex keeps its 15s wait.
+
 ## 0.206.4
 
 - **The daemon is told why a long command was refused.** A refused shell command over 300 characters

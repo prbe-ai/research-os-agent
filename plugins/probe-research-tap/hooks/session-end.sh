@@ -17,9 +17,21 @@
 # whose hash changed until the researcher re-approves it. So the original
 # entry (timeout 3, no flag) stays byte-identical, and a second entry runs this
 # script with `--wait` under a 20s timeout. Claude Code runs both in parallel
-# and waits for the longer; Codex keeps running the old one until the new one
-# is approved. Either may run first, so the pid is handed over in a
-# `.stopping` file before the pid file is removed.
+# and waits for the longer, up to its exit budget (below); Codex keeps running
+# the old one until the new one is approved. Either may run first, so the pid is
+# handed over in a `.stopping` file before the pid file is removed.
+#
+# CLAUDE CODE'S EXIT BUDGET IS NOT THE ENTRY'S TIMEOUT. At exit Claude Code
+# bounds the whole SessionEnd phase at CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,
+# else at the longest SessionEnd `timeout` in the user's own settings (a
+# plugin's hooks.json is not counted), else at 1.5s (the variable arrived in
+# 2.1.74), and cancels whatever is still running: "SessionEnd hook [...]
+# failed: Hook cancelled" on every exit whose last pass took longer (seen on
+# 2.1.283). So under Claude Code the wait ends inside that budget, and the hook
+# exits 0 instead of being killed. Only the variable is read, not settings
+# files, so a longer budget from a settings hook is left unused: short, never
+# cancelled. A container or CI job that needs the daemon's last pass (often
+# 1.3-5s) sets the variable to 16000 for the full 15s wait.
 
 set -euo pipefail
 
@@ -27,8 +39,16 @@ WAIT=0
 [ "${1:-}" = "--wait" ] && WAIT=1
 
 HOOK_INPUT="$(cat)"
-SESSION_ID=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || echo "")
-REASON=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("reason"); print(v if isinstance(v,str) else "")' 2>/dev/null || echo "")
+# One python3 start for both fields, and `-S` skips site-packages: start-up
+# spends the --wait budget below.
+PARSED=$(printf '%s' "$HOOK_INPUT" | python3 -S -c 'import json,sys
+d=json.load(sys.stdin); v=d.get("reason")
+print(d.get("session_id","")); print(v if isinstance(v,str) else "")' 2>/dev/null || echo "")
+SESSION_ID=""
+REASON=""
+{ IFS= read -r SESSION_ID || true; IFS= read -r REASON || true; } <<EOF
+$PARSED
+EOF
 
 if [ -z "$SESSION_ID" ]; then
     exit 0
@@ -92,12 +112,32 @@ rm -f "$PID_FILE"
 # `--wait`: stay until the wrapper's group (the daemon) has exited, so the agent
 # cannot exit, and take a container down, before the FINALIZE leaves. Not on
 # `clear` or `resume`: the agent keeps running (and so does the delivery), and a
-# wait there would freeze the researcher's /clear. 75 x 0.2s = 15s, inside the
-# entry's 20s timeout.
+# wait there would freeze the researcher's /clear. At most 75 x 0.2s = 15s,
+# inside the entry's 20s timeout; under Claude Code, at most its exit budget
+# less 300ms for this script's start-up (python3, ps: ~60ms on Linux) and the
+# hooks.json wrapper, which spend the same budget: 6 ticks at the default 1.5s.
+WAIT_TICKS=75
+if [ "$SOURCE" != codex ]; then
+    BUDGET_MS="${CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS:-}"
+    case "$BUDGET_MS" in '' | *[!0-9]*) BUDGET_MS=1500 ;; esac
+    # Strip leading zeros so the length check measures magnitude, and read 0
+    # as unset, as Claude Code does.
+    BUDGET_MS="${BUDGET_MS#"${BUDGET_MS%%[!0]*}"}"
+    [ -n "$BUDGET_MS" ] || BUDGET_MS=1500
+    # Past six digits it is over the 75-tick cap anyway, and a 20-digit value
+    # would overflow the arithmetic below.
+    if [ "${#BUDGET_MS}" -gt 6 ]; then
+        WAIT_TICKS=75
+    else
+        WAIT_TICKS=$(((BUDGET_MS - 300) / 200))
+    fi
+    if [ "$WAIT_TICKS" -gt 75 ]; then WAIT_TICKS=75; fi
+    if [ "$WAIT_TICKS" -lt 0 ]; then WAIT_TICKS=0; fi
+fi
 if [ "$WAIT" = 1 ]; then
     if [ "$LEADER" = 1 ] && [ "$REASON" != clear ] && [ "$REASON" != resume ]; then
         i=0
-        while [ "$i" -lt 75 ] && kill -0 -- "-$PID" 2>/dev/null; do
+        while [ "$i" -lt "$WAIT_TICKS" ] && kill -0 -- "-$PID" 2>/dev/null; do
             sleep 0.2
             i=$((i + 1))
         done
