@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.208.0
+
 - **Read a paper's citation links from the CLI and the SDK.** `probe paper citations <paper id>`
   lists every link the server read from that paper's bibliographies, each with its proof: the
   bibliography it came from, the entry number, and whether the id was printed in the entry or
