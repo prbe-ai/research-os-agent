@@ -1,6 +1,6 @@
 ---
 name: track-work
-description: Record ML work in Probe - track ALL related work (training runs, inference sweeps, evals, lit reviews, architecture design work, etc) - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`/probe`).
+description: Record ML work in Probe - track ALL related work (training runs, evaluation sweeps, evals, lit reviews, architecture design work, etc) - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`/probe`).
 ---
 
 # Track work
@@ -102,7 +102,7 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
 | kind | meaning |
 |---|---|
 | `training` | weights MOVE: pretraining, SFT, RL |
-| `inference` | weights do not move: sweeps, ablations, evals. A sweep is an experiment, not a project. |
+| `evaluation` | weights do not move: sweeps, ablations, evals. A sweep is an experiment, not a project. |
 | `research` | document-shaped: lit reviews, design, theory. A review feeding a training effort is a project BESIDE it, not inside it |
 | `general` | everything else; also what W&B import uses |
 | `experiment` | a LEAF under one of the four, answering one question. Its `--description` IS that question, which is why `experiment set` has no `--description` to set separately. Runs live in it; nothing nests under it. |

@@ -96,7 +96,7 @@ probe experiment create lower-sampling-temperature --project antibody-folding \
 | kind | meaning |
 |---|---|
 | `training` | weights MOVE: pretraining, SFT, RL |
-| `inference` | weights do not move: sweeps, ablations, evals. A sweep is an experiment, not a project. |
+| `evaluation` | weights do not move: sweeps, ablations, evals. A sweep is an experiment, not a project. |
 | `research` | document-shaped: lit reviews, design, theory. A review feeding a training effort is a project BESIDE it, not inside it |
 | `general` | everything else; also what W&B import uses |
 | `experiment` | a LEAF under one of the four, answering one question. Its `--description` IS that question, which is why `experiment set` has no `--description` to set separately. Runs live in it; nothing nests under it. |

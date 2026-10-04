@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **The `inference` project kind is now `evaluation` in the CLI, SDK, agent rules and skills.**
+  The server made `evaluation` canonical (frozen weights: sweeps, ablations, evals). `probe
+  project create --kind` and `probe project move --kind` offer `evaluation`, and help and the
+  choice list in a usage error name only the five current kinds. `--kind inference`
+  is still accepted and sent as `evaluation`, because installed skills and agents' habits still
+  type it. Code that builds `probe.models.ProjectCreate`/`ProjectPatch` itself must pass
+  `evaluation` (the generated enum no longer has `inference`); `client.create_project` still sends
+  either spelling unchanged. The generated `ProjectKind` enum says `evaluation`. The managed block in CLAUDE.md and
+  AGENTS.md moves to v37 (its kind list says `evaluation`), so the next update rewrites it. The
+  track-work skill's kind table and description say `evaluation` in the plugin, the pi package
+  and the tap's daemon rules. A CLI older than this one refuses `--kind evaluation` locally, and
+  its error lists `inference`, which the server still takes.
 - **Exiting Claude Code no longer prints "SessionEnd hook [...] failed: Hook cancelled"** (tap
   0.9.4). Claude Code gives SessionEnd hooks 1.5s in all at exit unless
   `CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS` (or a SessionEnd hook in your own settings) says

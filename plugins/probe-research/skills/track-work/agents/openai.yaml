@@ -1,5 +1,5 @@
 interface:
   display_name: "Track Work"
   short_description: "How to track ML work in Probe"
-  default_prompt: "Record ML work in Probe - track ALL related work (training runs, inference sweeps, evals, lit reviews, architecture design work, dataset processing) and what supports it (infra and provisioning for training, results dashboards, config or dependency changes before a launch) - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`$probe`).
+  default_prompt: "Record ML work in Probe - track ALL related work (training runs, evaluation sweeps, evals, lit reviews, architecture design work, dataset processing) and what supports it (infra and provisioning for training, results dashboards, config or dependency changes before a launch) - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`$probe`).
 "
