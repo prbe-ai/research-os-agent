@@ -901,3 +901,33 @@ def test_an_input_named_on_the_command_line_is_not_produced(tmp_path):
     produced = observe.observe("claude_code", lines).produced_text
     assert "results/report.png" in produced
     assert "customers.parquet" not in produced and "private.csv" not in produced
+
+
+def test_every_api_request_names_the_tap_and_its_version(monkeypatch):
+    """The server grades a key's caller by its client pair. From the light
+    experiments' R4 refusal on, a key request naming no client is answered as an
+    old CLI where it reaches an experiment by its project address, which the
+    worker's entity reads do. The tap versions on its own line and is never
+    refused by it."""
+    import tap
+
+    seen = {}
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            return b"{}"
+
+    def capture(req, timeout=None):
+        seen.update({k.lower(): v for k, v in req.header_items()})
+        return _Resp()
+
+    monkeypatch.setattr(api_mod.urllib.request, "urlopen", capture)
+    api_mod.Api("https://api.example.test", "t").get("/v1/projects/x")
+    assert seen["x-probe-client"] == "tap"
+    assert seen["x-probe-client-version"] == tap.__version__

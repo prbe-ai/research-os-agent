@@ -8,6 +8,83 @@
   paper graph` still print a plain line for `state: disabled` instead of an empty table, and the
   SDK still raises a 409 as `ConflictError`. No behaviour changed.
 
+- **The SDK, the CLI and the MCP speak the experiment API** (light experiments R4, X15).
+  An experiment is read and written as an experiment, under the project it is filed in, and no
+  longer through its project address:
+  - `create_experiment` posts to `POST /v1/projects/{project}/experiments`; `get_experiment`,
+    `update_experiment` (name, question), `delete_experiment` (a move to the trash, with
+    `dry_run=` and `reason=`) and `list_experiments` use `/v1/projects/{project}/experiments[/{id}]`.
+    When only the experiment's id is known, `GET /v1/scopes/{id}` finds its project; when only its
+    slug is, `GET /v1/scopes?slug=` does (one request, tenant-wide).
+  - New: `move_experiment` (`probe experiment move <exp> --to <project>`: its runs, files and
+    groups move with it), `get_scope`, `get_scope_by_slug`, `get_project_workspace` (the T16
+    read: one scope's experiments, run ids, question, summary and files),
+    `get_experiment_overview`, `get_experiment_document` and `get_experiment_leaf`.
+  - `list_experiments(project_id=...)` sends the project in the path. It used to send it as a
+    `project_id` query parameter that `GET /v1/projects` never declared, so the filter was
+    silently dropped and every project's experiments came back (so `probe backfill`'s file count
+    for one project also counted other projects' experiments). Without a project it now reads
+    every project's list, one request each, so naming the project is faster. Its `cursor` is now
+    an offset token; a cursor from an older client is refused.
+  - `resolve_experiment(slug, project_id=...)` is one request; without a project it is two
+    (`GET /v1/scopes?slug=`, then the experiment). Only against a server older than that route
+    does it read every project's list (8 at a time, stopping once found). A slug an experiment
+    had before a rename (`legacy_slug`) now resolves too, after every live slug, as it does on
+    the server. The CLI looks in the active project first when it is stored as an id (one
+    request). The near-miss guard still reads the whole list, but once per `probe.init()` /
+    `run()` / `ensure_experiment` call, not twice, and it skips a project trashed mid-read.
+  - A create (or an edit) with `document=` is two writes, because the experiment API has no
+    document field. If the second fails, `DocumentNotWritten` names the experiment that now
+    exists and the command that finishes it (`probe experiment set <slug> --summary ...`).
+  - Only the trash notice reads as "not there" (`RosError.in_trash`); any other 410, a
+    `client_too_old` refusal included, is raised.
+  - Create-or-get (`ensure_experiment`, `probe.init(question=...)`) adopts a slug's existing holder
+    only when it is an experiment in the same project. A slug held by a project, or by an
+    experiment in another project, is an error that says which.
+  - Rows keep the old vocabulary beside the new: `project_id` and `parent_project_id`, `question`
+    and `description`, `kind: "experiment"`. The experiment read's overview status is
+    `overview_status` (the API calls it `summary`, which on the project address meant headline
+    metrics). The experiment read carries no `document`, `tags`, `repo`, `sessions` or
+    contributors: read the document with `get_experiment_document`.
+  - **Retired:** an experiment's tags are read-only since experiments moved to their own record
+    (the server has refused tag writes on them since the R3 switch). `probe experiment tag`,
+    `experiment create --tag`, `experiment set --add-tag/--remove-tag/--set-tags` and
+    `experiment list --tag` say so and exit; the SDK raises `ValueError` for `tags=`,
+    `metadata=` and `summary=` on an experiment before sending anything. `probe.models.ExperimentCreate`
+    is now the experiment API's create body (`ProjectExperimentCreate`: no `project_id`, the
+    project is the path).
+  - Still at the project address, because the experiment API has no route for them yet (the
+    server keeps serving them to this release until R6): an experiment's `document` write and
+    read; its runs (`POST /v1/projects/{E}/runs`), groups, lineage edges and lineage view, files
+    and uploads, notes writes, notes history and sub-notes, the CLI's notes read for an
+    experiment (it carries the notes' headroom, which the experiment read does not), versions,
+    reproduce, code and W&B
+    sources; a slug that names an experiment where a project is asked for (`run move --to`,
+    `edge add`); `list_projects(parent_id=)`, which lists an experiment as a child; the daemon's
+    delete preview; and the read-only `Reader` (service tokens reach only allowlisted reads, and
+    the experiment API is not on that list).
+  - A `client_too_old` refusal (410) now always ends in how to upgrade
+    (`pip install -U probe-research`), naming the release that fixes it.
+  - The Probe daemon's own HTTP calls (delete previews) and the tap's daemon worker now send the
+    client pair (`X-Probe-Client`/`X-Probe-Client-Version`) like every other first-party client.
+  - The MCP's experiment card, `research_context`, runs-of-an-experiment and run handoff read the
+    experiment through the experiment API; its `summary` view reads the document separately.
+  - **Release note for pinned jobs.** Once the server turns on its refusal (not before 7 days with
+    no active older client, and at the latest 90 days after this release), an SDK or CLI older
+    than 0.209.0 that addresses an experiment through its project address gets 410
+    `client_too_old`. A pinned job that calls `probe.init()` on an experiment then fails at init
+    with `ClientTooOldError`. A job already running keeps training and keeps logging: run-scoped
+    writes are never refused. Upgrade: `pip install -U probe-research`.
+
+- **Tap 0.9.5: the daemon worker names itself on every server call.** Its requests to the Probe
+  API (the companion gateway and the entity reads it makes for the daemon) now carry
+  `X-Probe-Client: tap` and `X-Probe-Client-Version: 0.9.5`, like every other first-party client.
+  The server reads a key request that names no client as an older CLI, and once it turns on the
+  light experiments' refusal (R4) it would answer such a request with 410 `client_too_old`
+  wherever it reaches an experiment by its project address; a request that names the tap is never
+  graded by that refusal. Nothing else changes. The tap ships from main, so this release is the
+  merge; `client-version.json` `tap.latest` moves to 0.9.5 with it.
+
 - **Tests prove the hosted MCP's experiment reads give the same answer in both storage shapes**
   (light experiments, task X9). Until the server's R2 job, an experiment's runs, files and groups
   are stored at the experiment's own id. After it, they are stored at the project with an

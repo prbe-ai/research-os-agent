@@ -29,6 +29,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
+from tap import __version__
 from tap import config as cfg
 
 GATEWAY_PATH = "/v1/companion/complete"
@@ -134,6 +135,14 @@ class Api:
             "Authorization": f"Bearer {self.token}",
             "Accept": "application/json",
             "User-Agent": USER_AGENT,
+            # Who is calling, as every first-party client says it: the server
+            # grades a key's caller by this pair, and from the light
+            # experiments' R4 refusal on it answers a key request that names
+            # no client as an old CLI wherever it reaches an experiment by its
+            # project address (the entity reads below do). The tap versions on
+            # its own line and is never refused by it.
+            "X-Probe-Client": "tap",
+            "X-Probe-Client-Version": __version__,
         }
         if data is not None:
             headers["Content-Type"] = "application/json"
