@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Nothing in the SDK, the CLI or the MCP addresses an experiment as a project any more**
+  (light experiments X21b; needs a server with the X21b routes deployed). An experiment's W&B
+  sources are listed, attached, paused and detached at
+  `/v1/projects/{P}/experiments/{E}/wandb-sources` (`list_/attach_/patch_/detach_experiment_wandb_source`
+  take an optional `project_id` that saves the one `GET /v1/scopes/{E}` placing it; `probe backfill`
+  passes the reviewed project); their history imports stay at the project's address, which
+  answers the same job. A run moves into an experiment by `experiment_id`:
+  `Client.move_run(run_id, experiment_id=E)` (exactly one of `project_id` and `experiment_id`;
+  an experiment by its uuid), and `probe run move --to <experiment>` sends it that way. Against
+  a server older than X21b the move answers with the run where it was and is refused
+  (`CapabilityUnavailable`), as before; an older server 404s the W&B routes (`CapabilityUnavailable`).
 - **The Probe daemon records an experiment as an experiment** (tap 0.9.8). The daemon read and
   wrote an experiment at its old project address (`/v1/projects/{experiment}`), which the server
   keeps answering only until the old dashboard is retired. It now asks where each project or
