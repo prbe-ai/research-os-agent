@@ -39,11 +39,19 @@ def _turn(offset: int) -> None:
     (lease.sessions_dir() / f"{SID}{worker_mod.TURN_SUFFIX}").write_text(json.dumps({"offset": offset}))
 
 
+def _scope(pid, kind="project", project=None):
+    """`GET /v1/scopes/{pid}` as the server answers it: where the id lives."""
+    return {f"/v1/scopes/{pid}": {"id": pid, "kind": kind, "project_id": project or pid,
+                                  "experiment_id": pid if kind == "experiment" else None, "run_id": None}}
+
+
 def _api(**extra):
     return FakeApi(
         entities={
             f"/v1/runs/{RUN}": {"id": RUN, "name": "best", "status": "completed", "tags": [], "project_id": PROJECT},
-            f"/v1/projects/{PROJECT}": {"id": PROJECT, "name": "digits", "kind": "experiment",
+            # A PROJECT: the worker places every project-typed id first (X21b).
+            **_scope(PROJECT),
+            f"/v1/projects/{PROJECT}": {"id": PROJECT, "name": "digits", "kind": "research",
                                         "description": None, "notes": None, "notes_version": 0},
             **extra.pop("entities", {}),
         },
@@ -251,7 +259,7 @@ def test_runs_a_sweep_script_printed_are_admitted_only_inside_the_sessions_exper
 def test_a_project_the_session_only_read_admits_no_runs(tmp_path):
     other = "0ccc0000-0000-4000-8000-000000000001"
     theirs = "7ee10000-0000-4000-8000-000000000001"
-    api = _api(entities={f"/v1/projects/{other}": {"id": other, "name": "teammate's", "kind": "experiment"},
+    api = _api(entities={**_scope(other), f"/v1/projects/{other}": {"id": other, "name": "teammate's", "kind": "research"},
                          f"/v1/runs/{theirs}": {"id": theirs, "name": "theirs", "project_id": other,
                                                 "created_at": "2100-01-01T00:00:00Z"}})
     worker, _ = _live_worker(tmp_path, api, _session())

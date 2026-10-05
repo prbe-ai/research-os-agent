@@ -207,6 +207,58 @@ TARGET_TYPES = ("project", "run", "artifact")
 RUN_RELATIONS = ("forked_from", "resumed_from", "retried_from", "branched_from", "derived_from")
 NOTE_TITLE_PREFIX = "companion: "
 
+# AN EXPERIMENT IS ADDRESSED AS AN EXPERIMENT (light experiments X21b). The
+# model targets a project OR an experiment as type "project" (an experiment's
+# id was a project id while its leaf row existed), and the worker used to read
+# and write both at `/v1/projects/{id}` -- for an experiment that is the leaf
+# door, which answers from adapters until R6 removes it. So every id of type
+# "project" (or untyped) is PLACED first with `GET /v1/scopes/{id}` (permanent,
+# D24) and then addressed where it lives: a project at `/v1/projects/{P}`
+# (unchanged), an experiment at `/v1/projects/{P}/experiments/{E}` and its
+# children (`/sub-notes`, `/artifacts`, `/artifacts/uploads`). A ledger op an
+# older tap persisted at the old address still publishes there (the leaf door
+# serves it until R6); nothing stored is rewritten.
+
+#: An experiment's own address on the experiment API.
+_EXPERIMENT_PATH_RE = re.compile(r"^/v1/projects/[^/]+/experiments/[^/]+$")
+
+
+class Place(NamedTuple):
+    """Where a project-typed id lives: its base path, and the project it is
+    filed under (itself for a project)."""
+
+    path: str
+    project_id: str
+    experiment: bool
+
+
+def place_of(scope: Any, eid: str) -> Place | None:
+    """`GET /v1/scopes/{eid}`'s answer -> a `Place`, or None when the id is
+    neither a project nor an experiment (a run, an unreadable answer)."""
+    if not isinstance(scope, dict):
+        return None
+    kind, project = scope.get("kind"), scope.get("project_id")
+    if kind == "experiment" and isinstance(project, str) and project:
+        return Place(f"/v1/projects/{project}/experiments/{eid}", project, True)
+    if kind == "project":
+        return Place(f"/v1/projects/{eid}", eid, False)
+    return None
+
+
+def experiment_row(detail: dict) -> dict:
+    """The experiment API's detail in the row shape the worker reads off a
+    project: `kind` experiment, its project as the parent, its question as the
+    description (an experiment's description IS its question), no tags (an
+    experiment's are read-only since R3)."""
+    return {
+        **detail,
+        "kind": "experiment",
+        "parent_project_id": detail.get("project_id"),
+        "description": detail.get("question"),
+        "tags": [],
+    }
+
+
 #: Never uploaded, whatever the model says: the names credentials live under.
 _SECRET_NAME_RE = re.compile(
     r"(^|/)(\.env.*|\.netrc|\.pgpass|id_[a-z0-9]+|.*\.pem|.*\.key|.*\.p12|.*\.pfx|.*\.jks|"
@@ -462,6 +514,8 @@ class Decider:
         self.files = dict(files or {})
         self._entity_cache: dict[tuple[str, str], dict] = {}
         self._artifact_cache: dict[tuple[str, str], list] = {}
+        #: project-typed id -> where it lives (`GET /v1/scopes/{id}`, once per cycle).
+        self._places: dict[str, Place] = {}
 
     # -- helpers --
     def _get(self, path: str) -> Any:
@@ -473,6 +527,27 @@ class Decider:
             raise Held(f"read refused ({exc.status}): {path}") from None
         except api_mod.Retryable:
             raise Held(f"read failed, not written: {path}") from None
+
+    def _place(self, eid: str) -> Place:
+        """Where a project-typed id lives (see `place_of`). A refused or failed
+        scope read HOLDS, like any other refused read; so does an id that is a
+        run or anything else."""
+        if eid not in self._places:
+            found = place_of(self._get(f"/v1/scopes/{eid}"), eid)
+            if found is None:
+                raise Held(f"{eid} is not a project or an experiment")
+            self._places[eid] = found
+        return self._places[eid]
+
+    def _base(self, etype: str, eid: str) -> str:
+        """The entity's own path: `/v1/runs/{id}`, or where the project or
+        experiment lives (`_place`)."""
+        if etype == "project":
+            return self._place(eid).path
+        return f"/v1/{etype}s/{eid}"
+
+    def _is_experiment(self, etype: str, eid: str) -> bool:
+        return etype == "project" and self._place(eid).experiment
 
     def _resolve(self, path_text: str) -> Path:
         """The file a path names. A relative path is relative to where the
@@ -500,7 +575,7 @@ class Decider:
         key = (etype, eid)
         if key not in self._artifact_cache:
             try:
-                listing = self._get(f"/v1/{etype}s/{eid}/artifacts")
+                listing = self._get(f"{self._base(etype, eid)}/artifacts")
             except Held:
                 if strict:
                     raise
@@ -526,10 +601,10 @@ class Decider:
     def _entity(self, etype: str, eid: str) -> dict:
         key = (etype, eid)
         if key not in self._entity_cache:
-            row = self._get(f"/v1/{etype}s/{eid}")
+            row = self._get(self._base(etype, eid))
             if not isinstance(row, dict):
                 raise Held(f"{etype} {eid} not readable")
-            self._entity_cache[key] = row
+            self._entity_cache[key] = experiment_row(row) if self._is_experiment(etype, eid) else row
         return self._entity_cache[key]
 
     def _target(self, raw: dict) -> tuple[str, str]:
@@ -587,22 +662,27 @@ class Decider:
                 raise Held("the main document is not empty; write a titled sub-note instead")
             row["notes"], row["notes_version"] = body, 1  # a second main proposal sees it filled
             payload = {"title": title, "body": body}
-            return {"payload": payload, "op": ("NOTES", f"/v1/{etype}s/{eid}", payload)}
+            return {"payload": payload, "op": ("NOTES", self._base(etype, eid), payload)}
         full_title = NOTE_TITLE_PREFIX + title
-        listing = self._get(f"/v1/{etype}s/{eid}/sub-notes") or {}
+        listing = self._get(f"{self._base(etype, eid)}/sub-notes") or {}
         existing = {item.get("title") for item in listing.get("sub_notes", []) if isinstance(item, dict)}
         if full_title in existing:
             raise Held("a sub-note with this title already exists")
         if len(existing) >= int(listing.get("limit_count") or 20):
             raise Held("sub-note limit reached")
         payload = {"title": full_title, "body": body}
-        return {"payload": payload, "op": ("POST", f"/v1/{etype}s/{eid}/sub-notes", payload)}
+        return {"payload": payload, "op": ("POST", f"{self._base(etype, eid)}/sub-notes", payload)}
 
     def _describe(self, raw: dict, etype: str, eid: str) -> dict:
+        experiment = self._is_experiment(etype, eid)
         row = self._entity(etype, eid)
         wanted = {
             "name": _str(raw.get("name"), 200),
-            "description": _str(raw.get("description"), 2000),
+            # An experiment's description is its question, set when it was
+            # created; the experiment API has no `description` (and the leaf
+            # door 422s one since R3). Its NAME is still the daemon's to give
+            # while it reads as its slug.
+            "description": None if experiment else _str(raw.get("description"), 2000),
             "notes": _str(raw.get("notes"), 2000) if etype == "run" else None,
         }
         body: dict[str, Any] = {}
@@ -619,19 +699,23 @@ class Decider:
             raise Held("every proposed field is already filled")
         body["authored_by"] = "agent"
         row.update({k: v for k, v in body.items() if k != "authored_by"})  # later proposals see it
-        return {"payload": body, "op": ("DESCRIBE", f"/v1/{etype}s/{eid}", body)}
+        return {"payload": body, "op": ("DESCRIBE", self._base(etype, eid), body)}
 
     def _tag(self, raw: dict, etype: str, eid: str) -> dict:
         tags = raw.get("tags")
         if not isinstance(tags, list):
             raise Held("tags must be a list")
+        if self._is_experiment(etype, eid):
+            # Read-only since the R3 switch (a 422 at every address); the
+            # experiment API carries none.
+            raise Held("an experiment's tags are read-only")
         wanted = [t.strip().lower() for t in tags if isinstance(t, str) and t.strip()][:10]
         current = [t for t in (self._entity(etype, eid).get("tags") or []) if isinstance(t, str)]
         new = [t for t in wanted if t not in current]
         if not new:
             raise Held("tags already present")
         self._entity(etype, eid)["tags"] = current + new  # a second tag proposal adds to this one
-        return {"payload": {"add": new}, "op": ("TAG", f"/v1/{etype}s/{eid}", {"add": new})}
+        return {"payload": {"add": new}, "op": ("TAG", self._base(etype, eid), {"add": new})}
 
     def _paper(self, raw: dict, etype: str, eid: str) -> dict:
         if etype != "project":
@@ -642,7 +726,11 @@ class Decider:
             raise Held("paper needs a title and a source_url")
         if source_url not in self.chunk_text:
             raise Held("the paper's source_url does not appear in the transcript")
-        listing = self._get(f"/v1/projects/{eid}/papers") or {}
+        # A paper belongs to a PROJECT (`papers.project_id`): one proposed on an
+        # experiment is recorded on the project it is filed under, which is what
+        # the server's 422 for a paper on an experiment names (R5a).
+        project = self._place(eid).project_id
+        listing = self._get(f"/v1/projects/{project}/papers") or {}
         items = listing.get("items", listing.get("papers", [])) if isinstance(listing, dict) else listing
         if any(isinstance(p, dict) and p.get("source_url") == source_url for p in items or []):
             raise Held("paper already recorded")
@@ -651,7 +739,7 @@ class Decider:
             body["summary_md"] = _str(raw.get("summary_md"), 4000)
         if isinstance(raw.get("tags"), list):
             body["tags"] = [t for t in raw["tags"] if isinstance(t, str)][:10]
-        return {"payload": body, "op": ("POST", f"/v1/projects/{eid}/papers", body)}
+        return {"payload": body, "op": ("POST", f"/v1/projects/{project}/papers", body)}
 
     def _edge(self, raw: dict, etype: str, eid: str) -> dict:
         if etype != "run":
@@ -753,7 +841,7 @@ class Decider:
         if _str(raw.get("notes"), 1000):
             presign["notes"] = _str(raw.get("notes"), 1000)
         payload = {**presign, "path": str(resolved)}
-        return {"payload": payload, "op": ("UPLOAD", f"/v1/{etype}s/{eid}/artifacts/uploads", payload)}
+        return {"payload": payload, "op": ("UPLOAD", f"{self._base(etype, eid)}/artifacts/uploads", payload)}
 
 
 #: Leading bytes of containers the credential scan cannot read into.
@@ -888,8 +976,12 @@ def publish(api: api_mod.Api, proposal: ledger_mod.Proposal) -> Any:
         if filled and isinstance(row.get("notes"), str) and row["notes"].strip() == body["body"].strip():
             raise AlreadyDone("the main document is this proposal's own (a lost response, retried)")
         if not filled:
-            return api.request("PATCH", path, {"notes": body["body"], "base_version": 0,
-                                               "op_key": proposal.idem_key}, idem_key=proposal.idem_key)
+            patch = {"notes": body["body"], "base_version": 0}
+            if not _EXPERIMENT_PATH_RE.match(path):
+                # The experiment API's body is closed (`op_key` is a 422 there):
+                # its retries ride the Idempotency-Key header alone.
+                patch["op_key"] = proposal.idem_key
+            return api.request("PATCH", path, patch, idem_key=proposal.idem_key)
         listing = api.get(path + "/sub-notes") or {}
         title = NOTE_TITLE_PREFIX + body["title"]
         if title in {i.get("title") for i in listing.get("sub_notes", []) if isinstance(i, dict)}:
@@ -1543,8 +1635,14 @@ class Worker:
         for eid, etype in ordered:
             if etype in ("artifact", "paper"):
                 continue
-            row = self._read_quiet(f"/v1/projects/{eid}") if etype != "run" else None
-            if isinstance(row, dict) and row.get("id"):
+            # Placed first (`place_of`): an experiment is read on the experiment
+            # API, never at `/v1/projects/{E}`. A failed scope read skips it, as a
+            # failed entity read always has; a run's id falls through to the run.
+            place = place_of(self._read_quiet(f"/v1/scopes/{eid}"), eid) if etype != "run" else None
+            row = self._read_quiet(place.path) if place is not None else None
+            if isinstance(row, dict) and place is not None and place.experiment:
+                row = experiment_row(row)
+            if isinstance(row, dict) and row.get("id") and place is not None:
                 if not observe.from_probe_tool(contexts.get(eid)):
                     projects.add(eid)
                 entities.append({
@@ -1556,20 +1654,23 @@ class Worker:
                 })
                 if (row.get("notes") or "").strip():
                     note_lines.append(f"{row.get('name')}: {row['notes'].strip()[:400]}")
-                listing = self._read_quiet(f"/v1/projects/{eid}/sub-notes") or {}
+                listing = self._read_quiet(f"{place.path}/sub-notes") or {}
                 for sub in listing.get("sub_notes", []) if isinstance(listing, dict) else []:
                     if isinstance(sub, dict) and sub.get("title"):
                         note_lines.append(f"{row.get('name')}: {sub['title']}")  # listings carry no body
                 continue
             row = self._read_quiet(f"/v1/runs/{eid}") if etype in ("run", None) else None
             if isinstance(row, dict) and row.get("id"):
-                if row.get("project_id") and not observe.from_probe_tool(contexts.get(eid)):
-                    projects.add(row["project_id"])
+                if not observe.from_probe_tool(contexts.get(eid)):
+                    # A run names its project AND, in an experiment, the
+                    # experiment (the new shape since the light split's R2).
+                    projects.update(i for i in (row.get("project_id"), row.get("experiment_id")) if i)
                 add_run(eid, row)
         for rid in sorted(set(mentioned) - set(seen))[:MAX_ADMITTED_RUNS]:
             row = self._read_quiet(f"/v1/runs/{rid}")
             created = _epoch(row.get("created_at")) if isinstance(row, dict) else None
-            if (isinstance(row, dict) and row.get("id") and row.get("project_id") in projects and created is not None
+            homes = {row.get("project_id"), row.get("experiment_id")} - {None} if isinstance(row, dict) else set()
+            if (isinstance(row, dict) and row.get("id") and homes & projects and created is not None
                     and created >= self._session_started_at() - SESSION_START_SLACK_SECONDS):
                 # Created during this session, in a project it ran a `probe` command
                 # in: its own. A teammate's older run a script printed is not.

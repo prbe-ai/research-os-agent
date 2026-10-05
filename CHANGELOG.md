@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **The Probe daemon records an experiment as an experiment** (tap 0.9.8). The daemon read and
+  wrote an experiment at its old project address (`/v1/projects/{experiment}`), which the server
+  keeps answering only until the old dashboard is retired. It now asks where each project or
+  experiment it works on lives (`GET /v1/scopes/{id}`) and reads and writes an experiment on the
+  experiment API: its details and main document at `/v1/projects/{project}/experiments/{id}`,
+  its notes, files and uploads beneath that. A project keeps its address. Three proposals change
+  for an experiment: a description or a tag is held (an experiment's description is its question,
+  and its tags are read-only, so the server refused both; a name is still given while it reads as
+  its slug), and a paper is recorded on the
+  experiment's project (papers belong to projects; the server refused one on an experiment). A
+  run that a session's sweep script printed is again recognised as the session's when it sits in
+  an experiment the session worked in (a run names its project and its experiment since the
+  experiment split, and only the project was compared). A write an older daemon queued at the old
+  address still goes there.
+
 ## 0.212.0
 
 - **Codex: you are told when Probe's own hooks are switched off** (tap 0.9.7). Codex runs a

@@ -283,7 +283,7 @@ def test_a_huge_file_handed_to_an_edit_tool_is_cut_with_its_expand_id():
 
 def test_the_conclusions_pass_is_shown_the_notes_that_already_exist(tmp_path):
     api = Sizing(entities={**_api().entities,
-                           f"/v1/projects/{PROJECT}": {"id": PROJECT, "name": "digits", "kind": "experiment",
+                           f"/v1/projects/{PROJECT}": {"id": PROJECT, "name": "digits", "kind": "research",
                                                        "notes": "## Result\nSVM wins", "notes_version": 1}},
                  lists={**_api().lists, f"/v1/projects/{PROJECT}/sub-notes": {
                      "sub_notes": [{"title": "companion: PCA verdict"}], "limit_count": 20}})
