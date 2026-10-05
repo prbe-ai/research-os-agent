@@ -22,8 +22,8 @@ same files through both.
                        the answer first, and it exits 0 quietly.
 
 ONE UNASKED MESSAGE PER TURN. Every prompt writes a new token to `turns/<sid>`:
-this hook when a message waits, and otherwise the bash fast path in `hooks.json`
-itself (for a session the reader serves), so a turn with nothing to deliver still
+this hook when a message waits, and otherwise the bash fast path in its
+`routes.json` route itself (for a session the reader serves), so a turn with nothing to deliver still
 ends the last one and wakes no stale waiter. The turn's slot is an exclusive create
 of `turns/<sid>.unasked-<token>`: of any number of hooks racing in one turn
 (parallel tool calls), exactly one gets it. Answers are exempt. Unasked messages
@@ -32,8 +32,10 @@ never wake the agent.
 ONE OWNER PER MESSAGE. Delivery is `os.rename` into `claimed/<sid>/`: exactly one
 deliverer wins; `claimed/<sid>/log.jsonl` says who.
 
-Wired in `hooks.json` (prompt, after-tool-call) behind a bash fast path that
-exits before starting Python unless a message waits for THIS session, and in
+Wired in `routes.json` (prompt, after-tool-call; run by `dispatch.py` behind the
+frozen hooks.json entries, with the after-tool-call fast path copied into
+`dispatch.sh`) behind a bash fast path that exits before starting Python unless
+a message waits for THIS session, and in
 `claude-reads.json` (the Stop waiter; Claude Code only, since `asyncRewake` is a
 Claude Code key). Under Codex: the same prompt and after-tool-call delivery, no wake.
 
@@ -518,7 +520,7 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
     if not asks:
         return 0
     # The next prompt's shell writes a new token here even when nothing waits
-    # (hooks.json); the folder must exist for that write to land.
+    # (routes.json); the folder must exist for that write to land.
     _turn_path(sid).parent.mkdir(parents=True, exist_ok=True)
     turn = current_turn(sid)
     deadline = time.monotonic() + max_s

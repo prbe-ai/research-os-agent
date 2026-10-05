@@ -118,8 +118,8 @@ plugin is added to the central prbe-ai marketplace, the install becomes `probe-r
   and an unrecognised entry is ignored, not executed) — there is no command hook
   for a plugin to render into. So `hooks/statusline_notify.py` emits the same
   information as a message when it CHANGES (`Stop` hook, ~4 lines a session), and
-  the wizard's status-line setting turns that on when run under Codex. `hooks/hooks.json` is shared by both
-  flavours, so the refresh hook gates on whether the status line was ever
+  the wizard's status-line setting turns that on when run under Codex. `hooks/routes.json` (what the
+  frozen `hooks/hooks.json` dispatcher runs) is shared by both flavours, so the refresh hook gates on whether the status line was ever
   installed: without that it is one `stat` and a return, and it never reaches the
   network for a user who did not opt in.
 

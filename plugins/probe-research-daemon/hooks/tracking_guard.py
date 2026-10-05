@@ -90,8 +90,10 @@ import shlex
 import sys
 import time
 
-# Sibling import, resolved because sys.path[0] is this script's directory when
-# hooks.json runs `python3 <plugin_root>/hooks/tracking_guard.py`.
+# Sibling import, resolved because sys.path[0] is this script's directory: when
+# a route runs `python3 <plugin_root>/hooks/tracking_guard.py`, and when
+# dispatch.py (in this same folder) runs it in-process with runpy, which leaves
+# sys.path[0] as the dispatcher's directory -- this one.
 import _session_marker
 
 # WHICH COMMANDS WRITE, AND THE REFUSALS, live in `_session_marker` so the CLI's
@@ -1201,7 +1203,7 @@ def _deny(payload: dict, session_id: str) -> None:
             _refuse(DENY_REASON_OFF.format(matched=matched))
 
 
-#: Set by the lean `probe-research-daemon` plugin's hooks.json: this machine's
+#: Set by the lean `probe-research-daemon` plugin's routes.json: this machine's
 #: daemon records and reads (daemon reads), so the guard has one job there.
 PROFILE_ENV = "PROBE_PLUGIN_PROFILE"
 PROFILE_DAEMON = "daemon"

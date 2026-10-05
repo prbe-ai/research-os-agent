@@ -105,9 +105,9 @@ DEFAULT_BASE = version_policy.DEFAULT_BASE
 # that has it). CI keeps this == the released version (see release.yml).
 UPDATE_CMD_MIN_CLI = "0.8.1"
 
-# Which hook event we are running under. hooks.json exports this ONLY for
+# Which hook event we are running under. routes.json exports this ONLY for
 # PreCompact, so an unset value means SessionStart -- the reading that preserves
-# the old behaviour, which matters because an older hooks.json can ship alongside
+# the old behaviour, which matters because an older wiring can ship alongside
 # a newer copy of this file (the plugin and CLI version independently).
 HOOK_EVENT_ENV = "PROBE_HOOK_EVENT"
 PRECOMPACT = "precompact"
@@ -131,7 +131,7 @@ SESSION_ID_ENV = "PROBE_SESSION_ID"
 # id. It is immutable session provenance: later `cd`s do not change the default
 # a session was seeded with.
 SESSION_CWD_ENV = "PROBE_SESSION_CWD"
-# Set by the lean `probe-research-daemon` plugin's hooks.json (daemon reads): the
+# Set by the lean `probe-research-daemon` plugin's routes.json (daemon reads): the
 # daemon records and reads for this agent, so NOTHING here goes into the agent's
 # context -- the update nudge and the stuck-write / team-note reports reach the
 # researcher as a systemMessage instead, and `probe doctor` has the detail.

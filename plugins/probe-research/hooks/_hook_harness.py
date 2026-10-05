@@ -6,7 +6,7 @@ sync-harnesses` puts in this folder. Every hook that used to answer
 `"codex" if ... else "claude_code"` asks here instead.
 
 How the harness is told apart, in order:
-  1. `PROBE_AGENT`, which the hook wrappers in hooks.json export, when it names
+  1. `PROBE_AGENT`, which the hook wrappers in routes.json export, when it names
      a hook-plugin harness;
   2. the harness's own plugin-root variable (`CLAUDE_PLUGIN_ROOT` is Claude
      Code's, `PLUGIN_ROOT` is Codex's; the more specific row comes first). A

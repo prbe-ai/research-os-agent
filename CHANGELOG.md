@@ -18,6 +18,20 @@
   Code enforces each hook's own timeout, and a container that raises its exit budget still gets
   the full 15s wait.
 
+- **Probe's hooks run through one fixed hook per event, so updates stop switching them off in
+  Codex.** Codex runs a plugin's hook only after you approve it in `/hooks`, and asks again
+  whenever the hook changes; 21 of the last 23 changes to Probe's hooks did that, silently. Probe
+  Research and Probe Research (daemon) now register one hook per event, with no tool filter, each
+  running `hooks/dispatch.sh`, and those never change; what runs behind them, and on which tools
+  (`hooks/routes.json`), can change in any release with no approval. **Codex asks you to approve
+  Probe's hooks once more after this update**: type `/hooks` and approve the Probe Research hooks
+  (the session-capture plugin tells you while they wait, and `probe doctor` shows it). Every hook
+  that ran before still runs, with the same tool filters, timeouts and environment; hooks for one
+  event still run in parallel, a lone guard runs in the same process, and a call to a tool no
+  Probe hook watches stops after a 12ms look at the tool's name. Measured on Linux: a Bash
+  call's check before it +5ms, after it +33ms; any other tool call +12ms before and after. Kimi
+  Code's hooks are unchanged.
+
 ## 0.211.0
 
 - **An experiment's children are reached through the experiment API too** (light experiments
