@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The wizard's "On this device" block fits on one line per row.** Each coding agent is drawn as
+  its icon (`✻` Claude Code, `>_` Codex, `K` Kimi Code, `π` pi) instead of its name, with MCP and
+  capture in aligned columns and MCP in a few words (`off (daemon reads)`, `login needed`, …;
+  `probe doctor` keeps the full sentence). Only agents whose binary is on this machine's PATH are
+  listed. A value too long for the row is cut with `…` instead of wrapping onto a line that read
+  as a row of its own.
+
 ## 0.214.0
 
 - **The wizard and `probe doctor` say whether Probe's MCP actually works, per coding agent.** Each

@@ -17,6 +17,8 @@
       "searchable": true,
       "route": "claude-code",
       "icon": "/icons/claude-code.svg",
+      "glyph": "✻",
+      "glyph_color": "#d97757",
       "detect_env": [
         "CLAUDECODE",
         "CLAUDE_CODE_ENTRYPOINT"
@@ -90,6 +92,8 @@
       "searchable": false,
       "route": null,
       "icon": null,
+      "glyph": null,
+      "glyph_color": null,
       "detect_env": [
         "CURSOR_TRACE_ID"
       ],
@@ -130,6 +134,8 @@
       "searchable": true,
       "route": "codex",
       "icon": "/icons/codex.svg",
+      "glyph": ">_",
+      "glyph_color": null,
       "detect_env": [
         "CODEX_SANDBOX",
         "CODEX_THREAD_ID"
@@ -199,6 +205,8 @@
       "searchable": true,
       "route": "pi",
       "icon": "/icons/pi.svg",
+      "glyph": "π",
+      "glyph_color": null,
       "detect_env": [
         "PI_CODING_AGENT"
       ],
@@ -264,6 +272,8 @@
       "searchable": true,
       "route": "kimi-code",
       "icon": "/icons/kimi-code.svg",
+      "glyph": "K",
+      "glyph_color": null,
       "detect_env": [
         "PROBE_KIMI_SESSION_ID"
       ],
