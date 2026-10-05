@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.215.0
+
 - **The wizard's "On this device" block fits on one line per row.** Each coding agent is drawn as
   its icon (`✻` Claude Code, `>_` Codex, `K` Kimi Code, `π` pi) instead of its name, with MCP and
   capture in aligned columns and MCP in a few words (`off (daemon reads)`, `login needed`, …;
