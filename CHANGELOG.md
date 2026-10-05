@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.212.0
+
 - **Codex: you are told when Probe's own hooks are switched off** (tap 0.9.7). Codex runs a
   plugin's hook only after you approve it in `/hooks`, asks again whenever the hook changes, and
   says nothing in the session meanwhile. The next Probe plugin release changes Probe's hooks once
