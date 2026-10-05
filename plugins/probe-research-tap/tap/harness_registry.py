@@ -66,6 +66,22 @@ HOOK_OUTPUT_CLAUDE_JSON = "claude-json"
 HOOK_OUTPUT_MESSAGE_JSON = "message-json"
 HOOK_OUTPUTS = (HOOK_OUTPUT_CLAUDE_JSON, HOOK_OUTPUT_MESSAGE_JSON)
 
+#: How Probe's read-only MCP reaches a harness (`mcp`): each kind has ONE
+#: credential resolver (`probe.cli.capabilities.MCP_RESOLVERS`), and
+#: `null` means Probe offers no MCP there. A new kind without a resolver fails
+#: `agent/tests/test_mcp_state.py`.
+MCP_PLUGIN_FILE = "plugin-file"  # the plugin's .mcp.json + headersHelper (Claude Code)
+MCP_CONFIG_TOML = "config-toml"  # the agent's own config, bearer synced by the wizard (Codex)
+MCP_EXTENSION_BRIDGE = "extension-bridge"  # the extension bridges MCP, or pi-mcp-adapter does (pi)
+MCP_PLUGIN_MANIFEST = "plugin-manifest"  # the plugin manifest's mcpServers, bearer header (Kimi Code)
+MCP_KINDS = (MCP_PLUGIN_FILE, MCP_CONFIG_TOML, MCP_EXTENSION_BRIDGE, MCP_PLUGIN_MANIFEST)
+
+#: Where Probe's status-line segment goes (`statusline`), one writer each
+#: (`probe.cli.statusline`); `null` means the harness has no slot Probe uses.
+STATUSLINE_CLAUDE_SETTINGS = "claude-settings"  # ~/.claude/settings.json `statusLine`
+STATUSLINE_KIMI_TUI_TOML = "kimi-tui-toml"  # $KIMI_CODE_HOME/tui.toml `[status_line] command`
+STATUSLINE_SLOTS = (STATUSLINE_CLAUDE_SETTINGS, STATUSLINE_KIMI_TUI_TOML)
+
 #: What every hook-plugin harness's `plugin` object names.
 PLUGIN_KEYS = ("root_env", "manifest_dir", "marketplace", "marketplace_source")
 
@@ -154,8 +170,8 @@ class Harness:
     #: paired (its session variable is set in every shell, Probe or not).
     attribution_requires_pairing: bool = False
     capabilities: Mapping[str, bool] | None = None
-    #: Whether Probe installs its status-line segment into this harness.
-    statusline: bool = False
+    #: Where Probe installs its status-line segment (STATUSLINE_*), or None.
+    statusline: str | None = None
     #: Where the harness's "write reasoning summaries" setting lives, if it has
     #: one ("settings-json" | "config-toml"); None means nothing to switch.
     reasoning_setting: str | None = None
@@ -354,6 +370,12 @@ def _harness(row: Any, index: int) -> Harness:
     hook_output = row.get("hook_output", HOOK_OUTPUT_CLAUDE_JSON)
     if hook_output not in HOOK_OUTPUTS:
         raise RegistryError(f"{where}.hook_output must be one of {HOOK_OUTPUTS}")
+    mcp = _str_or_none(row.get("mcp"), f"{where}.mcp")
+    if mcp is not None and mcp not in MCP_KINDS:
+        raise RegistryError(f"{where}.mcp must be null or one of {MCP_KINDS}")
+    statusline = _str_or_none(row.get("statusline"), f"{where}.statusline")
+    if statusline is not None and statusline not in STATUSLINE_SLOTS:
+        raise RegistryError(f"{where}.statusline must be null or one of {STATUSLINE_SLOTS}")
     harness = Harness(
         id=hid,
         label=_required_str(row, "label", where),
@@ -379,14 +401,14 @@ def _harness(row: Any, index: int) -> Harness:
         plugin=row.get("plugin"),
         instructions=row.get("instructions"),
         team_note=_str_or_none(row.get("team_note"), f"{where}.team_note"),
-        mcp=_str_or_none(row.get("mcp"), f"{where}.mcp"),
+        mcp=mcp,
         question_tool=_str_or_none(row.get("question_tool"), f"{where}.question_tool"),
         lean_profile=_str_or_none(row.get("lean_profile"), f"{where}.lean_profile"),
         attribution_requires_pairing=_bool(
             row.get("attribution_requires_pairing"), f"{where}.attribution_requires_pairing"
         ),
         capabilities=row.get("capabilities") or {},
-        statusline=_bool(row.get("statusline"), f"{where}.statusline"),
+        statusline=statusline,
         reasoning_setting=_str_or_none(row.get("reasoning_setting"), f"{where}.reasoning_setting"),
         package_dir=_str_or_none(row.get("package_dir"), f"{where}.package_dir"),
         hook_output=hook_output,

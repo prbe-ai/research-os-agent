@@ -87,6 +87,14 @@ def install_dir() -> str:
     return os.path.join(claude, "probe-research-statusline")
 
 
+def install_dirs() -> list[str]:
+    """Every place a status-line install keeps the renderer copy: Claude Code's
+    (`statusline.install_dir`) and Kimi Code's (`statusline.kimi_install_dir`,
+    under `$KIMI_CODE_HOME`, default `~/.kimi-code`)."""
+    kimi = os.environ.get("KIMI_CODE_HOME") or os.path.join(os.path.expanduser("~"), ".kimi-code")
+    return [install_dir(), os.path.join(kimi, "probe-research-statusline")]
+
+
 def sync_renderer() -> None:
     """Refresh the installed renderer copies from this plugin. Never raises.
 
@@ -100,9 +108,12 @@ def sync_renderer() -> None:
     the status line on in the wizard, and a hook that created it would be installing a
     status line nobody asked for.
     """
-    target = install_dir()
-    if not os.path.isdir(target):
-        return
+    for target in install_dirs():
+        if os.path.isdir(target):
+            _sync_into(target)
+
+
+def _sync_into(target: str) -> None:
     source = os.path.dirname(os.path.abspath(__file__))
     for name in RENDERER_FILES:
         src, dst = os.path.join(source, name), os.path.join(target, name)
@@ -144,7 +155,7 @@ def installed() -> bool:
     `install` opts into the on-change notice instead — and that notice reads the
     same marker, so it needs the same refresh behind it.
     """
-    if os.path.isdir(install_dir()):
+    if any(os.path.isdir(target) for target in install_dirs()):
         return True
     try:
         return bool(_load("_session_marker").notify_enabled())

@@ -151,3 +151,12 @@ export function researcherDaemonNotice(
     next: DaemonStatus.Degraded,
   };
 }
+
+/**
+ * Tracking switched off (`trackingSetting.ts`): every skill this package
+ * ships leaves the prompt, the daemon profile's own `probe` skill included.
+ * A skill the researcher or another package brought stays.
+ */
+export function withoutPackageSkills<T extends PromptSkill>(skills: readonly T[]): T[] {
+  return skills.filter((skill) => !PACKAGE_SKILLS.has(skill.name));
+}

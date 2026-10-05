@@ -71,7 +71,7 @@
         "prompt_context": true,
         "wake": true
       },
-      "statusline": true,
+      "statusline": "claude-settings",
       "reasoning_setting": "settings-json",
       "hook_output": "claude-json",
       "session_id_prefix": null,
@@ -111,7 +111,7 @@
         "prompt_context": false,
         "wake": false
       },
-      "statusline": false,
+      "statusline": null,
       "reasoning_setting": null,
       "hook_output": "claude-json",
       "session_id_prefix": null,
@@ -180,7 +180,7 @@
         "prompt_context": false,
         "wake": false
       },
-      "statusline": false,
+      "statusline": null,
       "reasoning_setting": "config-toml",
       "hook_output": "claude-json",
       "session_id_prefix": null,
@@ -243,7 +243,7 @@
         "prompt_context": false,
         "wake": true
       },
-      "statusline": false,
+      "statusline": null,
       "reasoning_setting": null,
       "hook_output": "claude-json",
       "session_id_prefix": null,
@@ -319,7 +319,7 @@
         "prompt_context": true,
         "wake": false
       },
-      "statusline": false,
+      "statusline": "kimi-tui-toml",
       "reasoning_setting": null,
       "hook_output": "message-json",
       "session_id_prefix": "session_",

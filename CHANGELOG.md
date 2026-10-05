@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- **The wizard and `probe doctor` say whether Probe's MCP actually works, per coding agent.** Each
+  agent now reads `on`, `login needed: run <command>` (with `token rejected` when the API refused
+  the read token), `off: the daemon reads for this agent`, `off: not installed`, `unknown: <what>`
+  or `not offered`. "On" used to mean "plugin installed and CLI signed in": a daemon profile with no
+  MCP read as on, Kimi's un-logged-in MCP read as on, and pi always read as off. The answer comes
+  from each agent's registry row (its `mcp` kind picks one credential check), so a new agent gets it
+  by declaring its row. A read token the API refuses now makes `probe wizard` sign the MCP in
+  again instead of doing nothing.
+- **pi: unticking tracking keeps capture.** pi carries tracking (skills + MCP) and capture in one
+  package, so unticking tracking deleted capture too (and removing capture deleted tracking). The
+  package now stays, with tracking switched off on its settings entry (`probeTracking: false`, no
+  package skills), which pi's Probe extension 0.4.0 enforces itself: no MCP, no skills, nothing in
+  the prompt, while capture, the daemon and the guard keep running. The wizard updates pi's package
+  first when it is older than 0.4.0.
+- **Kimi Code: Probe's MCP works with no login, and the footer shows Probe's state.** The installed
+  plugin sends this device's read token, so there is no `/mcp-config login` (whose localhost
+  callback no remote box could finish); only when the plugin's MCP and this device's API are the
+  same deployment, and `probe logout` takes it back out of every installed copy. Every token change
+  reaches every agent copy, Kimi's included (`probe mcp token set` used to update Codex's only). Kimi's footer shows Probe's state
+  beside Kimi's model and folder, in Claude Code's words; a status-line command of your own is kept
+  and comes back on uninstall.
+
 - **The wizard offers past Kimi Code sessions for import.** "Import past coding sessions" asked
   about Claude Code, Codex and pi only, from a list kept by hand, so Kimi Code's saved sessions
   were never offered even though the importer reads them. The step now asks about every agent

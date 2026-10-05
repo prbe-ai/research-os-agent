@@ -26,6 +26,13 @@ CONTRACT — this runs on a RENDER PATH, once per status-line update:
   * ONE LINE, NEVER A NEWLINE. Claude Code splits this command's stdout on
     newlines and renders each as its own status row.
 
+KIMI CODE (`$KIMI_CODE_HOME/tui.toml` `[status_line] command`) runs this too,
+with `KIMI_CODE_STATUS_LINE=1` set. Its command REPLACES Kimi's footer line 1
+and only the first stdout line counts, so there the output is the whole line:
+Kimi's own `model  ~/cwd  branch` (or the first line of a researcher's own
+command, handed over in `PROBE_SL_PREFIX` by the chain) followed by the
+segment. Kimi kills the command after 300 ms; this stays at the same ~26 ms.
+
 STDIN MAY BE EMPTY, and that is a supported case rather than a bug. The
 status line is a single global slot, so this command is typically CHAINED
 after somebody else's — and a predecessor that does `input=$(cat)` has already
@@ -57,6 +64,20 @@ def _load(name: str):
     return module
 
 
+def _kimi() -> bool:
+    """Kimi Code sets this on its status-line command's environment."""
+    return os.environ.get("KIMI_CODE_STATUS_LINE") == "1"
+
+
+def _uuid_tail(value: str) -> str:
+    """The UUID a harness id ends with (Kimi's `session_<uuid>`): Probe keys
+    every session by the bare UUID."""
+    tail = value[-36:]
+    if len(tail) == 36 and tail.count("-") == 4 and all(c in "0123456789abcdefABCDEF-" for c in tail):
+        return tail.lower()
+    return value
+
+
 def resolve_session_id(payload: dict) -> str:
     """The session this status line belongs to.
 
@@ -69,6 +90,9 @@ def resolve_session_id(payload: dict) -> str:
     session_id = payload.get("session_id")
     if isinstance(session_id, str) and session_id:
         return session_id
+    kimi_session = payload.get("sessionId")  # Kimi Code's snapshot
+    if isinstance(kimi_session, str) and kimi_session:
+        return _uuid_tail(kimi_session)
     transcript = payload.get("transcript_path")
     if isinstance(transcript, str) and transcript:
         # `~/.claude/projects/<slug>/<session-id>.jsonl` — the basename IS the id.
@@ -81,9 +105,12 @@ def resolve_session_id(payload: dict) -> str:
 #: The status line is Claude Code's (`statusLine` in its settings.json): who
 #: records for THIS coding agent decides a session not yet marked.
 AGENT = "claude_code"  # harness-literal-ok: the status line is a Claude Code feature
+#: ...or Kimi Code's (`[status_line] command` in its tui.toml).
+KIMI_AGENT = "kimi_code"  # harness-literal-ok: Kimi Code's footer runs this renderer
 
 
 def segment(payload: dict) -> str:
+    agent = KIMI_AGENT if _kimi() else AGENT
     marker = _load("_session_marker")
 
     # ONE parse of the config file, two answers off it: whether Probe is set up
@@ -98,14 +125,14 @@ def segment(payload: dict) -> str:
     cwd = cwd if isinstance(cwd, str) and cwd else None
     if not session_id:
         switch, _source = marker.resolve_state_default(cwd, config)
-        switch = marker.seed_state("", switch, AGENT)
+        switch = marker.seed_state("", switch, agent)
         return marker.render(
             None,
             configured=True,
             tracking=marker.state_allows_writes(switch),
             color=_color(),
             session_state=switch,
-            daemon=marker.daemon_session("", AGENT),
+            daemon=marker.daemon_session("", agent),
         )
 
     state = marker.read(session_id)
@@ -117,7 +144,7 @@ def segment(payload: dict) -> str:
         # seed it (`seed_state`: `on` by who records), or a new daemon session
         # shows the agent's words until its first prompt (Richard 2026-09-29).
         switch, _source = marker.resolve_state_default(cwd, config)
-        switch = marker.seed_state(session_id, switch, AGENT)
+        switch = marker.seed_state(session_id, switch, agent)
     tracking = marker.state_allows_writes(switch)
     daemon = marker.daemon_status(session_id, switch)
     return marker.render(
@@ -137,8 +164,29 @@ def segment(payload: dict) -> str:
         ),
         # `read only (daemon)` in a session the daemon reads for; a session the
         # lean plugin has not marked yet goes by who records for Claude Code.
-        daemon=marker.daemon_session(session_id, AGENT),
+        daemon=marker.daemon_session(session_id, agent),
     )
+
+
+def kimi_line(payload: dict, ours: str) -> str:
+    """Kimi Code's footer line 1, which this command replaces: the researcher's
+    own first line when the chain hands one over, else Kimi's `model  ~/cwd
+    branch`, then our segment."""
+    prefix = (os.environ.get("PROBE_SL_PREFIX") or "").strip()
+    if not prefix:
+        parts = []
+        model = payload.get("model")
+        if isinstance(model, str) and model:
+            parts.append(model)
+        cwd = payload.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            home = os.path.expanduser("~")
+            parts.append("~" + cwd[len(home):] if home and (cwd == home or cwd.startswith(home + os.sep)) else cwd)
+        branch = payload.get("gitBranch")
+        if isinstance(branch, str) and branch:
+            parts.append(branch)
+        prefix = "  ".join(parts)
+    return "  ".join(part for part in (prefix, ours) if part)
 
 
 def _color() -> bool:
@@ -162,6 +210,11 @@ def main() -> int:
         out = segment(payload)
     except BaseException:  # noqa: BLE001 - a render path may never traceback
         out = ""
+    if _kimi():
+        try:
+            out = kimi_line(payload, out)
+        except BaseException:  # noqa: BLE001 - a render path may never traceback
+            pass
     if out:
         # No newline: the caller joins segments, and a newline would become a row.
         sys.stdout.write(out.replace("\n", " "))

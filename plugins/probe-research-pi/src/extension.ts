@@ -36,7 +36,8 @@ import {
   type DaemonNoticeDeps,
   type DaemonStatusValue,
 } from "./core/daemonNotice.js";
-import { daemonSkillDir, isProbeMcpTool, leanSkills, readDaemonSkill, researcherDaemonNotice } from "./profile.js";
+import { daemonSkillDir, isProbeMcpTool, leanSkills, readDaemonSkill, researcherDaemonNotice, withoutPackageSkills } from "./profile.js";
+import { trackingOff } from "./trackingSetting.js";
 import {
   initializeTrackingState,
   ProbeState,
@@ -110,6 +111,17 @@ function profileFor(sessionId: string | undefined): RecorderValue {
 
 function inDaemonProfile(sessionId: string | undefined): boolean {
   return profileFor(sessionId) === Recorder.Daemon;
+}
+
+/**
+ * Probe's tracking switched off on our settings entry (`trackingSetting.ts`),
+ * read at each session_start straight from pi's settings files. Keyed by
+ * session like `cachedProfile`, so a new or resumed session never inherits it.
+ */
+let cachedTrackingOff: { sessionId: string; off: boolean } | undefined;
+
+function trackingOffFor(sessionId: string | undefined): boolean {
+  return sessionId !== undefined && cachedTrackingOff?.sessionId === sessionId && cachedTrackingOff.off;
 }
 
 /**
@@ -608,7 +620,15 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // tool is offered at all: the bridge stays off, a connection an earlier
     // agent-profile start of this session opened is closed, and an adapter's
     // tools are deactivated (see `deactivateProbeTools`).
-    const handoff = inDaemonProfile(sessionId)
+    // TRACKING OFF (trackingSetting.ts) offers no Probe MCP tool either,
+    // read from the settings files themselves so no CLI answer can undo it.
+    if (sessionId) {
+      cachedTrackingOff = {
+        sessionId,
+        off: trackingOff({ env: process.env, cwd: ctx.cwd, packageRoot: extensionDir }),
+      };
+    }
+    const handoff = inDaemonProfile(sessionId) || trackingOffFor(sessionId)
       ? null
       : detectAdapterHandoff({ env: process.env, cwd: ctx.cwd, packageRoot: extensionDir });
     if (!handoff) {
@@ -618,7 +638,8 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
         stale.close().catch((err) => logLine(`session_start(${event.reason}): Probe MCP close failed: ${err instanceof Error ? err.message : String(err)}`));
       }
       deactivateProbeTools(pi);
-      logLine(`session_start(${event.reason}): daemon profile, no Probe MCP tools for ${sessionId}`);
+      const why = trackingOffFor(sessionId) ? "Probe tracking is off" : "daemon profile";
+      logLine(`session_start(${event.reason}): ${why}, no Probe MCP tools for ${sessionId}`);
     } else if (handoff.standDown) {
       logLine(`session_start(${event.reason}): ${MCP_SERVED_VIA_ADAPTER_MESSAGE} — ${handoff.reason}`);
     } else {
@@ -698,7 +719,8 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   // every session_start (startup, reload, new, resume, fork), by which point
   // the CLI has answered for this session; the agent profile adds nothing.
   pi.on("resources_discover", (_event, ctx) => {
-    if (!inDaemonProfile(ctx?.sessionManager?.getSessionId())) return;
+    const id = ctx?.sessionManager?.getSessionId();
+    if (!inDaemonProfile(id) || trackingOffFor(id)) return;
     return { skillPaths: [daemonSkillDir(extensionDir)] };
   });
 
@@ -717,6 +739,15 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // Not awaited: the prompt must not wait on a spawn.
     void startPendingCapture(ctx, "before_agent_start");
     const sessionId = ctx?.sessionManager?.getSessionId();
+    if (trackingOffFor(sessionId)) {
+      // Capture already started above; tracking adds nothing: no package
+      // skill, no Probe MCP tool, nothing injected into the prompt.
+      if (event.systemPromptOptions?.skills) {
+        event.systemPromptOptions.skills = withoutPackageSkills(event.systemPromptOptions.skills);
+      }
+      deactivateProbeTools(pi);
+      return;
+    }
     const daemonProfile = inDaemonProfile(sessionId);
     if (daemonProfile) {
       // In every state, `off` included: the profile is the machine's choice of

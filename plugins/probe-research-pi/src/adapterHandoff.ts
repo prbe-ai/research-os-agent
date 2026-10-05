@@ -176,6 +176,8 @@ function readPackageJsonName(dir: string): string | null {
 interface ScopeEntries {
   /** Raw `packages` source strings for this scope, already flattened from string | {"source": ...}. */
   sources: string[];
+  /** The same entries in object form (`{"source": ...}` for a bare string), in step with `sources`. */
+  entries: Record<string, unknown>[];
   /** Base dir relative local sources in this scope resolve against. */
   baseDir: string;
   /** Set when the scope's settings.json was unreadable/malformed — folded into the overall reason. */
@@ -196,40 +198,43 @@ function readScope(settingsPath: string, baseDir: string, label: string): ScopeE
   } catch {
     // Missing file is the common, expected case (fact 8: this machine's
     // real settings.json has no `packages` key at all) — no note needed.
-    return { sources: [], baseDir };
+    return { sources: [], entries: [], baseDir };
   }
 
   let data: unknown;
   try {
     data = JSON.parse(raw);
   } catch {
-    return { sources: [], baseDir, note: `${label} settings.json (${settingsPath}) has malformed JSON, ignored` };
+    return { sources: [], entries: [], baseDir, note: `${label} settings.json (${settingsPath}) has malformed JSON, ignored` };
   }
 
   if (typeof data !== "object" || data === null || Array.isArray(data)) {
-    return { sources: [], baseDir, note: `${label} settings.json (${settingsPath}) root is not an object, ignored` };
+    return { sources: [], entries: [], baseDir, note: `${label} settings.json (${settingsPath}) root is not an object, ignored` };
   }
 
   const root = data as Record<string, unknown>;
   const packages = root.packages;
   if (packages === undefined) {
     // Absent `packages` is normal — pi itself treats this the same as `[]` (`?? []`).
-    return { sources: [], baseDir };
+    return { sources: [], entries: [], baseDir };
   }
   if (!Array.isArray(packages)) {
-    return { sources: [], baseDir, note: `${label} settings.json (${settingsPath}) "packages" is not a list, ignored` };
+    return { sources: [], entries: [], baseDir, note: `${label} settings.json (${settingsPath}) "packages" is not a list, ignored` };
   }
 
   const sources: string[] = [];
+  const entries: Record<string, unknown>[] = [];
   for (const entry of packages) {
     if (typeof entry === "string") {
       sources.push(entry);
+      entries.push({ source: entry });
     } else if (entry && typeof entry === "object" && !Array.isArray(entry) && typeof (entry as Record<string, unknown>).source === "string") {
       sources.push((entry as Record<string, unknown>).source as string);
+      entries.push(entry as Record<string, unknown>);
     }
     // Any other shape is a malformed individual entry — skipped, not fatal to the scope.
   }
-  return { sources, baseDir };
+  return { sources, entries, baseDir };
 }
 
 function matchesAdapter(source: string, baseDir: string): boolean {
@@ -258,6 +263,28 @@ function matchesOurs(source: string, baseDir: string, ourRealRoot: string): bool
   // `<repo>/plugins/probe-research-pi`. Confirm by name so an unrelated
   // ancestor directory can never match on the prefix alone.
   return ourRealRoot.startsWith(dir + sep) && readPackageJsonName(dir) === OUR_NPM_NAME;
+}
+
+/** Our own `packages` entry in one settings scope (object form), or null. */
+function ourEntryIn(scope: ScopeEntries, ourRealRoot: string): Record<string, unknown> | null {
+  const index = scope.sources.findIndex((source) => matchesOurs(source, scope.baseDir, ourRealRoot));
+  return index === -1 ? null : scope.entries[index];
+}
+
+/**
+ * Our entry as pi resolves it (pi's `docs/packages.md`, "Scope and
+ * Deduplication"): the project entry wins, unless it carries `autoload: false`,
+ * in which case it applies as a delta over the global one. The same rule as
+ * the CLI's `pi_config.merged_package_entry`, so both read one answer. An
+ * unreadable file reads as "no entry there".
+ */
+export function mergedOurEntry(opts: AdapterHandoffOptions): Record<string, unknown> | null {
+  const ourRealRoot = realpathOrResolved(resolve(opts.packageRoot));
+  const user = ourEntryIn(readScope(piSettingsPath(opts.env), piAgentDir(opts.env), "user"), ourRealRoot);
+  const project = ourEntryIn(readScope(piProjectSettingsPath(opts.cwd), join(opts.cwd, ".pi"), "project"), ourRealRoot);
+  if (project === null) return user;
+  if (project.autoload === false && user !== null) return { ...user, ...project };
+  return project;
 }
 
 export function detectAdapterHandoff(opts: AdapterHandoffOptions): AdapterHandoffResult {

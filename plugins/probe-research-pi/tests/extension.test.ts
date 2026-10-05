@@ -1338,3 +1338,88 @@ describe("registerExtension — the daemon's held questions", () => {
     expect(existsSync(answer)).toBe(false);
   });
 });
+
+describe("registerExtension — Probe's tracking switched off (probeTracking: false)", () => {
+  const PACKAGE_SKILLS = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit"];
+
+  type BeforeAgentStart = (
+    event: { systemPrompt: string; systemPromptOptions?: { skills: Array<{ name: string; filePath: string }> } },
+    ctx: unknown,
+  ) => Promise<{ systemPrompt?: string; message?: { content: string } } | undefined>;
+
+  function writeOurEntry(entry: Record<string, unknown>, scopeDir = process.env.PI_CODING_AGENT_DIR!): void {
+    mkdirSync(scopeDir, { recursive: true });
+    writeFileSync(join(scopeDir, "settings.json"), JSON.stringify({ packages: [{ source: tmp, ...entry }] }));
+  }
+
+  it("offers no Probe MCP tool, no package skill and no prompt text, while capture keeps running", async () => {
+    pair();
+    writeOurEntry({ skills: [], probeTracking: false });
+    const { api, handlers, activeTools } = fakeExtensionAPI(["read", "bash", "probe-research-pi__probe_browse"]);
+    registerExtension(api as never, tmp);
+    const sessionId = uniqueSessionId("tracking-off");
+    const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
+
+    await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
+
+    expect(activeTools()).toEqual(["read", "bash"]);
+    const log = readFileSync(extensionLogFile(process.env), "utf-8");
+    expect(log).toContain("Probe tracking is off, no Probe MCP tools");
+    expect(log).not.toContain("Probe MCP ready");
+    expect(daemonSpawns()).toHaveLength(1); // capture is untouched
+
+    const skills = [...PACKAGE_SKILLS, "their-own"].map((name) => ({ name, filePath: `/x/${name}/SKILL.md` }));
+    const event = { systemPrompt: "BASE", systemPromptOptions: { skills } };
+    const result = await (handlers.get("before_agent_start") as unknown as BeforeAgentStart)(event, ctx);
+    expect(result).toBeUndefined();
+    expect(event.systemPromptOptions.skills.map((s) => s.name)).toEqual(["their-own"]);
+
+    rmSync(pidFile(sessionId), { force: true });
+    rmSync(shutdownSentinelFile(sessionId), { force: true });
+  });
+
+  it("adds no daemon skill either, even when the CLI says the daemon records", async () => {
+    installProbeCli();
+    writeOurEntry({ skills: [], probeTracking: false });
+    const original = execFileMock.getMockImplementation()!;
+    execFileMock.mockImplementation((_command, args, _options, callback) => {
+      callback(null, JSON.stringify({ session_id: args[args.indexOf("--session") + 1], tracking: true, signal: "on",
+        seeded: true, source: "machine", state: "daemon", profile: "daemon" }), "");
+    });
+    try {
+      const { api, handlers } = fakeExtensionAPI();
+      registerExtension(api as never, tmp);
+      const ctx = fakeContext({ sessionId: uniqueSessionId("tracking-off-daemon"), sessionFile: undefined });
+      await handlers.get("session_start")!({ reason: "startup" }, ctx);
+      expect(await handlers.get("resources_discover")!({ type: "resources_discover", cwd: "/repo", reason: "startup" }, ctx)).toBeUndefined();
+    } finally {
+      execFileMock.mockImplementation(original);
+    }
+  });
+
+  it("stays off when the CLI cannot answer: the flag is read from pi's settings, not from `probe`", async () => {
+    writeOurEntry({ skills: [], probeTracking: false });
+    const original = execFileMock.getMockImplementation()!;
+    execFileMock.mockImplementation((_command, _args, _options, callback) => callback(new Error("probe: not found"), "", ""));
+    try {
+      const { api, handlers, activeTools } = fakeExtensionAPI(["read", "probe-research-pi__probe_browse"]);
+      registerExtension(api as never, tmp);
+      const ctx = fakeContext({ sessionId: uniqueSessionId("tracking-off-nocli"), sessionFile: undefined });
+      await handlers.get("session_start")!({ reason: "startup" }, ctx);
+      expect(activeTools()).toEqual(["read"]);
+    } finally {
+      execFileMock.mockImplementation(original);
+    }
+  });
+
+  it("follows pi's merge: a project entry with tracking on wins over the global switch", async () => {
+    writeOurEntry({ skills: [], probeTracking: false });
+    const project = join(tmp, "proj");
+    writeOurEntry({}, join(project, ".pi"));
+    const { trackingOff } = await import("../src/trackingSetting.js");
+    expect(trackingOff({ env: process.env, cwd: project, packageRoot: tmp })).toBe(false);
+    // `autoload: false` makes the project entry a delta over the global one.
+    writeOurEntry({ autoload: false }, join(project, ".pi"));
+    expect(trackingOff({ env: process.env, cwd: project, packageRoot: tmp })).toBe(true);
+  });
+});
