@@ -42,8 +42,10 @@ from tap import config as cfg
 
 #: Process names that own a session. Claude Code sets its process title to
 #: `claude` (native and npm installs alike); Codex's native binary is `codex`
-#: (its npm launcher is a `node` parent, which the walk passes through).
-AGENT_NAMES = frozenset({"claude", "codex"})
+#: (its npm launcher is a `node` parent, which the walk passes through); Kimi
+#: Code 2.1.1 titles its node process kimi-code (comm and argv[0], seen under a
+#: real session), so a Kimi started from another agent's shell owns its own.
+AGENT_NAMES = frozenset({"claude", "codex", "kimi-code"})  # harness-literal-ok: process titles
 
 #: A hook sits a few shells below the agent (`sh -c` -> `bash -c` -> the hook,
 #: plus ensure-daemon.sh on the self-heal path). Past this, the chain is not a

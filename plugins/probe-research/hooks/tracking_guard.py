@@ -1159,7 +1159,7 @@ def _deny(payload: dict, session_id: str) -> None:
         state == read-only -> deny WRITES typed into Bash
         state == off    -> deny writes, Probe MCP calls, and Probe content reads
     """
-    aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"))
+    aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
     if aimed:
         _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
         return
@@ -1217,7 +1217,7 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     is refused (`DAEMON_PROFILE_DENY`), and so is a Probe MCP call. A session
     the researcher turned off keeps the off refusals (`_deny`); one set to read
     only also loses the runs' own data (a write)."""
-    aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"))
+    aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
     if aimed:
         _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
         return

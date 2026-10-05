@@ -1,0 +1,127 @@
+{
+  "name": "probe-research-daemon",
+  "version": "0.116.0",
+  "description": "Probe Research, daemon profile: the Probe daemon records and reads the team's work for this agent. Installs instrument-code, the daemon's messages and questions, and the guard; no MCP.",
+  "author": {
+    "name": "Probe",
+    "email": "team@prbe.ai",
+    "url": "https://github.com/prbe-ai"
+  },
+  "homepage": "https://github.com/prbe-ai/research-os-agent",
+  "license": "MIT",
+  "keywords": [
+    "mlops",
+    "experiment-tracking",
+    "research"
+  ],
+  "interface": {
+    "displayName": "Probe Research (daemon)",
+    "shortDescription": "The Probe daemon records and reads for this agent",
+    "developerName": "Probe",
+    "websiteURL": "https://research.prbe.ai"
+  },
+  "skills": "./skills/",
+  "hooks": [
+    {
+      "event": "UserPromptSubmit",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_PLUGIN_PROFILE=daemon; [ -f \"$ROOT/hooks/tracking_guard.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" tracking_guard.py'",
+      "timeout": 5
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/statusline_refresh.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" statusline_refresh.py'",
+      "timeout": 5
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/approvals_hook.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" approvals_hook.py'",
+      "timeout": 5
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/reads_hook.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" reads_hook.py'",
+      "timeout": 5
+    },
+    {
+      "event": "SessionStart",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_PLUGIN_PROFILE=daemon; [ -f \"$ROOT/hooks/session-start.sh\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" session-start.sh'"
+    },
+    {
+      "event": "SessionStart",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/statusline_refresh.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" statusline_refresh.py'",
+      "timeout": 5
+    },
+    {
+      "event": "SessionStart",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/approvals_hook.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" approvals_hook.py'",
+      "timeout": 5
+    },
+    {
+      "event": "PreCompact",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_PLUGIN_PROFILE=daemon PROBE_HOOK_EVENT=precompact; [ -f \"$ROOT/hooks/session-start.sh\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" session-start.sh'",
+      "timeout": 10
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^Bash$|probe[-_]research",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_PLUGIN_PROFILE=daemon; [ -f \"$ROOT/hooks/tracking_guard.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" tracking_guard.py'",
+      "timeout": 5
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^AskUserQuestion$",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/approvals_hook.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" approvals_hook.py'",
+      "timeout": 5
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "^(Write|Edit|MultiEdit|NotebookEdit)$",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_PLUGIN_PROFILE=daemon; [ -f \"$ROOT/hooks/tracking_guard.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" tracking_guard.py'",
+      "timeout": 5
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "^(Bash|Skill|SlashCommand)$|probe[-_]research",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/telemetry.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" telemetry.py post-tool'",
+      "timeout": 5
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "^(Bash|Skill|SlashCommand)$|probe[-_]research",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_PLUGIN_PROFILE=daemon; [ -f \"$ROOT/hooks/tracking_guard.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" tracking_guard.py'",
+      "timeout": 5
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "^(Bash|Skill|SlashCommand)$|probe[-_]research",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/statusline_refresh.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" statusline_refresh.py'",
+      "timeout": 5
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "^AskUserQuestion$",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/approvals_hook.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" approvals_hook.py'",
+      "timeout": 5
+    },
+    {
+      "event": "SessionEnd",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/telemetry.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" telemetry.py session-end'",
+      "timeout": 3
+    },
+    {
+      "event": "SessionEnd",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_HOOK_EVENT=sessionend; [ -f \"$ROOT/hooks/team-note-sync.sh\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" team-note-sync.sh'",
+      "timeout": 3
+    },
+    {
+      "event": "Stop",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/statusline_notify.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" statusline_notify.py'",
+      "timeout": 5
+    },
+    {
+      "event": "Stop",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_HOOK_EVENT=stop; [ -f \"$ROOT/hooks/team-note-sync.sh\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" team-note-sync.sh'",
+      "timeout": 15
+    }
+  ]
+}

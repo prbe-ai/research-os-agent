@@ -1278,8 +1278,12 @@ DENY_REASON_APPROVALS = (
 )
 
 #: Tools that write a file named by one input field.
-_FILE_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path", "MultiEdit": "file_path",
-                     "NotebookEdit": "notebook_path"}
+#: The argument naming the file, per write tool. Claude Code's Write/Edit take
+#: `file_path`; Kimi Code's take `path` (relative to the session's folder). Both
+#: are checked whichever harness sent the call: a forged answer is refused by
+#: any name it uses.
+_FILE_WRITE_TOOLS = {"Write": ("file_path", "path"), "Edit": ("file_path", "path"),
+                     "MultiEdit": ("file_path",), "NotebookEdit": ("notebook_path",)}
 #: The folder as a command's text names it (`~/.local/state/probe/approvals/answers/x.json`,
 #: `$XDG_STATE_HOME/probe/approvals`, `cd probe && ... approvals/...`).
 _APPROVALS_TEXT = re.compile(r"probe/+approvals\b|\bapprovals/+(answers|requests)\b")
@@ -1289,7 +1293,7 @@ def approvals_dir() -> Path:
     return state_dir() / APPROVALS_DIRNAME
 
 
-def touches_approvals(tool_name: object, tool_input: object) -> "str | None":
+def touches_approvals(tool_name: object, tool_input: object, cwd: "str | None" = None) -> "str | None":
     """The approvals path a coding agent's tool call aims at, or None.
 
     A TRIPWIRE, NOT A BOUNDARY: the agent runs as the same user as the daemon,
@@ -1301,14 +1305,22 @@ def touches_approvals(tool_name: object, tool_input: object) -> "str | None":
     """
     if not isinstance(tool_input, dict):
         return None
-    field = _FILE_WRITE_TOOLS.get(tool_name) if isinstance(tool_name, str) else None
-    if field is not None:
-        target = tool_input.get(field)
-        if not isinstance(target, str) or not target:
-            return None
+    fields = _FILE_WRITE_TOOLS.get(tool_name) if isinstance(tool_name, str) else None
+    if fields is not None:
         root = os.path.realpath(str(approvals_dir()))
-        real = os.path.realpath(os.path.expanduser(target))
-        return target if real == root or real.startswith(root.rstrip(os.sep) + os.sep) else None
+        for field in fields:
+            target = tool_input.get(field)
+            if not isinstance(target, str) or not target:
+                continue
+            path = os.path.expanduser(target)
+            if not os.path.isabs(path) and isinstance(cwd, str) and cwd:
+                # A relative path is the SESSION's (Kimi resolves it against the
+                # session folder; a hook runs from the plugin folder).
+                path = os.path.join(cwd, path)
+            real = os.path.realpath(path)
+            if real == root or real.startswith(root.rstrip(os.sep) + os.sep):
+                return target
+        return None
     if tool_name == "Bash":
         command = tool_input.get("command")
         if isinstance(command, str) and (
@@ -2713,3 +2725,212 @@ def render(
     if room >= _MIN_SLUG_CHARS_DEGRADED:
         return head + label_tracked + _elide(project, room) + _LABEL_NO_CAPTURE + reason
     return head + label_bare + _no_capture_clause(reason, label_bare)
+
+
+# ---------------------------------------------------------------------------
+# WHICH SESSION RUNS THIS PROCESS, for a harness that does not say.
+#
+#   <state_dir>/harness-processes/<pid>-<start>.json
+#       {"harness": "<registry id>", "session_id": "<uuid>", "updated_at": 1790000000.0}
+#
+# Claude Code, Codex and pi put the session id in every shell they start; Kimi
+# Code puts none there. Its hooks (children of the harness process) write this
+# record for the harness process itself, found by the title the harness gives
+# its own process (the registry's `process_title`). A `probe` command or a
+# training script the harness starts walks up its parents to the same process
+# and reads the record. `<start>` is the process's start time, so a recycled pid
+# never reads a dead session's record. Linux reads /proc; macOS asks `ps` once.
+# ---------------------------------------------------------------------------
+
+HARNESS_PROCESSES_DIRNAME = "harness-processes"
+#: How far up a lookup walks: harness -> shell -> (wrappers) -> probe.
+_ANCESTOR_LIMIT = 16
+
+
+def harness_processes_dir() -> Path:
+    return state_dir() / HARNESS_PROCESSES_DIRNAME
+
+
+def _proc_linux(pid: int) -> "tuple[int, str, str] | None":
+    """(parent pid, start time, title) from /proc, or None."""
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            stat_line = fh.read().decode("utf-8", "replace")
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            argv0 = fh.read().split(b"\0", 1)[0].decode("utf-8", "replace")
+    except OSError:
+        return None
+    # comm may hold spaces and parentheses: the fields start after the LAST ')'.
+    fields = stat_line.rsplit(")", 1)[-1].split()
+    try:
+        return int(fields[1]), fields[19], argv0
+    except (IndexError, ValueError):
+        return None
+
+
+def _ps_table() -> "dict[int, tuple[int, str, str]]":
+    """Every process as {pid: (parent pid, start time, title)}, from one `ps`."""
+    import subprocess  # noqa: PLC0415 -- only off Linux
+
+    try:
+        # LC_ALL=C and TZ=UTC: `lstart` is the record key, so it must read the
+        # same in the hook and in the command, whatever their locale or zone.
+        out = subprocess.run(
+            ["ps", "-A", "-ww", "-o", "pid=,ppid=,lstart=,command="],
+            capture_output=True, text=True, timeout=3, check=False,
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC"},
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    table = {}
+    for line in out.splitlines():
+        parts = line.split(None, 7)  # pid, ppid, 5 words of lstart, command
+        if len(parts) < 8:
+            continue
+        try:
+            table[int(parts[0])] = (int(parts[1]), "-".join(parts[2:7]), parts[7].split(" ", 1)[0])
+        except ValueError:
+            continue
+    return table
+
+
+def _ancestors(pid: "int | None" = None) -> "list[tuple[int, str, str]]":
+    """(pid, start time, title) for `pid` (default: this process's parent) and
+    each process above it, nearest first. Empty where processes can't be read."""
+    current = os.getppid() if pid is None else pid
+    table = None if os.path.isdir("/proc/self") else _ps_table()
+    chain = []
+    for _ in range(_ANCESTOR_LIMIT):
+        if current <= 1:
+            break
+        info = _proc_linux(current) if table is None else table.get(current)
+        if info is None:
+            break
+        parent, start, title = info
+        chain.append((current, start, title))
+        current = parent
+    return chain
+
+
+def _titled(title: str, wanted: str) -> bool:
+    return os.path.basename(title) == wanted or title == wanted
+
+
+def _process_record_path(pid: int, start: str) -> Path:
+    return harness_processes_dir() / (f"{pid}-" + re.sub(r"[^A-Za-z0-9]", "", start) + ".json")
+
+
+def record_harness_process(harness: str, session_id: str, process_title: str) -> "Path | None":
+    """From a hook: note that the nearest ancestor titled `process_title` runs
+    `session_id` (replacing what it ran before: a TUI's /new and /resume). Also
+    sweeps records of processes that are gone. None when no such ancestor
+    exists or the record cannot be written. Never raises."""
+    if not (valid_session_id(session_id) and harness and process_title):
+        return None
+    try:
+        target = next(
+            ((pid, start) for pid, start, title in _ancestors() if _titled(title, process_title)),
+            None,
+        )
+        if target is None:
+            return None
+        path = _process_record_path(*target)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        body = json.dumps({"harness": harness, "session_id": session_id, "updated_at": time.time()})
+        if not _publish_atomically(path, body):
+            return None
+        _sweep_process_records(keep=path)
+        return path
+    except Exception:  # noqa: BLE001 -- fail-soft: a hook must never break
+        return None
+
+
+#: Off Linux a record cannot be checked against its process: it is kept this long.
+_RECORD_MAX_AGE_SECONDS = 14 * 86400
+
+
+def _sweep_process_records(keep: Path) -> None:
+    """Delete records whose process has exited (a pid gone, or reused by a
+    process that started later). Off Linux, records older than
+    `_RECORD_MAX_AGE_SECONDS` go instead."""
+    if not os.path.isdir("/proc/self"):
+        try:
+            cutoff = time.time() - _RECORD_MAX_AGE_SECONDS
+            for entry in harness_processes_dir().glob("*.json"):
+                if entry != keep and entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+        except OSError:
+            pass
+        return
+    try:
+        for entry in harness_processes_dir().glob("*.json"):
+            if entry == keep:
+                continue
+            pid_text, _, start_text = entry.stem.partition("-")
+            info = _proc_linux(int(pid_text)) if pid_text.isdigit() else None
+            if info is None or re.sub(r"[^A-Za-z0-9]", "", info[1]) != start_text:
+                entry.unlink()
+    except (OSError, ValueError):
+        return
+
+
+def process_environ(pid: int) -> "dict[str, str] | None":
+    """A process's own environment (Linux /proc only; None elsewhere or when
+    unreadable): what it inherited, as opposed to what was set below it."""
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    out = {}
+    for item in raw.split(b"\0"):
+        key, sep, value = item.partition(b"=")
+        if sep:
+            out[key.decode("utf-8", "replace")] = value.decode("utf-8", "replace")
+    return out
+
+
+def harness_process(
+    pid: "int | None" = None, stop_titles: "tuple[str, ...] | list[str]" = ()
+) -> "tuple[str, str, int] | None":
+    """(harness id, session id, harness pid) for the nearest recorded harness
+    ancestor; see `harness_process_session`. Never raises."""
+    try:
+        for ancestor, start, title in _ancestors(pid):
+            if any(_titled(title, wanted) for wanted in stop_titles):
+                return None
+            path = _process_record_path(ancestor, start)
+            if not path.is_file():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            harness, session_id = data.get("harness"), data.get("session_id")
+            if isinstance(harness, str) and harness and valid_session_id(session_id):
+                return harness, session_id, ancestor
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return None
+
+
+def harness_process_session(
+    pid: "int | None" = None, stop_titles: "tuple[str, ...] | list[str]" = ()
+) -> "tuple[str, str] | None":
+    """(harness id, session id) a harness's hook recorded for the nearest
+    ancestor of this process, or None. The walk stops at an ancestor titled one
+    of `stop_titles` (another coding agent, nearer than any recorded one: a
+    Claude Code started inside Kimi is Claude Code's). Never raises."""
+    try:
+        for ancestor, start, title in _ancestors(pid):
+            if any(_titled(title, wanted) for wanted in stop_titles):
+                return None
+            path = _process_record_path(ancestor, start)
+            if not path.is_file():
+                continue
+            data = json.loads(path.read_text(encoding="utf-8"))
+            harness, session_id = data.get("harness"), data.get("session_id")
+            if isinstance(harness, str) and harness and valid_session_id(session_id):
+                return harness, session_id
+            return None
+    except Exception:  # noqa: BLE001
+        return None
+    return None

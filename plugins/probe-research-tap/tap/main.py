@@ -59,6 +59,7 @@ from tap.session_journal import (
     Journal,
     ReconciliationRequired,
     SessionDeleted,
+    SourceRewritten,
     Wire,
     recoverable,
 )
@@ -368,6 +369,39 @@ def _settle_deleted(
         )
 
 
+#: What a rewritten session's journal row says, once logged: a restarted
+#: daemon finds it and stays quiet.
+REWRITTEN_ERROR = "transcript rewritten in place; capture stopped, nothing re-uploaded"
+
+
+def _note_rewritten(journal: Journal | None, session_id: str, noted: set[str]) -> None:
+    """A transcript rewritten under its cursor (`SourceRewritten`): one line.
+
+    The journal already refuses the session on every pass, so nothing is ever
+    re-uploaded; what was missing was a reason anyone could read. Before this
+    the refusal was logged as "retained for retry" on every tick, forever,
+    naming neither the file nor the rewrite.
+    """
+    if session_id in noted or journal is None:
+        return
+    noted.add(session_id)
+    try:
+        state = journal.get(session_id) or {}
+        if state.get("error") == REWRITTEN_ERROR:
+            return  # an earlier process said it
+        journal.update(session_id, error=REWRITTEN_ERROR)
+    except (sqlite3.Error, OSError):
+        # Called from an `except` clause: a second error would end the daemon.
+        # The journal still refuses the session; only the note waits.
+        state = {}
+    log.warning(
+        "session %s: its transcript %s was rewritten in place (bytes already uploaded "
+        "changed); capture of this session stopped and nothing will be re-uploaded",
+        session_id,
+        state.get("path"),
+    )
+
+
 def _require_capture_eligible(cwd: Path) -> None:
     if cfg.killswitch_active() or cfg.cwd_disabled(cwd):
         raise DeliveryPending("capture disabled for this source folder; pending bytes retained")
@@ -391,6 +425,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     # Also the only record of one when the refusal came before a journal
     # existed to hold it (a 410 on this daemon's very first receipts read).
     deleted: set[str] = set()
+    # Sessions whose transcript was rewritten under the cursor, said once each.
+    rewritten: set[str] = set()
     empty_ticks = 0
     # The Probe daemon worker rides this process's lifecycle as a child; see
     # companion_supervisor.py. Polled every tick and every few seconds of the
@@ -435,7 +471,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                     raise _NothingToDrain
                 if journal.is_deleted(c.session_id):
                     deleted.add(c.session_id)
-                if stopping and c.session_id not in deleted:
+                if stopping and c.session_id not in deleted and c.session_id not in rewritten:
                     journal.ensure(
                         c.session_id,
                         c.transcript_path,
@@ -447,7 +483,11 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                     journal.update(c.session_id, finalize_requested=True)
                 # Recover only sessions with durable consent/capture ownership.
                 # A session the server deleted is done: it never takes a slot.
-                states = [state for state in journal.sessions() if not state.get("deleted")]
+                states = [
+                    state
+                    for state in journal.sessions()
+                    if not state.get("deleted") and state["session_id"] not in rewritten
+                ]
                 current = [state for state in states if state["session_id"] == c.session_id]
                 # Stopping drains this session only: SessionEnd waits for this
                 # pass, and the other sessions' backlog is not the agent's exit.
@@ -516,6 +556,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                         journal.release_snapshot(state["session_id"])
                     except SessionDeleted as exc:
                         _settle_deleted(journal, exc, deleted)
+                    except SourceRewritten:
+                        _note_rewritten(journal, state["session_id"], rewritten)
                     except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
                         journal.update(state["session_id"], error=str(exc))
                         log.warning("session %s retained for retry: %s", state["session_id"], exc)
@@ -566,6 +608,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                 pass
             except SessionDeleted as exc:
                 _settle_deleted(journal, exc, deleted, c.transcript_path)
+            except SourceRewritten:
+                _note_rewritten(journal, c.session_id, rewritten)
             except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
                 log.warning("capture pending; source and queue retained: %s", exc)
             if stopping:

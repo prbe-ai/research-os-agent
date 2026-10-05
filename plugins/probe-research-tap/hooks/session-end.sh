@@ -39,6 +39,22 @@ WAIT=0
 [ "${1:-}" = "--wait" ] && WAIT=1
 
 HOOK_INPUT="$(cat)"
+SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
+# Any harness but Claude Code and Codex: its values, and its session id without
+# the harness's own prefix, from its registry row (tap/hook_env.py).
+REGISTRY_ENV=""
+case "$SOURCE" in
+    claude_code | codex) ;;
+    *)
+        TAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+        REGISTRY_ENV=$(printf '%s' "$HOOK_INPUT" | PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" \
+            python3 -m tap hook-env --source "$SOURCE" --payload 2>/dev/null || true)
+        ;;
+esac
+if [ -n "$REGISTRY_ENV" ]; then
+    eval "$REGISTRY_ENV"
+    HOOK_INPUT="$TAP_HOOK_INPUT"
+fi
 # One python3 start for both fields, and `-S` skips site-packages: start-up
 # spends the --wait budget below.
 PARSED=$(printf '%s' "$HOOK_INPUT" | python3 -S -c 'import json,sys
@@ -54,9 +70,9 @@ if [ -z "$SESSION_ID" ]; then
     exit 0
 fi
 
-SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
 WATCHER_PREFIX="probe-research-tap"
 [ "$SOURCE" = "codex" ] && WATCHER_PREFIX="prbe-codex-tap"
+[ -n "$REGISTRY_ENV" ] && WATCHER_PREFIX="$TAP_WATCHER_PREFIX"
 PID_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
 SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 STOPPING_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping"
@@ -116,8 +132,10 @@ rm -f "$PID_FILE"
 # inside the entry's 20s timeout; under Claude Code, at most its exit budget
 # less 300ms for this script's start-up (python3, ps: ~60ms on Linux) and the
 # hooks.json wrapper, which spend the same budget: 6 ticks at the default 1.5s.
+# A registry harness (Kimi Code) awaits its SessionEnd hooks up to the entry's
+# own timeout, as Codex does, so it gets the full wait.
 WAIT_TICKS=75
-if [ "$SOURCE" != codex ]; then
+if [ "$SOURCE" != codex ] && [ -z "$REGISTRY_ENV" ]; then
     BUDGET_MS="${CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS:-}"
     case "$BUDGET_MS" in '' | *[!0-9]*) BUDGET_MS=1500 ;; esac
     # Strip leading zeros so the length check measures magnitude, and read 0

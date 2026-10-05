@@ -1,0 +1,29 @@
+{
+  "version": "1",
+  "plugins": [
+    {
+      "id": "probe-research",
+      "name": "probe-research",
+      "displayName": "Probe Research",
+      "type": "plugin",
+      "source": "./plugins/probe-research",
+      "description": "Experiment-tracking skills wired to the Probe Research MCP server; writes go through the `probe` CLI."
+    },
+    {
+      "id": "probe-research-daemon",
+      "name": "probe-research-daemon",
+      "displayName": "Probe Research (daemon profile)",
+      "type": "plugin",
+      "source": "./plugins/probe-research-daemon",
+      "description": "The daemon profile (installed by `probe wizard` in place of probe-research): the Probe daemon records and reads for your coding agent."
+    },
+    {
+      "id": "probe-research-tap",
+      "name": "probe-research-tap",
+      "displayName": "Probe Research transcript capture",
+      "type": "plugin",
+      "source": "./plugins/probe-research-tap",
+      "description": "Ships client-sanitized per-session transcripts to Probe Research with source-bound device authentication."
+    }
+  ]
+}

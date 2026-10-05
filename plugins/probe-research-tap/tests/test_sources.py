@@ -4,8 +4,8 @@ import pytest
 from tap import sources
 
 
-def test_known_sources_are_the_three_shipped_harnesses():
-    assert set(sources.SOURCES) == {"claude_code", "codex", "pi"}
+def test_known_sources_are_the_shipped_harnesses():
+    assert set(sources.SOURCES) == {"claude_code", "codex", "pi", "kimi_code"}
 
 
 def test_lookup_returns_the_row_for_a_known_source():

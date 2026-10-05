@@ -57,7 +57,7 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from tap import config as cfg
 from tap import outbox, pi_discovery, sources
@@ -176,11 +176,16 @@ def transcript_root() -> Path:
     output), which is why it is not deleted outright.
     """
     source = cfg.current_source()
-    transcripts = sources.harness(source).transcripts
+    harness = sources.harness(source)
+    transcripts = harness.transcripts
     if transcripts.get("discovery") == "glob":
         env = os.environ.get(transcripts.get("root_env") or "")
         if env:
             return Path(env)
+    if transcripts.get("follows_home"):
+        # The harness's own home override moves its sessions too (Kimi Code:
+        # $KIMI_CODE_HOME/sessions).
+        return harness.transcript_root()
     return Path.home() / source.default_session_root
 
 
@@ -200,12 +205,16 @@ def _candidate_transcripts() -> list[Path]:
     `.jsonl` files (a project's own logs, a fork's other state) from being
     treated as candidate sessions.
     """
-    if sources.harness(cfg.current_source()).transcripts.get("discovery") == "header_scan":
+    harness = sources.harness(cfg.current_source())
+    if harness.transcripts.get("discovery") == "header_scan":
         return pi_discovery.discover_session_files()
     root = transcript_root()
     if not root.is_dir():
         return []
-    return list(root.rglob("*.jsonl"))
+    # The row's pattern: the main-session files only (Kimi Code keeps each
+    # subagent's wire beside the session's). A row without one gets
+    # "**/*.jsonl", exactly what rglob("*.jsonl") walked for Claude Code and Codex.
+    return list(root.glob(harness.transcript_pattern()))
 
 
 def session_id_for(path: Path) -> str | None:
@@ -225,7 +234,19 @@ def session_id_for(path: Path) -> str | None:
     stem = path.stem
     if stem.startswith("agent-"):
         return None
-    if cfg.current_source().session_id_strategy == sources.SESSION_ID_UUID_SUFFIX:
+    source = cfg.current_source()
+    if source.session_id_strategy == sources.SESSION_ID_PARENT_UUID:
+        # Every file has the same name; only one per session is the session's
+        # (Kimi Code: agents/main/, never a subagent's agents/agent-N/).
+        pattern = sources.harness(source).transcripts.get("pattern")
+        if pattern and not PurePath(path).match(pattern):
+            return None
+        for folder in path.parents:
+            m = _UUID_RE.search(folder.name)
+            if m:
+                return m.group(1)
+        return None
+    if source.session_id_strategy == sources.SESSION_ID_UUID_SUFFIX:
         m = _UUID_RE.search(stem)
         return m.group(1) if m else None
     return stem or None

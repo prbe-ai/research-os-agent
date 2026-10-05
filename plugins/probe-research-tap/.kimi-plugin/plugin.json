@@ -1,0 +1,51 @@
+{
+  "name": "probe-research-tap",
+  "version": "0.9.5",
+  "description": "Ships sanitized per-session Kimi Code transcripts to Probe Research OS.",
+  "author": {
+    "name": "Probe",
+    "email": "team@prbe.ai"
+  },
+  "homepage": "https://github.com/prbe-ai/research-os-agent",
+  "license": "MIT",
+  "keywords": [
+    "kimi",
+    "research",
+    "transcript",
+    "capture"
+  ],
+  "interface": {
+    "displayName": "Probe Session Capture",
+    "shortDescription": "Capture sanitized Kimi Code research sessions",
+    "longDescription": "Tails each Kimi Code session's wire, sanitizes it into the shared session shape, and delivers durable batches to Research OS.",
+    "developerName": "Probe",
+    "websiteURL": "https://research.prbe.ai"
+  },
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_TAP_SOURCE=kimi_code; [ -x \"$ROOT/hooks/session-start.sh\" ] || exit 0; exec \"$ROOT/hooks/session-start.sh\" >/dev/null'",
+      "timeout": 10
+    },
+    {
+      "event": "UserPromptSubmit",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_TAP_SOURCE=kimi_code; [ -x \"$ROOT/hooks/ensure-daemon.sh\" ] || exit 0; exec \"$ROOT/hooks/ensure-daemon.sh\" >/dev/null'",
+      "timeout": 5
+    },
+    {
+      "event": "SessionEnd",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_TAP_SOURCE=kimi_code; [ -x \"$ROOT/hooks/session-end.sh\" ] || exit 0; exec \"$ROOT/hooks/session-end.sh\" >/dev/null'",
+      "timeout": 3
+    },
+    {
+      "event": "SessionEnd",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_TAP_SOURCE=kimi_code; [ -x \"$ROOT/hooks/session-end.sh\" ] || exit 0; exec \"$ROOT/hooks/session-end.sh\" --wait >/dev/null'",
+      "timeout": 20
+    },
+    {
+      "event": "Stop",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_TAP_SOURCE=kimi_code; [ -x \"$ROOT/hooks/turn-end.sh\" ] || exit 0; exec \"$ROOT/hooks/turn-end.sh\" >/dev/null'",
+      "timeout": 3
+    }
+  ]
+}

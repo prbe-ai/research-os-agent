@@ -14,7 +14,7 @@ set -u
 # either way so nothing blocks on a full one).
 HOOK_INPUT="$(cat 2>/dev/null || true)"
 
-PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
+PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-${KIMI_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}}"
 
 # python3 required (same dependency the tap hook and mcp helper already assume);
 # degrade silently if absent rather than erroring.
@@ -69,11 +69,10 @@ do
 done
 
 export PROBE_BIN="${PROBE_BIN:-probe}"
-if [ "${PROBE_AGENT:-}" = "codex" ]; then
-  export PROBE_PLUGIN_JSON="$PLUGIN_ROOT/.codex-plugin/plugin.json"
-else
-  export PROBE_PLUGIN_JSON="$PLUGIN_ROOT/.claude-plugin/plugin.json"
-fi
+# The running harness's own manifest (.claude-plugin, .codex-plugin, .kimi-plugin),
+# from the harness registry beside this script.
+MANIFEST_DIR="$("$PY" "$PLUGIN_ROOT/hooks/_hook_harness.py" manifest-dir 2>/dev/null || true)"
+export PROBE_PLUGIN_JSON="$PLUGIN_ROOT/${MANIFEST_DIR:-.claude-plugin}/plugin.json"
 # PROBE_BASE_URL (self-host) is honored by version_check.py if exported; otherwise
 # it reads the CLI config, then falls back to the hosted API.
 

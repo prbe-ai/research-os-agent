@@ -26,7 +26,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 
-from . import codex_sanitize, pi_sanitize, sanitize
+from . import codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
 from .secrets import redact_event
 
 PROTOCOL_VERSION = 2
@@ -81,6 +81,7 @@ _SANITIZER_MODULES = {
     "sanitize": sanitize,
     "codex_sanitize": codex_sanitize,
     "pi_sanitize": pi_sanitize,
+    "kimi_sanitize": kimi_sanitize,
 }
 
 
@@ -107,6 +108,18 @@ class ReconciliationRequired(RuntimeError):
         super().__init__(message)
         self.safe_message = message if safe_message is None else safe_message
         self.status_code = status_code
+
+
+class SourceRewritten(ReconciliationRequired):
+    """The transcript's bytes changed inside a range already uploaded or
+    reserved: its producer rewrote the file in place. Kimi Code does, on
+    resume, when the file's `protocol_version` is older than its own (an
+    equal-size rewrite included, so file size proves nothing).
+
+    Final for this session on this machine: the journal keeps refusing it, so
+    nothing is re-uploaded and the pending bytes are kept, until the server
+    can take a replacement stream. The tap says so once.
+    """
 
 
 class UnsafePending(ReconciliationRequired):
@@ -564,8 +577,12 @@ class Journal:
         body = self.pending(state["session_id"])
         end = json.loads(body)["source_byte_end"] if body else state["source_byte_end"]
         expected = json.loads(body)["prefix_sha256"] if body else state["prefix_sha256"]
-        if prefix_hash(path, end) != expected:
-            raise ReconciliationRequired("source changed inside an acknowledged or pending range")
+        try:
+            actual = prefix_hash(path, end)
+        except ReconciliationRequired as exc:  # shorter than what was already sent
+            raise SourceRewritten(str(exc)) from exc
+        if actual != expected:
+            raise SourceRewritten("source changed inside an acknowledged or pending range")
 
     def _reconcile_finalization(self, state: dict, remote: dict) -> bool:
         """Retire only a no-data completion whose exact boundary is accepted.

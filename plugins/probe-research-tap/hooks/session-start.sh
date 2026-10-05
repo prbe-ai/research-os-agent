@@ -4,11 +4,27 @@
 # Reads {session_id, transcript_path, cwd} from stdin and spawns the tap
 # daemon detached, wrapped in a crash-recovery loop. Wrapper PID is recorded
 # in /tmp/probe-research-tap-watcher-<sid>.pid for SessionEnd cleanup.
+#
+# Claude Code's and Codex's values are spelled below. Every other hook-plugin
+# harness (Kimi Code) gets its values, and its payload in Claude Code's shape,
+# from its registry row through `python3 -m tap hook-env` (tap/hook_env.py).
 
 set -euo pipefail
 
 PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
+HOOK_INPUT="$(cat)"
+REGISTRY_ENV=""
+case "$SOURCE" in
+    claude_code | codex) ;;
+    *)
+        TAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+        REGISTRY_ENV=$(printf '%s' "$HOOK_INPUT" | PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" \
+            python3 -m tap hook-env --source "$SOURCE" --payload --transcript 2>/dev/null || true)
+        ;;
+esac
+TAP_MANIFEST_DIR=""
+TAP_HAS_TOKEN=""
 if [ "$SOURCE" = "codex" ]; then
     if [ -n "${PRBE_CODEX_TAP_PLUGIN_DIR:-}" ]; then
         PLUGIN_DIR="$PRBE_CODEX_TAP_PLUGIN_DIR"
@@ -20,6 +36,13 @@ if [ "$SOURCE" = "codex" ]; then
         PLUGIN_DIR="$HOME/.codex/state/probe-research-tap"
     fi
     WATCHER_PREFIX="prbe-codex-tap"
+elif [ -n "$REGISTRY_ENV" ]; then
+    eval "$REGISTRY_ENV"
+    # This script runs from that harness's own copy of the plugin.
+    PLUGIN_ROOT="$TAP_ROOT"
+    PLUGIN_DIR="$TAP_PLUGIN_DIR"
+    WATCHER_PREFIX="$TAP_WATCHER_PREFIX"
+    HOOK_INPUT="$TAP_HOOK_INPUT"
 else
     PLUGIN_DIR="${PROBE_RESEARCH_TAP_PLUGIN_DIR:-$HOME/.claude/plugins/probe-research-tap}"
     WATCHER_PREFIX="probe-research-tap"
@@ -45,7 +68,6 @@ find /tmp/ -maxdepth 1 \( -name "${WATCHER_PREFIX}-watcher-*.shutdown" \
     -o -name "${WATCHER_PREFIX}-watcher-*.owner" -o -name "${WATCHER_PREFIX}-watcher-*.stopping" \) \
     -mtime +2 -delete 2>/dev/null || true
 
-HOOK_INPUT="$(cat)"
 SESSION_ID=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || echo "")
 TRANSCRIPT_PATH=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("transcript_path"); print(v if isinstance(v,str) else "")' 2>/dev/null || echo "")
 CWD=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys,os; print(json.load(sys.stdin).get("cwd") or os.getcwd())' 2>/dev/null || echo "")
@@ -65,6 +87,7 @@ LOG_FILE="${LOG_DIR}/${SESSION_ID}.log"
 RUNNING_VER=""
 MANIFEST="$PLUGIN_ROOT/.claude-plugin/plugin.json"
 [ "$SOURCE" = "codex" ] && MANIFEST="$PLUGIN_ROOT/.codex-plugin/plugin.json"
+[ -n "$TAP_MANIFEST_DIR" ] && MANIFEST="$PLUGIN_ROOT/$TAP_MANIFEST_DIR/plugin.json"
 if [ -f "$MANIFEST" ]; then
     RUNNING_VER=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("version",""))' \
         "$MANIFEST" 2>/dev/null || echo "")
@@ -109,8 +132,11 @@ fi
 # overrides for tests/dev). Surface once and no-op when none is present.
 TOKEN_ENV="${PROBE_INGEST_TOKEN:-}"
 [ "$SOURCE" = "codex" ] && TOKEN_ENV="${PRBE_CODEX_TAP_TOKEN:-}"
+# A registry harness: hook-env already asked tap/config.py's load_token(), which
+# never takes the probe CLI's token for a harness that token was not minted for.
+[ -n "$REGISTRY_ENV" ] && TOKEN_ENV="$TAP_HAS_TOKEN"
 if [ ! -f "$PLUGIN_DIR/.token" ] && [ -z "$TOKEN_ENV" ]; then
-    if [ "$SOURCE" = "codex" ]; then
+    if [ "$SOURCE" = "codex" ] || [ -n "$REGISTRY_ENV" ]; then
         HAS_TOKEN=""
     else
     HAS_TOKEN=$(python3 - <<'PYEOF' 2>/dev/null || echo ""

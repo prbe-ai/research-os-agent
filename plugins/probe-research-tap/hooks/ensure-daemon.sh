@@ -11,18 +11,43 @@
 # subprocess, no network. Only the rare unhealthy case pays for a spawn.
 set -uo pipefail
 
+SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
 ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}"
+case "$SOURCE" in
+    claude_code | codex | pi) ;;
+    # Any other hook-plugin harness (Kimi Code) runs this from its own copy of
+    # the plugin, and sets neither variable.
+    *) [ -n "$ROOT" ] || ROOT="$(cd "$(dirname "$0")/.." && pwd)" ;;
+esac
 ROOT="${ROOT%/}"
 [ -x "$ROOT/hooks/session-start.sh" ] || exit 0
 
 HOOK_INPUT=$(cat 2>/dev/null || true)
-SID=$(printf '%s' "$HOOK_INPUT" | python3 -c \
-    'import json,sys; v=json.load(sys.stdin).get("session_id"); print(v if isinstance(v,str) else "")' \
-    2>/dev/null || echo "")
+# Its values, and its session id without the harness's own prefix, from its
+# registry row (tap/hook_env.py): ONE python start, the same cost as the parse
+# below.
+REGISTRY_ENV=""
+case "$SOURCE" in
+    claude_code | codex | pi) ;;
+    *)
+        REGISTRY_ENV=$(printf '%s' "$HOOK_INPUT" | PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$ROOT" \
+            python3 -m tap hook-env --source "$SOURCE" --payload 2>/dev/null || echo "")
+        ;;
+esac
+if [ -n "$REGISTRY_ENV" ]; then
+    eval "$REGISTRY_ENV"
+    SID="$TAP_SESSION_ID"
+    HOOK_INPUT="$TAP_HOOK_INPUT"
+else
+    SID=$(printf '%s' "$HOOK_INPUT" | python3 -c \
+        'import json,sys; v=json.load(sys.stdin).get("session_id"); print(v if isinstance(v,str) else "")' \
+        2>/dev/null || echo "")
+fi
 [ -n "$SID" ] || exit 0
 
-SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
-if [ "$SOURCE" = "codex" ]; then
+if [ -n "$REGISTRY_ENV" ]; then
+    PREFIX="$TAP_WATCHER_PREFIX"
+elif [ "$SOURCE" = "codex" ]; then
     PREFIX="prbe-codex-tap"
 else
     PREFIX="probe-research-tap"
@@ -62,6 +87,8 @@ case "$SOURCE" in
         STATE="${PROBE_RESEARCH_TAP_PLUGIN_DIR:-$HOME/.claude/plugins/probe-research-tap}"
         ;;
 esac
+# A registry harness: the folder its row names (tap/config.py::plugin_dir()).
+[ -z "$REGISTRY_ENV" ] || STATE="$TAP_PLUGIN_DIR"
 
 # Ten-minute bound, the same rule `probe`'s ensure_capture uses and the same
 # path (tap/config.py::heal_marker), so the two cannot drift into two rules.
@@ -89,5 +116,11 @@ mkdir -p "$STATE/heal" 2>/dev/null || true
 # fail-open by contract, and on UserPromptSubmit an exit code of 2 BLOCKS the
 # user's prompt — so a spawn that went wrong must not be able to cost the
 # researcher their turn. session-start.sh already logs its own failures.
-printf '%s' "$HOOK_INPUT" | "$ROOT/hooks/session-start.sh" || true
+if [ -n "$REGISTRY_ENV" ]; then
+    # Kimi Code injects a UserPromptSubmit hook's stdout into the model's
+    # context as text, so session-start.sh's Claude Code JSON stays out of it.
+    printf '%s' "$HOOK_INPUT" | "$ROOT/hooks/session-start.sh" >/dev/null || true
+else
+    printf '%s' "$HOOK_INPUT" | "$ROOT/hooks/session-start.sh" || true
+fi
 exit 0

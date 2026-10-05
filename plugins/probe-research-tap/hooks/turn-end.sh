@@ -16,6 +16,22 @@
 set -uo pipefail
 
 HOOK_INPUT="$(cat)"
+SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
+# Any harness but Claude Code and Codex: its payload in Claude Code's shape, its
+# session id without the harness's own prefix and its transcript found when the
+# payload names none (Kimi Code), from its registry row (tap/hook_env.py).
+case "$SOURCE" in
+    claude_code | codex) ;;
+    *)
+        TAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+        REGISTRY_ENV=$(printf '%s' "$HOOK_INPUT" | PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" \
+            python3 -m tap hook-env --source "$SOURCE" --payload --transcript 2>/dev/null || true)
+        if [ -n "$REGISTRY_ENV" ]; then
+            eval "$REGISTRY_ENV"
+            HOOK_INPUT="$TAP_HOOK_INPUT"
+        fi
+        ;;
+esac
 printf '%s' "$HOOK_INPUT" | python3 -c '
 import json, os, re, sys, tempfile, time
 from pathlib import Path

@@ -26,6 +26,9 @@ from pathlib import Path
 #: only two forms forever; reconcile.session_id_for() dispatches on these.
 SESSION_ID_STEM = "stem"
 SESSION_ID_UUID_SUFFIX = "uuid_suffix"
+#: The id is the trailing UUID of the nearest folder above the transcript
+#: whose name ends in one (Kimi Code: <wd>/session_<uuid>/agents/main/wire.jsonl).
+SESSION_ID_PARENT_UUID = "parent_uuid"
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,8 @@ class Source:
     #:     stem (Codex: rollout-<ts>-<uuid>.jsonl; pi: <ts>_<uuid>.jsonl —
     #:     both prefix the uuid with other content, so only the tail is
     #:     trustworthy).
+    #:   SESSION_ID_PARENT_UUID — every transcript has the same name, and the
+    #:     id is the folder above it (Kimi Code: session_<uuid>/agents/main/).
     session_id_strategy: str
 
 

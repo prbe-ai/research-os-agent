@@ -17,13 +17,28 @@ macOS keychain.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+
+#: Real Kimi Code 2.1.1 sessions, recorded once for the whole monorepo
+#: (agent/tests/fixtures/kimi_code/README.md). Not copied here: two copies of
+#: one recording drift.
+KIMI_FIXTURES = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "kimi_code"
 
 
 @pytest.fixture(autouse=True)
 def _isolate_transcript_roots(monkeypatch, tmp_path_factory):
-    """Point both flavours' transcript discovery at an empty per-test directory."""
+    """Point every flavour's transcript discovery at an empty per-test directory."""
     root = tmp_path_factory.mktemp("transcripts")
     monkeypatch.setenv("PROBE_RESEARCH_TAP_PROJECTS_DIR", str(root))
     monkeypatch.setenv("PRBE_CODEX_SESSIONS_DIR", str(root / "codex"))
+    monkeypatch.setenv("PROBE_KIMI_SESSIONS_DIR", str(root / "kimi"))
     yield
+
+
+@pytest.fixture
+def kimi_fixtures() -> Path:
+    if not KIMI_FIXTURES.is_dir():  # an installed tap, no monorepo alongside
+        pytest.skip("Kimi Code fixtures live in the research-os monorepo")
+    return KIMI_FIXTURES

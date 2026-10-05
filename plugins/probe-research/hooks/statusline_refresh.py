@@ -179,7 +179,18 @@ def due(marker, session_id: str) -> bool:
 #: Agents whose session id the server records on `runs.foreign_keys`. Must track
 #: `app.runs.agent_session.CAPTURED_AGENTS` and the SDK's capability table; an
 #: agent named here that the server does not record simply returns no rows.
-AGENT_KEYS = ("claude_code", "codex", "pi")
+def _captured_ids() -> tuple:
+    import json as _json  # noqa: PLC0415
+
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "harnesses.json"), encoding="utf-8") as fh:
+            rows = _json.load(fh)["harnesses"]
+        return tuple(row["id"] for row in rows if row.get("captured") is True)
+    except (OSError, ValueError, KeyError, TypeError):
+        return ("claude_code", "codex", "pi")
+
+
+AGENT_KEYS = _captured_ids()
 
 
 def _get(base_url: str, token: str, path: str, params: dict | None = None):

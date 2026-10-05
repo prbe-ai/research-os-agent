@@ -11,6 +11,9 @@ way off the machine, and it must not be the one the scanner does not see.
     Codex         {"type": "response_item", "payload": {"type": "message" |
                    "function_call" | "function_call_output" | "custom_tool_call" | ...}}
     pi            {"type": "message", "message": {"role": "user"|"assistant"|"toolResult"}}
+    Kimi Code     {"type": "context.append_message", "message": {"role": "user", "origin": ...}}
+                  {"type": "context.append_loop_event", "event": {"type": "content.part" |
+                   "tool.call" | "tool.result", ...}}
 
 Unknown shapes are skipped, never guessed at: an event the daemon misreads is
 worse than one it did not see, because it would ground a write on it.
@@ -18,6 +21,7 @@ worse than one it did not see, because it would ground a write on it.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import shlex
@@ -294,8 +298,60 @@ def _pi(obj: dict, offset: int) -> list[Event]:
     return []
 
 
+#: Kimi Code `<bash-input>`/`<bash-stdout>` text is XML-escaped by Kimi.
+_KIMI_SHELL_TAG = re.compile(r"<bash-(input|stdout|stderr)>(.*?)</bash-\1>", re.DOTALL)
+
+
+def _kimi_shell_text(content: Any, tag: str) -> str:
+    text = "\n".join(_block_texts(content))
+    return "\n".join(html.unescape(m.group(2)).strip("\n") for m in _KIMI_SHELL_TAG.finditer(text) if m.group(1) == tag)
+
+
+def _kimi(obj: dict, offset: int) -> list[Event]:
+    """Kimi Code `wire.jsonl`: the engine records only (kimi_sanitize.py says
+    why), so a message is read once although the wire holds it twice."""
+    kind = obj.get("type")
+    if kind == "context.append_message":
+        message = obj.get("message")
+        if not isinstance(message, dict) or message.get("role") != "user":
+            return []
+        origin = message.get("origin") if isinstance(message.get("origin"), dict) else {}
+        content = message.get("content")
+        if origin.get("kind") == "user":
+            return [Event(offset, USER, text=t) for t in _block_texts(content) if t.strip()]
+        if origin.get("kind") == "shell_command":
+            # The researcher's own `!command`: a call and its output, like pi's.
+            if origin.get("phase") == "input":
+                command = _kimi_shell_text(content, "input")
+                return [Event(offset, TOOL_CALL, tool="Bash", tool_input={"command": command})] if command else []
+            output = "\n".join(filter(None, (_kimi_shell_text(content, "stdout"), _kimi_shell_text(content, "stderr"))))
+            return [Event(offset, TOOL_RESULT, text=output, is_error=origin.get("isError") is True)]
+        # System reminders, hook output, stop-hook/subagent triggers, skill bodies.
+        return []
+    if kind != "context.append_loop_event" or not isinstance(obj.get("event"), dict):
+        return []
+    loop = obj["event"]
+    inner = loop.get("type")
+    if inner == "content.part":
+        part = loop.get("part")
+        if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str):
+            return [Event(offset, ASSISTANT, text=part["text"])] if part["text"].strip() else []
+        return []
+    if inner == "tool.call":
+        args = loop.get("args") if isinstance(loop.get("args"), dict) else {}
+        call_id = loop.get("toolCallId") if isinstance(loop.get("toolCallId"), str) else None
+        return [Event(offset, TOOL_CALL, tool=str(loop.get("name") or ""), call_id=call_id, tool_input=args)]
+    if inner == "tool.result":
+        result = loop.get("result") if isinstance(loop.get("result"), dict) else {}
+        output = result.get("output")
+        text = output if isinstance(output, str) else "\n".join(_block_texts(output))
+        call_id = loop.get("toolCallId") if isinstance(loop.get("toolCallId"), str) else None
+        return [Event(offset, TOOL_RESULT, text=text, call_id=call_id, is_error=result.get("isError") is True)]
+    return []
+
+
 #: One parser per transcript format (a registry row's `transcripts.format`).
-PARSERS = {"claude_jsonl": _claude, "codex_rollout": _codex, "pi_jsonl": _pi}
+PARSERS = {"claude_jsonl": _claude, "codex_rollout": _codex, "pi_jsonl": _pi, "kimi_wire": _kimi}
 
 
 def _parser_for(source: str):

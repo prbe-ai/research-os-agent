@@ -72,7 +72,10 @@
         "wake": true
       },
       "statusline": true,
-      "reasoning_setting": "settings-json"
+      "reasoning_setting": "settings-json",
+      "hook_output": "claude-json",
+      "session_id_prefix": null,
+      "process_title": null
     },
     {
       "id": "cursor",
@@ -109,7 +112,10 @@
         "wake": false
       },
       "statusline": false,
-      "reasoning_setting": null
+      "reasoning_setting": null,
+      "hook_output": "claude-json",
+      "session_id_prefix": null,
+      "process_title": null
     },
     {
       "id": "codex",
@@ -175,7 +181,10 @@
         "wake": false
       },
       "statusline": false,
-      "reasoning_setting": "config-toml"
+      "reasoning_setting": "config-toml",
+      "hook_output": "claude-json",
+      "session_id_prefix": null,
+      "process_title": null
     },
     {
       "id": "pi",
@@ -235,7 +244,86 @@
         "wake": true
       },
       "statusline": false,
-      "reasoning_setting": null
+      "reasoning_setting": null,
+      "hook_output": "claude-json",
+      "session_id_prefix": null,
+      "process_title": null
+    },
+    {
+      "id": "kimi_code",
+      "label": "Kimi Code",
+      "display": "Kimi Code session",
+      "aliases": [
+        "kimi"
+      ],
+      "binary": "kimi",
+      "cli_flag": "kimi",
+      "family": "hook-plugin",
+      "captured": true,
+      "installable": true,
+      "searchable": false,
+      "route": "kimi-code",
+      "icon": "/icons/kimi-code.svg",
+      "detect_env": [
+        "PROBE_KIMI_SESSION_ID"
+      ],
+      "session_env": "PROBE_KIMI_SESSION_ID",
+      "version_env": null,
+      "min_version": [
+        2,
+        1,
+        1
+      ],
+      "home": {
+        "path": ".kimi-code",
+        "env": "KIMI_CODE_HOME"
+      },
+      "transcripts": {
+        "root": ".kimi-code/sessions",
+        "session_id": "parent_uuid",
+        "format": "kimi_wire",
+        "watch": "file",
+        "root_env": "PROBE_KIMI_SESSIONS_DIR",
+        "discovery": "glob",
+        "pattern": "*/session_*/agents/main/wire.jsonl",
+        "follows_home": true
+      },
+      "capture": {
+        "token_env": "PROBE_KIMI_TAP_TOKEN",
+        "plugin_dir_env": "PROBE_KIMI_TAP_PLUGIN_DIR",
+        "plugin_dir": ".kimi-code/state/probe-research-tap",
+        "watcher_prefix": "probe-research-tap",
+        "sanitizer": "kimi_sanitize",
+        "cli_token_fallback": false,
+        "legacy_plugin_dir": null
+      },
+      "plugin": {
+        "root_env": "KIMI_PLUGIN_ROOT",
+        "manifest_dir": ".kimi-plugin",
+        "marketplace": "kimi-marketplace.json",
+        "marketplace_source": "string"
+      },
+      "package_dir": null,
+      "instructions": {
+        "global": "AGENTS.md",
+        "project": [
+          "AGENTS.md"
+        ]
+      },
+      "team_note": "render",
+      "mcp": "plugin-manifest",
+      "question_tool": "AskUserQuestion",
+      "lean_profile": "second-plugin",
+      "attribution_requires_pairing": false,
+      "capabilities": {
+        "prompt_context": true,
+        "wake": false
+      },
+      "statusline": false,
+      "reasoning_setting": null,
+      "hook_output": "message-json",
+      "session_id_prefix": "session_",
+      "process_title": "kimi-code"
     }
   ]
 }

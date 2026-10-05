@@ -48,9 +48,23 @@ FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION, FAMILY_DETECT_ONLY)
 CAPABILITY_PROMPT_CONTEXT = "prompt_context"  # add text to the next prompt from a hook
 CAPABILITY_WAKE = "wake"  # start a turn for a late answer
 
-#: How a transcript's filename yields its session id.
+#: How a transcript's path yields its session id.
 SESSION_ID_STEM = "stem"  # the whole stem is the id
 SESSION_ID_UUID_SUFFIX = "uuid_suffix"  # the trailing UUID of a longer stem
+#: The trailing UUID of the nearest folder above the file whose name ends in one
+#: (Kimi Code: sessions/<wd>/session_<uuid>/agents/main/wire.jsonl).
+SESSION_ID_PARENT_UUID = "parent_uuid"
+SESSION_ID_STRATEGIES = (SESSION_ID_STEM, SESSION_ID_UUID_SUFFIX, SESSION_ID_PARENT_UUID)
+
+#: The transcript glob (relative to the root) when a row names none.
+DEFAULT_TRANSCRIPT_PATTERN = "**/*.jsonl"
+
+#: How a hook hands text to the model. Claude Code and Codex read
+#: `{"hookSpecificOutput": {"additionalContext": ...}}`; Kimi Code reads
+#: `{"message": ...}` (it injects any other JSON as raw text).
+HOOK_OUTPUT_CLAUDE_JSON = "claude-json"
+HOOK_OUTPUT_MESSAGE_JSON = "message-json"
+HOOK_OUTPUTS = (HOOK_OUTPUT_CLAUDE_JSON, HOOK_OUTPUT_MESSAGE_JSON)
 
 #: What every hook-plugin harness's `plugin` object names.
 PLUGIN_KEYS = ("root_env", "manifest_dir", "marketplace", "marketplace_source")
@@ -148,6 +162,16 @@ class Harness:
     #: The package an extension-family harness installs (a dir under agent/,
     #: rendered into the public mirror); None for the other families.
     package_dir: str | None = None
+    #: How this harness's hooks hand text to the model (HOOK_OUTPUT_*).
+    hook_output: str = HOOK_OUTPUT_CLAUDE_JSON
+    #: A prefix the harness puts before the UUID in its own session ids
+    #: (Kimi Code: "session_"). Probe always stores the bare UUID.
+    session_id_prefix: str | None = None
+    #: The name the harness gives its own process, when it puts no session id
+    #: in its shells' environment (Kimi Code renames itself "kimi-code"). Its
+    #: hooks then record "this process runs session X", and a `probe` command
+    #: finds its session by walking up to that process.
+    process_title: str | None = None
 
     def can(self, capability: str) -> bool:
         """Whether this harness has a CAPABILITY_* (unknown means no)."""
@@ -165,6 +189,43 @@ class Harness:
         values = os.environ if env is None else env
         override = (values.get(self.home["env"]) or "").strip()
         return Path(override).expanduser() if override else Path.home() / self.home["path"]
+
+    def canonical_session_id(self, raw: str | None) -> str:
+        """The id Probe stores for one of this harness's session ids: the raw
+        id without the harness's own prefix (`session_<uuid>` -> `<uuid>`)."""
+        text = (raw or "").strip()
+        prefix = self.session_id_prefix
+        if prefix and text.startswith(prefix):
+            return text[len(prefix):]
+        return text
+
+    def native_session_id(self, canonical: str) -> str:
+        """The harness's own spelling of a stored session id (for resume
+        commands): the inverse of canonical_session_id."""
+        prefix = self.session_id_prefix or ""
+        return canonical if not prefix or canonical.startswith(prefix) else prefix + canonical
+
+    def transcript_root(self, env: Mapping[str, str] | None = None) -> Path | None:
+        """Where this harness writes transcripts: the row's override variable,
+        else (when the row follows its home) under the home override, else
+        under $HOME."""
+        if not self.transcripts:
+            return None
+        values = os.environ if env is None else env
+        override = (values.get(self.transcripts.get("root_env") or "") or "").strip()
+        if override:
+            return Path(override).expanduser()
+        root = self.transcripts["root"]
+        if self.transcripts.get("follows_home") and self.home:
+            home_path = self.home["path"].rstrip("/") + "/"
+            if root.startswith(home_path):
+                return self.home_dir(values) / root[len(home_path):]
+        return Path.home() / root
+
+    def transcript_pattern(self) -> str:
+        """The glob, relative to transcript_root(), that finds this harness's
+        main-session transcripts (subagent files excluded)."""
+        return (self.transcripts or {}).get("pattern") or DEFAULT_TRANSCRIPT_PATTERN
 
 
 @dataclass(frozen=True)
@@ -288,13 +349,11 @@ def _harness(row: Any, index: int) -> Harness:
             raise RegistryError(f"{where}.min_version must be [major, minor, patch] or null")
         min_version = tuple(min_version)
     transcripts = _object_or_none(row.get("transcripts"), f"{where}.transcripts", ("root",))
-    if transcripts is not None and transcripts.get("session_id") not in (
-        SESSION_ID_STEM,
-        SESSION_ID_UUID_SUFFIX,
-    ):
-        raise RegistryError(
-            f"{where}.transcripts.session_id must be {SESSION_ID_STEM!r} or {SESSION_ID_UUID_SUFFIX!r}"
-        )
+    if transcripts is not None and transcripts.get("session_id") not in SESSION_ID_STRATEGIES:
+        raise RegistryError(f"{where}.transcripts.session_id must be one of {SESSION_ID_STRATEGIES}")
+    hook_output = row.get("hook_output", HOOK_OUTPUT_CLAUDE_JSON)
+    if hook_output not in HOOK_OUTPUTS:
+        raise RegistryError(f"{where}.hook_output must be one of {HOOK_OUTPUTS}")
     harness = Harness(
         id=hid,
         label=_required_str(row, "label", where),
@@ -330,6 +389,9 @@ def _harness(row: Any, index: int) -> Harness:
         statusline=_bool(row.get("statusline"), f"{where}.statusline"),
         reasoning_setting=_str_or_none(row.get("reasoning_setting"), f"{where}.reasoning_setting"),
         package_dir=_str_or_none(row.get("package_dir"), f"{where}.package_dir"),
+        hook_output=hook_output,
+        session_id_prefix=_str_or_none(row.get("session_id_prefix"), f"{where}.session_id_prefix"),
+        process_title=_str_or_none(row.get("process_title"), f"{where}.process_title"),
     )
     if harness.captured and (
         harness.route is None or harness.capture is None or harness.transcripts is None

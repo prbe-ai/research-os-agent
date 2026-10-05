@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **Kimi Code is a supported coding agent.** `probe wizard` installs Probe's plugins into Kimi Code
+  (`--agent kimi`), and its sessions are captured, recorded inline or by the Probe
+  daemon (Who records in Kimi Code), with the guard and held questions. Kimi Code has no plugin
+  install command, so the wizard writes Kimi's own plugin list the way `/plugins install` does,
+  and never touches a list in a layout it does not know (it prints the `/plugins install` step
+  instead). Kimi puts no session id in its shells, so its hooks record which Kimi process runs
+  which session and `probe` (and `probe.init()` in a script Kimi starts) finds its session by
+  walking up to that process. Needs Kimi Code 2.1.1 or newer; `probe doctor` shows the version and
+  whether Kimi's plugin list is managed. Each plugin version gets its own folder, so an update
+  never swaps files under a running session. A Kimi session is never treated as bypass: a resumed
+  session writes no new permission mode, so held questions are always asked. Past Kimi sessions
+  can be imported like Claude Code's and Codex's. The approvals-folder guard now also reads a
+  write tool's `path` argument (Kimi's spelling), relative to the session folder.
+
+- **A transcript rewritten in place is never read again from the start (every harness).** The
+  daemon used to start over when a chat log shrank, which handed it every earlier event again as
+  new (one rewrite replayed all 14 events of a two-turn session), and read on inside unrelated bytes
+  when a rewrite kept or grew the size. It now keeps the file's inode and a hash of the 4 KB before
+  its cursor and, when two polls in a row see changed bytes (an inode change alone is not
+  enough: copies and network mounts change it), stops reading that log with one notice and one line in
+  `daemon-errors.log`; the store gains three nullable columns and stays format 1. The capture tap
+  stops that session's upload with one clear log line instead of retrying every tick. Kimi Code
+  rewrites its wire when it migrates an older one on resume.
+
 ## 0.209.0
 
 - **Citation commands describe the server as it is now (task C13).** The server removed its

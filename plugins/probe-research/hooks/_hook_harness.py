@@ -122,3 +122,15 @@ def session_id(env=None) -> str:
         if raw.get("captured") is True and name and values.get(name):
             return values[name]
     return ""
+
+
+def manifest_dir(env=None) -> str:
+    """The plugin manifest folder of the harness running this hook
+    (`.claude-plugin`, `.codex-plugin`, `.kimi-plugin`)."""
+    return (current(env).plugin or {}).get("manifest_dir") or ".claude-plugin"
+
+
+if __name__ == "__main__":
+    # `python3 _hook_harness.py manifest-dir`: for the shell hooks.
+    if sys.argv[1:] == ["manifest-dir"]:
+        print(manifest_dir())
