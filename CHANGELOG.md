@@ -2,6 +2,61 @@
 
 ## Unreleased
 
+- **An experiment's children are reached through the experiment API too** (light experiments
+  X21; needs a server with research-os #2282 deployed: against an older one these calls raise
+  `CapabilityUnavailable` naming it). Apart from its W&B sources, nothing in the SDK, the CLI,
+  the MCP or the Probe daemon addresses an experiment's children at its project address
+  (`/v1/projects/{E}/...`) any more, so they keep working when the server removes that address
+  (R6):
+  - Runs (`create_run`, `probe.init`, `run()`, forks, `run child`, offline replay), groups
+    (`create_group`, `list_groups`), lineage (`experiment_edges`, and the new
+    `experiment_lineage`), manifests (`experiment_version`, `list_experiment_versions`,
+    `get_experiment_version`), `experiment_reproduce`, `get_experiment_code`, files
+    (`list_experiment_artifacts`, the experiment anchor of `upload_file`, references and
+    listings), sub-notes and notes writes go to `/v1/projects/{P}/experiments/{E}/<child>`.
+    `create_run`, `create_group`, `list_groups`, `experiment_edges`, `experiment_lineage`,
+    `experiment_version`, `list_experiment_versions`, `get_experiment_version`,
+    `experiment_reproduce`, `get_experiment_code`, `list_experiment_artifacts` and `list_anchored`
+    take an optional keyword `project_id=`; the notes, sub-note, upload and reference calls place
+    the experiment by its id. Without a project the experiment's is found once per client (`GET
+    /v1/scopes/{E}`, or any read that already placed it) and remembered. A 404 or 410 at a
+    remembered OR supplied project (the experiment moved, or that project is in the trash) asks
+    again once and, if the experiment is elsewhere, sends the call there.
+  - A write that is QUEUED (async writes, `probe --async artifact add --experiment`,
+    `enqueue_artifact_reference`) is journaled by the experiment alone
+    (`/v1/projects/~/experiments/{E}/...`) and placed under its project when it drains: queueing
+    needs no network, and a move before delivery does not dead-letter it. A drainer older than
+    this release sends such an op to a 404 and dead-letters it.
+  - An experiment's file rows (listings, uploads, references) now name the project in
+    `project_id` beside the experiment in `experiment_id`, as the experiment API answers them
+    (they used to say `project_id = E`).
+  - The experiment's `document` and its notes' headroom (`notes_limit_chars`,
+    `notes_remaining_chars`) come from the experiment detail: `get_experiment_document` and
+    `probe notes show` on an experiment read `GET /v1/projects/{P}/experiments/{E}`.
+    `get_experiment_leaf` (0.209.0) is now that same read. `update_experiment` sends the name,
+    question and document in ONE `PATCH`, so the edit lands whole or not at all (no more
+    `DocumentNotWritten` from an edit; a create still writes its document right after), and a
+    document-only edit returns that write's answer rather than a re-read of the experiment.
+  - An experiment's notes replace is `PATCH /v1/projects/{P}/experiments/{E}` with `notes` and
+    `base_version` (or `force`); the experiment API's body has no `op_key`, so it is not sent.
+  - `Reader` (service tokens): `experiments()`, `experiment()` and `groups()` read the experiment
+    API (`experiments(tags=...)` is refused: an experiment's tags are kept read-only).
+  - The MCP's experiment lineage view, its note-history pin and its summary view use the
+    experiment API.
+  - `probe run move --to <slug>` places a project or experiment slug with one `GET
+    /v1/scopes?slug=`.
+  - The Probe daemon's delete preview for an experiment is `DELETE
+    /v1/projects/{P}/experiments/{E}?dry_run=true`, and `experiment create`, `experiment set` and
+    `experiment move` are retried with their Idempotency-Key again: the server names those routes
+    since X21.
+  - Still at the project address: an experiment's W&B sources (the server has no experiment twin
+    for them yet), and the tap's companion worker's context reads (they move with a tap release).
+  - Regenerated models: `probe.models.CitationGraphState` no longer lists `disabled` (the server
+    dropped it at C13), so `PaperCitationsOut` / `CitationGraphOut` refuse it; `probe paper
+    citations` / `graph` read `state` raw and still print a line for an older server's
+    `disabled`. The experiment detail's `summary` is nullable (a service token gets null), and
+    `CaptureSource` gains `kimi_code` (already served; the checked-in schema lagged).
+
 ## 0.210.0
 
 - **Kimi Code is a supported coding agent.** `probe wizard` installs Probe's plugins into Kimi Code
@@ -32,6 +87,7 @@
   Code's session logs (main agent only) and, for every harness, logs one line for a transcript
   rewritten under its cursor instead of retrying it each tick. The tap ships from main, so this
   merge is its release; `client-version.json` `tap.latest` moves to 0.9.6 with it.
+
 ## 0.209.0
 
 - **Citation commands describe the server as it is now (task C13).** The server removed its
