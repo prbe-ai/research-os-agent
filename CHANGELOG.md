@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **The SDK no longer says disconnecting a W&B account keeps what it imported.**
+  `Client.disconnect_wandb_account` was documented as "retaining imported records", but the server
+  has deleted every run an account's sources imported on disconnect since 09-21 (#1772). Its
+  docstring, and those of `detach_project_wandb_source` / `detach_experiment_wandb_source`, now
+  say what happens: the imported runs and any work attached to them are permanently deleted; runs
+  created in Probe and the destinations stay; pausing a source keeps its runs. Docstrings only, no
+  behaviour change.
+
 ## 0.213.0
 
 - **Nothing in the SDK, the CLI or the MCP addresses an experiment as a project any more**
