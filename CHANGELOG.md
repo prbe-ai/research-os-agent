@@ -26,6 +26,10 @@
   stops that session's upload with one clear log line instead of retrying every tick. Kimi Code
   rewrites its wire when it migrates an older one on resume.
 
+- **Tap 0.9.6: Kimi Code capture, and a rewritten transcript is set aside.** The tap reads Kimi
+  Code's session logs (main agent only) and, for every harness, logs one line for a transcript
+  rewritten under its cursor instead of retrying it each tick. The tap ships from main, so this
+  merge is its release; `client-version.json` `tap.latest` moves to 0.9.6 with it.
 ## 0.209.0
 
 - **Citation commands describe the server as it is now (task C13).** The server removed its
