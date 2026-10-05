@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.209.0
+
 - **Citation commands describe the server as it is now (task C13).** The server removed its
   per-tenant citation switch, so `state: disabled` and the refresh route's 409 `citations_disabled`
   only come from an older server. The SDK docstrings say so; `probe paper citations` and `probe
