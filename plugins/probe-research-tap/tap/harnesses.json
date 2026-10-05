@@ -261,7 +261,7 @@
       "family": "hook-plugin",
       "captured": true,
       "installable": true,
-      "searchable": false,
+      "searchable": true,
       "route": "kimi-code",
       "icon": "/icons/kimi-code.svg",
       "detect_env": [
