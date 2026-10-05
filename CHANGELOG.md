@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.210.0
+
 - **Kimi Code is a supported coding agent.** `probe wizard` installs Probe's plugins into Kimi Code
   (`--agent kimi`), and its sessions are captured, recorded inline or by the Probe
   daemon (Who records in Kimi Code), with the guard and held questions. Kimi Code has no plugin
