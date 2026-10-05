@@ -45,10 +45,24 @@ else
 fi
 [ -n "$SID" ] || exit 0
 
+# Codex only (the branch below): say so when Probe's own hooks are not running
+# in this session (hooks/probe-hooks-trust.sh). Printed only where this hook
+# would otherwise exit silently; the cold path below prints session-start.sh's
+# JSON instead, and the next prompt carries the message.
+PROBE_HOOKS_CHECK=""
+quiet_exit() {
+    [ -z "$PROBE_HOOKS_CHECK" ] || probe_hooks_nudge "$SID" "$ROOT" || true
+    exit 0
+}
+
 if [ -n "$REGISTRY_ENV" ]; then
     PREFIX="$TAP_WATCHER_PREFIX"
 elif [ "$SOURCE" = "codex" ]; then
     PREFIX="prbe-codex-tap"
+    if [ -f "$ROOT/hooks/probe-hooks-trust.sh" ]; then
+        # shellcheck source=probe-hooks-trust.sh
+        . "$ROOT/hooks/probe-hooks-trust.sh" && PROBE_HOOKS_CHECK=1
+    fi
 else
     PREFIX="probe-research-tap"
 fi
@@ -57,7 +71,7 @@ PIDF="/tmp/${PREFIX}-watcher-${SID}.pid"
 if [ -s "$PIDF" ]; then
     PID=$(cat "$PIDF" 2>/dev/null || echo "")
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-        exit 0
+        quiet_exit
     fi
 fi
 
@@ -106,7 +120,7 @@ if [ -f "$MARKER" ]; then
     # belt: no `||` chain can ever put prose into the arithmetic again.
     THEN=$(stat -c %Y "$MARKER" 2>/dev/null || stat -f %m "$MARKER" 2>/dev/null || echo 0)
     case "$THEN" in '' | *[!0-9]*) THEN=0 ;; esac
-    [ $((NOW - THEN)) -lt 600 ] && exit 0
+    [ $((NOW - THEN)) -lt 600 ] && quiet_exit
 fi
 
 mkdir -p "$STATE/heal" 2>/dev/null || true

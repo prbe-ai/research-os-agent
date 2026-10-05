@@ -58,6 +58,10 @@ def test_codex_lifecycle_hooks_start_and_stop_capture() -> None:
     assert wait["command"] == end["command"].replace(
         'session-end.sh\"\'', 'session-end.sh\" --wait\''
     )
+    # 20s, though Codex (0.159) clamps it to 3s and flags it in `/hooks`:
+    # Claude Code enforces each hook's own timeout, and a container that raises
+    # its exit budget needs the full 15s wait. session-end.sh budgets its Codex
+    # wait inside the clamp instead.
     assert wait["timeout"] == 20
     assert ensure["timeout"] == 5
     # Silent on the common path: this one fires on every prompt.

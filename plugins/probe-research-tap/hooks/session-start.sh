@@ -25,7 +25,9 @@ case "$SOURCE" in
 esac
 TAP_MANIFEST_DIR=""
 TAP_HAS_TOKEN=""
+IS_CODEX=""
 if [ "$SOURCE" = "codex" ]; then
+    IS_CODEX=1
     if [ -n "${PRBE_CODEX_TAP_PLUGIN_DIR:-}" ]; then
         PLUGIN_DIR="$PRBE_CODEX_TAP_PLUGIN_DIR"
     elif [ -d "$HOME/.codex/state/prbe-codex-tap-plugin" ] && [ ! -e "$HOME/.codex/state/probe-research-tap" ]; then
@@ -75,6 +77,15 @@ CWD=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys,os; print(json.loa
 if [ -z "$SESSION_ID" ] || { [ "$SOURCE" != "codex" ] && [ -z "$TRANSCRIPT_PATH" ]; }; then
     printf '{"continue": true}\n'
     exit 0
+fi
+
+# Codex: record once whether this session should expect Probe's own hooks to
+# run (hooks/probe-hooks-trust.sh; ensure-daemon.sh tells the researcher when
+# they do not). Before every exit below: it needs no token and no capture.
+if [ -n "$IS_CODEX" ] && [ -z "$REGISTRY_ENV" ] && [ -f "$PLUGIN_ROOT/hooks/probe-hooks-trust.sh" ]; then
+    HOOK_EVENT=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("hook_event_name"); print(v if isinstance(v,str) else "")' 2>/dev/null || echo "")
+    # shellcheck source=probe-hooks-trust.sh
+    . "$PLUGIN_ROOT/hooks/probe-hooks-trust.sh" && probe_hooks_record "$SESSION_ID" "$PLUGIN_ROOT" "$HOOK_EVENT" || true
 fi
 
 LOG_FILE="${LOG_DIR}/${SESSION_ID}.log"

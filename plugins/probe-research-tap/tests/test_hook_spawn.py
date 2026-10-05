@@ -393,24 +393,34 @@ def test_session_end_waits_for_the_final_delivery(reason, waits) -> None:
             Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
 
 
-@pytest.mark.parametrize(
-    ("overrides", "prefix"),
-    [
-        # Codex runs the entry under its own 20s timeout, whatever Claude
-        # Code's budget says.
-        ({"PROBE_TAP_SOURCE": "codex", BUDGET_ENV: "1500"}, "prbe-codex-tap"),
-        # A budget too long for the arithmetic still caps at 15s, and exits 0.
-        ({BUDGET_ENV: "99999999999999999999"}, "probe-research-tap"),
-    ],
-    ids=["codex", "claude-code-huge-budget"],
-)
-def test_session_end_wait_is_bounded(overrides, prefix) -> None:
+def test_session_end_wait_is_bounded() -> None:
     """A daemon stuck on a dead network cannot hold the agent's exit past the
-    hook's own budget (15s of hooks.json's 20s)."""
+    hook's own 15s cap: a budget too long for the arithmetic still caps there,
+    and exits 0."""
     session_id = f"pytest-bounded-{os.getpid()}"
+    prefix = "probe-research-tap"
     proc = _fake_daemon_group(session_id, linger_s=60, prefix=prefix)
     try:
-        assert 14 <= _session_end(session_id, "other", "--wait", env=_env(**overrides)) < 19
+        elapsed = _session_end(session_id, "other", "--wait", env=_env(**{BUDGET_ENV: "99999999999999999999"}))
+        assert 14 <= elapsed < 19
+    finally:
+        _cleanup(session_id, proc, prefix=prefix)
+
+
+def test_codex_wait_ends_inside_its_3s_clamp() -> None:
+    """Codex (0.159) clamps every SessionEnd hook's timeout to 3s, whatever the
+    entry asks, and kills the hook then. The wait must end, exit 0, inside it:
+    13 ticks, the same 300ms margin Claude Code's budget gets. Claude Code's
+    budget variable is not Codex's and must not move it."""
+    session_id = f"pytest-codex-clamp-{os.getpid()}"
+    prefix = "prbe-codex-tap"
+    proc = _fake_daemon_group(session_id, linger_s=60, prefix=prefix)
+    try:
+        elapsed = _session_end(
+            session_id, "other", "--wait", env=_env(PROBE_TAP_SOURCE="codex", **{BUDGET_ENV: "20000"})
+        )
+        # 13 ticks is 2.6s; Codex kills the hook at 3s. 0.2s of slack for a loaded box.
+        assert 2.6 <= elapsed < 3.2, f"took {elapsed:.2f}s; Codex kills the hook at 3s"
     finally:
         _cleanup(session_id, proc, prefix=prefix)
 

@@ -18,8 +18,11 @@
 # entry (timeout 3, no flag) stays byte-identical, and a second entry runs this
 # script with `--wait` under a 20s timeout. Claude Code runs both in parallel
 # and waits for the longer, up to its exit budget (below); Codex keeps running
-# the old one until the new one is approved. Either may run first, so the pid is
-# handed over in a `.stopping` file before the pid file is removed.
+# the old one until the new one is approved, and clamps the new one to 3s (it
+# says so in `/hooks` as "1 issue loading hooks"; the 20s stays, because Claude
+# Code enforces each hook's own timeout and a container that raises its exit
+# budget needs the full wait). Either may run first, so the pid is handed over
+# in a `.stopping` file before the pid file is removed.
 #
 # CLAUDE CODE'S EXIT BUDGET IS NOT THE ENTRY'S TIMEOUT. At exit Claude Code
 # bounds the whole SessionEnd phase at CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,
@@ -128,14 +131,17 @@ rm -f "$PID_FILE"
 # `--wait`: stay until the wrapper's group (the daemon) has exited, so the agent
 # cannot exit, and take a container down, before the FINALIZE leaves. Not on
 # `clear` or `resume`: the agent keeps running (and so does the delivery), and a
-# wait there would freeze the researcher's /clear. At most 75 x 0.2s = 15s,
-# inside the entry's 20s timeout; under Claude Code, at most its exit budget
-# less 300ms for this script's start-up (python3, ps: ~60ms on Linux) and the
-# hooks.json wrapper, which spend the same budget: 6 ticks at the default 1.5s.
-# A registry harness (Kimi Code) awaits its SessionEnd hooks up to the entry's
-# own timeout, as Codex does, so it gets the full wait.
+# wait there would freeze the researcher's /clear. At most 75 x 0.2s = 15s;
+# under Claude Code, at most its exit budget less 300ms for this script's
+# start-up (python3, ps: ~60ms on Linux) and the hooks.json wrapper, which spend
+# the same budget: 6 ticks at the default 1.5s. Codex (0.159) clamps every
+# SessionEnd hook's timeout to 3s, whatever the entry asks, so its wait ends at
+# 2.7s: 13 ticks, the same 300ms margin. A registry harness (Kimi Code) awaits
+# its SessionEnd hooks up to the entry's own timeout, so it gets the full wait.
 WAIT_TICKS=75
-if [ "$SOURCE" != codex ] && [ -z "$REGISTRY_ENV" ]; then
+if [ "$SOURCE" = codex ] && [ -z "$REGISTRY_ENV" ]; then
+    WAIT_TICKS=13
+elif [ -z "$REGISTRY_ENV" ]; then
     BUDGET_MS="${CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS:-}"
     case "$BUDGET_MS" in '' | *[!0-9]*) BUDGET_MS=1500 ;; esac
     # Strip leading zeros so the length check measures magnitude, and read 0

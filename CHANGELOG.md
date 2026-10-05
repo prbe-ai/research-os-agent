@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- **Codex: you are told when Probe's own hooks are switched off** (tap 0.9.7). Codex runs a
+  plugin's hook only after you approve it in `/hooks`, asks again whenever the hook changes, and
+  says nothing in the session meanwhile. The next Probe plugin release changes Probe's hooks once
+  (one fixed hook per event from then on), so Codex holds them until you approve. While it does,
+  the tap prints one line ("type /hooks and approve the Probe Research hooks") on up to three
+  prompts of each new session, and stops as soon as they run or you switch Probe off. A session
+  started before the update is never told. `probe doctor` gains a "Codex hooks" section from
+  Codex's own hook list whenever Codex is installed: how many of Probe's hooks Codex will run,
+  which are waiting for approval, and any unexpected warning Codex shows for them.
+- **Codex: the tap's SessionEnd wait ends inside Codex's 3s cap** (tap 0.9.7). Codex 0.159 cuts
+  every SessionEnd hook off at 3s (and says so in `/hooks` as "1 issue loading hooks"), but the
+  tap's wait for the daemon's last delivery ran to 15s under Codex and was killed mid-wait. It
+  now ends at 2.7s under Codex. The hook keeps asking for 20s, so Codex's notice stays: Claude
+  Code enforces each hook's own timeout, and a container that raises its exit budget still gets
+  the full 15s wait.
+
 ## 0.211.0
 
 - **An experiment's children are reached through the experiment API too** (light experiments
