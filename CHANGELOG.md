@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.211.0
+
 - **An experiment's children are reached through the experiment API too** (light experiments
   X21; needs a server with research-os #2282 deployed: against an older one these calls raise
   `CapabilityUnavailable` naming it). Apart from its W&B sources, nothing in the SDK, the CLI,
