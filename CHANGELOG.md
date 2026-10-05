@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.214.0
+
 - **The wizard and `probe doctor` say whether Probe's MCP actually works, per coding agent.** Each
   agent now reads `on`, `login needed: run <command>` (with `token rejected` when the API refused
   the read token), `off: the daemon reads for this agent`, `off: not installed`, `unknown: <what>`

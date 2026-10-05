@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.118.0",
+  "version": "0.119.0",
   "description": "Probe Research tracking for Kimi Code: the probe switch (on / read / off per conversation), track-work, instrument-code, visualize-progress, edit-notes and audit-team-note skills, plus a read-only OAuth MCP.",
   "author": {
     "name": "Probe",
