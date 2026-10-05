@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Citation commands describe the server as it is now (task C13).** The server removed its
+  per-tenant citation switch, so `state: disabled` and the refresh route's 409 `citations_disabled`
+  only come from an older server. The SDK docstrings say so; `probe paper citations` and `probe
+  paper graph` still print a plain line for `state: disabled` instead of an empty table, and the
+  SDK still raises a 409 as `ConflictError`. No behaviour changed.
+
 - **Tests prove the hosted MCP's experiment reads give the same answer in both storage shapes**
   (light experiments, task X9). Until the server's R2 job, an experiment's runs, files and groups
   are stored at the experiment's own id. After it, they are stored at the project with an
