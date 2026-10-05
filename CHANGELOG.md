@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.213.0
+
 - **Nothing in the SDK, the CLI or the MCP addresses an experiment as a project any more**
   (light experiments X21b; needs a server with the X21b routes deployed). An experiment's W&B
   sources are listed, attached, paused and detached at
