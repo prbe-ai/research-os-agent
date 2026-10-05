@@ -10,6 +10,11 @@
   `probe doctor` keeps the full sentence). Only agents whose binary is on this machine's PATH are
   listed. A value too long for the row is cut with `…` instead of wrapping onto a line that read
   as a row of its own.
+- The shared `entity(view="overview")` read returns the complete saved project
+  or experiment Overview, including generated content, authored edits and chart
+  data. Oversized pages use bounded continuation; queue ETA changes do not
+  invalidate a read, and edits require restarting. Legacy summary reads retain
+  their authored-block compatibility shape.
 
 ## 0.214.0
 
