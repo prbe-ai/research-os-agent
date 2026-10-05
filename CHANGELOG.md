@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The wizard offers past Kimi Code sessions for import.** "Import past coding sessions" asked
+  about Claude Code, Codex and pi only, from a list kept by hand, so Kimi Code's saved sessions
+  were never offered even though the importer reads them. The step now asks about every agent
+  Probe captures (the harness registry), so the next one is offered without an edit.
+
 - **The SDK no longer says disconnecting a W&B account keeps what it imported.**
   `Client.disconnect_wandb_account` was documented as "retaining imported records", but the server
   has deleted every run an account's sources imported on disconnect since 09-21 (#1772). Its
