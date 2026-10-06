@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Companion bench: prices Claude Sonnet 5 and Opus 5 rounds, and charges cache writes at the write
+  rate when the model route reports them (`cache_write_tokens`); before, both new models came out
+  unpriced and every write was priced as input. Results carry write totals per lane.
 
 - **Cursor is no longer a coding agent Probe recognises.** Probe never captured, installed or
   offered MCP in Cursor; it only read `CURSOR_TRACE_ID`, which then became the session
