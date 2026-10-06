@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.216.3
+
 - **Kimi Code's footer shows Probe from the moment Kimi opens.** Kimi creates its session on the
   first message, so the footer's first renders carry no session id; the renderer then fell back to a
   module the footer's copy does not carry, failed quietly, and showed no Probe until the first
