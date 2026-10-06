@@ -360,7 +360,7 @@ def detect_agent_label(env: "dict[str, str] | None" = None) -> str | None:
 
     Returns None rather than a guess. The previous behaviour defaulted to
     ``claude_code`` whenever ``PROBE_AGENT`` was unset, which silently recorded every
-    Cursor and Codex user as Claude Code -- and the per-agent breakdown exists
+    Codex and pi user as Claude Code -- and the per-agent breakdown exists
     precisely to tell those apart, so a confident wrong answer was worse than none.
     """
     values = os.environ if env is None else env
@@ -409,7 +409,7 @@ def build_batch(
         props = dict(e.get("properties") or {})
         # Absent when nothing is detectable, never a placeholder: an event with no
         # `agent` is honestly unattributed, whereas the old `claude_code` fallback
-        # made every Cursor and unset-Codex user indistinguishable from Claude Code.
+        # made every pi and unset-Codex user indistinguishable from Claude Code.
         #
         # Detection reads THIS process's environment, which is only ever the right
         # answer on a client. A server passes `agent=` explicitly -- including

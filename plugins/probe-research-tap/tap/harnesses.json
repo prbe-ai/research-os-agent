@@ -78,46 +78,6 @@
       "process_title": null
     },
     {
-      "id": "cursor",
-      "label": "Cursor",
-      "display": "Cursor session",
-      "aliases": [],
-      "binary": null,
-      "cli_flag": null,
-      "family": "detect-only",
-      "captured": false,
-      "installable": false,
-      "searchable": false,
-      "route": null,
-      "icon": null,
-      "detect_env": [
-        "CURSOR_TRACE_ID"
-      ],
-      "session_env": "CURSOR_TRACE_ID",
-      "version_env": null,
-      "min_version": null,
-      "home": null,
-      "transcripts": null,
-      "capture": null,
-      "plugin": null,
-      "package_dir": null,
-      "instructions": null,
-      "team_note": null,
-      "mcp": null,
-      "question_tool": null,
-      "lean_profile": null,
-      "attribution_requires_pairing": false,
-      "capabilities": {
-        "prompt_context": false,
-        "wake": false
-      },
-      "statusline": null,
-      "reasoning_setting": null,
-      "hook_output": "claude-json",
-      "session_id_prefix": null,
-      "process_title": null
-    },
-    {
       "id": "codex",
       "label": "Codex",
       "display": "Codex session",

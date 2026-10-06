@@ -40,8 +40,7 @@ REGISTRY_FILE = Path(__file__).with_name("harnesses.json")
 #: How a harness is integrated. Core code branches on these, never on an id.
 FAMILY_HOOK_PLUGIN = "hook-plugin"  # a plugin with hooks, skills and MCP (Claude Code, Codex)
 FAMILY_EXTENSION = "extension"  # a package whose extension calls the probe CLI (pi)
-FAMILY_DETECT_ONLY = "detect-only"  # recognised in the environment, never integrated (Cursor)
-FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION, FAMILY_DETECT_ONLY)
+FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION)
 
 #: What a hook or the extension can do inside the harness (mirrors the daemon
 #: adapters' Capabilities.inject_line / .wake; the conformance test pins them).

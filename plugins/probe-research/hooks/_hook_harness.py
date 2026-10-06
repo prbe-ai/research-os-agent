@@ -112,7 +112,7 @@ def current(env=None) -> Row:
 def session_id(env=None) -> str:
     """This session's id from the environment ("" when none): the current
     harness's session variable first, then a captured harness's. Only captured
-    rows: Cursor's trace id is a terminal's, not a session's."""
+    rows: an id nobody captures names no transcript."""
     values = os.environ if env is None else env
     own = current(values).session_env
     if own and values.get(own):

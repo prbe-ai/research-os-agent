@@ -15,7 +15,7 @@ def test_capture_source_is_case_and_space_insensitive(monkeypatch):
 def test_unknown_source_env_falls_back_to_claude_code(monkeypatch):
     # Fallback is right HERE (an unset env is the Claude Code install) and
     # wrong in sources.get(). Keep the asymmetry.
-    monkeypatch.setenv("PROBE_TAP_SOURCE", "cursor")
+    monkeypatch.setenv("PROBE_TAP_SOURCE", "nonsense")
     assert cfg.capture_source() == "claude_code"
 
 

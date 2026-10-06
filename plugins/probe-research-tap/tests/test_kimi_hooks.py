@@ -267,7 +267,7 @@ def _hook_env(*args: str, stdin: str = "", env: dict | None = None) -> subproces
     )
 
 
-@pytest.mark.parametrize("source", ["pi", "cursor", "nonsense"])
+@pytest.mark.parametrize("source", ["pi", "nonsense"])
 def test_hook_env_knows_only_captured_hook_plugin_harnesses(source) -> None:
     result = _hook_env("--source", source, "--payload", stdin='{"session_id": "x"}')
     assert (result.returncode, result.stdout) == (hook_env.EXIT_UNKNOWN_SOURCE, "")

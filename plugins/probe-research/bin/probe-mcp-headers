@@ -72,8 +72,8 @@ fi
 # PAIR is the key and a lone session id resolves to nothing.
 #
 # MIRRORS src/probe/sdk/agent_session.py (AGENTS order, _SESSION_RE, the codex pairing
-# check). Only agents whose transcripts actually reach Research OS are named: Cursor is
-# detectable but uncaptured, so it gets no headers rather than a link nobody can follow.
+# check). Only agents whose transcripts actually reach Research OS are named: anything
+# else gets no headers rather than a link nobody can follow.
 #
 # THE CHARSET CHECK IS NOT COSMETIC. This value is interpolated into the JSON on
 # stdout, and a failure here is not degraded telemetry -- it is an unauthenticated
@@ -87,8 +87,6 @@ AGENT_SESSION=""
 if [ -n "${CLAUDECODE:-}" ] || [ -n "${CLAUDE_CODE_ENTRYPOINT:-}" ]; then
   AGENT_LABEL="claude_code"
   AGENT_SESSION="${CLAUDE_CODE_SESSION_ID:-}"
-elif [ -n "${CURSOR_TRACE_ID:-}" ]; then
-  AGENT_LABEL=""            # detectable, deliberately uncaptured
 elif [ -n "${CODEX_SANDBOX:-}" ] || [ -n "${CODEX_THREAD_ID:-}" ]; then
   # Codex is reported only when its tap holds a credential: that is the durable
   # evidence this device completed pairing. Merely running under Codex must not create
