@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.215.1
+
 - **Kimi Code on macOS: `probe` commands from Kimi's shell find their session again.** Kimi puts no
   session id in its shells, so Probe's hook notes which Kimi process runs which session and the CLI
   walks up to it. The hook looked for the process by its `kimi-code` title, which Linux shows but
