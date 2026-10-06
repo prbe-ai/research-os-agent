@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.216.2
+
 - **The wizard's agent logos are round brand avatars.** Each agent in "On this device" is its
   mark in white on a circle of its brand colour, the way other agent tools show them: Claude's
   spark on terracotta, the OpenAI mark (Codex), Kimi's mark and pi's π on black. They used to be
