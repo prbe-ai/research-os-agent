@@ -12,6 +12,9 @@
   sessions used to go unattributed there). The harness registry drops its `cursor` row and the
   `detect-only` family; the plugin's `probe-mcp-headers` drops its Cursor branch.
 
+- The daemon prices Claude Opus 5 (input $5, cache read $0.50, write $6.25, output $25 per MTok), and a
+  dated model name prices as its own model, never a shorter one's.
+
 ## 0.219.0
 - Daemon: once the model route answers through its refusal fallback (`x-probe-served-model`),
   the session's later model calls ask for that model (`X-Probe-Prefer-Model`), so a refused
