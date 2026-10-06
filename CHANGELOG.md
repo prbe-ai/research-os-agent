@@ -15,6 +15,14 @@
   switch in this profile (`probe session state|toggle|track|untrack|default` are refused under
   `off` and while it holds Probe), and `--session` cannot take over another conversation. The
   CLAUDE.md / AGENTS.md block and the guard's refusal name the command.
+- **Kimi Code: typing `/probe on` (or `read`, `off`) switches Probe again.** Kimi fires no
+  UserPromptSubmit for a typed skill, only TurnStarted with `origin_kind: skill_activation` and its own
+  `<skill-loaded … trigger="user-slash" args="on">` block, so the switch never ran: the footer stayed
+  `off` while the model reported "on". The Kimi plugins now run the switch on that turn, as the typed
+  line, and only for a skill the person typed (not one the model loads).
+- **A coding agent set up for the first time joins the device's Who records.** Where the other agents
+  record through the daemon, a new one (Kimi Code installed after the switch) now starts on the daemon
+  too instead of on its own. An agent already set up still never moves on its own.
 
 ## 0.216.0
 

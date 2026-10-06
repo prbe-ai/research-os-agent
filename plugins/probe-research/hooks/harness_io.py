@@ -23,6 +23,13 @@ its output is translated by the registry row's `hook_output`. A harness whose
 row says `claude-json` gets its payload and output through untouched. Claude
 Code and Codex never run this file (their hooks.json is frozen).
 
+A skill the person TYPES (`/probe on`) fires no UserPromptSubmit in Kimi: it
+arrives only as TurnStarted with `origin_kind: skill_activation` and a leading
+`<skill-loaded name=".." trigger="user-slash" args="..">` block that Kimi writes
+itself. That turn is handed to the hook as the UserPromptSubmit of the typed
+line, so Probe's switch flips as it does when typed in Claude Code; every other
+TurnStarted is ignored (its prompt already came through UserPromptSubmit).
+
 It also records which harness process runs this session
 (`session_marker.record_harness_process`) on SessionStart and UserPromptSubmit,
 for a harness with a `process_title`: that is how a `probe` command the harness
@@ -34,8 +41,10 @@ passes its output through; a broken adapter must never block the harness.
 
 from __future__ import annotations
 
+import html
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -65,6 +74,46 @@ _RECORD_EVENTS = ("SessionStart", "UserPromptSubmit")
 _INDEX_TAIL_BYTES = 8 * 1024 * 1024
 #: The one tool whose output is JSON Probe reads: an answered question.
 _JSON_OUTPUT_TOOLS = ("AskUserQuestion",)
+
+
+#: The event a typed skill arrives as (see the module docstring), and Kimi's
+#: own marks of one the person typed.
+_TURN_STARTED = "TurnStarted"
+_SKILL_ACTIVATION = "skill_activation"
+_USER_SLASH = "user-slash"
+_SKILL_LOADED_TAG = re.compile(r"<skill-loaded\b([^>]*)>")
+#: The switch's skills (`tracking_guard.TOGGLE_SKILL_SLUGS`, which a test keeps
+#: equal: that module runs as a script and is not importable from here).
+_SWITCH_SLUGS = frozenset({"probe", "track-work", "toggle-research-tracking", "research-tracking"})
+_ATTRIBUTE = re.compile(r'([A-Za-z_-]+)="([^"]*)"')
+
+
+def typed_skill(payload: dict) -> "str | None":
+    """The line a person typed (`/probe on`) when this is the turn a typed skill
+    starts, else None. Only Kimi's own leading block counts, and only with
+    `trigger="user-slash"`: a skill the model loads is not a person's switch."""
+    if payload.get("hook_event_name") != _TURN_STARTED or payload.get("origin_kind") != _SKILL_ACTIVATION:
+        return None
+    text = _prompt_text(payload.get("prompt"))
+    if not isinstance(text, str):
+        return None
+    tag = _SKILL_LOADED_TAG.search(text)
+    # Kimi's own block opens a line near the top (after one sentence of
+    # preamble); a tag quoted mid-line or further down is content, not the call.
+    if tag is None or text.find("<skill-loaded") != tag.start():
+        return None
+    if (tag.start() and text[tag.start() - 1] != "\n") or text.count("\n", 0, tag.start()) > 3:
+        return None
+    attributes = {key: html.unescape(value) for key, value in _ATTRIBUTE.findall(tag.group(1))}
+    name = attributes.get("name", "").strip()
+    if attributes.get("trigger") != _USER_SLASH or not name or any(c.isspace() for c in name):
+        return None
+    # Only Probe's switch: any other typed skill is none of these hooks' business
+    # (and running them would claim a notice nobody sees).
+    if name.split(":")[-1] not in _SWITCH_SLUGS:
+        return None
+    args = " ".join(attributes.get("args", "").split())
+    return f"/{name} {args}".rstrip()
 
 
 def _strip_prefix(session_id: object, prefix: "str | None") -> object:
@@ -186,11 +235,21 @@ def main(argv: "list[str]") -> int:
     raw_in = sys.stdin.buffer.read()
     stdin = raw_in
     row = None
+    quiet = False
     try:
         row = _hook_harness.current()
         payload = json.loads(raw_in.decode("utf-8") or "{}")
         if isinstance(payload, dict):
+            typed = typed_skill(payload) if payload.get("hook_event_name") == _TURN_STARTED else None
+            if payload.get("hook_event_name") == _TURN_STARTED and typed is None:
+                return 0  # before `normalize`, which reads the session index
             normalized = normalize(payload, row)
+            if typed is not None:
+                # The typed line, as UserPromptSubmit would have carried it. Its
+                # output is dropped: the skill itself tells the model what to say.
+                normalized["hook_event_name"] = "UserPromptSubmit"
+                normalized["prompt"] = typed
+                quiet = True
             _record(normalized, row)
             stdin = json.dumps(normalized).encode("utf-8")
     except Exception:  # noqa: BLE001 -- fail-open: run the hook on the raw payload
@@ -200,9 +259,9 @@ def main(argv: "list[str]") -> int:
         done = subprocess.run(command + argv[1:], input=stdin, capture_output=True, check=False)
     except OSError:
         return 0
-    stdout = done.stdout.decode("utf-8", "replace")
+    stdout = "" if quiet else done.stdout.decode("utf-8", "replace")
     stderr = done.stderr.decode("utf-8", "replace")
-    code = done.returncode
+    code = 0 if quiet else done.returncode
     try:
         if row is not None:
             stdout, extra, forced = translate(stdout, row)

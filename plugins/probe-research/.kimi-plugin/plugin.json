@@ -134,6 +134,12 @@
       "event": "Stop",
       "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_HOOK_EVENT=stop; [ -f \"$ROOT/hooks/team-note-sync.sh\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" team-note-sync.sh'",
       "timeout": 15
+    },
+    {
+      "event": "TurnStarted",
+      "matcher": "^skill_activation$",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/tracking_guard.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" \"$ROOT/hooks/harness_io.py\" tracking_guard.py'",
+      "timeout": 5
     }
   ]
 }
