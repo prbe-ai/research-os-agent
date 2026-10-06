@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- **The wizard draws each coding agent's real logo, and its name on hover.** In terminals that
+  draw images (Warp, Ghostty, kitty and WezTerm through the kitty protocol; iTerm2 through its
+  own) the "On this device" rows show the same logos as the dashboard, and pointing at a row shows
+  the agent's name. While that menu is open the wizard takes the mouse, so selecting text needs
+  Option/Shift. Terminal.app, VS Code, tmux and anything unrecognised get the names instead.
+  `PROBE_WIZARD_ICONS=off` turns the logos off; `kitty` or `iterm` forces a protocol.
+
 ## 0.215.1
 
 - **Kimi Code on macOS: `probe` commands from Kimi's shell find their session again.** Kimi puts no

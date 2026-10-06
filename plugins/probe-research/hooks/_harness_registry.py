@@ -146,10 +146,6 @@ class Harness:
     #: The ingest route suffix: `/ingest/v1/sessions/<route>`.
     route: str | None
     icon: str | None
-    #: The terminal's stand-in for `icon`: a character or two the wizard draws
-    #: in place of the name, in `glyph_color` (a hex colour) when set.
-    glyph: str | None
-    glyph_color: str | None
     detect_env: tuple[str, ...]
     session_env: str | None
     version_env: str | None
@@ -395,8 +391,6 @@ def _harness(row: Any, index: int) -> Harness:
         searchable=_bool(row.get("searchable"), f"{where}.searchable"),
         route=_str_or_none(row.get("route"), f"{where}.route"),
         icon=_str_or_none(row.get("icon"), f"{where}.icon"),
-        glyph=_str_or_none(row.get("glyph"), f"{where}.glyph"),
-        glyph_color=_str_or_none(row.get("glyph_color"), f"{where}.glyph_color"),
         detect_env=_tuple(row.get("detect_env", []), f"{where}.detect_env"),
         session_env=_str_or_none(row.get("session_env"), f"{where}.session_env"),
         version_env=_str_or_none(row.get("version_env"), f"{where}.version_env"),
