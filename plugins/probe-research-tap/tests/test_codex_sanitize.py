@@ -22,6 +22,7 @@ import pytest
 
 from tap.codex_sanitize import sanitize_event
 from tap.outbox import build_batch_body
+from tap.sanitize import COMMAND_MAX_LEN
 
 FIXTURE = Path(__file__).parent / "fixtures" / "rollout-sample.jsonl"
 
@@ -229,7 +230,11 @@ def test_function_call_output_becomes_tool_result_with_error_flag():
     }
 
 
-def test_local_shell_call_stashes_action_and_status():
+def test_local_shell_call_ships_capped_command_and_status_never_the_action():
+    """The command ships once, in the summary, under COMMAND_MAX_LEN. The raw
+    `action` used to ride in `_codex_extras` as well: the same command again,
+    uncapped, with its env and working directory (tap 0.9.10 drops it)."""
+    long_script = "x" * (COMMAND_MAX_LEN + 500)
     raw = {
         "type": "response_item",
         "timestamp": "t",
@@ -237,17 +242,37 @@ def test_local_shell_call_stashes_action_and_status():
             "type": "local_shell_call",
             "call_id": "ls1",
             "status": "completed",
-            "action": {"command": ["bash", "-c", "echo hi"], "type": "exec"},
+            "action": {
+                "command": ["bash", "-c", long_script],
+                "type": "exec",
+                "env": {"API_HOST": "internal.example"},
+                "working_directory": "/home/researcher/private",
+            },
         },
     }
     out = sanitize_event(raw)
     block = out["message"]["content"][0]
     assert block["type"] == "tool_use"
     assert block["name"] == "local_shell"
-    assert block["summary"] == "bash -c echo hi"
-    extras = out["_codex_extras"]
-    assert extras["status"] == "completed"
-    assert extras["action"]["type"] == "exec"
+    assert block["summary"] == ("bash -c " + long_script)[:COMMAND_MAX_LEN]
+    assert out["_codex_extras"] == {"status": "completed"}
+    shipped = json.dumps(out)
+    assert "internal.example" not in shipped and "/home/researcher/private" not in shipped
+    assert len(shipped) < COMMAND_MAX_LEN + 500
+
+
+def test_local_shell_call_status_that_is_not_a_string_does_not_ship():
+    raw = {
+        "type": "response_item",
+        "timestamp": "t",
+        "payload": {
+            "type": "local_shell_call",
+            "call_id": "ls1",
+            "status": {"nested": "payload"},
+            "action": {"command": ["ls"], "type": "exec"},
+        },
+    }
+    assert "_codex_extras" not in sanitize_event(raw)
 
 
 def test_reasoning_keeps_text_and_stashes_summary_drops_encrypted():

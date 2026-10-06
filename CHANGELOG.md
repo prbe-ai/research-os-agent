@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- **Session capture no longer uploads tool results or attached files (tap 0.9.10).** This is what the
+  consent screen already promised. Claude Code capture still sent three things it should not have:
+  a second, full copy of every tool's output (`toolUseResult`: command output, the whole file a
+  Read or Edit touched), attachments holding a file or a `CLAUDE.md`, and Claude Code's newer
+  fields (`wireToolInputs`, an attachment's rendered text). A pasted screenshot also went up as its
+  base64 bytes. Capture now sends only the fields it names, at every level. Anything else is
+  dropped, and a content block it does not know ships as its type alone. Codex capture no longer
+  sends a shell call's raw `action` (its command was already sent once, capped at 4,000
+  characters), and an image value that is not an `http(s)` link is sent as its size. pi capture
+  checks the type of every field it copies and caps an extension entry's key names; Codex capture
+  drops an `AGENTS.md` file's contents, as Claude Code's drops a `CLAUDE.md`. Transcripts read the
+  same: nothing removed was ever shown or searched. Sessions already uploaded are not changed. Still
+  sent as conversation text: what a `!command` you type prints, and a skill's text when it loads.
+  One malformed transcript line now costs that line instead of stopping the session's capture.
+
 ## 0.216.3
 
 - **Kimi Code's footer shows Probe from the moment Kimi opens.** Kimi creates its session on the

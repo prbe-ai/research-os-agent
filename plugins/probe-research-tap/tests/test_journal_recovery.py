@@ -237,3 +237,48 @@ def test_a_staged_body_always_passes_its_own_safety_check():
     body = sj.canonical_payload(sj._scrub_content(payload))
     sj._require_safe_pending(body)
     assert TOKEN.encode() not in body and uuid.encode() in body
+
+
+def test_a_line_the_sanitizer_cannot_handle_costs_that_line_not_the_session(session):
+    sid, journal, _server, monkeypatch = session
+    real = sj._sanitizer("claude_code")
+
+    def trips_on_the_token(event):
+        if TOKEN in json.dumps(event):
+            raise TypeError("a shape this sanitizer never saw")
+        return real(event)
+
+    monkeypatch.setattr(sj, "_sanitizer", lambda source: trips_on_the_token)
+    body = json.loads(journal.stage(sid, cwd="/work"))
+    assert body["source_line_end"] == 2, "the cursor moves past the line"
+    assert [e["raw"]["message"]["content"] for e in body["events"]] == ["hi"]
+
+
+def test_a_line_nested_past_the_redactors_reach_is_dropped_not_fatal(tmp_path, monkeypatch):
+    # The journal's own guard, whatever a sanitizer lets through: an identity
+    # sanitizer hands the redactor the deep value as is.
+    monkeypatch.setattr(sj, "_sanitizer", lambda source: lambda event: event)
+    monkeypatch.setenv("PROBE_TRANSCRIPT_STATE_DIR", str(tmp_path / "v2"))
+    sid = str(uuid4())
+    # Past the 64-level cap, well inside every Python's own json/recursion
+    # limits (3.11 cannot even encode ~1000 levels to build the fixture).
+    deep: object = "x"
+    for _ in range(100):
+        deep = [deep]
+    lines = [
+        dict(type="user", sessionId=sid, cwd="/work", message=dict(role="user", content="first")),
+        dict(type="user", sessionId=sid, cwd="/work", uuid=deep,
+             message=dict(role="user", content="deep")),
+        dict(type="user", sessionId=sid, cwd="/work", message=dict(role="user", content="after")),
+    ]
+    path = tmp_path / f"{sid}.jsonl"
+    path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+    server = Server()
+    journal = Journal(server.base_url, "synthetic", server.source)
+    try:
+        journal.ensure(sid, path, server.receipts(sid), historical=False, cwd="/work")
+        body = json.loads(journal.stage(sid, cwd="/work"))
+    finally:
+        journal.close()
+    assert body["source_line_end"] == 3
+    assert [e["raw"]["message"]["content"] for e in body["events"]] == ["first", "after"]

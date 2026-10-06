@@ -8,15 +8,35 @@ plus a one-line marker for each tool call. Everything else is noise:
       * `stop_hook_summary`, `turn_duration` (system subtypes)
       * `file-history-snapshot` (75% of payload weight; pure backup metadata)
       * `last-prompt`, `ai-title`, `permission-mode` (UI / mode plumbing)
-  - Top-level fields duplicated on every event: `cwd`, `gitBranch`,
-    `sessionId` (already on the doc), plus pure CC plumbing
-    (`promptId`, `entrypoint`, `userType`, `version`, `slug`).
+  - Every top-level field not on `_KEEP_TOP_LEVEL`: the per-event copies of
+    `cwd`, `gitBranch`, `sessionId` (already on the doc), CC plumbing, and
+    `toolUseResult` (CC's second copy of every tool's OUTPUT).
   - Empty `thinking: ""` blocks (assistant turns where the model didn't
     surface any reasoning text — the empty block carries no content).
   - Full tool_use `input` args EXCEPT Bash's `command` (the full
     old_string/new_string of an Edit, the search/replace bodies, …)
   - Full tool_result `content` (file contents, command output, search
     results — usually the single largest chunk of any session payload)
+  - Pasted image bytes, and any content block or attachment type this file
+    does not name.
+
+ALLOW-LISTS, NOT DENY-LISTS (tap 0.9.10). The consent screen promises that file
+contents, command output and search results are not sent
+(`app/assistant/product.md`, held by `dashboard/src/lib/capture-disclosure.test.ts`).
+Three deny-lists broke that promise by letting through whatever they did not
+name: the top-level `toolUseResult` (stdout/stderr, `originalFile`, whole edit
+bodies — 54% of the sanitized bytes of one measured 12.9 MB session), the
+`file` / `edited_text_file` / `nested_memory` attachments, and every content
+block type Claude Code added after this file was written. Claude Code keeps
+adding fields (`wireToolInputs`, an attachment's `rendered` text, a
+`prompt_snapshot` of the whole system prompt), so each level now names what
+ships and drops the rest:
+  - top-level keys      `_KEEP_TOP_LEVEL`
+  - `message` keys      `_KEEP_MESSAGE`
+  - content blocks      text, thinking, tool_use, tool_result, image
+                        (a placeholder); any other type ships as
+                        `{"type": <type>, "dropped": true}`
+  - attachment types    `_KEEP_ATTACHMENTS`, each with its own key list
 
 REDACTION IS NOT DONE HERE. `Journal.stage` and the legacy
 `transcript.build_batch_body` run `secrets.redact_event` on this output, so a credential in a prompt or
@@ -29,7 +49,7 @@ We KEEP enough of each tool block to reconstruct what happened:
   - tool_use:    type, id, name, summary — the FULL command for Bash
                  (shell lines are a session's method section; capped at
                  _COMMAND_MAX_LEN), first line of path/pattern/etc for the rest
-  - tool_result: type, tool_use_id, is_error (only when truthy)
+  - tool_result: type, tool_use_id, is_error (only when truthy), result_bytes
 
 `sanitize_event(event)` returns:
   - None        → drop the event entirely (CC bookkeeping with no content)
@@ -59,71 +79,72 @@ _DROP_EVENT_TYPES: frozenset[str] = frozenset({
 })
 
 # `attachment` events are harness plumbing that CC injects around the
-# conversation, and they were shipping in full: 12,217 events and 11.5 MB across
-# ten measured sessions, none of which produce a single character of indexed
-# text (the renderer has no case for them). Same class as file-history-snapshot,
-# and missed for the same reason — it does not look like a payload until you
-# weigh it.
+# conversation: 12,217 events and 11.5 MB across ten measured sessions, none of
+# which produce a single character of indexed text (the renderer has no case
+# for them). Most are hook output, registry dumps and reminders; the rest carry
+# FILE CONTENT -- `file` and `nested_memory` (a whole file or CLAUDE.md),
+# `edited_text_file` (a snippet of the edited file), `instructions`, and
+# `prompt_snapshot` (the whole system prompt). It used to be a deny-list "so a
+# type we have not seen still ships", and that is exactly how the file-bearing
+# ones shipped.
 #
-# Denylist rather than allowlist, so an attachment type we have not seen still
-# ships. Share of those 11.5 MB in brackets.
-_DROP_ATTACHMENT_TYPES: frozenset[str] = frozenset({
-    "hook_success",             # 54.7% — hook stdout/stderr/exitCode per fire
-    "hook_non_blocking_error",  # 10.9%
-    "hook_cancelled",
-    "hook_system_message",
-    "hook_additional_context",  #  1.4% — the same injected preamble every session
-    "task_reminder",            #  6.2%
-    "queued_command",           #  4.0%
-    "deferred_tools_delta",     #  4.0% — tool-registry dumps
-    "skill_listing",            #  3.4% — identical across every session
-    "invoked_skills",           #  2.4%
-    "agent_listing_delta",      #  0.8%
-    "mcp_instructions_delta",   #  0.7%
-    "command_permissions",
-    "date_change",
-    "ultra_effort_enter",
-    "plan_mode_exit",
-    "dynamic_skill",
+# ALLOW-LIST, and per type an allow-list of its keys, so a kept type that grows
+# a content field later still ships only what is named here. Each entry was
+# checked against real transcripts (Claude Code 2.x, 2026-10) for its key set.
+# An attachment of any other type drops the whole event.
+_KEEP_ATTACHMENTS: dict[str, tuple[str, ...]] = {
+    # Which files were in context when a compaction ran: a path, never content.
+    # Observed keys: type, filename, displayPath.
+    "compact_file_reference": ("filename", "displayPath"),
+}
+
+# Top-level fields that ship. Everything else on an event is dropped: the
+# per-event copies of cwd / gitBranch / sessionId (already on the doc), CC
+# plumbing (promptId, entrypoint, userType, version, slug, requestId, ...),
+# `toolUseResult`, and whatever Claude Code adds next.
+#
+# Each key is here because something reads it:
+#   type, subtype       engine `transcript_render._render_event` dispatches on
+#                       them; `compact_boundary` is counted and segmented on
+#                       (`claude_code._count_compactions`, extraction)
+#   message             the conversation (its own allow-list below)
+#   content             engine renders a top-level string `content` for system
+#                       events and unknown event types, and reads the first
+#                       event's for the document preview (strings only)
+#   isCompactSummary    engine labels it COMPACTION SUMMARY instead of USER
+#   timestamp           engine's session-complete check reads it
+#   uuid, parentUuid,   identity and order: the only link from one event to
+#   logicalParentUuid   the one before it (logicalParentUuid carries that link
+#                       across a compaction boundary)
+#   attachment          the payload of a kept attachment (filtered above)
+#
+# `toolUseResult` is CC's SECOND copy of every tool's output (stdout/stderr,
+# `originalFile`, whole edit bodies). The tool_result block below already
+# carries its size; nothing in research-os or the engine reads the field.
+_KEEP_TOP_LEVEL: frozenset[str] = frozenset({
+    "type",
+    "subtype",
+    "message",
+    "content",
+    "isCompactSummary",
+    "timestamp",
+    "uuid",
+    "parentUuid",
+    "logicalParentUuid",
+    "attachment",
 })
 
-# KEPT on purpose: `edited_text_file` and `file` carry real file content, and
-# `nested_memory` / `compact_file_reference` carry project context a session
-# genuinely referred to. Together they are ~11% of attachment bytes.
-
-# Top-level fields to drop from every retained event. These are duplicated
-# on every event but already present once at the document level (cwd,
-# gitBranch, sessionId) or pure CC plumbing that never has retrieval value
-# (promptId, entrypoint, userType, version, slug, sourceToolAssistantUUID).
-_DROP_TOP_LEVEL: frozenset[str] = frozenset({
-    "requestId",
-    "isSidechain",
-    "isMeta",
-    "diagnostics",
-    "promptId",
-    "entrypoint",
-    "userType",
-    "version",
-    "slug",
-    "sessionId",
-    "cwd",
-    "gitBranch",
-    "sourceToolAssistantUUID",
-})
-
-# Fields inside `message` that are pure API/runtime metadata, not content.
-_DROP_MESSAGE: frozenset[str] = frozenset({
-    "usage",
-    "iterations",
-    "cache_creation",
-    "service_tier",
-    "inference_geo",
-    "speed",
-    "stop_details",
-    "stop_sequence",
-    "diagnostics",
-    "id",    # Anthropic's per-message API id; we already keep top-level uuid
-    "type",  # Inner Anthropic shape ("message"); redundant with outer event type
+# Fields inside `message` that ship. role + content are the conversation;
+# stop_reason is rendered for non-default stops (`[stop: max_tokens]`); model
+# says which model wrote the turn. Dropped: Anthropic's API metadata (usage,
+# id, type, stop_sequence, stop_details, service tier, ...) and CC's
+# per-request bookkeeping (`container`, `context_management`, and
+# `input_transformations`, a list of file paths with reasons).
+_KEEP_MESSAGE: frozenset[str] = frozenset({
+    "role",
+    "content",
+    "model",
+    "stop_reason",
 })
 
 # `system` events with these subtypes have no content — drop entirely.
@@ -133,10 +154,6 @@ _DROP_SYSTEM_SUBTYPES: frozenset[str] = frozenset({
     "stop_hook_summary",
     "turn_duration",
 })
-
-# `thinking` blocks carry both a `thinking` text field (content — keep) and
-# a `signature` field (huge base64-encoded model state — drop).
-_THINKING_DROP: frozenset[str] = frozenset({"signature"})
 
 # When summarizing a tool_use's `input`, pick the FIRST key from this list
 # that holds a non-empty string. Order matches "most identifying" per tool:
@@ -174,6 +191,13 @@ _TOOL_SUMMARY_MAX_LEN = 200
 COMMAND_MAX_LEN = 4000
 _COMMAND_MAX_LEN = COMMAND_MAX_LEN  # backwards-compatible local alias
 
+#: A URL is a reference and costs nothing to keep; anything longer is not a
+#: URL. Same bound as codex_sanitize.MAX_IMAGE_URL and kimi's media URLs.
+_MAX_IMAGE_URL = 2048
+#: Cap for a metadata string copied out of a block: a media type, the name of
+#: a dropped block type.
+_METADATA_MAX_LEN = 128
+
 
 def sanitize_event(event: Any) -> Any:
     """Trim a transcript event to ship only the conversation, not metadata.
@@ -185,35 +209,61 @@ def sanitize_event(event: Any) -> Any:
 
     # Drop entire bookkeeping event types (file-history-snapshot, last-prompt,
     # ai-title, permission-mode). These never carry conversational content.
-    if event.get("type") in _DROP_EVENT_TYPES:
+    # A list or object here would make the set lookups below raise.
+    ev_type = event.get("type")
+    if isinstance(ev_type, str) and ev_type in _DROP_EVENT_TYPES:
         return None
 
-    # Drop harness-plumbing attachments (hook output, tool/skill registry
-    # dumps, reminders). See _DROP_ATTACHMENT_TYPES.
-    if event.get("type") == "attachment":
-        attachment = event.get("attachment")
-        if isinstance(attachment, dict):
-            if attachment.get("type") in _DROP_ATTACHMENT_TYPES:
-                return None
-
     # Drop CC-internal system events with no content value.
-    if event.get("type") == "system":
+    if ev_type == "system":
         sub = event.get("subtype")
-        if sub in _DROP_SYSTEM_SUBTYPES:
+        if isinstance(sub, str) and sub in _DROP_SYSTEM_SUBTYPES:
             return None
 
-    out = {k: v for k, v in event.items() if k not in _DROP_TOP_LEVEL}
+    out = {k: v for k, v in event.items() if k in _KEEP_TOP_LEVEL}
+    # Rendered only as a string; anything else would be an unknown payload.
+    if not isinstance(out.get("content", ""), str):
+        del out["content"]
+
+    # An attachment ships only when its type is on _KEEP_ATTACHMENTS, and then
+    # only that type's named keys. The `attachment` key itself is meaningful
+    # on attachment events alone; anywhere else it is an unknown payload.
+    if event.get("type") == "attachment":
+        attachment = _sanitize_attachment(event.get("attachment"))
+        if attachment is None:
+            return None
+        out["attachment"] = attachment
+    else:
+        out.pop("attachment", None)
 
     msg = out.get("message")
     if isinstance(msg, dict):
-        msg_out = {k: v for k, v in msg.items() if k not in _DROP_MESSAGE}
+        msg_out = {k: v for k, v in msg.items() if k in _KEEP_MESSAGE}
         content = msg_out.get("content")
         if isinstance(content, list):
             sanitized_blocks = [_sanitize_block(b) for b in content]
             # Drop blocks that came back as None (empty thinking, etc).
             msg_out["content"] = [b for b in sanitized_blocks if b is not None]
+        elif not isinstance(content, str):
+            msg_out.pop("content", None)
         out["message"] = msg_out
 
+    return out
+
+
+def _sanitize_attachment(attachment: Any) -> dict[str, Any] | None:
+    """A kept attachment's named keys, or None to drop the event."""
+    if not isinstance(attachment, dict):
+        return None
+    kind = attachment.get("type")
+    keys = _KEEP_ATTACHMENTS.get(kind) if isinstance(kind, str) else None
+    if keys is None:
+        return None
+    out: dict[str, Any] = {"type": kind}
+    for key in keys:
+        value = attachment.get(key)
+        if isinstance(value, str) and value:
+            out[key] = value[:_TOOL_SUMMARY_MAX_LEN]
     return out
 
 
@@ -329,24 +379,36 @@ def _result_size(content: Any) -> int | None:
 def _sanitize_block(block: Any) -> Any:
     """Per-content-block sanitization.
 
-    text       → unchanged (it's the conversation).
-    thinking   → drop signature; if remaining `thinking` text is empty/
-                 whitespace, return None so the caller drops the block.
+    text       → type + text (it's the conversation).
+    thinking   → type + thinking; the signature (huge base64 model state)
+                 goes, and an empty/whitespace block returns None so the
+                 caller drops it.
     tool_use   → drop input, keep id+name + summary + compacted change stats.
     tool_result→ drop content, keep tool_use_id + is_error + size of the result.
-    other      → unchanged (forward-compat for new block types).
+    image      → media type and encoded size, never the bytes (a remote
+                 http(s) URL is kept: a pointer, not content).
+    other      → `{"type": <type>, "dropped": true}`. It used to be forwarded
+                 unchanged "for forward-compat", which is how a new block type
+                 carrying a document or a search result would have shipped.
+                 The renderer has no case for an unknown block, so nothing
+                 that was indexed is lost; the marker records that it was here.
+    non-dict   → None (dropped; nothing renders a non-dict block).
     """
     if not isinstance(block, dict):
-        return block
+        return None
 
     btype = block.get("type")
+
+    if btype == "text":
+        text = block.get("text")
+        return {"type": "text", "text": text if isinstance(text, str) else ""}
 
     if btype == "thinking":
         thinking_text = block.get("thinking")
         if not isinstance(thinking_text, str) or not thinking_text.strip():
             # Empty thinking blocks add zero signal but inflate payload + chunks.
             return None
-        return {k: v for k, v in block.items() if k not in _THINKING_DROP}
+        return {"type": "thinking", "thinking": thinking_text}
 
     if btype == "tool_use":
         name = block.get("name") or "tool"
@@ -378,4 +440,35 @@ def _sanitize_block(block: Any) -> Any:
             out["result_bytes"] = size
         return out
 
-    return block
+    if btype == "image":
+        return _image_placeholder(block.get("source"))
+
+    name = btype[:_METADATA_MAX_LEN] if isinstance(btype, str) and btype else "unknown"
+    return {"type": name, "dropped": True}
+
+
+def _image_placeholder(source: Any) -> dict[str, Any]:
+    """A pasted image as WHAT was there, never the bytes.
+
+    The same shape codex_sanitize, pi_sanitize and kimi_sanitize already give
+    a pasted image (`{type, mimeType, bytes}`, or a remote URL kept as a
+    pointer). Claude Code was the one sanitizer still forwarding the base64.
+    """
+    if isinstance(source, dict):
+        url = source.get("url")
+        if (
+            source.get("type") == "url"
+            and isinstance(url, str)
+            and url.startswith(("http://", "https://"))
+            and len(url) <= _MAX_IMAGE_URL
+        ):
+            return {"type": "image", "source": {"type": "url", "url": url}}
+        media = source.get("media_type")
+        data = source.get("data")
+    else:
+        media = data = None
+    return {
+        "type": "image",
+        "mimeType": media[:_METADATA_MAX_LEN] if isinstance(media, str) and media else "image",
+        "bytes": len(data) if isinstance(data, str) else 0,
+    }

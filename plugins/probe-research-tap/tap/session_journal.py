@@ -28,6 +28,7 @@ from pathlib import Path
 
 from . import codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
 from .secrets import redact_event
+from .transcript import nesting_exceeds
 
 PROTOCOL_VERSION = 2
 EMPTY_HASH = hashlib.sha256(b"").hexdigest()
@@ -927,6 +928,7 @@ class Journal:
             event_no = state["event_end"]
             events: list[dict] = []
             size = 2048  # envelope + bounded source provenance
+            sanitize = _sanitizer(self.source)  # an unknown source refuses, never guesses
             with path.open("rb") as handle:
                 handle.seek(end)
                 while True:
@@ -944,16 +946,22 @@ class Journal:
                             )
                         break
                     try:
-                        value = _sanitizer(self.source)(json.loads(raw)) if raw.strip() else None
+                        value = sanitize(json.loads(raw)) if raw.strip() else None
+                        if value is not None and nesting_exceeds(value):
+                            value = None  # the redactor below would hit the recursion limit
                     except (ValueError, UnicodeDecodeError):
+                        value = None
+                    except MemoryError:
+                        raise  # may pass; never drop a line for it
+                    except Exception:  # noqa: BLE001
+                        # A sanitizer that trips on one hostile or unforeseen
+                        # line costs that line, never the session: the cursor
+                        # never moves past an exception, so raising here would
+                        # stop this session's capture for good.
                         value = None
                     retained = (
                         value if isinstance(value, list) else ([] if value is None else [value])
                     )
-                    if historic:
-                        for event in retained:
-                            if isinstance(event, dict):
-                                event.pop("toolUseResult", None)
                     additions = [
                         {"line_no": event_no + i, "raw": event} for i, event in enumerate(retained)
                     ]

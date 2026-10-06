@@ -46,18 +46,22 @@ text, and `customType` on both custom entry types) is type-checked with
 `_safe_metadata_str` and length-capped before it leaves this module, even
 though these are not `toolCall.arguments` and so not the argument-value
 boundary above. This list is the class, not a sample of it — a new metadata
-field copied out of an untrusted pi entry belongs on it too.
+field copied out of an untrusted pi entry belongs on it too. Since tap 0.9.10
+that includes the timestamp, the tree ids, the session header, the entry and
+role names, the assistant's provider/model fields, labels and names
+(`_opt_str`), every numeric or boolean fact (`_opt_scalar`), and the text of
+text, thinking and summary content, which must be a string or ships empty.
 
 UNKNOWN CONTENT BLOCKS ARE KEPT AS A TYPE-ONLY PLACEHOLDER, NOT FORWARDED.
-sanitize.py's precedent for a content block type it doesn't recognize is to
-forward the block unchanged — correct there, because Claude Code's block
-shapes are ours to trust. Doing the same here would let an untrusted fork's
-arbitrary block (any keys, any values) ride straight through, which is an
-exfiltration path this module exists to close. So an unrecognized block type
-becomes `{"type": "unknown_block", "block_type": <name>}` — the fact that
-something was here is kept (this file's "never drop" principle, which one
-level up only promises that for top-level JSONL entries, applies to content
-blocks too) but none of the unknown block's own content does.
+Forwarding an unrecognized block would let an untrusted fork's arbitrary
+block (any keys, any values) ride straight through, which is an exfiltration
+path this module exists to close. So an unrecognized block type becomes
+`{"type": "unknown_block", "block_type": <name>}` — the fact that something
+was here is kept (this file's "never drop" principle, which one level up only
+promises that for top-level JSONL entries, applies to content blocks too) but
+none of the unknown block's own content does. sanitize.py used to forward
+Claude Code's unknown blocks unchanged; since tap 0.9.10 it also ships a
+type-only marker (`{"type": <name>, "dropped": true}`).
 """
 
 from __future__ import annotations
@@ -82,29 +86,37 @@ def sanitize_event(event: Any) -> Any:
                              extras={"raw_type": type(event).__name__})
 
     entry_type = event.get("type")
-    timestamp = event.get("timestamp")
+    # Copied onto every translated event, so it gets the metadata guard too.
+    timestamp = _opt_str(event.get("timestamp"), _TIMESTAMP_MAX_LEN)
 
     if entry_type == "session":
         return _translate_session_header(event, timestamp)
 
-    handler = _HANDLERS.get(entry_type)
+    handler = _HANDLERS.get(entry_type) if isinstance(entry_type, str) else None
     if handler is None:
+        # An untrusted name: interpolated raw, a nested object's repr would
+        # land in `subtype`, which the engine renders into the index.
+        name = _opt_str(entry_type)
         return _system_event(
-            subtype=f"unknown:{entry_type}",
+            subtype=f"unknown:{name}",
             timestamp=timestamp,
-            extras=_tree_extras(event) | {"raw_type": entry_type},
+            extras=_tree_extras(event) | {"raw_type": name},
         )
     return handler(event, timestamp)
 
 
 def _translate_session_header(event: dict, timestamp: Any) -> dict:
     version = event.get("version", 1)
+    # A non-integer version cannot be compared (an object is unhashable and
+    # crashed the membership test below), so it ships as None and is flagged.
+    if isinstance(version, bool) or not isinstance(version, int):
+        version = None
     extras: dict[str, Any] = {
         "version": version,
-        "cwd": event.get("cwd"),
-        "session_uuid": event.get("id"),
+        "cwd": _opt_str(event.get("cwd"), _PATH_MAX_LEN),
+        "session_uuid": _opt_str(event.get("id")),
     }
-    parent = event.get("parentSession")
+    parent = _opt_str(event.get("parentSession"), _PATH_MAX_LEN)
     if parent:
         extras["parent_session"] = parent
     if version not in SUPPORTED_SESSION_VERSIONS:
@@ -119,9 +131,10 @@ def _tree_extras(event: dict) -> dict[str, Any]:
 
     Kept on ALL events because the transcript ships the whole tree and the
     active branch is resolved downstream; without parentId the reader cannot
-    tell an abandoned branch from the live one.
+    tell an abandoned branch from the live one. Real ids are short strings;
+    anything else is not an id and does not ship.
     """
-    return {k: event[k] for k in _TREE_KEYS if event.get(k) is not None}
+    return {k: v for k in _TREE_KEYS if (v := _opt_str(event.get(k))) is not None}
 
 
 def _system_event(
@@ -159,6 +172,32 @@ def _safe_metadata_str(value: Any, *, max_len: int = _METADATA_MAX_LEN) -> str:
     return value[:max_len]
 
 
+#: Cap for a path copied out of the session header (cwd, parentSession).
+_PATH_MAX_LEN = 4096
+#: An ISO-8601 timestamp is ~24 characters.
+_TIMESTAMP_MAX_LEN = 64
+#: A custom entry's `data` ships its key names only: at most this many, this long.
+_DATA_KEYS_MAX = 50
+_DATA_KEY_MAX_LEN = 64
+
+
+def _opt_str(value: Any, max_len: int = _METADATA_MAX_LEN) -> str | None:
+    """`_safe_metadata_str` for an optional field: None when it is not a string,
+    so an absent field stays absent instead of becoming ""."""
+    return value[:max_len] if isinstance(value, str) else None
+
+
+def _opt_scalar(value: Any) -> bool | int | float | None:
+    """An untrusted number or flag, or None: never a nested object."""
+    return value if isinstance(value, (bool, int, float)) else None
+
+
+def _text(value: Any) -> str:
+    """Content text (prompts, replies, thinking, summaries): uncapped like
+    every sanitizer's conversation text, but a string or nothing."""
+    return value if isinstance(value, str) else ""
+
+
 #: Argument keys worth summarizing, most informative first.
 #: VERIFIED against pi 0.86.0's own typebox schemas (unchanged from 0.84.3) in
 #: node_modules/@earendil-works/pi-coding-agent/dist/core/tools/*.d.ts:
@@ -176,11 +215,12 @@ def _translate_message(event: dict, timestamp: Any) -> dict:
                              extras=_tree_extras(event))
 
     role = message.get("role")
-    handler = _MESSAGE_HANDLERS.get(role)
+    handler = _MESSAGE_HANDLERS.get(role) if isinstance(role, str) else None
     if handler is None:
+        name = _opt_str(role)
         return _system_event(
-            subtype=f"unknown:message:{role}", timestamp=timestamp,
-            extras=_tree_extras(event) | {"role": role},
+            subtype=f"unknown:message:{name}", timestamp=timestamp,
+            extras=_tree_extras(event) | {"role": name},
         )
     return handler(event, message, timestamp)
 
@@ -198,10 +238,10 @@ def _translate_assistant_message(event: dict, message: dict, timestamp: Any) -> 
     extras = _tree_extras(event)
     for src, dst in (("provider", "provider"), ("model", "model"),
                      ("api", "api"), ("stopReason", "stop_reason")):
-        if message.get(src) is not None:
-            extras[dst] = message[src]
-    if message.get("errorMessage"):
-        extras["error_message"] = str(message["errorMessage"])[:_TOOL_SUMMARY_MAX_LEN]
+        if (value := _opt_str(message.get(src))) is not None:
+            extras[dst] = value
+    if error := _opt_str(message.get("errorMessage"), _TOOL_SUMMARY_MAX_LEN):
+        extras["error_message"] = error
     return {
         "type": "assistant",
         "timestamp": timestamp,
@@ -228,9 +268,9 @@ def _translate_block(item: Any) -> dict | None:
         return None
     kind = item.get("type")
     if kind == "text":
-        return {"type": "text", "text": item.get("text") or ""}
+        return {"type": "text", "text": _text(item.get("text"))}
     if kind == "thinking":
-        return {"type": "thinking", "thinking": item.get("thinking") or ""}
+        return {"type": "thinking", "thinking": _text(item.get("thinking"))}
     if kind == "image":
         # Size, mime and nothing else. See the batch-cap test.
         data = item.get("data")
@@ -374,8 +414,8 @@ def _translate_bash_execution(event: dict, message: dict, timestamp: Any) -> lis
     extras = _tree_extras(event)
     for src, dst in (("exitCode", "exit_code"), ("cancelled", "cancelled"),
                      ("truncated", "truncated")):
-        if message.get(src) is not None:
-            extras[dst] = message[src]
+        if (value := _opt_scalar(message.get(src))) is not None:
+            extras[dst] = value
     if message.get("excludeFromContext"):
         extras["excluded_from_context"] = True
 
@@ -433,10 +473,10 @@ _HANDLERS["message"] = _translate_message
 
 def _translate_compaction(event: dict, timestamp: Any) -> dict:
     extras = _tree_extras(event)
-    if event.get("tokensBefore") is not None:
-        extras["tokens_before"] = event["tokensBefore"]
-    if event.get("firstKeptEntryId"):
-        extras["first_kept_entry_id"] = event["firstKeptEntryId"]
+    if (tokens := _opt_scalar(event.get("tokensBefore"))) is not None:
+        extras["tokens_before"] = tokens
+    if first_kept := _opt_str(event.get("firstKeptEntryId")):
+        extras["first_kept_entry_id"] = first_kept
     if isinstance(event.get("retainedTail"), list):
         # The retained messages themselves are already in the file as their own
         # entries; record only that this compaction was self-contained.
@@ -444,49 +484,49 @@ def _translate_compaction(event: dict, timestamp: Any) -> dict:
     if event.get("fromHook"):
         extras["from_extension"] = True
     return _system_event(subtype="compaction", timestamp=timestamp,
-                         text=event.get("summary"), extras=extras)
+                         text=_text(event.get("summary")), extras=extras)
 
 
 def _translate_branch_summary(event: dict, timestamp: Any) -> dict:
     extras = _tree_extras(event)
-    if event.get("fromId"):
-        extras["from_id"] = event["fromId"]
+    if from_id := _opt_str(event.get("fromId")):
+        extras["from_id"] = from_id
     if event.get("fromHook"):
         extras["from_extension"] = True
     return _system_event(subtype="branch_summary", timestamp=timestamp,
-                         text=event.get("summary"), extras=extras)
+                         text=_text(event.get("summary")), extras=extras)
 
 
 def _translate_label(event: dict, timestamp: Any) -> dict:
     extras = _tree_extras(event)
-    if event.get("targetId"):
-        extras["target_id"] = event["targetId"]
+    if target := _opt_str(event.get("targetId")):
+        extras["target_id"] = target
     # A cleared label is `label: undefined` — absent, not empty.
-    if event.get("label") is not None:
-        extras["label"] = event["label"]
+    if (label := _opt_str(event.get("label"))) is not None:
+        extras["label"] = label
     return _system_event(subtype="label", timestamp=timestamp, extras=extras)
 
 
 def _translate_model_change(event: dict, timestamp: Any) -> dict:
     extras = _tree_extras(event)
     for src, dst in (("provider", "provider"), ("modelId", "model_id")):
-        if event.get(src):
-            extras[dst] = event[src]
+        if value := _opt_str(event.get(src)):
+            extras[dst] = value
     return _system_event(subtype="model_change", timestamp=timestamp, extras=extras)
 
 
 def _translate_thinking_level_change(event: dict, timestamp: Any) -> dict:
     extras = _tree_extras(event)
-    if event.get("thinkingLevel"):
-        extras["thinking_level"] = event["thinkingLevel"]
+    if level := _opt_str(event.get("thinkingLevel")):
+        extras["thinking_level"] = level
     return _system_event(subtype="thinking_level_change", timestamp=timestamp,
                          extras=extras)
 
 
 def _translate_session_info(event: dict, timestamp: Any) -> dict:
     extras = _tree_extras(event)
-    if event.get("name"):
-        extras["name"] = event["name"]
+    if name := _opt_str(event.get("name")):
+        extras["name"] = name
     return _system_event(subtype="session_info", timestamp=timestamp, extras=extras)
 
 
@@ -534,7 +574,11 @@ def _translate_custom(event: dict, timestamp: Any) -> dict:
     extras["custom_type"] = custom_type
     data = event.get("data")
     if isinstance(data, dict):
-        extras["data_keys"] = sorted(data)
+        # Key names only, and only a bounded number of short ones: a fork's
+        # extension writes whatever it likes here.
+        extras["data_keys"] = sorted(
+            k for k in (_opt_str(key, _DATA_KEY_MAX_LEN) for key in list(data)[:_DATA_KEYS_MAX]) if k
+        )
     return _system_event(subtype=f"custom:{custom_type}", timestamp=timestamp,
                          extras=extras)
 

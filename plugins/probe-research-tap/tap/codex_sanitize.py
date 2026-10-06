@@ -114,6 +114,8 @@ _TURN_CONTEXT_EXTRAS: tuple[str, ...] = (
 )
 
 _STARTUP_CONTEXT_TAGS: tuple[str, ...] = (
+    # Older Codex wrapped an AGENTS.md file's contents in this tag.
+    "user_instructions",
     "permissions instructions",
     "skills_instructions",
     "plugins_instructions",
@@ -132,6 +134,8 @@ _TOOL_SUMMARY_MAX_LEN = 200
 # while every other key stays first-line-only.
 #: Single definition in sanitize.py -- see COMMAND_MAX_LEN there.
 _COMMAND_MAX_LEN = COMMAND_MAX_LEN
+#: A local_shell_call `status` is a short enum ("completed", "in_progress").
+_STATUS_MAX_LEN = 64
 
 
 def sanitize_event(event: Any) -> Any:
@@ -190,7 +194,7 @@ def _translate_compacted(payload: dict, timestamp: Any) -> dict:
 
 def _translate_event_msg(payload: dict, timestamp: Any) -> Any:
     sub = payload.get("type")
-    if sub in _DROP_EVENT_MSG_TYPES:
+    if not isinstance(sub, str) or sub in _DROP_EVENT_MSG_TYPES:
         return None
     return None
 
@@ -232,14 +236,15 @@ def _translate_message(payload: dict, timestamp: Any) -> dict | None:
         return None
 
     cc_role = "assistant" if role == "assistant" else "user"
-    blocks = [_translate_content_item(c) for c in payload.get("content") or []]
+    content = payload.get("content")
+    blocks = [_translate_content_item(c) for c in content] if isinstance(content, list) else []
     blocks = [b for b in blocks if b is not None]
     if not blocks:
         return None
 
     extras: dict[str, Any] = {}
     phase = payload.get("phase")
-    if phase in _PHASES:
+    if isinstance(phase, str) and phase in _PHASES:
         extras["phase"] = phase
 
     out: dict[str, Any] = {
@@ -274,6 +279,10 @@ def _content_texts(content: Any) -> list[str]:
 
 def _is_startup_context_text(text: str) -> bool:
     stripped = text.strip().lower()
+    # An AGENTS.md file's contents, which Codex injects as a user turn without a
+    # tag of its own: file content, dropped like Claude Code's CLAUDE.md.
+    if stripped.startswith("# agents.md instructions for") and "<instructions>" in stripped:
+        return True
     return any(
         stripped.startswith(f"<{tag}>") and stripped.endswith(f"</{tag}>")
         for tag in _STARTUP_CONTEXT_TAGS
@@ -326,10 +335,11 @@ def _image_placeholder(url: str) -> dict:
 
     A remote `https://` reference is kept: it is a pointer, not file content,
     and a reader following it later is the point of having it. An inline
-    `data:` payload -- and any other absurdly long value claiming to be a URL
-    -- is replaced by its media type and encoded length.
+    `data:` payload -- and any other value claiming to be a URL: a `file://`
+    path, bare base64, anything absurdly long -- is replaced by its media type
+    and encoded length (tap 0.9.10; it used to keep anything but `data:`).
     """
-    if not url.startswith("data:") and len(url) <= MAX_IMAGE_URL:
+    if url.startswith(("http://", "https://")) and len(url) <= MAX_IMAGE_URL:
         return {"type": "image", "source": {"type": "url", "url": url}}
     media = "image"
     if url.startswith("data:"):
@@ -429,14 +439,13 @@ def _translate_local_shell_call(payload: dict, timestamp: Any) -> dict:
         "timestamp": timestamp,
         "message": {"role": "assistant", "content": [block]},
     }
-    extras: dict[str, Any] = {}
-    if isinstance(action, dict):
-        extras["action"] = action
+    # The `action` object itself does NOT ship (tap 0.9.10). It is the same
+    # command the summary above already carries -- but whole, with no cap, plus
+    # its env, working directory and timeout, which a session's story does not
+    # need and the 4,000-character command cap exists to bound.
     status = payload.get("status")
-    if status is not None:
-        extras["status"] = status
-    if extras:
-        out["_codex_extras"] = extras
+    if isinstance(status, str) and status:
+        out["_codex_extras"] = {"status": status[:_STATUS_MAX_LEN]}
     return out
 
 
@@ -521,7 +530,8 @@ def _summarize_args(value: Any) -> str:
             if isinstance(parsed, dict):
                 value = parsed
         except (ValueError, TypeError):
-            return value.splitlines()[0][:_TOOL_SUMMARY_MAX_LEN]
+            lines = value.splitlines()
+            return lines[0][:_TOOL_SUMMARY_MAX_LEN] if lines else ""
     if isinstance(value, dict):
         for key in _TOOL_SUMMARY_KEYS:
             candidate = value.get(key)

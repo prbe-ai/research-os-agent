@@ -105,11 +105,9 @@ def test_bash_execution_call_id_rejects_non_string_entry_id():
     # The synthetic call_id is built from the entry's own `id` and becomes
     # the tool_use `id` / tool_result `tool_use_id` pairing key — same class
     # as tool_use id elsewhere, just reached via f-string interpolation
-    # instead of a dict literal. NOTE: the entry's `id` also rides through
-    # unguarded into `_pi_extras` via `_tree_extras` (a separate, documented,
-    # load-bearing tree-navigation field this fix deliberately does not
-    # touch) — so this test checks only the synthetic pairing id, not that
-    # the whole output is free of the leaked value.
+    # instead of a dict literal. The entry's `id` also used to ride through
+    # unguarded into `_pi_extras` via `_tree_extras`; since tap 0.9.10 a
+    # non-string tree id does not ship either, so the whole output is clean.
     out = sanitize_event({
         "type": "message", "id": {"leaked": "entry-id-value"}, "parentId": "e0",
         "timestamp": "2026-08-25T14:00:03.000Z",
@@ -121,6 +119,8 @@ def test_bash_execution_call_id_rejects_non_string_entry_id():
     use, result = out
     assert use["message"]["content"][0]["id"] == "bash-"
     assert result["message"]["content"][0]["tool_use_id"] == "bash-"
+    assert "leaked" not in repr(out)
+    assert use["_pi_extras"]["parentId"] == "e0"  # a real string id still ships
 
 
 def test_edit_tool_call_ships_counts_not_content():

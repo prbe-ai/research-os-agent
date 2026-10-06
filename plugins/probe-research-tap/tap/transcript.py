@@ -182,8 +182,14 @@ def build_batch_body(
             raw = json.loads(line)
         except (ValueError, UnicodeDecodeError):
             raw = line.decode("utf-8", errors="replace")
-        sanitized = sanitize(raw)
-        if sanitized is None:
+        try:
+            sanitized = sanitize(raw)
+        except MemoryError:
+            raise
+        except Exception:  # noqa: BLE001
+            # One hostile or unforeseen line costs that line, never the batch.
+            continue
+        if sanitized is None or nesting_exceeds(sanitized):
             continue
         for one in (sanitized if isinstance(sanitized, list) else [sanitized]):
             scrubbed, fired = redact_event(one)
@@ -259,3 +265,28 @@ def byte_offset_after(path: Path, start: int, line_count: int) -> int:
                 pos -= len(chunk)  # partial trailing line: do not consume
                 break
     return pos
+
+
+
+#: Deepest nesting an uploaded event may have. The redactor walks values
+#: recursively and raises RecursionError somewhere past 950 levels; real
+#: sanitized events nest at most 5-8 (245,267 Claude Code events measured).
+MAX_EVENT_DEPTH = 64
+
+
+def nesting_exceeds(value: Any, limit: int = MAX_EVENT_DEPTH) -> bool:
+    """True when `value` holds a dict or list nested deeper than `limit`.
+    Iterative, so it cannot itself hit the recursion limit."""
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        item, depth = stack.pop()
+        if isinstance(item, dict):
+            children: Any = item.values()
+        elif isinstance(item, list):
+            children = item
+        else:
+            continue
+        if depth >= limit:
+            return True
+        stack.extend((child, depth + 1) for child in children)
+    return False

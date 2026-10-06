@@ -87,3 +87,58 @@ def test_a_content_block_type_from_a_fork_is_never_dropped_but_never_forwarded()
     assert "sk-should-never-appear" not in repr(out)
     assert "anything" not in repr(out)
     assert "goes" not in repr(out)
+
+
+def test_a_fork_cannot_ship_a_nested_object_through_any_copied_field():
+    # Every field this translator copies out of an entry, given an object
+    # where a string, number or flag belongs. Before tap 0.9.10 each of these
+    # shipped the object as-is (or its repr, through an f-string into the
+    # rendered subtype), and an object `version` crashed the translator.
+    leak = {"leaked": "nested-value"}
+    entries = [
+        {"type": "session", "version": leak, "id": leak, "cwd": leak, "parentSession": leak},
+        {"type": leak, "id": leak, "parentId": leak, "timestamp": leak},
+        {"type": "message", "id": "m1", "message": {"role": leak}},
+        {"type": "message", "id": "m1", "message": {
+            "role": "assistant", "provider": leak, "model": leak, "api": leak, "stopReason": leak,
+            "content": [{"type": "text", "text": leak}, {"type": "thinking", "thinking": leak}],
+        }},
+        {"type": "message", "id": "m1", "message": {"role": "user", "content": [{"type": "text", "text": leak}]}},
+        {"type": "message", "id": "m1", "message": {
+            "role": "bashExecution", "command": "ls", "output": "ok",
+            "exitCode": leak, "cancelled": leak, "truncated": leak,
+        }},
+        {"type": "compaction", "id": "c1", "summary": leak, "tokensBefore": leak, "firstKeptEntryId": leak},
+        {"type": "branch_summary", "id": "b1", "summary": leak, "fromId": leak},
+        {"type": "label", "id": "l1", "targetId": leak, "label": leak},
+        {"type": "model_change", "id": "x1", "provider": leak, "modelId": leak},
+        {"type": "thinking_level_change", "id": "t1", "thinkingLevel": leak},
+        {"type": "session_info", "id": "s1", "name": leak},
+        {"type": "message", "id": "m1", "message": {
+            "role": "assistant", "content": [], "stopReason": "error", "errorMessage": leak,
+        }},
+    ]
+    for entry in entries:
+        out = sanitize_event(entry)
+        assert "leaked" not in repr(out), entry
+
+
+def test_a_custom_entry_ships_a_bounded_list_of_short_key_names():
+    data = {f"k{i:03d}" + "x" * 100: i for i in range(80)}
+    out = sanitize_event({"type": "custom", "id": "x1", "customType": "ext", "data": data})
+    keys = out["_pi_extras"]["data_keys"]
+    assert len(keys) == 50 and all(len(k) == 64 for k in keys)
+    assert sanitize_event({"type": "custom", "id": "x1", "customType": "ext", "data": {"a": 1}}
+                          )["_pi_extras"]["data_keys"] == ["a"]
+
+
+def test_real_string_and_number_fields_still_ship():
+    out = sanitize_event({
+        "type": "message", "id": "m1", "parentId": "m0",
+        "message": {"role": "bashExecution", "command": "ls", "output": "ok",
+                    "exitCode": 2, "cancelled": False, "truncated": True},
+    })
+    assert out[0]["_pi_extras"] == {"id": "m1", "parentId": "m0", "exit_code": 2,
+                                    "cancelled": False, "truncated": True}
+    out = sanitize_event({"type": "label", "id": "l1", "targetId": "m1", "label": "good run"})
+    assert out["_pi_extras"] == {"id": "l1", "target_id": "m1", "label": "good run"}

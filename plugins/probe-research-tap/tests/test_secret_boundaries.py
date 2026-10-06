@@ -7,7 +7,6 @@ from unittest.mock import patch
 import pytest
 
 from tap import secrets, transcript
-from tap.sanitize import sanitize_event
 from tap.session_journal import Journal, ReconciliationRequired, Wire
 
 KEY = 'ghp_' + hashlib.sha256(b'synthetic-transcript-regression').hexdigest()[:36]
@@ -84,10 +83,13 @@ def test_old_unsafe_pending_is_blocked_without_changing_receipt_identity(tmp_pat
 
 
 def test_legacy_envelope_and_dict_context():
+    # The redactor's own contract, whatever a sanitizer lets through: an
+    # identity sanitizer hands it the nested dict as is.
     event = native('claude_code', 'keep conversation')
     event['extension'] = {'password': OPAQUE, KEY: 'keep value'}
     body = transcript.build_batch_body(device_id='device', session_id='session', batch_seq=0,
-        cwd='/work/'+KEY, base_line_no=0, lines=[json.dumps(event).encode()], sanitize=sanitize_event)
+        cwd='/work/'+KEY, base_line_no=0, lines=[json.dumps(event).encode()],
+        sanitize=lambda e: e)
     assert KEY.encode() not in body and OPAQUE.encode() not in body
     assert b'keep conversation' in body and b'keep value' in body
 

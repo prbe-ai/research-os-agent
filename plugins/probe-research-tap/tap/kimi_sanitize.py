@@ -108,7 +108,8 @@ def sanitize_event(event: Any) -> Any:
     """One Kimi wire record -> a CC-shaped event, or None to drop it."""
     if not isinstance(event, dict):
         return None
-    handler = _HANDLERS.get(event.get("type"))
+    ev_type = event.get("type")
+    handler = _HANDLERS.get(ev_type) if isinstance(ev_type, str) else None
     if handler is None:
         return None
     return handler(event)
@@ -311,7 +312,7 @@ def _translate_append_message(event: dict) -> dict | None:
         return None
     origin = message.get("origin") if isinstance(message.get("origin"), dict) else {}
     kind = origin.get("kind")
-    if kind in _PROMPT_ORIGINS:
+    if isinstance(kind, str) and kind in _PROMPT_ORIGINS:
         blocks = _blocks(message.get("content"))
         if not blocks:
             return None
