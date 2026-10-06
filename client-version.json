@@ -8,8 +8,8 @@
     "min": "0.90.0"
   },
   "tap": {
-    "latest": "0.9.12",
+    "latest": "0.9.13",
     "min": "0.6.0",
-    "recommended": "0.9.10"
+    "recommended": "0.9.13"
   }
 }

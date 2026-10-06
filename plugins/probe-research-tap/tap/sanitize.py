@@ -21,6 +21,12 @@ plus a one-line marker for each tool call. Everything else is noise:
     results — usually the single largest chunk of any session payload)
   - Pasted image bytes, and any content block or attachment type this file
     does not name.
+  - What a command the RESEARCHER ran printed (tap 0.9.13): a `!command`'s
+    `<bash-stdout>`/`<bash-stderr>` and a local slash command's
+    `<local-command-stdout>`/`<local-command-stderr>` keep their tags, and
+    the text inside becomes OUTPUT_WITHHELD (`withhold_output`).
+  - A loaded skill's body: the `isMeta` user turn Claude Code injects when a
+    skill fires, starting "Base directory for this skill:" (tap 0.9.13).
 
 ALLOW-LISTS, NOT DENY-LISTS (tap 0.9.10). The consent screen promises that file
 contents, command output and search results are not sent
@@ -73,6 +79,7 @@ canonical file, never the plugin copy.
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 # Top-level event types to drop entirely. These are CC-internal bookkeeping
@@ -177,6 +184,34 @@ USAGE_KEYS: tuple[str, ...] = (
 #: The only value probe-events/1 defines. PUBLIC for pi_sanitize / kimi_sanitize.
 ORIGIN_USER_SHELL = "user_shell"
 
+# What a command the RESEARCHER ran printed, which Claude Code keeps as
+# conversation text rather than as a tool result: a `!command` (bash mode) is a
+# user turn `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>`, and a
+# local slash command (`/model`, `/cost`, `/context`, `/exit`'s "Bye!")
+# prints `<local-command-stdout>…</local-command-stdout>` on a user turn or in
+# a `system` `local_command` event's `content`. Across this devbox's Claude
+# Code transcripts (2026-10-06): 444 user turns and 68 system events carried
+# local-command output, 7 user turns a `!command`'s. The consent screen says
+# command output is not sent (app/assistant/product.md); through tap 0.9.12
+# it was. The tags stay, so a reader still sees that the command printed and
+# how much; the text inside does not (`withhold_output`).
+_OUTPUT_TAG_NAMES = ("bash-stdout", "bash-stderr", "local-command-stdout", "local-command-stderr")
+_OUTPUT_TAG = re.compile(r"<(/?)(" + "|".join(_OUTPUT_TAG_NAMES) + r")>")
+
+#: What replaces withheld command output, in every sanitizer that withholds
+#: some (here, and codex_sanitize for Codex's `!command`): its size in
+#: characters, comma-grouped. Empty output stays empty. PUBLIC for
+#: codex_sanitize; one format, so a reader matches one string.
+OUTPUT_WITHHELD = "[output not sent: {:,} chars]"
+
+# When a skill fires, Claude Code injects its whole SKILL.md as an `isMeta`
+# user turn starting with this line (313 of them on this devbox, 2026-10-06).
+# It is a file's content, not something anyone said: the engine already drops
+# any user text with this line when rendering (transcript_render
+# `_INJECTED_DOCUMENT`), so it was uploaded and never read. Since tap 0.9.13
+# it is not uploaded.
+_SKILL_BODY_PREFIX = "Base directory for this skill:"
+
 # `system` events with these subtypes have no content — drop entirely.
 # stop_hook_summary  = CC's per-hook timing/output; pure bookkeeping.
 # turn_duration      = how long a turn took; pure bookkeeping.
@@ -255,6 +290,10 @@ def sanitize_event(event: Any) -> Any:
         if isinstance(sub, str) and sub in _DROP_SYSTEM_SUBTYPES:
             return None
 
+    # A loaded skill's body is a file, not a turn (see _SKILL_BODY_PREFIX).
+    if ev_type == "user" and event.get("isMeta") is True and _is_skill_body(event.get("message")):
+        return None
+
     out = {k: v for k, v in event.items() if isinstance(v, _KEEP_TOP_LEVEL.get(k, ()))}
 
     # An attachment ships only when its type is on _KEEP_ATTACHMENTS, and then
@@ -268,6 +307,12 @@ def sanitize_event(event: Any) -> Any:
     else:
         out.pop("attachment", None)
 
+    # Command output arrives on the user and system channels only; an
+    # assistant's text is the model's own words and is left as written.
+    withhold = out["type"] != "assistant"
+    if withhold and "content" in out:
+        out["content"] = withhold_output(out["content"])
+
     msg = out.get("message")
     if isinstance(msg, dict):
         msg_out = {k: v for k, v in msg.items() if isinstance(v, _KEEP_MESSAGE.get(k, ()))}
@@ -276,6 +321,12 @@ def sanitize_event(event: Any) -> Any:
             sanitized_blocks = [_sanitize_block(b) for b in content]
             # Drop blocks that came back as None (empty thinking, etc).
             msg_out["content"] = [b for b in sanitized_blocks if b is not None]
+            if withhold:
+                for block in msg_out["content"]:
+                    if block.get("type") == "text":
+                        block["text"] = withhold_output(block["text"])
+        elif withhold and isinstance(content, str):
+            msg_out["content"] = withhold_output(content)
         out["message"] = msg_out
         if out["type"] == "assistant":
             # One model call (Anthropic's message id) and what it cost. Claude
@@ -305,6 +356,92 @@ def usage_counts(source: Any, names: dict[str, str]) -> dict[str, int] | None:
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
             out[ours] = value
     return out or None
+
+
+def output_withheld(size: int) -> str:
+    """OUTPUT_WITHHELD for `size` characters, or "" when there were none."""
+    return OUTPUT_WITHHELD.format(size) if size > 0 else ""
+
+
+_TASK_NOTIFICATION = re.compile(r"<task-notification>(.*?)(?:</task-notification>|\Z)", re.DOTALL)
+_TASK_EVENT = re.compile(r"<event>(.*?)(?:</event>|\Z)", re.DOTALL)
+
+
+def _withhold_task_events(text: str) -> str:
+    """Inside a `<task-notification>`, each `<event>` body (a Monitor's output
+    lines, a watcher's report) becomes its size; the rest of the notice stays.
+    Only inside a notification: an `<event>` a researcher types is their own."""
+    if "<task-notification>" not in text:
+        return text
+
+    def notification(block: re.Match[str]) -> str:
+        inner = _TASK_EVENT.sub(
+            lambda e: f"<event>{output_withheld(len(e.group(1)))}</event>", block.group(1)
+        )
+        closed = block.group(0).endswith("</task-notification>")
+        return f"<task-notification>{inner}" + ("</task-notification>" if closed else "")
+
+    return _TASK_NOTIFICATION.sub(notification, text)
+
+
+def withhold_output(text: str) -> str:
+    """`text` with the inside of every command-output tag replaced by its size.
+
+    `<bash-stdout>(1,234 characters)</bash-stdout><bash-stderr></bash-stderr>` becomes
+    `<bash-stdout>[output not sent: 1,234 chars]</bash-stdout><bash-stderr></bash-stderr>`.
+
+    FAIL-CLOSED, because output can contain the tags themselves (a `!cat` of a
+    transcript, a grep of this repo), and pairing tags naively would then ship
+    the output after the first fake close tag. So everything from the FIRST
+    output open tag to the LAST output close tag (to the end of the text when
+    an open tag is never closed) ships as tags and size markers only: each
+    open tag starts a span that only its own close tag ends, and any text
+    between spans, which only a faked tag puts there, is counted into the span
+    before it and never shipped. Real Claude Code lines have none. One linear
+    pass over the tags: a pasted log full of them costs no more than its length.
+    """
+    text = _withhold_task_events(text)
+    tags = list(_OUTPUT_TAG.finditer(text))
+    opens = [m for m in tags if not m.group(1)]
+    if not opens:
+        # A lone close tag is a researcher writing about the tag, not output
+        # (Claude Code never splits an output turn across blocks).
+        return text
+    start = opens[0].start()
+    closes = [m for m in tags if m.group(1)]
+    end = closes[-1].end() if closes and closes[-1].start() > opens[-1].start() else len(text)
+    spans: list[list[Any]] = []  # [tag name, characters withheld]
+    current: str | None = None  # the tag whose span is open
+    cursor = start  # first character not yet counted
+    for m in tags:
+        if m.start() < start or m.end() > end:
+            continue
+        closing, name = m.group(1), m.group(2)
+        if current is None and not closing:
+            if spans:
+                spans[-1][1] += m.start() - cursor
+            spans.append([name, 0])
+            current, cursor = name, m.end()
+        elif closing and name == current:
+            spans[-1][1] += m.start() - cursor
+            current, cursor = None, m.end()
+    spans[-1][1] += end - cursor
+    withheld = "".join(f"<{name}>{output_withheld(size)}</{name}>" for name, size in spans)
+    return text[:start] + withheld + text[end:]
+
+
+def _is_skill_body(message: Any) -> bool:
+    """True when a user message's text is a skill's injected SKILL.md."""
+    if not isinstance(message, dict):
+        return False
+    content = message.get("content")
+    if isinstance(content, str):
+        texts: list[Any] = [content]
+    elif isinstance(content, list):
+        texts = [b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"]
+    else:
+        return False
+    return any(isinstance(t, str) and t.lstrip().startswith(_SKILL_BODY_PREFIX) for t in texts)
 
 
 def _sanitize_attachment(attachment: Any) -> dict[str, Any] | None:

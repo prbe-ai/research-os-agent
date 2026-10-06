@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Session capture no longer sends what your own commands print, or a skill's text when it loads
+  (tap 0.9.13).** The consent screen says command output is not sent, but two things still went up
+  as conversation text (the 0.9.10 entry below lists them): what a `!command` typed in Claude Code
+  printed (`<bash-stdout>`, `<bash-stderr>`) or a slash command such as `/cost` printed
+  (`<local-command-stdout>`), and the whole `SKILL.md` Claude Code adds to the conversation when
+  a skill loads. Now the command still ships, and its output ships as its size inside the same
+  tags: `<bash-stdout>[output not sent: 1,234 chars]</bash-stdout>` (empty output stays empty).
+  Output that prints those tags itself cannot slip past them. A Monitor's output lines and other
+  `<event>` bodies inside a background-task notice ship as their size too; the notice itself stays. The skill's text is not sent; search
+  never showed it. Codex had the same gap for a typed `!command` (`<user_shell_command>`): the
+  command, exit code and duration ship, the output as its size. pi and Kimi Code already sent
+  only the size. Search no longer finds words that only a command's output contained.
+  `tap.recommended` is now 0.9.13, so older taps are asked to update. Sessions already uploaded
+  are not changed; `probe` imports of past sessions follow the same rule from this CLI release.
+- **Codex: Probe's SessionEnd hooks now finish before Codex stops them.** Codex kills a SessionEnd
+  hook 3 seconds after starting it. The hook dispatcher gave its routes 2.8 seconds, then could
+  spend up to 0.3 more stopping one that overran, plus its own start-up, so at worst Codex killed
+  it first. It now gives them 2.3 seconds: with 0.2 allowed for start-up and 0.3 for stopping a
+  route, it is done by 2.8 seconds (measured: 2.33, or 2.53 when a killed route's child holds its
+  output open). Claude Code's SessionEnd budget is unchanged. Ships in the next plugin release.
+
 ## 0.218.0
 
 - **`/probe inline`: the researcher hands Probe to the agent; the agent no longer takes it (tap

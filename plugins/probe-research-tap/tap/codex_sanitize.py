@@ -28,6 +28,7 @@ Translation rules:
                               with content[] of {type: text, text} blocks
                               extras: phase
                               drops: startup context / developer instruction frames
+                              withholds: what a `!command` printed (its size ships)
   response_item.reasoning   → CC `assistant` event with
                               {type: thinking, thinking: <flattened text>}
                               extras: structured reasoning_summary
@@ -68,9 +69,8 @@ canonical file, never the plugin copy.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
-
-from .sanitize import COMMAND_MAX_LEN
 
 # Compaction is shared with the Claude Code sanitizer on purpose. The two
 # formats differ; what we choose to RECORD about a tool call should not, or
@@ -80,7 +80,7 @@ from .sanitize import COMMAND_MAX_LEN
 # RELATIVE import, deliberately: this file is byte-identical in its two homes
 # (canonical src/probe/tap_core/, vendored plugins/probe-research-tap/tap/),
 # and `.sanitize` resolves correctly inside both packages.
-from .sanitize import _result_size
+from .sanitize import COMMAND_MAX_LEN, _result_size, output_withheld
 
 # Per-message phase from Codex's `MessagePhase` enum. Tracked in extras since
 # CC has no equivalent.
@@ -124,6 +124,28 @@ _STARTUP_CONTEXT_TAGS: tuple[str, ...] = (
     "plugins_instructions",
     "environment_context",
 )
+
+# A `!command` the researcher types in Codex is recorded as a user message, not
+# a tool call (codex-cli 0.160 `shell.user_command`):
+#
+#   <user_shell_command>
+#   <command>
+#   ls -la
+#   </command>
+#   <result>
+#   Exit code: 0
+#   Duration: 0.0213 seconds
+#   Output:
+#   <whatever it printed>
+#   </result>
+#   </user_shell_command>
+#
+# The command ships (a session's commands are its method section); what it
+# printed does not, as for Claude Code's `<bash-stdout>`, pi's bashExecution
+# and Kimi's shell mode (tap 0.9.13). The exit code and duration are kept.
+_USER_SHELL_OPEN = "<user_shell_command>"
+_USER_SHELL_CLOSE = "</user_shell_command>"
+_RESULT_HEAD = re.compile(r"\n?(?:Exit code: [^\n]*\n)?(?:Duration: [^\n]*\n)?(?:Output:\n?)?")
 
 # Tool input summary keys ordered by "most identifying". Mirrors cc-tap.
 _TOOL_SUMMARY_KEYS: tuple[str, ...] = (
@@ -244,6 +266,10 @@ def _translate_message(payload: dict, timestamp: Any) -> dict | None:
     blocks = [b for b in blocks if b is not None]
     if not blocks:
         return None
+    if cc_role == "user":
+        for block in blocks:
+            if block.get("type") == "text":
+                block["text"] = _withhold_shell_output(block["text"])
 
     extras: dict[str, Any] = {}
     phase = payload.get("phase")
@@ -258,6 +284,31 @@ def _translate_message(payload: dict, timestamp: Any) -> dict | None:
     if extras:
         out["_codex_extras"] = extras
     return out
+
+
+def _withhold_shell_output(text: str) -> str:
+    """A `<user_shell_command>` record with what the command printed replaced
+    by its size (sanitize.OUTPUT_WITHHELD); any other text unchanged.
+
+    The output runs from the `Exit code:` / `Duration:` / `Output:` head to
+    the LAST `</result>`, or to the end when the result never closes, so
+    output that prints `</result>` itself still does not ship."""
+    if not text.lstrip().startswith(_USER_SHELL_OPEN):
+        return text
+    start = text.find("<result>")
+    if start < 0:
+        return text
+    body = start + len("<result>")
+    # Only a record that really closes (`</result>` then `</user_shell_command>`
+    # at its end) has an end other than the end of the text: a truncated record
+    # whose output printed `</result>` must not ship what follows that.
+    end = text.rfind("</result>")
+    if end < body or not text.rstrip().endswith(_USER_SHELL_CLOSE):
+        end = len(text)
+    head = min(_RESULT_HEAD.match(text, body).end(), end)
+    output = text[head:end]
+    newline = "\n" if output.endswith("\n") else ""
+    return text[:head] + output_withheld(len(output) - len(newline)) + newline + text[end:]
 
 
 def _is_startup_context_message(payload: dict) -> bool:

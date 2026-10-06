@@ -102,6 +102,24 @@ JOIN_SLACK_S = 0.1
 SESSION_END_MARGIN_S = 0.2
 CLAUDE_SESSION_END_DEFAULT_MS = 1500
 CODEX_SESSION_END_S = 3.0
+#: Codex KILLS a SessionEnd hook CODEX_SESSION_END_S after starting it, so what
+#: this process does outside its budget must fit before then too. Worst case,
+#: from Codex starting the hook to this process exiting:
+#:
+#:     STARTUP_ALLOWANCE_S    0.2  bash, `python3 -S`, the payload and routes.json,
+#:                                 all before the budget's clock starts (11ms
+#:                                 median, 18ms max on the devbox; 0.2 is for a
+#:                                 cold or loaded machine)
+#:   + budget                 2.3  CODEX_SESSION_END_S - CODEX_SESSION_END_MARGIN_S
+#:   + KILL_WAIT_S            0.2  an overrun route is killed, then waited for
+#:   + JOIN_SLACK_S           0.1  the join on that wait
+#:   = 2.8s: SESSION_END_MARGIN_S (0.2s) inside Codex's 3.0s.
+#:
+#: Through plugin 0.120.0 the budget was 3.0 - SESSION_END_MARGIN_S = 2.8s, so
+#: the same worst case was 3.1s plus startup: past Codex's kill. Claude Code's
+#: SessionEnd budget is unchanged. tests/test_hook_dispatch.py holds this sum.
+STARTUP_ALLOWANCE_S = 0.2
+CODEX_SESSION_END_MARGIN_S = STARTUP_ALLOWANCE_S + KILL_WAIT_S + JOIN_SLACK_S + SESSION_END_MARGIN_S
 #: Never budget a SessionEnd below this, whatever the variable says.
 MIN_SESSION_END_S = 0.1
 
@@ -285,7 +303,7 @@ def budget(lane: str) -> float:
     """Seconds this dispatcher may spend before printing what it has."""
     if lane == "session-end":
         if os.environ.get("PLUGIN_ROOT"):
-            return CODEX_SESSION_END_S - SESSION_END_MARGIN_S
+            return CODEX_SESSION_END_S - CODEX_SESSION_END_MARGIN_S
         raw = (os.environ.get("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS") or "").strip()
         try:
             ms = int(raw) if raw.isascii() and raw.isdigit() else 0
