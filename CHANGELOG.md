@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.217.0
+
 - **`probe session export <id>` writes a captured session as one ATIF trajectory document** (Harbor's Agent Trajectory Interchange Format), readable by Harbor, Phoenix and Transluce. `--source` names the agent, `--out` a file. SDK: `Client.session_trajectory()` (one page) and `Client.export_session_trajectory()` (every page, joined). Without `--source` it asks each captured agent in turn. The trajectory never carries tool arguments or tool output.
 
 - **Session capture no longer uploads tool results or attached files (tap 0.9.10).** This is what the
