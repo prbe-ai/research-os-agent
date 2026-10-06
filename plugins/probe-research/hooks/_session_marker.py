@@ -2751,15 +2751,31 @@ def harness_processes_dir() -> Path:
     return state_dir() / HARNESS_PROCESSES_DIRNAME
 
 
+#: Script runtimes: a process started as `node /usr/local/bin/pi` is pi. Where
+#: the script never retitles itself, or the platform does not show the new
+#: title (macOS `ps`), the runtime is all the first word says.
+_SCRIPT_RUNTIMES = ("node", "nodejs", "bun")
+
+
+def _title_of(argv: "list[str]") -> str:
+    """A process's title from its argv: the script a runtime runs, else argv[0]."""
+    if not argv:
+        return ""
+    if os.path.basename(argv[0]) in _SCRIPT_RUNTIMES and len(argv) > 1 and not argv[1].startswith("-"):
+        return argv[1]
+    return argv[0]
+
+
 def _proc_linux(pid: int) -> "tuple[int, str, str] | None":
     """(parent pid, start time, title) from /proc, or None."""
     try:
         with open(f"/proc/{pid}/stat", "rb") as fh:
             stat_line = fh.read().decode("utf-8", "replace")
         with open(f"/proc/{pid}/cmdline", "rb") as fh:
-            argv0 = fh.read().split(b"\0", 1)[0].decode("utf-8", "replace")
+            argv = [part.decode("utf-8", "replace") for part in fh.read().split(b"\0") if part]
     except OSError:
         return None
+    argv0 = _title_of(argv)
     # comm may hold spaces and parentheses: the fields start after the LAST ')'.
     fields = stat_line.rsplit(")", 1)[-1].split()
     try:
@@ -2788,7 +2804,7 @@ def _ps_table() -> "dict[int, tuple[int, str, str]]":
         if len(parts) < 8:
             continue
         try:
-            table[int(parts[0])] = (int(parts[1]), "-".join(parts[2:7]), parts[7].split(" ", 1)[0])
+            table[int(parts[0])] = (int(parts[1]), "-".join(parts[2:7]), _title_of(parts[7].split()))
         except ValueError:
             continue
     return table
@@ -2820,16 +2836,27 @@ def _process_record_path(pid: int, start: str) -> Path:
     return harness_processes_dir() / (f"{pid}-" + re.sub(r"[^A-Za-z0-9]", "", start) + ".json")
 
 
-def record_harness_process(harness: str, session_id: str, process_title: str) -> "Path | None":
-    """From a hook: note that the nearest ancestor titled `process_title` runs
-    `session_id` (replacing what it ran before: a TUI's /new and /resume). Also
-    sweeps records of processes that are gone. None when no such ancestor
-    exists or the record cannot be written. Never raises."""
-    if not (valid_session_id(session_id) and harness and process_title):
+def record_harness_process(
+    harness: str, session_id: str, process_title: "str | tuple[str, ...] | list[str]"
+) -> "Path | None":
+    """From a hook: note that the nearest ancestor titled `process_title` (or any
+    of several titles) runs `session_id` (replacing what it ran before: a TUI's
+    /new and /resume). Also sweeps records of processes that are gone. None when
+    no such ancestor exists or the record cannot be written. Never raises.
+
+    Several titles because one harness process reads differently by platform:
+    a harness that retitles itself shows the new title in Linux's /proc, while
+    macOS's `ps` keeps the name it was started as (the registry's `binary`)."""
+    titles = (process_title,) if isinstance(process_title, str) else tuple(t for t in process_title if t)
+    if not (valid_session_id(session_id) and harness and titles):
         return None
     try:
         target = next(
-            ((pid, start) for pid, start, title in _ancestors() if _titled(title, process_title)),
+            (
+                (pid, start)
+                for pid, start, title in _ancestors()
+                if any(_titled(title, wanted) for wanted in titles)
+            ),
             None,
         )
         if target is None:

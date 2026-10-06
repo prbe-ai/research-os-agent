@@ -172,7 +172,11 @@ def _record(payload: dict, row) -> None:
     if title and payload.get("hook_event_name") in _RECORD_EVENTS:
         session_id = payload.get("session_id")
         if isinstance(session_id, str):
-            _session_marker.record_harness_process(row.id, session_id, title)
+            # The retitled name (Linux /proc) or the binary it was started as
+            # (macOS `ps` shows `kimi`, never the new title).
+            binary = row._raw.get("binary")  # noqa: SLF001
+            titles = (title, binary) if isinstance(binary, str) and binary else (title,)
+            _session_marker.record_harness_process(row.id, session_id, titles)
 
 
 def main(argv: "list[str]") -> int:

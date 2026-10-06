@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- **Kimi Code on macOS: `probe` commands from Kimi's shell find their session again.** Kimi puts no
+  session id in its shells, so Probe's hook notes which Kimi process runs which session and the CLI
+  walks up to it. The hook looked for the process by its `kimi-code` title, which Linux shows but
+  macOS's `ps` does not (it shows `kimi`), so on a Mac nothing was noted and every `probe session …`
+  from Kimi said "no session id". It now accepts the binary name too.
+- **Kimi Code's footer reaches machines that already had Probe's rules.** The footer is written by
+  the rules step, which a machine with current rules never runs again, so 0.214.0 gave no existing
+  Kimi machine the footer. `probe wizard` (and an update) now adds it once; a later
+  `probe statusline uninstall` stays. `probe statusline install --agent kimi_code` works from any
+  terminal.
+
 ## 0.215.0
 
 - **The wizard's "On this device" block fits on one line per row.** Each coding agent is drawn as
