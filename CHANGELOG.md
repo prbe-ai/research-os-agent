@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Daemon: once the model route answers through its refusal fallback (`x-probe-served-model`),
+  the session's later model calls ask for that model (`X-Probe-Prefer-Model`), so a refused
+  session stops paying a refused attempt on the configured model first.
 
 ## 0.218.1
 
