@@ -473,7 +473,7 @@ describe("trackingStatusText", () => {
     expect(trackingStatusText(true, undefined)).toBe("● tracking");
   });
 
-  it("says `on (inline)` while the agent holds Probe, even over a cached `read`", () => {
+  it("says `on (inline)` while the researcher has Probe inline, even over a cached `read`", () => {
     expect(trackingStatusText(true, { running: true, reason: "running" }, undefined, true)).toBe("● on (inline)");
     expect(trackingStatusText(false, { running: true, reason: "running" }, undefined, true)).toBe("● on (inline)");
   });
@@ -1277,7 +1277,15 @@ describe("registerExtension — the guard", () => {
     registerExtension(api as never, tmp);
     const ctx = fakeContext({ sessionId: uniqueSessionId(`guard-${profile}`), sessionFile: undefined, cwd: tmp });
     await handlers.get("session_start")!({ reason: "startup" }, ctx);
-    return { toolCall: handlers.get("tool_call") as unknown as ToolCall, ctx };
+    return { toolCall: handlers.get("tool_call") as unknown as ToolCall, ctx, handlers };
+  }
+
+  function setInline(ctx: unknown, since: number): void {
+    const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
+    const sessions = join(process.env.XDG_STATE_HOME!, "probe", "sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, `${sid}.state`), "full\n");
+    writeFileSync(join(sessions, `${sid}.inline`), JSON.stringify({ from: "daemon", since }));
   }
 
   it("blocks a daemon-profile session's probe read and lets its probe ask run", async () => {
@@ -1297,6 +1305,23 @@ describe("registerExtension — the guard", () => {
     writeFileSync(join(sessions, `${sid}.inline`), JSON.stringify({ from: "daemon", since: 1 }));
     expect(await toolCall({ toolName: "bash", input: { command: "probe project create x" } }, ctx)).toBeUndefined();
     expect(await toolCall({ toolName: "bash", input: { command: "probe session state on" } }, ctx)).toMatchObject({ block: true });
+  });
+
+  it("tells an inline daemon-profile agent once, and again after a compaction or a resume", async () => {
+    type BeforeAgentStart = (event: { systemPrompt: string }, ctx: unknown) => Promise<unknown>;
+    const { ctx, handlers } = await start("daemon");
+    setInline(ctx, 1791266269.25);
+    const before = handlers.get("before_agent_start") as unknown as BeforeAgentStart;
+    const told = async () => JSON.stringify((await before({ systemPrompt: "BASE" }, ctx)) ?? {}).includes("on (inline)");
+    expect(await told()).toBe(true);
+    expect(await told()).toBe(false);
+    await handlers.get("session_compact")!({}, ctx);
+    expect(await told()).toBe(true);
+    expect(await told()).toBe(false);
+    await handlers.get("session_start")!({ reason: "resume" }, ctx);
+    expect(await told()).toBe(true);
+    setInline(ctx, 1791266300);
+    expect(await told()).toBe(true);
   });
 
   it("blocks an agent-profile session's forged answer, and nothing else", async () => {

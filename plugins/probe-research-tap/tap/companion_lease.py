@@ -21,7 +21,6 @@ notice can say why.
 from __future__ import annotations
 
 import json
-import math
 import os
 import tempfile
 import time
@@ -142,31 +141,3 @@ def reads_only(session_id: str, state: str | None = None) -> bool:
     nothing."""
     state = session_state(session_id) if state is None else state
     return state == STATE_READ_ONLY and daemon_profile(session_id)
-
-
-#: `full` as `<sid>.state` stores it.
-STATE_FULL = "full"
-#: The states the agent may take Probe over from (`probe session inline`).
-INLINE_FROM = ("daemon", STATE_READ_ONLY)
-#: The takeover's marker beside `<sid>.state` (`session_marker.INLINE_SUFFIX`).
-INLINE_SUFFIX = ".inline"
-
-
-def inline(session_id: str, state: str | None = None) -> bool:
-    """`on (inline)` (Richard 2026-10-05): the agent took Probe over from the
-    daemon (`probe session inline`). The CLI's `session_marker.is_inline` is the
-    rule: `full` in a daemon-profile session WITH its `<sid>.inline` marker (a
-    known origin and a finite `since`). The worker keeps running there: its
-    reader still answers `probe ask`, and it leaves the agent's turns to the
-    agent. `tests/test_companion_lease_contract.py` reads what the CLI writes."""
-    state = session_state(session_id) if state is None else state
-    if state != STATE_FULL or not daemon_profile(session_id):
-        return False
-    try:
-        data = json.loads((sessions_dir() / (session_id + INLINE_SUFFIX)).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    if not isinstance(data, dict) or data.get("from") not in INLINE_FROM:
-        return False
-    since = data.get("since")
-    return isinstance(since, (int, float)) and not isinstance(since, bool) and math.isfinite(since)

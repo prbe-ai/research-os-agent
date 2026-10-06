@@ -14,7 +14,7 @@
  *   `probe <anything>` outside `DAEMON_PROFILE_ALLOWED` and the agent's runs'
  *   own data, and every Probe MCP tool call, are refused (`DAEMON_PROFILE_DENY`);
  *   the researcher's switch is refused as the switch (`RESEARCHER_SWITCH_DENY`).
- *   Unless the agent took Probe over (`probe session inline`, `sessionIsInline`):
+ *   Unless the researcher set Probe inline (`/probe inline`, `sessionIsInline`):
  *   then only the question folder and the researcher's switch (`switchMove`,
  *   `INLINE_SWITCH_DENY`) are refused.
  *
@@ -49,7 +49,7 @@ export const DENY_REASON_APPROVALS =
 
 /** `session_marker.DAEMON_PROFILE_DENY`. Placeholder: `{matched}`. */
 export const DAEMON_PROFILE_DENY =
-  "The Probe daemon records this session and reads the team's work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team's prior work: `probe ask \"<question>\"`. To do it yourself, run `probe session inline` first.";
+  "The Probe daemon records this session and reads the team's work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team's prior work: `probe ask \"<question>\"`. If you need to do it yourself, ask the researcher to type `/probe inline`.";
 
 /** `session_marker._APPROVALS_TEXT`'s pattern: the folder as a command's text names it. */
 export const APPROVALS_TEXT_SOURCE = String.raw`probe/+approvals\b|\bapprovals/+(answers|requests)\b`;
@@ -145,43 +145,63 @@ export function touchesApprovals(toolName: string, input: unknown, env: PathEnv,
 
 /** `session_marker.INLINE_SWITCH_DENY`. Placeholder: `{matched}`. */
 export const INLINE_SWITCH_DENY =
-  "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only the researcher moves it (`/probe on`, `/probe read`, `/probe off`). To hand Probe back to the daemon, run `probe session daemon`.";
+  "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only the researcher moves it (`/probe on`, `/probe read`, `/probe off`, `/probe inline`).";
 
 /** `session_marker.RESEARCHER_SWITCH_DENY`. Placeholder: `{matched}`. */
 export const RESEARCHER_SWITCH_DENY =
-  "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only the researcher moves it (`/probe on`, `/probe read`, `/probe off`), and a `/probe` they typed has already moved it. `probe session status` prints where it landed.";
+  "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only the researcher moves it (`/probe on`, `/probe read`, `/probe off`, `/probe inline`), and a `/probe` they typed has already moved it. `probe session status` prints where it landed.";
 
-/** `session_marker.INLINE_FROM`: the states the agent may take Probe over from. */
-export const INLINE_FROM: ReadonlySet<string> = new Set(["daemon", "read-only"]);
+/** `session_marker.INLINE_FROM`: the states `/probe inline` is typed from (any). */
+export const INLINE_FROM: ReadonlySet<string> = new Set(["daemon", "read-only", "off"]);
 
-/** `session_marker.INLINE_SUFFIX`: the takeover's marker beside `<sid>.state`. */
+/** `session_marker.INLINE_SUFFIX`: the inline marker beside `<sid>.state`. */
 export const INLINE_SUFFIX = ".inline";
 
 /**
- * `session_marker.is_inline`, ported: the agent took Probe over from the daemon
- * (`probe session inline`, Richard 2026-10-05). The session's state is `full`
- * AND its `<sid>.inline` marker names where it was taken over from. The caller
- * knows the profile (the marker is only ever written in the daemon profile).
+ * `session_marker.inline_marker`'s `since` for an OPEN marker (a known origin, a
+ * finite `since`, no `until`), or null. `until` is a stretch whose log could not
+ * be written: closed, so not inline.
+ */
+export function inlineSince(sessionId: string | undefined, env: PathEnv = process.env): number | null {
+  if (!sessionId) return null;
+  try {
+    const marker = JSON.parse(
+      readFileSync(join(probeStateDir(env), "sessions", `${sessionId}${INLINE_SUFFIX}`), "utf8"),
+    ) as unknown;
+    if (typeof marker !== "object" || marker === null || "until" in marker) return null;
+    const { from, since } = marker as { from?: unknown; since?: unknown };
+    return INLINE_FROM.has(String(from)) && typeof since === "number" && Number.isFinite(since) ? since : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `session_marker.is_inline`, ported: the researcher set Probe inline
+ * (`/probe inline`, Richard 2026-10-06). The session's state is `full` AND its
+ * `<sid>.inline` marker is open (`inlineSince`). The caller knows the profile
+ * (the marker is only ever written in the daemon profile).
  */
 export function sessionIsInline(sessionId: string | undefined, env: PathEnv = process.env): boolean {
-  if (!sessionId) return false;
-  const sessions = join(probeStateDir(env), "sessions");
+  return currentInlineSince(sessionId, env) !== null;
+}
+
+/** `sessionIsInline`'s stretch: its `since`, or null when the session is not inline. One read of each file. */
+export function currentInlineSince(sessionId: string | undefined, env: PathEnv = process.env): number | null {
+  if (!sessionId) return null;
   try {
-    const state = readFileSync(join(sessions, `${sessionId}${STATE_SUFFIX}`), "utf8").trim().toLowerCase();
-    if (state !== ProbeState.Full) return false;
-    const marker = JSON.parse(readFileSync(join(sessions, `${sessionId}${INLINE_SUFFIX}`), "utf8")) as unknown;
-    if (typeof marker !== "object" || marker === null) return false;
-    const { from, since } = marker as { from?: unknown; since?: unknown };
-    // `session_marker.inline_marker`: a known origin and a finite `since`.
-    return INLINE_FROM.has(String(from)) && typeof since === "number" && Number.isFinite(since);
+    const state = readFileSync(join(probeStateDir(env), "sessions", `${sessionId}${STATE_SUFFIX}`), "utf8")
+      .trim()
+      .toLowerCase();
+    return state === ProbeState.Full ? inlineSince(sessionId, env) : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
 export interface GuardContext {
   daemonProfile: boolean;
-  /** The agent took Probe over (`sessionIsInline`): the daemon profile refuses nothing. */
+  /** The researcher set Probe inline (`sessionIsInline`): only the switch and the question folder are refused. */
   inline?: boolean;
   env: PathEnv;
   cwd: string;
@@ -193,7 +213,7 @@ export function guardToolCall(toolName: string, input: unknown, context: GuardCo
   if (aimed !== null) return fill(DENY_REASON_APPROVALS, { tool: toolName, path: aimed });
   if (!context.daemonProfile) return null;
   if (context.inline) {
-    // The agent took Probe over: only the researcher's switch is refused.
+    // The researcher set Probe inline: only the switch is refused.
     const field = SHELL_FIELD[toolName];
     const line = field !== undefined && typeof input === "object" && input !== null ? (input as Record<string, unknown>)[field] : undefined;
     const moved = typeof line === "string" ? switchMove(line) : null;
@@ -204,7 +224,7 @@ export function guardToolCall(toolName: string, input: unknown, context: GuardCo
   if (shellField === undefined || typeof input !== "object" || input === null) return null;
   const command = (input as Record<string, unknown>)[shellField];
   if (typeof command !== "string") return null;
-  // The switch is answered as the switch, ahead of DAEMON_PROFILE_DENY's pointer to `probe session inline`.
+  // The switch is answered as the switch, ahead of DAEMON_PROFILE_DENY's pointer to `/probe inline`.
   const moved = switchMove(command);
   if (moved !== null) return fill(RESEARCHER_SWITCH_DENY, { matched: moved });
   const matched = daemonProfileRefusal(command);

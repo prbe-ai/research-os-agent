@@ -800,6 +800,25 @@ def _daemon_profile() -> bool:
     return os.environ.get(PROFILE_ENV) == PROFILE_DAEMON
 
 
+def _inline_reminder() -> str | None:
+    """After a compaction or a resume while the researcher has Probe inline
+    (`/probe inline`): the notice, now -- Claude Code's auto-compaction carries
+    the turn on with no new prompt -- naming this plugin's `inline/` copies of
+    the skills. Re-armed too (not marked told): where SessionStart context does
+    not land, the guard tells it at the next chance (`_announce_inline_once`)."""
+    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
+        return None
+    if os.environ.get(SESSION_SOURCE_ENV) not in (COMPACT_SOURCE, RESUME_SOURCE):
+        return None
+    sid = os.environ.get(SESSION_ID_ENV) or ""
+    if not _session_marker.is_inline(sid):
+        return None
+    _session_marker.forget_inline_shown(sid)
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
+    track_work, edit_notes = (os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES)
+    return _session_marker.inline_notice(track_work, edit_notes)
+
+
 def _daemon_profile_notice() -> str | None:
     """The daemon profile's `_start_context`: the same maintenance, and the
     reports that would have gone to the agent as ONE line for the researcher.
@@ -855,8 +874,9 @@ def _final(obj: dict) -> NoReturn:
     early return (up-to-date, no manifest, malformed cache). An update nudge
     already occupying additionalContext is appended to, never clobbered.
 
-    In the daemon profile nothing reaches the agent: `additionalContext` is
-    dropped and the researcher gets the reports as a systemMessage line.
+    In the daemon profile nothing reaches the agent -- `additionalContext` is
+    dropped and the researcher gets the reports as a systemMessage line -- but
+    an inline session's notice after a compaction or resume (`_inline_reminder`).
     """
     if _daemon_profile():
         obj.pop("hookSpecificOutput", None)
@@ -864,6 +884,9 @@ def _final(obj: dict) -> NoReturn:
         if notice:
             prior = obj.get("systemMessage")
             obj["systemMessage"] = f"{prior}\n{notice}" if prior else notice
+        reminder = _inline_reminder()
+        if reminder:
+            obj["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": reminder}
         _emit(obj)
     ctx = _start_context()
     if ctx:

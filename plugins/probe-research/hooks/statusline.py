@@ -172,7 +172,7 @@ def segment(payload: dict) -> str:
         # `read only (daemon)` in a session the daemon reads for; a session the
         # lean plugin has not marked yet goes by who records for Claude Code.
         daemon=marker.daemon_session(session_id, agent),
-        # `on (inline)`: the agent took Probe over (`probe session inline`).
+        # `on (inline)`: the researcher set Probe inline (`/probe inline`).
         inline=marker.is_inline(session_id, switch),
     )
 

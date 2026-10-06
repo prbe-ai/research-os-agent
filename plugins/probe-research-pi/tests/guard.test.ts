@@ -116,7 +116,7 @@ describe("the daemon profile's allowlist", () => {
     expect(guardToolCall("probe_mcp_browse", {}, agent())).toBeNull();
   });
 
-  it("refuses the researcher's switch as the switch, never pointing at a takeover", () => {
+  it("refuses the researcher's switch as the switch, never with DAEMON_PROFILE_DENY's pointer to `/probe inline`", () => {
     for (const [command, matched] of [
       ["probe session state on", "probe session state"],
       ["probe session --help; probe session toggle", "probe session toggle"],
@@ -126,13 +126,21 @@ describe("the daemon profile's allowlist", () => {
     }
   });
 
-  it("lets the agent take Probe over (`probe session inline`)", () => {
-    expect(guardToolCall(PiTool.Bash, { command: "probe session inline" }, daemon())).toBeNull();
+  it("never lets the agent hand Probe to itself (`/probe inline` is the researcher's)", () => {
+    expect(guardToolCall(PiTool.Bash, { command: "probe session state inline" }, daemon())).toBe(
+      RESEARCHER_SWITCH_DENY.replace("{matched}", "probe session state"),
+    );
+    for (const command of ["probe session inline", "probe session daemon"]) {
+      expect(guardToolCall(PiTool.Bash, { command }, daemon())).toBe(
+        DAEMON_PROFILE_DENY.replace("{matched}", "probe session"),
+      );
+    }
+    expect(DAEMON_PROFILE_DENY).toContain("ask the researcher to type `/probe inline`");
   });
 
-  it("refuses only the question folder and the researcher's switch while the agent holds Probe", () => {
+  it("refuses only the question folder and the researcher's switch while Probe is inline", () => {
     const inline = { ...daemon(), inline: true };
-    for (const command of ["probe project create my-sweep", "probe run list", "probe session daemon"]) {
+    for (const command of ["probe project create my-sweep", "probe run list", "probe session status"]) {
       expect(guardToolCall(PiTool.Bash, { command }, inline)).toBeNull();
     }
     expect(guardToolCall("probe_mcp_browse", {}, inline)).toBeNull();
@@ -140,17 +148,11 @@ describe("the daemon profile's allowlist", () => {
     expect(guardToolCall(PiTool.Write, { path: answer }, inline)).toBe(approvalsRefusal(PiTool.Write, answer));
     for (const [command, matched] of [
       ["probe session state on", "probe session state"],
+      ["probe session state inline", "probe session state"],
       ["probe run list; probe session default on", "probe session default"],
     ]) {
       expect(guardToolCall(PiTool.Bash, { command }, inline)).toBe(INLINE_SWITCH_DENY.replace("{matched}", matched));
     }
-  });
-
-  it("hands back without a refusal and never lets a takeover vouch for the rest of its line", () => {
-    expect(guardToolCall(PiTool.Bash, { command: "probe session daemon" }, daemon())).toBeNull();
-    expect(guardToolCall(PiTool.Bash, { command: "probe session inline && probe project create x" }, daemon())).toBe(
-      DAEMON_PROFILE_DENY.replace("{matched}", "probe project create"),
-    );
   });
 });
 
@@ -162,16 +164,21 @@ describe("sessionIsInline (session_marker.is_inline)", () => {
     writeFileSync(join(sessions(), `${SID}.${name}`), body);
   };
 
-  it("needs `full` and a marker naming where Probe was taken from", () => {
+  it("needs `full` and an open marker naming the state `/probe inline` was typed from", () => {
     expect(sessionIsInline(SID, env)).toBe(false);
     write("state", "full\n");
     expect(sessionIsInline(SID, env)).toBe(false);
-    write("inline", JSON.stringify({ from: "read-only", since: 1 }));
-    expect(sessionIsInline(SID, env)).toBe(true);
+    for (const from of ["daemon", "read-only", "off"]) {
+      write("inline", JSON.stringify({ from, since: 1 }));
+      expect(sessionIsInline(SID, env)).toBe(true);
+    }
     write("state", "daemon\n");
     expect(sessionIsInline(SID, env)).toBe(false);
     write("state", "full\n");
-    write("inline", JSON.stringify({ from: "off", since: 1 }));
+    write("inline", JSON.stringify({ from: "elsewhere", since: 1 }));
+    expect(sessionIsInline(SID, env)).toBe(false);
+    // A stretch whose log could not be written is kept closed: not inline.
+    write("inline", JSON.stringify({ from: "daemon", since: 1, until: 2 }));
     expect(sessionIsInline(SID, env)).toBe(false);
     // `session_marker.inline_marker`: a finite number of seconds, nothing else.
     for (const since of ['"1"', "true", "null"]) {

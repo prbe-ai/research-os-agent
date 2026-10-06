@@ -242,10 +242,19 @@ READ_ONLY_WORDS = frozenset({"read", "read-only", "readonly", "read_only", "ro"}
 DAEMON_WORDS = frozenset({"daemon"})
 TOGGLE_WORDS = frozenset({"toggle", "flip", "cycle", "next"})
 STATUS_WORDS = frozenset({"status"})
+#: `/probe inline` (Richard 2026-10-06): the researcher hands Probe to the agent
+#: and the daemon stops. Honoured only from a shape that proves a person
+#: (`RESEARCHER_SHAPES`): never from a tool call the agent can make.
+INLINE_WORDS = frozenset({_session_marker.INLINE_WORD})
 
 #: The relative request, kept distinct from the three absolute targets. A claim
 #: stores what a cycle RESOLVED TO, never the word -- see `_apply_direction`.
 CYCLE = "cycle"
+#: The direction (and, in the daemon profile, the announcement) of `/probe inline`.
+INLINE = _session_marker.INLINE_WORD
+#: Set by harness_io for a hook whose output the harness drops (Kimi's typed
+#: `/probe`): nothing said there reaches the model, so nothing is marked told.
+QUIET_ENV = "PROBE_HOOK_QUIET"
 
 _ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 
@@ -631,7 +640,7 @@ def _bare_flips(slug: str, shape: str) -> bool:
 
 
 def _direction_from_words(
-    words: "list[str]", *, bare_flips: bool, slug: str = ""
+    words: "list[str]", *, bare_flips: bool, slug: str = "", typed: bool = False
 ) -> "str | None":
     """Map an argument word list to an ABSOLUTE target, or CYCLE, or None.
 
@@ -643,9 +652,14 @@ def _direction_from_words(
     THE SLUG DECIDES WHAT `off` MEANS, and this is the one place that asymmetry
     lives. Typed at a legacy name it is `read-only` (what it has always done);
     typed at the new switch it is the new `off`. See LEGACY_SLUGS.
+
+    `inline` moves only when `typed` (a shape a person sends): the agent never
+    hands Probe to itself.
     """
     if not words:
         return CYCLE if bare_flips else None
+    if words[0] in INLINE_WORDS:
+        return INLINE if typed else None
     if words[0] in READ_ONLY_WORDS:
         return "read-only"
     if words[0] in DAEMON_WORDS:
@@ -717,7 +731,9 @@ def prompt_direction(prompt: object) -> "tuple[str | None, str, str]":
             args = _ARGUMENTS_LINE.search(text)
         words = args.group(1).strip().lower().split() if args else []
         return (
-            _direction_from_words(words, bare_flips=_bare_flips(slug, shape), slug=slug),
+            _direction_from_words(
+                words, bare_flips=_bare_flips(slug, shape), slug=slug, typed=shape in RESEARCHER_SHAPES
+            ),
             shape,
             slug,
         )
@@ -732,6 +748,7 @@ def prompt_direction(prompt: object) -> "tuple[str | None, str, str]":
             [w.lower() for w in parts[1:]],
             bare_flips=_bare_flips(slug, SHAPE_RAW),
             slug=slug,
+            typed=True,
         ),
         SHAPE_RAW,
         slug,
@@ -940,6 +957,17 @@ def _apply_direction(
     if direction == "daemon":
         # Not the switch's to move: the daemon is the wizard's "Who records".
         return REFUSED_DAEMON
+    if direction == INLINE:
+        try:
+            _claim_path(session_id).unlink()
+        except OSError:
+            pass
+        if not _session_marker.switch_to_inline(session_id):
+            return None
+        # Where the daemon records, `inline` is its own announcement; elsewhere it is `on`.
+        if _session_marker.session_profile(session_id) == _session_marker.RECORDER_DAEMON:
+            return INLINE
+        return _session_marker.STATE_FULL
     if direction != CYCLE:
         # Clear the claim rather than ignoring it. An explicit setter is
         # absolute and needs no claim of its own, but LEAVING one behind
@@ -1123,11 +1151,63 @@ def _daemon_bypass(payload: dict, session_id: str) -> "str | None":
     return matched
 
 
-def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False) -> None:
+def _inline_notice() -> str:
+    """`session_marker.INLINE_NOTICE`, naming this plugin's `inline/` copies of the
+    skills the agent records by (the lean plugin ships them beside `hooks/`)."""
+    root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
+    track_work, edit_notes = (os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES)
+    return _session_marker.inline_notice(track_work, edit_notes)
+
+
+def _inline_reaches_model(hook_event: str) -> bool:
+    """Does context this hook adds reach the model? Not when the harness drops
+    this hook's output (QUIET_ENV). A harness that adds context at the next
+    prompt (`prompt_context`: Claude Code, Kimi) hears it there; one that cannot
+    (Codex) hears it after its next tool call, where PostToolUse context lands."""
+    if os.environ.get(QUIET_ENV) == "1":
+        return False
+    try:
+        prompt = _hook_harness().current().can("prompt_context")
+    except Exception:  # noqa: BLE001 -- unknown harness: the prompt, as on Claude Code
+        prompt = True
+    return prompt if hook_event == "UserPromptSubmit" else not prompt
+
+
+def _hook_harness():
+    """The harness resolver beside this file, loaded by explicit path (as
+    approvals_hook does): this hook is also loaded from outside its folder."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks._hook_harness"
+    if key in sys.modules:
+        return sys.modules[key]
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_hook_harness.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _announce_inline_once(hook_event: str, session_id: str) -> None:
+    """The researcher set Probe inline (typed, from pi or from a terminal) and the
+    agent has not been told about this stretch: tell it now, once, where this
+    harness lets it land (`_inline_reaches_model`). Marked told only then."""
+    since = _session_marker.inline_notice_due(session_id)
+    if since is None or not _inline_reaches_model(hook_event):
+        return
+    _emit_context(hook_event, _inline_notice())
+    _session_marker.mark_inline_shown(session_id, since)
+
+
+def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, session_id: str = "") -> None:
     """Tell the model where the switch landed. Silent when nothing resolved.
     `daemon`: the lean plugin, whose sessions the daemon records and reads for."""
     if landed == REFUSED_DAEMON:
         notice = _session_marker.DAEMON_SWITCH_REFUSAL
+    elif landed == INLINE:
+        _announce_inline_once(hook_event, session_id)
+        return
     else:
         notices = DAEMON_PROFILE_FLIP_NOTICE if daemon else FLIP_NOTICE
         notice = notices.get(landed) if landed else None
@@ -1215,14 +1295,13 @@ def daemon_profile() -> bool:
 
 def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     """The daemon profile's PreToolUse: the daemon records and reads, so every
-    `probe` command but `ask`, `exec`, the runs' own data, `session status`,
-    `session inline` and `session daemon` is refused (`DAEMON_PROFILE_DENY`),
-    and so is a Probe MCP call; the researcher's switch (`RESEARCHER_SWITCH`) is
-    refused as the switch (`RESEARCHER_SWITCH_DENY`). A session the researcher
-    turned off keeps the off refusals (`_deny`); one set to read only also loses the runs' own data
-    (a write). A session the agent took over (`is_inline`) is refused only the
-    researcher's switch (`RESEARCHER_SWITCH`), which the agent never moves here,
-    under `off` included."""
+    `probe` command but `ask`, `exec`, the runs' own data and `session status` is
+    refused (`DAEMON_PROFILE_DENY`), and so is a Probe MCP call; the researcher's
+    switch (`RESEARCHER_SWITCH`) is refused as the switch (`RESEARCHER_SWITCH_DENY`).
+    A session the researcher turned off keeps the off refusals (`_deny`); one set
+    to read only also loses the runs' own data (a write). A session the
+    researcher set inline (`/probe inline`, `is_inline`) is refused only the
+    switch, which the agent never moves here, and the approvals folder."""
     aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
     if aimed:
         _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
@@ -1236,7 +1315,7 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
         _deny(payload, session_id)
         return
     if _session_marker.is_inline(session_id, state):
-        # The agent took Probe over (`probe session inline`): only the switch is refused.
+        # The researcher set Probe inline (`/probe inline`): only the switch is refused.
         matched = _switch_move(payload)
         if matched:
             _refuse(_session_marker.INLINE_SWITCH_DENY.format(matched=matched))
@@ -1246,8 +1325,8 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
         _refuse(_session_marker.DAEMON_PROFILE_DENY.format(matched=tool_name))
         return
     # The switch is answered as the switch, ahead of the general refusal, whose
-    # "run `probe session inline` first" would send an agent looking for a typed
-    # `/probe on` to take Probe from the daemon instead.
+    # "ask the researcher to type `/probe inline`" would send an agent looking for
+    # a typed `/probe on` asking for the wrong thing.
     matched = _switch_move(payload)
     if matched:
         _refuse(_session_marker.RESEARCHER_SWITCH_DENY.format(matched=matched))
@@ -1329,12 +1408,19 @@ def main() -> None:
             direction, shape, slug = prompt_direction(payload.get("prompt"))
             if direction is not None:
                 landed = _apply_direction(direction, session_id, shape, slug, _payload_cwd(payload))
-                _announce("UserPromptSubmit", landed, daemon=True)
-        elif payload.get("tool_name") in ("Skill", "SlashCommand"):
-            direction, slug = toggle_direction(payload.get("tool_name"), payload.get("tool_input"))
-            if direction is not None:
-                landed = _apply_direction(direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload))
-                _announce("PostToolUse", landed, daemon=True)
+                _announce("UserPromptSubmit", landed, daemon=True, session_id=session_id)
+            else:
+                _announce_inline_once("UserPromptSubmit", session_id)
+        elif hook_event == "PostToolUse":
+            landed = None
+            if payload.get("tool_name") in ("Skill", "SlashCommand"):
+                direction, slug = toggle_direction(payload.get("tool_name"), payload.get("tool_input"))
+                if direction is not None:
+                    landed = _apply_direction(direction, session_id, SHAPE_TOOL, slug, _payload_cwd(payload))
+            if landed:
+                _announce("PostToolUse", landed, daemon=True, session_id=session_id)
+            else:
+                _announce_inline_once("PostToolUse", session_id)
         return
     if hook_event == "UserPromptSubmit":
         direction, shape, slug = prompt_direction(payload.get("prompt"))

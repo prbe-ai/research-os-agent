@@ -324,7 +324,7 @@ export function trackingStatusText(
   inline = false,
 ): string {
   // An inline session records (the agent does) even while a cached reading from
-  // before the takeover still says `read`.
+  // before `/probe inline` still says `read`.
   if (!tracking && !inline) return "○ not tracking";
   const captureDown = capture !== undefined && !capture.running;
   const label = inline

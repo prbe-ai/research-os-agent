@@ -255,8 +255,11 @@ def main(argv: "list[str]") -> int:
     except Exception:  # noqa: BLE001 -- fail-open: run the hook on the raw payload
         stdin = raw_in
     command = [sys.executable, hook] if hook.endswith(".py") else [hook]
+    # A hook whose output is dropped is told so: what it says reaches no model,
+    # so it must not record that it told one (`tracking_guard.QUIET_ENV`).
+    env = {**os.environ, "PROBE_HOOK_QUIET": "1"} if quiet else None
     try:
-        done = subprocess.run(command + argv[1:], input=stdin, capture_output=True, check=False)
+        done = subprocess.run(command + argv[1:], input=stdin, capture_output=True, check=False, env=env)
     except OSError:
         return 0
     stdout = "" if quiet else done.stdout.decode("utf-8", "replace")

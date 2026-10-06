@@ -801,19 +801,39 @@ def test_read_only_in_a_daemon_profile_session_keeps_the_worker_for_its_reader(t
         assert sup.wanted() is wanted, state
 
 
-def test_the_worker_stays_while_the_agent_holds_probe(tmp_path):
-    # `on (inline)` (Richard 2026-10-05): `full` plus the `<sid>.inline` marker in
-    # a daemon-profile session. The worker's reader still answers `probe ask` and
-    # it leaves the agent's turns alone; a `full` without the marker is not inline.
+def test_no_worker_while_probe_is_inline(tmp_path):
+    # `/probe inline` (Richard 2026-10-06): `full` plus the `<sid>.inline` marker in
+    # a daemon-profile session stops the daemon the way `off` does, from any
+    # state it was typed from; the next move back to `daemon` wants one again.
     sup = supervisor_mod.Supervisor(session_id=SID, transcript=tmp_path / "t.jsonl", cwd=tmp_path)
     _set_state("full")
     (lease.sessions_dir() / f"{SID}.profile").write_text("daemon")
-    assert sup.wanted() is False
-    for taken_from in ("daemon", "read-only"):
-        (lease.sessions_dir() / f"{SID}.inline").write_text(json.dumps({"from": taken_from, "since": 1.0}))
-        assert sup.wanted() is True, taken_from
-    (lease.sessions_dir() / f"{SID}.profile").write_text("agent")
-    assert sup.wanted() is False
+    for typed_from in ("daemon", "read-only", "off"):
+        (lease.sessions_dir() / f"{SID}.inline").write_text(json.dumps({"from": typed_from, "since": 1.0}))
+        assert sup.wanted() is False, typed_from
+    _set_state("daemon")
+    assert sup.wanted() is True
+
+
+def test_every_worker_is_told_the_supervisor_follows_inline(tmp_path, monkeypatch):
+    # So a worker leaving for `/probe inline` exits 0 here, not EXIT_DO_NOT_RESPAWN
+    # (whose hold a quick switch back would pin): `probe.daemon.worker.inline_exit_code`.
+    envs = []
+
+    class Spawn:
+        def __init__(self, argv, **kw):
+            envs.append(kw["env"])
+            self.pid, self.returncode = 1, None
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(supervisor_mod.subprocess, "Popen", Spawn)
+    monkeypatch.setattr(supervisor_mod, "probe_cli", lambda: "/usr/bin/probe")
+    sup = supervisor_mod.Supervisor(session_id=SID, transcript=tmp_path / "t.jsonl", cwd=tmp_path)
+    _set_state("daemon")
+    sup.poll()
+    assert envs and envs[0][supervisor_mod.FOLLOWS_INLINE_ENV] == "1"
 
 
 def test_the_supervisor_honours_do_not_respawn(tmp_path, monkeypatch):

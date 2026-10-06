@@ -18,6 +18,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
 import { QuestionAsker, type ApprovalsDeps } from "./core/approvals.js";
 import { guardToolCall, sessionIsInline } from "./guard.js";
+import { forgetInlineShown, inlineNotice, inlineNoticeDue, markInlineShown } from "./inlineNotice.js";
 import { pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type SpawnFn } from "./core/daemon.js";
 import { connectAndRegisterTools, defaultMcpBridgeDeps, interactiveOAuthLogin, type ConnectResult } from "./mcpBridge.js";
 import { approvalsDir, disabledFile, extensionLogFile, probeStateDir, teamNoteDocumentPath } from "./core/paths.js";
@@ -138,7 +139,7 @@ function footerText(sessionId: string, daemonLive?: boolean): string | undefined
     cachedProbeState !== ProbeState.Daemon
       ? undefined
       : (daemonLive ?? daemonStatus(sessionId, realDaemonNoticeDeps()).status === DaemonStatus.Live);
-  // `on (inline)`: the agent took Probe over from the daemon (`probe session inline`).
+  // `on (inline)`: the researcher set Probe inline (`/probe inline`).
   const inline = inDaemonProfile(sessionId) && sessionIsInline(sessionId);
   return trackingStatusText(cachedTracking.tracking, cachedTracking.capture, live, inline);
 }
@@ -447,6 +448,24 @@ function tellResearcherAboutDaemon(
   }
 }
 
+/**
+ * Every coding agent's session variable, from the harness registry beside this
+ * file (`harnesses.json`, synced from `probe.harness`): pi's switch spawns the
+ * CLI without them (`trackingSwitch.ts`). Empty when the copy cannot be read.
+ */
+export function agentSessionEnv(): readonly string[] {
+  try {
+    const doc = JSON.parse(fs.readFileSync(new URL("./harnesses.json", import.meta.url), "utf8")) as {
+      harnesses?: { session_env?: unknown }[];
+    };
+    return (doc.harnesses ?? [])
+      .map((row) => row.session_env)
+      .filter((name): name is string => typeof name === "string" && name.length > 0);
+  } catch {
+    return [];
+  }
+}
+
 export function registerExtension(pi: ExtensionAPI, extensionDir: string): void {
   // Read once: the file ships with the package and only changes with it.
   const daemonSkill = readDaemonSkill(extensionDir);
@@ -579,6 +598,8 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // are safe: the hidden initializer uses set-if-absent and returns the
     // existing signal rather than resolving the folder again.
     await refreshTrackingStatus(ctx, sessionId, ctx.cwd);
+    // A resumed session's agent hears again that Probe is inline (`/probe inline`).
+    if (sessionId && event.reason === "resume") forgetInlineShown(sessionId);
 
     if (probeIsOff()) {
       // `off` means no Probe calls and nothing injected. Leaving this out was
@@ -741,6 +762,12 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // Not awaited: the prompt must not wait on a spawn.
     void startPendingCapture(ctx, "before_agent_start");
     const sessionId = ctx?.sessionManager?.getSessionId();
+    // `probe session state inline` from a terminal moves the switch on disk
+    // without a typed `/probe`: read it back, or a cached `off` would return
+    // below before the agent hears it is inline.
+    if (sessionId && ctx && cachedProbeState !== ProbeState.Full && inDaemonProfile(sessionId) && sessionIsInline(sessionId)) {
+      await refreshTrackingStatus(ctx, sessionId, ctx.cwd);
+    }
     if (trackingOffFor(sessionId)) {
       // Capture already started above; tracking adds nothing: no package
       // skill, no Probe MCP tool, nothing injected into the prompt.
@@ -769,6 +796,13 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     let notice: string | null = null;
     if (daemonProfile) {
       if (inDaemon && sessionId && ctx) tellResearcherAboutDaemon(ctx, sessionId);
+      // `/probe inline` (typed, or from a terminal): the agent hears it once per
+      // stretch, and again after a compaction or resume (`forgetInlineShown`).
+      const since = sessionId ? inlineNoticeDue(sessionId) : null;
+      if (sessionId && since !== null) {
+        notice = inlineNotice(extensionDir);
+        markInlineShown(sessionId, since);
+      }
     } else {
       // Only claim the daemon records while it DOES: its lease is live, or this
       // is the first turn and it has a key to start with. Otherwise daemonNotice
@@ -884,6 +918,13 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     if (hasProbePointer(process.env)) spawnTeamNoteSync(realTeamNoteSyncDeps());
   });
 
+  // A compaction took the inline notice out of the agent's context: the next
+  // prompt tells it again (`before_agent_start`).
+  pi.on("session_compact", async (_event, ctx) => {
+    const sessionId = ctx?.sessionManager?.getSessionId();
+    if (sessionId) forgetInlineShown(sessionId);
+  });
+
   // THE TRACKING SWITCH. `input` fires on the RAW line, before pi expands
   // `/skill:<name>` — which is what lets a `/track-work` typed out of Claude
   // Code habit be rewritten to pi's own spelling instead of reaching the model
@@ -916,6 +957,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
           isExecutable,
           env: process.env,
           log: logLine,
+          agentSessionEnv: agentSessionEnv(),
         });
         if (applied) {
           // Read back through the same atomic host bridge instead of deriving

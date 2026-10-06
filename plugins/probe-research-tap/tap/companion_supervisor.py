@@ -57,6 +57,10 @@ EXIT_CRASHED = 4
 #: reads `daemon`, not before RESPAWN_LATER_SECONDS.
 EXIT_RESPAWN_LATER = 5
 RESPAWN_LATER_SECONDS = 5
+#: Told to every worker this spawns (`probe.daemon.worker.SUPERVISOR_FOLLOWS_INLINE_ENV`):
+#: `wanted()` is False while the researcher has Probe inline, so a worker leaving
+#: for it exits 0, not EXIT_DO_NOT_RESPAWN (whose hold a quick switch back would pin).
+FOLLOWS_INLINE_ENV = "PROBE_TAP_FOLLOWS_INLINE"
 #: After a crash, the next spawn waits this long, doubling per crash in a row.
 CRASH_BACKOFF_SECONDS = 30
 CRASH_BACKOFF_CAP_SECONDS = 30 * 60
@@ -130,14 +134,10 @@ class Supervisor:
             self.gave_up_in = None
         else:
             return False
-        # Daemon v2 has no shadow mode: it runs in `daemon`, in `read only
-        # (daemon)` for its reader alone (the worker records nothing there), and
-        # while the agent holds Probe (`on (inline)`), whose turns it leaves alone.
-        return (
-            state == worker.STATE_DAEMON
-            or lease.reads_only(self.session_id, state)
-            or lease.inline(self.session_id, state)
-        )
+        # Daemon v2 has no shadow mode: it runs in `daemon`, and in `read only
+        # (daemon)` for its reader alone (the worker records nothing there). Never
+        # in `off`, and never while the researcher has Probe inline (`full`).
+        return state == worker.STATE_DAEMON or lease.reads_only(self.session_id, state)
 
     def _open_socket(self) -> None:
         """Listen for SDK messages (a UNIX datagram socket): nothing to accept, nothing
@@ -251,7 +251,7 @@ class Supervisor:
                         stdout=log_file,
                         stderr=subprocess.STDOUT,
                         cwd=str(self.cwd) if Path(self.cwd).is_dir() else str(Path.home()),
-                        env={**os.environ},
+                        env={**os.environ, FOLLOWS_INLINE_ENV: "1"},
                         # Its own group: a signal to the capture daemon's group must not
                         # cut the worker's final cycle short.
                         start_new_session=True,

@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
+import { readFileSync } from "node:fs";
+
+import { agentSessionEnv } from "../src/extension.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild } from "../src/core/trackingSwitch.js";
 
 describe("parseSwitchIntent", () => {
@@ -21,6 +24,14 @@ describe("parseSwitchIntent", () => {
     // and every one of them still moves it.
     for (const word of ["read", "read-only", "readonly", "read_only", "ro"]) {
       expect(parseSwitchIntent(`/skill:probe ${word}`)?.direction).toBe("read-only");
+    }
+  });
+
+  it("reads `inline` as the researcher handing Probe to the agent", () => {
+    // Only an interactive source reaches parseSwitchIntent (extension.ts), so
+    // the word is always the researcher's (Richard 2026-10-06).
+    for (const line of ["/skill:probe inline", "/probe inline", "$probe inline"]) {
+      expect(parseSwitchIntent(line)).toEqual({ direction: "inline", canonicalText: "/skill:probe inline" });
     }
   });
 
@@ -109,18 +120,51 @@ describe("applyTrackingSwitch", () => {
     ]);
   });
 
-  it("maps each of the three states, and the cycle, onto its CLI call", async () => {
+  it("maps each of the three states, the cycle and inline onto its CLI call", async () => {
     const cases = [
       ["full", ["state", "full"]],
       ["read-only", ["state", "read-only"]],
       ["off", ["state", "off"]],
       ["cycle", ["toggle"]],
+      ["inline", ["state", "inline"]],
     ] as const;
     for (const [direction, tail] of cases) {
       const calls: string[][] = [];
       await applyTrackingSwitch(direction, "s", fakeDeps(0, calls));
       expect(calls[0].slice(1)).toEqual(["session", ...tail, "--session", "s"]);
     }
+  });
+
+  it("spawns the researcher's switch without any agent's session variable", async () => {
+    // The CLI refuses a switch move from inside an agent session the daemon
+    // records (the agent moving it); this spawn is the researcher's, named by --session.
+    const envs: Record<string, string | undefined>[] = [];
+    const base = fakeDeps(0, []);
+    const deps = {
+      ...base,
+      agentSessionEnv: ["PI_SESSION_ID", "CLAUDE_CODE_SESSION_ID"],
+      env: { ...base.env, PI_SESSION_ID: "s", CLAUDE_CODE_SESSION_ID: "c" },
+      spawn: (command: string, args: string[], options: { env: Record<string, string | undefined> }): SwitchChild => {
+        envs.push(options.env);
+        return base.spawn(command, args);
+      },
+    };
+    await applyTrackingSwitch("inline", "s", deps);
+    await applyTrackingSwitch("off", "s", deps);
+    expect(envs[0].PI_SESSION_ID).toBeUndefined();
+    expect(envs[0].CLAUDE_CODE_SESSION_ID).toBeUndefined();
+    expect(envs[0].PROBE_AGENT).toBe("pi");
+    expect(envs[1].PI_SESSION_ID).toBeUndefined();
+    expect(envs[1].PATH).toBe("/usr/bin");
+  });
+
+  it("names every coding agent's session variable from the registry beside it", () => {
+    const registry = JSON.parse(readFileSync(new URL("../src/harnesses.json", import.meta.url), "utf8")) as {
+      harnesses: { session_env?: string }[];
+    };
+    const names = registry.harnesses.map((row) => row.session_env).filter(Boolean);
+    expect(names.length).toBeGreaterThanOrEqual(4);
+    expect(agentSessionEnv()).toEqual(names);
   });
 
   it("reports failure instead of throwing when the CLI exits nonzero", async () => {

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- **`/probe inline`: the researcher hands Probe to the agent; the agent no longer takes it (tap
+  0.9.12).** Where the Probe daemon records, typing `/probe inline` (or pi's `/probe inline`, or
+  `probe session state inline --session <id>` from a terminal) stops the daemon the way `off`
+  does and lets the agent read and write Probe itself, recording by track-work as written. It
+  works from `on`, `read` and `off`; any other `/probe` move hands Probe back, and the next daemon
+  leaves the inline stretch's turns to the agent. The agent hears it on its next prompt, once per
+  stretch (at its next prompt where the harness adds prompt context, after its next tool call on
+  Codex), and again after a compaction or resume. The notice names two files the agent reads:
+  the main agent's track-work and edit-notes, now shipped as plain files in the daemon plugin's
+  `inline/` folder (pi uses its own package's copies). A notice cannot carry them whole: Claude
+  Code saves hook text over about 2 KB to a file. The agent cannot switch to inline itself: a
+  Skill call or Codex activation with `inline` moves nothing, and its shell is refused every switch
+  command. The CLI now enforces this itself, however the call is wrapped (`probe exec`, `bash -lc`,
+  a script): `probe session state inline` refuses inside any coding agent's session, and every
+  switch move (`probe session state|toggle|track|untrack|default`) refuses inside an agent session
+  the Probe daemon records. The researcher moves the switch with `/probe`, or from a terminal
+  outside the agent with `--session <id>`. When the agent needs to write, the refusal tells it
+  to ask the researcher. A bite still running when `/probe inline` lands stops at once, settling
+  no held question. `probe
+  session inline` and `probe session daemon` (0.216.1) are removed, as is their line in the
+  daemon CLAUDE.md block. `probe ask` is refused while inline: no daemon runs to answer it. Tap
+  0.9.12 starts no worker while inline; older taps are told not to respawn one until the switch
+  moves.
+
 ## 0.217.0
 
 - **`probe session export <id>` writes a captured session as one ATIF trajectory document** (Harbor's Agent Trajectory Interchange Format), readable by Harbor, Phoenix and Transluce. `--source` names the agent, `--out` a file. SDK: `Client.session_trajectory()` (one page) and `Client.export_session_trajectory()` (every page, joined). Without `--source` it asks each captured agent in turn. The trajectory never carries tool arguments or tool output.

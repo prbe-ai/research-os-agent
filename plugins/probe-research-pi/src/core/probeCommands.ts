@@ -131,8 +131,6 @@ export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
 export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "ask",
   "session status",
-  "session inline",
-  "session daemon",
   "run expect",
   "doctor",
 ]);

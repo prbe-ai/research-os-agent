@@ -43,6 +43,10 @@ const ON_WORDS = new Set(["on", "start", "resume", "full"]);
 const READ_ONLY_WORDS = new Set(["read", "read-only", "readonly", "read_only", "ro"]);
 const TOGGLE_WORDS = new Set(["toggle", "flip", "cycle", "next"]);
 const STATUS_WORDS = new Set(["status"]);
+// `/probe inline` (Richard 2026-10-06): the researcher hands Probe to the agent
+// and the daemon stops. `tracking_guard.py::INLINE_WORDS`; only an interactive
+// source reaches this function, so it is always the researcher's.
+const INLINE_WORDS = new Set(["inline"]);
 
 /**
  * Slugs that predate the third state, and what `off` means when typed at one.
@@ -85,12 +89,13 @@ const CANONICAL = "/skill:probe";
 const LEGACY_CANONICAL = "/skill:track-work";
 
 /**
- * The switch's three positions, plus the relative request. Mirrors
- * `session_marker.SWITCH_STATES`. The daemon is not a position (Richard
+ * The switch's three positions, the relative request, and `inline` (the
+ * researcher's hand-over to the agent, `session_marker.switch_to_inline`).
+ * Mirrors `session_marker.SWITCH_STATES`. The daemon is not a position (Richard
  * 2026-09-29): it is chosen in `probe wizard`, and a typed `daemon` moves
  * nothing -- it canonicalises like any unrecognised word and the skill says so.
  */
-export type SwitchDirection = "full" | "read-only" | "off" | "cycle";
+export type SwitchDirection = "full" | "read-only" | "off" | "cycle" | "inline";
 
 export interface SwitchIntent {
   direction: SwitchDirection | null;
@@ -133,6 +138,7 @@ export function parseSwitchIntent(text: string): SwitchIntent | null {
     return { direction: legacy ? "read-only" : "off", canonicalText };
   }
   if (ON_WORDS.has(first)) return { direction: "full", canonicalText };
+  if (INLINE_WORDS.has(first)) return { direction: "inline", canonicalText };
   if (TOGGLE_WORDS.has(first)) return { direction: "cycle", canonicalText };
   if (STATUS_WORDS.has(first)) return { direction: null, canonicalText };
   return { direction: null, canonicalText };
@@ -179,7 +185,22 @@ const SUBCOMMAND: Record<SwitchDirection, readonly string[]> = {
   "read-only": ["state", "read-only"],
   off: ["state", "off"],
   cycle: ["toggle"],
+  // New in the CLI with the researcher-set inline mode: an older probe refuses
+  // the word (exit 1) and the switch reads as not moved.
+  inline: ["state", "inline"],
 };
+
+/**
+ * The CLI refuses a switch move from inside an agent's session the daemon
+ * records -- the agent moving it -- so the researcher's own `/probe` is spawned
+ * without any coding agent's session variable (`agentSessionEnv`); `--session`
+ * names the session.
+ */
+function switchEnv(env: PathEnv, agentSessionEnv: readonly string[]): PathEnv {
+  const child: Record<string, string | undefined> = { ...env, PROBE_AGENT: "pi" };
+  for (const name of agentSessionEnv) delete child[name];
+  return child as PathEnv;
+}
 
 /**
  * A child we can WAIT ON, which `daemon.ts`/`teamNote.ts`'s `SpawnFn` is not:
@@ -200,6 +221,8 @@ export type SwitchSpawnFn = (
 export interface TrackingSwitchDeps extends ProbeBinaryDeps {
   spawn: SwitchSpawnFn;
   log: (message: string) => void;
+  /** Every coding agent's session variable (the harness registry's `session_env`). */
+  agentSessionEnv?: readonly string[];
 }
 
 /**
@@ -231,7 +254,7 @@ export async function applyTrackingSwitch(
     const child = deps.spawn(binary, ["session", ...SUBCOMMAND[direction], "--session", sessionId], {
       detached: false,
       stdio: "ignore",
-      env: { ...deps.env, PROBE_AGENT: "pi" } as PathEnv,
+      env: switchEnv(deps.env, deps.agentSessionEnv ?? []),
     });
     const code = await waitForExit(child);
     if (code !== 0) {
