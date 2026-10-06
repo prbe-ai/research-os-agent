@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.216.1
+
 - **In the daemon profile, the agent can take Probe over and hand it back** (tap 0.9.9;
   Richard 2026-10-05). Where the Probe daemon records, the agent could run only `probe ask`,
   `probe exec`, its runs' own data and a few reads; everything else, reads included, was refused,
