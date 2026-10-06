@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Kimi Code's footer shows Probe from the moment Kimi opens.** Kimi creates its session on the
+  first message, so the footer's first renders carry no session id; the renderer then fell back to a
+  module the footer's copy does not carry, failed quietly, and showed no Probe until the first
+  message. It now shows the state a new session starts in (`● off`, `● tracking`, …) right away.
+
 ## 0.216.2
 
 - **The wizard's agent logos are round brand avatars.** Each agent in "On this device" is its

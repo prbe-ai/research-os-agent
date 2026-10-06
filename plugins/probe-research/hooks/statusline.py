@@ -90,16 +90,23 @@ def resolve_session_id(payload: dict) -> str:
     session_id = payload.get("session_id")
     if isinstance(session_id, str) and session_id:
         return session_id
-    kimi_session = payload.get("sessionId")  # Kimi Code's snapshot
-    if isinstance(kimi_session, str) and kimi_session:
-        return _uuid_tail(kimi_session)
+    if "sessionId" in payload:
+        # Kimi Code's snapshot. Empty until the first message (Kimi creates the
+        # session then): no session yet, so the line shows what a new one starts
+        # as. Never the environment fallback: the footer's copy of this renderer
+        # carries only RENDERER_FILES, and `_hook_harness` is not one of them.
+        kimi_session = payload.get("sessionId")
+        return _uuid_tail(kimi_session) if isinstance(kimi_session, str) and kimi_session else ""
     transcript = payload.get("transcript_path")
     if isinstance(transcript, str) and transcript:
         # `~/.claude/projects/<slug>/<session-id>.jsonl` — the basename IS the id.
         stem = os.path.splitext(os.path.basename(transcript))[0]
         if stem:
             return stem
-    return _load("_hook_harness").session_id()
+    try:
+        return _load("_hook_harness").session_id()
+    except Exception:  # noqa: BLE001 - a copy without the module renders the default
+        return ""
 
 
 #: The status line is Claude Code's (`statusLine` in its settings.json): who
