@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.218.1
+
 - **Session capture no longer sends what your own commands print, or a skill's text when it loads
   (tap 0.9.13).** The consent screen says command output is not sent, but two things still went up
   as conversation text (the 0.9.10 entry below lists them): what a `!command` typed in Claude Code
