@@ -2,8 +2,10 @@
 
 What we ship: the *conversation* — user prompts, assistant text + thinking,
 plus a one-line marker for each tool call. Everything else is noise:
-  - Anthropic API metadata (token-usage tallies, cache stats, request ids,
-    big base64 signature blobs on thinking blocks)
+  - Anthropic API metadata (per-TTL cache breakdowns, service tier, request
+    ids, big base64 signature blobs on thinking blocks). Since tap 0.9.11 an
+    assistant event keeps the message id and the four token counts, as
+    `inference_id` and `usage`.
   - CC-internal bookkeeping events:
       * `stop_hook_summary`, `turn_duration` (system subtypes)
       * `file-history-snapshot` (75% of payload weight; pure backup metadata)
@@ -37,6 +39,12 @@ ships and drops the rest:
                         (a placeholder); any other type ships as
                         `{"type": <type>, "dropped": true}`
   - attachment types    `_KEEP_ATTACHMENTS`, each with its own key list
+
+THE OUTPUT IS A CONTRACT: `probe-events-1.schema.json` beside this file
+describes what all four sanitizers emit, and
+`tests/test_probe_events_contract.py` holds them to it. An assistant event
+also carries `inference_id` (Anthropic's message id) and `usage` (the four
+token counts in USAGE_KEYS), lifted out of `message` rather than copied.
 
 REDACTION IS NOT DONE HERE. `Journal.stage` and the legacy
 `transcript.build_batch_body` run `secrets.redact_event` on this output, so a credential in a prompt or
@@ -121,31 +129,53 @@ _KEEP_ATTACHMENTS: dict[str, tuple[str, ...]] = {
 # `toolUseResult` is CC's SECOND copy of every tool's output (stdout/stderr,
 # `originalFile`, whole edit bodies). The tool_result block below already
 # carries its size; nothing in research-os or the engine reads the field.
-_KEEP_TOP_LEVEL: frozenset[str] = frozenset({
-    "type",
-    "subtype",
-    "message",
-    "content",
-    "isCompactSummary",
-    "timestamp",
-    "uuid",
-    "parentUuid",
-    "logicalParentUuid",
-    "attachment",
-})
+#
+# Each key maps to the JSON types it may hold (probe-events-1.schema.json): a
+# value of any other type is dropped, so a key that is named still cannot carry
+# an unnamed payload. Every real CC 2.x line checked (2026-10) conforms.
+_NULL = type(None)
+_KEEP_TOP_LEVEL: dict[str, tuple[type, ...]] = {
+    "type": (str,),
+    "subtype": (str,),
+    "message": (dict,),
+    "content": (str,),
+    "isCompactSummary": (bool,),
+    "timestamp": (str,),
+    "uuid": (str,),
+    "parentUuid": (str, _NULL),
+    "logicalParentUuid": (str, _NULL),
+    "attachment": (dict,),
+}
 
 # Fields inside `message` that ship. role + content are the conversation;
 # stop_reason is rendered for non-default stops (`[stop: max_tokens]`); model
-# says which model wrote the turn. Dropped: Anthropic's API metadata (usage,
-# id, type, stop_sequence, stop_details, service tier, ...) and CC's
-# per-request bookkeeping (`container`, `context_management`, and
-# `input_transformations`, a list of file paths with reasons).
-_KEEP_MESSAGE: frozenset[str] = frozenset({
-    "role",
-    "content",
-    "model",
-    "stop_reason",
-})
+# says which model wrote the turn. Dropped: Anthropic's API metadata (type,
+# stop_sequence, stop_details, service tier, ...) and CC's per-request
+# bookkeeping (`container`, `context_management`, and `input_transformations`,
+# a list of file paths with reasons). `id` and `usage` are lifted out of the
+# message instead, as `inference_id` and `usage` (see sanitize_event).
+_KEEP_MESSAGE: dict[str, tuple[type, ...]] = {
+    "role": (str,),
+    "content": (str, list),
+    "model": (str,),
+    "stop_reason": (str, _NULL),
+}
+
+#: The one token-usage shape every sanitizer emits, as `usage` on an assistant
+#: event, whatever its harness calls the counts. Non-negative ints; a count the
+#: harness did not report is absent, never 0. PUBLIC because pi_sanitize maps
+#: its own names onto it.
+USAGE_KEYS: tuple[str, ...] = (
+    "input_tokens",
+    "output_tokens",
+    "cache_read_input_tokens",
+    "cache_creation_input_tokens",
+)
+
+#: `origin` on an event a researcher's own shell command produced (pi's `!`
+#: bashExecution, Kimi's shell mode), so no reader takes it for model output.
+#: The only value probe-events/1 defines. PUBLIC for pi_sanitize / kimi_sanitize.
+ORIGIN_USER_SHELL = "user_shell"
 
 # `system` events with these subtypes have no content — drop entirely.
 # stop_hook_summary  = CC's per-hook timing/output; pure bookkeeping.
@@ -207,6 +237,11 @@ def sanitize_event(event: Any) -> Any:
     if not isinstance(event, dict):
         return event
 
+    # An event that does not say what it is cannot be put on any allow-list
+    # (probe-events/1 requires `type`). Every real CC line has one.
+    if not isinstance(event.get("type"), str):
+        return None
+
     # Drop entire bookkeeping event types (file-history-snapshot, last-prompt,
     # ai-title, permission-mode). These never carry conversational content.
     # A list or object here would make the set lookups below raise.
@@ -220,10 +255,7 @@ def sanitize_event(event: Any) -> Any:
         if isinstance(sub, str) and sub in _DROP_SYSTEM_SUBTYPES:
             return None
 
-    out = {k: v for k, v in event.items() if k in _KEEP_TOP_LEVEL}
-    # Rendered only as a string; anything else would be an unknown payload.
-    if not isinstance(out.get("content", ""), str):
-        del out["content"]
+    out = {k: v for k, v in event.items() if isinstance(v, _KEEP_TOP_LEVEL.get(k, ()))}
 
     # An attachment ships only when its type is on _KEEP_ATTACHMENTS, and then
     # only that type's named keys. The `attachment` key itself is meaningful
@@ -238,17 +270,41 @@ def sanitize_event(event: Any) -> Any:
 
     msg = out.get("message")
     if isinstance(msg, dict):
-        msg_out = {k: v for k, v in msg.items() if k in _KEEP_MESSAGE}
+        msg_out = {k: v for k, v in msg.items() if isinstance(v, _KEEP_MESSAGE.get(k, ()))}
         content = msg_out.get("content")
         if isinstance(content, list):
             sanitized_blocks = [_sanitize_block(b) for b in content]
             # Drop blocks that came back as None (empty thinking, etc).
             msg_out["content"] = [b for b in sanitized_blocks if b is not None]
-        elif not isinstance(content, str):
-            msg_out.pop("content", None)
         out["message"] = msg_out
+        if out["type"] == "assistant":
+            # One model call (Anthropic's message id) and what it cost. Claude
+            # Code writes one line per content block of a call, every line
+            # carrying the same id, and a usage snapshot that only grows: a
+            # reader groups by `inference_id` and keeps the LAST usage.
+            inference = msg.get("id")
+            if isinstance(inference, str) and inference:
+                out["inference_id"] = inference[:_METADATA_MAX_LEN]
+            usage = usage_counts(msg.get("usage"), {k: k for k in USAGE_KEYS})
+            if usage:
+                out["usage"] = usage
 
     return out
+
+
+def usage_counts(source: Any, names: dict[str, str]) -> dict[str, int] | None:
+    """`source`'s token counts under the USAGE_KEYS names, or None if it has
+    none. `names` maps each of ours to the harness's own key. Only the four
+    counts: service tier, per-TTL cache breakdowns, iterations, cost and
+    whatever else a provider adds stay on the machine."""
+    if not isinstance(source, dict):
+        return None
+    out: dict[str, int] = {}
+    for ours in USAGE_KEYS:
+        value = source.get(names.get(ours, ""))
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            out[ours] = value
+    return out or None
 
 
 def _sanitize_attachment(attachment: Any) -> dict[str, Any] | None:
@@ -415,8 +471,8 @@ def _sanitize_block(block: Any) -> Any:
         inp = block.get("input")
         out: dict[str, Any] = {
             "type": "tool_use",
-            "id": block.get("id"),
-            "name": block.get("name"),
+            "id": _id_or_none(block.get("id")),
+            "name": _id_or_none(block.get("name")),
         }
         summary = _summarize_tool_input(inp)
         if summary:
@@ -428,7 +484,7 @@ def _sanitize_block(block: Any) -> Any:
         return out
 
     if btype == "tool_result":
-        out = {"type": "tool_result", "tool_use_id": block.get("tool_use_id")}
+        out = {"type": "tool_result", "tool_use_id": _id_or_none(block.get("tool_use_id"))}
         if block.get("is_error"):
             out["is_error"] = True
         # SIZE, not content. "ok" alone cannot distinguish a grep that found
@@ -445,6 +501,12 @@ def _sanitize_block(block: Any) -> Any:
 
     name = btype[:_METADATA_MAX_LEN] if isinstance(btype, str) and btype else "unknown"
     return {"type": name, "dropped": True}
+
+
+def _id_or_none(value: Any) -> str | None:
+    """An id or a tool name, as probe-events/1 types it: a capped string, or
+    None when Claude Code wrote none (or wrote something else)."""
+    return value[:_METADATA_MAX_LEN] if isinstance(value, str) else None
 
 
 def _image_placeholder(source: Any) -> dict[str, Any]:

@@ -13,9 +13,11 @@ extraction work unchanged.
 
   session               -> CC `system` subtype=session_meta
   message.user          -> CC `user`
-  message.assistant     -> CC `assistant` (text / thinking / toolCall blocks)
+  message.assistant     -> CC `assistant` (text / thinking / toolCall blocks),
+                           `inference_id` = the entry id, `usage` (4 counts)
   message.toolResult    -> CC `user` w/ tool_result block
-  message.bashExecution -> CC `assistant` tool_use + CC `user` tool_result
+  message.bashExecution -> CC `assistant` tool_use + CC `user` tool_result,
+                           both `origin: "user_shell"`
   compaction            -> CC `system` subtype=compaction
   branch_summary        -> CC `system` subtype=branch_summary (summary KEPT)
   custom_message        -> CC `user` (it DOES enter LLM context)
@@ -68,7 +70,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .sanitize import COMMAND_MAX_LEN
+from .sanitize import COMMAND_MAX_LEN, ORIGIN_USER_SHELL, usage_counts
 
 SUPPORTED_SESSION_VERSIONS = frozenset({1, 2, 3})
 
@@ -207,6 +209,15 @@ def _text(value: Any) -> str:
 #: pi uses `path` for every file tool — there is no filePath/file_path.
 _TOOL_SUMMARY_KEYS = ("command", "path", "pattern")
 
+#: pi's `message.usage` names for the four counts in sanitize.USAGE_KEYS. Its
+#: totalTokens, cost, reasoning and cacheWrite1h stay on the machine.
+_USAGE_NAMES = {
+    "input_tokens": "input",
+    "output_tokens": "output",
+    "cache_read_input_tokens": "cacheRead",
+    "cache_creation_input_tokens": "cacheWrite",
+}
+
 
 def _translate_message(event: dict, timestamp: Any) -> dict:
     message = event.get("message")
@@ -242,12 +253,21 @@ def _translate_assistant_message(event: dict, message: dict, timestamp: Any) -> 
             extras[dst] = value
     if error := _opt_str(message.get("errorMessage"), _TOOL_SUMMARY_MAX_LEN):
         extras["error_message"] = error
-    return {
+    out: dict[str, Any] = {
         "type": "assistant",
         "timestamp": timestamp,
         "message": {"role": "assistant", "content": _blocks(message.get("content"))},
         "_pi_extras": extras,
     }
+    # pi writes one entry per model response, so the entry's own id names the
+    # inference (probe-events/1), and its usage is that response's final count.
+    inference = _opt_str(event.get("id"))
+    if inference:
+        out["inference_id"] = inference
+    usage = usage_counts(message.get("usage"), _USAGE_NAMES)
+    if usage:
+        out["usage"] = usage
+    return out
 
 
 def _blocks(content: Any) -> list[dict]:
@@ -410,7 +430,7 @@ def _translate_bash_execution(event: dict, message: dict, timestamp: Any) -> lis
     # non-string entry `id` (e.g. a nested object) must not be interpolated
     # into it raw — f-string formatting would stringify the object's repr
     # straight into an output field.
-    call_id = f"bash-{_safe_metadata_str(event.get('id'))}"
+    call_id = f"bash-{_safe_metadata_str(event.get('id'), max_len=195)}"  # ids cap at 200
     extras = _tree_extras(event)
     for src, dst in (("exitCode", "exit_code"), ("cancelled", "cancelled"),
                      ("truncated", "truncated")):
@@ -425,6 +445,8 @@ def _translate_bash_execution(event: dict, message: dict, timestamp: Any) -> lis
     # slice below outright. `_safe_metadata_str` types-checks it while still
     # keeping the full command text, not just an identifier-length prefix.
     command = _safe_metadata_str(message.get("command"), max_len=_COMMAND_MAX_LEN)
+    # The researcher typed this, not the model: `origin` says so on both
+    # halves (probe-events/1), so no reader counts it as an inference.
     use = {
         "type": "assistant",
         "timestamp": timestamp,
@@ -433,6 +455,7 @@ def _translate_bash_execution(event: dict, message: dict, timestamp: Any) -> lis
             "summary": command,
         }]},
         "_pi_extras": extras,
+        "origin": ORIGIN_USER_SHELL,
     }
     output = message.get("output")
     result_block: dict[str, Any] = {"type": "tool_result", "tool_use_id": call_id}
@@ -445,6 +468,7 @@ def _translate_bash_execution(event: dict, message: dict, timestamp: Any) -> lis
         "timestamp": timestamp,
         "message": {"role": "user", "content": [result_block]},
         "_pi_extras": dict(extras),
+        "origin": ORIGIN_USER_SHELL,
     }
     return [use, result]
 

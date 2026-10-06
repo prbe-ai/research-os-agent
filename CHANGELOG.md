@@ -16,6 +16,16 @@
   same: nothing removed was ever shown or searched. Sessions already uploaded are not changed. Still
   sent as conversation text: what a `!command` you type prints, and a skill's text when it loads.
   One malformed transcript line now costs that line instead of stopping the session's capture.
+- **Captured sessions now record which model call each reply came from and its token counts (tap
+  0.9.11).** What capture uploads is now a written, versioned contract, `probe-events/1`
+  (`agent/src/probe/tap_core/probe-events-1.schema.json`), the same for Claude Code, Codex, pi and
+  Kimi Code. Model replies carry `inference_id` (Claude Code's message id, pi's entry id, Kimi's
+  turn and step) and, for Claude Code and pi, `usage`: input, output, cache-read and cache-write
+  tokens, and nothing else of the provider's usage record. A shell command the researcher typed
+  (pi's `!` command, Kimi's shell mode) is marked `origin: "user_shell"`, so it is not mistaken for
+  model output. Codex has no per-call id, and its token counts are per turn, so they are not
+  recorded yet. Older taps keep uploading without these fields. Claude Code repeats a call's
+  usage on every line of it, so its uploads grow about 14% (60.2 MB to 68.6 MB over 250 sessions).
 
 ## 0.216.3
 

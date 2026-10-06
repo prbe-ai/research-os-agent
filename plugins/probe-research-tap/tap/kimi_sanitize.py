@@ -58,6 +58,11 @@ Translation:
                                        interaction records, subagent.*, the UI
                                        family, and any record type Kimi adds
 
+probe-events/1 fields: a `content.part` or `tool.call` event carries
+`inference_id` = `<turn_id>:<step>` (one step is one model call), and a shell
+command input carries `origin: "user_shell"`. Kimi's `usage` records are not
+read, so no event carries `usage`.
+
 TOOL ARGUMENTS follow sanitize.py's policy: a recognized key becomes a capped
 summary (the full shell `command`), file-mutating tools get counts, never
 content, and an unrecognized schema ships as a bare tool name. Tool OUTPUT
@@ -80,7 +85,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .sanitize import COMMAND_MAX_LEN
+from .sanitize import COMMAND_MAX_LEN, ORIGIN_USER_SHELL
 
 #: Single definition in sanitize.py -- see COMMAND_MAX_LEN there.
 _COMMAND_MAX_LEN = COMMAND_MAX_LEN
@@ -155,6 +160,12 @@ def _message_event(role: str, timestamp: Any, blocks: list, extras: dict | None 
     if extras:
         out["_kimi_extras"] = extras
     return out
+
+
+def _with_inference(event: dict, inference: str | None) -> dict:
+    if inference:
+        event["inference_id"] = inference
+    return event
 
 
 def _media_placeholder(kind: str, holder: Any) -> dict:
@@ -334,9 +345,13 @@ def _translate_append_message(event: dict) -> dict | None:
             text = _text_of(message.get("content"))[:_COMMAND_MAX_LEN]
             if not text:
                 return None
-            return _message_event(
+            out = _message_event(
                 "user", timestamp, [{"type": "text", "text": text}], {"origin": "shell_command"},
             )
+            # The researcher's own shell line, not a prompt to the model and
+            # not model output (probe-events/1 `origin`).
+            out["origin"] = ORIGIN_USER_SHELL
+            return out
         extras: dict[str, Any] = {"result_bytes": len(_text_of(message.get("content")))}
         if origin.get("isError") is True:
             extras["is_error"] = True
@@ -367,9 +382,17 @@ def _translate_loop_event(event: dict) -> dict | None:
     step = loop.get("step")
     if isinstance(step, int) and not isinstance(step, bool):
         extras["step"] = step
+    # A step is one model call within a turn, and turn ids keep counting
+    # across a resume, so `turn:step` names the inference (probe-events/1).
+    # Only the model's own parts carry it; a tool.result arrives without one.
+    inference = (
+        f"{extras['turn_id']}:{step}"[:200] if "turn_id" in extras and "step" in extras else None
+    )
     if kind == "content.part":
         block = _translate_part(loop.get("part"))
-        return _message_event("assistant", timestamp, [block], extras) if block else None
+        if not block:
+            return None
+        return _with_inference(_message_event("assistant", timestamp, [block], extras), inference)
     if kind == "tool.call":
         name = _str(loop.get("name"))
         args = loop.get("args")
@@ -384,7 +407,7 @@ def _translate_loop_event(event: dict) -> dict | None:
         stats = _edit_stats(name, args)
         if stats:
             block["stats"] = stats
-        return _message_event("assistant", timestamp, [block], extras)
+        return _with_inference(_message_event("assistant", timestamp, [block], extras), inference)
     if kind == "tool.result":
         result = loop.get("result") if isinstance(loop.get("result"), dict) else {}
         block = {"type": "tool_result", "tool_use_id": _str(loop.get("toolCallId"))}

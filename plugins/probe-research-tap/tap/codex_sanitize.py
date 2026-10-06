@@ -51,6 +51,9 @@ Translation rules:
   event_msg.<other>                     → drop (fail closed on future payloads)
   world_state / unknown top variants   → drop (may contain instructions/secrets)
 
+probe-events/1's `inference_id` and `usage` are not emitted: a rollout names
+no model call, and `token_count` reports per turn, not per inference.
+
 `sanitize_event(event)` returns:
   - None  → drop the event entirely (turn-boundary, duplicates, pure metadata)
   - dict  → translated CC-shape event including `_codex_extras` if any
@@ -146,7 +149,7 @@ def sanitize_event(event: Any) -> Any:
     rollout_type = event.get("type")
     raw_payload = event.get("payload")
     payload = raw_payload if isinstance(raw_payload, dict) else {}
-    timestamp = event.get("timestamp")
+    timestamp = _str_or_none(event.get("timestamp"), _TIMESTAMP_MAX_LEN)
 
     if rollout_type == "session_meta":
         return _translate_session_meta(payload, timestamp)
@@ -184,7 +187,7 @@ def _translate_compacted(payload: dict, timestamp: Any) -> dict:
     out = _system_event(
         subtype="compaction",
         timestamp=timestamp,
-        text=payload.get("message"),
+        text=_str_or_none(payload.get("message")),
     )
     rh = payload.get("replacement_history")
     if isinstance(rh, list):
@@ -308,7 +311,7 @@ def _translate_content_item(item: Any) -> dict | None:
         # one screenshot is one event of its full encoded size. Two things
         # followed from shipping that verbatim. It contradicted the promise the
         # import review screen makes in so many words -- "tool output, file
-        # contents and API metadata never leave" -- for every image small
+        # contents ... never leave" -- for every image small
         # enough to fit a batch. And for the rest it was fatal rather than
         # lossy: a single event above MAX_BODY_BYTES can be put in no batch at
         # all, so `Journal.stage` refused, the session never imported, and no
@@ -383,8 +386,8 @@ def _flatten_reasoning_content(content: Any) -> str:
 
 
 def _translate_function_call(payload: dict, timestamp: Any) -> dict:
-    call_id = payload.get("call_id") or ""
-    name = payload.get("name") or ""
+    call_id = _id_str(payload.get("call_id"))
+    name = _id_str(payload.get("name"))
     summary = _summarize_args(payload.get("arguments"))
     block: dict[str, Any] = {"type": "tool_use", "id": call_id, "name": name}
     if summary:
@@ -407,7 +410,7 @@ def _translate_function_call(payload: dict, timestamp: Any) -> dict:
 
 
 def _translate_function_call_output(payload: dict, timestamp: Any) -> dict:
-    call_id = payload.get("call_id") or ""
+    call_id = _id_str(payload.get("call_id"))
     block: dict[str, Any] = {"type": "tool_result", "tool_use_id": call_id}
     if _output_is_error(payload.get("output")):
         block["is_error"] = True
@@ -422,7 +425,7 @@ def _translate_function_call_output(payload: dict, timestamp: Any) -> dict:
 
 
 def _translate_local_shell_call(payload: dict, timestamp: Any) -> dict:
-    call_id = payload.get("call_id") or payload.get("id") or ""
+    call_id = _id_str(payload.get("call_id")) or _id_str(payload.get("id"))
     action = payload.get("action") or {}
     command_summary = ""
     if isinstance(action, dict):
@@ -450,8 +453,8 @@ def _translate_local_shell_call(payload: dict, timestamp: Any) -> dict:
 
 
 def _translate_custom_tool_call(payload: dict, timestamp: Any) -> dict:
-    call_id = payload.get("call_id") or ""
-    name = payload.get("name") or "custom_tool"
+    call_id = _id_str(payload.get("call_id"))
+    name = _id_str(payload.get("name")) or "custom_tool"
     block: dict[str, Any] = {"type": "tool_use", "id": call_id, "name": name}
     summary = _summarize_args(payload.get("input"))
     if summary:
@@ -464,7 +467,7 @@ def _translate_custom_tool_call(payload: dict, timestamp: Any) -> dict:
 
 
 def _translate_custom_tool_call_output(payload: dict, timestamp: Any) -> dict:
-    call_id = payload.get("call_id") or ""
+    call_id = _id_str(payload.get("call_id"))
     block: dict[str, Any] = {"type": "tool_result", "tool_use_id": call_id}
     if _output_is_error(payload.get("output")):
         block["is_error"] = True
@@ -476,7 +479,7 @@ def _translate_custom_tool_call_output(payload: dict, timestamp: Any) -> dict:
 
 
 def _translate_synthetic_tool_use(payload: dict, timestamp: Any, *, name: str) -> dict:
-    call_id = payload.get("call_id") or payload.get("id") or ""
+    call_id = _id_str(payload.get("call_id")) or _id_str(payload.get("id"))
     block: dict[str, Any] = {"type": "tool_use", "id": call_id, "name": name}
     summary = _summarize_args(payload.get("action") or payload.get("arguments"))
     if summary:
@@ -489,7 +492,7 @@ def _translate_synthetic_tool_use(payload: dict, timestamp: Any, *, name: str) -
 
 
 def _translate_synthetic_tool_result(payload: dict, timestamp: Any) -> dict:
-    call_id = payload.get("call_id") or ""
+    call_id = _id_str(payload.get("call_id"))
     block: dict[str, Any] = {"type": "tool_result", "tool_use_id": call_id}
     if payload.get("status") and payload["status"] != "completed":
         block["is_error"] = True
@@ -501,6 +504,23 @@ def _translate_synthetic_tool_result(payload: dict, timestamp: Any) -> dict:
 
 
 # --- helpers ---------------------------------------------------------------
+
+
+#: probe-events/1 caps every id and tool name at 200 characters.
+_ID_MAX_LEN = 200
+_TIMESTAMP_MAX_LEN = 64
+
+
+def _str_or_none(value: Any, max_len: int | None = None) -> str | None:
+    """An untrusted text field: a string (optionally capped), never an object."""
+    if not isinstance(value, str):
+        return None
+    return value if max_len is None else value[:max_len]
+
+
+def _id_str(value: Any) -> str:
+    """An untrusted id or tool name: a capped string, "" for anything else."""
+    return value[:_ID_MAX_LEN] if isinstance(value, str) else ""
 
 
 def _system_event(

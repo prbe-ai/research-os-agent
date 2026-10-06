@@ -272,7 +272,7 @@ def test_drops_usage_iterations_cache_creation() -> None:
     assert "service_tier" not in msg
     assert "inference_geo" not in msg
     assert "speed" not in msg
-    assert "id" not in msg, "Anthropic's per-message id is dropped (top-level uuid is enough)"
+    assert "id" not in msg
     assert "stop_sequence" not in msg
     assert "stop_details" not in msg
     # Stop_reason is content-relevant; keep it.
@@ -280,6 +280,10 @@ def test_drops_usage_iterations_cache_creation() -> None:
     # Content survives intact.
     assert msg["content"] == [{"type": "text", "text": "hi"}]
     assert msg["role"] == "assistant"
+    # probe-events/1 (tap 0.9.11): the id names the model call and the counts
+    # say what it cost; both are lifted out of the message, nothing else is.
+    assert out["inference_id"] == "msg_anthropic_internal"
+    assert out["usage"] == {"input_tokens": 1, "output_tokens": 100}
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +629,9 @@ def test_build_batch_body_strips_thinking_signature_and_usage() -> None:
     assert "service_tier" not in msg
     assert "id" not in msg
     assert msg["stop_reason"] == "end_turn"
+    raw = parsed["events"][0]["raw"]
+    assert raw["inference_id"] == "msg_drop_me"
+    assert raw["usage"] == {"input_tokens": 1, "output_tokens": 100, "cache_read_input_tokens": 99999}
     blocks = msg["content"]
     assert blocks[0]["thinking"] == "reasoning text"
     assert "signature" not in blocks[0]
@@ -880,6 +887,37 @@ def test_a_non_string_top_level_content_does_not_ship() -> None:
     assert "content" not in sanitize_event({"type": "system", "subtype": "x", "content": {"a": 1}})
     out = sanitize_event({"type": "user", "message": {"role": "user", "content": {"a": 1}}})
     assert out["message"] == {"role": "user"}
+
+
+def test_a_named_key_holding_the_wrong_type_does_not_ship() -> None:
+    """probe-events/1 types every allow-listed key (tap 0.9.11), so a named
+    key cannot carry an unnamed payload either."""
+    from tap.sanitize import sanitize_event
+
+    out = sanitize_event({
+        "type": "assistant",
+        "uuid": {"nested": "x"},
+        "parentUuid": None,
+        "timestamp": 1791170700,
+        "isCompactSummary": "yes",
+        "message": {
+            "role": "assistant",
+            "model": {"nested": "x"},
+            "stop_reason": None,
+            "content": [{"type": "tool_use", "id": {"nested": "x"}, "name": 7, "input": {}}],
+        },
+    })
+    assert out == {
+        "type": "assistant",
+        "parentUuid": None,
+        "message": {
+            "role": "assistant",
+            "stop_reason": None,
+            "content": [{"type": "tool_use", "id": None, "name": None}],
+        },
+    }
+    assert sanitize_event({"uuid": "u", "content": "an event with no type"}) is None
+    assert sanitize_event({"type": "user", "message": "not an object"}) == {"type": "user"}
 
 
 def test_unknown_block_types_ship_as_a_dropped_marker() -> None:
