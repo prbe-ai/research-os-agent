@@ -28,6 +28,14 @@
   model output. Codex has no per-call id, and its token counts are per turn, so they are not
   recorded yet. Older taps keep uploading without these fields. Claude Code repeats a call's
   usage on every line of it, so its uploads grow about 14% (60.2 MB to 68.6 MB over 250 sessions).
+- **After `/probe on` in Kimi Code, the agent no longer hunts for the command or gets told to take
+  Probe over.** Kimi never shows the agent that a typed `/probe` moved the switch, so it read the
+  `probe` skill, ran `probe session state on` itself, and got the general daemon refusal, which
+  ends "run `probe session inline` first": following that hands Probe from the daemon to the
+  agent. The daemon skill now says a typed `/probe` already moved the switch and that
+  `probe session status` shows where it landed, and the guard (Claude Code, Codex, Kimi and pi)
+  answers an agent that types `probe session state|toggle|track|untrack|default` with that, not
+  with the takeover pointer.
 
 ## 0.216.3
 

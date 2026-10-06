@@ -12,7 +12,8 @@
  *
  *   DAEMON PROFILE -- the daemon records and reads, so a shell command running
  *   `probe <anything>` outside `DAEMON_PROFILE_ALLOWED` and the agent's runs'
- *   own data, and every Probe MCP tool call, are refused (`DAEMON_PROFILE_DENY`).
+ *   own data, and every Probe MCP tool call, are refused (`DAEMON_PROFILE_DENY`);
+ *   the researcher's switch is refused as the switch (`RESEARCHER_SWITCH_DENY`).
  *   Unless the agent took Probe over (`probe session inline`, `sessionIsInline`):
  *   then only the question folder and the researcher's switch (`switchMove`,
  *   `INLINE_SWITCH_DENY`) are refused.
@@ -146,6 +147,10 @@ export function touchesApprovals(toolName: string, input: unknown, env: PathEnv,
 export const INLINE_SWITCH_DENY =
   "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only the researcher moves it (`/probe on`, `/probe read`, `/probe off`). To hand Probe back to the daemon, run `probe session daemon`.";
 
+/** `session_marker.RESEARCHER_SWITCH_DENY`. Placeholder: `{matched}`. */
+export const RESEARCHER_SWITCH_DENY =
+  "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only the researcher moves it (`/probe on`, `/probe read`, `/probe off`), and a `/probe` they typed has already moved it. `probe session status` prints where it landed.";
+
 /** `session_marker.INLINE_FROM`: the states the agent may take Probe over from. */
 export const INLINE_FROM: ReadonlySet<string> = new Set(["daemon", "read-only"]);
 
@@ -199,6 +204,9 @@ export function guardToolCall(toolName: string, input: unknown, context: GuardCo
   if (shellField === undefined || typeof input !== "object" || input === null) return null;
   const command = (input as Record<string, unknown>)[shellField];
   if (typeof command !== "string") return null;
+  // The switch is answered as the switch, ahead of DAEMON_PROFILE_DENY's pointer to `probe session inline`.
+  const moved = switchMove(command);
+  if (moved !== null) return fill(RESEARCHER_SWITCH_DENY, { matched: moved });
   const matched = daemonProfileRefusal(command);
   return matched === null ? null : fill(DAEMON_PROFILE_DENY, { matched });
 }

@@ -11,6 +11,7 @@ import {
   guardToolCall,
   INLINE_SWITCH_DENY,
   PiTool,
+  RESEARCHER_SWITCH_DENY,
   resolveLikePi,
   sessionIsInline,
 } from "../src/guard.js";
@@ -113,6 +114,16 @@ describe("the daemon profile's allowlist", () => {
   it("is off in the agent profile", () => {
     expect(guardToolCall(PiTool.Bash, { command: "probe run list" }, agent())).toBeNull();
     expect(guardToolCall("probe_mcp_browse", {}, agent())).toBeNull();
+  });
+
+  it("refuses the researcher's switch as the switch, never pointing at a takeover", () => {
+    for (const [command, matched] of [
+      ["probe session state on", "probe session state"],
+      ["probe session --help; probe session toggle", "probe session toggle"],
+      ["probe run list; probe session default on", "probe session default"],
+    ]) {
+      expect(guardToolCall(PiTool.Bash, { command }, daemon())).toBe(RESEARCHER_SWITCH_DENY.replace("{matched}", matched));
+    }
   });
 
   it("lets the agent take Probe over (`probe session inline`)", () => {

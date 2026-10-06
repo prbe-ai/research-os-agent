@@ -1227,6 +1227,17 @@ INLINE_SWITCH_DENY = (
     "the daemon, run `probe session daemon`."
 )
 
+#: What the guard answers an agent the daemon records for that types one of
+#: `RESEARCHER_SWITCH`. Kimi runs a typed `/probe on` through a hook whose output
+#: never reaches the model, so the agent reads the skill, goes looking for the
+#: command itself, and lands here: the answer is that the move already happened,
+#: never `DAEMON_PROFILE_DENY`'s pointer to `probe session inline`.
+RESEARCHER_SWITCH_DENY = (
+    "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only "
+    "the researcher moves it (`/probe on`, `/probe read`, `/probe off`), and a `/probe` they "
+    "typed has already moved it. `probe session status` prints where it landed."
+)
+
 DAEMON_PROFILE_DENY = (
     'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team\'s prior work: `probe ask "<question>"`. To do it yourself, run `probe session inline` first.'
 )

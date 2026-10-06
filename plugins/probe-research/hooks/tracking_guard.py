@@ -1217,8 +1217,9 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     """The daemon profile's PreToolUse: the daemon records and reads, so every
     `probe` command but `ask`, `exec`, the runs' own data, `session status`,
     `session inline` and `session daemon` is refused (`DAEMON_PROFILE_DENY`),
-    and so is a Probe MCP call. A session the researcher turned off keeps the
-    off refusals (`_deny`); one set to read only also loses the runs' own data
+    and so is a Probe MCP call; the researcher's switch (`RESEARCHER_SWITCH`) is
+    refused as the switch (`RESEARCHER_SWITCH_DENY`). A session the researcher
+    turned off keeps the off refusals (`_deny`); one set to read only also loses the runs' own data
     (a write). A session the agent took over (`is_inline`) is refused only the
     researcher's switch (`RESEARCHER_SWITCH`), which the agent never moves here,
     under `off` included."""
@@ -1243,6 +1244,13 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     tool_name = payload.get("tool_name")
     if is_probe_mcp_tool(tool_name):
         _refuse(_session_marker.DAEMON_PROFILE_DENY.format(matched=tool_name))
+        return
+    # The switch is answered as the switch, ahead of the general refusal, whose
+    # "run `probe session inline` first" would send an agent looking for a typed
+    # `/probe on` to take Probe from the daemon instead.
+    matched = _switch_move(payload)
+    if matched:
+        _refuse(_session_marker.RESEARCHER_SWITCH_DENY.format(matched=matched))
         return
     if tool_name != "Bash":
         return

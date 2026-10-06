@@ -8,6 +8,9 @@ This skill only changes the state of Probe for this session. The Probe daemon
 records this session and reads the team's work for you; you record nothing
 yourself.
 
+Typing `/probe …` moves the switch itself, before you read this; you never move it.
+To see where it landed, run `probe session status`.
+
 ```
 /probe on      on (daemon): the daemon records and reads     /probe          advance one step
 /probe read    read only (daemon): reads, records nothing    /probe status   print it, change nothing
