@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The wizard's agent logos are round brand avatars.** Each agent in "On this device" is its
+  mark in white on a circle of its brand colour, the way other agent tools show them: Claude's
+  spark on terracotta, the OpenAI mark (Codex), Kimi's mark and pi's π on black. They used to be
+  the dashboard's icons on a light square tile.
+
 ## 0.216.1
 
 - **In the daemon profile, the agent can take Probe over and hand it back** (tap 0.9.9;
