@@ -801,6 +801,21 @@ def test_read_only_in_a_daemon_profile_session_keeps_the_worker_for_its_reader(t
         assert sup.wanted() is wanted, state
 
 
+def test_the_worker_stays_while_the_agent_holds_probe(tmp_path):
+    # `on (inline)` (Richard 2026-10-05): `full` plus the `<sid>.inline` marker in
+    # a daemon-profile session. The worker's reader still answers `probe ask` and
+    # it leaves the agent's turns alone; a `full` without the marker is not inline.
+    sup = supervisor_mod.Supervisor(session_id=SID, transcript=tmp_path / "t.jsonl", cwd=tmp_path)
+    _set_state("full")
+    (lease.sessions_dir() / f"{SID}.profile").write_text("daemon")
+    assert sup.wanted() is False
+    for taken_from in ("daemon", "read-only"):
+        (lease.sessions_dir() / f"{SID}.inline").write_text(json.dumps({"from": taken_from, "since": 1.0}))
+        assert sup.wanted() is True, taken_from
+    (lease.sessions_dir() / f"{SID}.profile").write_text("agent")
+    assert sup.wanted() is False
+
+
 def test_the_supervisor_honours_do_not_respawn(tmp_path, monkeypatch):
     spawned = []
 

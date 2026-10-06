@@ -472,6 +472,11 @@ describe("trackingStatusText", () => {
   it("falls back to the plain state when the CLI returned no capture block", () => {
     expect(trackingStatusText(true, undefined)).toBe("● tracking");
   });
+
+  it("says `on (inline)` while the agent holds Probe, even over a cached `read`", () => {
+    expect(trackingStatusText(true, { running: true, reason: "running" }, undefined, true)).toBe("● on (inline)");
+    expect(trackingStatusText(false, { running: true, reason: "running" }, undefined, true)).toBe("● on (inline)");
+  });
 });
 
 describe("registerExtension — the footer's third state", () => {
@@ -1281,6 +1286,17 @@ describe("registerExtension — the guard", () => {
     expect(refused).toMatchObject({ block: true });
     expect(refused!.reason).toContain("`probe run list` was refused before it ran");
     expect(await toolCall({ toolName: "bash", input: { command: "probe ask hi" } }, ctx)).toBeUndefined();
+  });
+
+  it("lets an inline daemon-profile session's probe write run, and still refuses the switch", async () => {
+    const { toolCall, ctx } = await start("daemon");
+    const sid = (ctx as { sessionManager: { getSessionId(): string } }).sessionManager.getSessionId();
+    const sessions = join(process.env.XDG_STATE_HOME!, "probe", "sessions");
+    mkdirSync(sessions, { recursive: true });
+    writeFileSync(join(sessions, `${sid}.state`), "full\n");
+    writeFileSync(join(sessions, `${sid}.inline`), JSON.stringify({ from: "daemon", since: 1 }));
+    expect(await toolCall({ toolName: "bash", input: { command: "probe project create x" } }, ctx)).toBeUndefined();
+    expect(await toolCall({ toolName: "bash", input: { command: "probe session state on" } }, ctx)).toMatchObject({ block: true });
   });
 
   it("blocks an agent-profile session's forged answer, and nothing else", async () => {

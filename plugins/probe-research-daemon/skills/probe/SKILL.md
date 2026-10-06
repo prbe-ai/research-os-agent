@@ -14,6 +14,10 @@ yourself.
 /probe off     off: no daemon, no Probe calls
 ```
 
+`on (inline)`: the agent took Probe over (`probe session inline`) and reads and
+writes it itself until `probe session daemon` hands it back to the daemon. Any
+`/probe` move ends it.
+
 Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing it; one
 press leaves it for `read`. Whether the daemon is used at all is set in
 `probe wizard`, not by this switch.

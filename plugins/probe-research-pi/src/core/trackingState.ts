@@ -307,6 +307,7 @@ export const RecordingLabel = {
   Tracking: "tracking",
   Daemon: "on (daemon)",
   DaemonDegraded: "on (daemon degraded)",
+  Inline: "on (inline)",
 } as const;
 
 /**
@@ -320,11 +321,15 @@ export function trackingStatusText(
   tracking: boolean,
   capture?: CaptureReading,
   daemonLive?: boolean,
+  inline = false,
 ): string {
-  if (!tracking) return "○ not tracking";
+  // An inline session records (the agent does) even while a cached reading from
+  // before the takeover still says `read`.
+  if (!tracking && !inline) return "○ not tracking";
   const captureDown = capture !== undefined && !capture.running;
-  const label =
-    daemonLive === undefined
+  const label = inline
+    ? RecordingLabel.Inline
+    : daemonLive === undefined
       ? RecordingLabel.Tracking
       : daemonLive || captureDown
         ? RecordingLabel.Daemon

@@ -1,11 +1,19 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { DAEMON_PROFILE_DENY, DENY_REASON_APPROVALS, guardToolCall, PiTool, resolveLikePi } from "../src/guard.js";
+import {
+  DAEMON_PROFILE_DENY,
+  DENY_REASON_APPROVALS,
+  guardToolCall,
+  INLINE_SWITCH_DENY,
+  PiTool,
+  resolveLikePi,
+  sessionIsInline,
+} from "../src/guard.js";
 import { approvalsDir } from "../src/core/paths.js";
 
 let tmp: string;
@@ -105,6 +113,63 @@ describe("the daemon profile's allowlist", () => {
   it("is off in the agent profile", () => {
     expect(guardToolCall(PiTool.Bash, { command: "probe run list" }, agent())).toBeNull();
     expect(guardToolCall("probe_mcp_browse", {}, agent())).toBeNull();
+  });
+
+  it("lets the agent take Probe over (`probe session inline`)", () => {
+    expect(guardToolCall(PiTool.Bash, { command: "probe session inline" }, daemon())).toBeNull();
+  });
+
+  it("refuses only the question folder and the researcher's switch while the agent holds Probe", () => {
+    const inline = { ...daemon(), inline: true };
+    for (const command of ["probe project create my-sweep", "probe run list", "probe session daemon"]) {
+      expect(guardToolCall(PiTool.Bash, { command }, inline)).toBeNull();
+    }
+    expect(guardToolCall("probe_mcp_browse", {}, inline)).toBeNull();
+    const answer = join(approvalsDir(env), "answers", "x.json");
+    expect(guardToolCall(PiTool.Write, { path: answer }, inline)).toBe(approvalsRefusal(PiTool.Write, answer));
+    for (const [command, matched] of [
+      ["probe session state on", "probe session state"],
+      ["probe run list; probe session default on", "probe session default"],
+    ]) {
+      expect(guardToolCall(PiTool.Bash, { command }, inline)).toBe(INLINE_SWITCH_DENY.replace("{matched}", matched));
+    }
+  });
+
+  it("hands back without a refusal and never lets a takeover vouch for the rest of its line", () => {
+    expect(guardToolCall(PiTool.Bash, { command: "probe session daemon" }, daemon())).toBeNull();
+    expect(guardToolCall(PiTool.Bash, { command: "probe session inline && probe project create x" }, daemon())).toBe(
+      DAEMON_PROFILE_DENY.replace("{matched}", "probe project create"),
+    );
+  });
+});
+
+describe("sessionIsInline (session_marker.is_inline)", () => {
+  const SID = "11111111-2222-3333-4444-555555555555";
+  const sessions = () => join(tmp, "state", "probe", "sessions");
+  const write = (name: string, body: string) => {
+    mkdirSync(sessions(), { recursive: true });
+    writeFileSync(join(sessions(), `${SID}.${name}`), body);
+  };
+
+  it("needs `full` and a marker naming where Probe was taken from", () => {
+    expect(sessionIsInline(SID, env)).toBe(false);
+    write("state", "full\n");
+    expect(sessionIsInline(SID, env)).toBe(false);
+    write("inline", JSON.stringify({ from: "read-only", since: 1 }));
+    expect(sessionIsInline(SID, env)).toBe(true);
+    write("state", "daemon\n");
+    expect(sessionIsInline(SID, env)).toBe(false);
+    write("state", "full\n");
+    write("inline", JSON.stringify({ from: "off", since: 1 }));
+    expect(sessionIsInline(SID, env)).toBe(false);
+    // `session_marker.inline_marker`: a finite number of seconds, nothing else.
+    for (const since of ['"1"', "true", "null"]) {
+      write("inline", `{"from": "daemon", "since": ${since}}`);
+      expect(sessionIsInline(SID, env)).toBe(false);
+    }
+    write("inline", '{"from": "daemon"}');
+    expect(sessionIsInline(SID, env)).toBe(false);
+    expect(sessionIsInline(undefined, env)).toBe(false);
   });
 });
 

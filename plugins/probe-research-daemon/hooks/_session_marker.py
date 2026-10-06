@@ -42,6 +42,7 @@ path where an exception is a broken prompt.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import stat
@@ -94,6 +95,9 @@ _LABEL_DAEMON_BARE = "on (daemon)"
 #: says the daemon is not the one doing it.
 _LABEL_DAEMON_DEGRADED = "on (daemon degraded) " + _ARROW + " "
 _LABEL_DAEMON_DEGRADED_BARE = "on (daemon degraded)"
+#: The agent took Probe over from the daemon (`is_inline`, Richard 2026-10-05).
+_LABEL_INLINE = "on (inline) " + _ARROW + " "
+_LABEL_INLINE_BARE = "on (inline)"
 #: Kept for readers that still resolve the switch to a BOOLEAN. `render` only
 #: reaches it when no three-valued state was passed in, which is the shape a
 #: pre-three-state caller has. New callers pass `session_state` and get one of
@@ -804,10 +808,13 @@ DAEMON_STATE_DISPLAY = {
 }
 
 
-def state_display(state: "str | None", daemon: bool = False) -> str:
+def state_display(state: "str | None", daemon: bool = False, inline: bool = False) -> str:
     """The state as a person reads it: `on` / `read` / `off`, and in a session the
     daemon records for (`daemon`, see `daemon_session`) `on (daemon)` /
-    `read only (daemon)` / `off`. A stored `daemon` always reads `on (daemon)`."""
+    `read only (daemon)` / `off`. A stored `daemon` always reads `on (daemon)`;
+    an inline session (`is_inline`) reads `on (inline)`."""
+    if inline and state == STATE_FULL:
+        return INLINE_DISPLAY
     if state == STATE_DAEMON or (daemon and state in DAEMON_STATE_DISPLAY):
         return DAEMON_STATE_DISPLAY[state]
     return state_label(state)
@@ -1196,12 +1203,40 @@ def daemon_allows_agent(matched: str) -> bool:
 #: command, reads included, with `DAEMON_PROFILE_DENY` (the approved text:
 #: `~/daemon-prompts/reads/agent-facing/guard-refusal.NEW.md`).
 #: `probe --version` needs no entry (no command words); `probe version` is the
-#: experiment-versions group, a write.
-DAEMON_PROFILE_ALLOWED = frozenset({"ask", "session status", "run expect", "doctor"})
+#: experiment-versions group, a write. `session inline` is the agent taking
+#: Probe over (`enter_inline`), after which the session is `full` and the guard
+#: refuses only `RESEARCHER_SWITCH`; `session daemon` hands it back and writes
+#: nothing when the session is not inline.
+DAEMON_PROFILE_ALLOWED = frozenset(
+    {"ask", "session status", "session inline", "session daemon", "run expect", "doctor"}
+)
+
+#: The researcher's switch and defaults, typed into a shell. In the daemon
+#: profile the agent never moves them: not under `off` (where it would walk out
+#: of the opt-out, `toggle` then `inline`) and not while it holds Probe (where
+#: `state on` would turn a takeover from read only into recording for good).
+#: The researcher moves them with `/probe`, which reaches the hooks, not a shell.
+RESEARCHER_SWITCH = frozenset(
+    {"session state", "session toggle", "session track", "session untrack", "session default"}
+)
+
+#: What the guard answers an inline agent that types one of `RESEARCHER_SWITCH`.
+INLINE_SWITCH_DENY = (
+    "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only "
+    "the researcher moves it (`/probe on`, `/probe read`, `/probe off`). To hand Probe back to "
+    "the daemon, run `probe session daemon`."
+)
 
 DAEMON_PROFILE_DENY = (
-    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team\'s prior work: `probe ask "<question>"`.'
+    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team\'s prior work: `probe ask "<question>"`. To do it yourself, run `probe session inline` first.'
 )
+
+
+def moves_switch(args: "list[str]") -> "str | None":
+    """`probe <words>` when these args (after `probe`) move the researcher's
+    switch (`RESEARCHER_SWITCH`), else None."""
+    two = " ".join(command_words(args)[:2])
+    return "probe " + two if two in RESEARCHER_SWITCH else None
 
 
 def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
@@ -1570,9 +1605,26 @@ def _legacy_tracking_value(session_id: str) -> "str | None":
 
 
 def set_session_state(session_id: str, state: str) -> bool:
-    """Record the decision. True when the canonical file now reads `state`."""
+    """Record the decision. True when the canonical file now reads `state`.
+
+    Every switch move goes through here, so this is also where an inline session
+    ends (`leave_inline` is the agent's own way back): the researcher's switch
+    always wins over the agent's takeover (Richard 2026-10-05)."""
     if not valid_session_id(session_id) or state not in STATES:
         return False
+    with _StateLock(session_id):
+        marker = inline_marker(session_id) if is_inline(session_id) else None
+        if marker is not None:
+            # Logged BEFORE the state reopens recording (`leave_inline`'s order);
+            # a failed log does not hold the researcher's switch back.
+            _log_inline_interval(session_id, marker, None)
+        if not _set_state_unlocked(session_id, state):
+            return False
+        _remove_inline_marker(session_id)
+    return True
+
+
+def _set_state_unlocked(session_id: str, state: str) -> bool:
     if not _publish_atomically(state_path(session_id), state + "\n"):
         return False
     _write_compat_tracking(session_id, state)
@@ -1644,6 +1696,251 @@ def mark_session_profile(session_id: str, profile: str) -> None:
         os.replace(tmp, path)
     except OSError:
         pass
+
+
+# ---------------------------------------------------------------------------
+# INLINE: the agent takes Probe over from the daemon (Richard 2026-10-05)
+# ---------------------------------------------------------------------------
+#
+# In a daemon-profile session the agent may switch itself to reading and writing
+# Probe directly (`probe session inline`) whenever the researcher has not set
+# Probe off -- from `on (daemon)` and from `read only (daemon)` -- and hands
+# control back when it chooses (`probe session daemon`). The researcher's switch
+# always wins: any move of it ends inline (`set_session_state`).
+#
+# STORED AS `full` PLUS A MARKER. Every gate already reads `full` as "the agent
+# records", and an older copy of this module meeting an unknown state byte would
+# read it as recording anyway, so no new byte. The marker `<sid>.inline` is what
+# makes a `full` inline: a `full` without one (an older CLI's `track`) is NOT
+# inline and opens nothing.
+#
+#     <sid>.inline      {"from": "daemon" | "read-only", "since": <epoch s>}
+#     <sid>.inline-log  one {"since", "until", "from"} line per interval that ended
+#
+# The daemon skips the events stamped inside those intervals (`inline_intervals`):
+# the switch's own times, not the moment a worker noticed, so a takeover shorter
+# than the worker's poll is still the agent's.
+#
+# ORDER, so a reader that takes no lock never sees an inline state that is not
+# one: entry writes the marker, then the state; leaving logs the interval, then
+# writes the state, then removes the marker. Writers take `_StateLock`.
+
+INLINE_SUFFIX = ".inline"
+INLINE_LOG_SUFFIX = ".inline-log"
+#: The states the agent may take Probe over from: never `off`.
+INLINE_FROM = (STATE_DAEMON, STATE_READ_ONLY)
+INLINE_DISPLAY = "on (inline)"
+
+INLINE_REFUSED_OFF = (
+    "Probe is off for this conversation, so `probe session inline` changed nothing: "
+    "only the researcher turns Probe back on."
+)
+INLINE_REFUSED_PROFILE = (
+    "This session is not recorded by the Probe daemon, so there is nothing to take over: "
+    "the agent already reads and writes Probe here. Nothing changed."
+)
+INLINE_REFUSED_UNREAD = (
+    "This session's Probe state could not be read, so `probe session inline` changed nothing."
+)
+NOT_INLINE = "This session is not inline; nothing changed."
+INLINE_LOG_FAILED = (
+    "The takeover could not be logged, so Probe stays with you (`on (inline)`): nothing changed."
+)
+
+def inline_path(session_id: str) -> Path:
+    return state_path(session_id).with_suffix(INLINE_SUFFIX)
+
+
+def inline_log_path(session_id: str) -> Path:
+    return state_path(session_id).with_suffix(INLINE_LOG_SUFFIX)
+
+
+def _state_lock_path(session_id: str) -> Path:
+    return state_path(session_id).with_suffix(".lock")
+
+
+class _StateLock:
+    """One per-session lock around every state move: an agent entering inline
+    re-reads the state inside it, so a researcher's `off` landing the same
+    instant is never overwritten, and a takeover in flight finishes before the
+    researcher's move (it holds the lock for a few file writes). It waits: a
+    move made unlocked after a timeout could be overwritten by the very
+    takeover it waited for. Any process of the same user can still write the
+    files directly; this orders Probe's own writers. No flock provider
+    (`_fcntl`) or no lock file: unlocked, as every move was before."""
+
+    def __init__(self, session_id: str) -> None:
+        self.session_id = session_id
+        self.fd: "int | None" = None
+
+    def __enter__(self) -> "_StateLock":
+        module = _fcntl()
+        if module is None:
+            return self
+        try:
+            path = _state_lock_path(self.session_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            self.fd = os.open(str(path), os.O_CREAT | os.O_RDWR, 0o600)
+            module.flock(self.fd, module.LOCK_EX)
+        except OSError:
+            self._close()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._close()
+
+    def _close(self) -> None:
+        if self.fd is not None:
+            try:
+                os.close(self.fd)
+            except OSError:
+                pass
+            self.fd = None
+
+
+def _finite(value: object) -> "float | None":
+    """A finite number, or None: a marker or log line is read as data, and an
+    `Infinity` there would hand every event of the session to nobody."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if math.isfinite(value) else None
+
+
+def inline_marker(session_id: str) -> "dict | None":
+    """The open takeover (`{"from", "since"}`), or None. A malformed one is None."""
+    if not valid_session_id(session_id):
+        return None
+    try:
+        data = json.loads(inline_path(session_id).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("from") not in INLINE_FROM:
+        return None
+    since = _finite(data.get("since"))
+    return None if since is None else {"from": data["from"], "since": since}
+
+
+def is_inline(session_id: str, state: "str | None" = None) -> bool:
+    """Has the agent taken Probe over in this session? The state is `full`, the
+    session is the daemon's (`<sid>.profile`), and the marker is there. The
+    marker is read only when the state is `full`: the guard asks before every
+    tool call."""
+    if state is None:
+        state = session_state(session_id)
+    if state != STATE_FULL or session_profile(session_id) != RECORDER_DAEMON:
+        return False
+    return inline_marker(session_id) is not None
+
+
+def inline_from(session_id: str, state: "str | None" = None) -> "str | None":
+    """The state an inline session was taken over from (`daemon` or
+    `read-only`), or None when the session is not inline."""
+    if not is_inline(session_id, state):
+        return None
+    marker = inline_marker(session_id)
+    return marker["from"] if marker else None
+
+
+def enter_inline(session_id: str, now: "float | None" = None) -> "str | None":
+    """The agent takes Probe over. None when the session is now inline, else the
+    refusal (nothing written). Allowed from `on (daemon)` and `read only
+    (daemon)`; an inline session stays as it is."""
+    if not valid_session_id(session_id):
+        return INLINE_REFUSED_UNREAD
+    with _StateLock(session_id):
+        state = session_state(session_id)
+        if session_profile(session_id) != RECORDER_DAEMON:
+            return INLINE_REFUSED_PROFILE
+        if is_inline(session_id, state):
+            return None
+        if state == STATE_OFF:
+            return INLINE_REFUSED_OFF
+        if state not in INLINE_FROM:
+            return INLINE_REFUSED_UNREAD
+        at = time.time() if now is None else now
+        if not _publish_atomically(inline_path(session_id), json.dumps({"from": state, "since": at}) + "\n"):
+            return INLINE_REFUSED_UNREAD
+        if not _set_state_unlocked(session_id, STATE_FULL):
+            _remove_inline_marker(session_id)
+            return INLINE_REFUSED_UNREAD
+    return None
+
+
+def leave_inline(session_id: str, now: "float | None" = None) -> "tuple[str | None, str | None]":
+    """The agent hands Probe back: `(restored state, None)`; `(None, None)` when
+    the session is not inline (nothing written -- so it can never undo a
+    researcher's `off`); `(None, reason)` when the hand-back could not be made
+    safely (it stays inline)."""
+    if not valid_session_id(session_id):
+        return (None, None)
+    with _StateLock(session_id):
+        state = session_state(session_id)
+        marker = inline_marker(session_id)
+        if marker is None or not is_inline(session_id, state):
+            return (None, None)
+        # Logged BEFORE the state reopens recording: a worker polling between
+        # the two must already see the closed interval.
+        if not _log_inline_interval(session_id, marker, now):
+            return (None, INLINE_LOG_FAILED)
+        if not _set_state_unlocked(session_id, marker["from"]):
+            return (None, INLINE_REFUSED_UNREAD)
+        _remove_inline_marker(session_id)
+    return (marker["from"], None)
+
+
+def _log_inline_interval(session_id: str, marker: dict, now: "float | None") -> bool:
+    """Append `{"since", "until", "from"}` to the interval log. True when the
+    whole line landed."""
+    until = time.time() if now is None else now
+    # A leading newline too: a row torn by an earlier short write stays on a line
+    # of its own (unreadable, skipped) instead of swallowing this one.
+    data = ("\n" + json.dumps({"since": marker["since"], "until": until, "from": marker["from"]}) + "\n").encode("utf-8")
+    try:
+        fd = os.open(str(inline_log_path(session_id)), os.O_CREAT | os.O_WRONLY | os.O_APPEND, 0o600)
+        try:
+            return os.write(fd, data) == len(data)
+        finally:
+            os.close(fd)
+    except OSError:
+        return False
+
+
+def _remove_inline_marker(session_id: str) -> None:
+    try:
+        inline_path(session_id).unlink()
+    except OSError:
+        pass
+
+
+def inline_intervals(session_id: str) -> "list[tuple[float, float | None]]":
+    """Every stretch the agent held Probe in this session, `(since, until)` in
+    epoch seconds, the open one first with `until` None. The daemon leaves the
+    events stamped inside them to the agent.
+
+    The OPEN one is read FIRST: a hand-back logs its interval before it moves
+    the state, so whichever side of a hand-back this read lands on, the stretch
+    is in one of the two answers."""
+    out: "list[tuple[float, float | None]]" = []
+    if not valid_session_id(session_id):
+        return out
+    if is_inline(session_id):
+        marker = inline_marker(session_id)
+        if marker is not None:
+            out.append((marker["since"], None))
+    try:
+        lines = inline_log_path(session_id).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            row = json.loads(line)
+        except ValueError:
+            continue
+        since = _finite(row.get("since")) if isinstance(row, dict) else None
+        until = _finite(row.get("until")) if isinstance(row, dict) else None
+        if since is not None and until is not None and since <= until:
+            out.append((since, until))
+    return out
 
 
 def set_session_state_if_absent(session_id: str, state: str) -> bool:
@@ -2554,13 +2851,18 @@ def _name_room(label: str) -> int:
     return MAX_SEGMENT_CHARS - len(_INDENT) - _GLYPH_WIDTH - len(label) - len(_ACCENT_TEXT)
 
 
-def _recording_labels(session_state: "str | None", daemon_live: bool, capture_reason: str) -> tuple[str, str]:
+def _recording_labels(
+    session_state: "str | None", daemon_live: bool, capture_reason: str, inline: bool = False
+) -> tuple[str, str]:
     """`(label before a project name, bare label)` for a session that records.
 
     In the `daemon` state the capture suffix already explains a daemon that is
     not running (the worker is a child of capture), so that line keeps the
-    shorter `on (daemon)` and its columns go to the reason.
+    shorter `on (daemon)` and its columns go to the reason. An inline session
+    (the agent took Probe over) reads `on (inline)`.
     """
+    if inline and session_state == STATE_FULL:
+        return _LABEL_INLINE, _LABEL_INLINE_BARE
     if session_state != STATE_DAEMON:
         return _LABEL_TRACKED, _LABEL_TRACKING_BARE
     if daemon_live or capture_reason:
@@ -2619,6 +2921,7 @@ def render(
     session_state: "str | None" = None,
     daemon_live: bool = False,
     daemon: bool = False,
+    inline: bool = False,
 ) -> str:
     """The status-line segment. One line, bounded, self-delimiting, or empty.
 
@@ -2685,7 +2988,7 @@ def render(
     # be an answer to a question nobody asked.
     reason = _capture_reason(state)
     head = _INDENT + _paint(_DOT_DEGRADED if reason else _DOT, _GREEN, color) + " "
-    label_tracked, label_bare = _recording_labels(session_state, daemon_live, reason)
+    label_tracked, label_bare = _recording_labels(session_state, daemon_live, reason, inline)
 
     project = state.get("project") if isinstance(state, dict) else None
     if not (isinstance(project, str) and project):

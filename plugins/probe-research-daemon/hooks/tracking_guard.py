@@ -1215,16 +1215,30 @@ def daemon_profile() -> bool:
 
 def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     """The daemon profile's PreToolUse: the daemon records and reads, so every
-    `probe` command but `ask`, `exec`, the runs' own data and `session status`
-    is refused (`DAEMON_PROFILE_DENY`), and so is a Probe MCP call. A session
-    the researcher turned off keeps the off refusals (`_deny`); one set to read
-    only also loses the runs' own data (a write)."""
+    `probe` command but `ask`, `exec`, the runs' own data, `session status`,
+    `session inline` and `session daemon` is refused (`DAEMON_PROFILE_DENY`),
+    and so is a Probe MCP call. A session the researcher turned off keeps the
+    off refusals (`_deny`); one set to read only also loses the runs' own data
+    (a write). A session the agent took over (`is_inline`) is refused only the
+    researcher's switch (`RESEARCHER_SWITCH`), which the agent never moves here,
+    under `off` included."""
     aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
     if aimed:
         _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
         return
-    if _state(session_id, _payload_cwd(payload)) == _session_marker.STATE_OFF:
+    state = _state(session_id, _payload_cwd(payload))
+    if state == _session_marker.STATE_OFF:
+        matched = _switch_move(payload)
+        if matched:
+            _refuse(DENY_REASON_OFF.format(matched=matched))
+            return
         _deny(payload, session_id)
+        return
+    if _session_marker.is_inline(session_id, state):
+        # The agent took Probe over (`probe session inline`): only the switch is refused.
+        matched = _switch_move(payload)
+        if matched:
+            _refuse(_session_marker.INLINE_SWITCH_DENY.format(matched=matched))
         return
     tool_name = payload.get("tool_name")
     if is_probe_mcp_tool(tool_name):
@@ -1243,12 +1257,30 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
         if not allowed:
             _refuse(_session_marker.DAEMON_PROFILE_DENY.format(matched=matched))
             return
-    if _state(session_id, _payload_cwd(payload)) == _session_marker.STATE_READ_ONLY:
+    if state == _session_marker.STATE_READ_ONLY:
         # `read only (daemon)`: the runs' own data is a write like any other.
         # `probe exec` still runs, unrecorded (`write_gate.exec_child`).
         matched = probe_write(command)
         if matched and matched != _EXEC:
             _refuse(DENY_REASON.format(matched=matched))
+
+
+def _switch_move(payload: dict) -> "str | None":
+    """The researcher's switch moved by a `probe` command in this Bash call
+    (`session_marker.moves_switch`), or None."""
+    if payload.get("tool_name") != "Bash":
+        return None
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if isinstance(tool_input, dict) else None
+    if not isinstance(command, str):
+        return None
+    for args in _probe_invocations(command):
+        if _asks_help(args):
+            continue
+        matched = _session_marker.moves_switch(args)
+        if matched:
+            return matched
+    return None
 
 
 def _refuse(reason: str) -> None:

@@ -17,7 +17,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
 import { QuestionAsker, type ApprovalsDeps } from "./core/approvals.js";
-import { guardToolCall } from "./guard.js";
+import { guardToolCall, sessionIsInline } from "./guard.js";
 import { pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type SpawnFn } from "./core/daemon.js";
 import { connectAndRegisterTools, defaultMcpBridgeDeps, interactiveOAuthLogin, type ConnectResult } from "./mcpBridge.js";
 import { approvalsDir, disabledFile, extensionLogFile, probeStateDir, teamNoteDocumentPath } from "./core/paths.js";
@@ -138,7 +138,9 @@ function footerText(sessionId: string, daemonLive?: boolean): string | undefined
     cachedProbeState !== ProbeState.Daemon
       ? undefined
       : (daemonLive ?? daemonStatus(sessionId, realDaemonNoticeDeps()).status === DaemonStatus.Live);
-  return trackingStatusText(cachedTracking.tracking, cachedTracking.capture, live);
+  // `on (inline)`: the agent took Probe over from the daemon (`probe session inline`).
+  const inline = inDaemonProfile(sessionId) && sessionIsInline(sessionId);
+  return trackingStatusText(cachedTracking.tracking, cachedTracking.capture, live, inline);
 }
 
 /** Has the researcher switched Probe off for this session? */
@@ -827,8 +829,11 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // not wait on a spawn.
     void startPendingCapture(ctx, "tool_call");
     try {
+      const sessionId = ctx?.sessionManager?.getSessionId();
+      const daemonProfile = inDaemonProfile(sessionId);
       const reason = guardToolCall(event.toolName, event.input, {
-        daemonProfile: inDaemonProfile(ctx?.sessionManager?.getSessionId()),
+        daemonProfile,
+        inline: daemonProfile && sessionIsInline(sessionId),
         env: process.env,
         cwd: ctx?.cwd ?? process.cwd(),
       });

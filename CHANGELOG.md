@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **In the daemon profile, the agent can take Probe over and hand it back** (tap 0.9.9;
+  Richard 2026-10-05). Where the Probe daemon records, the agent could run only `probe ask`,
+  `probe exec`, its runs' own data and a few reads; everything else, reads included, was refused,
+  and `--directed` never reached the CLI. `probe session inline` (from `on (daemon)` or
+  `read only (daemon)`, never `off`) gives the agent the whole `probe` CLI and prints the
+  track-work and edit-notes skills it records by; `probe session daemon` hands back to the state
+  it was taken from, and any `/probe` move ends it. The status line reads `on (inline)`. The
+  daemon leaves the turns the agent held to it, by the switch's own times (SDK run messages and
+  file changes included), finishes what came before the takeover, keeps answering `probe ask`,
+  and is told once per takeover which turns it skipped. The agent never moves the researcher's
+  switch in this profile (`probe session state|toggle|track|untrack|default` are refused under
+  `off` and while it holds Probe), and `--session` cannot take over another conversation. The
+  CLAUDE.md / AGENTS.md block and the guard's refusal name the command.
+
 ## 0.216.0
 
 - **The wizard draws each coding agent's real logo, and its name on hover.** In terminals that

@@ -130,9 +130,14 @@ class Supervisor:
             self.gave_up_in = None
         else:
             return False
-        # Daemon v2 has no shadow mode: it runs in `daemon`, and in `read only
-        # (daemon)` for its reader alone (the worker records nothing there).
-        return state == worker.STATE_DAEMON or lease.reads_only(self.session_id, state)
+        # Daemon v2 has no shadow mode: it runs in `daemon`, in `read only
+        # (daemon)` for its reader alone (the worker records nothing there), and
+        # while the agent holds Probe (`on (inline)`), whose turns it leaves alone.
+        return (
+            state == worker.STATE_DAEMON
+            or lease.reads_only(self.session_id, state)
+            or lease.inline(self.session_id, state)
+        )
 
     def _open_socket(self) -> None:
         """Listen for SDK messages (a UNIX datagram socket): nothing to accept, nothing

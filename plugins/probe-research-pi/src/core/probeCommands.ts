@@ -128,7 +128,14 @@ export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
 ]);
 
 /** `session_marker.DAEMON_PROFILE_ALLOWED`: what else the daemon profile leaves to the agent. */
-export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set(["ask", "session status", "run expect", "doctor"]);
+export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
+  "ask",
+  "session status",
+  "session inline",
+  "session daemon",
+  "run expect",
+  "doctor",
+]);
 
 /** `session_marker.command_words`: the (at most three) words click dispatches on. */
 export function commandWords(args: readonly string[]): string[] {
@@ -518,6 +525,25 @@ export function asksHelp(args: readonly string[]): boolean {
   const end = args.indexOf("--");
   const words = end >= 0 ? args.slice(0, end) : args;
   return words.some((word, i) => word === HELP_FLAG && (i === 0 || !REDIRECTIONS.has(words[i - 1])));
+}
+
+/** `session_marker.RESEARCHER_SWITCH`: the researcher's switch and defaults, which the agent never moves. */
+export const RESEARCHER_SWITCH: ReadonlySet<string> = new Set([
+  "session state",
+  "session toggle",
+  "session track",
+  "session untrack",
+  "session default",
+]);
+
+/** `tracking_guard._switch_move`: the first `probe` invocation in a shell line that moves the researcher's switch. */
+export function switchMove(command: string): string | null {
+  for (const args of probeInvocations(command)) {
+    if (asksHelp(args)) continue;
+    const two = commandWords(args).slice(0, 2).join(" ");
+    if (RESEARCHER_SWITCH.has(two)) return `probe ${two}`;
+  }
+  return null;
 }
 
 /** The first `probe` invocation in a shell line the daemon profile refuses, by its `matched` words; null if none. */
