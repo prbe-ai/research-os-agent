@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.218.0
+
 - **`/probe inline`: the researcher hands Probe to the agent; the agent no longer takes it (tap
   0.9.12).** Where the Probe daemon records, typing `/probe inline` (or pi's `/probe inline`, or
   `probe session state inline --session <id>` from a terminal) stops the daemon the way `off`
