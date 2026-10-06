@@ -5,6 +5,16 @@
   the session's later model calls ask for that model (`X-Probe-Prefer-Model`), so a refused
   session stops paying a refused attempt on the configured model first.
 
+- **The Probe daemon's writer compacts once per stretch, not on every bite.** Compaction kept "the
+  last 20 messages" and stopped just under the size; one message is a whole bite of the session, so a
+  long session's kept tail was already over the size and it compacted on nearly every bite, each time
+  making the model provider re-cache the whole history (~1M tokens) at the write price. It now runs
+  once the context passes its size (unchanged: ~950K for the writer, 120K for the reader), comes down
+  to half of it, and keeps the newest quarter of the size whole (the newest message alone if it is
+  bigger). The reader is held near its 120K instead of growing past 1M, though a backlog of full
+  reader turns still compacts about every other turn. A size of 0 or below still runs the worker as
+  bites. The daemon knows Claude Sonnet 5's prices.
+
 ## 0.218.1
 
 - **Session capture no longer sends what your own commands print, or a skill's text when it loads
