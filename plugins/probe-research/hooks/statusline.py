@@ -174,6 +174,8 @@ def segment(payload: dict) -> str:
         daemon=marker.daemon_session(session_id, agent),
         # `on (inline)`: the researcher set Probe inline (`/probe inline`).
         inline=marker.is_inline(session_id, switch),
+        # `· paused: not ML`: the daemon paused itself (`auto_paused`).
+        paused=marker.auto_paused(session_id, switch),
     )
 
 
