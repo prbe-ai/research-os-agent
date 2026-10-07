@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.220.0
 - Companion bench: prices Claude Sonnet 5 and Opus 5 rounds, and charges cache writes at the write
   rate when the model route reports them (`cache_write_tokens`); before, both new models came out
   unpriced and every write was priced as input. Results carry write totals per lane.
