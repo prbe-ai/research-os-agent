@@ -7,6 +7,10 @@
   skill-text arm on a venv installed from main silently ran main's text (found benching #2418).
 
 
+- The daemon's writer compacts its conversation at 250K tokens (was 950K): every model round re-reads
+  the whole context, and 78% of writer spend in the week to 10-07 was calls over 200K tokens.
+  `PROBE_DAEMON_CONTEXT_TOKENS` still overrides it.
+
 ## 0.222.0
 
 - **Taps before 0.9.14 are now asked to update at session start.** `tap.recommended` is 0.9.14, so an older transcript tap shows the update notice (and the agent mentions it once) instead of a quiet one-liner; the notice says why: older taps upload sessions in the previous format, and taps before 0.9.13 also send what your own commands printed. Capture keeps working on every version meanwhile.
