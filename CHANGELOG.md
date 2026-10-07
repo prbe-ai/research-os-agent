@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.226.0
+
 - The daemon and the companion bench price `claude-sonnet-5-5` and `claude-haiku-5-5`.
 - Daemon reader: a researcher prompt anywhere in the unread backlog wakes it (it only looked at the first 400
   events). After a turn whose last request was over the reader's size, or a request the route rejected as sent,
