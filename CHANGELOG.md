@@ -7,6 +7,7 @@
   a request down a socket this end was closing (502). And behind the hosted pod's loopback TLS
   sidecar every peer is 127.0.0.1, which uvicorn trusts for forwarded headers by default; nothing
   in the server reads the client address or scheme.
+- **The MCP entity card for a run, experiment or project carries `intent`:** the researcher's ask that started the work, quoted from the session that created it (`GET /v1/intent`), with `match` (`exact` or `approximate`, which is candidate context only). Best effort: the card never fails on it, and the daemon reader never sees its own session's asks. Ships with the hosted MCP deploy.
 
 ## 0.221.0
 
