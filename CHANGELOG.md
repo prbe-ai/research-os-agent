@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **`probe-research-mcp-http` keeps idle connections for 75 s and ignores `X-Forwarded-*`.**
+  uvicorn's 5 s idle close raced ingress-nginx's 60 s upstream keep-alive, so the proxy could send
+  a request down a socket this end was closing (502). And behind the hosted pod's loopback TLS
+  sidecar every peer is 127.0.0.1, which uvicorn trusts for forwarded headers by default; nothing
+  in the server reads the client address or scheme.
+
 ## 0.221.0
 
 - **`probe edge add` takes a run by its petname**, as `run get` does: `--target run:petite-wallaby-576`
