@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **One update report per Update run, not one per coding agent.** `probe wizard --action update` updates every coding agent in turn, and each pass used to send its own report; the server keeps one per machine, so the last agent won. Live on the devbox, Kimi Code ran last with no Probe plugins and the machine read plugin `not_installed` and no tap, although Claude Code's tap was current and Codex had verified its own. The passes are now merged: per component (CLI, plugin, tap) the most informative result wins (error > refresh failed > not on PATH > legacy id > behind > updated > current > not installed), with that pass's versions and reason and the agent it came from. A single update (the detached auto-update, `probe update`) reports as before. Needs the API from the same change; release after it is deployed.
+
 ## 0.224.1
 - Companion bench: the MLP side-by-side key's "paper why" check (F4) accepts the stopping rule in any
   verb form ("stops after", "keeps the best"); it failed notes that stated the rule correctly.
