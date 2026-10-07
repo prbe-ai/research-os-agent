@@ -18,6 +18,9 @@
   used to act on run B) and a row that is not the run named. `run get` still prints what the server
   answers for the path it is given.
 
+- The daemon and the companion bench price `gpt-6.1-sol` (long-context rates: $4 input, $0.20 cache
+  read, $5 cache write, $15 output per MTok).
+
 ## 0.220.1
 
 - **Session capture can upload ATIF fragments (protocol 3, tap 0.9.14).** When the server's
