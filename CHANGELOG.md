@@ -13,6 +13,8 @@
   the whole context, and 78% of writer spend in the week to 10-07 was calls over 200K tokens.
   `PROBE_DAEMON_CONTEXT_TOKENS` still overrides it.
 
+- The daemon and the companion bench price `claude-haiku-4-5`, `gpt-6-luna` and `gpt-5.6-terra`.
+
 ## 0.222.0
 
 - **Taps before 0.9.14 are now asked to update at session start.** `tap.recommended` is 0.9.14, so an older transcript tap shows the update notice (and the agent mentions it once) instead of a quiet one-liner; the notice says why: older taps upload sessions in the previous format, and taps before 0.9.13 also send what your own commands printed. Capture keeps working on every version meanwhile.
