@@ -57,6 +57,7 @@ from tap.session_identity import validate_identity
 from tap.session_journal import (
     DeliveryPending,
     Journal,
+    ProtocolRestarted,
     ReconciliationRequired,
     SessionDeleted,
     SourceRewritten,
@@ -532,6 +533,11 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                                     break
                                 _require_capture_eligible(source_cwd)
                                 journal.deliver(state["session_id"], wire)
+                            except ProtocolRestarted as exc:
+                                # Batch 0 refused on protocol 3 and dropped:
+                                # stage it again on protocol 2 in this pass.
+                                log.warning("session %s: %s", state["session_id"], exc)
+                                continue
                             except ReconciliationRequired as exc:
                                 if not recoverable(exc):
                                     raise

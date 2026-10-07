@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+- **Session capture can upload ATIF fragments (protocol 3, tap 0.9.14).** When the server's
+  receipts answer offers it (`accepts.protocols` holds 3 and `accepts.fragment_versions` this tap's
+  `FRAGMENT_VERSION`), a NEW session uploads each retained event as an ATIF fragment built by the
+  engine's own `fragment()` (prbe-knowledge `engine/ingest/atif/fragment.py` at main f1be5a8, vendored as
+  `tap_core/atif_fragment.py` + `transcript_render.py` by `agent/scripts/sync_atif_fragment.py`,
+  which stamps the engine commit and file hash). The events go beside the fragments only when the
+  server asked (`accepts.events`) as the stream started. A server with no `accepts` (older or
+  self-hosted) keeps protocol 2, and so does every session already uploading: a stream keeps the
+  protocol the server pinned with its first batch, whatever is offered later. Batch 0 refused with
+  409 `protocol 3 not enabled` / `protocol mismatch` (an offer withdrawn mid-rollout) restarts that
+  session on protocol 2 at once (also inside `probe import`) instead of retrying forever. Order on
+  the machine: events scrubbed together, then one fragment per event, then the fragments scrubbed to
+  a fixed point. Protocol-3 batches pack toward 2 MiB (protocol 2: 1 MiB), estimated from the
+  events so no fragment is built twice, and the built batch is measured exactly. A record
+  that must go alone may use protocol 3's route budget (6,000,000 bytes, the gateway's
+  `MAX_FRAGMENT_BODY_BYTES`; protocol 2 keeps 2,000,000), goes without its event if only that does
+  not fit, and keeps its source only when its fragments alone are over. Every protocol-3 batch,
+  finalize included, carries `fragment_version`. Once the server holds a session on protocol 3, it
+  moves to a journal table (`fragment_sessions`) that taps before 0.9.14 never read, because those
+  drain every session they can see and would send protocol-2 batches the server refuses. Its
+  history snapshot is named `.snapshot-p3.jsonl`, a pattern they never sweep; one an older tap froze
+  under the old name is hard-linked (or copied) to the new name as the session moves, before that
+  tap can delete it as an orphan. A session only OFFERED protocol 3 stays where they see it, so an
+  older tap or `probe import` on the same machine continues the same stream instead of starting a
+  second one, and a batch for another stream of the session is never acknowledged as this one's.
+  The cost of that choice: when a 0.9.14 tap has staged a session's protocol-3 batch 0 and an older
+  daemon (still running from before the update) drains it, the older one sends that batch (up to
+  2 MiB, or 6 MB for one large record) and cannot accept its receipt, so it re-sends it every tick
+  (60 s active, 300 s idle) as a duplicate the server ignores, until a 0.9.14 tap for that agent
+  drains the journal and acknowledges it. `probe import` uses the same journal, so it follows the same offer; with
+  `--transcripts-budget-mb` below 2 its protocol-3 batches pack to the budget.
+  Nothing is offered protocol 3 until the engine's customer list names a team.
+
 - Companion bench: the fake Probe takes the links production takes and refuses the ones it refuses.
   It now accepts experiment and project ends (`derived_from`, `supersedes`, `informed_by`) and the
   `supersedes` / `informed_by` relations, which it refused on every attempt (105 recorded). Like the

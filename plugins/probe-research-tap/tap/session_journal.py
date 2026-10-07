@@ -1,4 +1,4 @@
-"""Protocol-2 source reservations and immutable delivery, shared with the tap.
+"""Protocol-2 and -3 source reservations and immutable delivery, shared with the tap.
 
 Old tap processes cannot enumerate this namespace. One SQLite transaction owns
 the reservation cursor, retained-event ordinal and pending body. The network is
@@ -6,6 +6,18 @@ outside the transaction. Acknowledgement and retiring pending bytes are atomic.
 Pending bodies are never evicted on capacity pressure, authorization or poison.
 The one exception is final by construction: the server saying the session was
 deleted at its customer's request (`SessionDeleted`, `Journal.mark_deleted`).
+
+PROTOCOL 3 is protocol 2 with each retained event also sent as an ATIF fragment
+(`fragments`, built by the vendored engine module `atif_fragment`), and the
+events themselves only when the server asked for them. Which protocol a stream
+uses is settled once: a new stream starts on what the receipts answer offers
+(`accepts`, see `negotiate`), the server pins it with the first accepted batch,
+and from then on every batch of that stream uses it, whatever is offered later.
+Once the server holds a session's stream on protocol 3, the session is kept
+where taps that predate it cannot see it (`_FRAGMENT_SESSIONS`): those drain
+every session in the journal, and would stage protocol-2 batches the server
+refuses for a protocol-3 stream. Until then it stays where they see it, so that
+one stream is all any tap on this machine starts for it.
 """
 
 from __future__ import annotations
@@ -25,14 +37,49 @@ import urllib.request
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+from typing import NamedTuple
 
 from . import codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
 from .secrets import redact_event
 from .transcript import nesting_exceeds
 
-PROTOCOL_VERSION = 2
+#: Upload protocols with streams, cursors and receipts (prbe-knowledge
+#: `kb/session_receipts.py`). 2 sends the sanitized probe-events/1 `events`;
+#: 3 sends one ATIF fragment per event (`fragments`), plus the events only when
+#: the server asked for them as the stream started (`accepts.events`).
+PROTOCOL_EVENTS = 2
+PROTOCOL_FRAGMENTS = 3
+RECEIPTED_PROTOCOLS = (PROTOCOL_EVENTS, PROTOCOL_FRAGMENTS)
+#: The protocol of a stream nothing else is recorded for: every stream a tap
+#: before protocol 3 started.
+PROTOCOL_VERSION = PROTOCOL_EVENTS
+#: The server's 409 `detail` when it will not take a protocol-3 batch 0: the
+#: customer is not (or no longer) offered protocol 3, or the stream already
+#: exists on another protocol. Matched on the text until the door names them
+#: with reason constants. Only batch 0 restarts on protocol 2 (`Journal.deliver`).
+PROTOCOL3_REFUSALS = ("protocol 3 not enabled", "protocol mismatch")
+#: Where the journal keeps sessions whose stream the server holds on protocol 3
+#: (`protocol_version` 3 in the state, never a mere offer). A tap that predates
+#: protocol 3 reads only `sessions` and drains EVERY session there, so a
+#: protocol-3 stream it could see would get protocol-2 batches the server
+#: refuses (409 `protocol mismatch`), each one an immutable pending body no
+#: process could then deliver. A session only OFFERED protocol 3 stays in
+#: `sessions`: hidden there, an older tap's or `probe import`'s gap sweep would
+#: start a second stream for it (the server holds none yet), while visible it
+#: drains the one stream (on protocol 2, which the first acknowledgment then
+#: pins). The snapshots of sessions offered or pinned to protocol 3 carry their
+#: own suffix, because an older tap deletes every `*.snapshot.jsonl` its own
+#: sessions do not name.
+_FRAGMENT_SESSIONS = "fragment_sessions"
+_SNAPSHOT_SUFFIXES = {PROTOCOL_EVENTS: ".snapshot.jsonl", PROTOCOL_FRAGMENTS: ".snapshot-p3.jsonl"}
 EMPTY_HASH = hashlib.sha256(b"").hexdigest()
 MAX_BODY_BYTES = 1024 * 1024
+#: Protocol 3's packing target. A fragment carries its event's text about
+#: twice (its Line and its message or parts), and the events ride along while
+#: the server asks for them, so a protocol-3 batch of the same events is about
+#: twice the bytes: twice the target keeps the events per batch near protocol
+#: 2's. The route's ceiling (SERVER_FRAGMENT_BATCH_LIMIT) bounds a lone record.
+MAX_FRAGMENT_BODY_BYTES = 2 * MAX_BODY_BYTES
 
 #: What the INGEST ROUTE actually accepts, from `app/ingestion/sessions_router.py`
 #: (`MAX_BODY_BYTES = 2_000_000`; the ingress in front of it allows 25m, so the
@@ -52,6 +99,12 @@ SERVER_BATCH_LIMIT = 2_000_000
 #: batch that cannot be split.
 ENVELOPE_HEADROOM = 16 * 1024
 MAX_SOLO_EVENT_BYTES = SERVER_BATCH_LIMIT - ENVELOPE_HEADROOM
+#: The route's budget for a protocol-3 batch (the gateway's
+#: `MAX_FRAGMENT_BODY_BYTES`): one event's text can ride three times, as the
+#: fragment's message, its index Line, and the event while the server asks for
+#: events. Protocols 1 and 2 keep SERVER_BATCH_LIMIT.
+SERVER_FRAGMENT_BATCH_LIMIT = 6_000_000
+MAX_SOLO_FRAGMENT_BYTES = SERVER_FRAGMENT_BATCH_LIMIT - ENVELOPE_HEADROOM
 MAX_SOURCE_LINE = 64 * 1024 * 1024
 DEFAULT_CAP_BYTES = 100 * 1024 * 1024
 # Raw history can be much larger than its sanitized pending delivery. Its
@@ -62,6 +115,8 @@ _FIELDS = (
     "batch_seq",
     "cwd",
     "events",
+    "fragments",
+    "fragment_version",
     "finalize",
     "protocol_version",
     "stream_id",
@@ -100,6 +155,115 @@ def _sanitizer(source: str):
 
 def _route(source: str) -> str:
     return _harness(source).route
+
+
+def _fragment_module():
+    """The vendored fragment builder, or None where it cannot run.
+
+    Imported on use, never at module load, and any failure is contained:
+    protocol 2 must keep working on an interpreter or install where the
+    vendored engine code does not import (it is the engine's code, written
+    for the engine's Python)."""
+    try:
+        from . import atif_fragment
+    except Exception:  # noqa: BLE001
+        return None
+    return atif_fragment
+
+
+def negotiate(remote: dict) -> tuple[int, bool]:
+    """(protocol, send events) for a NEW stream, from a receipts answer.
+
+    Protocol 3 only when the answer offers it AND this client's
+    FRAGMENT_VERSION, and the vendored builder imports here. No `accepts` at
+    all is an older or self-hosted server: protocol 2. `send events` is the
+    server's `accepts.events`, for protocol 3 only.
+    """
+    accepts = remote.get("accepts")
+    if not isinstance(accepts, dict):
+        return PROTOCOL_EVENTS, False
+    protocols, versions = accepts.get("protocols"), accepts.get("fragment_versions")
+    if not (
+        isinstance(protocols, list)
+        and any(type(p) is int and p == PROTOCOL_FRAGMENTS for p in protocols)
+        and isinstance(versions, list)
+    ):
+        return PROTOCOL_EVENTS, False  # not offered: the builder is never imported
+    module = _fragment_module()
+    if module is None or not any(
+        type(v) is int and v == module.FRAGMENT_VERSION for v in versions
+    ):
+        return PROTOCOL_EVENTS, False
+    return PROTOCOL_FRAGMENTS, accepts.get("events") is True
+
+
+def _stream_protocol(state: dict) -> int:
+    """The protocol a session's next batch uses.
+
+    `protocol_version` is the stream's own, recorded once the server holds it
+    (the first acknowledged batch, or an existing stream adopted from the
+    receipts answer). Without it, a stream the server already holds was started
+    by a tap that predates protocol 3; one it does not hold yet starts on what
+    was offered (`protocol_offer`), and may still restart on protocol 2.
+    """
+    pinned = state.get("protocol_version")
+    if pinned in RECEIPTED_PROTOCOLS:
+        return pinned
+    if state.get("last_seq", -1) >= 0:
+        return PROTOCOL_EVENTS
+    offer = state.get("protocol_offer")
+    return offer if offer in RECEIPTED_PROTOCOLS else PROTOCOL_EVENTS
+
+
+class _Mark(NamedTuple):
+    """Where a batch stands after one more packed source line."""
+
+    events: int
+    end: int
+    lines: int
+    event_no: int
+    size: int
+    records: int
+
+
+def _encoded_bytes(value) -> int:
+    """Bytes `value` takes inside a canonical payload."""
+    return len(
+        json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    )
+
+
+def _record_bytes(additions: list[dict]) -> tuple[int, int]:
+    """(fragments, events): what one source line adds to a protocol-3 batch,
+    estimated from its events alone, so packing never builds a fragment twice.
+
+    A fragment repeats its event's text at most about twice, plus a small
+    fixed part (2x + 64 bytes held for every event of the four harnesses'
+    goldens; 1.46x overall). An estimate a little high only packs a little
+    less; the built batch is measured exactly and trimmed (`Journal.stage`).
+    """
+    events = _encoded_bytes(additions)
+    return 2 * events + 64 * len(additions), events
+
+
+def _fragment(module, event: dict) -> dict:
+    """`fragment(event)`, and never no fragment: every event ordinal is sent.
+
+    The builder isolates each event's failures itself; this is the guard for
+    one it did not foresee. The stand-in keeps the ordinal (its Line's
+    `line_no`, which the server checks for contiguity) and the error's class,
+    and has no `kind`, so the engine's fold reads it as one unparsed event.
+    """
+    try:
+        return module.fragment(event)
+    except MemoryError:
+        raise  # may pass; never send an empty fragment for it
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "v": module.FRAGMENT_VERSION,
+            "line": {"line_no": event.get("line_no"), "text": ""},
+            "error": type(exc).__name__,
+        }
 
 
 class ReconciliationRequired(RuntimeError):
@@ -144,6 +308,24 @@ class DeliveryPending(RuntimeError):
         super().__init__(message)
         self.retryable = retryable
         self.safe_message = message if safe_message is None else safe_message
+
+
+class ProtocolRestarted(DeliveryPending):
+    """The server would not take this session's protocol-3 batch 0, so the
+    journal dropped it and the session starts again on protocol 2
+    (`Journal._restart_refused_offer`). Nothing is lost and nothing waits:
+    the caller stages again at once. A DeliveryPending (retryable) only so a
+    caller that does not know it still keeps the session for its next pass."""
+
+    def __init__(self, message: str):
+        super().__init__(
+            message + "; the session restarts on protocol 2",
+            retryable=True,
+            safe_message=(
+                "the server did not take protocol 3 for this new session; "
+                "it is sent again on protocol 2"
+            ),
+        )
 
 
 #: How the server says a session was deleted at its customer's request (the
@@ -261,6 +443,10 @@ def _scrub_content(payload: dict) -> dict:
     value, and a shortened span can bring an anchor within reach of a value.
     `_require_safe_pending` scrubs once more and demands no change, so a body
     staged from a single pass could be refused by its own daemon forever.
+
+    The keys are scrubbed independently (the scrubber joins text only across
+    the items of one list), so a part already at its fixed point is unchanged
+    by scrubbing it again with the rest.
     """
     content = {key: payload[key] for key in ('events', 'fragments', 'cwd', 'provenance') if key in payload}
     for _ in range(_MAX_SCRUB_PASSES):
@@ -379,9 +565,11 @@ class Wire:
         )
         if deleted_response(code, body, session_id):
             raise SessionDeleted(session_id)
-        if code != 200 or body.get("protocol_version") != 2:
+        # `protocol_version` is the stream's own (2 or 3), and 2 for a session
+        # the server holds no stream for; `accepts` says what a new one may use.
+        if code != 200 or body.get("protocol_version") not in RECEIPTED_PROTOCOLS:
             raise DeliveryPending(
-                f"protocol 2 receipts unavailable (http {code}); nothing newly staged",
+                f"stream receipts unavailable (http {code}); nothing newly staged",
                 retryable=_retryable_status(code) or (code == 0 and self.last_request_retryable),
                 safe_message=(
                     "server returned an unsupported receipt protocol"
@@ -428,10 +616,13 @@ class Journal:
         os.chmod(self.db_path, 0o600)
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=FULL")
-        self.conn.executescript("""
+        self.conn.executescript(f"""
             CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS {_FRAGMENT_SESSIONS}(session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS pending(session_id TEXT PRIMARY KEY, body BLOB NOT NULL, digest TEXT NOT NULL);
         """)
+        # Still 2: taps that predate protocol 3 keep opening this journal for
+        # their own protocol-2 streams, and never read the table above.
         self.conn.execute("PRAGMA user_version=2")
 
     def close(self):
@@ -498,17 +689,68 @@ class Journal:
             raise
 
     def get(self, session_id: str) -> dict | None:
-        row = self.conn.execute(
-            "SELECT state FROM sessions WHERE session_id=?", (session_id,)
-        ).fetchone()
-        return json.loads(row[0]) if row else None
+        for table in (_FRAGMENT_SESSIONS, "sessions"):
+            row = self.conn.execute(
+                f"SELECT state FROM {table} WHERE session_id=?", (session_id,)
+            ).fetchone()
+            if row:
+                return json.loads(row[0])
+        return None
 
     def _save(self, state: dict):
+        # By the PINNED protocol, never the offer (see _FRAGMENT_SESSIONS): a
+        # session moves once, when the server is known to hold it on 3.
+        table, other = (
+            (_FRAGMENT_SESSIONS, "sessions")
+            if state.get("protocol_version") == PROTOCOL_FRAGMENTS
+            else ("sessions", _FRAGMENT_SESSIONS)
+        )
+        if table == _FRAGMENT_SESSIONS:
+            self._keep_snapshot_from_older_taps(state)
         self.conn.execute(
-            "INSERT INTO sessions(session_id,state) VALUES(?,?) "
+            f"INSERT INTO {table}(session_id,state) VALUES(?,?) "
             "ON CONFLICT(session_id) DO UPDATE SET state=excluded.state",
             (state["session_id"], json.dumps(state, separators=(",", ":"))),
         )
+        self.conn.execute(f"DELETE FROM {other} WHERE session_id=?", (state["session_id"],))
+
+    def _keep_snapshot_from_older_taps(self, state: dict) -> None:
+        """Give a protocol-3 session's snapshot the name older taps never delete.
+
+        An older tap that froze the session's history while it was still in
+        its view (`pin_orphan`) named the copy `*.snapshot.jsonl`; once the
+        session leaves its view, it deletes that copy as unreferenced. The same
+        bytes get the protocol-3 name first: a hard link (no copy, atomic), or
+        a durable copy where the filesystem refuses links. The old name is then
+        unreferenced here too, and the next sweep removes it.
+        """
+        snapshot = state.get("snapshot_path")
+        p2, p3 = _SNAPSHOT_SUFFIXES[PROTOCOL_EVENTS], _SNAPSHOT_SUFFIXES[PROTOCOL_FRAGMENTS]
+        if not snapshot or not snapshot.endswith(p2):
+            return
+        source = Path(snapshot)
+        if not source.exists():
+            return  # already gone: `ensure` freezes the history again
+        target = source.with_name(source.name[: -len(p2)] + p3)
+        if not target.exists():
+            try:
+                os.link(source, target)
+            except OSError:
+                fd, temporary = tempfile.mkstemp(dir=self.directory)
+                try:
+                    with os.fdopen(fd, "wb") as copy, source.open("rb") as original:
+                        shutil.copyfileobj(original, copy, 1024 * 1024)
+                        copy.flush()
+                        os.fsync(copy.fileno())
+                    os.replace(temporary, target)
+                finally:
+                    Path(temporary).unlink(missing_ok=True)
+            directory_fd = os.open(self.directory, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        state["snapshot_path"] = str(target)
 
     def is_deleted(self, session_id: str) -> bool:
         state = self.get(session_id)
@@ -593,7 +835,8 @@ class Journal:
         that does not authorize acknowledging different transcript event bytes.
         """
         stream = remote.get("stream") or {}
-        if (remote.get("protocol_version") != 2 or remote.get("state") != "ready"
+        protocol = _stream_protocol(state)
+        if (remote.get("protocol_version") != protocol or remote.get("state") != "ready"
                 or stream.get("finalized") is not True):
             return False
         row = self.conn.execute(
@@ -607,8 +850,9 @@ class Journal:
         payload = json.loads(body)
         sequence, remote_sequence = payload.get("batch_seq"), stream.get("last_seq")
         if (
-            payload.get("protocol_version") != 2 or payload.get("finalize") is not True
+            payload.get("protocol_version") != protocol or payload.get("finalize") is not True
             or payload.get("events") not in (None, [])
+            or payload.get("fragments") not in (None, [])
             or payload.get("session_id") != state["session_id"]
             or payload.get("stream_id") != state["stream_id"]
             or stream.get("stream_id") != state["stream_id"]
@@ -684,9 +928,10 @@ class Journal:
                     if snapshot_path:
                         Path(snapshot_path).unlink(missing_ok=True)
             referenced = {item.get("snapshot_path") for item in states}
-            for orphan in self.directory.glob("*.snapshot.jsonl"):
-                if str(orphan) not in referenced:
-                    orphan.unlink(missing_ok=True)
+            for suffix in _SNAPSHOT_SUFFIXES.values():
+                for orphan in self.directory.glob("*" + suffix):
+                    if str(orphan) not in referenced:
+                        orphan.unlink(missing_ok=True)
             for orphan in self.directory.glob("tmp*"):
                 if orphan.is_file():
                     orphan.unlink(missing_ok=True)
@@ -707,6 +952,19 @@ class Journal:
                     "digest_state": "not_requested",
                     "error": None,
                 }
+                if remote.get("stream"):
+                    # The server holds this stream (another device, or a journal
+                    # lost here): it keeps the protocol the server pinned it to,
+                    # whatever is offered today, and sends events if asked today.
+                    state["protocol_version"] = remote.get("protocol_version")
+                    accepts = remote.get("accepts")
+                    state["send_events"] = (
+                        state["protocol_version"] == PROTOCOL_FRAGMENTS
+                        and isinstance(accepts, dict)
+                        and accepts.get("events") is True
+                    )
+                else:
+                    state["protocol_offer"], state["send_events"] = negotiate(remote)
                 self._validate_source(state, path)
             else:
                 self._validate_source(state, path)
@@ -715,6 +973,19 @@ class Journal:
                     raise ReconciliationRequired(
                         "server stream changed; existing pending bytes retained"
                     )
+                if stream:
+                    served, pinned = remote.get("protocol_version"), state.get("protocol_version")
+                    if pinned is not None and pinned != served:
+                        raise ReconciliationRequired(
+                            "server stream uses another upload protocol; pending bytes retained"
+                        )
+                    if pinned is None and (served == _stream_protocol(state) or not self.pending(session_id)):
+                        # The server holds this stream, so its protocol is settled:
+                        # record it. An unacknowledged protocol-3 batch 0 the server
+                        # will refuse is left to delivery, which restarts it on 2.
+                        state["protocol_version"] = served
+                        if served != PROTOCOL_FRAGMENTS:
+                            state["send_events"] = False
                 reconciled = self._reconcile_finalization(state, remote)
                 if reconcile_body is not None and not reconciled:
                     raise ReconciliationRequired("pending finalization does not match accepted coverage")
@@ -831,8 +1102,9 @@ class Journal:
                         "not enough free disk space for the transcript snapshot; "
                         "source and pending uploads retained. Free disk space, then resume"
                     )
-                snapshot = (
-                    self.directory / f"{state['stream_id']}-{uuid.uuid4().hex}.snapshot.jsonl"
+                snapshot = self.directory / (
+                    f"{state['stream_id']}-{uuid.uuid4().hex}"
+                    + _SNAPSHOT_SUFFIXES[_stream_protocol(state)]
                 )
                 fd, temporary = tempfile.mkstemp(dir=self.directory)
                 try:
@@ -882,6 +1154,23 @@ class Journal:
             self._save(state)
             return state
 
+    @staticmethod
+    def _fragment_builder(protocol: int):
+        """The fragment builder a protocol-3 stream needs, None for protocol 2.
+
+        A stream on protocol 3 cannot fall back to 2 (the server pinned it), so
+        an install whose builder will not import keeps the source for one that can.
+        """
+        if protocol != PROTOCOL_FRAGMENTS:
+            return None
+        module = _fragment_module()
+        if module is None:
+            raise DeliveryPending(
+                "this session uploads ATIF fragments (protocol 3), and the fragment "
+                "builder does not import here; source retained"
+            )
+        return module
+
     def stage(
         self,
         session_id: str,
@@ -889,18 +1178,12 @@ class Journal:
         cwd: str,
         finalize: bool = False,
         historical_only: bool = False,
-        max_body_bytes: int = MAX_BODY_BYTES,
+        max_body_bytes: int | None = None,
         solo_limit: int | None = None,
+        packing_cap: int | None = None,
         require_no_pending: bool = False,
         expected_history: tuple[int, str] | None = None,
     ) -> bytes | None:
-        # A lone event may use the whole ROUTE budget; a packed batch may only
-        # use the packing target. A caller that lowers `max_body_bytes` to
-        # exercise batching still gets the real solo allowance unless it says
-        # otherwise, because the two answer different questions: how much to
-        # pack, versus what the server will take.
-        if solo_limit is None:
-            solo_limit = max(max_body_bytes, MAX_SOLO_EVENT_BYTES)
         with self.transaction():
             state = self.get(session_id)
             if state is None:
@@ -923,11 +1206,35 @@ class Journal:
             path = Path(state["snapshot_path"] if historic else state["path"])
             if historic and prefix_hash(path, state["historical_end"]) != state["historical_hash"]:
                 raise ReconciliationRequired("historical snapshot changed")
+            protocol = _stream_protocol(state)
+            # Protocol 3: the fragment builder, and whether events go beside it.
+            module = self._fragment_builder(protocol)
+            send_events = module is None or bool(state.get("send_events"))
+            # A lone event may use the whole ROUTE budget (the protocol's); a
+            # packed batch may only use the packing target. A caller that lowers
+            # `max_body_bytes` to exercise batching still gets the real solo
+            # allowance unless it says otherwise, because the two answer
+            # different questions: how much to pack, versus what the server
+            # will take.
+            if max_body_bytes is None:
+                max_body_bytes = MAX_BODY_BYTES if module is None else MAX_FRAGMENT_BODY_BYTES
+                if module is not None and packing_cap is not None:
+                    # A caller's byte budget (`probe import --transcripts-budget-mb`)
+                    # below protocol 3's larger target would otherwise never
+                    # see one batch fit. The solo ceiling is unchanged.
+                    max_body_bytes = min(max_body_bytes, packing_cap)
+            if solo_limit is None:
+                solo_limit = max(
+                    max_body_bytes,
+                    MAX_SOLO_EVENT_BYTES if module is None else MAX_SOLO_FRAGMENT_BYTES,
+                )
             end = state["source_byte_end"]
             lines = state["source_line_end"]
             event_no = state["event_end"]
             events: list[dict] = []
             size = 2048  # envelope + bounded source provenance
+            records = 0  # source lines that retained an event
+            marks: list[_Mark] = []  # after each packed line, to give lines back
             sanitize = _sanitizer(self.source)  # an unknown source refuses, never guesses
             with path.open("rb") as handle:
                 handle.seek(end)
@@ -965,7 +1272,16 @@ class Journal:
                     additions = [
                         {"line_no": event_no + i, "raw": event} for i, event in enumerate(retained)
                     ]
-                    increment = len(json.dumps(additions, separators=(",", ":")).encode())
+                    if module is None:
+                        increment = len(json.dumps(additions, separators=(",", ":")).encode())
+                        solo = increment
+                    else:
+                        fragment_bytes, event_bytes = _record_bytes(additions)
+                        increment = fragment_bytes + (event_bytes if send_events else 0)
+                        # Events are optional per protocol-3 batch: a record
+                        # that must go alone is held to the budget by its
+                        # fragments, and goes without its events if need be.
+                        solo = fragment_bytes
                     if size + increment > max_body_bytes:
                         if not events:
                             # NOTHING TO PACK IT BESIDE, so the packing target
@@ -974,7 +1290,12 @@ class Journal:
                             # the server would have accepted, and did it
                             # permanently: one such event stranded its whole
                             # session on every retry forever.
-                            if increment > solo_limit:
+                            if solo > solo_limit and module is not None:
+                                # Rare, so exact: the estimate may be high.
+                                solo = _encoded_bytes(
+                                    [_fragment(module, event) for event in additions]
+                                )
+                            if solo > solo_limit:
                                 raise DeliveryPending(
                                     "sanitized event exceeds the gateway batch budget; "
                                     "source retained"
@@ -986,6 +1307,8 @@ class Journal:
                     size += increment
                     end += len(raw)
                     lines += 1
+                    records += bool(additions)
+                    marks.append(_Mark(len(events), end, lines, event_no, size, records))
                     # Bound reads even when the sanitizer drops everything.
                     if end - state["source_byte_end"] >= 4 * 1024 * 1024:
                         break
@@ -1000,32 +1323,72 @@ class Journal:
                     state["historical_complete"] = True
                     self._save(state)
                 return None
-            body = {
-                "protocol_version": 2,
-                "session_id": session_id,
-                "stream_id": state["stream_id"],
-                "batch_seq": state["last_seq"] + 1,
-                "source_byte_start": state["source_byte_end"],
-                "source_byte_end": end,
-                "source_line_start": state["source_line_end"],
-                "source_line_end": lines,
-                "event_start": state["event_end"],
-                "event_end": event_no,
-                "prefix_sha256": prefix_hash(path, end),
-            }
-            if final:
-                body["finalize"] = True
-            else:
-                body.update({"cwd": state.get("cwd") or cwd, "events": events})
-                if state["last_seq"] == -1 and state.get("provenance"):
-                    body["provenance"] = state["provenance"]
-            if historic:
-                body["snapshot_byte_end"] = state["historical_end"]
-                body["snapshot_sha256"] = state["historical_hash"]
-            encoded = canonical_payload(_scrub_content(body))
-            # One event that could not be packed is allowed the route's budget;
-            # anything packed stays inside the smaller target.
-            envelope_limit = solo_limit if len(events) <= 1 else max_body_bytes
+            while True:
+                body = {
+                    "protocol_version": protocol,
+                    "session_id": session_id,
+                    "stream_id": state["stream_id"],
+                    "batch_seq": state["last_seq"] + 1,
+                    "source_byte_start": state["source_byte_end"],
+                    "source_byte_end": end,
+                    "source_line_start": state["source_line_end"],
+                    "source_line_end": lines,
+                    "event_start": state["event_end"],
+                    "event_end": event_no,
+                    "prefix_sha256": prefix_hash(path, end),
+                }
+                if module is not None:
+                    # Every protocol-3 batch, finalize included: the gateway requires it.
+                    body["fragment_version"] = module.FRAGMENT_VERSION
+                if final:
+                    body["finalize"] = True
+                else:
+                    body["cwd"] = state.get("cwd") or cwd
+                    if state["last_seq"] == -1 and state.get("provenance"):
+                        body["provenance"] = state["provenance"]
+                if historic:
+                    body["snapshot_byte_end"] = state["historical_end"]
+                    body["snapshot_sha256"] = state["historical_hash"]
+                if module is None:
+                    if not final:
+                        body["events"] = events
+                    encoded = canonical_payload(_scrub_content(body))
+                    # One event that could not be packed is allowed the route's budget;
+                    # anything packed stays inside the smaller target.
+                    envelope_limit = solo_limit if len(events) <= 1 else max_body_bytes
+                    break
+                envelope_limit = solo_limit if records <= 1 else max_body_bytes
+                if final:
+                    encoded = canonical_payload(_scrub_content(body))
+                    break
+                # The batch's events are scrubbed TOGETHER first (adjacent
+                # messages are scanned as one text, as protocol 2 does), each
+                # fragment is built from its scrubbed event, and the fragments
+                # are then scrubbed to their own fixed point. Scrubbing a body
+                # without its events gives the same fragments: the scrubber
+                # never joins text across keys.
+                scrubbed = _scrub_content({"events": events})["events"]
+                body["fragments"] = [_fragment(module, event) for event in scrubbed]
+                content = _scrub_content(body)
+                if send_events:
+                    content["events"] = scrubbed
+                encoded = canonical_payload(content)
+                if len(encoded) > envelope_limit and records <= 1 and send_events:
+                    # One record whose event does not fit beside its fragments:
+                    # this batch goes without events (optional per batch) rather
+                    # than not at all.
+                    del content["events"]
+                    encoded = canonical_payload(content)
+                if len(encoded) <= envelope_limit or records <= 1:
+                    break
+                # Lines were packed by an estimate (their unscrubbed records);
+                # the built batch is what counts. Give back trailing lines
+                # worth the overshoot and build it again.
+                over = len(encoded) - envelope_limit
+                while len(marks) > 1 and over > 0:
+                    over -= marks.pop().size - marks[-1].size
+                count, end, lines, event_no, size, records = marks[-1]
+                del events[count:]
             if len(encoded) > envelope_limit:
                 raise DeliveryPending("transcript envelope exceeds the batch budget")
             used = self.conn.execute(
@@ -1062,10 +1425,24 @@ class Journal:
             if body is None:
                 return
             payload = json.loads(body)
+            state = self.get(session_id)
+            if state is None or payload.get("stream_id") != state["stream_id"]:
+                # Another producer's reservation for this session (the pending
+                # row is per session, not per stream): its receipt says nothing
+                # about the stream this journal continues.
+                raise ReconciliationRequired(
+                    "pending batch belongs to another stream of this session; bytes retained"
+                )
             receipt = result.get("receipt") or {}
-            if result.get("protocol_version") != 2 or (
+            # The protocol the server holds this stream on. A body of another
+            # protocol is only ever adopted through a receipt for its range.
+            accepted = result.get("protocol_version")
+            if accepted not in RECEIPTED_PROTOCOLS or (
                 not content_may_differ
-                and receipt.get("body_sha256") != hashlib.sha256(body).hexdigest()
+                and (
+                    accepted != payload.get("protocol_version")
+                    or receipt.get("body_sha256") != hashlib.sha256(body).hexdigest()
+                )
             ):
                 raise ReconciliationRequired(
                     "server acknowledgment does not match the immutable pending batch"
@@ -1085,13 +1462,20 @@ class Journal:
                 raise ReconciliationRequired(
                     "server acknowledgment finalized a different stream boundary"
                 )
-            state = self.get(session_id)
             if state["last_seq"] >= payload["batch_seq"]:
                 # Another compatible drainer committed this receipt and may
                 # already have reserved its successor. Never retire that row.
                 return
             if pending != body:
                 raise ReconciliationRequired("pending reservation changed before acknowledgment")
+            if state.get("protocol_version") not in (None, accepted):
+                raise ReconciliationRequired(
+                    "server stream uses another upload protocol; pending bytes retained"
+                )
+            # The server holds the stream now, so its protocol is settled for good.
+            state["protocol_version"] = accepted
+            if accepted != PROTOCOL_FRAGMENTS:
+                state["send_events"] = False
             state.update(
                 {
                     k: payload[k]
@@ -1128,6 +1512,8 @@ class Journal:
             raise SessionDeleted(session_id, newly=self.mark_deleted(session_id))
         if code != 202:
             message = f"http {code}: {result.get('detail', 'transcript delivery pending')}"
+            if code == 409 and self._restart_refused_offer(session_id, body, result, message):
+                raise ProtocolRestarted(message)
             self.update(session_id, error=message)
             if code in (409, 422):
                 raise ReconciliationRequired(
@@ -1141,6 +1527,42 @@ class Journal:
                 safe_message=_request_failure(wire, code),
             )
         self.acknowledge(session_id, result, sent_body=body)
+        return True
+
+    def _restart_refused_offer(
+        self, session_id: str, body: bytes, result: dict, message: str
+    ) -> bool:
+        """Restart on protocol 2 a new stream the server will not take on 3.
+
+        Between a receipts answer offering protocol 3 and batch 0 arriving, the
+        offer can be withdrawn (a settings rollout, the kill switch), or the
+        stream can already exist on protocol 2: the door then answers 409 with
+        one of PROTOCOL3_REFUSALS, and would answer it forever. Only batch 0 of
+        a stream this journal never had acknowledged qualifies, so no byte the
+        server holds is dropped: the pending body goes and the same source range
+        is staged again on protocol 2 (which a server holding batch 0 already
+        settles through its receipt). Anything else stays a reconciliation.
+        """
+        detail = result.get("detail") if isinstance(result, dict) else None
+        payload = json.loads(body)
+        if (
+            detail not in PROTOCOL3_REFUSALS
+            or payload.get("protocol_version") != PROTOCOL_FRAGMENTS
+            or payload.get("batch_seq") != 0
+        ):
+            return False
+        with self.transaction():
+            state = self.get(session_id)
+            if (
+                state is None
+                or state.get("protocol_version") is not None
+                or state["last_seq"] != -1
+                or self.pending(session_id) != body
+            ):
+                return False
+            self.conn.execute("DELETE FROM pending WHERE session_id=?", (session_id,))
+            state.update(protocol_offer=PROTOCOL_EVENTS, send_events=False, error=message)
+            self._save(state)
         return True
 
     def reconcile_pending(self, session_id: str, wire: Wire) -> str | None:
@@ -1187,7 +1609,7 @@ class Journal:
                 raise ReconciliationRequired("server stream changed; existing pending bytes retained")
             self.acknowledge(
                 session_id,
-                {"protocol_version": 2, "receipt": receipt},
+                {"protocol_version": remote.get("protocol_version"), "receipt": receipt},
                 sent_body=body,
                 content_may_differ=True,
             )
@@ -1200,7 +1622,12 @@ class Journal:
                 "redaction does not settle on the pending batch; bytes retained"
             )
         encoded = canonical_payload(scrubbed)
-        if len(encoded) > SERVER_BATCH_LIMIT:
+        budget = (
+            SERVER_FRAGMENT_BATCH_LIMIT
+            if payload.get("protocol_version") == PROTOCOL_FRAGMENTS
+            else SERVER_BATCH_LIMIT
+        )
+        if len(encoded) > budget:
             raise DeliveryPending("re-redacted batch exceeds the route budget; bytes retained")
         with self.transaction():
             updated = self.conn.execute(
@@ -1230,4 +1657,9 @@ class Journal:
                 Path(state["snapshot_path"]).unlink(missing_ok=True)
 
     def sessions(self) -> list[dict]:
-        return [json.loads(row[0]) for row in self.conn.execute("SELECT state FROM sessions")]
+        found = {
+            row[0]: json.loads(row[1])
+            for table in ("sessions", _FRAGMENT_SESSIONS)  # a protocol-3 row wins, as in get()
+            for row in self.conn.execute(f"SELECT session_id,state FROM {table}")
+        }
+        return list(found.values())
