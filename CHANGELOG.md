@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- Companion bench: the MLP side-by-side key's "paper why" check (F4) accepts the stopping rule in any
+  verb form ("stops after", "keeps the best"); it failed notes that stated the rule correctly.
+
 
 ## 0.224.0
 
