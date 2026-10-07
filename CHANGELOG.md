@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.220.1
+
 - **Session capture can upload ATIF fragments (protocol 3, tap 0.9.14).** When the server's
   receipts answer offers it (`accepts.protocols` holds 3 and `accepts.fragment_versions` this tap's
   `FRAGMENT_VERSION`), a NEW session uploads each retained event as an ATIF fragment built by the
