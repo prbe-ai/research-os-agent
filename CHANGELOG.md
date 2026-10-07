@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A project or experiment card carries its Overview page's `blurb`**, read through the page's own read: a caller the page is withheld from (it is written over the project's whole family, and one of them is hidden from the caller) gets no blurb on the card either. Any failed read leaves the card as it was.
+
 ## 0.223.0
 - Companion bench: refuses to start when the bench venv's INSTALLED `track-work` / `edit-notes`
   differ from the arm's own `agent/skills`. The daemon reads skills through `bite.skills_root()`,
