@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.223.0
 - Companion bench: refuses to start when the bench venv's INSTALLED `track-work` / `edit-notes`
   differ from the arm's own `agent/skills`. The daemon reads skills through `bite.skills_root()`,
   which prefers `<venv>/share/probe-research/skills`, and `--src` swaps only Python code, so a
