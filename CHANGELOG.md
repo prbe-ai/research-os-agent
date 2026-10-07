@@ -2,7 +2,19 @@
 
 ## Unreleased
 
+- Credential scrubber: a credential split across consecutive events is now caught for every coding
+  agent, not only between Claude Code prompts. Before, only events whose message was a plain string
+  were joined, so a credential split across two Codex, pi or Kimi events (Kimi writes each streamed
+  text part as its own event), or across two Claude Code assistant replies, kept both halves. The
+  scrubber now reads each event's text and thinking blocks in order; a tool call or result still
+  ends the run, so tool names, ids and summaries never join. The same reading covers ATIF fragments
+  (session upload protocol 3): their prose is joined, and the halves also leave each fragment's
+  `line.text` (the index text, which repeats the prose behind a speaker label). That edit is by
+  position, piece by piece. A line that does not hold its prose where expected is replaced by
+  the marker instead of keeping a half. The journal's scrub now covers a batch's `fragments`. The join runs across speaker turns too, so a key name at the end of one reply and a credential-shaped value starting the next prompt are redacted together (none on 399,261 real events checked).
+
 ## 0.220.0
+
 - Companion bench: prices Claude Sonnet 5 and Opus 5 rounds, and charges cache writes at the write
   rate when the model route reports them (`cache_write_tokens`); before, both new models came out
   unpriced and every write was priced as input. Results carry write totals per lane.

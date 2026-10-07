@@ -262,7 +262,7 @@ def _scrub_content(payload: dict) -> dict:
     `_require_safe_pending` scrubs once more and demands no change, so a body
     staged from a single pass could be refused by its own daemon forever.
     """
-    content = {key: payload[key] for key in ('events', 'cwd', 'provenance') if key in payload}
+    content = {key: payload[key] for key in ('events', 'fragments', 'cwd', 'provenance') if key in payload}
     for _ in range(_MAX_SCRUB_PASSES):
         scrubbed, _rules = redact_event(content)
         if scrubbed == content:
