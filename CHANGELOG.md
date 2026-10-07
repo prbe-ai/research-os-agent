@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.224.0
+
 - **The daemon tells Probe's engineers when it breaks.** A crash, a model refusal or rejection, a bug in a bite, the model gateway answering 5xx twice in a row, the reader failing twice in a row, skipped events, a rewritten chat log or an unreadable switch now sends one `daemon.error` event (once per machine per error every 6 hours, restarts included), which posts to Probe's #eng-alerts. It carries the error's first line, scrubbed of secrets with the home folder shown as `~` (`PROBE_DIAGNOSTICS=off` drops the line). Errors you fix yourself or that pass (a refused key, the budget, a rate limit, a timeout, no connection, the Probe MCP refusing or unreachable) send nothing, and `PROBE_TELEMETRY=off` turns it off like every other client event.
 - **A project or experiment card carries its Overview page's `blurb`**, read through the page's own read: a caller the page is withheld from (it is written over the project's whole family, and one of them is hidden from the caller) gets no blurb on the card either. Any failed read leaves the card as it was.
 
