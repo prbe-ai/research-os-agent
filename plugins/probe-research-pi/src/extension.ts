@@ -18,7 +18,14 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
 import { QuestionAsker, type ApprovalsDeps } from "./core/approvals.js";
 import { guardToolCall, sessionIsInline } from "./guard.js";
-import { forgetInlineShown, inlineNotice, inlineNoticeDue, markInlineShown } from "./inlineNotice.js";
+import {
+  cliHasInlineBridge,
+  forgetInlineShown,
+  inlineNotice,
+  inlineNoticeDue,
+  localCliVersion,
+  markInlineShown,
+} from "./inlineNotice.js";
 import { pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type SpawnFn } from "./core/daemon.js";
 import { connectAndRegisterTools, defaultMcpBridgeDeps, interactiveOAuthLogin, type ConnectResult } from "./mcpBridge.js";
 import { approvalsDir, disabledFile, extensionLogFile, probeStateDir, teamNoteDocumentPath } from "./core/paths.js";
@@ -800,7 +807,8 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       // stretch, and again after a compaction or resume (`forgetInlineShown`).
       const since = sessionId ? inlineNoticeDue(sessionId) : null;
       if (sessionId && since !== null) {
-        notice = inlineNotice(extensionDir);
+        const cli = await localCliVersion({ execFile: realTrackingExecFile, existsSync: fs.existsSync, isExecutable, env: process.env });
+        notice = inlineNotice(extensionDir, cliHasInlineBridge(cli));
         markInlineShown(sessionId, since);
       }
     } else {

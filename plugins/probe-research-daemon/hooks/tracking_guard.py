@@ -1153,10 +1153,39 @@ def _daemon_bypass(payload: dict, session_id: str) -> "str | None":
 
 def _inline_notice() -> str:
     """`session_marker.INLINE_NOTICE`, naming this plugin's `inline/` copies of the
-    skills the agent records by (the lean plugin ships them beside `hooks/`)."""
+    skills the agent records by (the lean plugin ships them beside `hooks/`), its
+    last sentence by what the local CLI can do (`version_check.inline_notice_for`).
+    Unreadable: the too-old-CLI sentence, never commands the CLI may lack."""
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
     track_work, edit_notes = (os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES)
-    return _session_marker.inline_notice(track_work, edit_notes)
+    try:
+        return _version_check().inline_notice_for(track_work, edit_notes)
+    except Exception:  # noqa: BLE001 -- the notice still lands
+        return _session_marker.inline_notice(track_work, edit_notes, bridge=False)
+
+
+def _version_check():
+    """`version_check.py` beside this file, loaded by explicit path like
+    `_hook_harness` (this hook is also loaded from outside its folder); its own
+    sibling imports resolve against this folder while it loads."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks.version_check"
+    if key in sys.modules:
+        return sys.modules[key]
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(key, os.path.join(here, "version_check.py"))
+    module = importlib.util.module_from_spec(spec)
+    added = here not in sys.path
+    if added:
+        sys.path.insert(0, here)
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        if added:
+            sys.path.remove(here)
+    sys.modules[key] = module
+    return module
 
 
 def _inline_reaches_model(hook_event: str) -> bool:

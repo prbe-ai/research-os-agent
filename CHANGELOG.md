@@ -15,6 +15,23 @@
 - The daemon prices Claude Opus 5 (input $5, cache read $0.50, write $6.25, output $25 per MTok), and a
   dated model name prices as its own model, never a shorter one's.
 
+- **`/probe inline`: the agent can now read the team's work, through `probe mcp tools` and `probe mcp
+  call`.** Inline, the agent has no Probe MCP tools (the daemon profile installs none, and Codex and
+  Kimi cannot pick up tools mid-session) and `probe ask` is refused, so it had no way to search, browse
+  or query what the team already recorded. `probe mcp tools` prints the hosted Probe MCP's read guide
+  and its tools as the server serves them (`probe mcp tools <tool>` adds that tool's full input
+  schema), and `probe mcp call <tool> '<json args>'` (or `--args-file PATH|-`) calls one and prints
+  what it returns, exiting 1 with the server's text when it fails. It is a pass-through: the same
+  tools, arguments and answers as the MCP, so a new hosted tool appears with no CLI release. It
+  sends the MCP read token and this session's id, as an MCP client does, and gives up after 100
+  seconds in all (`error: the Probe MCP did not answer within 100 s`). Both commands are hidden from
+  `probe --help` and refuse (exit 2) in any session that is not inline: where the daemon reads, the
+  refusal points to `probe ask`; elsewhere the Probe MCP tools are the read surface. The inline
+  notice now names the two commands instead of `probe --help`, but only beside a CLI that has them
+  (this release or newer): beside an older CLI, or one whose version it cannot read, it tells the
+  agent to ask the researcher to update (`probe wizard --action update`). The CLI now needs `mcp`
+  1.24 or newer.
+
 ## 0.219.0
 - Daemon: once the model route answers through its refusal fallback (`x-probe-served-model`),
   the session's later model calls ask for that model (`X-Probe-Prefer-Model`), so a refused

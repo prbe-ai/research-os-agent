@@ -608,6 +608,20 @@ def _start_context() -> str | None:
 #: exactly the fact we need.
 TEAM_NOTE_MIN_CLI = "0.144.0"
 
+#: The first CLI with `probe mcp tools|call`, the read bridge an inline agent
+#: (`/probe inline`) reads the hosted Probe MCP through. Same independence as
+#: TEAM_NOTE_MIN_CLI: a plugin whose inline notice names the two commands beside
+#: an older CLI would send the agent to `No such command`, so the notice names
+#: them only at or above this floor (`inline_notice_for`).
+INLINE_BRIDGE_MIN_CLI = "0.220.0"
+
+#: `probe --version` for the inline notice, under the guard's own 5 s hook
+#: budget (measured 0.9 s on the devbox).
+INLINE_CLI_TIMEOUT_S = 3.0
+
+#: Where `probe` lives when PATH does not say: session-start.sh's search.
+_PROBE_FALLBACKS = ("~/.local/bin/probe", "~/.local/share/uv/tools/probe-research/bin/probe")
+
 #: What a too-old CLI is told. Names the upgrade, because the researcher reading
 #: it has no other way to connect "my notes are not syncing" to "my CLI is old".
 TEAM_NOTE_STALE_CLI = (
@@ -820,7 +834,7 @@ def _inline_reminder() -> str | None:
     _session_marker.forget_inline_shown(sid)
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
     track_work, edit_notes = (os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES)
-    return _session_marker.inline_notice(track_work, edit_notes)
+    return inline_notice_for(track_work, edit_notes)
 
 
 def _daemon_profile_notice() -> str | None:
@@ -1015,14 +1029,47 @@ def _pair_message(info: dict) -> str | None:
     return _clip_advisory(" ".join(text.split()))
 
 
-def _local_cli(probe_bin: str):
+def _local_cli(probe_bin: str, timeout: float = 5):
     try:
-        out = subprocess.run([probe_bin, "--version"], capture_output=True, text=True, timeout=5)
+        out = subprocess.run([probe_bin, "--version"], capture_output=True, text=True, timeout=timeout)
         if out.returncode == 0:
             return (out.stdout or "").strip() or None
     except Exception:
         return None
     return None
+
+
+def _probe_bin() -> str:
+    """The `probe` the agent's shell would run: `PROBE_BIN` (session-start.sh
+    exports it), then PATH, then the two install locations it also searches."""
+    explicit = os.environ.get("PROBE_BIN")
+    if explicit:
+        return explicit
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        candidate = os.path.join(directory, "probe")
+        if os.path.isabs(directory) and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    for raw in _PROBE_FALLBACKS:
+        candidate = os.path.expanduser(raw)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return "probe"
+
+
+def inline_bridge_ready() -> bool:
+    """Does this machine's CLI have the inline read bridge (`INLINE_BRIDGE_MIN_CLI`)?
+
+    An unknown version is NO, unlike `_team_note_cli_too_old`: there a wrong
+    guess costs a quiet failed sync, here it sends the agent to a command that
+    does not exist."""
+    have = _local_cli(_probe_bin(), timeout=INLINE_CLI_TIMEOUT_S)
+    local, needed = _triplet(have or ""), _triplet(INLINE_BRIDGE_MIN_CLI)
+    return local is not None and needed is not None and local >= needed
+
+
+def inline_notice_for(track_work: str, edit_notes: str) -> str:
+    """`_session_marker.INLINE_NOTICE`, its last sentence by what the local CLI can do."""
+    return _session_marker.inline_notice(track_work, edit_notes, bridge=inline_bridge_ready())
 
 
 def _local_plugin(plugin_json: str):

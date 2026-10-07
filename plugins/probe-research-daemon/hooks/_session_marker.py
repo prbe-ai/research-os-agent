@@ -1931,11 +1931,25 @@ INLINE_SKILL_FILES = ("track-work/SKILL.md", "edit-notes/SKILL.md")
 #: What the agent is told when the researcher switches to inline, and again after
 #: a compaction or resume (Richard's approved text, 2026-10-06). Short on purpose:
 #: Claude Code saves hook context over ~2 KB to a file, so the skills go by path.
+#: `{reads}` is its last sentence, by what this machine's `probe` CLI can do
+#: (`inline_notice`).
 INLINE_NOTICE = (
     "Probe is `on (inline)` for this conversation: the Probe daemon is off, and you read and "
     "write Probe yourself with the `probe` CLI, recording the work as it happens. Before "
-    "recording, read the two skills you record by: {track_work} and {edit_notes}. This session "
-    "has no Probe MCP tools: where a skill names one, use its `probe` CLI command (`probe --help`)."
+    "recording, read the two skills you record by: {track_work} and {edit_notes}. {reads}"
+)
+#: How an inline agent reads where the CLI has the read bridge (`probe mcp tools|call`,
+#: CLI 0.220.0: the hooks' `version_check.INLINE_BRIDGE_MIN_CLI`).
+INLINE_READS = (
+    "This session has no Probe MCP tools: where a skill names one, run `probe mcp tools` to see "
+    "them and `probe mcp call <tool> '<json args>'` to use one."
+)
+#: ...and where the CLI is older, or its version unknown: the plugin and the CLI
+#: update on their own schedules, and naming commands the CLI lacks sends the
+#: agent to `No such command`.
+INLINE_READS_OLD_CLI = (
+    "This session has no Probe MCP tools, and this machine's `probe` CLI is too old to read Probe "
+    "here: ask the researcher to update it (`probe wizard --action update`)."
 )
 
 
@@ -2150,9 +2164,12 @@ def inline_intervals(session_id: str) -> "list[tuple[float, float | None]]":
     return out
 
 
-def inline_notice(track_work: "str | Path", edit_notes: "str | Path") -> str:
-    """`INLINE_NOTICE` naming the two skill files the agent records by."""
-    return INLINE_NOTICE.format(track_work=track_work, edit_notes=edit_notes)
+def inline_notice(track_work: "str | Path", edit_notes: "str | Path", *, bridge: bool) -> str:
+    """`INLINE_NOTICE` naming the two skill files the agent records by; `bridge`:
+    this machine's CLI has `probe mcp tools|call` (`INLINE_READS`), else it is
+    too old to read Probe inline (`INLINE_READS_OLD_CLI`)."""
+    reads = INLINE_READS if bridge else INLINE_READS_OLD_CLI
+    return INLINE_NOTICE.format(track_work=track_work, edit_notes=edit_notes, reads=reads)
 
 
 def _inline_shown_path(session_id: str) -> Path:
