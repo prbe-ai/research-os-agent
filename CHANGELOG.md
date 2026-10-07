@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- **`probe edge add` takes a run by its petname**, as `run get` does: `--target run:petite-wallaby-576`
+  is sent as that run's id. Before, `POST /v1/edges` refused a petname and the caller (often the Probe
+  daemon) had to look the id up and write the link again. An id, bare or `id:`, is sent as typed with
+  no lookup; an unknown petname is a usage error (exit 2) and nothing is sent.
+- **`probe experiment lineage EXP` and `probe project lineage P`** print the entity's OWN links in and
+  out (stored, then "built on" derived from its runs' reads), its origin and its direct children: what
+  to read before linking it to anything. `experiment edges` stays the graph AMONG an experiment's runs
+  and files. Both are reads for the write gate (so `read` and `daemon` allow them) and for the
+  daemon's shell.
+- A run named by petname must be the run that comes back: `edge add` and every verb that resolves a
+  run ref (`run check`, `run move --to`, ...) refuse a ref with a `/` in it (`x/edges` used to crash, `A/../B`
+  used to act on run B) and a row that is not the run named. `run get` still prints what the server
+  answers for the path it is given.
+
 ## 0.220.1
 
 - **Session capture can upload ATIF fragments (protocol 3, tap 0.9.14).** When the server's

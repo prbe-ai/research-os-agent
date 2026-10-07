@@ -80,6 +80,7 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "preview",
   "inputs",
   "upstream",
+  "lineage",
   "citations",
   "graph",
 ]);
