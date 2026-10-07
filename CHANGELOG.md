@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Companion bench: the fake Probe takes the links production takes and refuses the ones it refuses.
+  It now accepts experiment and project ends (`derived_from`, `supersedes`, `informed_by`) and the
+  `supersedes` / `informed_by` relations, which it refused on every attempt (105 recorded). Like the
+  server it refuses a self-link, a parent cycle, an `experiment` end type on the wire, a paper link
+  with no provenance (and `provider_citation` off one), a discovery link across projects or in a loop,
+  and answers 410 for an end in the trash. A frozen edge exists only once the clock passes it, for
+  writes as for reads; a duplicate answers `{message, existing_id}` so `edge add` prints
+  `already_linked`. It serves `GET /v1/projects/{id}/lineage` and the experiment one, with origin and
+  children derived as the server derives them. Fixtures freeze each project's and experiment's own
+  lineage and drop every link the live v2 daemon made (read from its own store,
+  `daemon/<session>.sqlite`; never one it found already there), and the run parent such a link filled.
+
 - Credential scrubber: a credential split across consecutive events is now caught for every coding
   agent, not only between Claude Code prompts. Before, only events whose message was a plain string
   were joined, so a credential split across two Codex, pi or Kimi events (Kimi writes each streamed
