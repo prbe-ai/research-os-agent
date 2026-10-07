@@ -3,6 +3,14 @@
 ## Unreleased
 
 - The daemon and the companion bench price `claude-sonnet-5-5` and `claude-haiku-5-5`.
+- Daemon reader: a researcher prompt anywhere in the unread backlog wakes it (it only looked at the first 400
+  events). After a turn whose last request was over the reader's size, or a request the route rejected as sent,
+  the next turn starts a fresh conversation (instead of compacting every turn), which opens with the messages and
+  answers the reader already sent this session (so it does not repeat them in other words). New events alone wake it
+  every 30 minutes (was 20 s; `PROBE_READER_EVERY_S`, 0 = only prompts and asks).
+- Daemon: the writer's and reader's context sizes follow the server's when lower (`x-probe-context-tokens`,
+  `x-probe-read-context-tokens`, floor 100K), so changing them needs no release.
+- Daemon and bench: gpt-6.1-sol priced at its short-context rates up to 272K prompt tokens and its long ones above.
 
 ## 0.225.0
 
