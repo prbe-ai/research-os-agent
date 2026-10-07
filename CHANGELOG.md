@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.221.0
+
 - **`probe edge add` takes a run by its petname**, as `run get` does: `--target run:petite-wallaby-576`
   is sent as that run's id. Before, `POST /v1/edges` refused a petname and the caller (often the Probe
   daemon) had to look the id up and write the link again. An id, bare or `id:`, is sent as typed with
