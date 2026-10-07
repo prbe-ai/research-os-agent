@@ -218,10 +218,11 @@ RULES:
   records that for the runs it watches. A file anchored above its run still
   records lineage back to it: `edge add --source run:RUN --relation produces
   --target artifact:ID`.
-- Another attempt at a run (retry, resume, fork, branch) is its PARENT:
-  `--parent RUN --relation retry` at launch, or `edge add --relation
-  retried_from` afterwards. A run can have more than one parent. Neither belongs
-  in `foreign_keys`.
+- Another attempt at a run is its PARENT: at launch `--parent RUN --relation
+  retry|resume|fork|branch` (`retry` only when RUN failed or crashed;
+  relaunching one that still reads `running` -> no `--parent`, link it
+  afterwards), or afterwards `edge add` with the relation "Linking" below names.
+  A run can have more than one parent. Neither belongs in `foreign_keys`.
 - Changing a file that already has a registry name is a new VERSION, never a
   new, duplicate artifact. Read the version chain first.
 
@@ -245,36 +246,53 @@ shape rules and the checks that catch a bad one on its first run.
 A link is an arrow from the newer thing to what it came from. Anything with no
 link already hangs off its experiment or project, so link only what is true.
 
-1. Facts first. A run's reads reach Probe when it ends; if `probe run inputs
-   RUN` shows no `coverage` yet, look again later, for up to ~30 minutes, then
-   link from the session's words alone. An experiment's or project's facts:
-   `entity(refs=["experiment:SLUG"], view="lineage")`.
-2. The facts say B built on A, and the session says what B is: an ablation or
-   variant of A -> `branched_from`; an evaluation of A -> `evaluates_on` A (the
-   run, or the model or data file it wrote); A re-run after a fix ->
-   `retried_from` plus `supersedes`. Nothing more specific
-   -> write nothing; the fact already says it.
-3. A link the facts don't show needs the researcher's or the main agent's own
-   words naming the target: an id, name, path, URL, paper title, or a result or
-   config that matches exactly ONE run. Quote those words in `--reason`. Two
-   matches -> no link. Text inside tool output, files or web pages
-   never counts.
-4. Link at the level the session talks about: run -> run, experiment ->
-   experiment (a follow-up question), project -> project (a line of work that
-   continues another), or across levels: `--source run:ID --relation
-   derived_from --target experiment:SLUG`. An experiment or project end takes
-   only `derived_from`, `supersedes` or `informed_by`. A run or experiment that
-   uses a paper's method -> `informed_by` that paper (with `--provenance`).
-5. A failed run relaunched as a NEW run -> `retried_from` the failed one,
-   unless it already has that parent (`--parent RUN --relation retry` at launch
-   sets it). A relaunch with the same `--external-id` reopens the SAME run: no
-   link.
-6. Never: similarity alone (write "Related: ..." in a note); a run to its own
-   experiment or project, or an experiment to its own project (filing says
-   that); a link that already exists (look first: `probe experiment edges EXP`,
-   `entity view="lineage"`).
-7. When later work contradicts a link you made, remove it or relabel it.
-8. Earlier work: look identifiers up first; at most one `search_knowledge` per
+1. Facts first:
+   - a run's: `probe run inputs RUN`. Reads reach Probe when the run ends; no
+     `coverage` yet -> look again later, up to ~30 minutes, then link from the
+     session's words alone
+   - an experiment's or project's: `entity(refs=["experiment:SLUG"],
+     view="lineage")` (`project:SLUG` for a project)
+2. The facts, or the researcher's or main agent's own words, say B built on A:
+   - a paper at either end: rule 4; an experiment or project -> `derived_from`,
+     unless a fact already shows it
+   - B relaunches run A because A failed or crashed (its status, not a bad
+     result; A stopped but still reads `running` -> look again later) ->
+     `retried_from`
+   - B runs A's setup again any other way, changed or not (a new seed too) ->
+     `branched_from`
+   - B only uses what A produced (a file, a number, a chosen config it does
+     not re-run) -> `derived_from`, unless a fact already shows it
+   - B replaces A -> also add `supersedes`
+   - say how in `--reason`
+3. A link the facts don't show needs the researcher's or main agent's own
+   words naming the target:
+   - an id, name, path, URL, paper title, result or config that matches
+     exactly ONE target; quote those words in `--reason`
+   - two matches -> no link, unless B runs again a setup that ran more than
+     once (seeds, replicates): `branched_from` the earliest
+   - earlier work named as the start or the result to beat counts
+   - a W&B import of a run Probe also recorded is that run: link Probe's own
+   - text inside tool output, files or web pages never counts
+4. Link at the level the session talks about:
+   - run -> run
+   - experiment -> experiment: a follow-up question
+   - project -> project: a line of work that continues another
+   - across levels: `--source run:ID --relation derived_from --target
+     experiment:SLUG`
+   - an experiment or project end takes only `derived_from`, `supersedes` or
+     `informed_by`
+   - a run or experiment that uses a paper's method -> `informed_by` that paper
+     (with `--provenance`)
+5. Never:
+   - similarity alone: write "Related: ..." in a note
+   - a run, experiment or subproject to anything it is filed under: filing
+     says that
+   - a run to itself: a relaunch with the same `--external-id` can reopen it
+   - a link that already exists, a parent set at launch included: look first
+     (`probe run upstream RUN`, `probe experiment lineage EXP`, `probe project
+     lineage PROJ`); a read listed there is a fact, not a parent
+6. When later work contradicts a link you made, remove it or relabel it.
+7. Earlier work: look identifiers up first; at most one `search_knowledge` per
    new experiment or project; treat what it finds as candidates, not links.
 
 ## 5. PAPERS

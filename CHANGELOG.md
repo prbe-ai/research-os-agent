@@ -3,6 +3,21 @@
 ## Unreleased
 
 - **One update report per Update run, not one per coding agent.** `probe wizard --action update` updates every coding agent in turn, and each pass used to send its own report; the server keeps one per machine, so the last agent won. Live on the devbox, Kimi Code ran last with no Probe plugins and the machine read plugin `not_installed` and no tap, although Claude Code's tap was current and Codex had verified its own. The passes are now merged: per component (CLI, plugin, tap) the most informative result wins (error > refresh failed > not on PATH > legacy id > behind > updated > current > not installed), with that pass's versions and reason and the agent it came from. A single update (the detached auto-update, `probe update`) reports as before. Needs the API from the same change; release after it is deployed.
+- **track-work §4 "Linking": four link words, written as bullets.** When the facts, or the
+  researcher's or main agent's own words, say B built on A: a paper end goes to `informed_by`, and
+  any other link with an experiment or project end is `derived_from` when no fact already shows it. Between runs, a relaunch of a
+  run because its status is failed or crashed is `retried_from`; B running A's setup again any other way,
+  changed or not (a new seed too), is `branched_from`; B only using what A produced (a file, a
+  number, a chosen config) is `derived_from` when no read already shows it, so an evaluation of A
+  no longer gets `evaluates_on`. B replacing A adds `supersedes`. Words that match several runs of
+  one setup (seeds, replicates) name the earliest only when B runs that setup again; any other two
+  matches link nothing. Earlier work named as the start or the result to beat counts as naming the
+  target, and a W&B import of a run Probe also recorded is that run. Never: a run, experiment or
+  subproject to anything it is filed under, a run to itself, or a link that already exists, a
+  launch parent included (`probe run upstream`, `probe experiment lineage`, `probe project
+  lineage`). A launch `--relation retry` is only for a failed or crashed parent. `retried_from`
+  stays narrow because the crash email treats any retry edge as "the run came back". The same text
+  drives the daemon and an inline agent.
 
 ## 0.224.1
 - Companion bench: the MLP side-by-side key's "paper why" check (F4) accepts the stopping rule in any
