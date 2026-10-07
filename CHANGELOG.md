@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Taps before 0.9.14 are now asked to update at session start.** `tap.recommended` is 0.9.14, so an older transcript tap shows the update notice (and the agent mentions it once) instead of a quiet one-liner; the notice says why: older taps upload sessions in the previous format, and taps before 0.9.13 also send what your own commands printed. Capture keeps working on every version meanwhile.
+
 - **`probe-research-mcp-http` keeps idle connections for 75 s and ignores `X-Forwarded-*`.**
   uvicorn's 5 s idle close raced ingress-nginx's 60 s upstream keep-alive, so the proxy could send
   a request down a socket this end was closing (502). And behind the hosted pod's loopback TLS
