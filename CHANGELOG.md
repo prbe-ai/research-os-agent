@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.226.2
+
 - MCP `query_sql`: the description tells agents to call it with no arguments first (and again once that listing has left their context), to write SQL with only the table and column names it lists (it now returns every table's `column_names`), and to fetch any table listed without names, or named in `omitted_tables`, with `tables=[...]`; the `sql` and `tables` argument text says the same. A discovery answer over `token_budget` is now marked `truncated` and drops the last tables' `column_names` before it drops any whole table. Ships on `deploy-mcp.yml`, not a CLI release.
 
 ## 0.226.1
