@@ -29,10 +29,10 @@ def plugin_dir(tmp_path, monkeypatch):
     # or fail on whether they happen to be logged in.
     monkeypatch.setenv("PROBE_CONFIG_PATH", str(d / "absent-probe-config.json"))
     monkeypatch.delenv("PROBE_PI_TAP_TOKEN", raising=False)
-    for p in (cfg.pid_file(SID), cfg.shutdown_sentinel(SID)):
+    for p in (cfg.pid_file(SID), cfg.shutdown_sentinel(SID), cfg.version_file(SID)):
         p.unlink(missing_ok=True)
     yield d
-    for p in (cfg.pid_file(SID), cfg.shutdown_sentinel(SID)):
+    for p in (cfg.pid_file(SID), cfg.shutdown_sentinel(SID), cfg.version_file(SID)):
         p.unlink(missing_ok=True)
 
 
@@ -101,6 +101,18 @@ def test_happy_path_spawns_once_and_passes_the_transcript(paired, tmp_path):
     assert argv[1] == "-c"
     assert "--transcript" in argv
     assert argv[-1].endswith("session.jsonl")
+
+
+def test_a_spawn_records_which_tap_started_it(paired, tmp_path):
+    """hooks/session-start.sh replaces a daemon an OLDER tap started when the
+    session resumes, and reads a missing record as a tap before 0.9.16: a
+    daemon this spawner started must say its version, or the next resume under
+    the same tap would stop and restart it for nothing."""
+    from tap import __version__
+
+    assert tap_start.main(_args(tmp_path), spawn=lambda argv: None) == tap_start.EXIT_OK
+    assert cfg.version_file(SID).read_text(encoding="utf-8") == __version__
+    assert cfg.version_file(SID).parent == cfg.pid_file(SID).parent
 
 
 def test_live_daemon_is_already_running_not_a_second_spawn(paired, tmp_path, monkeypatch):

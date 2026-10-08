@@ -100,16 +100,16 @@ def tap_env(tmp_path: Path):
             os.killpg(pid, signal.SIGTERM) if _pgid(pid) == pid else os.kill(pid, signal.SIGTERM)
         except (ValueError, OSError):
             pass
-    for suffix in (".pid", ".shutdown", ".owner", ".stopping"):
+    for suffix in (".pid", ".shutdown", ".owner", ".stopping", ".version"):
         Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
 
 
-def _start(session_id: str, transcript: Path, env: dict) -> int:
+def _start(session_id: str, transcript: Path, env: dict, hook: Path = SESSION_START) -> int:
     payload = json.dumps(
         {"session_id": session_id, "transcript_path": str(transcript), "cwd": "/tmp"}
     )
     subprocess.run(
-        ["bash", str(SESSION_START)],
+        ["bash", str(hook)],
         input=payload,
         text=True,
         capture_output=True,
@@ -481,3 +481,205 @@ def test_the_waiting_entry_finds_the_daemon_after_its_sibling_ran() -> None:
         assert not Path(f"/tmp/probe-research-tap-watcher-{session_id}.stopping").exists()
     finally:
         _cleanup(session_id, proc)
+
+
+# -- a resume after an update ------------------------------------------------
+#
+# A resumed session hands its live daemon to the new agent process, and that
+# daemon runs the code its own tap version loaded. So the restart that applies a
+# tap update kept the OLD daemon: anthrogen's dev pod ran tap 0.9.3 for days
+# after its tap was updated to 0.9.14 (2026-10-07), and every local check read
+# the new version. These drive the real hook against a real daemon.
+
+
+def _version_file(session_id: str) -> Path:
+    return Path(f"/tmp/probe-research-tap-watcher-{session_id}.version")
+
+
+def _this_tap() -> str:
+    return json.loads((HOOKS.parent / ".claude-plugin" / "plugin.json").read_text())["version"]
+
+
+def _gone(pid: int, timeout: float = 15) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline and _alive(pid):
+        time.sleep(0.2)
+    return not _alive(pid)
+
+
+def test_a_spawn_records_the_tap_version(tap_env) -> None:
+    session_id, transcript, env, _ = tap_env
+    _start(session_id, transcript, env)
+    assert _version_file(session_id).read_text() == _this_tap()
+
+
+def _versioned_tap(tmp_path: Path, version: str) -> Path:
+    """This tap copied into a marketplace cache folder named `version` (as
+    Claude Code and Codex install one), its manifests saying `version` too."""
+    root = tmp_path / "cache" / "research-os-agent" / "probe-research-tap" / version
+    shutil.copytree(
+        HOOKS.parent, root, ignore=shutil.ignore_patterns("tests", "__pycache__", "*.pyc", ".venv")
+    )
+    for manifest in root.glob(".*-plugin/plugin.json"):
+        data = json.loads(manifest.read_text())
+        manifest.write_text(json.dumps({**data, "version": version}))
+    return root
+
+
+def _start_older_tap(tmp_path, session_id, transcript, env, version) -> int:
+    """A live daemon an older tap started: from its versioned folder, with no
+    version record (taps before 0.9.16 wrote none)."""
+    root = _versioned_tap(tmp_path, version)
+    pid = _start(
+        session_id, transcript, {**env, "CLAUDE_PLUGIN_ROOT": str(root)},
+        hook=root / "hooks" / "session-start.sh",
+    )
+    _version_file(session_id).unlink()
+    return pid
+
+
+def test_a_resume_replaces_a_daemon_an_older_tap_started(tap_env, tmp_path) -> None:
+    session_id, transcript, env, plugin_dir = tap_env
+    old = _start_older_tap(tmp_path, session_id, transcript, env, "0.9.3")
+
+    new = _start(session_id, transcript, env)
+
+    assert new != old, "the resume kept the older tap's daemon"
+    assert _gone(old), "the older tap's wrapper is still running beside the new one"
+    assert _alive(new)
+    assert _version_file(session_id).read_text() == _this_tap()
+    log = (plugin_dir / "logs" / f"{session_id}.log").read_text()
+    assert f"tap 0.9.3 daemon (wrapper {old}) still runs this session; replacing it with {_this_tap()}" in log
+
+
+def test_a_resume_replaces_a_daemon_a_lower_version_recorded(tap_env) -> None:
+    session_id, transcript, env, _ = tap_env
+    old = _start(session_id, transcript, env)
+    _version_file(session_id).write_text("0.9.14")
+
+    new = _start(session_id, transcript, env)
+
+    assert new != old
+    assert _gone(old)
+
+
+@pytest.mark.parametrize("version", ["0.4.4", "0.3.0"])
+def test_a_protocol_1_daemon_is_never_replaced(tap_env, tmp_path, version) -> None:
+    """Before 0.4.5 a daemon uploads on protocol 1, and a new daemon refuses
+    that session every tick ("legacy transcript coverage is unverified")."""
+    session_id, transcript, env, _ = tap_env
+    old = _start_older_tap(tmp_path, session_id, transcript, env, version)
+
+    again = _start(session_id, transcript, env)
+
+    assert again == old
+    assert _alive(old)
+
+
+def test_a_protocol_1_version_record_is_never_replaced(tap_env) -> None:
+    session_id, transcript, env, _ = tap_env
+    first = _start(session_id, transcript, env)
+    _version_file(session_id).write_text("0.4.4")
+    assert _start(session_id, transcript, env) == first
+
+
+def test_a_daemon_of_unknown_version_is_left_alone(tap_env) -> None:
+    """No record and no versioned folder (a checkout, Kimi Code's copy): it
+    could be a protocol-1 tap, so it is not replaced on a guess."""
+    session_id, transcript, env, _ = tap_env
+    first = _start(session_id, transcript, env)
+    _version_file(session_id).unlink()
+    assert _start(session_id, transcript, env) == first
+    assert _alive(first)
+
+
+@pytest.mark.skipif(not Path("/proc/self/cmdline").exists(), reason="the fallback reads /proc")
+def test_without_ps_the_older_daemon_is_found_in_proc_and_replaced(tap_env, tmp_path) -> None:
+    """A slim container has no `ps`: the wrapper's command line comes from
+    /proc and its group from `kill -0 -- -PID`, as in session-end.sh."""
+    session_id, transcript, env, _ = tap_env
+    old = _start_older_tap(tmp_path, session_id, transcript, env, "0.9.3")
+    no_ps = tmp_path / "bin-without-ps"
+    no_ps.mkdir()
+    for directory in env["PATH"].split(os.pathsep):
+        try:
+            names = os.listdir(directory)
+        except OSError:
+            continue
+        for name in names:
+            link = no_ps / name
+            if name != "ps" and not link.exists() and not link.is_symlink():
+                link.symlink_to(Path(directory) / name)
+    assert shutil.which("ps", path=str(no_ps)) is None
+
+    new = _start(session_id, transcript, {**env, "PATH": str(no_ps)})
+
+    assert new != old
+    assert _gone(old), "the older daemon's group outlived its replacement"
+    assert _alive(new)
+
+
+def test_a_resume_under_the_same_tap_keeps_its_daemon(tap_env) -> None:
+    session_id, transcript, env, _ = tap_env
+    first = _start(session_id, transcript, env)
+    again = _start(session_id, transcript, env)
+    assert again == first
+    assert _alive(first)
+
+
+def test_an_older_tap_never_replaces_a_newer_daemon(tap_env) -> None:
+    session_id, transcript, env, _ = tap_env
+    first = _start(session_id, transcript, env)
+    _version_file(session_id).write_text("99.0.0")
+
+    again = _start(session_id, transcript, env)
+
+    assert again == first
+    assert _alive(first)
+    assert _version_file(session_id).read_text() == "99.0.0"
+
+
+def test_a_live_pid_that_is_not_this_sessions_tap_is_never_signalled(tap_env) -> None:
+    """/tmp is world-writable and pids are reused: a pid file naming some other
+    live process, with no version record, must not get it killed."""
+    session_id, transcript, env, _ = tap_env
+    stranger = subprocess.Popen(["sleep", "60"])
+    pid_file = Path(f"/tmp/probe-research-tap-watcher-{session_id}.pid")
+    try:
+        pid_file.write_text(str(stranger.pid))
+        subprocess.run(
+            ["bash", str(SESSION_START)],
+            input=json.dumps(
+                {"session_id": session_id, "transcript_path": str(transcript), "cwd": "/tmp"}
+            ),
+            text=True,
+            capture_output=True,
+            env=env,
+            check=True,
+            timeout=60,
+        )
+        time.sleep(0.5)
+        assert stranger.poll() is None, "the hook signalled a process that is not its tap"
+        assert pid_file.read_text().strip() == str(stranger.pid)
+    finally:
+        stranger.kill()
+        stranger.wait()
+
+
+def test_a_version_record_is_pruned_only_once_its_pid_file_is_gone(tap_env) -> None:
+    """Written once and never refreshed: a days-old live session must keep it."""
+    session_id, transcript, env, _ = tap_env
+    old = time.time() - (5 * 24 * 3600)
+    orphan = Path("/tmp/probe-research-tap-watcher-pytest-version-orphan.version")
+    kept = Path("/tmp/probe-research-tap-watcher-pytest-version-live.version")
+    kept_pid = kept.with_suffix(".pid")
+    for path in (orphan, kept, kept_pid):
+        path.write_text("0.9.15")
+        os.utime(path, (old, old))
+    try:
+        _start(session_id, transcript, env)
+        assert not orphan.exists(), "an orphaned version record was not pruned"
+        assert kept.exists(), "a version record beside a pid file was pruned"
+    finally:
+        for path in (orphan, kept, kept_pid):
+            path.unlink(missing_ok=True)

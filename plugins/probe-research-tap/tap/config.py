@@ -156,6 +156,15 @@ def pid_file(session_id: str) -> Path:
     return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.pid"
 
 
+def version_file(session_id: str) -> Path:
+    """The tap version the live wrapper was started from, beside its pid file.
+
+    hooks/session-start.sh reads it to replace a daemon an older tap started
+    when a session resumes under a newer one (taps before 0.9.16 wrote none).
+    """
+    return pid_file(session_id).with_suffix(".version")
+
+
 def heal_marker(session_id: str) -> Path:
     """Rate-limit stamp for a self-heal attempt.
 

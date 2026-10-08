@@ -69,6 +69,13 @@ mkdir -p "$LOG_DIR"
 find /tmp/ -maxdepth 1 \( -name "${WATCHER_PREFIX}-watcher-*.shutdown" \
     -o -name "${WATCHER_PREFIX}-watcher-*.owner" -o -name "${WATCHER_PREFIX}-watcher-*.stopping" \) \
     -mtime +2 -delete 2>/dev/null || true
+# A wrapper's version record is written once and never refreshed, and a live
+# session can be days old: of the 2-day-old ones, only those whose pid file is
+# gone are pruned.
+find /tmp/ -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.version" -mtime +2 2>/dev/null \
+    | while IFS= read -r _vf; do
+        [ -e "${_vf%.version}.pid" ] || rm -f "$_vf"
+    done || true
 
 SESSION_ID=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id",""))' 2>/dev/null || echo "")
 TRANSCRIPT_PATH=$(printf '%s' "$HOOK_INPUT" | python3 -c 'import json,sys; v=json.load(sys.stdin).get("transcript_path"); print(v if isinstance(v,str) else "")' 2>/dev/null || echo "")
@@ -207,12 +214,101 @@ PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
     "$PY" -m tap owner --session-id "$SESSION_ID" --from-pid "$$" </dev/null >/dev/null 2>&1 || true
 
 PID_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.pid"
+# The tap version the live wrapper was started from, written beside its pid
+# file by whatever spawned it (this hook below, `tap start`). Taps before 0.9.16
+# wrote none; their wrapper's command line names its versioned plugin folder.
+VERSION_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.version"
+
+#: The first tap on protocol 2. A protocol-1 daemon's session cannot be taken
+#: over: the new daemon would refuse it every tick ("legacy transcript coverage
+#: is unverified"), so one older than this is left to finish on its own.
+PROTOCOL2_TAP="0.4.5"
+
+# Exit 0 when tap version $1 is older than $2 (x.y.z). Never "older" when
+# either is unknown or not plain digits, so nothing is replaced on a guess.
+tap_older() {
+    local live="$1" ours="$2" a b i
+    [ -n "$ours" ] || return 1
+    [ -n "$live" ] || return 1
+    for i in 1 2 3; do
+        a="${live%%.*}"
+        b="${ours%%.*}"
+        case "$a" in '' | *[!0-9]*) return 1 ;; esac
+        case "$b" in '' | *[!0-9]*) return 1 ;; esac
+        [ "$a" -lt "$b" ] && return 0
+        [ "$a" -gt "$b" ] && return 1
+        if [ "$live" = "${live#*.}" ]; then live=0; else live="${live#*.}"; fi
+        if [ "$ours" = "${ours#*.}" ]; then ours=0; else ours="${ours#*.}"; fi
+    done
+    return 1
+}
 
 # If a daemon is already running for this session_id (e.g. resumed session),
-# don't spawn another.
+# don't spawn another -- unless an OLDER tap started it.
+#
+# A resumed session hands its surviving daemon to the new agent process (the
+# owner hand-over above), and the daemon is the code its own tap version
+# loaded. So after an update, the restart that is supposed to apply it kept the
+# old daemon instead: anthrogen's dev pod ran tap 0.9.3 for a session born on
+# 10-04 and resumed under a newer tap on 10-06, three days after its tap had
+# been updated to 0.9.14 (2026-10-07). The machine then reports that old tap,
+# and nothing local says so: `.installed_version` above already reads the new
+# one. So a daemon an older tap started is stopped -- its last pass and
+# finalize, exactly as at SessionEnd, after which the stream continues as on
+# any resume -- and this version's daemon takes the session over. Never the
+# other way: an older tap resuming a session never replaces a newer daemon.
 if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-    printf '{"continue": true}\n'
-    exit 0
+    LIVE_VER=$(cat "$VERSION_FILE" 2>/dev/null || true)
+    OLD_PID=$(cat "$PID_FILE" 2>/dev/null || true)
+    case "$OLD_PID" in '' | *[!0-9]*) OLD_PID="" ;; esac
+    # Only a pid that is provably THIS session's tap wrapper is stopped: /tmp is
+    # world-writable and pids are reused, and the check above only proves that
+    # SOME process holds this pid. Its command line from `ps`, else Linux's
+    # /proc (a slim container has no `ps`); neither means no proof, and it is
+    # left alone.
+    OLD_CMD=""
+    if [ -n "$OLD_PID" ]; then
+        OLD_CMD=$(ps -ww -o command= -p "$OLD_PID" 2>/dev/null || true)
+        if [ -z "$OLD_CMD" ] && [ -r "/proc/$OLD_PID/cmdline" ]; then
+            OLD_CMD=$(tr '\0' ' ' <"/proc/$OLD_PID/cmdline" 2>/dev/null || true)
+        fi
+    fi
+    case "$OLD_CMD" in
+        *"tap watch"*"$SESSION_ID"*) OURS=1 ;;
+        *) OURS="" ;;
+    esac
+    # A wrapper from a tap before 0.9.16 recorded no version: the versioned
+    # folder (Claude Code's and Codex's plugin caches) in its command line says.
+    if [ -z "$LIVE_VER" ] && [[ "$OLD_CMD" =~ /(probe-research-tap|prbe-cc-tap-plugin|prbe-codex-tap-plugin)/([0-9]+\.[0-9]+\.[0-9]+)(/|[[:space:]]|$) ]]; then
+        LIVE_VER="${BASH_REMATCH[2]}"
+    fi
+    if [ -z "$OURS" ] || ! tap_older "$LIVE_VER" "$RUNNING_VER" \
+        || tap_older "$LIVE_VER" "$PROTOCOL2_TAP"; then
+        printf '{"continue": true}\n'
+        exit 0
+    fi
+    echo "[$(date -u +%FT%TZ)] tap $LIVE_VER daemon (wrapper $OLD_PID) still runs this session; replacing it with $RUNNING_VER" >>"$LOG_FILE"
+    # session-end.sh's stop, without its sentinel (the new wrapper's first check
+    # would exit on it): the group when the wrapper leads one (pgid from `ps`,
+    # or, with no `ps`, a live group this pid leads), else the wrapper, whose
+    # TERM trap forwards to the daemon. Waits up to 3s for the last pass, inside
+    # this hook's 10s. A daemon still finishing after that holds the session's
+    # journal lock: the new daemon cannot take it and exits 0, its wrapper
+    # retries at most 5 times a minute and then gives up, and ensure-daemon.sh
+    # restarts capture on the next prompt. Nothing is lost: the transcript is
+    # read from the journal's offset, whichever daemon reads it.
+    OLD_PGID=$(ps -o pgid= -p "$OLD_PID" 2>/dev/null | tr -d ' ' || true)
+    if [ -n "$OLD_PGID" ] && [ "$OLD_PGID" = "$OLD_PID" ]; then
+        kill -TERM "-$OLD_PID" 2>/dev/null || true
+        for _ in $(seq 1 15); do kill -0 -- "-$OLD_PID" 2>/dev/null || break; sleep 0.2; done
+    elif ! command -v ps >/dev/null 2>&1 && kill -0 -- "-$OLD_PID" 2>/dev/null; then
+        kill -TERM "$OLD_PID" 2>/dev/null || true
+        for _ in $(seq 1 15); do kill -0 -- "-$OLD_PID" 2>/dev/null || break; sleep 0.2; done
+    else
+        kill -TERM "$OLD_PID" 2>/dev/null || true
+        for _ in $(seq 1 15); do kill -0 "$OLD_PID" 2>/dev/null || break; sleep 0.2; done
+    fi
+    rm -f "$PID_FILE"
 fi
 
 # No live wrapper for this session_id, so any leftover shutdown sentinel is
@@ -221,6 +317,15 @@ fi
 # immediately kill the fresh daemon on a resumed session.
 SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 rm -f "$SHUTDOWN_FILE"
+
+# Which tap the wrapper below runs, for the next resume's check above. Written
+# before the spawn, so there is no moment when a live wrapper carries an older
+# one's version; unknown (no manifest) leaves none, which never replaces.
+if [ -n "$RUNNING_VER" ]; then
+    printf '%s' "$RUNNING_VER" >"$VERSION_FILE" 2>/dev/null || true
+else
+    rm -f "$VERSION_FILE"
+fi
 
 if [ -n "$TRANSCRIPT_PATH" ]; then
     TRANSCRIPT_ARGS=(--transcript "$TRANSCRIPT_PATH")

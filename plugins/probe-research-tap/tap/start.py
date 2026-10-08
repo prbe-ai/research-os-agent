@@ -29,6 +29,7 @@ import sys
 from collections.abc import Callable
 from pathlib import Path
 
+from tap import __version__
 from tap import config as cfg
 
 EXIT_OK = 0
@@ -181,6 +182,12 @@ def main(
     # and a fresh wrapper's first check would exit on it immediately.
     with contextlib.suppress(OSError):
         cfg.shutdown_sentinel(args.session_id).unlink()
+
+    # Which tap this wrapper runs, beside its pid file: hooks/session-start.sh
+    # replaces a daemon an OLDER tap started when the session resumes, and a
+    # daemon with no record is from a tap before 0.9.16.
+    with contextlib.suppress(OSError):
+        cfg.version_file(args.session_id).write_text(__version__, encoding="utf-8")
 
     spawn(
         [
