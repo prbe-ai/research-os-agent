@@ -18,6 +18,12 @@ where taps that predate it cannot see it (`_FRAGMENT_SESSIONS`): those drain
 every session in the journal, and would stage protocol-2 batches the server
 refuses for a protocol-3 stream. Until then it stays where they see it, so that
 one stream is all any tap on this machine starts for it.
+
+Protocol 2 can be retired for NEW streams (the engine's
+`SESSION_PROTOCOL2_NEW_STREAMS=false`). A session a tap staged on protocol 2
+before that, and the server never took, is then refused at batch 0 for good:
+the journal drops that batch and sends the session again, from its batch 0, on
+protocol 3 (`Journal._restart_retired_protocol2`).
 """
 
 from __future__ import annotations
@@ -58,6 +64,12 @@ PROTOCOL_VERSION = PROTOCOL_EVENTS
 #: exists on another protocol. Matched on the text until the door names them
 #: with reason constants. Only batch 0 restarts on protocol 2 (`Journal.deliver`).
 PROTOCOL3_REFUSALS = ("protocol 3 not enabled", "protocol mismatch")
+#: The server's 409 `detail` when it will not START a stream on protocol 2
+#: (prbe-knowledge `kb/session_receipts.py` `PROTOCOL2_RETIRED`): protocol 2 is
+#: retired for new sessions of a customer offered protocol 3, while a stream
+#: the server already holds on 2 keeps being accepted. Only batch 0 of a
+#: stream the server does not hold restarts, on protocol 3 (`Journal.deliver`).
+PROTOCOL2_RETIRED = "protocol 2 retired"
 #: Where the journal keeps sessions whose stream the server holds on protocol 3
 #: (`protocol_version` 3 in the state, never a mere offer). A tap that predates
 #: protocol 3 reads only `sessions` and drains EVERY session there, so a
@@ -311,21 +323,25 @@ class DeliveryPending(RuntimeError):
 
 
 class ProtocolRestarted(DeliveryPending):
-    """The server would not take this session's protocol-3 batch 0, so the
-    journal dropped it and the session starts again on protocol 2
-    (`Journal._restart_refused_offer`). Nothing is lost and nothing waits:
-    the caller stages again at once. A DeliveryPending (retryable) only so a
-    caller that does not know it still keeps the session for its next pass."""
+    """The server would not take this new session's batch 0 on its protocol,
+    so the journal dropped it and the session starts again on `protocol`:
+    protocol 3 refused -> 2 (`Journal._restart_refused_offer`), protocol 2
+    retired -> 3 (`Journal._restart_retired_protocol2`). Nothing is lost and
+    nothing waits: the caller stages again at once. A DeliveryPending
+    (retryable) only so a caller that does not know it still keeps the
+    session for its next pass."""
 
-    def __init__(self, message: str):
+    def __init__(self, message: str, protocol: int = PROTOCOL_EVENTS):
+        refused = PROTOCOL_EVENTS if protocol == PROTOCOL_FRAGMENTS else PROTOCOL_FRAGMENTS
         super().__init__(
-            message + "; the session restarts on protocol 2",
+            message + f"; the session restarts on protocol {protocol}",
             retryable=True,
             safe_message=(
-                "the server did not take protocol 3 for this new session; "
-                "it is sent again on protocol 2"
+                f"the server did not take protocol {refused} for this new session; "
+                f"it is sent again on protocol {protocol}"
             ),
         )
+        self.protocol = protocol
 
 
 #: How the server says a session was deleted at its customer's request (the
@@ -1514,6 +1530,10 @@ class Journal:
             message = f"http {code}: {result.get('detail', 'transcript delivery pending')}"
             if code == 409 and self._restart_refused_offer(session_id, body, result, message):
                 raise ProtocolRestarted(message)
+            if code == 409 and self._restart_retired_protocol2(
+                session_id, body, result, message, wire
+            ):
+                raise ProtocolRestarted(message, PROTOCOL_FRAGMENTS)
             self.update(session_id, error=message)
             if code in (409, 422):
                 raise ReconciliationRequired(
@@ -1562,6 +1582,78 @@ class Journal:
                 return False
             self.conn.execute("DELETE FROM pending WHERE session_id=?", (session_id,))
             state.update(protocol_offer=PROTOCOL_EVENTS, send_events=False, error=message)
+            self._save(state)
+        return True
+
+    def _never_held(self, state: dict | None, session_id: str, body: bytes) -> bool:
+        """Whether `body` is batch 0 of a stream this journal never had the
+        server acknowledge or report, and still the session's pending body."""
+        return (
+            state is not None
+            and not state.get("deleted")
+            and state.get("protocol_version") is None
+            and state["last_seq"] == -1
+            and self.pending(session_id) == body
+        )
+
+    def _restart_retired_protocol2(
+        self, session_id: str, body: bytes, result: dict, message: str, wire: Wire
+    ) -> bool:
+        """Restart on protocol 3 a new stream the server will not START on 2.
+
+        A tap before 0.9.14 (or this one, before protocol 3 was offered)
+        staged the session's protocol-2 batch 0, and the server retired
+        protocol 2 for new streams before taking it: the door answers 409
+        PROTOCOL2_RETIRED, and would forever. Restarting is safe only for batch
+        0 of a stream the server does not hold, so both are proven first: the
+        journal never had a batch of it acknowledged (no pinned protocol,
+        `last_seq` -1, the same pending body), and a fresh receipts answer says
+        the server has no stream for the session. That answer also says what a
+        new stream may use (`negotiate`); only protocol 3 restarts, anything
+        else leaves the batch pending for a later offer.
+
+        Then, in one transaction: the pending protocol-2 body goes, the session
+        is offered protocol 3 with that answer's `events`, and a historical
+        snapshot gets its protocol-3 name (same bytes, see
+        `_keep_snapshot_from_older_taps`); the cursors stay at 0, so the WHOLE
+        source is staged again, under the SAME stream id, from batch 0. The
+        session stays in `sessions` until the server pins it to 3, so a tap
+        before 0.9.14 on this machine keeps seeing it and never starts a
+        second stream for it (it may re-send the staged protocol-3 batch 0,
+        which the server takes once, as a duplicate after that).
+        """
+        detail = result.get("detail") if isinstance(result, dict) else None
+        payload = json.loads(body)
+        if (
+            detail != PROTOCOL2_RETIRED
+            or payload.get("protocol_version") != PROTOCOL_EVENTS
+            or payload.get("batch_seq") != 0
+            or not self._never_held(self.get(session_id), session_id, body)
+        ):
+            return False
+        try:
+            remote = wire.receipts(session_id)
+        except SessionDeleted:
+            raise SessionDeleted(session_id, newly=self.mark_deleted(session_id)) from None
+        self._deleted_remote(session_id, remote)
+        if (
+            remote.get("customer_id") != self.customer_id
+            or remote.get("state") != "absent"
+            or remote.get("stream")
+        ):
+            return False  # the server holds something for it: reconcile, never restart
+        protocol, send_events = negotiate(remote)
+        if protocol != PROTOCOL_FRAGMENTS:
+            return False  # nothing to restart on: the batch waits for an offer
+        with self.transaction():
+            state = self.get(session_id)
+            if not self._never_held(state, session_id, body):
+                return False
+            self.conn.execute("DELETE FROM pending WHERE session_id=?", (session_id,))
+            state.update(
+                protocol_offer=PROTOCOL_FRAGMENTS, send_events=send_events, error=message
+            )
+            self._keep_snapshot_from_older_taps(state)
             self._save(state)
         return True
 

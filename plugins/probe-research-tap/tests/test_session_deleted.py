@@ -59,6 +59,12 @@ class Server:
         self.upload_status: int | None = None  # force an answer for uploads
         self.upload_body: dict | None = None
         self.accepted: dict[tuple[str, int], bytes] = {}
+        #: The receipts answer's `accepts` (None: an older server, protocol 2).
+        self.accepts: dict | None = None
+        #: The engine door with SESSION_PROTOCOL2_NEW_STREAMS=false: a NEW
+        #: stream's protocol-2 batch 0 gets 409 `protocol 2 retired`.
+        self.retire_protocol2 = False
+        self.streams: dict[str, int] = {}  # session id -> the protocol it is pinned to
         server = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -81,18 +87,18 @@ class Server:
                 if sid in server.deleted and server.receipts_410:
                     return self._answer(410, _deleted_body(sid))
                 state = "deleted" if sid in server.deleted else "absent"
-                self._answer(
-                    200,
-                    dict(
-                        protocol_version=2,
-                        customer_id=CUSTOMER,
-                        source=source,
-                        session_id=sid,
-                        state=state,
-                        receipts=[],
-                        uploader_device_id="device-synthetic",
-                    ),
+                answer = dict(
+                    protocol_version=2,
+                    customer_id=CUSTOMER,
+                    source=source,
+                    session_id=sid,
+                    state=state,
+                    receipts=[],
+                    uploader_device_id="device-synthetic",
                 )
+                if server.accepts is not None:
+                    answer["accepts"] = server.accepts
+                self._answer(200, answer)
 
             def do_POST(self):
                 body = self.rfile.read(int(self.headers["Content-Length"]))
@@ -105,6 +111,11 @@ class Server:
                     return self._answer(410, _deleted_body(sid))
                 if "protocol_version" not in data:
                     return self._answer(202, {"status": "accepted"})
+                protocol = data["protocol_version"]
+                if sid not in server.streams:
+                    if protocol == 2 and server.retire_protocol2:
+                        return self._answer(409, {"detail": "protocol 2 retired"})
+                    server.streams[sid] = protocol
                 server.accepted[sid, data["batch_seq"]] = body
                 receipt = {
                     k: data[k]
@@ -120,7 +131,9 @@ class Server:
                     body_sha256=hashlib.sha256(body).hexdigest(),
                     finalized=bool(data.get("finalize")),
                 )
-                self._answer(202, dict(status="accepted", protocol_version=2, receipt=receipt))
+                self._answer(
+                    202, dict(status="accepted", protocol_version=protocol, receipt=receipt)
+                )
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
         self.url = f"http://127.0.0.1:{self.httpd.server_address[1]}"

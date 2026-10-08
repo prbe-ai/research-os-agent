@@ -534,8 +534,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                                 _require_capture_eligible(source_cwd)
                                 journal.deliver(state["session_id"], wire)
                             except ProtocolRestarted as exc:
-                                # Batch 0 refused on protocol 3 and dropped:
-                                # stage it again on protocol 2 in this pass.
+                                # Batch 0 refused on its protocol and dropped
+                                # (3 not enabled, or 2 retired): stage it
+                                # again on the other one in this pass.
                                 log.warning("session %s: %s", state["session_id"], exc)
                                 continue
                             except ReconciliationRequired as exc:
