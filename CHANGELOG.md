@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.228.0
+
 - **The Probe daemon never sees work a `.probe.config` excludes.** Everything the daemon (v2, `probe daemon worker`) does reads its session store, and every transcript line reaches the store through one place (`Worker._parse`), so the filter sits there (`probe/daemon/exclusions.py`). An event is dropped when the folder it ran in is excluded (the line's `cwd`, a Codex shell call's `workdir`, else where the session started) or a tool call names an excluded path; the output of a dropped call is dropped too, in a later read or after a restart (the ids live in the store). Lines of an output that list an excluded file (`grep -rn`, `rg -l`, a search tool) are removed and counted; the rest of the output stays. Event ids are assigned before the filter, so a kept event's id never moves. The folder check skips excluded files before reading them. Files above the launch folder are set aside only when the researcher answered `ignore` for exactly them. Upload is unchanged: the transcript still uploads whole. A bare file name in a command (`--out model.ckpt`) is not a place and does not drop the call; the CLI refuses recording the file itself.
 
 ## 0.227.0
