@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The MCP's `search_knowledge` is now `search`, with a `semantic` argument.** `search(query, semantic=false)` is a keyword search with no model call: names and slugs, plus BM25 over document text and titles (`retrieval: "keyword"` on `/v1/search`); its hits say `keyword` in `why_matched`, and the response says when the backend ignored the mode (`keyword_search_unsupported`) or matched more than it returned (`keyword_matches_beyond_backend_limit`). The old name is gone, not aliased: a session started before the hosted MCP rolled keeps its old tool list and must restart to search. The dead `corpora` and `curated_only` arguments went with it. The track-work skill (every copy) names `search`; the daemon reader's self-exclusion matches both names exactly; the SDK `search()` takes `retrieval`; the companion bench's fake answers keyword search and `include_semantic: false`.
+
 ## 0.229.0
 
 - Daemon reader: a turn may take 40 model rounds and 300 s (360 s when it answers an ask), up from 8 rounds and

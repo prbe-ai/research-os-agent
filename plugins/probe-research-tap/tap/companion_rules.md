@@ -286,7 +286,7 @@ link already hangs off its experiment or project, so link only what is true.
      (`probe run upstream RUN`, `probe experiment lineage EXP`, `probe project
      lineage PROJ`); a read listed there is a fact, not a parent
 6. When later work contradicts a link you made, remove it or relabel it.
-7. Earlier work: look identifiers up first; at most one `search_knowledge` per
+7. Earlier work: look identifiers up first; at most one `search` per
    new experiment or project; treat what it finds as candidates, not links.
 
 ## 5. PAPERS

@@ -302,7 +302,7 @@ view that answers the question; `view_options` narrows server-side. A
 `partial` read is not the whole record: name what you did not see next to the
 finding it qualifies.
 
-To trace a path, URI, artifact id or content hash: `search_knowledge` with it
+To trace a path, URI, artifact id or content hash: `search` with it
 as the query (exact match), then `entity(view="lineage")` on the run that owns
 the hit. No hit means unknown provenance, not none - say so.
 
