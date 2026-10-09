@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.229.0
+
 - Daemon reader: a turn may take 40 model rounds and 300 s (360 s when it answers an ask), up from 8 rounds and
   60 s / 80 s. The limits are now runaway guards only: across 532 reader turns on the devbox the most rounds was 6
   bar one turn the old cap stopped, and the longest turn took 143 s. "Probe daemon's reader stopped a turn" should
