@@ -6,6 +6,9 @@
   60 s / 80 s. The limits are now runaway guards only: across 532 reader turns on the devbox the most rounds was 6
   bar one turn the old cap stopped, and the longest turn took 143 s. "Probe daemon's reader stopped a turn" should
   now show only for a turn that is actually stuck.
+- Daemon: a reader turn that hits its limit (model rounds or seconds) or goes in circles now pings #eng-alerts
+  (`daemon.error` kind `reader_stopped`, "🟡 Reader turn stopped", the limit as its error line), once per machine
+  every 6 hours like the other kinds. It only showed the researcher "Probe daemon's reader stopped a turn: …".
 
 ## 0.228.0
 
