@@ -175,8 +175,11 @@ cannot work, or when the MCP has to be wired by hand:
 probe wizard --action update --yes  # CLI + plugins
 probe wizard --action settings      # turn auto-update on
 probe wizard --action defaults      # the default Probe state (on / read / off); Who records (agent or daemon - daemon needs capture) sits beside it
-probe session default read --folder /path/to/project   # one folder's own default
 ```
+
+To keep folders out of Probe, put a `.probe.config` in them (gitignore syntax: `*` for the
+whole folder; `/*` then `!/repo-a/` in a parent to track only repo-a). `probe ignore check PATH`
+names the line that excludes a path.
 
 The CLI and the plugins ship together. Running one without the other is the usual cause of
 a capability that is configured but does nothing.

@@ -1,6 +1,6 @@
 ---
 name: probe
-description: The skill for setting the Probe plugin state - `on` (r/w), `read`, `off` (no r/w).
+description: The skill for setting the Probe plugin state - `on` (r/w), `read`, `off` (no r/w) - and `.probe.config` (paths Probe never records).
 ---
 # Probe
 
@@ -51,9 +51,16 @@ beats it.
 ONLY written by the wizard (`npx probe-research`). `probe session status`
 reports it as `machine_default_state`.
 
-**Folder Defaults**
+## `.probe.config`:
 
-The hook already writes direct `/probe --folder` commands but semantic requests ("default this repo to read"), run it yourself: `probe session default read --folder PATH`.
-- A relative path resolves against this session's directory, and `~` works. The folder must already exist.
-- "this repo" is `git rev-parse --show-toplevel`. If that fails, ASK which folder - never fall back to the cwd.
-- Never edit `.probe/config.json` by hand.
+Lists paths Probe never records (gitignore syntax), whatever the state; reads
+are unaffected. Folders inherit their parents' file; where nothing matches, the
+state decides. `probe ignore check PATH` names the excluding line.
+
+- Create or edit one when the researcher asks, or when you judge a path should
+  not be recorded; loosen or remove a rule only when they ask. Tell them each
+  change (file and line). Whole folder: `*` in its own file. Only some repos:
+  `/*` then `!/repo-a/` in the parent's.
+- One above where this session started is followed unless the researcher says
+  otherwise. When a notice asks, put that to them once and record their answer
+  as it says; never choose.

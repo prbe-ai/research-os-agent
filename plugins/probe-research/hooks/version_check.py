@@ -387,6 +387,9 @@ def _seed_tracking_signal() -> None:
         return  # PreCompact carries no id; the session was seeded at its start.
     if _daemon_profile():
         _session_marker.mark_session_profile(session_id, _session_marker.RECORDER_DAEMON)
+    # Where the session started, once (a resume keeps the first): it decides
+    # which `.probe.config` files are ABOVE the session (`probe session parent`).
+    _session_marker.record_launch_dir(session_id, os.environ.get(SESSION_CWD_ENV) or "")
     try:
         # The signal is the live state. Once present, even discovering the cwd
         # default is both wasted ancestor I/O and a risk of live-reloading a
@@ -455,6 +458,13 @@ def _tracking_off() -> bool:
         return False
 
 
+def _excluded_context() -> str | None:
+    """`.probe.config` paths that reach this session, as one line, or None."""
+    return _session_marker.excluded_context(
+        os.environ.get(SESSION_ID_ENV) or "", os.environ.get(SESSION_CWD_ENV) or None
+    )
+
+
 def _start_context() -> str | None:
     """What to inject at a session start, or None.
 
@@ -505,6 +515,9 @@ def _start_context() -> str | None:
         return None
     parts: list[str] = []
     tracking_off = not _session_marker.state_allows_writes(state)
+    excluded = None if tracking_off else _excluded_context()
+    if excluded:
+        parts.append(excluded)
     if tracking_off:
         parts.append(TRACKING_OFF_CONTEXT)
     elif state == _session_marker.STATE_DAEMON and not _session_marker.companion_key_held():

@@ -72,6 +72,18 @@ export interface TrackingState {
    * plain two-state text when it is missing.
    */
   capture?: CaptureReading;
+  /**
+   * `.probe.config` (paths Probe never records), absent from a CLI that
+   * predates it. `context` goes into the prompt on every turn; `ask`, the
+   * question about files above the launch folder, is delivered ONCE: the CLI
+   * marked it asked when it returned it.
+   */
+  probeConfig?: ProbeConfigReading;
+}
+
+export interface ProbeConfigReading {
+  context: string | null;
+  ask: string | null;
 }
 
 export interface TrackingExecOptions {
@@ -223,6 +235,7 @@ export async function initializeTrackingState(
       seeded: value.seeded,
       source: value.source,
       capture: parseCapture(value.capture),
+      probeConfig: parseProbeConfig(value.probe_config),
     };
   } catch (err) {
     deps.log(
@@ -230,6 +243,14 @@ export async function initializeTrackingState(
     );
     return null;
   }
+}
+
+/** `.probe.config`'s block, read leniently: anything unexpected is absent. */
+function parseProbeConfig(raw: unknown): ProbeConfigReading | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const value = raw as Record<string, unknown>;
+  const text = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
+  return { context: text(value.context), ask: text(value.ask) };
 }
 
 /**

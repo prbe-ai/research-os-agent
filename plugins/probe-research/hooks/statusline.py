@@ -154,7 +154,7 @@ def segment(payload: dict) -> str:
         switch = marker.seed_state(session_id, switch, agent)
     tracking = marker.state_allows_writes(switch)
     daemon = marker.daemon_status(session_id, switch)
-    return marker.render(
+    rendered = marker.render(
         state,
         configured=True,
         tracking=tracking,
@@ -177,6 +177,11 @@ def segment(payload: dict) -> str:
         # `· paused: not ML`: the daemon paused itself (`auto_paused`).
         paused=marker.auto_paused(session_id, switch),
     )
+    # `· .probe.config: ask`: a `.probe.config` above the launch folder awaits
+    # the researcher's follow / ignore (`probe session parent`).
+    if rendered and tracking and marker.parent_question_open(session_id):
+        rendered += " · " + marker.PARENT_STATUS_ASK
+    return rendered
 
 
 def kimi_line(payload: dict, ours: str) -> str:

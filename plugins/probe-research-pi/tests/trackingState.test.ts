@@ -83,6 +83,32 @@ describe("initializeTrackingState", () => {
     expect(parseProfile(sent)).toBe(read);
   });
 
+  it.each([
+    { sent: { context: "`.probe.config` keeps Probe from recording: x.", ask: "Ask the researcher once" },
+      read: { context: "`.probe.config` keeps Probe from recording: x.", ask: "Ask the researcher once" } },
+    { sent: { context: null, ask: null }, read: { context: null, ask: null } },
+    { sent: { context: 3, ask: "" }, read: { context: null, ask: null } },
+    { sent: undefined, read: undefined },
+    { sent: "nope", read: undefined },
+  ])("reads the .probe.config block $sent leniently", async ({ sent, read }) => {
+    const execFile: TrackingExecFileFn = (_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({ session_id: "pi-session-1", tracking: true, signal: "on", seeded: true, source: "machine", probe_config: sent }),
+        "",
+      );
+    };
+    const state = await initializeTrackingState("pi-session-1", "/repo", {
+      execFile,
+      existsSync: () => true,
+      isExecutable: () => true,
+      env: { PATH: "/usr/bin", HOME: "/home/x" },
+      log: () => {},
+    });
+    expect(state?.tracking).toBe(true);
+    expect(state?.probeConfig).toEqual(read);
+  });
+
   it("fails open when the CLI does not return a valid tracking state", async () => {
     const execFile: TrackingExecFileFn = (_command, _args, _options, callback) => {
       callback(null, '{"tracking":"off"}', "");

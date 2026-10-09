@@ -1211,7 +1211,9 @@ def daemon_allows_agent(matched: str) -> bool:
 #: `probe --version` needs no entry (no command words); `probe version` is the
 #: experiment-versions group, a write. While the researcher has Probe inline
 #: (`is_inline`) the guard refuses only `RESEARCHER_SWITCH`.
-DAEMON_PROFILE_ALLOWED = frozenset({"ask", "session status", "run expect", "doctor"})
+DAEMON_PROFILE_ALLOWED = frozenset(
+    {"ask", "session status", "session parent", "ignore check", "run expect", "doctor"}
+)
 
 #: The researcher's switch and defaults, typed into a shell. In the daemon
 #: profile the agent never moves them (`probe session state inline` included):
@@ -1241,6 +1243,26 @@ RESEARCHER_SWITCH_DENY = (
 DAEMON_PROFILE_DENY = (
     'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team\'s prior work: `probe ask "<question>"`. If you need to do it yourself, ask the researcher to type `/probe inline`.'
 )
+
+
+#: `.probe.config`: paths Probe never records (`probe_config.py`).
+EXCLUDED_DENY = (
+    "`{path}` is excluded by `{source}`, so `{matched}` was refused before it ran. Probe "
+    "records nothing about it; do not route around it."
+)
+
+#: A `.probe.config` above the launch folder: asked once per session, under `on`.
+PARENT_ASK = (
+    "`{files}`, above where this session started, keeps Probe from recording some paths here. "
+    "Ask the researcher once: follow it, or set it aside for this session? Record their answer "
+    "with `probe session parent follow --directed` or `probe session parent ignore --directed`. "
+    "It is followed until then; never choose for them."
+)
+
+PARENT_ASK_DENY = "`{matched}` was held back so you ask this first; retry it after. " + PARENT_ASK
+
+#: Session start, when any `.probe.config` reaches this session's folder.
+EXCLUDED_CONTEXT = "`.probe.config` keeps Probe from recording: {paths}. Reads are unaffected."
 
 
 def moves_switch(args: "list[str]") -> "str | None":
@@ -1738,8 +1760,8 @@ def mark_session_profile(session_id: str, profile: str) -> None:
 #     <sid>.state-source   `explicit` | `default`
 #     <sid>.auto-pause     {"since": <epoch s>, "p_ml": [...], "reason": "..."}
 #
-# EXPLICIT is a typed `/probe ...`, `probe session state ...`, the environment
-# override and a folder's `.probe/config.json`. DEFAULT is the machine's (the
+# EXPLICIT is a typed `/probe ...`, `probe session state ...` and the environment
+# override. DEFAULT is the machine's (the
 # wizard's) setting and the shipped one. A MISSING or unreadable source reads
 # explicit: an older client wrote that state, and nothing may pause what we
 # cannot prove was a default. A `default` older than the state it describes
@@ -1772,14 +1794,9 @@ def auto_pause_path(session_id: str) -> Path:
 
 def default_is_explicit(source: str) -> bool:
     """Is a default `resolve_state_default` resolved (its diagnostic `source`)
-    the researcher's own explicit setting? The environment override and a
-    folder's `.probe/config.json` are; the machine file and the shipped value
-    are not."""
-    if source == "environment":
-        return True
-    if source == "shipped":
-        return False
-    return Path(source).parent.name == ".probe"
+    the researcher's own explicit setting? The environment override is; the
+    machine file and the shipped value are not."""
+    return source == "environment"
 
 
 def seed_source(source: str) -> str:
@@ -2463,7 +2480,6 @@ TRACKING_READ_ONLY_VALUES = ("read", "read-only", "readonly", "read_only", "ro")
 # Folder configs are repository-controlled settings, never data blobs. Their bound
 # protects startup/status paths from devices and giant files before JSON parsing can
 # fail soft. Machine configs remain size-unbounded for backwards compatibility.
-FOLDER_CONFIG_MAX_BYTES = 64 * 1024
 
 
 def _parse_tracking_value(value: object) -> bool | None:
@@ -2644,59 +2660,9 @@ def default_session_state(config: dict | None = None) -> str:
     return DEFAULT_STATE if value is None else value
 
 
-def folder_config_path(folder: str | os.PathLike[str]) -> Path:
-    """The absolute config path owned by exactly ``folder``."""
-    return Path(os.path.abspath(os.fspath(folder))) / ".probe" / "config.json"
-
-
 def _append_config_error(errors: list[str] | None, message: str) -> None:
     if errors is not None and message not in errors:
         errors.append(message)
-
-
-def _folder_tracking_override(path: Path, errors: list[str] | None = None) -> bool | None:
-    try:
-        raw = _read_config_text(
-            path,
-            require_regular=True,
-            max_bytes=FOLDER_CONFIG_MAX_BYTES,
-        )
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as exc:
-        _append_config_error(errors, f"{path}: could not be read ({exc})")
-        return None
-    try:
-        data = json.loads(raw)
-    except ValueError as exc:
-        _append_config_error(errors, f"{path}: malformed JSON ({exc})")
-        return None
-    if not isinstance(data, dict):
-        _append_config_error(errors, f"{path}: config is not a JSON object")
-        return None
-    if DEFAULTS_KEY not in data:
-        return None
-    defaults = data[DEFAULTS_KEY]
-    if not isinstance(defaults, dict):
-        _append_config_error(errors, f"{path}: defaults is not a JSON object")
-        return None
-    if TRACKING_DEFAULT_KEY not in defaults and STATE_DEFAULT_KEY not in defaults:
-        return None
-    # Same projection as `_tracking_value`, for the same reason: a folder config
-    # carrying only the new key must not read as "no override here" to every
-    # surface that still asks the boolean question.
-    value = _tracking_value({DEFAULTS_KEY: defaults})
-    if value is None:
-        key = TRACKING_DEFAULT_KEY if TRACKING_DEFAULT_KEY in defaults else STATE_DEFAULT_KEY
-        _append_config_error(errors, f"{path}: invalid defaults.{key} value")
-    return value
-
-
-def folder_tracking_override(
-    folder: str | os.PathLike[str], *, errors: list[str] | None = None
-) -> bool | None:
-    """The override stored by exactly ``folder``, without inheritance."""
-    return _folder_tracking_override(folder_config_path(folder), errors)
 
 
 def resolve_tracking_default(
@@ -2705,27 +2671,13 @@ def resolve_tracking_default(
     *,
     errors: list[str] | None = None,
 ) -> tuple[bool, str]:
-    """The effective new-session default and its diagnostic source."""
+    """The effective new-session default and its diagnostic source: the
+    environment, then the machine file, then shipped. `cwd` is unused since
+    folder defaults retired (a `.probe.config` excludes paths instead; see
+    `probe_config`); it stays for the callers that pass it."""
     override = tracking_env_override()
     if override is not None:
         return override, "environment"
-
-    try:
-        current = Path(os.path.abspath(os.getcwd() if cwd is None else os.fspath(cwd)))
-    except (OSError, TypeError, ValueError) as exc:
-        _append_config_error(errors, f"{cwd}: could not resolve working directory ({exc})")
-        current = None
-
-    while current is not None:
-        path = current / ".probe" / "config.json"
-        value = _folder_tracking_override(path, errors)
-        if value is not None:
-            return value, str(path)
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-
     data = _read_config() if config is None else config
     value = default_tracking(data)
     if _tracking_value(data) is None:
@@ -2734,137 +2686,23 @@ def resolve_tracking_default(
     return value, str(machine_path)
 
 
-def _folder_state_override(path: Path, errors: list[str] | None = None) -> "str | None":
-    """One folder's stored state, or None. Reuses the boolean reader's I/O rules.
-
-    Reads the SAME key the boolean override reads (`defaults.session_tracking`),
-    because it is the same setting with a wider vocabulary. A second key would
-    let one folder hold two answers.
-    """
-    try:
-        raw = _read_config_text(
-            path, require_regular=True, max_bytes=FOLDER_CONFIG_MAX_BYTES
-        )
-    except FileNotFoundError:
-        return None
-    except (OSError, ValueError) as exc:
-        _append_config_error(errors, f"{path}: could not be read ({exc})")
-        return None
-    try:
-        data = json.loads(raw)
-    except ValueError as exc:
-        _append_config_error(errors, f"{path}: malformed JSON ({exc})")
-        return None
-    if not isinstance(data, dict):
-        _append_config_error(errors, f"{path}: config is not a JSON object")
-        return None
-    if DEFAULTS_KEY not in data:
-        return None
-    defaults = data[DEFAULTS_KEY]
-    if not isinstance(defaults, dict):
-        _append_config_error(errors, f"{path}: defaults is not a JSON object")
-        return None
-    # SAME DIAGNOSTICS AS THE TWO-VALUED READER. A folder config is
-    # repository-controlled and a typo in it is somebody's mistake to find, so
-    # an unusable value is REPORTED and then ignored -- never silently swallowed
-    # into the shipped default, which is what makes a typo indistinguishable
-    # from "no override here".
-    present = [k for k in (STATE_DEFAULT_KEY, TRACKING_DEFAULT_KEY) if k in defaults]
-    if not present:
-        return None
-    value = _stored_state(defaults)
-    if value is None:
-        _append_config_error(errors, f"{path}: invalid defaults.{present[0]} value")
-    return value
-
-
 def resolve_state_default(
     cwd: str | os.PathLike[str] | None,
     config: dict | None = None,
     *,
     errors: list[str] | None = None,
 ) -> tuple[str, str]:
-    """The effective new-session STATE and its diagnostic source.
-
-    Walks the same ladder as `resolve_tracking_default` -- env, then each
-    `.probe/config.json` from cwd upward, then the machine file, then shipped --
-    so the two can never disagree about which file won, only about how many
-    values that file is allowed to hold.
-    """
+    """The effective new-session STATE and its diagnostic source: the
+    environment, then the machine file, then shipped -- the same ladder as
+    `resolve_tracking_default`. `cwd` is unused since folder defaults retired."""
     override = state_env_override()
     if override is not None:
         return override, "environment"
-
-    try:
-        current = Path(os.path.abspath(os.getcwd() if cwd is None else os.fspath(cwd)))
-    except (OSError, TypeError, ValueError) as exc:
-        _append_config_error(errors, f"{cwd}: could not resolve working directory ({exc})")
-        current = None
-
-    while current is not None:
-        path = current / ".probe" / "config.json"
-        value = _folder_state_override(path, errors)
-        if value is not None:
-            return value, str(path)
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-
     data = _read_config() if config is None else config
     stored = _stored_state(data.get(DEFAULTS_KEY))
     if stored is None:
         return DEFAULT_STATE, "shipped"
     return stored, str(Path(os.path.abspath(os.fspath(config_path()))))
-
-
-def write_folder_tracking_default(
-    folder: str | os.PathLike[str], on: bool | None
-) -> Path:
-    """Set this exact folder's default; None removes the override to inherit."""
-    from probe.sdk.config import (
-        ConfigUnreadable,
-        _config_lock,
-        _load_json_file,
-        _save_json_file,
-        _write_target,
-    )
-
-    path = folder_config_path(folder)
-    target = _write_target(path)
-    with _config_lock(target, _resolved=True):
-        data = _load_json_file(
-            target,
-            strict=True,
-            migrate=False,
-            require_regular=True,
-            max_bytes=FOLDER_CONFIG_MAX_BYTES,
-        )
-        defaults = data.get(DEFAULTS_KEY)
-        if DEFAULTS_KEY in data and not isinstance(defaults, dict):
-            raise ConfigUnreadable(
-                f"{path} has a non-object {DEFAULTS_KEY}. Refusing to overwrite it."
-            )
-        if on is None:
-            if isinstance(defaults, dict):
-                defaults.pop(STATE_DEFAULT_KEY, None)
-                defaults.pop(TRACKING_DEFAULT_KEY, None)
-                if not defaults:
-                    data.pop(DEFAULTS_KEY, None)
-        else:
-            if not isinstance(defaults, dict):
-                defaults = {}
-                data[DEFAULTS_KEY] = defaults
-            defaults[TRACKING_DEFAULT_KEY] = "on" if on else "off"
-            defaults[STATE_DEFAULT_KEY] = STATE_FULL if on else STATE_READ_ONLY
-        _save_json_file(
-            target,
-            data,
-            private=False,
-            _resolved=True,
-            max_bytes=FOLDER_CONFIG_MAX_BYTES,
-        )
-    return path
 
 
 def write_default_tracking(on: bool) -> Path:
@@ -2964,63 +2802,6 @@ def write_default_state(state: str) -> Path:
     return path
 
 
-def write_folder_state_default(
-    folder: str | os.PathLike[str], state: "str | None"
-) -> Path:
-    """Set this exact folder's default state; None removes the override."""
-    if state is not None and state not in STATES:
-        raise ValueError(f"expected one of {STATES}, got {state!r}")
-    from probe.sdk.config import (
-        ConfigUnreadable,
-        _config_lock,
-        _load_json_file,
-        _save_json_file,
-        _write_target,
-    )
-
-    path = folder_config_path(folder)
-    target = _write_target(path)
-    with _config_lock(target, _resolved=True):
-        data = _load_json_file(
-            target,
-            strict=True,
-            migrate=False,
-            require_regular=True,
-            max_bytes=FOLDER_CONFIG_MAX_BYTES,
-        )
-        defaults = data.get(DEFAULTS_KEY)
-        if DEFAULTS_KEY in data and not isinstance(defaults, dict):
-            raise ConfigUnreadable(
-                f"{path} has a non-object {DEFAULTS_KEY}. Refusing to overwrite it."
-            )
-        if state is None:
-            if isinstance(defaults, dict):
-                defaults.pop(STATE_DEFAULT_KEY, None)
-                defaults.pop(TRACKING_DEFAULT_KEY, None)
-                if not defaults:
-                    data.pop(DEFAULTS_KEY, None)
-        else:
-            if not isinstance(defaults, dict):
-                defaults = {}
-                data[DEFAULTS_KEY] = defaults
-            defaults[STATE_DEFAULT_KEY] = state
-            defaults[TRACKING_DEFAULT_KEY] = "on" if state in RECORDING_STATES else "off"
-        _save_json_file(
-            target,
-            data,
-            private=False,
-            _resolved=True,
-            max_bytes=FOLDER_CONFIG_MAX_BYTES,
-        )
-    return path
-
-
-#: WHO RECORDS, per coding agent (daemon reads; the wizard's "Who records" row).
-#: `agent`: the full `probe-research` plugin, the agent records and reads (today).
-#: `daemon`: the lean `probe-research-daemon` plugin, the Probe daemon records AND
-#: reads for that agent. Stored as `defaults.recorders: {"claude_code": "daemon"}`
-#: in the machine config, TOP LEVEL for the same reason as `DEFAULTS_KEY`; an
-#: absent entry (every machine before this) reads as `agent`.
 RECORDERS_KEY = "recorders"
 RECORDER_AGENT = "agent"
 RECORDER_DAEMON = "daemon"
@@ -3569,3 +3350,137 @@ def harness_process_session(
     except Exception:  # noqa: BLE001
         return None
     return None
+
+
+# ---------------------------------------------------------------------------
+# `.probe.config`: paths Probe never records
+# ---------------------------------------------------------------------------
+
+
+#: The status-line segment while the parent question is open.
+PARENT_STATUS_ASK = ".probe.config: ask"
+
+
+def probe_config():
+    """The `.probe.config` matcher: `probe.sdk.probe_config` in the SDK; beside
+    the hooks (which cannot import `probe`), the vendored `_probe_config.py`,
+    loaded by EXPLICIT path, never a bare import: sys.path can carry the user's
+    project directory, and the status line runs this on every render."""
+    try:
+        from . import probe_config as module
+
+        return module
+    except ImportError:
+        pass
+    import importlib.util  # noqa: PLC0415
+    import sys  # noqa: PLC0415
+
+    key = "_probe_hooks._probe_config"
+    module = sys.modules.get(key)
+    if module is not None:
+        return module
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_probe_config.py")
+    spec = importlib.util.spec_from_file_location(key, path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[key] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(key, None)
+        raise
+    return module
+
+
+def parent_question_open(session_id: str) -> bool:
+    """Was the parent question asked in this session and not answered yet? One
+    small file read and nothing imported: the status line asks on every render."""
+    if not valid_session_id(session_id):
+        return False
+    try:
+        with open(sessions_dir() / (session_id + ".parent-config"), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and "asked_at" in data and "decision" not in data
+
+
+def record_launch_dir(session_id: str, cwd: str) -> bool:
+    """Where a session started, written once at seed. Never raises."""
+    if not valid_session_id(session_id) or not cwd:
+        return False
+    try:
+        return probe_config().record_launch_dir(sessions_dir(), session_id, cwd)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def parent_config_status(session_id: str) -> "tuple[str, list]":
+    """`probe_config.parent_status` for this session; ("", []) when unknown."""
+    if not valid_session_id(session_id):
+        return "", []
+    try:
+        return probe_config().parent_status(sessions_dir(), session_id)
+    except Exception:  # noqa: BLE001
+        return "", []
+
+
+def excluded(path, session_id: "str | None" = None, *, is_dir=None, cwd=None, as_cwd: bool = False):
+    """`probe_config.session_check` for this session (all files apply without one)."""
+    pc = probe_config()
+    sid = session_id if session_id and valid_session_id(session_id) else None
+    try:
+        sessions = sessions_dir() if sid else None
+    except Exception:  # noqa: BLE001
+        sessions = None
+    return pc.session_check(path, sessions, sid, is_dir=is_dir, cwd=cwd, as_cwd=as_cwd)
+
+
+def verdict_source(verdict) -> str:
+    """`~/code/.probe.config:1 (/*)`: where a verdict came from."""
+    pc = probe_config()
+    rule = getattr(verdict, "rule", None)
+    if rule is None:
+        return pc.CONFIG_NAME
+    where = pc.shown(rule.source)
+    return f"{where}:{rule.line} ({rule.pattern})" if rule.line else f"{where} ({rule.pattern})"
+
+
+def parent_files_label(parents) -> str:
+    """The files a parent question is about, as one message names them."""
+    pc = probe_config()
+    return ", ".join(pc.shown(p.path) for p in parents)
+
+
+def excluded_context(session_id: str, cwd: "str | None") -> "str | None":
+    """`EXCLUDED_CONTEXT` for a session starting in `cwd`: the `.probe.config`
+    paths that reach it, as one line, or None. Files above the launch folder are
+    left out once the researcher set them aside. Never raises."""
+    try:
+        pc = probe_config()
+        start = pc.launch_dir(sessions_dir(), session_id) if valid_session_id(session_id) else None
+        if not (start or cwd):
+            return None
+        _start, skip = pc.session_view(sessions_dir(), session_id) if valid_session_id(session_id) else (None, frozenset())
+        summary = pc.summarize(start or cwd, skip=skip, legacy=True)
+    except Exception:  # noqa: BLE001
+        return None
+    if not summary.entries:
+        return None
+    return EXCLUDED_CONTEXT.format(paths=", ".join(summary.entries) + (", and more" if summary.truncated else ""))
+
+
+def take_parent_ask(session_id: str, statuses: "tuple[str, ...] | None" = None) -> "str | None":
+    """`PARENT_ASK` when a file above the launch folder reaches this session and
+    its status is one of `statuses` (default: not asked yet), marking it asked.
+    The caller must deliver it. Never raises."""
+    try:
+        pc = probe_config()
+        wanted = statuses or (pc.UNASKED,)
+        status, parents = parent_config_status(session_id)
+        if status not in wanted or not parents:
+            return None
+        pc.mark_asked(sessions_dir(), session_id, parents)
+        return PARENT_ASK.format(files=parent_files_label(parents))
+    except Exception:  # noqa: BLE001
+        return None
+

@@ -163,6 +163,12 @@ function probeIsOff(): boolean {
  */
 let lastTurnInDaemon = false;
 
+// `.probe.config` (paths Probe never records), from `session initialize`:
+// the line that goes into the prompt while Probe records, and the question
+// about files above the launch folder, delivered once with the next turn.
+let cachedProbeConfigContext: string | null = null;
+let pendingParentAsk: string | null = null;
+
 // DAEMON READS (reads.ts): the daemon's reader answers `probe ask` and sends
 // team context; pi gets it at each prompt and, between prompts, from a 2 s
 // poller that steers an answer into a running agent or starts a turn for one
@@ -386,6 +392,8 @@ async function refreshTrackingStatus(
   }
   cachedProbeState = state.state;
   cachedTracking = { tracking: state.tracking, capture: state.capture };
+  cachedProbeConfigContext = state.probeConfig?.context ?? null;
+  if (state.probeConfig?.ask) pendingParentAsk = state.probeConfig.ask;
   cachedProfile = { sessionId, profile: state.profile };
   if (ctx.hasUI) {
     try {
@@ -799,6 +807,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     if (cachedTeamNote) {
       systemPrompt += renderTeamNoteForPrompt(cachedTeamNote, teamNoteDocumentPath(process.env));
     }
+    if (cachedProbeConfigContext) systemPrompt += `\n\n${cachedProbeConfigContext}`;
     const inDaemon = cachedProbeState === ProbeState.Daemon;
     let notice: string | null = null;
     if (daemonProfile) {
@@ -854,6 +863,10 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       } catch (err) {
         logLine(`reads at prompt: ${err instanceof Error ? err.message : String(err)}`);
       }
+    }
+    if (pendingParentAsk) {
+      notice = [notice, pendingParentAsk].filter(Boolean).join("\n\n");
+      pendingParentAsk = null;
     }
     if (systemPrompt === event.systemPrompt && !notice) return;
     return {

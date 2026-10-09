@@ -202,11 +202,16 @@ cap; flagged here for whoever makes that call.
 ## Tracking defaults and footer
 
 On every `session_start`, the extension passes Pi's session id and initial cwd
-to Probe's hidden atomic initializer. That command resolves the nearest
-ancestor `.probe/config.json`, falls back to the machine default, and publishes
-the existing per-session tracking signal only when it is absent. Reloading an
-extension therefore reads the settled signal instead of changing the session
-because a config file changed later.
+to Probe's hidden atomic initializer. That command resolves the machine
+default and publishes the existing per-session tracking signal only when it is
+absent, and records the folder the session started in. Reloading an extension
+therefore reads the settled signal instead of changing the session because a
+config file changed later.
+
+The same call returns `probe_config`: `context`, one line naming the paths a
+`.probe.config` keeps Probe from recording (added to the prompt while Probe
+records), and `ask`, the question about `.probe.config` files above the launch
+folder (delivered once with the next turn; the CLI marked it asked).
 
 Interactive `/probe`, `/skill:probe`, and `$probe` requests (and the legacy
 `track-work` spellings) use
