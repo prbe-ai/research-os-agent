@@ -21,7 +21,7 @@ Its INDEX maps each section here to one there - pointers below say `reference
 # HARD GUIDELINES FOR ALL WRITES:
 
 - all human facing data should be as SHORT, CONCISE, and SIMPLE as possible - it should be readable by a new member of the team who has little context
-- **human facing**: every SLUG and `--name`; `--question`, `--summary`, `--discrepancies`, `--via-reason`; every `--tag`, metric key and span name; the run summary at `run end`; all notes and the team note.
+- **human facing**: every SLUG and `--name`; `--question`, `--summary`, `--discrepancies`, `--via-reason`, a link's `--reason`; every `--tag`, metric key and span name; the run summary at `run end`; all notes and the team note.
     - human facing values should never have: hashes, uuids, timestamps, ticket numbers, command lines, parameter piles, bare counters, or abbreviations only you can expand.
 - a path a `.probe.config` sets to `read`: use it to understand the work; record nothing about it.
 - NOT human facing - keep exact and machine-shaped: `--external-id`, `probe link` foreign keys, `--config`, `--spec`, an artifact's `--name` (the file's relative path) and a paper's title (its real one).
@@ -264,11 +264,11 @@ link already hangs off its experiment or project, so link only what is true.
    - B only uses what A produced (a file, a number, a chosen config it does
      not re-run) -> `derived_from`, unless a fact already shows it
    - B replaces A -> also add `supersedes`
-   - say how in `--reason`
+   - `--reason`: 1-2 short sentences on why this link is there
 3. A link the facts don't show needs the researcher's or main agent's own
    words naming the target:
    - an id, name, path, URL, paper title, result or config that matches
-     exactly ONE target; quote those words in `--reason`
+     exactly ONE target; `--reason` still says why, in your words, not a quote
    - two matches -> no link, unless B runs again a setup that ran more than
      once (seeds, replicates): `branched_from` the earliest
    - earlier work named as the start or the result to beat counts
