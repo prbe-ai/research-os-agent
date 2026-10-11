@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.231.1
+
 - **Daemon: an `off` path printed in an output now hides only its own line.** Found in the live check of 0.231.0: a `cat .probe.config` printed `secret/`, and the scrub took it for an `rg --heading` block and hid the rest of the output (the `read` plan and the code with it), so the daemon lost context. A bare path line starts a hidden block only when numbered match lines (`12:` / `12-`) follow it. The daemon's shell now says a tree it won't read "holds a path a .probe.config sets to off or is too big to check" (a `find /` was told it holds an `off` path).
 
 ## 0.231.0
