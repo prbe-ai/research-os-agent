@@ -38,6 +38,17 @@ except Exception:  # pragma: no cover
 #: skip.
 MARKER_SUFFIX = ".audit-advised"
 
+#: The daemon profile's plugin exports this on this hook's route (its
+#: `routes.json`). There the DAEMON runs the audit for the sessions it records
+#: (`probe.daemon.audit`, daemon-team-note-audit), so this hook speaks only in a
+#: session the researcher set inline (`/probe inline`), where the main agent
+#: records -- and so audits -- itself ("whoever records also audits").
+PROFILE_ENV = "PROBE_PLUGIN_PROFILE"
+DAEMON_PROFILE = "daemon"
+#: The daemon profile lists no skill but its own, so an inline agent is pointed
+#: at the audit skill's FILE, beside its track-work and edit-notes.
+INLINE_SKILL = os.path.join("inline", "audit-team-note", "SKILL.md")
+
 #: The subprocess budget sits UNDER the hook's own 5s: if the harness kills
 #: the hook first there is no chance to fail soft, and the researcher sees a
 #: hook error instead of nothing. Measured cold on this box: 0.77s.
@@ -105,6 +116,11 @@ def _recording(session_id, cwd) -> bool:
         state = _session_marker.session_state(session_id)
         if state is None:
             state, _source = _session_marker.resolve_state_default(cwd)
+        # A session the daemon records is audited by the daemon (`probe.daemon.audit`),
+        # whichever plugin is installed: told here too, its main agent would start a
+        # second auditor on the same note under the same lease holder.
+        if state == _session_marker.STATE_DAEMON:
+            return False
         return _session_marker.state_allows_writes(state)
     except Exception:
         return True
@@ -126,6 +142,25 @@ def _is_switch_prompt(payload) -> bool:
     except Exception:
         return False
     return direction is not None
+
+
+def _daemon_profile() -> bool:
+    return os.environ.get(PROFILE_ENV) == DAEMON_PROFILE
+
+
+def _inline(session_id) -> bool:
+    """Has the researcher set this daemon-profile session inline? Unreadable: no."""
+    try:
+        return bool(_session_marker.is_inline(session_id))
+    except Exception:
+        return False
+
+
+def _inline_skill_line() -> str:
+    """Where the audit skill's file is, for an inline agent in the daemon profile."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    path = os.path.join(root, INLINE_SKILL)
+    return f" The skill is the file {path}." if os.path.isfile(path) else ""
 
 
 def _source() -> str:
@@ -153,6 +188,8 @@ def main() -> int:
     if marker is None or marker.exists():
         return 0
     # NOT MARKED either: the switch can be turned on later in this session.
+    if _daemon_profile() and not _inline(session_id):
+        return 0
     cwd = payload.get("cwd") if isinstance(payload, dict) else None
     if _is_switch_prompt(payload) or not _recording(
         session_id, cwd if isinstance(cwd, str) and cwd else None
@@ -184,6 +221,8 @@ def main() -> int:
         # NOT MARKED. Nothing was said, so nothing has been spent -- and the note
         # may cross its threshold later in the same session.
         return 0
+    if _daemon_profile():
+        advisory += _inline_skill_line()
 
     event = payload.get("hook_event_name") if isinstance(payload, dict) else None
     try:
