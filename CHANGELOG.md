@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.231.2
+
 - track-work: a link's `--reason` is now 1-2 short sentences on why the link is there, in the writer's own words, never a pasted quote, and it is human facing (the canvas shows it when you hover an arrow). Quoting the researcher's words in `--reason` is gone; those words still decide whether to link.
 
 ## 0.231.1
