@@ -1,6 +1,6 @@
 ---
 name: probe
-description: The skill for setting the Probe plugin state - `on` (the daemon records and reads), `read` (the daemon reads), `off` (no Probe), `inline` (the agent reads and writes Probe itself) - and `.probe.config` (paths Probe never records).
+description: The skill for setting the Probe plugin state - `on` (the daemon records and reads), `read` (the daemon reads), `off` (no Probe), `inline` (the agent reads and writes Probe itself) - and `.probe.config` (what Probe may read and record, per path).
 ---
 # Probe
 
@@ -44,7 +44,10 @@ Moving the switch never deletes anything and never backfills anything. In the
 
 ## `.probe.config`:
 
-Lists paths Probe never records (gitignore syntax), whatever the state. Create
+Sets what Probe may do with paths (gitignore syntax), whatever the state: a plain
+line is `off` (Probe never reads or records it), `<pattern> @probe read` lets the
+daemon look but records nothing, `!pattern` or `<pattern> @probe on` turns a path
+back on; `@probe <level>` alone on the first line sets every line's level. Create
 or edit one when the researcher asks, or when you judge a path should not be
 recorded; loosen or remove a rule only when they ask. Tell them each change.
 When a notice asks you to put a choice about one to them, ask once and record

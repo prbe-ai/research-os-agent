@@ -84,8 +84,8 @@ describe("initializeTrackingState", () => {
   });
 
   it.each([
-    { sent: { context: "`.probe.config` keeps Probe from recording: x.", ask: "Ask the researcher once" },
-      read: { context: "`.probe.config` keeps Probe from recording: x.", ask: "Ask the researcher once" } },
+    { sent: { context: "`.probe.config` blocks Probe from recording: x.", ask: "Ask the researcher once" },
+      read: { context: "`.probe.config` blocks Probe from recording: x.", ask: "Ask the researcher once" } },
     { sent: { context: null, ask: null }, read: { context: null, ask: null } },
     { sent: { context: 3, ask: "" }, read: { context: null, ask: null } },
     { sent: undefined, read: undefined },

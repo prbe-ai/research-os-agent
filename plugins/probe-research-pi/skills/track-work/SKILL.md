@@ -23,6 +23,7 @@ Its INDEX maps each section here to one there - pointers below say `reference
 - all human facing data should be as SHORT, CONCISE, and SIMPLE as possible - it should be readable by a new member of the team who has little context
 - **human facing**: every SLUG and `--name`; `--question`, `--summary`, `--discrepancies`, `--via-reason`; every `--tag`, metric key and span name; the run summary at `run end`; all notes and the team note.
     - human facing values should never have: hashes, uuids, timestamps, ticket numbers, command lines, parameter piles, bare counters, or abbreviations only you can expand.
+- a path a `.probe.config` sets to `read`: use it to understand the work; record nothing about it.
 - NOT human facing - keep exact and machine-shaped: `--external-id`, `probe link` foreign keys, `--config`, `--spec`, an artifact's `--name` (the file's relative path) and a paper's title (its real one).
 
 ## ENTITY NAMING

@@ -209,7 +209,7 @@ therefore reads the settled signal instead of changing the session because a
 config file changed later.
 
 The same call returns `probe_config`: `context`, one line naming the paths a
-`.probe.config` keeps Probe from recording (added to the prompt while Probe
+`.probe.config` blocks Probe from recording (added to the prompt while Probe
 records), and `ask`, the question about `.probe.config` files above the launch
 folder (delivered once with the next turn; the CLI marked it asked).
 

@@ -1245,7 +1245,7 @@ DAEMON_PROFILE_DENY = (
 )
 
 
-#: `.probe.config`: paths Probe never records (`probe_config.py`).
+#: `.probe.config`: paths at `read` or `off`, which Probe never records (`probe_config.py`).
 EXCLUDED_DENY = (
     "`{path}` is excluded by `{source}`, so `{matched}` was refused before it ran. Probe "
     "records nothing about it; do not route around it."
@@ -1253,7 +1253,7 @@ EXCLUDED_DENY = (
 
 #: A `.probe.config` above the launch folder: asked once per session, under `on`.
 PARENT_ASK = (
-    "`{files}`, above where this session started, keeps Probe from recording some paths here. "
+    "`{files}`, above where this session started, blocks Probe from recording some paths here. "
     "Ask the researcher once: follow it, or set it aside for this session? Record their answer "
     "with `probe session parent follow --directed` or `probe session parent ignore --directed`. "
     "It is followed until then; never choose for them."
@@ -1261,8 +1261,10 @@ PARENT_ASK = (
 
 PARENT_ASK_DENY = "`{matched}` was held back so you ask this first; retry it after. " + PARENT_ASK
 
-#: Session start, when any `.probe.config` reaches this session's folder.
-EXCLUDED_CONTEXT = "`.probe.config` keeps Probe from recording: {paths}. Reads are unaffected."
+#: Session start, when any `.probe.config` reaches this session's folder: every
+#: profile, the daemon's included (Richard 2026-10-09, his wording). `read` and
+#: `off` paths alike: the agent records neither.
+EXCLUDED_CONTEXT = "`.probe.config` blocks Probe from recording: {paths}."
 
 
 def moves_switch(args: "list[str]") -> "str | None":

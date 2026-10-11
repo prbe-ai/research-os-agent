@@ -1,6 +1,6 @@
 ---
 name: probe
-description: The skill for setting the Probe plugin state - `on` (r/w), `read`, `off` (no r/w) - and `.probe.config` (paths Probe never records).
+description: The skill for setting the Probe plugin state - `on` (r/w), `read`, `off` (no r/w) - and `.probe.config` (what Probe may read and record, per path).
 ---
 # Probe
 
@@ -53,9 +53,14 @@ reports it as `machine_default_state`.
 
 ## `.probe.config`:
 
-Lists paths Probe never records (gitignore syntax), whatever the state; reads
-are unaffected. Folders inherit their parents' file; where nothing matches, the
-state decides. `probe ignore check PATH` names the excluding line.
+Sets what Probe may do with paths (gitignore syntax), whatever the state: a plain
+line is `off` (Probe never reads or records it), `<pattern> @probe read` lets the
+daemon look but records nothing, `!pattern` or `<pattern> @probe on` turns a path
+back on. `@probe <level>` alone on the first line sets every line's level. An
+`off` folder is closed, as in git: to keep one file in it, write `folder/*` then
+that file. Folders inherit their parents' file; where nothing matches, the state
+decides. Your own Probe lookups are unaffected. `probe ignore check PATH` names
+the level and the line.
 
 - Create or edit one when the researcher asks, or when you judge a path should
   not be recorded; loosen or remove a rule only when they ask. Tell them each

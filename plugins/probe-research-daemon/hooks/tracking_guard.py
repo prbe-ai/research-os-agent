@@ -1218,11 +1218,24 @@ def _hook_harness():
     return module
 
 
+def _parent_matters(state: "str | None", daemon_reads: bool) -> bool:
+    """Does the parent question change anything in this state? Under `on` the
+    answer changes what is recorded; under `read` with the daemon reading
+    (`read only (daemon)`), what the daemon may see (`read` vs `off` paths)."""
+    if state in (_session_marker.STATE_FULL, _session_marker.STATE_DAEMON):
+        return True
+    return daemon_reads and state == _session_marker.STATE_READ_ONLY
+
+
 def _ask_parent_on_prompt(session_id: str, cwd: "str | None") -> None:
-    """In a session the Probe daemon records, Probe is at work from the first
-    message, so the parent question goes out with it (once; `on` only)."""
+    """In a session the Probe daemon records or reads for, Probe is at work from
+    the first message, so the parent question goes out with it (once)."""
     try:
-        if _state(session_id, cwd) != _session_marker.STATE_DAEMON:
+        state = _state(session_id, cwd)
+        if state != _session_marker.STATE_DAEMON and not (
+            daemon_profile() and state == _session_marker.STATE_READ_ONLY
+            and not _session_marker.is_inline(session_id, state)
+        ):
             return
         if not _inline_reaches_model("UserPromptSubmit"):
             return  # never marked asked unheard: the first held call asks instead
@@ -1259,12 +1272,13 @@ def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, se
         if (
             notice
             and session_id
-            and landed in (_session_marker.STATE_FULL, _session_marker.STATE_DAEMON)
+            and _parent_matters(landed, daemon)
             and hook_event == "UserPromptSubmit"
             and _inline_reaches_model(hook_event)
         ):
-            # The switch moved to `on`: a `.probe.config` above the launch folder
-            # is the researcher's to follow or set aside, so ask now.
+            # The switch moved to `on` (or, with the daemon reading, `read`): a
+            # `.probe.config` above the launch folder is the researcher's to
+            # follow or set aside, so ask now.
             try:
                 pc = _session_marker.probe_config()
                 ask = _parent_ask(session_id, (pc.UNASKED, pc.PENDING))
@@ -1470,11 +1484,12 @@ def _parent_files(session_id: str) -> str:
 
 def _parent_hold(payload: dict, session_id: str) -> bool:
     """Hold back the session's first Probe call so the parent question comes
-    first (`on` only; the other states write nothing the answer could change).
-    True when refused."""
+    first (`on`, and `read` while the daemon reads: the other states touch
+    nothing the answer could change). True when refused."""
     try:
         state = _state(session_id, _payload_cwd(payload))
-        if state not in (_session_marker.STATE_FULL, _session_marker.STATE_DAEMON):
+        reads = daemon_profile() and not _session_marker.is_inline(session_id, state)
+        if not _parent_matters(state, reads):
             return False
         matched = _probe_call(payload)
         if not matched:

@@ -850,6 +850,18 @@ def _inline_reminder() -> str | None:
     return inline_notice_for(track_work, edit_notes)
 
 
+def _daemon_profile_excluded() -> str | None:
+    """The one agent-facing line the daemon profile keeps (Richard 2026-10-09):
+    which paths `.probe.config` blocks Probe from recording, so the agent never
+    records them itself. Only while something records (not `read` or `off`),
+    and never during a compaction."""
+    if os.environ.get(HOOK_EVENT_ENV) == PRECOMPACT:
+        return None
+    if not _session_marker.state_allows_writes(_probe_state()):
+        return None
+    return _excluded_context()
+
+
 def _daemon_profile_notice() -> str | None:
     """The daemon profile's `_start_context`: the same maintenance, and the
     reports that would have gone to the agent as ONE line for the researcher.
@@ -907,7 +919,8 @@ def _final(obj: dict) -> NoReturn:
 
     In the daemon profile nothing reaches the agent -- `additionalContext` is
     dropped and the researcher gets the reports as a systemMessage line -- but
-    an inline session's notice after a compaction or resume (`_inline_reminder`).
+    the `.probe.config` line (`_daemon_profile_excluded`) and an inline
+    session's notice after a compaction or resume (`_inline_reminder`).
     """
     if _daemon_profile():
         obj.pop("hookSpecificOutput", None)
@@ -915,9 +928,9 @@ def _final(obj: dict) -> NoReturn:
         if notice:
             prior = obj.get("systemMessage")
             obj["systemMessage"] = f"{prior}\n{notice}" if prior else notice
-        reminder = _inline_reminder()
-        if reminder:
-            obj["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": reminder}
+        context = [c for c in (_daemon_profile_excluded(), _inline_reminder()) if c]
+        if context:
+            obj["hookSpecificOutput"] = {"hookEventName": "SessionStart", "additionalContext": "\n\n".join(context)}
         _emit(obj)
     ctx = _start_context()
     if ctx:

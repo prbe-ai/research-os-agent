@@ -1,14 +1,29 @@
-"""`.probe.config`: paths Probe never records, in gitignore syntax.
+"""`.probe.config`: how much of a path Probe may touch, in gitignore syntax.
 
-A `.probe.config` in any folder lists paths under that folder that Probe must
-not record: no run opened there, no artifact or note about them, no daemon
-event. It beats the session's on / read / off switch, and it never blocks a
-read. The rules are git's (`gitignore(5)`), applied the way git applies them:
+A `.probe.config` in any folder sets a LEVEL for paths under that folder:
+
+- `off`: Probe never reads them and records nothing about them -- no run
+  opened there, no artifact or note about them, no daemon event;
+- `read`: the Probe daemon may see the agent's work on them, as context; Probe
+  records nothing about them (to the SDK, the CLI and the agent this is `off`);
+- `on`: recorded as usual (what `!pattern` means).
+
+A plain line is `off`. `@probe <level>` on a line of its own sets the level of
+the lines after it (written first, it is the file's default), and
+`<pattern> @probe <level>` sets one line's. A level only narrows what the
+session's on / read / off switch allows; it never blocks the agent's own
+Probe lookups. The rules are git's (`gitignore(5)`), applied the way git
+applies them:
 
 - a file covers its own folder and everything below it; patterns are relative
   to that folder; a folder with no file inherits its parents' rules;
 - a later line beats an earlier one, a deeper file beats a shallower one;
-- `!pattern` re-includes, except under a folder that is itself excluded;
+- a folder at `off` is closed, as git closes an ignored folder: nothing inside
+  it is looked at (its own `.probe.config` included) and no line turns
+  anything inside it back on. `secret/*` closes nothing, so
+  `secret/important.txt @probe on` after it works;
+- a folder at `read` or `on` stays open: what is inside it takes the folder's
+  level unless a line matches it directly;
 - `/` anchors, a trailing `/` matches folders only, `**` spans folders.
 
 One deliberate difference from git: files ABOVE a repository root count too,
@@ -20,9 +35,8 @@ aside for that session (`probe session parent ignore`); until they answer it is
 followed. Files at or below the launch folder always apply.
 
 THIS MODULE IS STDLIB-ONLY AND IMPORTS NOTHING FROM `probe`. It is copied
-verbatim beside the plugin hooks (`_probe_config.py`) and into the tap
-(`tap/probe_config.py`), which run under the system python with no package on
-their path (`make sync-probe-config`; `tests/test_probe_config_sync.py` fails
+verbatim beside both plugins' hooks (`_probe_config.py`), which run under the
+system python with no package on their path (`make sync-probe-config`; `tests/test_probe_config_sync.py` fails
 when a copy drifts). Matching never uses a backtracking regex: a segment glob
 is a dynamic-programming match, so no pattern can make a check slow.
 
@@ -36,6 +50,7 @@ skips it.
 from __future__ import annotations
 
 import errno
+import functools
 import hashlib
 import json
 import os
@@ -59,6 +74,17 @@ MAX_BYTES = 1024 * 1024
 PARENT_SUFFIX = ".parent-config"
 #: Where a session started, beside its state file (written once, at seed).
 LAUNCH_SUFFIX = ".launch-dir"
+
+#: The levels, least restrictive first. `on` is recorded; `read` and `off` are
+#: not recorded (`Verdict.excluded`); `off` is not even read (`Verdict.hidden`).
+ON = "on"
+READ = "read"
+OFF = "off"
+LEVELS = (ON, READ, OFF)
+_RANK = {ON: 0, READ: 1, OFF: 2}
+#: The word that sets a level: `@probe <level>` alone on a line sets the lines
+#: after it, `<pattern> @probe <level>` one line.
+LEVEL_WORD = "@probe"
 
 FOLLOW = "follow"
 IGNORE = "ignore"
@@ -281,6 +307,10 @@ class Rule:
     #: From a retired folder default (`.probe/config.json` off/read): it counts
     #: only inside an agent session (`legacy=True`), the only place it ever did.
     legacy: bool = False
+    #: What a match sets: `on`, `read` or `off`.
+    level: str = OFF
+    #: The pattern alone (no `!`, no `@probe` suffix), for describing the place.
+    text: str = ""
 
     def matches(self, rel: tuple[str, ...], is_dir: bool) -> bool:
         """Does this rule match the path `rel` (segments relative to `base`)?"""
@@ -294,8 +324,9 @@ class Rule:
 
     def could_reach(self, rel: tuple[str, ...]) -> bool:
         """Could this rule match `rel` (as a folder), one of its ancestors below
-        `base`, or anything inside it? From the pattern alone, no disk."""
-        if self.negated:
+        `base`, or anything inside it? From the pattern alone, no disk. A rule
+        that sets `on` restricts nothing, so it reaches nothing."""
+        if self.level == ON:
             return False
         if not self.anchored:
             return True
@@ -354,32 +385,95 @@ def _extends(pat: tuple, path: tuple[str, ...]) -> bool:
     return any(reach[i][n] for i in range(m))
 
 
-def parse_line(raw: str, base: str, source: str, line: int) -> Rule | None:
-    """One `.probe.config` line as a Rule, None for a blank or comment line.
-    Raises `_BadPattern` for a line git would never match."""
+def level_of(word: str) -> str | None:
+    """`on` / `read` / `off` from a level word (any case), else None."""
+    low = word.lower()
+    return low if low in _RANK else None
+
+
+def setting_line(raw: str) -> str | None:
+    """The level word of an `@probe <level>` line, else None (a pattern line)."""
+    parts = raw.strip(" \t\r\n").split()
+    if len(parts) == 2 and parts[0].lower() == LEVEL_WORD:
+        return parts[1]
+    return None
+
+
+def _split_level(text: str) -> tuple[str, str | None]:
+    """`(pattern, level word)` for `<pattern> @probe <word>`, else `(text, None)`.
+    Plain scans, no regex: the suffix is the last two words, `@probe` and the
+    level, after whitespace. A pattern that really ends in ` @probe x` escapes
+    it (`\\@probe`)."""
+    end = len(text)
+    while end and text[end - 1] in " \t":
+        end -= 1
+    j = end
+    while j and text[j - 1] not in " \t":
+        j -= 1
+    word = text[j:end]
+    k = j
+    while k and text[k - 1] in " \t":
+        k -= 1
+    m = k
+    while m and text[m - 1] not in " \t":
+        m -= 1
+    if not word or k == j or text[m:k].lower() != LEVEL_WORD:
+        return text, None
+    n = m
+    while n and text[n - 1] in " \t":
+        n -= 1
+    if n == m or n == 0:
+        return text, None
+    body = text[:n]
+    if body.endswith("\\") and not body.endswith("\\\\"):
+        body += text[n]  # an escaped space just before the suffix stays
+    return body, word
+
+
+def parse_line(raw: str, base: str, source: str, line: int, default: str = OFF) -> Rule | None:
+    """One `.probe.config` line as a Rule, None for a blank, comment or `@probe`
+    setting line. `default` is the level a plain line sets (the last `@probe
+    <level>` line above it). Raises `_BadPattern` for a line git would never match."""
+    return _parse(raw, base, source, line, default)[0]
+
+
+def _parse(raw: str, base: str, source: str, line: int, default: str = OFF) -> tuple[Rule | None, str | None]:
+    """`parse_line`, plus a warning about the line (an unknown level counts as `off`)."""
     text = raw.rstrip("\r\n")
     if not text or text.startswith("#"):
-        return None
+        return None, None
+    if setting_line(text) is not None:
+        return None, None
+    text, word = _split_level(text)
+    note = None
+    level = default
+    if word is not None:
+        level = level_of(word) or OFF
+        if level_of(word) is None:
+            note = f"`{word}` is not a level (on, read, off), so the line counts as `off`."
     text = _trim_trailing_spaces(text)
     if not text:
-        return None
+        return None, None
     negated = False
     if text.startswith("!"):
         negated = True
         text = text[1:]
+        if word is None:
+            level = ON
     elif text.startswith("\\!") or text.startswith("\\#"):
         text = text[1:]
     if not text:
-        return None
+        return None, None
+    shown_text = text
     dir_only = text.endswith("/") and not text.endswith("\\/")
     body = text[:-1] if dir_only else text
     if not body:
-        return None
+        return None, None
     anchored = "/" in body
     if body.startswith("/"):
         body = body[1:]
     if not body:
-        return None
+        return None, None
     parts = body.split("/")
     segments: list = []
     for part in parts:
@@ -404,7 +498,9 @@ def parse_line(raw: str, base: str, source: str, line: int) -> Rule | None:
         dir_only=dir_only,
         anchored=anchored,
         segments=tuple(segments),
-    )
+        level=level,
+        text=shown_text,
+    ), note
 
 
 def _trim_trailing_spaces(text: str) -> str:
@@ -426,7 +522,7 @@ def _everything(base: str, source: str, why: str, *, legacy: bool = False) -> Ru
     """A synthetic rule excluding everything under `base` (fail closed)."""
     return Rule(
         base=base, source=source, line=0, pattern=why, negated=False, dir_only=False,
-        anchored=False, segments=((("star",),),), legacy=legacy,
+        anchored=False, segments=((("star",),),), legacy=legacy, level=OFF, text="*",
     )
 
 
@@ -609,12 +705,24 @@ def _load_unlocked(folder: str, ttl: float) -> _Loaded | None:
             digest.update(b"unreadable")
         else:
             digest.update(text.encode("utf-8", "surrogatepass"))
+            default = OFF
             for number, raw in enumerate(text.splitlines(), start=1):
+                word = setting_line(raw)
+                if word is not None:
+                    default = level_of(word) or OFF
+                    if level_of(word) is None:
+                        warnings.append(
+                            f"`{path}:{number}`: `{word}` is not a level (on, read, off), so the lines "
+                            "after it count as `off`."
+                        )
+                    continue
                 try:
-                    rule = parse_line(raw, folder, path, number)
+                    rule, note = _parse(raw, folder, path, number, default)
                 except _BadPattern:
                     warnings.append(f"`{path}:{number}` is not a valid pattern and was skipped.")
                     continue
+                if note:
+                    warnings.append(f"`{path}:{number}`: {note}")
                 if rule is not None:
                     rules.append(rule)
     loaded = _Loaded(key=key, rules=tuple(rules), warnings=tuple(warnings), digest=digest.hexdigest())
@@ -641,17 +749,37 @@ def _stamp(folder: str, at: float) -> None:
 
 @dataclass(frozen=True)
 class Verdict:
+    #: Probe records nothing about the path (`read` or `off`).
     excluded: bool
     rule: Rule | None = None
-    #: The path the verdict was reached on (an excluded parent folder, or the path).
+    #: The path the verdict was reached on (a closed parent folder, or the path).
     at: str = ""
+    level: str = ON
 
     @property
     def source(self) -> str:
         return self.rule.where if self.rule is not None else ""
 
+    @property
+    def hidden(self) -> bool:
+        """Probe never even reads the path (`off`)."""
+        return self.level == OFF
+
 
 NOT_EXCLUDED = Verdict(False)
+#: What a check that broke answers: `off` (fail closed, as for an unreadable file).
+CHECK_FAILED = Verdict(True, None, "", OFF)
+
+
+def _verdict(rule: Rule | None, at: str) -> Verdict:
+    if rule is None or rule.level == ON:
+        return Verdict(False, rule, at, ON) if rule is not None else NOT_EXCLUDED
+    return Verdict(True, rule, at, rule.level)
+
+
+def stricter(a: Verdict, b: Verdict) -> Verdict:
+    """The more restrictive of two verdicts (`a` on a tie)."""
+    return b if _RANK[b.level] > _RANK[a.level] else a
 
 
 def _norm(path: str | os.PathLike, cwd: str | None = None) -> str:
@@ -685,6 +813,11 @@ def _is_strict_ancestor(folder: str, of: str) -> bool:
 
 
 def _rel(path: str, base: str) -> tuple[str, ...]:
+    if path == base:
+        return ()
+    prefix = base if base.endswith(os.sep) else base + os.sep
+    if path.startswith(prefix):
+        return tuple(p for p in path[len(prefix):].split(os.sep) if p and p != ".")
     rel = os.path.relpath(path, base)
     return tuple(p for p in rel.split(os.sep) if p and p != ".")
 
@@ -702,28 +835,105 @@ def _decide(target: str, is_dir: bool, layers: list[tuple[str, tuple]]) -> Rule 
     return None
 
 
+@dataclass(frozen=True)
+class _Frame:
+    """What a folder contributes to the paths inside it, worked out from its
+    parent's frame: git's per-directory exclude stack (`dir.c` `prep_exclude`)."""
+
+    folder: str
+    #: The rules that apply inside this folder, shallow file first: (base, rules).
+    layers: tuple
+    #: The `off` rule that closed this folder or one above it: nothing inside is
+    #: looked at, and nothing inside is turned back on.
+    closed: Rule | None = None
+    closed_at: str = ""
+    #: The nearest rule (on this folder or one above) that set `read` or `on`:
+    #: what an entry inside takes when no line matches it directly.
+    inherited: Rule | None = None
+    inherited_at: str = ""
+
+
+class _Walk:
+    """One session view (`skip`, `legacy`, `ttl`) applied to paths."""
+
+    __slots__ = ("skip", "legacy", "ttl")
+
+    def __init__(self, skip: frozenset, legacy: bool, ttl: float) -> None:
+        self.skip, self.legacy, self.ttl = skip, legacy, ttl
+
+    def root(self, folder: str) -> _Frame:
+        return _Frame(folder, self._layers(folder, ()))
+
+    def child(self, parent: _Frame, folder: str) -> _Frame:
+        """The frame of `folder`, a folder directly inside `parent.folder`."""
+        if parent.closed is not None:
+            return _Frame(folder, parent.layers, parent.closed, parent.closed_at, parent.inherited, parent.inherited_at)
+        found = _decide(folder, True, parent.layers)
+        rule = _ceiling(found, parent)
+        if rule is not None and rule.level == OFF:
+            return _Frame(folder, parent.layers, rule, folder, parent.inherited, parent.inherited_at)
+        if rule is None or (rule is parent.inherited and found is not rule):
+            # No line, or a deeper `on` capped: the `read` folder stays the ceiling's place.
+            inherited, inherited_at = parent.inherited, parent.inherited_at
+        else:
+            inherited, inherited_at = rule, folder
+        return _Frame(folder, self._layers(folder, parent.layers), None, "", inherited, inherited_at)
+
+    def entry(self, parent: _Frame, path: str, is_dir: bool) -> Verdict:
+        """The verdict on `path`, an entry directly inside `parent.folder`."""
+        if parent.closed is not None:
+            return Verdict(True, parent.closed, parent.closed_at, OFF)
+        rule = _ceiling(_decide(path, is_dir, parent.layers), parent)
+        if rule is not None:
+            return _verdict(rule, path)
+        if parent.inherited is not None:
+            return _verdict(parent.inherited, parent.inherited_at)
+        return NOT_EXCLUDED
+
+    def _layers(self, folder: str, layers: tuple) -> tuple:
+        if folder in self.skip:
+            return layers
+        loaded = _load(folder, self.ttl)
+        if loaded is None:
+            return layers
+        for message in loaded.warnings:
+            _warn(message)
+        rules = loaded.rules if self.legacy else tuple(r for r in loaded.rules if not r.legacy)
+        return layers + ((folder, rules),) if rules else layers
+
+    def one(self, stack: list, path: str, is_dir: bool) -> Verdict:
+        """The verdict on `path`, reusing the frames already on `stack` for the
+        folders it shares with the last path, and leaving its own there."""
+        chain = _parts(path)
+        if len(chain) < 2:
+            return NOT_EXCLUDED
+        folders = chain[:-1]
+        keep = 0
+        while keep < len(stack) and keep < len(folders) and stack[keep].folder == folders[keep]:
+            keep += 1
+        del stack[keep:]
+        while len(stack) < len(folders):
+            folder = folders[len(stack)]
+            stack.append(self.root(folder) if not stack else self.child(stack[-1], folder))
+        return self.entry(stack[-1], path, is_dir)
+
+
+def _ceiling(rule: Rule | None, parent: _Frame) -> Rule | None:
+    """A `read` folder is a ceiling for the files inside it: a deeper
+    `.probe.config` (one in the `read` folder or below it) may narrow it to
+    `off` but never turn it back `on`. Lines of the file that set `read` may
+    (`notebooks/ @probe read` then `notebooks/public.md @probe on`). A loosening
+    line from a deeper file is replaced by the `read` rule it would override."""
+    held = parent.inherited
+    if rule is None or held is None or held.level != READ or rule.level != ON:
+        return rule
+    if rule.base != held.base and (rule.base == parent.inherited_at or _is_strict_ancestor(parent.inherited_at, rule.base)):
+        return held
+    return rule
+
+
 def _check_one(path: str, is_dir: bool, skip: frozenset, legacy: bool, ttl: float = 0.0) -> Verdict:
-    chain = _parts(path)
-    layers: list[tuple[str, tuple]] = []
-    for index, folder in enumerate(chain):
-        last = index == len(chain) - 1
-        if index > 0:
-            # Is THIS path (a parent folder, or the path itself) excluded by the
-            # files above it? An excluded folder ends the walk: nothing under it
-            # can be re-included (git's rule).
-            rule = _decide(folder, True if not last else is_dir, layers)
-            if rule is not None and not rule.negated:
-                return Verdict(True, rule, folder)
-        if last:
-            break
-        loaded = None if folder in skip else _load(folder, ttl)
-        if loaded is not None:
-            for message in loaded.warnings:
-                _warn(message)
-            rules = loaded.rules if legacy else tuple(r for r in loaded.rules if not r.legacy)
-            if rules:
-                layers.append((folder, rules))
-    return NOT_EXCLUDED
+    return _Walk(skip, legacy, ttl).one([], path, is_dir)
 
 
 def check(
@@ -757,14 +967,82 @@ def check(
             is_dir = os.path.isdir(full)
         skipped = frozenset(skip or ())
         verdict = _check_one(full, is_dir, skipped, legacy, ttl)
-        if verdict.excluded or not resolve:
-            return verdict
+    except Exception:  # noqa: BLE001 - a check never breaks the caller, and fails closed
+        return CHECK_FAILED
+    if verdict.hidden or not resolve:
+        return verdict
+    try:
         real = _real(raw, ttl)
         if real != full:
-            return _check_one(real, is_dir, skipped, legacy, ttl)
+            return stricter(verdict, _check_one(real, is_dir, skipped, legacy, ttl))
+    except Exception:  # noqa: BLE001 - the path as given still decides
+        pass
+    return verdict
+
+
+class Checker:
+    """Many checks in a row, the way git checks them (`dir.c` `prep_exclude`):
+    the folders of the last path stay on a stack, so the next path in the same
+    folder costs one match instead of a walk to `/`. The answers are `check`'s
+    exactly. It keeps nothing beyond itself: make one per batch (one snapshot,
+    one walk, one tool output) and drop it."""
+
+    def __init__(
+        self,
+        *,
+        cwd: str | None = None,
+        skip: "frozenset[str] | set[str] | None" = None,
+        legacy: bool = False,
+        ttl: float = 0.0,
+        resolve: bool = True,
+    ) -> None:
+        self.cwd = cwd
+        self.resolve = resolve
+        self._walk = _Walk(frozenset(skip or ()), legacy, ttl)
+        self._given: list = []
+        self._real: list = []
+        #: Each folder's real path, once per batch (the folders of a batch repeat).
+        self._real_dirs: dict[str, str] = {}
+
+    def _resolved(self, raw: str) -> str:
+        """`os.path.realpath(raw)`, with each folder's real path worked out once."""
+        if ".." in raw.split(os.sep):
+            return os.path.realpath(raw)
+        folder, name = os.path.split(os.path.normpath(raw))
+        real_dir = self._real_dirs.get(folder)
+        if real_dir is None:
+            if len(self._real_dirs) >= _CACHE_MAX:
+                self._real_dirs.clear()
+            real_dir = self._real_dirs[folder] = os.path.realpath(folder)
+        joined = os.path.join(real_dir, name)
+        return os.path.realpath(joined) if os.path.islink(joined) else joined
+
+    def check(self, path: str | os.PathLike, *, is_dir: bool | None = None) -> Verdict:
+        try:
+            raw = os.fspath(path)
+            if raw.startswith("~"):
+                raw = os.path.expanduser(raw)
+            if not os.path.isabs(raw):
+                raw = os.path.join(self.cwd or os.getcwd(), raw)
+            full = os.path.normpath(raw)
+            if is_dir is None:
+                is_dir = os.path.isdir(full)
+            verdict = self._walk.one(self._given, full, is_dir)
+        except Exception:  # noqa: BLE001 - a check never breaks the caller, and fails closed
+            return CHECK_FAILED
+        if verdict.hidden or not self.resolve:
+            return verdict
+        try:
+            real = self._resolved(raw)
+            if real != full:
+                return stricter(verdict, self._walk.one(self._real, real, is_dir))
+        except Exception:  # noqa: BLE001 - the path as given still decides
+            pass
         return verdict
-    except Exception:  # noqa: BLE001 - a check never breaks the caller
-        return NOT_EXCLUDED
+
+    def closed(self, folder: str | os.PathLike) -> bool:
+        """For a walk: is `folder` closed (`off`), so it is not entered at all?"""
+        return self.check(folder, is_dir=True).hidden
 
 
 _REAL_DIRS: dict[str, tuple[float, str]] = {}
@@ -822,6 +1100,7 @@ def _witness(rule: Rule, rel_full: tuple[str, ...]) -> list[str] | None:
     segs = rule.segments
     k = len(rel_full)
 
+    @functools.lru_cache(maxsize=None)
     def rec(i: int, j: int) -> list[str] | None:
         if j == k:
             rest: list[str] = []
@@ -843,15 +1122,17 @@ def _witness(rule: Rule, rel_full: tuple[str, ...]) -> list[str] | None:
             return rec(i + 1, j) or rec(i, j + 1)
         return rec(i + 1, j + 1) if _match_segment(seg, rel_full[j]) else None
 
-    return rec(0, 0)
+    found = rec(0, 0)
+    return list(found) if found is not None else None
 
 
-def _reincluded_inside(full: str, skip: frozenset, legacy: bool, ttl: float) -> bool:
-    """Is anything inside `full` actually re-included by a `!` rule? For each `!`
-    rule that applies (the folder's own file or one above), build one path
-    inside `full` it matches and run the whole check on it: only a path that
-    comes back NOT excluded proves it (order, depth and excluded parents all
-    count, as for any path)."""
+def _looser_inside(full: str, than: Verdict, skip: frozenset, legacy: bool, ttl: float) -> Verdict:
+    """The least restrictive verdict some path INSIDE `full` actually gets, if
+    looser than `than`. For each rule that sets a looser level (the folder's own
+    file or one above), build one path inside `full` it matches and run the
+    whole check on it: only a path that comes back looser proves it (order,
+    depth and closed parents all count, as for any path)."""
+    best = than
     for folder in _parts(full):
         if folder in skip:
             continue
@@ -860,22 +1141,27 @@ def _reincluded_inside(full: str, skip: frozenset, legacy: bool, ttl: float) -> 
             continue
         rel = _rel(full, folder)
         for rule in loaded.rules:
-            if not rule.negated or (rule.legacy and not legacy):
+            if _RANK[rule.level] >= _RANK[best.level] or (rule.legacy and not legacy):
                 continue
             inside = _witness(rule, rel)
             if not inside:
                 continue
             path = os.path.join(full, *inside)
             as_dir = rule.dir_only
-            if not _check_one(path, as_dir, skip, legacy, ttl).excluded:
-                if not as_dir or not _check_one(os.path.join(path, "x"), False, skip, legacy, ttl).excluded:
-                    return True
-    return False
+            found = _check_one(path, as_dir, skip, legacy, ttl)
+            if as_dir and _RANK[found.level] < _RANK[best.level]:
+                found = stricter(found, _check_one(os.path.join(path, "x"), False, skip, legacy, ttl))
+            if _RANK[found.level] < _RANK[best.level]:
+                best = found
+                if best.level == ON:
+                    return best
+    return best
 
 
 def check_cwd(folder: str | os.PathLike, **kw) -> Verdict:
-    """Is work run IN `folder` excluded? The folder itself is excluded, or every
-    entry in it would be (its own `*`, or a parent's `repo-b/**`)."""
+    """Is work run IN `folder` excluded? The folder itself is, or every entry in
+    it would be (its own `*`, or a parent's `repo-b/**`). The level is the
+    loosest any entry gets: an event in the folder may be about any of them."""
     verdict = check(folder, is_dir=True, **kw)
     if verdict.excluded:
         return verdict
@@ -885,18 +1171,117 @@ def check_cwd(folder: str | os.PathLike, **kw) -> Verdict:
         legacy = bool(kw.get("legacy", False))
         ttl = float(kw.get("ttl", 0.0))
         probe_names = ("\u2063" * 8, "\u2063" * 9 + ".x")
-        first = None
+        loosest: Verdict | None = None
         for name in probe_names:
             for as_dir in (False, True):
                 child = _check_one(os.path.join(full, name), as_dir, skipped, legacy, ttl)
                 if not child.excluded:
                     return NOT_EXCLUDED
-                first = first or child
-        if first is None or _reincluded_inside(full, skipped, legacy, ttl):
+                if loosest is None or _RANK[child.level] < _RANK[loosest.level]:
+                    loosest = child
+        if loosest is None:
             return NOT_EXCLUDED
-        return Verdict(True, first.rule, full)
+        found = _looser_inside(full, loosest, skipped, legacy, ttl)
+        if not found.excluded:
+            return NOT_EXCLUDED
+        return Verdict(True, found.rule, full, found.level)
     except Exception:  # noqa: BLE001
         return NOT_EXCLUDED
+
+
+def off_inside(
+    folder: str | os.PathLike,
+    *,
+    skip: "frozenset[str] | set[str] | None" = None,
+    legacy: bool = False,
+    ttl: float = 0.0,
+    budget_s: float = 1.0,
+    max_entries: int = 1_000_000,
+) -> bool:
+    """Is `folder`, or anything below it, at `off`? For a command that reads a
+    whole tree (`rg`, `find`, `grep -r`, `git diff`): its output cannot be
+    trusted to name every file it read, so such a command is refused, or its
+    event dropped, when this is True. Skips what a search skips by default
+    (hidden folders, `SCAN_SKIP_DIRS`). Exact when it finishes; True (fail
+    closed) when it cannot finish in `budget_s` or `max_entries`. Never raises.
+
+    Cheap when nothing can apply: the per-file walk runs only when an `off`
+    rule above (or in) `folder` could reach inside it, or a `.probe.config`
+    sits below it."""
+    try:
+        full = _norm(folder)
+        real = os.path.realpath(full)
+        if real != full and _off_inside_one(real, skip, legacy, ttl, budget_s, max_entries):
+            return True
+        return _off_inside_one(full, skip, legacy, ttl, budget_s, max_entries)
+    except Exception:  # noqa: BLE001 - fail closed
+        return True
+
+
+def _off_inside_one(full: str, skip, legacy: bool, ttl: float, budget_s: float, max_entries: int) -> bool:
+    """`off_inside` for one spelling of the folder."""
+    checker = Checker(skip=skip, legacy=legacy, ttl=ttl)
+    if checker.check(full, is_dir=True).hidden:
+        return True
+    deadline = time.monotonic() + budget_s
+    stack: list = []
+    checker._walk.one(stack, os.path.join(full, "x"), False)
+    frame = stack[-1] if stack else None
+    reaches = frame is not None and any(
+        rule.level == OFF and (legacy or not rule.legacy) and rule.could_reach(_rel(full, base))
+        for base, rules in frame.layers
+        for rule in rules
+    )
+    if not reaches:
+        # Only a `.probe.config` below `folder` could set something inside it.
+        pending, seen = [full], 0
+        while pending and not reaches:
+            current = pending.pop()
+            try:
+                with os.scandir(current) as it:
+                    for entry in it:
+                        seen += 1
+                        if seen > max_entries or time.monotonic() > deadline:
+                            return True
+                        if current != full and (
+                            entry.name == CONFIG_NAME
+                            or (legacy and entry.name == LEGACY_DIRNAME and legacy_default(current) in ("off", "read-only"))
+                        ):
+                            reaches = True
+                            break
+                        if entry.name in SCAN_SKIP_DIRS:  # where nobody keeps a `.probe.config`
+                            continue
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                pending.append(entry.path)
+                        except OSError:
+                            continue
+            except OSError:
+                continue
+        if not reaches:
+            return False
+    pending, seen = [full], 0
+    while pending:
+        current = pending.pop()
+        try:
+            with os.scandir(current) as it:
+                for entry in it:
+                    seen += 1
+                    if seen > max_entries or time.monotonic() > deadline:
+                        return True
+                    if entry.name == ".git":  # objects, never a file's name or text
+                        continue
+                    try:
+                        is_dir = entry.is_dir(follow_symlinks=False)
+                    except OSError:
+                        continue
+                    if checker.check(entry.path, is_dir=is_dir).hidden:
+                        return True
+                    if is_dir:
+                        pending.append(entry.path)
+        except OSError:
+            continue
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -919,7 +1304,15 @@ def parents_reaching(launch_dir: str | os.PathLike) -> list[ParentFile]:
     except Exception:  # noqa: BLE001
         return []
     out: list[ParentFile] = []
+    walk = _Walk(frozenset(), True, 0.0)
+    frame = None
     for folder in _parts(launch)[:-1]:
+        try:
+            frame = walk.root(folder) if frame is None else walk.child(frame, folder)
+        except Exception:  # noqa: BLE001
+            break
+        if frame.closed is not None:
+            break  # a closed folder: its file, and every file below it, is never read
         try:
             loaded = _load(folder)
         except Exception:  # noqa: BLE001
@@ -1095,7 +1488,7 @@ def describe_rule(rule: Rule) -> str:
     """A rule as a place: `~/code/repo-a/data/`, or `*.ckpt under ~/code`."""
     if rule.line == 0:
         return _display(rule.base) + "/ (all of it)"
-    body = rule.pattern[1:] if rule.negated else rule.pattern
+    body = rule.text or (rule.pattern[1:] if rule.negated else rule.pattern)
     if rule.anchored:
         return _display(os.path.join(rule.base, body.lstrip("/")))
     return f"{body} under {_display(rule.base)}"
@@ -1121,7 +1514,7 @@ def summarize(
     seen: set[str] = set()
 
     def add(rule: Rule) -> None:
-        if rule.negated:
+        if rule.level == ON:
             return
         text = describe_rule(rule)
         if text in seen:
@@ -1146,27 +1539,32 @@ def summarize(
             if (legacy or not rule.legacy) and rule.could_reach(rel):
                 add(rule)
     deadline = time.monotonic() + budget_s
-    stack = [start]
+    walk = _Walk(skipped, legacy, 0.0)
+    frames: list = []
+    walk.one(frames, os.path.join(start, "x"), False)  # the frames down to `start`
+    stack = [frames[-1]] if frames and frames[-1].closed is None else []
     visited = 0
     while stack:
         if time.monotonic() > deadline or visited >= max_dirs:
             out.truncated = True
             break
-        folder = stack.pop()
+        frame = stack.pop()
         visited += 1
-        loaded = _load(folder)
-        if loaded is not None:
+        loaded = _load(frame.folder)
+        if loaded is not None and frame.folder not in skipped:
             for rule in loaded.rules:
                 if legacy or not rule.legacy:
                     add(rule)
         try:
-            with os.scandir(folder) as it:
+            with os.scandir(frame.folder) as it:
                 for entry in it:
                     if entry.name in SCAN_SKIP_DIRS:
                         continue
                     try:
                         if entry.is_dir(follow_symlinks=False):
-                            stack.append(entry.path)
+                            child = walk.child(frame, entry.path)
+                            if child.closed is None:  # a closed folder is never entered
+                                stack.append(child)
                     except OSError:
                         continue
         except OSError:
