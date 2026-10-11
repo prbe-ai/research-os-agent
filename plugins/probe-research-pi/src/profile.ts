@@ -3,12 +3,14 @@
  * records and reads for this session (`Recorder.Daemon`, `trackingState.ts`).
  *
  * On Claude Code and Codex the daemon profile is a second, lean plugin
- * (`plugins/probe-research-daemon`): `instrument-code` and its own `probe`
- * skill, no MCP server, no daemon notices. pi has one package for both
- * profiles (decision D1), so this extension narrows ITSELF:
+ * (`plugins/probe-research-daemon`): `instrument-code`, `plan-research-review`
+ * and its own `probe` skill, no MCP server, no daemon notices. pi has one
+ * package for both profiles (decision D1), so this extension narrows ITSELF:
  *
  *   - skills: `resources_discover` adds `daemon-skills/probe` (a byte copy of
- *     the lean plugin's skill), and every prompt lists only `DAEMON_PROFILE_SKILLS`
+ *     the lean plugin's skill) and `DAEMON_ADDED_SKILLS` (this package's own
+ *     copies, which the settings filter written before them does not load),
+ *     and every prompt lists only `DAEMON_PROFILE_SKILLS`
  *     -- `leanSkills` below, which also covers a project-level pi settings
  *     entry that loads every skill of this package;
  *   - tools: the extension's MCP bridge stays off, and any Probe MCP tool
@@ -24,8 +26,8 @@ import { join } from "node:path";
 import { DAEMON_REASON_WORDS, DaemonReason, DaemonStatus, type DaemonStatusValue } from "./core/daemonNotice.js";
 import { TOOL_NAME_PREFIX } from "./mcpSchema.js";
 
-/** The skills a daemon-profile prompt keeps of this package's: the lean plugin's two. */
-export const DAEMON_PROFILE_SKILLS: ReadonlySet<string> = new Set(["instrument-code", "probe"]);
+/** The skills a daemon-profile prompt keeps of this package's: the lean plugin's three. */
+export const DAEMON_PROFILE_SKILLS: ReadonlySet<string> = new Set(["instrument-code", "probe", "plan-research-review"]);
 
 /**
  * Every skill this package ships: package.json's `pi.skills`, which is
@@ -42,6 +44,7 @@ export const PACKAGE_SKILLS: ReadonlySet<string> = new Set([
   "audit-team-note",
   "edit-notes",
   "notes-audit",
+  "plan-research-review",
 ]);
 
 /** Where the daemon's `probe` skill lives inside this package. Never named in package.json. */
@@ -50,6 +53,23 @@ export const DAEMON_PROBE_SKILL = "probe";
 
 export function daemonSkillDir(extensionDir: string): string {
   return join(extensionDir, DAEMON_SKILLS_DIR, DAEMON_PROBE_SKILL);
+}
+
+/**
+ * Daemon-profile skills this extension adds from the package's own `skills/`,
+ * instead of the settings entry's filter (`pi_config.DAEMON_PACKAGE_SKILLS`).
+ * A filter is written once, by the wizard, so a skill added to the daemon
+ * profile later would never reach a machine already on it; and widening the
+ * filter would make every older filter read as the agent profile
+ * (`pi_config._is_daemon_filter` matches it exactly). pi keeps the first skill
+ * of a name, so where a filter or a project entry already loaded one, this
+ * path is a no-op.
+ */
+export const DAEMON_ADDED_SKILLS: readonly string[] = ["plan-research-review"];
+
+/** Every skill path `resources_discover` adds in the daemon profile. */
+export function daemonSkillPaths(extensionDir: string): string[] {
+  return [daemonSkillDir(extensionDir), ...DAEMON_ADDED_SKILLS.map((name) => join(extensionDir, "skills", name))];
 }
 
 /**

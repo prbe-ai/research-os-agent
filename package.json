@@ -16,7 +16,8 @@
       "plugins/probe-research-pi/skills/instrument-code",
       "plugins/probe-research-pi/skills/audit-team-note",
       "plugins/probe-research-pi/skills/edit-notes",
-      "plugins/probe-research-pi/skills/notes-audit"
+      "plugins/probe-research-pi/skills/notes-audit",
+      "plugins/probe-research-pi/skills/plan-research-review"
     ],
     "mcp": "./plugins/probe-research-pi/mcp.json"
   },

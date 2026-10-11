@@ -44,7 +44,7 @@ import {
   type DaemonNoticeDeps,
   type DaemonStatusValue,
 } from "./core/daemonNotice.js";
-import { daemonSkillDir, isProbeMcpTool, leanSkills, readDaemonSkill, researcherDaemonNotice, withoutPackageSkills } from "./profile.js";
+import { daemonSkillPaths, isProbeMcpTool, leanSkills, readDaemonSkill, researcherDaemonNotice, withoutPackageSkills } from "./profile.js";
 import { trackingOff } from "./trackingSetting.js";
 import {
   initializeTrackingState,
@@ -753,13 +753,13 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     logLine(`session_shutdown(${event.reason}): stopped capture for ${sessionId}`);
   });
 
-  // THE DAEMON PROFILE'S SKILL. pi asks for extra resource paths right after
+  // THE DAEMON PROFILE'S SKILLS. pi asks for extra resource paths right after
   // every session_start (startup, reload, new, resume, fork), by which point
   // the CLI has answered for this session; the agent profile adds nothing.
   pi.on("resources_discover", (_event, ctx) => {
     const id = ctx?.sessionManager?.getSessionId();
     if (!inDaemonProfile(id) || trackingOffFor(id)) return;
-    return { skillPaths: [daemonSkillDir(extensionDir)] };
+    return { skillPaths: daemonSkillPaths(extensionDir) };
   });
 
   // Inject, don't render — see teamNote.ts's module docstring. Fires on

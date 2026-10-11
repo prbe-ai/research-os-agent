@@ -2862,6 +2862,52 @@ def write_recorder(source: str, value: str) -> Path:
     return path
 
 
+#: The wizard's "Research plan review" setting: whether the Probe block in each
+#: agent's CLAUDE.md / AGENTS.md tells it to run `plan-research-review` before
+#: writing code for ML research (`agent_rules.render_block`). ON unless the
+#: config holds exactly `false`: absent is the shipped default, and an odd value
+#: reads as on, the same fail-soft direction as `recorder`.
+PLAN_REVIEW_KEY = "plan_review"
+
+
+def plan_review_on(config: "dict | None" = None) -> bool:
+    """True unless this machine turned the research plan review off."""
+    data = _read_config() if config is None else config
+    defaults = data.get(DEFAULTS_KEY) if isinstance(data, dict) else None
+    return not (isinstance(defaults, dict) and defaults.get(PLAN_REVIEW_KEY) is False)
+
+
+def write_plan_review(on: bool) -> Path:
+    """Persist the research plan review setting; returns the config path. Same
+    file, lock and loader as `write_recorder`. On removes the key (absent is on),
+    so a machine that never turned it off keeps no trace of it."""
+    from probe.sdk.config import (
+        CONFIG_VERSION,
+        DEFAULT_CONTEXT,
+        _config_lock,
+        _load_json_file,
+        _save_json_file,
+        _write_target,
+    )
+
+    path = config_path()
+    target = _write_target(path)
+    with _config_lock(target, _resolved=True):
+        data = _load_json_file(target, strict=True, migrate=True) or {
+            "version": CONFIG_VERSION,
+            "current_context": DEFAULT_CONTEXT,
+            "contexts": {},
+        }
+        defaults = data.get(DEFAULTS_KEY)
+        data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
+        if on:
+            data[DEFAULTS_KEY].pop(PLAN_REVIEW_KEY, None)
+        else:
+            data[DEFAULTS_KEY][PLAN_REVIEW_KEY] = False
+        _save_json_file(target, data, private=True, _resolved=True)
+    return path
+
+
 def configured(config: dict | None = None) -> bool:
     """Whether this machine has a credential for Probe. Cheap, and fail-soft.
 

@@ -47,8 +47,8 @@ describe("the daemon's probe skill", () => {
 describe("leanSkills", () => {
   const daemon = { description: "the daemon's", filePath: "/pkg/daemon-skills/probe/SKILL.md", baseDir: "/pkg/daemon-skills/probe" };
 
-  it("keeps only instrument-code and probe", () => {
-    const every = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit"];
+  it("keeps only instrument-code, plan-research-review and probe", () => {
+    const every = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit", "plan-research-review"];
     const lean = leanSkills(every.map((name) => skill(name)), null);
     expect(lean.map((s) => s.name).sort()).toEqual([...DAEMON_PROFILE_SKILLS].sort());
   });

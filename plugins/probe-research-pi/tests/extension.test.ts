@@ -1101,7 +1101,7 @@ describe("registerExtension — the daemon state", () => {
 
 describe("registerExtension — the daemon profile", () => {
   const PACKAGE_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
-  const EVERY_SKILL = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit"];
+  const EVERY_SKILL = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit", "plan-research-review"];
   const defaultExecFile = execFileMock.getMockImplementation()!;
 
   type BeforeAgentStart = (
@@ -1173,7 +1173,7 @@ describe("registerExtension — the daemon profile", () => {
     expect(activeTools()).toEqual(["read", "bash"]);
   });
 
-  it("adds the daemon's probe skill through resources_discover, and only in the daemon profile", async () => {
+  it("adds the daemon's probe skill and plan-research-review through resources_discover, and only in the daemon profile", async () => {
     installProbeCli();
     cliReports({ state: "daemon", profile: "daemon" });
     const { api, handlers } = fakeExtensionAPI();
@@ -1184,8 +1184,11 @@ describe("registerExtension — the daemon profile", () => {
     const discovered = (await handlers.get("resources_discover")!({ type: "resources_discover", cwd: "/repo", reason: "startup" }, daemonCtx)) as unknown as {
       skillPaths: string[];
     };
-    expect(discovered.skillPaths).toEqual([join(PACKAGE_ROOT, "daemon-skills", "probe")]);
-    expect(existsSync(join(discovered.skillPaths[0], "SKILL.md"))).toBe(true);
+    expect(discovered.skillPaths).toEqual([
+      join(PACKAGE_ROOT, "daemon-skills", "probe"),
+      join(PACKAGE_ROOT, "skills", "plan-research-review"),
+    ]);
+    for (const path of discovered.skillPaths) expect(existsSync(join(path, "SKILL.md"))).toBe(true);
 
     // The next session is the agent's (an older CLI sends no profile): the
     // previous session's profile must not carry over.
@@ -1215,7 +1218,7 @@ describe("registerExtension — the daemon profile", () => {
     }
 
     const lean = results[0].event.systemPromptOptions.skills;
-    expect(lean.map((skill) => skill.name).sort()).toEqual(["instrument-code", "probe"]);
+    expect(lean.map((skill) => skill.name).sort()).toEqual(["instrument-code", "plan-research-review", "probe"]);
     expect(lean.find((skill) => skill.name === "probe")!.filePath).toBe(join(PACKAGE_ROOT, "daemon-skills", "probe", "SKILL.md"));
     for (const { result } of results) {
       expect(result?.systemPrompt ?? "").not.toContain(DAEMON_CONTEXT);
@@ -1381,7 +1384,7 @@ describe("registerExtension — the daemon's held questions", () => {
 });
 
 describe("registerExtension — Probe's tracking switched off (probeTracking: false)", () => {
-  const PACKAGE_SKILLS = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit"];
+  const PACKAGE_SKILLS = ["probe", "track-work", "visualize-progress", "instrument-code", "audit-team-note", "edit-notes", "notes-audit", "plan-research-review"];
 
   type BeforeAgentStart = (
     event: { systemPrompt: string; systemPromptOptions?: { skills: Array<{ name: string; filePath: string }> } },

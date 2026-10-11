@@ -64,6 +64,7 @@ const EXPECTED_SKILLS = [
   "audit-team-note",
   "edit-notes",
   "notes-audit",
+  "plan-research-review",
 ].sort();
 
 let scratchHome: string;
