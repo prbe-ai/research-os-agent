@@ -23,11 +23,13 @@ Anchor it to the WIDEST scope the fact is actually true of, and no wider: run ->
 
 - one run's caveat, one experiment's reversal, one project's constraint -> that entity's notes
 - true across projects, or about how the lab works -> the team note
-- a distinct topic that would crowd a main note (Caveats, a handoff) -> a titled SUB-NOTE; the main note stays the running commentary
+- a distinct topic that would crowd a main note (Caveats, a handoff) -> a titled SUB-NOTE
 
 ## 2. Writing a note
 
 Never in ANY note: a play-by-play of what you did (transcripts are captured for you), secrets or credentials, a customer's private content, no changelog, no "audited" summary, no receipt.
+
+Read the whole note before each edit and fit the change into it: add what is new and useful, and update, merge or remove what it changes, so the note reads as one current document.
 
 ### 2a. Writing an entity note
 

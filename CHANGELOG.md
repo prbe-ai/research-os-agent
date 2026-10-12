@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Each note edit fits into the whole note.** `edit-notes` called the main note "the running commentary", so on a long session the daemon's writer added a new section after every turn: with 0.235.1's wording it still grew the willow-dictation-training note from 24,042 to 34,225 characters in 5 pushes over 11 minutes (2026-10-12). `edit-notes` now says to read the whole note before each edit and fit the change into it: add what is new and useful, and update, merge or remove what it changes, so the note reads as one current document.
+
 ## 0.235.1
 
 - **Notes hold what matters, not everything that happened.** `track-work` said "Drop nothing: a file with no better home goes to the project's artifacts, prose to its notes", and the daemon's writer was told to "record what it states" every turn, so it saved the session into notes: one project note reached 1,986 words in 11 pushes over 1h48m, mostly setup status and test counts (2026-10-12). `edit-notes` and `track-work` now say to write only what would help the next agent on that entity or project. "Drop nothing" still holds for files and runs.
