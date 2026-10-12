@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.241.0
+
 - Capy has full support in the CLI, the wizard and the capture plugin.
   - **Wizard:** `probe wizard` has a **Cloud agents → Capy** entry. It shows the in-Capy setup steps, connects capture (the key is typed hidden and projects are picked from a list), syncs now and disconnects. A Capy line under "On this device" shows the last sync, or a refused key, with Capy's logo. `--action cloud-agents` prints the steps.
   - **Sign-out (in the wizard) and uninstall** now disconnect Capy: the timer, a sync already running, the key, the sync record and the capture credential. Before, Capy threads kept uploading after them. Capture is also pinned to the Probe server it was connected to: a shell pointing Probe elsewhere syncs nothing.
