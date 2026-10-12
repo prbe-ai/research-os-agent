@@ -77,10 +77,10 @@ source found **and** each place searched with nothing found.
    check; never report that none exists.
 5. **What changed since the paper** - follow-ups, errata, and the repo's issues
    ("can't reproduce", "results differ", "bug in").
-6. **Related papers nobody named** - `find_papers` (daemon: `probe ask`): `search`
-   with a sentence saying what the paper should say, and `similar` from each named
-   paper with `expand: "citers"`. About five calls - they spend the team's weekly
-   web-call allowance.
+6. **Related papers nobody named** - `find_papers` (daemon: `probe paper find`,
+   the same arguments as flags): `search` with a sentence saying what the paper
+   should say, and `similar` from each named paper with `expand: "citers"`. About
+   five calls - they spend the team's weekly web-call allowance.
 
 **One line per related paper:** its claim, the map row it would change (none:
 drop it), its code, and whether results still compare to the target number.

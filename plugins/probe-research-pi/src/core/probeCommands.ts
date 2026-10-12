@@ -91,6 +91,7 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "lineage",
   "citations",
   "graph",
+  "find",
 ]);
 
 /** `session_marker.REMOVAL_VERBS`. */
@@ -154,6 +155,7 @@ export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "ignore check",
   "run expect",
   "doctor",
+  "paper find",
 ]);
 
 /** `session_marker.command_words`: the (at most three) words click dispatches on. */

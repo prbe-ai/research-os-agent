@@ -136,7 +136,7 @@ TOOL_LANES = ("pre-tool", "post-tool")
 #: accept in both plugins: a new tool route needs its name here too.
 TOOL_FILTER = {
     "pre-tool": (
-        frozenset(("Bash", "AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit")),
+        frozenset(("Bash", "AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebSearch")),
         ("probe-research", "probe_research"),
     ),
     "post-tool": (

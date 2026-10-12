@@ -253,6 +253,28 @@ def marker_path(session_id: str) -> Path:
     return sessions_dir() / (session_id + ".json")
 
 
+#: How long `probe paper find` keeps the papers hook from holding a web search,
+#: and how long one hold keeps it from holding another (`papers_hook.py`).
+PAPER_FIND_WINDOW_S = 15 * 60
+
+
+def paper_find_stamp_path(session_id: str) -> Path:
+    """Touched by `probe paper find` when it starts: the session tried Probe's
+    paper search, so the papers hook lets web searches through."""
+    return sessions_dir() / (session_id + ".papers")
+
+
+def paper_hold_stamp_path(session_id: str) -> Path:
+    """Touched by the papers hook when it holds a web search."""
+    return sessions_dir() / (session_id + ".papers-held")
+
+
+def paper_cli_cache_path(session_id: str) -> Path:
+    """The papers hook's per-session answer to "does the local CLI have
+    `probe paper find`?" (asking, `probe paper find --help`, costs ~0.9 s)."""
+    return sessions_dir() / (session_id + ".papers-cli")
+
+
 # ---------------------------------------------------------------------------
 # Read / write
 # ---------------------------------------------------------------------------
@@ -1043,6 +1065,9 @@ READ_VERBS = frozenset(
         # bibliographies (citation graph, Track C).
         "citations",
         "graph",
+        # `paper find`: the research literature (the MCP's `find_papers`), an
+        # outside index; it adds nothing to the team's records.
+        "find",
     }
 )
 
@@ -1227,8 +1252,11 @@ def daemon_allows_agent(matched: str) -> bool:
 #: `probe --version` needs no entry (no command words); `probe version` is the
 #: experiment-versions group, a write. While the researcher has Probe inline
 #: (`is_inline`) the guard refuses only `RESEARCHER_SWITCH`.
+#: `paper find` reads the research literature, an outside index, not the team's
+#: records, so the agent runs it itself (Richard 2026-10-12: "just the tools
+#: where it makes sense for the agent to call it directly").
 DAEMON_PROFILE_ALLOWED = frozenset(
-    {"ask", "session status", "session parent", "ignore check", "run expect", "doctor"}
+    {"ask", "session status", "session parent", "ignore check", "run expect", "doctor", "paper find"}
 )
 
 #: The researcher's switch and defaults, typed into a shell. In the daemon
@@ -1263,6 +1291,15 @@ DAEMON_PROFILE_DENY = (
 #: `DAEMON_PROFILE_DENY` for a WRITE: `--directed` admits one the researcher
 #: asked for. A read keeps the plain text: no flag admits it, `probe ask` reads.
 DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY
+
+#: What the papers hook answers a paper-type web search it holds (`papers_hook.py`):
+#: at most once per `PAPER_FIND_WINDOW_S`, and never after `probe paper find` ran
+#: inside it. Richard approved the wording 2026-10-12.
+PAPER_SEARCH_HOLD = (
+    "Probe searches research papers, so this web search was held. Run "
+    '`probe paper find "<the question as a sentence>"` first. After that, web searches run '
+    f"normally for {PAPER_FIND_WINDOW_S // 60} minutes."
+)
 
 
 #: `.probe.config`: paths at `read` or `off`, which Probe never records (`probe_config.py`).

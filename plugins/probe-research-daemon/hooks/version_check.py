@@ -632,6 +632,13 @@ INLINE_BRIDGE_MIN_CLI = "0.220.0"
 #: budget (measured 0.9 s on the devbox).
 INLINE_CLI_TIMEOUT_S = 3.0
 
+#: What `paper_find_ready` asks this machine's CLI: the papers hook holds a web
+#: search and names `probe paper find` only when the CLI has it. The plugin and
+#: the CLI update independently, and a hold beside a CLI without the command
+#: would send the agent to `No such command`. The command itself is asked, not a
+#: version floor: CLI 0.238.0 shipped without it while it was in review.
+PAPER_FIND_PROBE = ("paper", "find", "--help")
+
 #: Where `probe` lives when PATH does not say: session-start.sh's search.
 _PROBE_FALLBACKS = ("~/.local/bin/probe", "~/.local/share/uv/tools/probe-research/bin/probe")
 
@@ -1091,6 +1098,24 @@ def inline_bridge_ready() -> bool:
     have = _local_cli(_probe_bin(), timeout=INLINE_CLI_TIMEOUT_S)
     local, needed = _triplet(have or ""), _triplet(INLINE_BRIDGE_MIN_CLI)
     return local is not None and needed is not None and local >= needed
+
+
+def paper_find_ready() -> "bool | None":
+    """Does this machine's CLI have `probe paper find`? True when its `--help`
+    exits 0, False when click answers `No such command` (exit 2: an older CLI),
+    None for anything else (no CLI, a timeout, a crash mid-update): a caller must
+    not remember None, or one bad start would switch the hook off."""
+    try:
+        out = subprocess.run(
+            [_probe_bin(), *PAPER_FIND_PROBE], capture_output=True, text=True, timeout=INLINE_CLI_TIMEOUT_S
+        )
+    except Exception:
+        return None
+    if out.returncode == 0:
+        return True
+    if out.returncode == 2 and "No such command" in (out.stderr or "") + (out.stdout or ""):
+        return False
+    return None
 
 
 def inline_notice_for(track_work: str, edit_notes: str) -> str:
