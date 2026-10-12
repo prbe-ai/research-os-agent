@@ -238,8 +238,8 @@ folder, a name or kind you choose, a bucket path. Details in `instrument-code`.
 
 RULES:
 
-- Only fully upload a copy of the file if <64MB (the most an upload carries). Else, record a pointer instead - `--reference` when the bytes are on this box or a shared volume, `--uri` when they are already in a bucket.
-    - Over 64 MB an upload is refused. A pointer to a box that will be destroyed resolves nowhere: there, write big files to a bucket or a mounted volume and record where they are.
+- Upload a copy of the file if it is at most 5 GB. Over 64 MB it goes up in parts, and only its first 16 MB is checked for credentials before it leaves. Else, record a pointer instead - `--reference` when the bytes are on this box or a shared volume, `--uri` when they are already in a bucket.
+    - Over 5 GB the daemon refuses the upload. A pointer to a box that will be destroyed resolves nowhere: there, write big files to a bucket or a mounted volume and record where they are.
 
 - NEVER UPLOAD SECRETS or a customer's private content, as bytes, as a pointer,
   or in prose: `.env`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, tokens, for

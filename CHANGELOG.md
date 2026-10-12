@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The Probe daemon uploads files up to 5 GB (was 50 MB, and 10 MB for text). Its pre-check scans the first 16 MB of a text file and 64 MB of a binary for credentials; past that, the upload gate redacts what it can in a file up to 64 MB, and a bigger one goes up in parts.
+- `probe artifact add RUN FILE` queues a file over 64 MB as a multipart upload and returns at once, even under `PROBE_ASYNC=0` (the daemon's setting) unless `--sync` is passed. It reads the run first, scrubs the name, notes and meta, refuses a credential-shaped path, and keeps the synchronous path when the outbox is on a throwaway disk or the server takes no multipart uploads. Bulk `--from-manifest` imports are unchanged.
+- Output capture uploads a run's output files between 64 MB and 5 GB in parts, for teams the server has switched on (`GET /v1/teams/features`), when a background worker on lasting storage will carry the upload. It stages them by hardlink or reflink only, scans the staged copy's first 16 MB first, and keeps the old pointer for anything it cannot send that way.
+- `track-work` and `instrument-code` describe the 5 GB limit.
 - **A checkpoint file is filed as a `checkpoint` without saying so, and safetensors weights are linked to the run that wrote them.** `run.log_artifact(...)` and `probe artifact add` with no kind now file `.ckpt`, `.safetensors`, `.pt` and `.pth` as `checkpoint`, the kind the failed-run alert ("resume from") and the disk-space finding read; before, they were a `file` unless you passed `kind="checkpoint"`. `.bin`, `.gguf` and `.onnx` stay `file`, and an explicit kind still wins. Output capture keeps filing them as `file`, so a captured checkpoint folder's `scheduler.pt` never becomes "the last checkpoint". The write recorder now sees safetensors' `save_file` (Rust writes it, so Python's audit hook never did): the Hugging Face Trainer saves `model.safetensors` with it, and a later run loading those weights now links to the run that saved them, as `torch.save` files already did. A checkpoint deleted before its run ends is still not linked unless it was uploaded.
 
 ## 0.237.0
