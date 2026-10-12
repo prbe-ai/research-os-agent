@@ -290,6 +290,29 @@ def _read_probe_config() -> dict[str, Any]:
     return data
 
 
+#: Images pasted into a prompt upload with the captured session (2026-10-12)
+#: unless this machine turned it off: `defaults.pasted_images: false` in the
+#: Probe config, which `probe wizard` -> Settings writes. A copy of
+#: probe.sdk.session_marker.PASTED_IMAGES_KEY (this plugin cannot import probe).
+PASTED_IMAGES_KEY = "pasted_images"
+
+
+def pasted_images_on() -> bool:
+    """True unless this machine turned pasted-image upload off.
+
+    Read from the WHOLE config file (the `defaults` block sits beside the
+    contexts, not in one), on every call: the toggle takes effect on the next
+    batch. A missing or unreadable file reads as on, as
+    `session_marker.pasted_images_on` reads it.
+    """
+    try:
+        data = json.loads(probe_config_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return True
+    defaults = data.get("defaults") if isinstance(data, dict) else None
+    return not (isinstance(defaults, dict) and defaults.get(PASTED_IMAGES_KEY) is False)
+
+
 def _env_base_url() -> str | None:
     v = os.environ.get(ENV_BASE_URL, "").strip()
     return v.rstrip("/") if v else None

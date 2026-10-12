@@ -70,7 +70,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from .sanitize import COMMAND_MAX_LEN, ORIGIN_USER_SHELL, usage_counts
+from .sanitize import COMMAND_MAX_LEN, ORIGIN_USER_SHELL, PastedImage, usage_counts
 
 SUPPORTED_SESSION_VERSIONS = frozenset({1, 2, 3})
 
@@ -268,6 +268,28 @@ def _translate_assistant_message(event: dict, message: dict, timestamp: Any) -> 
     if usage:
         out["usage"] = usage
     return out
+
+
+def pasted_images(event: Any) -> list[PastedImage]:
+    """The images the researcher pasted into a pi prompt, in order: the
+    `image` blocks (`data` base64, `mimeType`) of a `message` entry whose
+    role is `user`. A tool's images (`toolResult`) and an extension's
+    (`custom_message`) are never read here."""
+    if not isinstance(event, dict) or event.get("type") != "message":
+        return []
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list) or message.get("role") != "user":
+        return []
+    return [
+        PastedImage(item["mimeType"], item["data"], len(item["data"]))
+        for item in content
+        if isinstance(item, dict)
+        and item.get("type") == "image"
+        and isinstance(item.get("mimeType"), str)
+        and isinstance(item.get("data"), str)
+        and item["data"]
+    ]
 
 
 def _blocks(content: Any) -> list[dict]:

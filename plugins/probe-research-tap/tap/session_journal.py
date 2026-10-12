@@ -24,30 +24,56 @@ Protocol 2 can be retired for NEW streams (the engine's
 before that, and the server never took, is then refused at batch 0 for good:
 the journal drops that batch and sends the session again, from its batch 0, on
 protocol 3 (`Journal._restart_retired_protocol2`).
+
+PASTED IMAGES (prbe-knowledge #646, research-os #2647). When the receipts answer
+says `accepts.media` and this machine has not turned it off (the tap passes
+`pasted_images`), an image the researcher pasted into their own prompt keeps
+its placeholder (`{type, mimeType, bytes}`) plus the SHA-256 of its bytes, and
+a protocol-3 fragment (version 2) names it as an image part. The bytes never
+enter an event, a fragment or a batch: `stage` keeps them in this journal
+(`media`, beside the pending batch that names them, under
+MEDIA_SPOOL_CAP_BYTES) and `deliver` uploads each one through the gateway's
+media door before it posts that batch. Which fragment version a stream builds
+is negotiated like its protocol (`fragment_version_for`): the highest one the
+server and this builder share, recorded in the session's state; a state that
+predates it builds version 1.
+
+A transcript line over MAX_SOURCE_LINE is skipped (read past, never held) and
+stands as an `oversize_line` system event, so one giant paste no longer stalls
+its session's capture.
 """
 
 from __future__ import annotations
 
+import base64
 import errno
 import fcntl
 import hashlib
+import ipaddress
 import json
+import logging
 import os
+import re
 import shutil
 import socket
 import sqlite3
 import ssl
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 from . import capy_sanitize, codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
+from .sanitize import PastedImage
 from .secrets import redact_event
 from .transcript import nesting_exceeds
+
+log = logging.getLogger(__name__)
 
 #: Upload protocols with streams, cursors and receipts (prbe-knowledge
 #: `kb/session_receipts.py`). 2 sends the sanitized probe-events/1 `events`;
@@ -118,6 +144,21 @@ MAX_SOLO_EVENT_BYTES = SERVER_BATCH_LIMIT - ENVELOPE_HEADROOM
 SERVER_FRAGMENT_BATCH_LIMIT = 6_000_000
 MAX_SOLO_FRAGMENT_BYTES = SERVER_FRAGMENT_BATCH_LIMIT - ENVELOPE_HEADROOM
 MAX_SOURCE_LINE = 64 * 1024 * 1024
+#: The system event that stands in for a line over MAX_SOURCE_LINE (D16).
+OVERSIZE_LINE_SUBTYPE = "oversize_line"
+#: Pasted images: the types the engine stores (its IMAGE_MEDIA_TYPES), the
+#: largest one the media door takes, and how many bytes of images waiting to
+#: upload this journal holds at most (over it, an image keeps its placeholder).
+IMAGE_MEDIA_TYPES = ("image/gif", "image/jpeg", "image/png", "image/webp")
+MEDIA_MAX_BYTES = 5 * 1024**3
+MEDIA_SPOOL_CAP_BYTES = 512 * 1024 * 1024
+#: An image whose upload keeps failing for reasons that may pass (no network,
+#: the door's 503, storage's 5xx) holds its batch back until it has failed
+#: this many times over at least this long; then it is given up (the engine
+#: shows it as not available) and the batch goes. Capture never stalls on one.
+MEDIA_RETRY_MIN_ATTEMPTS = 3
+MEDIA_RETRY_WINDOW_SECONDS = 3600
+_SHA256_HEX = re.compile(r"[0-9a-f]{64}\Z")
 DEFAULT_CAP_BYTES = 100 * 1024 * 1024
 # Raw history can be much larger than its sanitized pending delivery. Its
 # immutable disk copy needs space for the source, not the upload queue limit.
@@ -166,6 +207,12 @@ def _sanitizer(source: str):
     return _SANITIZER_MODULES[_harness(source).capture.sanitizer].sanitize_event
 
 
+def _pasted_extractor(source: str):
+    """The harness's reader of researcher-pasted images (`pasted_images`), or
+    None for a harness that has none (its images keep their placeholders)."""
+    return getattr(_SANITIZER_MODULES[_harness(source).capture.sanitizer], "pasted_images", None)
+
+
 def _route(source: str) -> str:
     return _harness(source).route
 
@@ -184,13 +231,36 @@ def _fragment_module():
     return atif_fragment
 
 
+def _builder_versions(module) -> tuple[int, ...]:
+    """The fragment versions a vendored builder can build (one before v2)."""
+    versions = getattr(module, "FRAGMENT_VERSIONS", None)
+    return tuple(versions) if isinstance(versions, tuple) else (module.FRAGMENT_VERSION,)
+
+
+def fragment_version_for(remote: dict) -> int | None:
+    """The fragment version a stream builds, from a receipts answer: the
+    highest one both the answer's `accepts.fragment_versions` and this
+    builder hold (D21: 2 only where the server takes 2, else 1), or None when
+    they share none, the answer offers none, or the builder does not import."""
+    accepts = remote.get("accepts")
+    versions = accepts.get("fragment_versions") if isinstance(accepts, dict) else None
+    if not isinstance(versions, list):
+        return None
+    offered = {v for v in versions if type(v) is int}
+    if not offered:
+        return None
+    module = _fragment_module()
+    shared = offered.intersection(_builder_versions(module)) if module is not None else ()
+    return max(shared) if shared else None
+
+
 def negotiate(remote: dict) -> tuple[int, bool]:
     """(protocol, send events) for a NEW stream, from a receipts answer.
 
-    Protocol 3 only when the answer offers it AND this client's
-    FRAGMENT_VERSION, and the vendored builder imports here. No `accepts` at
-    all is an older or self-hosted server: protocol 2. `send events` is the
-    server's `accepts.events`, for protocol 3 only.
+    Protocol 3 only when the answer offers it AND a fragment version this
+    client builds (`fragment_version_for`), and the vendored builder imports
+    here. No `accepts` at all is an older or self-hosted server: protocol 2.
+    `send events` is the server's `accepts.events`, for protocol 3 only.
     """
     accepts = remote.get("accepts")
     if not isinstance(accepts, dict):
@@ -202,12 +272,32 @@ def negotiate(remote: dict) -> tuple[int, bool]:
         and isinstance(versions, list)
     ):
         return PROTOCOL_EVENTS, False  # not offered: the builder is never imported
-    module = _fragment_module()
-    if module is None or not any(
-        type(v) is int and v == module.FRAGMENT_VERSION for v in versions
-    ):
+    if fragment_version_for(remote) is None:
         return PROTOCOL_EVENTS, False
     return PROTOCOL_FRAGMENTS, accepts.get("events") is True
+
+
+def _record_terms(state: dict, remote: dict) -> None:
+    """What a receipts answer lets this session's next batches carry, kept in
+    its state: the fragment version (`fragment_version_for`; kept as it was
+    when the answer names none this builder shares) and whether the server
+    takes pasted images (`accepts.media is True`; an answer without `accepts`
+    is a server that does not)."""
+    accepts = remote.get("accepts")
+    state["media"] = isinstance(accepts, dict) and accepts.get("media") is True
+    version = fragment_version_for(remote) if isinstance(accepts, dict) else None
+    if version is not None:
+        state["fragment_version"] = version
+
+
+def _stream_fragment_version(state: dict, module) -> int:
+    """The fragment version a protocol-3 batch of this session is built in:
+    the negotiated one, and 1 for a state recorded before versions were."""
+    versions = _builder_versions(module)
+    stored = state.get("fragment_version")
+    if type(stored) is int and stored in versions:
+        return stored
+    return 1 if 1 in versions else module.FRAGMENT_VERSION
 
 
 def _stream_protocol(state: dict) -> int:
@@ -259,8 +349,8 @@ def _record_bytes(additions: list[dict]) -> tuple[int, int]:
     return 2 * events + 64 * len(additions), events
 
 
-def _fragment(module, event: dict) -> dict:
-    """`fragment(event)`, and never no fragment: every event ordinal is sent.
+def _fragment(module, event: dict, version: int) -> dict:
+    """`fragment(event, version)`, and never no fragment: every event ordinal is sent.
 
     The builder isolates each event's failures itself; this is the guard for
     one it did not foresee. The stand-in keeps the ordinal (its Line's
@@ -268,15 +358,272 @@ def _fragment(module, event: dict) -> dict:
     and has no `kind`, so the engine's fold reads it as one unparsed event.
     """
     try:
-        return module.fragment(event)
+        return module.fragment(event, version)
     except MemoryError:
         raise  # may pass; never send an empty fragment for it
     except Exception as exc:  # noqa: BLE001
         return {
-            "v": module.FRAGMENT_VERSION,
+            "v": version,
             "line": {"line_no": event.get("line_no"), "text": ""},
             "error": type(exc).__name__,
         }
+
+
+# -- pasted images -------------------------------------------------------------------
+
+
+def oversize_line_event(length: int) -> dict:
+    """The probe-events/1 event standing in for a transcript line too long to
+    read (over MAX_SOURCE_LINE, `length` bytes with its newline): skipped, so
+    the session's capture goes on, and said, so the gap is not silent."""
+    return {
+        "type": "system",
+        "subtype": OVERSIZE_LINE_SUBTYPE,
+        "content": (
+            f"[transcript line not sent: {length:,} bytes, over the "
+            f"{MAX_SOURCE_LINE:,}-byte limit]"
+        ),
+    }
+
+
+def _rest_of_line(handle, consumed: int) -> int | None:
+    """Read past the rest of a line `consumed` bytes into, a chunk at a time,
+    never holding it: its whole length with the newline, or None when the
+    file ends first (a line its producer is still writing)."""
+    while True:
+        chunk = handle.readline(1024 * 1024)
+        if not chunk:
+            return None
+        consumed += len(chunk)
+        if chunk.endswith(b"\n"):
+            return consumed
+
+
+def _image_bytes_agree(media_type: str, data: bytes) -> bool:
+    """Whether the bytes are the image type the transcript says they are."""
+    if media_type == "image/png":
+        return data.startswith(b"\x89PNG\r\n\x1a\n")
+    if media_type == "image/jpeg":
+        return data.startswith(b"\xff\xd8\xff")
+    if media_type == "image/gif":
+        return data[:6] in (b"GIF87a", b"GIF89a")
+    if media_type == "image/webp":
+        return data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    return False
+
+
+def _decoded_image(image: PastedImage) -> bytes | None:
+    """A pasted image's bytes when they may be uploaded: a type the engine
+    stores, strict base64, the bytes of that type, 1 byte to MEDIA_MAX_BYTES.
+    None keeps the placeholder."""
+    if image.media_type not in IMAGE_MEDIA_TYPES or len(image.data) > 4 * (MEDIA_MAX_BYTES // 3 + 1):
+        return None
+    try:
+        data = base64.b64decode(image.data, validate=True)
+    except ValueError:  # binascii.Error included
+        return None
+    if not data or len(data) > MEDIA_MAX_BYTES or not _image_bytes_agree(image.media_type, data):
+        return None
+    return data
+
+
+def _image_placeholders(retained: list) -> list[dict]:
+    """The top-level image placeholders (`{type, mimeType, bytes}`) of a
+    line's user events, in order: where a pasted image's SHA-256 goes."""
+    found = []
+    for event in retained:
+        message = event.get("message") if isinstance(event, dict) and event.get("type") == "user" else None
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "image"
+                and "source" not in block
+                and type(block.get("bytes")) is int
+                and isinstance(block.get("mimeType"), str)
+            ):
+                found.append(block)
+    return found
+
+
+def _attach_pasted(
+    images: list[PastedImage], retained: list, spool: dict[str, tuple[str, bytes]], room: int,
+) -> int:
+    """Put each pasted image's SHA-256 on its placeholder; returns the spool
+    room left.
+
+    `images` (the harness's `pasted_images` of the raw line) and the line's
+    placeholders pair up in order, and only when they agree exactly: as many
+    of each, every encoded size and media type the same. Anything else
+    attaches nothing, so no digest can land on another image's placeholder.
+    An image that fails its own checks (`_decoded_image`), or would take the
+    spool past its room, keeps its placeholder alone. The decoded bytes go
+    into `spool` by digest; nothing is changed before every check is done.
+    """
+    placeholders = _image_placeholders(retained)
+    if not images or len(images) != len(placeholders) or any(
+        block["bytes"] != image.encoded or block["mimeType"] != image.media_type
+        for image, block in zip(images, placeholders, strict=True)
+    ):
+        return room
+    digests: list[str | None] = []
+    for image in images:
+        data = _decoded_image(image)
+        digest = hashlib.sha256(data).hexdigest() if data is not None else None
+        if digest is not None and digest not in spool:
+            if len(data) > room:
+                digest = None
+            else:
+                spool[digest] = (image.media_type, data)
+                room -= len(data)
+        digests.append(digest)
+    for block, digest in zip(placeholders, digests, strict=True):
+        if digest is not None:
+            block["sha256"] = digest
+    return room
+
+
+def named_media(payload: dict) -> set[str]:
+    """The SHA-256 of every pasted image a batch names: on its events' image
+    blocks and its fragments' image parts."""
+    named: set[str] = set()
+    for item in payload.get("events") or ():
+        raw = item.get("raw") if isinstance(item, dict) else None
+        message = raw.get("message") if isinstance(raw, dict) else None
+        content = message.get("content") if isinstance(message, dict) else None
+        for block in content if isinstance(content, list) else ():
+            if isinstance(block, dict) and block.get("type") == "image":
+                named.add(block.get("sha256"))
+    for fragment in payload.get("fragments") or ():
+        parts = fragment.get("parts") if isinstance(fragment, dict) else None
+        for part in parts if isinstance(parts, list) else ():
+            if isinstance(part, dict) and part.get("type") == "image":
+                named.add(part.get("sha256"))
+    return {d for d in named if isinstance(d, str) and _SHA256_HEX.match(d)}
+
+
+class Unresolved(Exception):
+    """The PUT host did not resolve: no PUT is made, and the image waits like
+    any network failure (bounded by MEDIA_RETRY_*), since every attempt asks
+    the door for a fresh URL."""
+
+
+def _resolve_host(host: str) -> list[str]:
+    """Every address `host` resolves to, once (no PUT follows a host this
+    client did not check). Raises Unresolved when it resolves to none."""
+    try:
+        infos = socket.getaddrinfo(host, None, proto=socket.IPPROTO_TCP)
+    except (OSError, UnicodeError) as exc:
+        raise Unresolved(type(exc).__name__) from None
+    addresses = [info[4][0] for info in infos]
+    if not addresses:
+        raise Unresolved("no address")
+    return addresses
+
+
+def _local_address(address: str) -> bool:
+    """Loopback, private, link-local (cloud metadata included), unspecified,
+    multicast or reserved: never where a presigned storage URL points."""
+    try:
+        ip = ipaddress.ip_address(address.split("%", 1)[0])
+    except ValueError:
+        return True  # not an address this check understands: treated as local
+    mapped = getattr(ip, "ipv4_mapped", None)
+    ip = mapped or ip
+    return (
+        ip.is_loopback or ip.is_private or ip.is_link_local or ip.is_unspecified
+        or ip.is_multicast or ip.is_reserved
+    )
+
+
+def _local_host(host: str, *, resolve: bool) -> bool:
+    """`localhost`, a local IP literal, or (with `resolve`) a name every one of
+    whose addresses is local. Unresolved propagates."""
+    host = host.rstrip(".").lower()
+    if host == "localhost" or host.endswith(".localhost"):
+        return True
+    try:
+        return _local_address(str(ipaddress.ip_address(host)))
+    except ValueError:
+        pass
+    return resolve and all(_local_address(a) for a in _resolve_host(host))
+
+
+class PutRefused(ValueError):
+    """An upload answer this client will not follow: final for the image."""
+
+
+def _put_target(
+    answer: dict, data: bytes, base_url: str = ""
+) -> tuple[str, dict[str, str]] | None:
+    """(url, headers) of the media door's `upload` answer, or None when it is
+    not one this client may follow: a PUT to an http(s) URL, string headers,
+    never a credential header, a Content-Length (when given) that is exactly
+    these bytes', and a URL that points where storage can be (`_storage_url`).
+    Anything that cannot be parsed or checked is None too, never an error:
+    a None is a final refusal for the image, so capture goes on."""
+    try:
+        url, headers = answer.get("url"), answer.get("headers")
+        if answer.get("method") != "PUT" or not isinstance(url, str) or not isinstance(headers, dict):
+            raise PutRefused("not a PUT answer")
+        if not all(isinstance(k, str) and isinstance(v, str) for k, v in headers.items()):
+            raise PutRefused("headers are not strings")
+        lowered = {k.lower(): v for k, v in headers.items()}
+        if "authorization" in lowered or "cookie" in lowered:
+            raise PutRefused("a credential header")
+        if lowered.get("content-length", str(len(data))) != str(len(data)):
+            raise PutRefused("a different Content-Length")
+        _storage_url(url, base_url)
+        return url, dict(headers)
+    except Unresolved:
+        raise
+    except (ValueError, TypeError, UnicodeError) as exc:  # PutRefused included
+        log.warning("pasted image: upload answer refused (%s); the image is not uploaded", _why(exc))
+        return None
+
+
+def _why(exc: Exception) -> str:
+    return str(exc) if isinstance(exc, PutRefused) else f"unparseable URL ({type(exc).__name__})"
+
+
+def _storage_url(url: str, base_url: str) -> None:
+    """Raise PutRefused unless `url` may receive a pasted image's bytes.
+
+    Under an https gateway the PUT is https. Its host is never `localhost` or
+    an address that is loopback, private, link-local (169.254.169.254, the
+    cloud metadata service), unspecified, multicast or reserved, as a literal
+    or as every address it resolves to (resolved once, here), unless the
+    gateway's own host is local or private: a development, test or
+    self-hosted setup whose storage sits beside it. Otherwise a wrong or
+    hostile answer could send the researcher's image into their own network.
+    Unresolved propagates (a wait, not a refusal)."""
+    parts = urlsplit(url)
+    base = urlsplit(base_url) if base_url else None
+    if parts.scheme not in ("https", "http"):
+        raise PutRefused(f"scheme {parts.scheme or 'none'!r}")
+    if base is not None and base.scheme == "https" and parts.scheme != "https":
+        raise PutRefused("plain http under an https gateway")
+    host, _port = parts.hostname, parts.port  # .port raises ValueError when malformed
+    if not host or parts.username is not None or parts.password is not None:
+        raise PutRefused("no host, or credentials in the URL")
+    if not _local_host(host, resolve=True):
+        return
+    # A local target: only beside a gateway that is local too.
+    base_host = base.hostname if base is not None else None
+    try:
+        allowed = bool(base_host) and _local_host(base_host, resolve=True)
+    except Unresolved:
+        allowed = False
+    if not allowed:
+        raise PutRefused(f"a local or private host ({host})")
+
+
+def _media_refusal(code: int) -> bool:
+    """The media door's final answer for one image (D23: 403 switched off,
+    409, 413 too large, 415 type, 422, 429 the team's daily budget; also a
+    gateway that has no media route yet, 404/405). The batch still goes and
+    the image keeps its placeholder; 401 and 408 are not about the image."""
+    return 400 <= code < 500 and code not in (401, 408, DELETED_STATUS)
 
 
 class ReconciliationRequired(RuntimeError):
@@ -604,6 +951,40 @@ class Wire:
     def post(self, body: bytes) -> tuple[int, dict]:
         return self._request(f"/ingest/v1/sessions/{_route(self.source)}", body)
 
+    def media(self, session_id: str, sha256: str, size_bytes: int, media_type: str) -> tuple[int, dict]:
+        """Ask the gateway's media door where one pasted image goes
+        (research-os `capture_session_media`): `{"status": "have"}`, or
+        `{"status": "upload", "method": "PUT", "url", "headers", ...}`."""
+        body = json.dumps(
+            {"sha256": sha256, "size_bytes": size_bytes, "media_type": media_type},
+            separators=(",", ":"),
+        ).encode()
+        return self._request(f"/ingest/v1/sessions/{self.source}/{session_id}/media", body)
+
+    def put(self, url: str, data: bytes, headers: dict[str, str]) -> int:
+        """PUT an image's bytes to the presigned storage URL the media door
+        gave, with exactly its headers (the store refuses a body, length, type
+        or checksum other than the signed ones). Never the bearer token: the
+        URL is the credential. The HTTP status, or 0 without a response."""
+        self.last_request_retryable = False
+        self.last_request_error = None
+        request = urllib.request.Request(url, data=data, headers=headers, method="PUT")
+        try:
+            with urllib.request.urlopen(
+                request, timeout=self.timeout, context=self.context
+            ) as response:
+                response.read(8192)
+                return response.status
+        except urllib.error.HTTPError as exc:
+            self.last_request_retryable = _retryable_status(exc.code)
+            exc.close()
+            return exc.code
+        except (OSError, ValueError) as exc:
+            self.last_request_retryable = _network_interruption(exc)
+            cause = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+            self.last_request_error = type(cause).__name__
+            return 0
+
 
 class Journal:
     def __init__(
@@ -637,7 +1018,18 @@ class Journal:
             CREATE TABLE IF NOT EXISTS sessions(session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS {_FRAGMENT_SESSIONS}(session_id TEXT PRIMARY KEY, state TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS pending(session_id TEXT PRIMARY KEY, body BLOB NOT NULL, digest TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS media(
+                session_id TEXT NOT NULL, sha256 TEXT NOT NULL, media_type TEXT NOT NULL,
+                size INTEGER NOT NULL, bytes BLOB NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0, first_failure REAL,
+                PRIMARY KEY(session_id, sha256)
+            );
         """)
+        # `media` holds the bytes of the pasted images a session's pending
+        # batch names, until `deliver` has uploaded them (or given them up).
+        # A row never outlives its session's pending batch: every path that
+        # retires one drops them (`_drop_media`), and `stage` sweeps rows an
+        # older tap left behind when it delivered such a batch itself.
         # Still 2: taps that predate protocol 3 keep opening this journal for
         # their own protocol-2 streams, and never read the table above.
         self.conn.execute("PRAGMA user_version=2")
@@ -787,7 +1179,7 @@ class Journal:
             state = self.get(session_id)
             dropped = self.conn.execute(
                 "DELETE FROM pending WHERE session_id=?", (session_id,)
-            ).rowcount
+            ).rowcount + self._drop_media(session_id)
             if state is not None and state.get("deleted") and not dropped:
                 return False
             snapshot = (state or {}).get("snapshot_path")
@@ -817,6 +1209,11 @@ class Journal:
         if snapshot:
             Path(snapshot).unlink(missing_ok=True)
         return True
+
+    def _drop_media(self, session_id: str) -> int:
+        """Drop the pasted images waiting to upload for a session whose
+        pending batch is going (acknowledged, dropped, or the session deleted)."""
+        return self.conn.execute("DELETE FROM media WHERE session_id=?", (session_id,)).rowcount
 
     def _refuse_deleted(self, session_id: str) -> None:
         if self.is_deleted(session_id):
@@ -896,6 +1293,7 @@ class Journal:
         )
         if removed.rowcount != 1:
             return False
+        self._drop_media(state["session_id"])
         state.update(last_seq=remote_sequence, finalized=True, error=None)
         if (state.get("historical_end") == state["source_byte_end"]
                 and state.get("historical_hash") == state["prefix_sha256"]):
@@ -982,9 +1380,14 @@ class Journal:
                     )
                 else:
                     state["protocol_offer"], state["send_events"] = negotiate(remote)
+                _record_terms(state, remote)
                 self._validate_source(state, path)
             else:
                 self._validate_source(state, path)
+                # Fresh terms for the next batches: a fragment version and
+                # pasted images follow the server, batch by batch (the engine
+                # folds mixed versions); the protocol never does.
+                _record_terms(state, remote)
                 stream = remote.get("stream")
                 if stream and stream["stream_id"] != state["stream_id"]:
                     raise ReconciliationRequired(
@@ -1200,7 +1603,16 @@ class Journal:
         packing_cap: int | None = None,
         require_no_pending: bool = False,
         expected_history: tuple[int, str] | None = None,
+        pasted_images: bool = False,
     ) -> bytes | None:
+        """Reserve the session's next batch, or return the one still pending.
+
+        `pasted_images`: this machine lets images the researcher pasted be
+        uploaded (the tap reads `defaults.pasted_images` in the Probe config
+        each pass). They are, only where the session's state also says the
+        server takes them (`media`) and, on protocol 3, the stream builds a
+        fragment version that carries them.
+        """
         with self.transaction():
             state = self.get(session_id)
             if state is None:
@@ -1227,6 +1639,21 @@ class Journal:
             # Protocol 3: the fragment builder, and whether events go beside it.
             module = self._fragment_builder(protocol)
             send_events = module is None or bool(state.get("send_events"))
+            version = _stream_fragment_version(state, module) if module is not None else None
+            # Rows an older tap left when it delivered the batch naming them
+            # (it knows no `media`): no pending batch names them any more.
+            self.conn.execute("DELETE FROM media WHERE session_id NOT IN (SELECT session_id FROM pending)")
+            extract = _pasted_extractor(self.source) if pasted_images else None
+            images_since = getattr(module, "IMAGES_SINCE", None) if module is not None else None
+            if extract is not None and state.get("media") is True and (
+                module is None or (images_since is not None and version >= images_since)
+            ):
+                spool: dict[str, tuple[str, bytes]] = {}
+                room = MEDIA_SPOOL_CAP_BYTES - self.conn.execute(
+                    "SELECT COALESCE(sum(size),0) FROM media"
+                ).fetchone()[0]
+            else:
+                extract = None
             # A lone event may use the whole ROUTE budget (the protocol's); a
             # packed batch may only use the packing target. A caller that lowers
             # `max_body_bytes` to exercise batching still gets the real solo
@@ -1257,35 +1684,54 @@ class Journal:
                 handle.seek(end)
                 while True:
                     raw = handle.readline(MAX_SOURCE_LINE + 1)
-                    if len(raw) > MAX_SOURCE_LINE:
-                        raise DeliveryPending(
-                            "source event exceeds the bounded parser; source retained"
-                        )
-                    if not raw:
-                        break
-                    if not raw.endswith(b"\n"):
-                        if historic:
-                            raise DeliveryPending(
-                                "historical transcript has an incomplete trailing line"
-                            )
-                        break
-                    try:
-                        value = sanitize(json.loads(raw)) if raw.strip() else None
-                        if value is not None and nesting_exceeds(value):
-                            value = None  # the redactor below would hit the recursion limit
-                    except (ValueError, UnicodeDecodeError):
-                        value = None
-                    except MemoryError:
-                        raise  # may pass; never drop a line for it
-                    except Exception:  # noqa: BLE001
-                        # A sanitizer that trips on one hostile or unforeseen
-                        # line costs that line, never the session: the cursor
-                        # never moves past an exception, so raising here would
+                    length = len(raw)
+                    if length > MAX_SOURCE_LINE:
+                        # Too long to read (D16): skipped to its newline and
+                        # said, never held, so the capture goes on. It used to
                         # stop this session's capture for good.
-                        value = None
-                    retained = (
-                        value if isinstance(value, list) else ([] if value is None else [value])
-                    )
+                        if not raw.endswith(b"\n"):
+                            length = _rest_of_line(handle, length)
+                        raw = b""
+                        if length is None:
+                            if historic:
+                                raise DeliveryPending(
+                                    "historical transcript has an incomplete trailing line"
+                                )
+                            break  # still being written: read it whole next pass
+                        retained = [oversize_line_event(length)]
+                    else:
+                        if not raw:
+                            break
+                        if not raw.endswith(b"\n"):
+                            if historic:
+                                raise DeliveryPending(
+                                    "historical transcript has an incomplete trailing line"
+                                )
+                            break
+                        line = None
+                        try:
+                            line = json.loads(raw) if raw.strip() else None
+                            value = sanitize(line) if raw.strip() else None
+                            if value is not None and nesting_exceeds(value):
+                                value = None  # the redactor below would hit the recursion limit
+                        except (ValueError, UnicodeDecodeError):
+                            value = None
+                        except MemoryError:
+                            raise  # may pass; never drop a line for it
+                        except Exception:  # noqa: BLE001
+                            # A sanitizer that trips on one hostile or unforeseen
+                            # line costs that line, never the session: the cursor
+                            # never moves past an exception, so raising here would
+                            # stop this session's capture for good.
+                            value = None
+                        retained = (
+                            value if isinstance(value, list) else ([] if value is None else [value])
+                        )
+                        if extract is not None and retained:
+                            # A shape the reader did not foresee costs the
+                            # line's images (placeholders), never the line.
+                            with suppress(ValueError, TypeError, KeyError, AttributeError, IndexError):
+                                room = _attach_pasted(extract(line), retained, spool, room)
                     additions = [
                         {"line_no": event_no + i, "raw": event} for i, event in enumerate(retained)
                     ]
@@ -1310,7 +1756,7 @@ class Journal:
                             if solo > solo_limit and module is not None:
                                 # Rare, so exact: the estimate may be high.
                                 solo = _encoded_bytes(
-                                    [_fragment(module, event) for event in additions]
+                                    [_fragment(module, event, version) for event in additions]
                                 )
                             if solo > solo_limit:
                                 raise DeliveryPending(
@@ -1322,7 +1768,7 @@ class Journal:
                     events.extend(additions)
                     event_no += len(additions)
                     size += increment
-                    end += len(raw)
+                    end += length
                     lines += 1
                     records += bool(additions)
                     marks.append(_Mark(len(events), end, lines, event_no, size, records))
@@ -1356,7 +1802,7 @@ class Journal:
                 }
                 if module is not None:
                     # Every protocol-3 batch, finalize included: the gateway requires it.
-                    body["fragment_version"] = module.FRAGMENT_VERSION
+                    body["fragment_version"] = version
                 if final:
                     body["finalize"] = True
                 else:
@@ -1385,7 +1831,7 @@ class Journal:
                 # without its events gives the same fragments: the scrubber
                 # never joins text across keys.
                 scrubbed = _scrub_content({"events": events})["events"]
-                body["fragments"] = [_fragment(module, event) for event in scrubbed]
+                body["fragments"] = [_fragment(module, event, version) for event in scrubbed]
                 content = _scrub_content(body)
                 if send_events:
                     content["events"] = scrubbed
@@ -1417,6 +1863,15 @@ class Journal:
                 "INSERT INTO pending(session_id,body,digest) VALUES(?,?,?)",
                 (session_id, encoded, hashlib.sha256(encoded).hexdigest()),
             )
+            if extract is not None and spool:
+                # The bytes of exactly the images this batch names (lines
+                # given back above name theirs again in the next batch).
+                for digest in sorted(named_media(json.loads(encoded)).intersection(spool)):
+                    media_type, data = spool[digest]
+                    self.conn.execute(
+                        "INSERT INTO media(session_id,sha256,media_type,size,bytes) VALUES(?,?,?,?,?)",
+                        (session_id, digest, media_type, len(data), data),
+                    )
             # The reservation is represented by this row. It is committed together
             # with state; no source cursor can pass it until its receipt arrives.
             self._save(state)
@@ -1514,6 +1969,7 @@ class Journal:
                 state["historical_complete"] = True
             self._save(state)
             self.conn.execute("DELETE FROM pending WHERE session_id=?", (session_id,))
+            self._drop_media(session_id)
 
     def deliver(self, session_id: str, wire: Wire, *, expected_body: bytes | None = None) -> bool:
         # A compatible drainer may already have acknowledged the staged body
@@ -1524,6 +1980,7 @@ class Journal:
         if body is None:
             return False
         _require_safe_pending(body)
+        self._upload_media(session_id, body, wire)
         code, result = wire.post(body)
         if deleted_response(code, result, session_id):
             raise SessionDeleted(session_id, newly=self.mark_deleted(session_id))
@@ -1549,6 +2006,103 @@ class Journal:
             )
         self.acknowledge(session_id, result, sent_body=body)
         return True
+
+    def _upload_media(self, session_id: str, body: bytes, wire: Wire) -> None:
+        """Upload the pasted images `body` names that still wait here, before
+        the batch goes (the engine promotes an image once a batch naming it is
+        accepted and its bytes are staged).
+
+        Per image, the gateway's media door answers:
+          `have`                 -> already stored: done
+          `upload`               -> PUT the bytes with exactly its headers:
+                                    2xx done; 408/429/5xx/no answer wait;
+                                    any other 4xx final
+          403/409/413/415/422/429 (any other 4xx but 401/408)
+                                 -> refused, final for this image
+          410 session_deleted    -> the session's deletion (SessionDeleted)
+          503, 5xx, no answer    -> wait: DeliveryPending, the batch waits
+        Done or final drops the image's row; a final one keeps the batch going
+        (the engine shows that image as not available). Waiting is bounded
+        (MEDIA_RETRY_MIN_ATTEMPTS over MEDIA_RETRY_WINDOW_SECONDS), then the
+        image is given up, so capture never stalls on one image.
+        """
+        waiting = [
+            row[0]
+            for row in self.conn.execute(
+                "SELECT sha256 FROM media WHERE session_id=? ORDER BY sha256", (session_id,)
+            )
+        ]
+        if not waiting:
+            return
+        named = named_media(json.loads(body))
+        for digest in waiting:
+            if digest in named:
+                self._upload_one(session_id, digest, wire)
+
+    def _upload_one(self, session_id: str, digest: str, wire: Wire) -> None:
+        row = self.conn.execute(
+            "SELECT media_type, bytes FROM media WHERE session_id=? AND sha256=?",
+            (session_id, digest),
+        ).fetchone()
+        if row is None:
+            return  # another drainer finished it
+        media_type, data = row[0], bytes(row[1])
+        code, answer = wire.media(session_id, digest, len(data), media_type)
+        if deleted_response(code, answer, session_id):
+            raise SessionDeleted(session_id, newly=self.mark_deleted(session_id))
+        status = answer.get("status") if code == 200 else None
+        if status == "upload":
+            try:
+                target = _put_target(answer, data, getattr(wire, "base_url", ""))
+            except Unresolved as exc:
+                target, unresolved = None, exc
+            else:
+                unresolved = None
+                if target is None:
+                    return self._media_settled(session_id, digest)  # not an answer to follow
+            if unresolved is not None:
+                failure, retryable = f"image storage host did not resolve ({unresolved})", True
+            else:
+                stored = wire.put(target[0], data, target[1])
+                if 200 <= stored < 300 or (400 <= stored < 500 and stored not in (408, 429)):
+                    return self._media_settled(session_id, digest)
+                failure, retryable = f"image upload to storage failed (http {stored})", (
+                    _retryable_status(stored) or (stored == 0 and wire.last_request_retryable)
+                )
+        elif code == 200 or _media_refusal(code):
+            # `have`, a final refusal, or a 200 that is neither answer.
+            return self._media_settled(session_id, digest)
+        else:
+            failure, retryable = f"image upload door unavailable (http {code})", (
+                _retryable_status(code) or (code == 0 and getattr(wire, "last_request_retryable", False))
+            )
+        with self.transaction():
+            row = self.conn.execute(
+                "SELECT attempts, first_failure FROM media WHERE session_id=? AND sha256=?",
+                (session_id, digest),
+            ).fetchone()
+            if row is None:
+                return
+            attempts, first = row[0] + 1, row[1] if row[1] is not None else time.time()
+            if attempts >= MEDIA_RETRY_MIN_ATTEMPTS and time.time() - first >= MEDIA_RETRY_WINDOW_SECONDS:
+                self.conn.execute(
+                    "DELETE FROM media WHERE session_id=? AND sha256=?", (session_id, digest)
+                )
+                return  # given up: the batch goes without these bytes
+            self.conn.execute(
+                "UPDATE media SET attempts=?, first_failure=? WHERE session_id=? AND sha256=?",
+                (attempts, first, session_id, digest),
+            )
+        raise DeliveryPending(
+            f"{failure}; the batch naming it waits",
+            retryable=retryable,
+            safe_message="a pasted image could not be uploaded yet; its batch waits",
+        )
+
+    def _media_settled(self, session_id: str, digest: str) -> None:
+        self.conn.execute(
+            "DELETE FROM media WHERE session_id=? AND sha256=?", (session_id, digest)
+        )
 
     def _restart_refused_offer(
         self, session_id: str, body: bytes, result: dict, message: str
@@ -1582,6 +2136,7 @@ class Journal:
             ):
                 return False
             self.conn.execute("DELETE FROM pending WHERE session_id=?", (session_id,))
+            self._drop_media(session_id)
             state.update(protocol_offer=PROTOCOL_EVENTS, send_events=False, error=message)
             self._save(state)
         return True
@@ -1651,9 +2206,11 @@ class Journal:
             if not self._never_held(state, session_id, body):
                 return False
             self.conn.execute("DELETE FROM pending WHERE session_id=?", (session_id,))
+            self._drop_media(session_id)
             state.update(
                 protocol_offer=PROTOCOL_FRAGMENTS, send_events=send_events, error=message
             )
+            _record_terms(state, remote)
             self._keep_snapshot_from_older_taps(state)
             self._save(state)
         return True

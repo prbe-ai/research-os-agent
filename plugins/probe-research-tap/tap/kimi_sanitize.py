@@ -85,7 +85,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from .sanitize import COMMAND_MAX_LEN, ORIGIN_USER_SHELL
+from .sanitize import COMMAND_MAX_LEN, ORIGIN_USER_SHELL, PastedImage, data_url_image
 
 #: Single definition in sanitize.py -- see COMMAND_MAX_LEN there.
 _COMMAND_MAX_LEN = COMMAND_MAX_LEN
@@ -186,6 +186,35 @@ def _media_placeholder(kind: str, holder: Any) -> dict:
         if candidate and len(candidate) <= 128:
             media = candidate
     return {"type": kind, "mimeType": media, "bytes": len(url)}
+
+
+def pasted_images(event: Any) -> list[PastedImage]:
+    """The images the researcher pasted into a Kimi Code prompt, in order.
+
+    Only a `context.append_message` user message whose `origin.kind` is a
+    researcher prompt (`_PROMPT_ORIGINS`), and only its inline `data:` image
+    parts. What a tool returned is a `tool.result` loop event and is never
+    read here; a `blobref:` part (media Kimi moved to `agents/<id>/blobs/`)
+    has no bytes in the line and keeps its placeholder.
+    """
+    if not isinstance(event, dict) or event.get("type") != "context.append_message":
+        return []
+    message = event.get("message")
+    if not isinstance(message, dict) or message.get("role") != "user":
+        return []
+    origin = message.get("origin")
+    kind = origin.get("kind") if isinstance(origin, dict) else None
+    content = message.get("content")
+    if not (isinstance(kind, str) and kind in _PROMPT_ORIGINS) or not isinstance(content, list):
+        return []
+    found = []
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "image_url":
+            holder = part.get("imageUrl")
+            image = data_url_image(holder.get("url") if isinstance(holder, dict) else None)
+            if image is not None:
+                found.append(image)
+    return found
 
 
 def _translate_part(part: Any) -> dict | None:

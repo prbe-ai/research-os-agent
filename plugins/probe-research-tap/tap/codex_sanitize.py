@@ -80,7 +80,7 @@ from typing import Any
 # RELATIVE import, deliberately: this file is byte-identical in its two homes
 # (canonical src/probe/tap_core/, vendored plugins/probe-research-tap/tap/),
 # and `.sanitize` resolves correctly inside both packages.
-from .sanitize import COMMAND_MAX_LEN, _result_size, output_withheld
+from .sanitize import COMMAND_MAX_LEN, PastedImage, _result_size, data_url_image, output_withheld
 
 # Per-message phase from Codex's `MessagePhase` enum. Tracked in extras since
 # CC has no equivalent.
@@ -356,7 +356,11 @@ def _translate_content_item(item: Any) -> dict | None:
         url = item.get("image_url")
         if not isinstance(url, str) or not url:
             return None
-        # A PASTED IMAGE IS FILE CONTENT AND DOES NOT LEAVE THE MACHINE.
+        # A PASTED IMAGE'S BYTES NEVER GO IN THE EVENT. (Since tap 0.9.17
+        # the journal may upload a researcher's paste BESIDE the batch, by
+        # digest, where the server and the machine allow it: `pasted_images`
+        # below and `session_journal`. The rest of this note is why the event
+        # itself must stay small.)
         #
         # Codex inlines a paste as `data:image/png;base64,...` on ONE line, so
         # one screenshot is one event of its full encoded size. Two things
@@ -402,6 +406,47 @@ def _image_placeholder(url: str) -> dict:
         if candidate and len(candidate) <= 128:
             media = candidate
     return {"type": "image", "mimeType": media, "bytes": len(url)}
+
+
+#: How Codex opens the user message that carries the files the researcher
+#: attached to a prompt: a manifest naming each one ("Image attachment: true"
+#: for an image), then their `input_image` items. Seen on every one of the
+#: 185 user messages with an image in 253 real Codex 0.160 rollouts (the
+#: desktop app, the TUI and the forked histories of their subagent threads).
+_ATTACHMENT_MANIFEST = "# Files mentioned by the user:"
+
+
+def pasted_images(line: Any) -> list[PastedImage]:
+    """The images the researcher attached to a Codex prompt, in order.
+
+    Only a user `message` that opens with Codex's attachment manifest. An
+    image the AGENT looked at (`view_image`, a code-mode screenshot) is a
+    `function_call_output` / `custom_tool_call_output` item since Codex
+    #12553 (2026-02), which the sanitizer drops whole; before that, Codex
+    injected it as a user message of its own with no manifest, so it is
+    never read here either. A user image message in any other shape (an
+    older TUI, `codex exec -i`) keeps its placeholder: it cannot be told
+    apart from that injected one by the line alone.
+    """
+    if not isinstance(line, dict) or line.get("type") != "response_item":
+        return []
+    payload = line.get("payload")
+    if not isinstance(payload, dict) or payload.get("type") != "message":
+        return []
+    if payload.get("role") != "user" or _is_startup_context_message(payload):
+        return []
+    content = payload.get("content")
+    first = content[0] if isinstance(content, list) and content else None
+    text = first.get("text") if isinstance(first, dict) and first.get("type") == "input_text" else None
+    if not isinstance(text, str) or not text.lstrip().startswith(_ATTACHMENT_MANIFEST):
+        return []
+    found = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "input_image":
+            image = data_url_image(item.get("image_url"))
+            if image is not None:
+                found.append(image)
+    return found
 
 
 def _translate_reasoning(payload: dict, timestamp: Any) -> dict | None:

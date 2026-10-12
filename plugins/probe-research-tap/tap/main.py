@@ -528,6 +528,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                                     cwd=str(source_cwd),
                                     finalize=bool(state.get("finalize_requested")),
                                     historical_only=not state.get("live_enabled", False),
+                                    # Read each pass: the Settings toggle
+                                    # takes effect on the next batch.
+                                    pasted_images=cfg.pasted_images_on(),
                                 )
                                 if body is None:
                                     break

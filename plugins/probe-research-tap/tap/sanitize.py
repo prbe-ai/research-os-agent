@@ -80,7 +80,7 @@ canonical file, never the plugin copy.
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, NamedTuple
 
 # Top-level event types to drop entirely. These are CC-internal bookkeeping
 # with no conversational content. file-history-snapshot dominates payload
@@ -647,7 +647,9 @@ def _id_or_none(value: Any) -> str | None:
 
 
 def _image_placeholder(source: Any) -> dict[str, Any]:
-    """A pasted image as WHAT was there, never the bytes.
+    """A pasted image as WHAT was there, never the bytes (since tap 0.9.17 the
+    journal may add the SHA-256 of a researcher's paste and upload the bytes
+    beside the batch: `pasted_images` below).
 
     The same shape codex_sanitize, pi_sanitize and kimi_sanitize already give
     a pasted image (`{type, mimeType, bytes}`, or a remote URL kept as a
@@ -671,3 +673,75 @@ def _image_placeholder(source: Any) -> dict[str, Any]:
         "mimeType": media[:_METADATA_MAX_LEN] if isinstance(media, str) and media else "image",
         "bytes": len(data) if isinstance(data, str) else 0,
     }
+
+
+class PastedImage(NamedTuple):
+    """An image the researcher pasted into their own prompt, read from the RAW
+    transcript line (each sanitizer's `pasted_images`).
+
+    It never enters an event: `Journal.stage` decodes it, checks it, and puts
+    only its SHA-256 on the placeholder the sanitizer made for it, matching
+    the two by order and by `encoded`, the size that placeholder records as
+    `bytes`. The bytes wait in the journal until they are uploaded.
+    """
+
+    #: The media type the transcript declares (checked against the bytes).
+    media_type: str
+    #: The base64 payload.
+    data: str
+    #: The placeholder's `bytes` for this image (its encoded size).
+    encoded: int
+
+
+def data_url_image(url: Any) -> PastedImage | None:
+    """A `data:<type>;base64,<payload>` URL as a PastedImage, else None.
+
+    The media type is read as the Codex and Kimi placeholders read it (the
+    text before the first `;`), so the two agree."""
+    if not isinstance(url, str) or not url.startswith("data:"):
+        return None
+    comma = url.find(",")
+    if comma < 0:
+        return None
+    media, *params = url[5:comma].split(";")
+    media = media.strip()
+    if not media or "base64" not in (param.strip().lower() for param in params):
+        return None
+    return PastedImage(media, url[comma + 1 :], len(url))
+
+
+def pasted_images(event: Any) -> list[PastedImage]:
+    """The images the researcher pasted into a Claude Code prompt, in order.
+
+    Claude Code writes a paste as a top-level `image` block with an inline
+    base64 `source` in the user's own message. What a TOOL showed the agent
+    (a `Read` of a PNG, a screenshot tool) sits inside a `tool_result` block
+    and is never read here, and neither is a line Claude Code itself wrote
+    in the user's place: an injected meta turn (`isMeta`), a tool-result line
+    (`toolUseResult`), a compaction summary, or a sidechain (a subagent's
+    prompt, written by the agent).
+    """
+    if not isinstance(event, dict) or event.get("type") != "user":
+        return []
+    if (
+        event.get("isMeta") is True
+        or event.get("isCompactSummary") is True
+        or event.get("isSidechain") is True
+        or "toolUseResult" in event
+    ):
+        return []
+    message = event.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list) or message.get("role") != "user":
+        return []
+    found = []
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "image":
+            continue
+        source = block.get("source")
+        if not isinstance(source, dict) or source.get("type") != "base64":
+            continue
+        media, data = source.get("media_type"), source.get("data")
+        if isinstance(media, str) and isinstance(data, str) and data:
+            found.append(PastedImage(media, data, len(data)))
+    return found
