@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.235.3
+
 - `plan-research-review` looks for related papers nobody named: `find_papers` (or `probe ask` under the daemon) for work that would change a part of the plan, one line per paper saying what it claims, the part it would change and its code. Using one is a question to the researcher, never something the agent builds on its own, and it comes after reproducing the paper.
 
 ## 0.235.2
