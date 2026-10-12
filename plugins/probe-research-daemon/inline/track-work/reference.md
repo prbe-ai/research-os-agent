@@ -165,7 +165,7 @@ record a pointer instead:
 `--kind`, `--step`, `--span` and `--meta` are run-anchor only. References are
 run/project/experiment only — a workspace or Shared file IS its bytes, so
 `--reference` and `--uri` are errors there. Code is always stored, never
-pointed at (`--kind code|script|source`, or the snapshot's `code_bytes`).
+pointed at (`--kind code`, or the snapshot's `code_bytes`).
 Uploads are content-addressed: bytes already held are never re-sent. From the
 SDK, `run.log_artifact(name, path=…, reference=True)` records where the bytes
 are without moving them.
