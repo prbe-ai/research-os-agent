@@ -122,6 +122,7 @@ RESEARCH_SKILLS = {
     "edit-notes",
     "plan-research-review",
     "probe-research-setup",
+    "probe-capy",
     # retired names (kept for resumed transcripts and cached installs);
     # notes-audit and pull-rules were renamed on 2026-09-17
     "notes-audit",

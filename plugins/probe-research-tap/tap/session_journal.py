@@ -45,7 +45,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
-from . import codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
+from . import capy_sanitize, codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
 from .secrets import redact_event
 from .transcript import nesting_exceeds
 
@@ -150,6 +150,7 @@ _SANITIZER_MODULES = {
     "codex_sanitize": codex_sanitize,
     "pi_sanitize": pi_sanitize,
     "kimi_sanitize": kimi_sanitize,
+    "capy_sanitize": capy_sanitize,
 }
 
 

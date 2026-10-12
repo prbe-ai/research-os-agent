@@ -5,7 +5,16 @@ from tap import sources
 
 
 def test_known_sources_are_the_shipped_harnesses():
-    assert set(sources.SOURCES) == {"claude_code", "codex", "pi", "kimi_code"}
+    assert set(sources.SOURCES) == {"claude_code", "codex", "pi", "kimi_code", "capy"}
+
+
+def test_every_source_s_sanitizer_imports_from_the_tap():
+    """Capy is uploaded by `probe capy sync`, never by a tap hook, but the tap
+    carries every captured row's sanitizer so its journal can stage any of them."""
+    import importlib
+
+    for row in sources.SOURCES.values():
+        assert hasattr(importlib.import_module(row.sanitizer_module), "sanitize_event"), row.source_id
 
 
 def test_lookup_returns_the_row_for_a_known_source():

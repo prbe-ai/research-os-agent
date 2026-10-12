@@ -40,7 +40,11 @@ REGISTRY_FILE = Path(__file__).with_name("harnesses.json")
 #: How a harness is integrated. Core code branches on these, never on an id.
 FAMILY_HOOK_PLUGIN = "hook-plugin"  # a plugin with hooks, skills and MCP (Claude Code, Codex)
 FAMILY_EXTENSION = "extension"  # a package whose extension calls the probe CLI (pi)
-FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION)
+#: The agent runs on its vendor's servers (Capy): nothing installs on this
+#: machine. Probe reaches it through the probe CLI on the vendor's machine and
+#: captures its sessions by pulling them from the vendor's API.
+FAMILY_CLOUD = "cloud"
+FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION, FAMILY_CLOUD)
 
 #: What a hook or the extension can do inside the harness (mirrors the daemon
 #: adapters' Capabilities.inject_line / .wake; the conformance test pins them).
@@ -432,6 +436,8 @@ def _harness(row: Any, index: int) -> Harness:
             raise RegistryError(f"{where}.plugin.marketplace_source must be one of {MARKETPLACE_SOURCES}")
     if harness.family == FAMILY_EXTENSION and harness.installable and not harness.package_dir:
         raise RegistryError(f"{where} is an installable extension harness, so it needs package_dir")
+    if harness.family == FAMILY_CLOUD and harness.installable:
+        raise RegistryError(f"{where} is a cloud harness: nothing installs locally, so it is not installable")
     if not harness.detect_env:
         raise RegistryError(f"{where}.detect_env must name at least one variable")
     return harness

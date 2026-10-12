@@ -196,7 +196,9 @@ def _captured_ids() -> tuple:
     try:
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "harnesses.json"), encoding="utf-8") as fh:
             rows = _json.load(fh)["harnesses"]
-        return tuple(row["id"] for row in rows if row.get("captured") is True)
+        # Only agents whose runs carry a session foreign key: a cloud agent
+        # (Capy) has no session env on this machine, so asking is a wasted request.
+        return tuple(row["id"] for row in rows if row.get("captured") is True and row.get("session_env"))
     except (OSError, ValueError, KeyError, TypeError):
         return ("claude_code", "codex", "pi")
 
