@@ -48,7 +48,7 @@ Still call `probe.log_artifact` for:
 | case | why |
 |---|---|
 | a file OUTSIDE the run's folder | the sweep only sees that folder |
-| a name or kind you choose (`kind="checkpoint"`) | captured files are named by path, kind by extension |
+| a name or kind you choose | captured files are named by path and never filed `checkpoint`; `log_artifact` files `.ckpt`/`.safetensors`/`.pt`/`.pth` as `checkpoint` itself |
 | a checkpoint written straight to a bucket | `log_artifact(name, uri="s3://...")` records where it is |
 
 Runs that SHARE a folder at the same time (sweep workers, parallel seeds) cannot
@@ -143,6 +143,15 @@ Hugging Face Trainer: `import probe.integrations.huggingface`, then
 `probe-research[huggingface]`; use one or the other, not both). Same rules as
 the Lightning logger: world-zero process only, adopts an open run, checkpoints
 as path references, one run per Trainer, never finishes its run.
+
+Both record each checkpoint's LOCATION by default; one on a job's own throwaway
+disk (a pod, a container, CI) warns, because it is gone with the job. To store
+the files, pass `checkpoints="upload"` (`ProbeCallback` / `ProbeLogger`), or set
+`PROBE_CHECKPOINTS=upload` with `report_to="probe"`: each save is uploaded as
+its own set, folders included (rank 0's view: shards kept on other nodes' own
+disks are not gathered). Get one back with `probe artifact download
+--run <run> --checkpoint latest|best -o DIR` (`client.checkpoint(run_id,
+"best")`, `client.download_checkpoint(row, dir)`).
 
 Ray Tune: one run per trial, opened inside the trainable. A function
 trainable's run closes itself when Tune ends the trial - after its last
