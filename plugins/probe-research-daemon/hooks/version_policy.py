@@ -9,7 +9,7 @@ never `import probe`. The only way one definition serves both is a file the plug
 ships its own copy of, which is why `make sync-plugin-policy` exists and why
 tests/test_policy_sync.py fails the moment the copies drift.
 
-Same contract as `skills/` -> `plugins/probe-research/skills/`: edit THIS file,
+Same contract as `skills/` -> `plugins/probe-research/agent-skills/`: edit THIS file,
 never the plugin copy.
 
 WHAT WAS DUPLICATED BEFORE THIS MODULE.

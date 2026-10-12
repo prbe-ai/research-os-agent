@@ -15,7 +15,7 @@
     "experiment-tracking",
     "research"
   ],
-  "skills": "./skills/",
+  "skills": "./agent-skills/",
   "interface": {
     "displayName": "Probe Research (daemon)",
     "shortDescription": "The Probe daemon records and reads for this agent",

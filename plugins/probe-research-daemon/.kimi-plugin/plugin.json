@@ -20,7 +20,7 @@
     "developerName": "Probe",
     "websiteURL": "https://research.prbe.ai"
   },
-  "skills": "./skills/",
+  "skills": "./agent-skills/",
   "hooks": [
     {
       "event": "UserPromptSubmit",

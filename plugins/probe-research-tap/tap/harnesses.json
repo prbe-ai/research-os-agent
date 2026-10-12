@@ -68,7 +68,7 @@
       "lean_profile": "second-plugin",
       "attribution_requires_pairing": false,
       "capabilities": {
-        "prompt_context": true,
+        "root_skills": true, "prompt_context": true,
         "wake": true
       },
       "statusline": "claude-settings",
@@ -137,7 +137,7 @@
       "lean_profile": "second-plugin",
       "attribution_requires_pairing": true,
       "capabilities": {
-        "prompt_context": false,
+        "root_skills": false, "prompt_context": false,
         "wake": false
       },
       "statusline": null,
@@ -200,7 +200,7 @@
       "lean_profile": "settings-filter",
       "attribution_requires_pairing": false,
       "capabilities": {
-        "prompt_context": false,
+        "root_skills": false, "prompt_context": false,
         "wake": true
       },
       "statusline": null,
@@ -276,7 +276,7 @@
       "lean_profile": "second-plugin",
       "attribution_requires_pairing": false,
       "capabilities": {
-        "prompt_context": true,
+        "root_skills": false, "prompt_context": true,
         "wake": false
       },
       "statusline": "kimi-tui-toml",

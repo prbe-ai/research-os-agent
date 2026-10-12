@@ -16,7 +16,7 @@
     "research",
     "mcp"
   ],
-  "skills": "./skills/",
+  "skills": "./agent-skills/",
   "mcpServers": {
     "probe-research": {
       "url": "https://mcp.research.prbe.ai/mcp",

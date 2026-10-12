@@ -46,6 +46,10 @@ FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION)
 #: adapters' Capabilities.inject_line / .wake; the conformance test pins them).
 CAPABILITY_PROMPT_CONTEXT = "prompt_context"  # add text to the next prompt from a hook
 CAPABILITY_WAKE = "wake"  # start a turn for a late answer
+#: Probe's skills go in the agent's OWN skills folder, so they carry no plugin
+#: prefix (`cli/root_skills.py`). Claude Code only: Codex and Kimi read the
+#: plugin's `agent-skills/` by manifest key, and pi its package manifest.
+CAPABILITY_ROOT_SKILLS = "root_skills"
 
 #: How a transcript's path yields its session id.
 SESSION_ID_STEM = "stem"  # the whole stem is the id

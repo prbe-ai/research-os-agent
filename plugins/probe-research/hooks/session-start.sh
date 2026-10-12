@@ -82,6 +82,11 @@ export PROBE_PLUGIN_JSON="$PLUGIN_ROOT/${MANIFEST_DIR:-.claude-plugin}/plugin.js
 # above on purpose: the detached sender inherits PROBE_BIN/PROBE_PLUGIN_JSON.
 printf '%s' "$HOOK_INPUT" | "$PY" "$PLUGIN_ROOT/hooks/telemetry.py" session-start 2>/dev/null || true
 
+# Probe's skills live in the agent's OWN skills folder, so they carry no plugin
+# prefix; the plugin stays their source and this copies it out when it differs.
+# Silent and fail-open, and a no-op on every harness but Claude Code.
+"$PY" "$PLUGIN_ROOT/hooks/root_skills_sync.py" >/dev/null 2>&1 || true
+
 out="$("$PY" "$PLUGIN_ROOT/hooks/version_check.py" 2>/dev/null)" || out=""
 if [ -n "$out" ]; then
   printf '%s\n' "$out"
