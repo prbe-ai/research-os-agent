@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.243.2
 - **The daemon stops paying again for an answer the model never gave.** When gpt-6.1-sol thinks until its token limit (16,384 by default) and answers nothing, or is cut off mid tool call, the writer used to treat it as a passing failure: it backed off, moved the bite to the back of the queue and sent the same request again. strand-ai's writer did that 41 times in 3.5 hours on 2026-10-12, at about $0.25 each. Now the writer starts fresh from disk with half the events and, if that fails too, skips the range with a notice (an "events skipped" ping, not "Daemon bug"). Each such bite in a row waits longer (30 s doubling, 30 min at most), and after 3 the agent records until a model round answers again. A continued run that answers nothing is dropped with a notice, not silently. The reader used to read the error as stray prose and keep its history, so the next wake thought to the limit again (one request was sent 14 times). Now the same events and question go once more on a fresh conversation, without counting as a reader failure; a second time they are passed over as a stopped turn, and newer events still get their own try.
 - **A CLI reinstalled under a running daemon restarts it instead of crashing it.** `uv tool` replaces the CLI under running workers: a new Python moves its folder (`lib/python3.13` to `lib/python3.14`), and `probe update` rewrites its files in place. A worker started before that failed at its next read of its own files ("Daemon crashed", FileNotFoundError on `record_session.md`) or ran old code against new files. It now notices either at its next poll, between two model rounds, or when a run fails on it, and exits 0; capture starts the new install at once, with no crash backoff and no ping.
 
