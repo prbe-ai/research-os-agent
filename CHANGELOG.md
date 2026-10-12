@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.237.0
+
 - `probe capy connect | sync | status | disconnect`: capture the Capy (capy.ai) threads you start as Probe sessions. Capy runs its agent on its own servers, so `probe capy sync` (every 10 minutes from a systemd user timer or launchd agent that `connect` installs) reads your threads through Capy's API with your own Capy key (from `$CAPY_API_KEY`, `--api-key-stdin` or a hidden prompt, never argv; sent to Capy only, never on a redirect), mirrors each thread and subagent to an append-only local file, and uploads it through the same journal as every other agent. Only threads you authored, in the Capy projects you choose, found by your Probe account's email; finished after a quiet day or when archived, reopened by new messages; read-only against Capy. The capture `.disabled` killswitch and a refused capture credential stop every sync until `connect` runs again. Runs and CLI calls from a Capy machine are labelled Capy when its environment sets `PROBE_CAPY=1`. Setup guide: `agent/docs/capy.md` (published as `capy/README.md` in the mirror, beside the `capy/skills/` bundle with its own `probe-capy` skill). The import lane never offers Capy (it has no local history).
 
 ## 0.236.0
