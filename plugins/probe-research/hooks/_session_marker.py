@@ -2943,6 +2943,49 @@ def write_plan_review(on: bool) -> Path:
     return path
 
 
+#: Images pasted into a prompt upload with the captured session (2026-10-12):
+#: on unless this machine turned it off. The capture tap reads the same key
+#: (`tap/config.py` `pasted_images_on`) before it uploads one.
+PASTED_IMAGES_KEY = "pasted_images"
+
+
+def pasted_images_on(config: "dict | None" = None) -> bool:
+    """True unless this machine turned pasted-image upload off."""
+    data = _read_config() if config is None else config
+    defaults = data.get(DEFAULTS_KEY) if isinstance(data, dict) else None
+    return not (isinstance(defaults, dict) and defaults.get(PASTED_IMAGES_KEY) is False)
+
+
+def write_pasted_images(on: bool) -> Path:
+    """Persist the pasted-image setting; returns the config path. Same file,
+    lock and loader as `write_plan_review`; on removes the key (absent is on)."""
+    from probe.sdk.config import (
+        CONFIG_VERSION,
+        DEFAULT_CONTEXT,
+        _config_lock,
+        _load_json_file,
+        _save_json_file,
+        _write_target,
+    )
+
+    path = config_path()
+    target = _write_target(path)
+    with _config_lock(target, _resolved=True):
+        data = _load_json_file(target, strict=True, migrate=True) or {
+            "version": CONFIG_VERSION,
+            "current_context": DEFAULT_CONTEXT,
+            "contexts": {},
+        }
+        defaults = data.get(DEFAULTS_KEY)
+        data[DEFAULTS_KEY] = defaults if isinstance(defaults, dict) else {}
+        if on:
+            data[DEFAULTS_KEY].pop(PASTED_IMAGES_KEY, None)
+        else:
+            data[DEFAULTS_KEY][PASTED_IMAGES_KEY] = False
+        _save_json_file(target, data, private=True, _resolved=True)
+    return path
+
+
 def configured(config: dict | None = None) -> bool:
     """Whether this machine has a credential for Probe. Cheap, and fail-soft.
 
