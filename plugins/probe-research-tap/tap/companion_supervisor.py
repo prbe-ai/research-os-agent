@@ -13,10 +13,12 @@ must be killable without touching capture.
                          child died ─> respawn, at most RESPAWNS_PER_MINUTE; after a
                            crash (EXIT_CRASHED, or any other failing exit) not
                            before a growing wait; after EXIT_RESPAWN_LATER (it left
-                           over the switch) once the switch reads `daemon`; and not
-                           at all after it exits EXIT_DO_NOT_RESPAWN (no AI
-                           libraries, no key, the store is newer than the code)
-                           until the switch moves
+                           over the switch) once the switch reads `daemon`; after
+                           EXIT_RETRY_LIBS (no AI libraries) not before
+                           LIBS_RETRY_SECONDS, because an update or `probe daemon
+                           install` puts them back; and not at all after it exits
+                           EXIT_DO_NOT_RESPAWN (no key, the store is newer than
+                           the code) until the switch moves
                          state left daemon ─> the child notices and exits itself
     tap watch exit ──> stop(): SIGTERM and return. The worker is in its OWN
                        process group, finishes its queue (bounded) and exits on
@@ -61,6 +63,15 @@ RESPAWN_LATER_SECONDS = 5
 #: `wanted()` is False while the researcher has Probe inline, so a worker leaving
 #: for it exits 0, not EXIT_DO_NOT_RESPAWN (whose hold a quick switch back would pin).
 FOLLOWS_INLINE_ENV = "PROBE_TAP_FOLLOWS_INLINE"
+#: The worker's exit when the daemon's AI libraries are missing
+#: (`probe.daemon.worker.EXIT_RETRY_LIBS`), sent only to a supervisor that says it
+#: retries (RETRIES_LIBS_ENV, `probe.daemon.worker.SUPERVISOR_RETRIES_LIBS_ENV`).
+#: Before tap 0.9.19 that exit was EXIT_DO_NOT_RESPAWN, and a session whose
+#: libraries came back (an update restates them) never got its daemon again
+#: until the switch moved (2026-10-12).
+EXIT_RETRY_LIBS = 6
+RETRIES_LIBS_ENV = "PROBE_TAP_RETRIES_LIBS"
+LIBS_RETRY_SECONDS = 300
 #: After a crash, the next spawn waits this long, doubling per crash in a row.
 CRASH_BACKOFF_SECONDS = 30
 CRASH_BACKOFF_CAP_SECONDS = 30 * 60
@@ -188,9 +199,10 @@ class Supervisor:
 
     def _spawn_argv(self) -> list[str] | None:
         """Daemon v2: `probe daemon worker` from the researcher's CLI environment.
-        No CLI (or one too old to have it, or without the AI libraries): the
-        worker exits EXIT_DO_NOT_RESPAWN, the lease is never taken, and the agent
-        records -- fall back to the agent, never to silence."""
+        No CLI, or one too old to have it: the worker exits EXIT_DO_NOT_RESPAWN,
+        the lease is never taken, and the agent records -- fall back to the
+        agent, never to silence. A CLI without the AI libraries exits
+        EXIT_RETRY_LIBS and is tried again after LIBS_RETRY_SECONDS."""
         cli = probe_cli()
         if cli is None:
             return None
@@ -209,14 +221,19 @@ class Supervisor:
             if self.child is not None and self.child.poll() is not None:
                 code = self.child.returncode
                 log.info("companion worker exited (%s)", code)
-                # 3: the worker said respawning cannot help (no AI libraries, no key,
-                # a store newer than the code). 2: the CLI has no `daemon worker`
+                # 3: the worker said respawning cannot help (no key, a store newer
+                # than the code; no AI libraries on a CLI older than
+                # EXIT_RETRY_LIBS). 2: the CLI has no `daemon worker`
                 # (too old). Either way: stop until the switch moves; the agent records.
                 if code in (worker.EXIT_DO_NOT_RESPAWN, 2):
                     self.gave_up_in = lease.session_state(self.session_id)
                 elif code == EXIT_RESPAWN_LATER:
                     self.crashes = 0
                     self.not_before = time.monotonic() + RESPAWN_LATER_SECONDS
+                elif code == EXIT_RETRY_LIBS:
+                    # Not a crash and not a give-up: the libraries can come back.
+                    self.crashes = 0
+                    self.not_before = time.monotonic() + LIBS_RETRY_SECONDS
                 elif code == 0:
                     self.crashes = 0
                 else:
@@ -251,7 +268,7 @@ class Supervisor:
                         stdout=log_file,
                         stderr=subprocess.STDOUT,
                         cwd=str(self.cwd) if Path(self.cwd).is_dir() else str(Path.home()),
-                        env={**os.environ, FOLLOWS_INLINE_ENV: "1"},
+                        env={**os.environ, FOLLOWS_INLINE_ENV: "1", RETRIES_LIBS_ENV: "1"},
                         # Its own group: a signal to the capture daemon's group must not
                         # cut the worker's final cycle short.
                         start_new_session=True,

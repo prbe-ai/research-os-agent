@@ -122,6 +122,31 @@ def test_a_worker_that_left_over_the_switch_respawns_even_when_it_already_reads_
     assert len(spawned) == 2, "the session stays with the agent for good"
 
 
+def test_a_worker_without_its_libraries_is_tried_again_later_not_given_up(tmp_path, monkeypatch):
+    # 2026-10-12: the daemon's AI libraries were stripped by a reinstall and put
+    # back an hour later; a supervisor that gave up (exit 3) left the session's
+    # daemon down until the switch moved. Exit 6 waits, then tries again.
+    sup, spawned, clock = _sup(tmp_path, monkeypatch, [supervisor_mod.EXIT_RETRY_LIBS, None])
+    _set_state("daemon")
+    sup.poll()  # spawn 1: no libraries
+    sup.poll()
+    assert sup.gave_up_in is None and sup.crashes == 0 and len(spawned) == 1
+    clock.now += supervisor_mod.LIBS_RETRY_SECONDS - 1
+    sup.poll()
+    assert len(spawned) == 1, "not in a loop while they are still missing"
+    clock.now += 2
+    sup.poll()
+    assert len(spawned) == 2
+
+
+def test_every_worker_is_told_the_supervisor_retries_missing_libraries(tmp_path, monkeypatch):
+    sup, spawned, _ = _sup(tmp_path, monkeypatch, [None])
+    _set_state("daemon")
+    sup.poll()
+    assert spawned[0]["env"][supervisor_mod.RETRIES_LIBS_ENV] == "1"
+    assert spawned[0]["env"][supervisor_mod.FOLLOWS_INLINE_ENV] == "1"
+
+
 def test_a_worker_that_left_over_the_switch_waits_while_it_is_not_daemon(tmp_path, monkeypatch):
     sup, spawned, clock = _sup(tmp_path, monkeypatch, [supervisor_mod.EXIT_RESPAWN_LATER, None])
     _set_state("daemon")
