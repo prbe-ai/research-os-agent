@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.243.0
+
 - `probe experiment fork SOURCE NEW --question "..."` (SDK `fork_experiment`) makes a new experiment in SOURCE's project that copies its notes, sub-notes, page document, tags, chart settings and its own files (nothing re-uploaded), links it `forked_from` SOURCE, and reads SOURCE's runs and their files live until one changes on SOURCE's side, when the fork keeps its own copy. `probe experiment inherited NEW [--runs]` (SDK `experiment_inherited`) lists what a fork reads from its source. The daemon owns `experiment fork` and may retry it safely; `experiment inherited` is a read.
 - `track-work` (main agent and daemon): a new experiment that starts from another's notes and files is made with `probe experiment fork SOURCE NEW --question "..."` instead of `experiment create` + `edge add`; the fork's own link comes only from that command.
 
