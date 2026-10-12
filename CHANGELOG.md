@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.234.1
+
 - **The Probe MCP's handshake timing out no longer pings #eng-alerts as a daemon bug.** When the hosted MCP takes the connection but does not finish its `initialize` handshake within 5 s (a laptop on bad wifi, a slow server), fastmcp raises `RuntimeError: Client failed to connect: Failed to initialize server session`. It is raised from a TimeoutError, but fastmcp re-raises it out of a task group in a way that drops that cause, so the daemon found no network error in it and pinged "Daemon bug" (probe-bench-temp, 2026-10-11). That exact error now counts as the network, like a refused connection: the writer retries without a ping and the reader's failing turns do not report it. The tests build the error with a real fastmcp client against a socket that never answers, so a fastmcp that words it differently fails there first.
 
 ## 0.234.0
