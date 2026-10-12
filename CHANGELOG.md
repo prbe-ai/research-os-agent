@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.236.0
+
 - **The agents are told what is and is not ML work, with examples.** `track-work` opens with "WHAT COUNTS AS ML WORK": seven kinds of ML work to record (training, evals, prompt engineering checked against model outputs, datasets, papers and design, analysing results, fixing any of them); setup that gets at most one short note and never a project, run or artifact (installs, drivers, CUDA, images, provisioning, cluster access, and a training repo's CI fixes and dependency bumps: one line where `edit-notes` puts it, only when something tripped you up); and four kinds that are not ML work and get nothing recorded (product code that only calls a model; CI, deploys, releases and dependency bumps of product code; typos, dotfiles, product docs, unrelated tests; work on Probe's own code). Work that fits both lists is ML work, what the researcher asks to record is recorded, and a session that holds both records only the ML part. Before, "ML work" was the only scope word, so each model drew the line itself. `reference.md`'s provisioning recipe is now a note, not an `infra` run. The daemon's reader and the inline pointer block (POINTER_VERSION 41) name the same not-ML list word for word, and `tests/test_prose_anchors.py` keeps them in step with the skill. The trigger eval's `frontier-torch-bump` and `frontier-ci-flake-fix` now expect no Probe call, reversing their v15 labels.
 
 ## 0.235.3
