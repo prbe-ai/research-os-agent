@@ -78,7 +78,7 @@ What to do, per entity:
 | entity | what it is | make | change | undo / move | how-to |
 |---|---|---|---|---|---|
 | project | high level organization for a given effort; `--kind` required; a phase nests via `--parent` | `project create` | `project set\|tag` | `project move` (parent, top level, workspace); `delete` is PERMANENT | §2 |
-| experiment | one question inside a project; IS a project, `kind=experiment` | `experiment create --question` | `experiment set --question\|--name\|--summary`, `tag`; `freeze` pins its runs (NO `--description`: the question is it) | `delete` PERMANENT | §2 |
+| experiment | one question inside a project; IS a project, `kind=experiment` | `experiment create --question`; `experiment fork SRC NEW --question` starts from SRC (§4) | `experiment set --question\|--name\|--summary`, `tag`; `freeze` pins its runs (NO `--description`: the question is it) | `delete` PERMANENT | §2 |
 | run | one execution, in an experiment or project-direct | `probe exec CMD` / SDK `run()` | `run set\|tag`, `run end --status` | `exec --parent RUN --relation retry\|resume\|fork\|branch`; `run fork SRC --step`, `run start --rewind-to-step` (see `instrument-code`, RELAUNCHING); `delete` PERMANENT | §3 |
 | group | a sweep's runs; needs an experiment | `group create EXP --name NAME` then `run start --group ID`; run the work under it with `probe exec RUN -- cmd` | `group set` | - | reference §1 |
 | trial | one rollout under a run; `--name` only, no notes | `trial add DIR --step N`; the Harbor/Miles pipeline is in `instrument-code` | `trial set` | - | reference §1, §9 |
@@ -288,6 +288,11 @@ link already hangs off its experiment or project, so link only what is true.
 2. The facts, or the researcher's or main agent's own words, say B built on A:
    - a paper at either end: rule 4; an experiment or project -> `derived_from`,
      unless a fact already shows it
+   - a NEW experiment B that starts from experiment A's notes and files (a
+     variation of A) -> make B with `probe experiment fork A B --question
+     "..."`, not `experiment create` + `edge add`: the fork copies A's notes
+     and files, reads A's runs (`probe experiment inherited B`) and is already
+     linked `forked_from` A
    - B relaunches run A because A failed or crashed (its status, not a bad
      result; A stopped but still reads `running` -> look again later) ->
      `retried_from`
@@ -313,7 +318,7 @@ link already hangs off its experiment or project, so link only what is true.
    - across levels: `--source run:ID --relation derived_from --target
      experiment:SLUG`
    - an experiment or project end takes only `derived_from`, `supersedes` or
-     `informed_by`
+     `informed_by`; a fork's own link comes only from `probe experiment fork`
    - a run or experiment that uses a paper's method -> `informed_by` that paper
      (with `--provenance`)
 5. Never:

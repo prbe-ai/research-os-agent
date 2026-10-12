@@ -19,6 +19,7 @@ Lookup only; judgment is in the skill. Sections mirror the skill's numbering.
 ```
 probe project create SLUG --kind K [--parent P] [--tag T] | list | get | use | set | move | delete
 probe experiment create SLUG --project P --question "..." | set | freeze --label L | delete | edges
+probe experiment fork SRC NEW --question "..." | inherited EXP [--runs]
 probe exec [--project P | --experiment E] [--parent RUN --relation R] -- CMD
 probe run fork SRC --step N | end --status S | check | reproduce | tag | set RUN --name
 probe group create EXPERIMENT_ID --name NAME [--kind K] [--spec JSON|@FILE] | list | get | set
