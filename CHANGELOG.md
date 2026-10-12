@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **MCP `browse` under a workspace no longer lists the lab's unfiled runs.** A run opened with no project belongs to no workspace, but `browse(workspace_id=…)` at the top level still appended the team-wide `unfiled` bucket, so an agent reported those runs as being in the workspace: in prod, Ask on a workspace with no projects answered that it held 4 unfiled runs (2026-10-12). The lab root (no `ref`, no `workspace_id`) still names them, and the tool description now says so.
+
 ## 0.233.1
 
 - **The daemon's loop detector no longer stops a run for calls made together.** It stops a run that gets the same refusal or failure 3 times, and it compares refusals with their ids and numbers masked. A reader that asked for three run folders' files in one round (`fm93-ncbi485`, `fm95-ncbi505`, `fm93-ncbi509`), all outside its working folders, got three refusals that read alike and had its turn stopped before it had seen a single answer (strand-ai, 2026-10-11). A refusal that reads alike across different calls now counts once per model round: calls made in the same round have not seen each other's answer. The same refusal in 3 rounds still stops the run, and the same call (tool and arguments) still counts every time, so a failing command repeated in one response still stops it.
