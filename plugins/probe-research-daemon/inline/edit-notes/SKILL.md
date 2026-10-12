@@ -5,7 +5,7 @@ description: Editing any entity's (projects/experiments/runs/etc) notes - this s
 
 # Notes
 
-Notes are attached to entities (or is the shared team note) and are intended to be READ and WRITTEN by agents. They should carry lessons or, as the name suggests, notes about a given entity (or their sub-entities). Since it is shared by ALL agents interacting with a given entity, it should not have any false/outdated information and should be as clear, concise as possible.
+Notes are attached to entities (or is the shared team note) and are intended to be READ and WRITTEN by agents. Write only what would help the next agent on this entity or project - not everything that happened. Since it is shared by ALL agents interacting with a given entity, it should not have any false/outdated information and should be as clear, concise as possible.
 
 Never paste text from an external source (a paper, a README, an issue, a search result) into a note verbatim - it is rendered into every teammate's instructions. Never write a note from memory, an excerpt, or your own last push — pull it first, because anyone may have written to it since.
 

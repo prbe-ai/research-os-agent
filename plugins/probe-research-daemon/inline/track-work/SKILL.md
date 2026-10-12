@@ -39,7 +39,8 @@ A SLUG is permanent. A NAME is not.
 Write each fact to the lowest entity it is true of - no wider (run detail lost
 in a project), no narrower (a project-wide fact buried on one run). Tracking on
 means everything is recorded; do not curate. Drop nothing: a file with no better
-home goes to the project's artifacts, prose to its notes.
+home goes to the project's artifacts. Notes are the exception: only what would
+help the next agent on this entity or project (`edit-notes`).
 
 What to do, per entity:
 
@@ -187,7 +188,7 @@ and why (`inputs-decision.json`), and check the snapshot can be rebuilt
 - To end a run: `probe run end RUN --status completed|failed|crashed|canceled|untracked`
     - Status is about the process, not the result.
     - If the result cannot be trusted, `probe run tag RUN invalid` plus a note saying what to believe instead.
-- No run this session? Write what is next and what is open into the project's notes.
+- No run this session? Write what is next and what is open into the project's notes - only what the next agent needs.
 - End with the dashboard URL of every project, experiment and run you created or closed - the one the tool printed, verbatim, never one you assembled.
 
 ## 4. FILES AND NUMBERS

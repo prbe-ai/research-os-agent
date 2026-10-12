@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Notes hold what matters, not everything that happened.** `track-work` said "Drop nothing: a file with no better home goes to the project's artifacts, prose to its notes", and the daemon's writer was told to "record what it states" every turn, so it saved the session into notes: one project note reached 1,986 words in 11 pushes over 1h48m, mostly setup status and test counts (2026-10-12). `edit-notes` and `track-work` now say to write only what would help the next agent on that entity or project. "Drop nothing" still holds for files and runs.
+
 ## 0.235.0
 
 - The marker file beside each installed skill names the plugin it came from again, not that plugin's version number. Claude Code installs a plugin to `.../<plugin>/<version>/`, so 0.130.0 wrote `"source": "0.130.0"`. Nothing reads the field; it is there for whoever opens the folder and wonders where it came from. Existing installs keep the old value until that skill is next rewritten.
