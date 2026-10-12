@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.243.1
 - **The reader's messages land where the agent got them, once.** A message the daemon's reader hands the main agent waits (10 s at most) until the chat line it came with is read, so one delivered with a new prompt lands after that prompt, in its turn, not at the end of the previous one. The transcript's own copy of the reader's messages (Claude Code's hook context and Stop-hook wake, Kimi's `<hook_result>`) is no longer read beside the whole message from the claim log; `[Probe]` text in a wording this CLI does not know still is.
 
 ## 0.243.0
