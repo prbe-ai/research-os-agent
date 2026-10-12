@@ -92,6 +92,7 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "citations",
   "graph",
   "find",
+  "inherited",
 ]);
 
 /** `session_marker.REMOVAL_VERBS`. */

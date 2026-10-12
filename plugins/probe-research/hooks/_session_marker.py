@@ -1061,6 +1061,8 @@ READ_VERBS = frozenset(
         "upstream",
         # `experiment|project lineage`: the entity's own links in and out.
         "lineage",
+        # `experiment inherited`: what a fork reads live from its source.
+        "inherited",
         # `paper citations|graph`: the citation links the server read from
         # bibliographies (citation graph, Track C).
         "citations",

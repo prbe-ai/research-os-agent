@@ -87,6 +87,7 @@ _ROOT_VALUE_OPTIONS = {"--base-url", "--spool-dir"}
 _ACTED_HEADS = {"exec", "snapshot"}
 _ACTED_VERBS = {
     "run start", "run child", "run fork", "project create", "experiment create", "group create",
+    "experiment fork",
 }
 #: Shell commands that only READ: a path in their output is something the
 #: session looked at, not something it produced.
