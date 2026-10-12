@@ -339,27 +339,24 @@ for either. A FAILED step resumes on retry with the same id: the same run,
 reopened, so no `retried_from`. A COMPLETED one refuses it - bump the version. Thresholds chosen and rows deleted go in the run's notes:
 deletions are provenance, not housekeeping.
 
-### Provisioning runs
+### Provisioning
+
+Provisioning is setup (SKILL "WHAT COUNTS AS ML WORK"): no run, no artifact.
+When it trips you up - every zone stocked out, a quota, a driver pin - write
+one short line in the notes of the project it serves (`edit-notes`), once that
+project exists.
+
+The machine a training run got goes on THAT run:
 
 ```
-probe run start --project swe-smith-shakedown --tag infra
-probe link $RUN --set gcp_zone=us-central1-a --set gcp_machine_type=a3-highgpu-8g
-probe run end $RUN --status failed
+probe link $TRAIN --set gcp_zone=us-central1-a --set gcp_machine_type=a3-highgpu-8g
 ```
 
-The error text goes in the run's notes.
-
-`probe link` puts machine identity in `foreign_keys`, where a reader can match
-it against the training run, which points back with `probe link $TRAIN --set
-provisioned_by=$INFRA_RUN`. **`foreign_keys` is ONLY for what the lineage
-vocabulary cannot say** (`consumes` `produces` `evaluates_on` `forked_from`
-`resumed_from` `retried_from` `branched_from` `promoted_to` `derived_from`
-`supersedes` `informed_by`) -
-a relaunch after a crash is `run child --relation retry`, not a key. Attempts
-cannot share a run group (groups are experiment-anchored; a project-direct run
-422s on `group_id`): use a shared key (`--set campaign=h100-hunt`) plus a
-paragraph in the project's notes. The runs are the evidence; the notes are
-what gets read.
+`probe link` puts machine identity in `foreign_keys`. **`foreign_keys` is ONLY
+for what the lineage vocabulary cannot say** (`consumes` `produces`
+`evaluates_on` `forked_from` `resumed_from` `retried_from` `branched_from`
+`promoted_to` `derived_from` `supersedes` `informed_by`) - a relaunch after a
+crash is `run child --relation retry`, not a key.
 
 ### Trials
 

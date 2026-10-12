@@ -1,6 +1,6 @@
 ---
 name: track-work
-description: Record ML work in Probe - track ALL related work (training runs, evaluation sweeps, evals, lit reviews, architecture design work, etc) - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`/probe`).
+description: Record ML work in Probe - track ALL related work (training runs, evaluation sweeps, evals, prompt engineering, datasets, lit reviews, architecture design work, etc) - not product code that only calls a model, its CI or deploys, or work on Probe's own code - this skill tells HOW to track this data properly. This should be triggered unprompted during any ML work while tracking is on (`/probe`).
 ---
 
 # Track work
@@ -17,6 +17,42 @@ This skill outlines how to properly track ML work in Probe.
 This file is the judgment; `track-work/reference.md` beside it is the lookup.
 Its INDEX maps each section here to one there - pointers below say `reference
 §N`.
+
+# WHAT COUNTS AS ML WORK
+
+ML work is work on a model: training it, evaluating it, the data it learns
+from, or the research behind it. Work that fits both lists below is ML work.
+What the researcher asks to record is recorded, whatever the lists say.
+
+ML work - record it:
+- training, fine-tuning, RL - and the scripts, configs and launches for them
+- evals, benchmarks, sweeps, ablations, reading through model outputs
+- prompt engineering: changing a prompt and checking what the model does
+- datasets: building, cleaning, labeling, splitting, checking for leaks
+- papers, lit reviews, method or architecture design
+- analysing results: plots, notebooks, comparing runs
+- fixing a bug in any of the above
+
+Setup - note it, never log it:
+- installs, drivers, CUDA, container images, provisioning, cluster or GPU
+  access - and, in a repo that trains or evaluates models, its CI fixes and
+  dependency bumps
+- no project, run or artifact for it: one short line where `edit-notes` puts
+  it - the notes of the project it serves once that project exists, or the
+  team note when it holds across projects - for what tripped you up (a pinned
+  version, a driver fix, a stocked-out zone). Nothing went wrong -> write
+  nothing.
+- fetching a dataset or a base checkpoint is not setup: it is an input the run
+  records when it reads it.
+
+Not ML work - record nothing:
+- product code that only calls a model (UI, API routes, CSS)
+- CI, deploys, releases, dependency bumps of product code
+- typos, dotfiles, product docs, tests unrelated to a model
+- work on Probe's own code (its CLI, SDK, server or plugins) - using Probe in ML work is not this
+
+A session can hold both: record the ML part only. "Everything is recorded" and
+"drop nothing" (§1) apply inside ML work.
 
 # HARD GUIDELINES FOR ALL WRITES:
 

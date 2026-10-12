@@ -6,7 +6,7 @@ through the `probe` CLI.
 
 ## Two client surfaces
 
-Probe Research tracks the team's ML work — experiments and training runs, but also surveys, design decisions, data processing and provisioning — through two separate surfaces over the same backend, for two different workflows:
+Probe Research tracks the team's ML work — experiments and training runs, but also surveys, design decisions and data processing, with a short note when setup such as provisioning trips you up — through two separate surfaces over the same backend, for two different workflows:
 
 - **`probe` — SDK + CLI (non-agent).** A Python library (`import probe`) and the `probe` command-line tool for integrating with existing setups and manual experimentation. Drop it into a training script or pipeline to record runs, metrics, spans, and artifacts. No agent required.
 - **`probe-research` — plugin: skills + MCP (agent-centric).** Installed into Claude Code or Codex. Its skills teach the agent the tracking workflow, its read-only MCP server lets the agent query research state, and writes flow through the `probe` CLI. This is the surface for agent-driven research loops such as Anthrogen.
