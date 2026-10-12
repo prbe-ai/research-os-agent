@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.233.2
+
 - **MCP `browse` under a workspace no longer lists the lab's unfiled runs.** A run opened with no project belongs to no workspace, but `browse(workspace_id=…)` at the top level still appended the team-wide `unfiled` bucket, so an agent reported those runs as being in the workspace: in prod, Ask on a workspace with no projects answered that it held 4 unfiled runs (2026-10-12). The lab root (no `ref`, no `workspace_id`) still names them, and the tool description now says so.
 
 ## 0.233.1
