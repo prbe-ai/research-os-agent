@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.244.0
 - **Artifact kinds are a fixed list.** `probe artifact add --kind` (and `log_artifact(kind=...)`) takes `checkpoint`, `dataset`, `evaluation`, `code` or `other`. Any other word still works: Probe files it as `other` (a synonym such as `benchmark`, `model` or `script` as its kind) and keeps the word as the file's label, and `artifact add` says so in one line on stderr, e.g. `kind: filed as other (label: report)`. A file logged without a kind is `other`, an image included (it was `plot`); `.ckpt`, `.safetensors`, `.pt` and `.pth` files are still a `checkpoint`. Every word Probe files as code (`test` and `code_bundle` now too) is uploaded, never recorded as a pointer, as `--kind code` always was. Output capture no longer uploads a second copy of a file you already uploaded as code, and `probe run check` counts a note file filed as `other` (label `note`) as the run's notes. `track-work` now says `--kind code`.
 
 ## 0.243.2
