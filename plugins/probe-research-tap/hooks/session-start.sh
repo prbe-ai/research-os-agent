@@ -439,6 +439,14 @@ elif ! kill -0 "$(cat "$PID_FILE" 2>/dev/null || echo 0)" 2>/dev/null; then
 after spawn; session=$SESSION_ID — transcript will be recovered by the reconciler" >>"$LOG_FILE"
 fi
 
+# A cloud agent connected on this machine (Capy) catches up when a local agent
+# starts (plan R13): `python3 -m tap cloud-catchup` starts `probe <agent> sync`
+# detached when the last sync is over 5 minutes old, and returns at once. No
+# network, never waited on, never a reason a session fails to start.
+if [ -n "${PY:-}" ] && [ -x "$PY" ]; then
+    (cd "$PLUGIN_ROOT" 2>/dev/null && "$PY" -m tap cloud-catchup >/dev/null 2>&1) || true
+fi
+
 # Tell the researcher what was redacted from their LAST session. The daemon
 # has no terminal of its own — it is spawned detached below and everything it
 # logs goes to a file nobody reads — so this hook's `systemMessage` is the only

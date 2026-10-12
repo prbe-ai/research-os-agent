@@ -13,7 +13,13 @@ What it serves:
   `probe-research-daemon@research-os-agent` (the daemon profile: the Probe daemon
   records and reads, installed by `probe wizard` in place of `probe-research`) and
   `probe-research-tap@research-os-agent` (client-sanitized transcript capture).
-  Installed plugins update from this repo's `main`.
+  Installed plugins update from this repo's `main`. pi installs the
+  `plugins/probe-research-pi` package from this repo's root `package.json`, and
+  Kimi Code installs these plugins from a checkout of it.
+- **`capy/`** — Probe for [Capy](https://capy.ai), a cloud coding agent:
+  `capy/skills/` (Agent Skills, installed with `npx skills add` or into a Capy
+  drive) and `capy/README.md`, the setup guide. Capy's threads are captured from
+  the researcher's own computer by `probe capy connect`.
 - **`client-version.json`** — the version/staleness advisory manifest the
   Probe Research backend reads over GitHub raw.
 - **`CHANGELOG.md`** and the [Releases](../../releases) page — the public

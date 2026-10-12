@@ -51,7 +51,7 @@ never reaches a teammate's thread or a PR review):
 | Name | Value |
 |---|---|
 | `PROBE_TOKEN` | a Probe token: `probe token create --name capy --scope read --scope write` on your computer (no `delete`: the agent never needs it) |
-| `PROBE_CAPY` | `1` (marks runs and CLI calls as coming from Capy) |
+| `PROBE_CAPY` | `1` (tells the `probe` CLI it runs inside Capy: `probe doctor` reports Capy's own checks, and CLI telemetry is labelled Capy; runs are not labelled with an agent on the server) |
 
 Then add the CLI to the machine recipe, in **Dev environment** or a committed
 `.capy/setup.json`:
@@ -93,6 +93,9 @@ your Capy account uses. Then:
 probe capy connect --project <your Capy project name>
 ```
 
+or run `npx probe-research` (the menu) and choose **Cloud agents → Capy**, which
+also shows the in-Capy steps above and, once connected, syncs now or disconnects.
+
 It asks for the key with a hidden prompt (or reads `$CAPY_API_KEY`, or
 `--api-key-stdin`; never type it as an argument, where shell history keeps it),
 finds your Capy user by your Probe account's email, asks you to approve capture
@@ -114,9 +117,15 @@ the background; a long history can take a while.
 - Your computer being off loses nothing: the next sync catches up. On Linux,
   user timers stop when you log out unless lingering is on
   (`loginctl enable-linger`); `connect` says so when it is off.
+- Each time a local coding agent (Claude Code, Codex, pi, Kimi Code) starts a
+  session, the capture plugin also starts a sync in the background when the last
+  one is over 5 minutes old.
 - `probe capy status` shows the last sync; `probe capy sync` runs one now;
   `probe capy disconnect` removes the timer, the key, the sync record and the
-  capture credential (sessions already uploaded stay in Probe).
+  capture credential (sessions already uploaded stay in Probe). Signing out in
+  the wizard, or uninstalling Probe, disconnects Capy the same way.
+- Capture is pinned to the Probe server it was connected to: a shell that points
+  Probe elsewhere (`$PROBE_BASE_URL`) syncs nothing.
 
 The key is stored owner-only (0600) beside the capture credential and is sent to
 Capy's API only, which `probe capy` reads and never writes.
