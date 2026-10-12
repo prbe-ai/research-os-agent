@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.242.0
 - **The daemon's writer sees what the reader handed the main agent, whole.** It used to see only the transcript's copy of a `[Probe]` message: a 300-character harness preview on Claude Code and Kimi (every one measured on a devbox was longer; a `probe ask` answer averaged 4,267 characters), none of an answer the Stop hook woke the agent with, an output tag for a `probe ask --wait` answer, and nothing at all on Codex and pi. The worker now reads the mailbox's claim log (`claimed/<sid>/log.jsonl`, which every deliverer appends) as a `reader` stream: one event per message the daemon itself recorded (a message file nobody recorded is never shown as the reader's), as the agent read it, shown as `[Probe message to the main agent · <id>]` up to 20,000 characters, to the writer and in the reader's own view; its own messages never wake the reader. Claims wait until the chat log is read up to them, follow `.probe.config`, and a session already under way when the CLI updates starts from the log's end. Daemon stores gain a `source` column and the `events_sizes_source` index; earlier CLIs still open them.
 
 ## 0.241.0
