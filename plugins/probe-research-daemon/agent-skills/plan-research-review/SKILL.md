@@ -59,7 +59,7 @@ that a source provides.
 
 ## STEP 1 - FIND WHAT ALREADY EXISTS
 
-First, before reasoning about how to build anything. All five, recording each
+First, before reasoning about how to build anything. All six, recording each
 source found **and** each place searched with nothing found.
 
 1. **The papers' code** - the link in the paper (abstract, footnotes, appendix),
@@ -73,10 +73,18 @@ source found **and** each place searched with nothing found.
    docs: README, `CLAUDE.md` / `AGENTS.md`, lit reviews, design and setup notes.
 4. **The team's work in Probe** - projects, runs, artifacts, notes on the same
    method, dataset or metric. Daemon: `probe ask "<q>"` (`--wait`, long timeout,
-   when you cannot plan without it). MCP: `search`, `find_papers`. Probe off: say
-   you could not check; never report that none exists.
+   when you cannot plan without it). MCP: `search`. Probe off: say you could not
+   check; never report that none exists.
 5. **What changed since the paper** - follow-ups, errata, and the repo's issues
    ("can't reproduce", "results differ", "bug in").
+6. **Related papers nobody named** - `find_papers` (daemon: `probe ask`): `search`
+   with a sentence saying what the paper should say, and `similar` from each named
+   paper with `expand: "citers"`. About five calls - they spend the team's weekly
+   web-call allowance.
+
+**One line per related paper:** its claim, the map row it would change (none:
+drop it), its code, and whether results still compare to the target number.
+Using one is a Step 4 question - proposed, never built, after the reproduction.
 
 Then **clone and read** each candidate. **Do not judge a repo by its README.**
 
@@ -223,8 +231,9 @@ public repo: ask before committing it.
 
 1. **Goal** - the question, and the result that answers it (target numbers, source).
 2. **Sources** - papers (ids, sections used); repos (`owner/repo@sha`, official or
-   not, license); libraries (pinned); Probe work (ids); docs read. Then
-   **Searched, nothing found:** where, and **Could not search:** what failed, why.
+   not, license); libraries (pinned); Probe work (ids); docs read; the related
+   papers' lines. Then **Searched, nothing found:** where, and **Could not
+   search:** what failed, why.
 3. **Provenance map** - the Step 2 table.
 4. **Decision ledger** - id, value, source (researcher D<N>, `repo:path:line`, paper §).
 5. **Approved deviations** - reason and approving D-number.

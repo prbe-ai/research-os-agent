@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- `plan-research-review` looks for related papers nobody named: `find_papers` (or `probe ask` under the daemon) for work that would change a part of the plan, one line per paper saying what it claims, the part it would change and its code. Using one is a question to the researcher, never something the agent builds on its own, and it comes after reproducing the paper.
+
 ## 0.235.2
 
 - **Each note edit fits into the whole note.** `edit-notes` called the main note "the running commentary", so on a long session the daemon's writer added a new section after every turn: with 0.235.1's wording it still grew the willow-dictation-training note from 24,042 to 34,225 characters in 5 pushes over 11 minutes (2026-10-12). `edit-notes` now says to read the whole note before each edit and fit the change into it: add what is new and useful, and update, merge or remove what it changes, so the note reads as one current document.
