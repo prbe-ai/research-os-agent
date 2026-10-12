@@ -87,6 +87,20 @@ def _same(src: Path, dst: Path) -> bool:
     return is_ours(dst) and _content_matches(src, dst)
 
 
+def plugin_name(plugin_root: Path) -> str:
+    """The plugin's NAME, not its version.
+
+    Claude Code installs to `.../cache/<marketplace>/<plugin>/<version>/`, so
+    the basename is the version: the marker shipped reading
+    `"source": "0.130.0"`, which tells whoever finds the folder nothing about
+    where it came from, which is the field's only job.
+    """
+    name = plugin_root.name
+    if name and all(ch.isdigit() or ch == "." for ch in name):
+        return plugin_root.parent.name or name
+    return name
+
+
 def slugs(plugin_root: Path) -> tuple[str, ...]:
     """The skills this plugin carries. The ONE place that answers it, so the
     CLI and the hook cannot disagree about what a profile contains."""
@@ -181,7 +195,7 @@ def apply(skills_root: Path, plugin_root: Path, wanted: "tuple[str, ...] | list[
         return out
 
     root = Path(skills_root)
-    plugin = Path(plugin_root).name
+    plugin = plugin_name(Path(plugin_root))
     with _one_writer(root) as mine:
         if not mine:
             out["notes"].append("another session is installing Probe's skills; left them to it")

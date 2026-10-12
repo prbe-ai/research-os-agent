@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The marker file beside each installed skill names the plugin it came from again, not that plugin's version number. Claude Code installs a plugin to `.../<plugin>/<version>/`, so 0.130.0 wrote `"source": "0.130.0"`. Nothing reads the field; it is there for whoever opens the folder and wonders where it came from. Existing installs keep the old value until that skill is next rewritten.
+
 ## 0.234.2
 
 - **Daemon profile: a write the researcher asked for runs with `--directed`.** `probe session status` and the session-start context tell the agent to add `--directed` to a write the researcher asks for, but the lean daemon plugin's guard refused it anyway: `probe project move willow-dictation-training --workspace willow --directed` was refused with "ask the researcher to type `/probe inline`" (plugin 0.129.0, 2026-10-12). The guard (Claude Code, Codex and pi) now lets a write carrying `--directed` through, as the `daemon` state already did; the CLI's own gate was not the problem. A read stays refused with the flag (reads go through `probe ask`), and so does a move of the researcher's switch. A refused write now also says "If the researcher asked for exactly this, run it again with `--directed`." under the usual refusal; a refused read reads as before. Under `read only (daemon)` a `--directed` write is still refused, as read-only.
