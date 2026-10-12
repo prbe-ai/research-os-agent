@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.240.0
+
 - **Daemon-mode agents search research papers themselves: `probe paper find`.** A new read command over the same delivery path as the Probe MCP's `find_papers` tool (same answer envelope and `--token-budget`): `search` ranks 40M+ abstracts by a sentence, `--mode read --paper-id arxiv:<id> --query ...` returns one paper's passages, `--mode similar` walks citers and references. It adds nothing to the team's records (the query reaches Probe's usage analytics, as the MCP tool's does) and spends one of the team's weekly web calls; `--cursor` pages within 30 minutes read the first answer instead of searching again. The daemon profile's guard admits it (the one read it leaves to the agent; `paper find` is classified a read in every state, pi included, and the daemon's team-note audit refuses it as it refuses `find_papers`), the daemon block gains a `### PAPERS:` section (pointer v42), and `plan-research-review` names it for related papers. A new plugin hook (`papers_hook.py`, `WebSearch` only, daemon profile only) holds a web search that looks like a paper search at most once per 15 minutes, and never after `probe paper find` ran in the last 15, naming the command; it never holds under `off` or beside a CLI without the command (it asks `probe paper find --help`, and keeps a definite answer for the session). Codex and pi have no hook point for their web search and get the block line only.
 
 ## 0.239.0
