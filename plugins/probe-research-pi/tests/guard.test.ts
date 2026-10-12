@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   DAEMON_PROFILE_DENY,
+  DAEMON_PROFILE_DENY_WRITE,
   DENY_REASON_APPROVALS,
   guardToolCall,
   INLINE_SWITCH_DENY,
@@ -96,6 +97,24 @@ describe("the daemon profile's allowlist", () => {
   it("refuses a probe command the daemon owns, naming it", () => {
     expect(guardToolCall(PiTool.Bash, { command: "cd repo && probe run list --limit 5" }, daemon())).toBe(
       DAEMON_PROFILE_DENY.replace("{matched}", "probe run list"),
+    );
+  });
+
+  it("tells a refused write that `--directed` runs it, and runs it when the flag is there", () => {
+    expect(guardToolCall(PiTool.Bash, { command: "probe project move p1 --workspace willow" }, daemon())).toBe(
+      DAEMON_PROFILE_DENY_WRITE.replace("{matched}", "probe project move"),
+    );
+    expect(
+      guardToolCall(PiTool.Bash, { command: "probe project move willow-dictation-training --workspace willow --directed" }, daemon()),
+    ).toBeNull();
+  });
+
+  it("refuses a read carrying `--directed` with the plain refusal: reads go through `probe ask`", () => {
+    expect(guardToolCall(PiTool.Bash, { command: "probe workspace list --directed" }, daemon())).toBe(
+      DAEMON_PROFILE_DENY.replace("{matched}", "probe workspace"),
+    );
+    expect(guardToolCall(PiTool.Bash, { command: "probe session state on --directed" }, daemon())).toBe(
+      RESEARCHER_SWITCH_DENY.replace("{matched}", "probe session state"),
     );
   });
 

@@ -1123,6 +1123,21 @@ DAEMON_RUN_WRITES = frozenset({"artifact add"})
 #: and does not repeat it.
 DIRECTED_FLAG = "--directed"
 
+#: What a refusal tells the agent about `DIRECTED_FLAG`: the `daemon` state's
+#: (`DENY_REASON_DAEMON`) and the daemon profile's, for a write
+#: (`DAEMON_PROFILE_DENY_WRITE`).
+DIRECTED_RETRY = "If the researcher asked for exactly this, run it again with `--directed`."
+
+
+def carries_directed(args: "list[str]") -> bool:
+    """Do these args (after `probe`) carry `DIRECTED_FLAG` where the CLI reads it?
+
+    Before a standalone `--` only, as `write_gate.split_directed` strips it:
+    after that it belongs to the command `probe exec` launches.
+    """
+    own = args[: args.index("--")] if "--" in args else args
+    return DIRECTED_FLAG in own
+
 
 def command_words(args: "list[str]") -> "list[str]":
     """The (at most three) words click dispatches on, from the args after `probe`.
@@ -1207,7 +1222,8 @@ def daemon_allows_agent(matched: str) -> bool:
 #: agent's `probe` is `ask`, `exec`, its runs' own data (`DAEMON_AGENT_WRITES`)
 #: and `session status`. The guard in that plugin refuses every other `probe`
 #: command, reads included, with `DAEMON_PROFILE_DENY` (the approved text:
-#: `~/daemon-prompts/reads/agent-facing/guard-refusal.NEW.md`).
+#: `~/daemon-prompts/reads/agent-facing/guard-refusal.NEW.md`), except a write
+#: the researcher asked for (`--directed`), which runs as in the `daemon` state.
 #: `probe --version` needs no entry (no command words); `probe version` is the
 #: experiment-versions group, a write. While the researcher has Probe inline
 #: (`is_inline`) the guard refuses only `RESEARCHER_SWITCH`.
@@ -1244,6 +1260,10 @@ DAEMON_PROFILE_DENY = (
     'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team\'s prior work: `probe ask "<question>"`. If you need to do it yourself, ask the researcher to type `/probe inline`.'
 )
 
+#: `DAEMON_PROFILE_DENY` for a WRITE: `--directed` admits one the researcher
+#: asked for. A read keeps the plain text: no flag admits it, `probe ask` reads.
+DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY
+
 
 #: `.probe.config`: paths at `read` or `off`, which Probe never records (`probe_config.py`).
 EXCLUDED_DENY = (
@@ -1275,7 +1295,12 @@ def moves_switch(args: "list[str]") -> "str | None":
 
 
 def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
-    """`(allowed, matched)` for the args after `probe` in the daemon profile."""
+    """`(allowed, matched)` for the args after `probe` in the daemon profile.
+
+    A write carrying `--directed` is allowed, as the CLI's gate allows it in the
+    `daemon` state (`write_gate.refusal`). A read is not (reads go through
+    `probe ask`), and neither is the researcher's switch (`RESEARCHER_SWITCH`).
+    """
     words = command_words(args)
     if not words:
         return (True, "probe")
@@ -1283,8 +1308,18 @@ def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
     two = " ".join(words[:2])
     if head in DAEMON_PROFILE_ALLOWED or two in DAEMON_PROFILE_ALLOWED:
         return (True, "probe " + (two if two in DAEMON_PROFILE_ALLOWED else head))
-    _kind, matched = classify_probe_args(args)
+    kind, matched = classify_probe_args(args)
+    if kind == "write" and carries_directed(args) and two not in RESEARCHER_SWITCH:
+        return (True, matched)
     return (daemon_allows_agent(matched), matched)
+
+
+def daemon_profile_deny(args: "list[str]", matched: str) -> str:
+    """The refusal for args `daemon_profile_allows` refused: a write is told
+    that `--directed` runs it (`DAEMON_PROFILE_DENY_WRITE`)."""
+    kind, _matched = classify_probe_args(args)
+    deny = DAEMON_PROFILE_DENY_WRITE if kind == "write" else DAEMON_PROFILE_DENY
+    return deny.format(matched=matched)
 
 
 #: The refusals, shared by the guard hook and the CLI gate. Placeholders:
@@ -1309,7 +1344,7 @@ DENY_REASON_DAEMON = (
     "refused before it ran: that write is the daemon's, and it creates the project, "
     "experiment and group your runs are filed in. Yours are starting runs (they may start "
     "with no project), the run's own data and `probe run end`; `probe session status` lists "
-    "them.\n\nIf the researcher asked for exactly this, run it again with `--directed`."
+    "them.\n\n" + DIRECTED_RETRY
 )
 
 #: THE ONE STATEMENT OF WHO WRITES WHAT IN THE `daemon` STATE. Every surface that

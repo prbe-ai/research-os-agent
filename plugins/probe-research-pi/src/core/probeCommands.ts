@@ -6,9 +6,8 @@
  *
  *   - `tracking_guard.py`: `_strip_heredocs`, `_segments`, `_probe_invocations`
  *     and `_asks_help` (the shell parse);
- *   - `session_marker.py`: `command_words`, `classify_probe_args` (only the
- *     `matched` half: the daemon profile never asks for the kind),
- *     `daemon_allows_agent` and `daemon_profile_allows`.
+ *   - `session_marker.py`: `command_words`, `classify_probe_args`,
+ *     `carries_directed`, `daemon_allows_agent` and `daemon_profile_allows`.
  *
  * `_segments` tokenizes with Python's `shlex` (posix, `punctuation_chars`,
  * `whitespace_split`); `shlexTokens` below is that tokenizer's state machine,
@@ -48,8 +47,17 @@ export const WRITE_GROUPS: ReadonlySet<string> = new Set([
 /** `session_marker.SUBGROUPS`. */
 export const SUBGROUPS: ReadonlySet<string> = new Set(["project code", "project reference", "run input", "wandb key"]);
 
-/** The keys of `session_marker.READ_UNLESS_FLAGS` (its flags decide the kind, never `matched`). */
+/** The keys of `session_marker.READ_UNLESS_FLAGS`: reads unless given one of `READ_UNLESS_FLAGS_WRITE_FLAGS`. */
 export const READ_UNLESS_FLAGS_COMMANDS: ReadonlySet<string> = new Set(["project contributors"]);
+
+/** The values of `session_marker.READ_UNLESS_FLAGS` (every command there takes the same flags). */
+export const READ_UNLESS_FLAGS_WRITE_FLAGS: ReadonlySet<string> = new Set(["--add", "--remove"]);
+
+/** `session_marker._SHELL_EXPANSION_CHARS`: a word the shell still expands could be a write flag. */
+export const SHELL_EXPANSION_CHARS = "$`{";
+
+/** `session_marker._GLOB_CHARS`: counted only in an option's name. */
+export const GLOB_CHARS = "*?[";
 
 /** `session_marker.READ_VERBS`. */
 export const READ_VERBS: ReadonlySet<string> = new Set([
@@ -106,6 +114,16 @@ export const ROOT_VALUE_OPTIONS: ReadonlySet<string> = new Set(["--base-url", "-
 /** `session_marker.HELP_FLAG`. */
 export const HELP_FLAG = "--help";
 
+/** `session_marker.DIRECTED_FLAG`: marks a write the researcher asked for. */
+export const DIRECTED_FLAG = "--directed";
+
+/** `classify_probe_args`'s kind: what a `probe` command does to Probe. */
+export const ProbeKind = {
+  Write: "write",
+  Read: "read",
+} as const;
+export type ProbeKindValue = (typeof ProbeKind)[keyof typeof ProbeKind];
+
 /** `session_marker.READ_GROUPS`. */
 export const READ_GROUPS: ReadonlySet<string> = new Set(["metrics", "series", "get", "bundle", "events", "coordinates", "shared"]);
 
@@ -161,10 +179,14 @@ export function commandWords(args: readonly string[]): string[] {
   return words;
 }
 
-/** `session_marker.classify_probe_args`'s `matched`: the words a refusal names. */
-export function matchedCommand(args: readonly string[]): string {
+function hasAny(text: string, chars: string): boolean {
+  return [...text].some((char) => chars.includes(char));
+}
+
+/** `session_marker.classify_probe_args`: `[kind, matched]`, `matched` being the words a refusal names. */
+export function classifyProbeArgs(args: readonly string[]): [ProbeKindValue | null, string] {
   const words = commandWords(args);
-  if (words.length === 0) return "";
+  if (words.length === 0) return [null, ""];
   const group = words[0];
   let head = words[0];
   let verb = words[1] ?? "";
@@ -173,13 +195,32 @@ export function matchedCommand(args: readonly string[]): string {
     verb = words[2] ?? "";
   }
   const command = `${head} ${verb}`;
-  if (UNGATED_COMMANDS.has(command)) return `probe ${command}`;
-  if (TOP_LEVEL_WRITES.has(head) || READ_GROUPS.has(head)) return `probe ${head}`;
-  if (DIRECTED_ONLY.has(command) || READ_UNLESS_FLAGS_COMMANDS.has(command)) return `probe ${command}`;
-  if (WRITE_GROUPS.has(group) && (READ_VERBS.has(verb) || (verb && !REMOVAL_VERBS.has(verb)))) {
-    return `probe ${command}`;
+  if (UNGATED_COMMANDS.has(command)) return [null, `probe ${command}`];
+  if (TOP_LEVEL_WRITES.has(head)) return [ProbeKind.Write, `probe ${head}`];
+  if (READ_GROUPS.has(head)) return [ProbeKind.Read, `probe ${head}`];
+  if (DIRECTED_ONLY.has(command)) return [ProbeKind.Write, `probe ${command}`];
+  if (READ_UNLESS_FLAGS_COMMANDS.has(command)) {
+    const writes = args.some((arg) => {
+      const name = arg.split("=", 1)[0];
+      return (
+        READ_UNLESS_FLAGS_WRITE_FLAGS.has(name) ||
+        hasAny(arg, SHELL_EXPANSION_CHARS) ||
+        (name.startsWith("-") && hasAny(name, GLOB_CHARS))
+      );
+    });
+    return [writes ? ProbeKind.Write : ProbeKind.Read, `probe ${command}`];
   }
-  return `probe ${head}`;
+  if (WRITE_GROUPS.has(group)) {
+    if (READ_VERBS.has(verb)) return [ProbeKind.Read, `probe ${command}`];
+    if (verb && !REMOVAL_VERBS.has(verb)) return [ProbeKind.Write, `probe ${command}`];
+  }
+  return [null, `probe ${head}`];
+}
+
+/** `session_marker.carries_directed`: `--directed` where the CLI reads it, before a standalone `--`. */
+export function carriesDirected(args: readonly string[]): boolean {
+  const end = args.indexOf("--");
+  return (end >= 0 ? args.slice(0, end) : args).includes(DIRECTED_FLAG);
 }
 
 /** `session_marker.daemon_allows_agent`. */
@@ -187,7 +228,10 @@ export function daemonAllowsAgent(matched: string): boolean {
   return DAEMON_AGENT_WRITES.has(matched.startsWith("probe ") ? matched.slice("probe ".length) : matched);
 }
 
-/** `session_marker.daemon_profile_allows`: `[allowed, matched]` for the args after `probe`. */
+/**
+ * `session_marker.daemon_profile_allows`: `[allowed, matched]` for the args after `probe`.
+ * A write carrying `--directed` is allowed; a read is not, nor the researcher's switch.
+ */
 export function daemonProfileAllows(args: readonly string[]): [boolean, string] {
   const words = commandWords(args);
   if (words.length === 0) return [true, "probe"];
@@ -195,7 +239,8 @@ export function daemonProfileAllows(args: readonly string[]): [boolean, string] 
   const two = words.slice(0, 2).join(" ");
   if (DAEMON_PROFILE_ALLOWED.has(two)) return [true, `probe ${two}`];
   if (DAEMON_PROFILE_ALLOWED.has(head)) return [true, `probe ${head}`];
-  const matched = matchedCommand(args);
+  const [kind, matched] = classifyProbeArgs(args);
+  if (kind === ProbeKind.Write && carriesDirected(args) && !RESEARCHER_SWITCH.has(two)) return [true, matched];
   return [daemonAllowsAgent(matched), matched];
 }
 
@@ -547,12 +592,18 @@ export function switchMove(command: string): string | null {
   return null;
 }
 
-/** The first `probe` invocation in a shell line the daemon profile refuses, by its `matched` words; null if none. */
-export function daemonProfileRefusal(command: string): string | null {
+/** A `probe` invocation the daemon profile refuses: the words it names, and whether it writes. */
+export interface DaemonProfileRefused {
+  matched: string;
+  write: boolean;
+}
+
+/** The first `probe` invocation in a shell line the daemon profile refuses; null if none. */
+export function daemonProfileRefusal(command: string): DaemonProfileRefused | null {
   for (const args of probeInvocations(command)) {
     if (asksHelp(args)) continue;
     const [allowed, matched] = daemonProfileAllows(args);
-    if (!allowed) return matched;
+    if (!allowed) return { matched, write: classifyProbeArgs(args)[0] === ProbeKind.Write };
   }
   return null;
 }

@@ -1370,9 +1370,11 @@ def daemon_profile() -> bool:
 
 def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     """The daemon profile's PreToolUse: the daemon records and reads, so every
-    `probe` command but `ask`, `exec`, the runs' own data and `session status` is
-    refused (`DAEMON_PROFILE_DENY`), and so is a Probe MCP call; the researcher's
-    switch (`RESEARCHER_SWITCH`) is refused as the switch (`RESEARCHER_SWITCH_DENY`).
+    `probe` command but `ask`, `exec`, the runs' own data, `session status` and a
+    write the researcher asked for (`--directed`) is refused (`DAEMON_PROFILE_DENY`,
+    or `DAEMON_PROFILE_DENY_WRITE` for a write), and so is a Probe MCP call; the
+    researcher's switch (`RESEARCHER_SWITCH`) is refused as the switch, flag or no
+    flag (`RESEARCHER_SWITCH_DENY`).
     A session the researcher turned off keeps the off refusals (`_deny`); one set
     to read only also loses the runs' own data (a write). A session the
     researcher set inline (`/probe inline`, `is_inline`) is refused only the
@@ -1417,7 +1419,7 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
             continue
         allowed, matched = _session_marker.daemon_profile_allows(args)
         if not allowed:
-            _refuse(_session_marker.DAEMON_PROFILE_DENY.format(matched=matched))
+            _refuse(_session_marker.daemon_profile_deny(args, matched))
             return
     if state == _session_marker.STATE_READ_ONLY:
         # `read only (daemon)`: the runs' own data is a write like any other.

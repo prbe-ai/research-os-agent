@@ -12,8 +12,10 @@
  *
  *   DAEMON PROFILE -- the daemon records and reads, so a shell command running
  *   `probe <anything>` outside `DAEMON_PROFILE_ALLOWED` and the agent's runs'
- *   own data, and every Probe MCP tool call, are refused (`DAEMON_PROFILE_DENY`);
- *   the researcher's switch is refused as the switch (`RESEARCHER_SWITCH_DENY`).
+ *   own data, and every Probe MCP tool call, are refused (`DAEMON_PROFILE_DENY`,
+ *   or `DAEMON_PROFILE_DENY_WRITE` for a write); a write carrying `--directed`
+ *   runs. The researcher's switch is refused as the switch, flag or no flag
+ *   (`RESEARCHER_SWITCH_DENY`).
  *   Unless the researcher set Probe inline (`/probe inline`, `sessionIsInline`):
  *   then only the question folder and the researcher's switch (`switchMove`,
  *   `INLINE_SWITCH_DENY`) are refused.
@@ -50,6 +52,12 @@ export const DENY_REASON_APPROVALS =
 /** `session_marker.DAEMON_PROFILE_DENY`. Placeholder: `{matched}`. */
 export const DAEMON_PROFILE_DENY =
   "The Probe daemon records this session and reads the team's work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team's prior work: `probe ask \"<question>\"`. If you need to do it yourself, ask the researcher to type `/probe inline`.";
+
+/** `session_marker.DIRECTED_RETRY`. */
+export const DIRECTED_RETRY = "If the researcher asked for exactly this, run it again with `--directed`.";
+
+/** `session_marker.DAEMON_PROFILE_DENY_WRITE`: a write is told `--directed` runs it. Placeholder: `{matched}`. */
+export const DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY;
 
 /** `session_marker._APPROVALS_TEXT`'s pattern: the folder as a command's text names it. */
 export const APPROVALS_TEXT_SOURCE = String.raw`probe/+approvals\b|\bapprovals/+(answers|requests)\b`;
@@ -227,6 +235,7 @@ export function guardToolCall(toolName: string, input: unknown, context: GuardCo
   // The switch is answered as the switch, ahead of DAEMON_PROFILE_DENY's pointer to `/probe inline`.
   const moved = switchMove(command);
   if (moved !== null) return fill(RESEARCHER_SWITCH_DENY, { matched: moved });
-  const matched = daemonProfileRefusal(command);
-  return matched === null ? null : fill(DAEMON_PROFILE_DENY, { matched });
+  const refused = daemonProfileRefusal(command);
+  if (refused === null) return null;
+  return fill(refused.write ? DAEMON_PROFILE_DENY_WRITE : DAEMON_PROFILE_DENY, { matched: refused.matched });
 }
