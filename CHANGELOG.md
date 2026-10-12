@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.235.0
+
 - The marker file beside each installed skill names the plugin it came from again, not that plugin's version number. Claude Code installs a plugin to `.../<plugin>/<version>/`, so 0.130.0 wrote `"source": "0.130.0"`. Nothing reads the field; it is there for whoever opens the folder and wonders where it came from. Existing installs keep the old value until that skill is next rewritten.
 - `plan-research-review` says the same thing in a sixth less text (295 lines to 251): the same steps, rules, checklist items and commands, with the explanation around them cut. Shorter prompts are followed more closely, and nothing it asks the agent to do has changed.
 
