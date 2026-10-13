@@ -291,15 +291,16 @@
       "display": "Capy session",
       "aliases": [],
       "binary": null,
-      "cli_flag": null,
+      "cli_flag": "capy",
       "family": "cloud",
       "captured": true,
-      "installable": false,
+      "installable": true,
       "searchable": true,
       "route": "capy",
       "icon": "/icons/capy.svg",
       "detect_env": [
-        "PROBE_CAPY"
+        "PROBE_CAPY",
+        "CAPY_GIT_CO_AUTHOR"
       ],
       "session_env": null,
       "version_env": null,
@@ -339,7 +340,16 @@
       "reasoning_setting": null,
       "hook_output": "claude-json",
       "session_id_prefix": null,
-      "process_title": null
+      "process_title": null,
+      "detect_paths": [
+        "/Applications/Capy.app",
+        "Applications/Capy.app",
+        "Library/Application Support/Capy",
+        ".capy",
+        ".config/Capy",
+        ".config/capy",
+        "AppData/Roaming/Capy"
+      ]
     }
   ]
 }

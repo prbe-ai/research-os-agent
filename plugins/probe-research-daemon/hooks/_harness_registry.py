@@ -40,9 +40,13 @@ REGISTRY_FILE = Path(__file__).with_name("harnesses.json")
 #: How a harness is integrated. Core code branches on these, never on an id.
 FAMILY_HOOK_PLUGIN = "hook-plugin"  # a plugin with hooks, skills and MCP (Claude Code, Codex)
 FAMILY_EXTENSION = "extension"  # a package whose extension calls the probe CLI (pi)
-#: The agent runs on its vendor's servers (Capy): nothing installs on this
-#: machine. Probe reaches it through the probe CLI on the vendor's machine and
-#: captures its sessions by pulling them from the vendor's API.
+#: The agent's loop runs on its vendor's servers (Capy), though its tools may
+#: run on this machine (a Capy thread on "This Mac"). It runs no Probe hooks and
+#: leaves no transcript here, so the installer configures nothing inside it:
+#: Probe goes in through the agent's own settings (the steps the installer
+#: prints), its tools call the probe CLI, and its sessions are captured by
+#: pulling them from the vendor's API. An installable cloud row is found by
+#: `detect_paths` (the app on disk), never a binary.
 FAMILY_CLOUD = "cloud"
 FAMILIES = (FAMILY_HOOK_PLUGIN, FAMILY_EXTENSION, FAMILY_CLOUD)
 
@@ -195,6 +199,10 @@ class Harness:
     #: hooks then record "this process runs session X", and a `probe` command
     #: finds its session by walking up to that process.
     process_title: str | None = None
+    #: Where the agent's app lives when it has no command on PATH (a cloud
+    #: row's desktop app): absolute paths, or paths relative to the home
+    #: directory. Any one existing means the agent is on this machine.
+    detect_paths: tuple[str, ...] = ()
 
     def can(self, capability: str) -> bool:
         """Whether this harness has a CAPABILITY_* (unknown means no)."""
@@ -244,6 +252,18 @@ class Harness:
             if root.startswith(home_path):
                 return self.home_dir(values) / root[len(home_path):]
         return Path.home() / root
+
+    def found_on_disk(self, home: Path | None = None) -> bool:
+        """Whether one of `detect_paths` exists: the agent's app is installed
+        here. False for a row that names none."""
+        base = Path.home() if home is None else home
+        for path in self.detect_paths:
+            try:
+                if (base / path).exists():  # an absolute path replaces the base
+                    return True
+            except OSError:  # unreadable: not evidence either way
+                continue
+        return False
 
     def transcript_pattern(self) -> str:
         """The glob, relative to transcript_root(), that finds this harness's
@@ -421,6 +441,7 @@ def _harness(row: Any, index: int) -> Harness:
         hook_output=hook_output,
         session_id_prefix=_str_or_none(row.get("session_id_prefix"), f"{where}.session_id_prefix"),
         process_title=_str_or_none(row.get("process_title"), f"{where}.process_title"),
+        detect_paths=_tuple(row.get("detect_paths", []), f"{where}.detect_paths"),
     )
     if harness.captured and (
         harness.route is None or harness.capture is None or harness.transcripts is None
@@ -436,8 +457,13 @@ def _harness(row: Any, index: int) -> Harness:
             raise RegistryError(f"{where}.plugin.marketplace_source must be one of {MARKETPLACE_SOURCES}")
     if harness.family == FAMILY_EXTENSION and harness.installable and not harness.package_dir:
         raise RegistryError(f"{where} is an installable extension harness, so it needs package_dir")
-    if harness.family == FAMILY_CLOUD and harness.installable:
-        raise RegistryError(f"{where} is a cloud harness: nothing installs locally, so it is not installable")
+    if harness.family == FAMILY_CLOUD and harness.plugin:
+        raise RegistryError(f"{where} is a cloud harness: no plugin installs into it, so it has no plugin")
+    if harness.family == FAMILY_CLOUD and harness.installable and not (harness.cli_flag and harness.detect_paths):
+        raise RegistryError(
+            f"{where} is an installable cloud harness, so it needs cli_flag and detect_paths "
+            "(it has no binary to find)"
+        )
     if not harness.detect_env:
         raise RegistryError(f"{where}.detect_env must name at least one variable")
     return harness
