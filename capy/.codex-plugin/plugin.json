@@ -1,7 +1,7 @@
 {
   "name": "probe-research",
   "version": "0.141.0",
-  "description": "Probe Research for Capy: Probe's MCP server (search the team's ML work) and the skills probe-capy, track-work, instrument-code, plan-research-review, edit-notes, notes-audit.",
+  "description": "Probe Research for Capy: Probe's MCP server (search the team's ML work) and the skills probe-capy, track-work, instrument-code, plan-research-review, edit-notes, audit-team-note.",
   "author": {
     "name": "Probe",
     "email": "team@prbe.ai",
@@ -14,7 +14,8 @@
     "probe": {
       "type": "http",
       "url": "https://mcp.research.prbe.ai/mcp",
-      "auth": "oauth"
+      "auth": "oauth",
+      "connection": "member"
     }
   },
   "interface": {

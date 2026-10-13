@@ -3,7 +3,8 @@
     "probe": {
       "type": "http",
       "url": "https://mcp.research.prbe.ai/mcp",
-      "auth": "oauth"
+      "auth": "oauth",
+      "connection": "member"
     }
   }
 }

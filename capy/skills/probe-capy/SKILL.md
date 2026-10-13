@@ -18,7 +18,8 @@ you.
   server's `search` tool (Capy lists it as `<server key>__search`, e.g.
   `probe__search`; its `entity` tool reads results in full). If no Probe MCP
   tool is available, tell the researcher once that Probe's MCP server is not
-  connected in this Capy project (Settings > MCP servers), then use
+  connected in Capy (Settings > MCP & plugins: add the Probe Research plugin,
+  or Connect its `probe` server), then use
   `probe project list` and `probe run list --project <slug>`.
 - **The team note.** At the start of ML work run `probe notes team --brief` (or
   the MCP `entity` tool with `refs=["team-note"]`) and follow it: it is the team's working

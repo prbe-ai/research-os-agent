@@ -9,8 +9,8 @@ computer, so Probe meets it in two places:
 - **Inside Capy**, the agent reads and records Probe work itself: the Probe MCP
   server for search, the `probe` CLI and SDK for writes and instrumented runs
   (your computer's, for a thread on This Mac), and a small skills bundle that
-  says how. Capy has no command or API for its settings, so you add these in
-  Capy once; the installer prints the steps.
+  says how. Capy has no command or API for its settings, so you add Probe's
+  plugin in Capy once; the installer prints where.
 - **On your computer**, Probe copies the Capy threads you start into Probe as
   sessions, every 10 minutes, through Capy's API.
 
@@ -31,42 +31,51 @@ npx probe-research install --agent capy
 (or `npx probe-research install` and tick Capy; it is listed when the Capy app
 is on this computer). After the review screen it asks for a Capy API key (Capy
 **Settings > API**; give it an expiry) and which Capy projects to capture, then
-connects capture and prints the steps below for Capy's own settings. Leave the
-key empty to skip capture for now.
+connects capture and prints the one step below for Capy's own settings. Leave
+the key empty to skip capture for now.
 
 Without a terminal (a script, a CI box), set `CAPY_API_KEY` and name the
 projects: `npx probe-research install --agent capy --yes --capture --capy-project
 <name>`. The key is never an argument, where shell history would keep it.
 
-## 1. Connect the Probe MCP server
+## 1. Add the Probe plugin
 
-In Capy: **Settings > MCP & plugins**, add an MCP server.
+In Capy: **Settings > MCP & plugins**, add a plugin from GitHub:
 
-- Name: `probe`. Scope: personal (or your org's).
-- Transport: **Streamable HTTP**, URL `https://mcp.research.prbe.ai/mcp`.
-- Save, click **Connect** and approve in Probe.
+```
+https://github.com/prbe-ai/research-os-agent/tree/main/capy
+```
+
+Choose **Only me**, then **Add**, and **Connect** its `probe` server and approve
+in Probe. If Capy says the key `probe` is already taken, you added Probe's server
+by hand before: remove that server, then add the plugin. The plugin
+carries Probe's MCP server and the skills bundle (`probe-capy`, `track-work`,
+`instrument-code`, `plan-research-review`, `edit-notes`, `audit-team-note`). Capy
+shows every skill's description to the agent in each thread, so `probe-capy` is
+read at the start of ML work without an AGENTS.md line.
 
 Use a **personal** connection (each person connects their own). A shared
 connection makes every Probe write from any teammate's thread look like it came
 from the admin who connected it.
 
-## 2. Install the skills
+### By hand (a self-hosted Probe, or without the plugin)
 
-The Capy bundle lives in `capy/skills/` of
-[prbe-ai/research-os-agent](https://github.com/prbe-ai/research-os-agent):
-`probe-capy` (read first), `track-work`, `instrument-code`,
-`plan-research-review`, `edit-notes`, `notes-audit`. Install from that folder
-(the repository root also carries the Claude Code plugin's own copies, so name
-the folder, not just the repository), into your repository's `.agents/skills/`:
+The plugin's server is the hosted Probe (`https://mcp.research.prbe.ai/mcp`).
+For another deployment, or to add the parts yourself:
 
-```bash
-npx skills add https://github.com/prbe-ai/research-os-agent/tree/main/capy/skills --agent universal
-```
+- **MCP server:** Settings > MCP & plugins, add an MCP server named `probe`,
+  scope personal, transport **Streamable HTTP**, your deployment's MCP URL.
+  Save, click **Connect** and approve in Probe.
+- **Skills**, into your repository's `.agents/skills/`:
 
-or ask Capy: *"Install the skills in the capy/skills folder of
-prbe-ai/research-os-agent into my personal drive."*
+  ```bash
+  npx skills add https://github.com/prbe-ai/research-os-agent/tree/main/capy/skills --agent universal
+  ```
 
-## 3. Threads in Capy's cloud: put the CLI on the Capy machine
+  or ask Capy: *"Install the skills in the capy/skills folder of
+  prbe-ai/research-os-agent into my personal drive."*
+
+## 2. Threads in Capy's cloud: put the CLI on the Capy machine
 
 A thread on **This Mac** uses your computer's `probe`, which the installer set up,
 and needs nothing here. A thread on a Capy machine in the cloud needs the CLI
@@ -95,9 +104,10 @@ Then add the CLI to the machine recipe, in **Dev environment** or a committed
 Code that calls the SDK (`import probe`) also needs `probe-research` in its own
 environment (`uv add probe-research`); the CLI tool install above is isolated.
 
-## 4. Tell the agent (AGENTS.md)
+## 3. Optional: an AGENTS.md line
 
-Add to your repository's root `AGENTS.md` (or your Capy drive's):
+The skills are enough. To make it explicit, add to your repository's root
+`AGENTS.md` (or your Capy personal drive's, which applies to all your threads):
 
 ```markdown
 ## Probe
@@ -106,7 +116,7 @@ run `probe notes team --brief`. Check the team's prior work with the Probe MCP
 `search` tool before proposing new experiments.
 ```
 
-## 5. How capture works
+## 4. How capture works
 
 The installer runs the same steps as `probe capy connect`, which you can also
 run yourself (`probe capy connect --project <your Capy project name>`; the
