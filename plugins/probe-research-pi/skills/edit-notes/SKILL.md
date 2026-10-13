@@ -40,6 +40,7 @@ Read the whole note before each edit and fit the change into it: add what is new
 - **`checkout` tells you how full the note is.** Act on it before you edit, not after.
 - **`push` merges, it does not overwrite.** A paragraph someone else wrote while you were editing survives.
 - **A conflict writes markers into the file and exits 2.** Resolve them, then push again. The base does not move until a push lands, so a failed push loses nothing.
+- **Add or change one paragraph without checking the note out:** `probe notes append --<entity> <slug> --text "..."` adds it at the end, `probe notes edit --<entity> <slug> --old "..." --new "..."` changes one. Both read the note as it is on the server, so a teammate's edit is never lost. Check out and push only to restructure a note.
 
 - **Sub-notes** take `--note "<title>"` on `checkout` / `push` / `show`.
   - Checking out a title that does not exist is refused. `probe notes create` makes one.
