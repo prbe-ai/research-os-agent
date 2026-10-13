@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.248.0
+
 - **Agents hear about their runs' alerts.** In the daemon profile, when a run the session launched or wrote to crashes, is still running with a flagged metric, or was flagged and then stopped, the agent gets a `[Probe] Run alert` message naming the run and what happened: the same alerts, and the same gates, as the alert email. The daemon asks Probe every 30 seconds (in `on` and `read only`), sends each alert once, and puts a batch in one message (ten runs listed, then "and N more runs."). An idle Claude Code or pi session wakes for it; Codex and Kimi get it at their next prompt or tool call. An undelivered alert waits 12 hours. Claude Code's Stop hook now also waits while the daemon serves the session, for up to 7 days, and stops at the next prompt or once the session's daemon is gone. Until the server serves the alerts, the daemon finds nothing and stays quiet.
 
 ## 0.247.3
