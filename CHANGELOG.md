@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.245.1
+
 - **The status line names the project the daemon is writing to.** It used to name the last project of the session's work list, an order that ties for every project of one session and so falls to id order: it could show a project the daemon had stopped writing to, and never moved. Now each daemon write that lands and names a project or experiment (filing a run, a note, an experiment, a paper, an artifact, a project change) stores that project's slug in `~/.local/state/probe/sessions/<session>.scope`, and the segment (and the Codex on-change notice) shows it. An experiment shows its project. A write that names only a run, an artifact or a note by id, a failed or queued write, and a `name:` ref leave the label where it was; the daemon deleting the labelled project clears it. Only sessions with the status line or the notice installed pay the lookup (one or two small reads, 5 s at most per write). Writes the daemon does not make (inline mode, `--directed`) do not move it yet. A project name with control or bidi characters is no longer printed, from either source. Needs this CLI (the daemon) and this plugin (the status line); either alone keeps the old label.
 
 ## 0.245.0
