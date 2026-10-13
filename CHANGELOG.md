@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.246.3
+
 - **Capy setup is one step.** The installer's last page, `probe capy setup` and `probe wizard --action manual` now say: in Capy, Settings > MCP & plugins > Add > From GitHub repository, paste `https://github.com/prbe-ai/research-os-agent/tree/main/capy`, choose Only me, Add plugin, then Connect. The plugin carries Probe's MCP server and the skills, so the separate MCP server, `npx skills add` and AGENTS.md steps are gone (Capy shows every skill's description to the agent). Its server now asks Capy for one sign-in per member (`connection: member`), and its bundle ships `audit-team-note` instead of the `notes-audit` stub. A self-hosted Probe, whose MCP server is not the plugin's, still gets the server and skills steps.
 
 ## 0.246.2
