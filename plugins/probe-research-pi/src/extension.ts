@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
-import { QuestionAsker, type ApprovalsDeps } from "./core/approvals.js";
+import { QuestionAsker, feedbackUnsent, spawnFeedbackFlush, type ApprovalsDeps } from "./core/approvals.js";
 import { guardToolCall, sessionIsInline } from "./guard.js";
 import {
   cliHasInlineBridge,
@@ -195,6 +195,7 @@ function realApprovalsDeps(): ApprovalsDeps {
     mkdirSync: (path) => fs.mkdirSync(path, { recursive: true }),
     now: () => Date.now(),
     token: () => randomBytes(6).toString("hex"),
+    sendFeedback: () => spawnFeedbackFlush(realTeamNoteSyncDeps()),
   };
 }
 
@@ -631,6 +632,9 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       await syncTeamNoteThenRead(realTeamNoteSyncDeps());
       cachedTeamNote = readTeamNote(process.env);
     }
+    // Feedback for the Probe team the researcher said yes to and that was not
+    // sent yet (offline, or the dialog's own send failed). Not under `off`.
+    if (!probeIsOff() && feedbackUnsent(realApprovalsDeps())) spawnFeedbackFlush(realTeamNoteSyncDeps());
 
     // Probe MCP read tools: entirely independent of the capture daemon below
     // (a separate credential — mcp_token, never the tap's ingest/device

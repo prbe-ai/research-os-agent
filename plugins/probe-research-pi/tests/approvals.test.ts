@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { PI_DIALOG_CHANNEL, QuestionAsker, Verdict, heldQuestions, type ApprovalsDeps, type DialogUI } from "../src/core/approvals.js";
+import { FEEDBACK_POLICY, FEEDBACK_UNSENT, PI_DIALOG_CHANNEL, QuestionAsker, feedbackUnsent, spawnFeedbackFlush, Verdict, heldQuestions, type ApprovalsDeps, type DialogUI } from "../src/core/approvals.js";
 import { approvalsDir } from "../src/core/paths.js";
 
 /** What the Board holds and what this writer must produce; shared with agent/tests/test_pi_approval_answer.py. */
@@ -13,6 +13,7 @@ const FIXTURE = JSON.parse(
   fs.readFileSync(new URL("../../../tests/fixtures/pi_approval_answer.json", import.meta.url), "utf-8"),
 ) as {
   request: Record<string, any>;
+  feedback: { policy: string; unsent_outcome: string };
   yes: Record<string, unknown>;
   no: Record<string, unknown>;
 };
@@ -189,3 +190,85 @@ describe("when a question is asked", () => {
     expect(heldQuestions(SID, deps()).map((q) => q.id)).toEqual(["bbbbbbbb", "aaaaaaaa"]);
   });
 });
+
+describe("a feedback question (`feedback.send`)", () => {
+  // No daemon acts on its answer: a yes starts `probe feedback flush`, which sends it.
+  it("starts the send after a yes, and only then", async () => {
+    const sendFeedback = vi.fn();
+    hold({ id: "f0000001", policy: FEEDBACK_POLICY });
+    expect(await new QuestionAsker().ask(SID, dialog(FIXTURE.request.question.yes_label), { ...deps(), sendFeedback }, true)).toBe(1);
+    expect(sendFeedback).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing after a no, or after a yes to the daemon's own question", async () => {
+    const sendFeedback = vi.fn();
+    hold({ id: "f0000002", policy: FEEDBACK_POLICY });
+    await new QuestionAsker().ask(SID, dialog(FIXTURE.request.question.no_label), { ...deps(), sendFeedback }, true);
+    hold({ id: "d0000003" });
+    await new QuestionAsker().ask(SID, dialog(FIXTURE.request.question.yes_label), { ...deps(), sendFeedback }, true);
+    expect(answerOf("d0000003")).toMatchObject({ answer: Verdict.Yes });
+    expect(sendFeedback).not.toHaveBeenCalled();
+  });
+});
+
+describe("feedback constants are Python's (the shared fixture)", () => {
+  it("names the same policy and unsent outcome as probe.feedback", () => {
+    expect(FEEDBACK_POLICY).toBe(FIXTURE.feedback.policy);
+    expect(FEEDBACK_UNSENT).toBe(FIXTURE.feedback.unsent_outcome);
+  });
+});
+
+describe("feedbackUnsent: session start spawns a flush only with something to send", () => {
+  it("is false with no board, and for unanswered or other questions", () => {
+    expect(feedbackUnsent(deps())).toBe(false);
+    hold({ id: "f0000010", policy: FEEDBACK_POLICY });
+    hold({ id: "d0000011" });
+    fs.writeFileSync(join(answersDir(), "d0000011.json"), JSON.stringify(FIXTURE.yes));
+    expect(feedbackUnsent(deps())).toBe(false);
+  });
+
+  it("is true for an answered feedback question, or one approved and not sent", () => {
+    hold({ id: "f0000012", policy: FEEDBACK_POLICY });
+    fs.writeFileSync(join(answersDir(), "f0000012.json"), JSON.stringify(FIXTURE.yes));
+    expect(feedbackUnsent(deps())).toBe(true);
+    rmSync(join(answersDir(), "f0000012.json"));
+    expect(feedbackUnsent(deps())).toBe(false);
+    hold({ id: "f0000012", policy: FEEDBACK_POLICY, state: "approved", outcome: FEEDBACK_UNSENT });
+    expect(feedbackUnsent(deps())).toBe(true);
+    hold({ id: "f0000012", policy: FEEDBACK_POLICY, state: "approved", outcome: "yes: sent" });
+    expect(feedbackUnsent(deps())).toBe(false);
+  });
+});
+
+describe("spawnFeedbackFlush", () => {
+  function spawnDeps(over: Record<string, unknown> = {}) {
+    const unref = vi.fn();
+    const spawn = vi.fn(() => ({ unref, pid: 7 }));
+    const log = vi.fn();
+    return { unref, spawn, log, deps: { spawn, existsSync: () => true, isExecutable: () => true, env: { PATH: "/usr/local/bin" }, log, ...over } };
+  }
+
+  it("spawns `probe feedback flush` detached, as pi, and lets it go", () => {
+    const { unref, spawn, deps } = spawnDeps();
+    spawnFeedbackFlush(deps as any);
+    const [binary, args, options] = spawn.mock.calls[0] as unknown as [string, string[], Record<string, any>];
+    expect(binary).toBe("/usr/local/bin/probe");
+    expect(args).toEqual(["feedback", "flush"]);
+    expect(options).toMatchObject({ detached: true, stdio: "ignore", env: { PROBE_AGENT: "pi" } });
+    expect(unref).toHaveBeenCalled();
+  });
+
+  it("logs and spawns nothing without a probe binary", () => {
+    const { spawn, log, deps } = spawnDeps({ existsSync: () => false, isExecutable: () => false, env: { PATH: "" } });
+    spawnFeedbackFlush(deps as any);
+    expect(spawn).not.toHaveBeenCalled();
+    expect(log.mock.calls[0][0]).toContain("feedback flush skipped");
+  });
+
+  it("never throws when the spawn fails", () => {
+    const { log, deps } = spawnDeps({ spawn: () => { throw new Error("EAGAIN"); } });
+    expect(() => spawnFeedbackFlush(deps as any)).not.toThrow();
+    expect(log.mock.calls[0][0]).toContain("feedback flush spawn failed: EAGAIN");
+  });
+});
+

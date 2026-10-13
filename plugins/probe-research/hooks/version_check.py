@@ -793,6 +793,37 @@ def _team_note_cli_too_old(binary: str) -> str | None:
     return TEAM_NOTE_STALE_CLI.format(needed=TEAM_NOTE_MIN_CLI, have=_safe_ver(have))
 
 
+#: `probe.feedback.UNSENT`: a feedback question answered yes, not sent yet.
+FEEDBACK_UNSENT = "yes: not sent yet"
+
+
+def _feedback_unsent() -> bool:
+    """Is a `feedback.send` question answered and not acted on yet? A few small
+    file reads, so a session start pays for `probe feedback flush` (a cold
+    `probe` process) only when there is something to send."""
+    base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
+    root = os.path.join(base, "probe", "approvals")
+    try:
+        names = os.listdir(os.path.join(root, "requests"))
+    except OSError:
+        return False
+    for name in names:
+        if not name.endswith(".json"):
+            continue
+        try:
+            with open(os.path.join(root, "requests", name), encoding="utf-8") as handle:
+                req = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(req, dict) or req.get("policy") != "feedback.send":
+            continue
+        if req.get("state") == "approved" and req.get("outcome") == FEEDBACK_UNSENT:
+            return True
+        if req.get("state") == "waiting" and os.path.exists(os.path.join(root, "answers", name)):
+            return True
+    return False
+
+
 def _spawn_session_maintenance() -> str | None:
     """Fire and forget. Never raises, never waits, never blocks a session start.
 
@@ -818,6 +849,10 @@ def _spawn_session_maintenance() -> str | None:
     # it unless what it wrote belongs to the team either way. So an edit that
     # exists is an edit that should land, and the toggle has no opinion about it.
     command = f'{shlex.quote(binary)} agent-rules refresh; {shlex.quote(binary)} notes sync'
+    if _feedback_unsent():
+        # Feedback for the Probe team the researcher said yes to and that was
+        # not sent yet (offline, or the answer hook's own send failed).
+        command += f'; {shlex.quote(binary)} feedback flush'
     try:
         subprocess.Popen(  # noqa: S602 -- fixed command, only the resolved binary path varies
             ["/bin/sh", "-c", command],

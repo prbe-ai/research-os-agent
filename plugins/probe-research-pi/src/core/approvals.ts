@@ -26,6 +26,11 @@
  * asked: the researcher answers with `probe approvals` in a terminal, which a
  * `terminal_only` question always needs.
  *
+ * FEEDBACK (`feedback.send`, `probe.feedback`): no daemon acts on its answer,
+ * so after a yes this starts a detached `probe feedback flush`, which sends it
+ * with the researcher's own credential (as the answer hook does on Claude Code),
+ * and session start runs one when a yes is still unsent (`feedbackUnsent`).
+ *
  * `agent/tests/fixtures/pi_approval_answer.json` is what this writes, and
  * `agent/tests/test_pi_approval_answer.py` feeds it to the Board and the
  * worker. Never throws: a failure is "nothing answered", and the question waits.
@@ -34,6 +39,7 @@
 import { join } from "node:path";
 
 import { approvalsDir, type PathEnv } from "./paths.js";
+import { spawnDetachedProbe, type TeamNoteSyncDeps } from "./teamNote.js";
 
 /** `approvals.WAITING`: the only state a question is asked in. */
 export const REQUEST_WAITING = "waiting";
@@ -48,9 +54,19 @@ export type VerdictValue = (typeof Verdict)[keyof typeof Verdict];
 /** The `channel` this extension's answers carry. */
 export const PI_DIALOG_CHANNEL = "pi-dialog";
 
+/** `approvals.FEEDBACK`: the policy whose yes this extension sends itself. */
+export const FEEDBACK_POLICY = "feedback.send";
+
+/** `probe.feedback.UNSENT`: a feedback question answered yes, not sent yet. */
+export const FEEDBACK_UNSENT = "yes: not sent yet";
+
+/** `approvals.APPROVED`. */
+const REQUEST_APPROVED = "approved";
+
 /** One question, as a request file holds it. */
 export interface HeldQuestion {
   id: string;
+  policy: string;
   question: string;
   yesLabel: string;
   noLabel: string;
@@ -79,6 +95,8 @@ export interface ApprovalsDeps {
   now: () => number;
   /** A fresh suffix for this writer's temporary file. */
   token: () => string;
+  /** Starts `probe feedback flush` after a yes to a feedback question. */
+  sendFeedback?: () => void;
 }
 
 function requestsDir(env: PathEnv): string {
@@ -103,7 +121,8 @@ function askable(data: unknown, sessionId: string, nowSeconds: number): HeldQues
   // Too long for a dialog: `probe approvals` prints it whole.
   if (terminalOnly === true) return null;
   if (typeof question !== "string" || typeof yesLabel !== "string" || typeof noLabel !== "string") return null;
-  return { id: req.id, question, yesLabel, noLabel, askedAt: Number(req.asked_at) || 0 };
+  const policy = typeof req.policy === "string" ? req.policy : "";
+  return { id: req.id, policy, question, yesLabel, noLabel, askedAt: Number(req.asked_at) || 0 };
 }
 
 function readJson(path: string, deps: ApprovalsDeps): unknown {
@@ -222,6 +241,7 @@ export class QuestionAsker {
         if (writeAnswer(sessionId, next, choice, deps)) {
           written += 1;
           log(`question ${next.id}: answered ${choice === next.yesLabel ? Verdict.Yes : Verdict.No} in pi's dialog`);
+          if (choice === next.yesLabel && next.policy === FEEDBACK_POLICY) deps.sendFeedback?.();
         } else {
           log(`question ${next.id}: no longer waiting, the pick was not written`);
         }
@@ -233,4 +253,35 @@ export class QuestionAsker {
       this.open = false;
     }
   }
+}
+
+/**
+ * Fire a detached `probe feedback flush` and return at once. Never throws: a
+ * failure leaves the yes on disk, and the next session start's flush sends it.
+ */
+export function spawnFeedbackFlush(deps: TeamNoteSyncDeps): void {
+  spawnDetachedProbe(deps, ["feedback", "flush"], "feedback flush");
+}
+
+/**
+ * Is a feedback question answered and not acted on yet (`version_check._feedback_unsent`)?
+ * A few small file reads, so session start spawns a cold `probe` only when
+ * there is something to send.
+ */
+export function feedbackUnsent(deps: ApprovalsDeps): boolean {
+  let names: string[];
+  try {
+    names = deps.readdirSync(requestsDir(deps.env)).filter((name) => name.endsWith(".json"));
+  } catch {
+    return false;
+  }
+  for (const name of names) {
+    const req = readJson(join(requestsDir(deps.env), name), deps);
+    if (typeof req !== "object" || req === null) continue;
+    const { policy, state, outcome } = req as Record<string, unknown>;
+    if (policy !== FEEDBACK_POLICY) continue;
+    if (state === REQUEST_APPROVED && outcome === FEEDBACK_UNSENT) return true;
+    if (state === REQUEST_WAITING && deps.existsSync(join(approvalsDir(deps.env), "answers", name))) return true;
+  }
+  return false;
 }

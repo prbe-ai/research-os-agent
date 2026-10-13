@@ -204,21 +204,30 @@ export interface TeamNoteSyncDeps {
  * explicitly.
  */
 export function spawnTeamNoteSync(deps: TeamNoteSyncDeps): void {
+  spawnDetachedProbe(deps, ["notes", "sync"], "team-note sync");
+}
+
+/**
+ * Fire a detached `probe <args>` with `PROBE_AGENT=pi` and return at once;
+ * `what` names it in the log. Never throws: no binary or a failed spawn is
+ * logged and nothing runs.
+ */
+export function spawnDetachedProbe(deps: TeamNoteSyncDeps, args: string[], what: string): void {
   const binary = findProbeBinary(deps);
   if (!binary) {
-    deps.log("team-note sync skipped: no probe CLI found on PATH or in the documented fallback locations");
+    deps.log(`${what} skipped: no probe CLI found on PATH or in the documented fallback locations`);
     return;
   }
   try {
-    const child = deps.spawn(binary, ["notes", "sync"], {
+    const child = deps.spawn(binary, args, {
       detached: true,
       stdio: "ignore",
       env: { ...deps.env, PROBE_AGENT: "pi" },
     });
     child.unref();
-    deps.log(`team-note sync spawned (pid ${child.pid ?? "unknown"})`);
+    deps.log(`${what} spawned (pid ${child.pid ?? "unknown"})`);
   } catch (err) {
-    deps.log(`team-note sync spawn failed: ${err instanceof Error ? err.message : String(err)}`);
+    deps.log(`${what} spawn failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 }
 

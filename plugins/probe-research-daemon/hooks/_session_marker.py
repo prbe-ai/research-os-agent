@@ -1373,9 +1373,12 @@ def daemon_allows_agent(matched: str) -> bool:
 #: (`is_inline`) the guard refuses only `RESEARCHER_SWITCH`.
 #: `paper find` reads the research literature, an outside index, not the team's
 #: records, so the agent runs it itself (Richard 2026-10-12: "just the tools
-#: where it makes sense for the agent to call it directly").
+#: where it makes sense for the agent to call it directly"). `feedback send`
+#: holds feedback for the Probe team as a question for the researcher
+#: (`probe.feedback`); nothing leaves without their yes.
 DAEMON_PROFILE_ALLOWED = frozenset(
-    {"ask", "session status", "session parent", "ignore check", "run expect", "doctor", "paper find"}
+    {"ask", "session status", "session parent", "ignore check", "run expect", "doctor", "paper find",
+     "feedback send"}
 )
 
 #: The researcher's switch and defaults, typed into a shell. In the daemon
