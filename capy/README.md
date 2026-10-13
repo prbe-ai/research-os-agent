@@ -40,23 +40,27 @@ projects: `npx probe-research install --agent capy --yes --capture --capy-projec
 
 ## 1. Add the Probe plugin
 
-In Capy: **Settings > MCP & plugins**, add a plugin from GitHub:
+On a Mac with the Capy app, the installer's last page offers **Open Capy**: it
+opens Capy's **Add from GitHub** box with Probe's plugin filled in. Click
+**Continue**, choose **Only me**, **Add plugin**, then **Connect** its `probe`
+server and approve in Probe. Elsewhere, or later: in Capy, **Settings > MCP &
+plugins > Add > From GitHub repository**, and paste:
 
 ```
 https://github.com/prbe-ai/research-os-agent/tree/main/capy
 ```
 
-Choose **Only me**, then **Add**, and **Connect** its `probe` server and approve
-in Probe. If Capy says the key `probe` is already taken, you added Probe's server
+On a Mac, `open "capy://app/settings/mcp?github=https%3A%2F%2Fgithub.com%2Fprbe-ai%2Fresearch-os-agent%2Ftree%2Fmain%2Fcapy"`
+opens the same box. If Capy says the key `probe` is already taken, you added Probe's server
 by hand before: remove that server, then add the plugin. The plugin
 carries Probe's MCP server and the skills bundle (`probe-capy`, `track-work`,
 `instrument-code`, `plan-research-review`, `edit-notes`, `audit-team-note`). Capy
 shows every skill's description to the agent in each thread, so `probe-capy` is
 read at the start of ML work without an AGENTS.md line.
 
-Use a **personal** connection (each person connects their own). A shared
-connection makes every Probe write from any teammate's thread look like it came
-from the admin who connected it.
+Choose **Only me**, not Organization: with Organization, Capy signs the server
+in once for everyone ("signed in for the organization"), so every teammate's
+thread reads Probe as whoever clicked Connect.
 
 ### By hand (a self-hosted Probe, or without the plugin)
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The Capy install can open Capy on the plugin's Add box.** On a Mac with the Capy app and the hosted Probe (not over SSH), the installer's last page offers **Open Capy >**, which opens `capy://app/settings/mcp?github=…` (the plugin URL percent-encoded; Capy ignores a raw one) so the step is Continue, Only me, Add plugin, Connect. It opens only when chosen, after the step is on screen: Capy's box defaults to Organization, which signs every teammate in as you. Windows is left out until its deep links are checked. The plugin manifest no longer sets `connection: member`, which Capy ignores.
+
 ## 0.247.2
 
 - **The daemon's writer no longer misses the first [Probe] message after the reader's mailbox is swept.** The claim log is deleted after a week idle and made again by the next claim; the new file often gets the old inode number back, so the writer read it from the old cursor and skipped its first message(s). It now compares the bytes just before its cursor, as it does for the chat log, and reads a new log from the start.
