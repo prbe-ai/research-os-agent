@@ -11,7 +11,9 @@ be created through the SDK in a training process, the `probe` CLI in a shell, th
 hosted MCP (which runs no code on this machine at all), or a script three
 processes deep. Only some of those are ours to hook, and a status line that says
 "untracked" because it missed one is worse than no status line. One read covers
-every path by construction.
+every path by construction. The one exception is the PROJECT name: the daemon
+stores the project its last write landed in (`<session>.scope`), and
+`_session_marker.read` shows that in place of this answer's guess.
 
 CONTRACT — this is a hook, so it inherits the house rules:
 

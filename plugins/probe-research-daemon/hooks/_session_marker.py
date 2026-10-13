@@ -13,6 +13,11 @@ The division of labour is deliberate:
   a plugin hook REFRESHES this file in the background, from the server
   a status-line script READS it, in stdlib python, in about 30ms
 
+One writer is instrumented anyway: the daemon, after each of its writes lands,
+stores that write's project in ``<session_id>.scope`` (:mod:`probe.daemon.scope`),
+and :func:`read` shows it in place of the server's guess at the project. Run ids,
+liveness and capture still come from the refresh.
+
 Refreshing from the server rather than instrumenting the SDK's create paths is
 what makes the answer complete. A session's work can be created through the SDK,
 the CLI, the hosted MCP, or a training script three processes deep; only one of
@@ -47,6 +52,7 @@ import os
 import re
 import stat
 import time
+import unicodedata
 from pathlib import Path
 
 #: Mirrors probe.version_policy.STATE_DIRNAME. Duplicated rather than imported
@@ -59,6 +65,20 @@ SESSIONS_DIRNAME = "sessions"
 #: project from a conversation someone abandoned last month is a lie with a
 #: confident glyph on it; saying nothing is the honest answer.
 MAX_AGE_SECONDS = 30 * 86400
+
+#: `<session>.scope` beside the marker: the project the daemon's latest write
+#: landed in (`write_scope`). Its own file because the refresh hook replaces the
+#: marker whole. `prune` sweeps it with the rest of the directory.
+SCOPE_SUFFIX = ".scope"
+#: A bound on a project name this file stores or shows. Server slugs are
+#: free-form TEXT; the segment elides a long one anyway, so this only keeps a
+#: pathological value off the render path.
+MAX_LABEL_CHARS = 1024
+#: Unicode categories a label may not hold: controls (an escape sequence),
+#: format characters (bidi overrides, zero-width), line and paragraph
+#: separators, surrogates and private use. Not `Cn` (unassigned): the hook's
+#: python can be older than the daemon's, and a newer emoji is unassigned there.
+_UNPRINTABLE = frozenset({"Cc", "Cf", "Zl", "Zp", "Cs", "Co"})
 
 #: The ONE way any message sends a person to set up, sign in, update or repair
 #: this device: setup is wizard-only (Richard 2026-09-29), so no user-facing text
@@ -280,8 +300,8 @@ def paper_cli_cache_path(session_id: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def read(session_id: str) -> dict | None:
-    """This session's cached work, or None.
+def _read_marker(session_id: str) -> dict | None:
+    """This session's cached work as the refresh hook stored it, or None.
 
     None for absent, unreadable, malformed, and EXPIRED alike — every one of
     them means "we cannot say what this session tracked", and a reader that
@@ -296,14 +316,109 @@ def read(session_id: str) -> dict | None:
         return None
     if not isinstance(state, dict):
         return None
-    updated_at = state.get("updated_at")
-    if not isinstance(updated_at, (int, float)):
-        return None
-    # A future timestamp (clock skew, a restored backup) must not pin a marker
-    # as fresh forever; treat anything outside the window as expired.
-    if abs(time.time() - updated_at) > MAX_AGE_SECONDS:
+    if not _fresh(state.get("updated_at")):
         return None
     return state
+
+
+def _fresh(updated_at: object) -> bool:
+    """Inside the age window. A future timestamp (clock skew, a restored backup)
+    must not pin a file as fresh forever, so anything outside the window, either
+    side, is expired -- and so is a value no clock wrote (NaN, an int too large
+    for a float), which must not raise on a render path."""
+    if isinstance(updated_at, bool) or not isinstance(updated_at, (int, float)):
+        return False
+    try:
+        return math.isfinite(updated_at) and abs(time.time() - float(updated_at)) <= MAX_AGE_SECONDS
+    except OverflowError:
+        return False
+
+
+def read(session_id: str) -> dict | None:
+    """This session's cached work, or None — with the project the daemon last
+    wrote to (`read_scope`) in place of the server's, when there is one.
+
+    The server's `project` is a GUESS at what the session works on now: the last
+    of the projects it touched, in an order that ties for every project of one
+    session (each link row carries the SESSION's first sighting), so it falls to
+    uuid order and never moves. The daemon's scope is where its writes actually
+    landed. The scope only refines a marker: without one, nothing is installed
+    to refresh it, and the answer is None as before. Every reader of the marker
+    — the segment, the notice, `probe statusline show` — goes through here, so
+    they cannot come to name different projects, and a name neither file may
+    print (`_printable`) is dropped here for all of them.
+    """
+    state = _read_marker(session_id)
+    if state is None:
+        return None
+    scope = read_scope(session_id)
+    if scope is not None:
+        return {**state, "project": scope}
+    if state.get("project") is not None and not _printable(state.get("project")):
+        return {**state, "project": None}
+    return state
+
+
+def scope_path(session_id: str) -> Path:
+    return sessions_dir() / (session_id + SCOPE_SUFFIX)
+
+
+def _printable(value: object) -> bool:
+    """A project name the segment can print: one bounded line, nothing a terminal
+    or a bidi renderer would act on. It comes from the server, where slugs are
+    free-form, so it is checked, not trusted."""
+    return (isinstance(value, str) and 0 < len(value) <= MAX_LABEL_CHARS
+            and all(unicodedata.category(ch) not in _UNPRINTABLE for ch in value))
+
+
+def write_scope(session_id: str, project: str, project_id: str | None = None) -> bool:
+    """Record the project the daemon's latest write landed in (its slug, and its
+    id so a delete by id can clear it). True when it landed.
+
+    A file of its own, not a key in the marker: the refresh hook REPLACES the
+    marker every few seconds from the server's answer, and a second writer's key
+    would be gone at the next refresh.
+    """
+    if not valid_session_id(session_id) or not _printable(project):
+        return False
+    record = {"project": project, "project_id": project_id, "updated_at": time.time()}
+    return _publish_atomically(scope_path(session_id), json.dumps(record) + "\n")
+
+
+def _read_scope_record(session_id: str) -> dict | None:
+    if not valid_session_id(session_id):
+        return None
+    try:
+        with open(scope_path(session_id), encoding="utf-8") as handle:
+            record = json.load(handle)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not _fresh(record.get("updated_at")):
+        return None
+    return record if _printable(record.get("project")) else None
+
+
+def read_scope(session_id: str) -> str | None:
+    """The project the daemon last wrote to for this session, or None: absent,
+    unreadable, malformed and expired alike, as in `_read_marker`."""
+    record = _read_scope_record(session_id)
+    return record["project"] if record is not None else None
+
+
+def clear_scope(session_id: str, ref: str) -> bool:
+    """Forget the stored project when `ref` (a slug or an id) names it: the daemon
+    deleted it, and a label naming a project in the trash is the lie this file
+    exists to stop. True when it was cleared."""
+    record = _read_scope_record(session_id)
+    project_id = record.get("project_id") if record is not None else None
+    if record is None or not (ref == record.get("project")
+                              or isinstance(project_id, str) and ref.lower() == project_id.lower()):
+        return False
+    try:
+        os.unlink(scope_path(session_id))
+        return True
+    except OSError:
+        return False
 
 
 def write(session_id: str, state: dict) -> bool:
@@ -341,9 +456,11 @@ def from_session_work(payload: dict) -> dict:
     and is treated as untrusted — every field is checked, and a shape we do not
     recognise degrades to "tracked nothing" rather than raising on a render path.
 
-    WHICH PROJECT, when a session touched several: the LAST one, because the
-    list arrives oldest-first and the thing a status line should name is what
-    you are working on now, not what you opened the session with.
+    WHICH PROJECT, when a session touched several: the LAST one. That is only a
+    GUESS: the list is ordered by each link's first sighting, which is the
+    SESSION's for every project it touched, so it ties and falls to uuid order.
+    `read` puts the daemon's own answer (`<session>.scope`) in its place when
+    there is one.
     """
     project = None
     projects = payload.get("projects")
