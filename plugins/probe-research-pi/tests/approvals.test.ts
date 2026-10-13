@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { FEEDBACK_POLICY, FEEDBACK_UNSENT, PI_DIALOG_CHANNEL, QuestionAsker, feedbackUnsent, spawnFeedbackFlush, Verdict, heldQuestions, type ApprovalsDeps, type DialogUI } from "../src/core/approvals.js";
+import { FEEDBACK_OLD_DAEMON_VOID, FEEDBACK_POLICY, FEEDBACK_UNSENT, PI_DIALOG_CHANNEL, QuestionAsker, feedbackUnsent, spawnFeedbackFlush, Verdict, heldQuestions, type ApprovalsDeps, type DialogUI } from "../src/core/approvals.js";
 import { approvalsDir } from "../src/core/paths.js";
 
 /** What the Board holds and what this writer must produce; shared with agent/tests/test_pi_approval_answer.py. */
@@ -13,7 +13,7 @@ const FIXTURE = JSON.parse(
   fs.readFileSync(new URL("../../../tests/fixtures/pi_approval_answer.json", import.meta.url), "utf-8"),
 ) as {
   request: Record<string, any>;
-  feedback: { policy: string; unsent_outcome: string };
+  feedback: { policy: string; unsent_outcome: string; old_daemon_void: string };
   yes: Record<string, unknown>;
   no: Record<string, unknown>;
 };
@@ -215,6 +215,7 @@ describe("feedback constants are Python's (the shared fixture)", () => {
   it("names the same policy and unsent outcome as probe.feedback", () => {
     expect(FEEDBACK_POLICY).toBe(FIXTURE.feedback.policy);
     expect(FEEDBACK_UNSENT).toBe(FIXTURE.feedback.unsent_outcome);
+    expect(FEEDBACK_OLD_DAEMON_VOID).toBe(FIXTURE.feedback.old_daemon_void);
   });
 });
 
@@ -237,6 +238,8 @@ describe("feedbackUnsent: session start spawns a flush only with something to se
     expect(feedbackUnsent(deps())).toBe(true);
     hold({ id: "f0000012", policy: FEEDBACK_POLICY, state: "approved", outcome: "yes: sent" });
     expect(feedbackUnsent(deps())).toBe(false);
+    hold({ id: "f0000012", policy: FEEDBACK_POLICY, state: "void", outcome: FEEDBACK_OLD_DAEMON_VOID });
+    expect(feedbackUnsent(deps())).toBe(true);
   });
 });
 

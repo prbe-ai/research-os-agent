@@ -60,8 +60,12 @@ export const FEEDBACK_POLICY = "feedback.send";
 /** `probe.feedback.UNSENT`: a feedback question answered yes, not sent yet. */
 export const FEEDBACK_UNSENT = "yes: not sent yet";
 
-/** `approvals.APPROVED`. */
+/** `probe.feedback.OLD_DAEMON_VOID`: a yes a daemon from before 0.247.0 voided. */
+export const FEEDBACK_OLD_DAEMON_VOID = "void: the held action changed on disk";
+
+/** `approvals.APPROVED` / `approvals.VOID`. */
 const REQUEST_APPROVED = "approved";
+const REQUEST_VOID = "void";
 
 /** One question, as a request file holds it. */
 export interface HeldQuestion {
@@ -281,6 +285,7 @@ export function feedbackUnsent(deps: ApprovalsDeps): boolean {
     const { policy, state, outcome } = req as Record<string, unknown>;
     if (policy !== FEEDBACK_POLICY) continue;
     if (state === REQUEST_APPROVED && outcome === FEEDBACK_UNSENT) return true;
+    if (state === REQUEST_VOID && outcome === FEEDBACK_OLD_DAEMON_VOID) return true;
     if (state === REQUEST_WAITING && deps.existsSync(join(approvalsDir(deps.env), "answers", name))) return true;
   }
   return false;

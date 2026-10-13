@@ -795,6 +795,8 @@ def _team_note_cli_too_old(binary: str) -> str | None:
 
 #: `probe.feedback.UNSENT`: a feedback question answered yes, not sent yet.
 FEEDBACK_UNSENT = "yes: not sent yet"
+#: `probe.feedback.OLD_DAEMON_VOID`: a yes a daemon from before 0.247.0 voided.
+FEEDBACK_OLD_DAEMON_VOID = "void: the held action changed on disk"
 
 
 def _feedback_unsent() -> bool:
@@ -818,6 +820,8 @@ def _feedback_unsent() -> bool:
         if not isinstance(req, dict) or req.get("policy") != "feedback.send":
             continue
         if req.get("state") == "approved" and req.get("outcome") == FEEDBACK_UNSENT:
+            return True
+        if req.get("state") == "void" and req.get("outcome") == FEEDBACK_OLD_DAEMON_VOID:
             return True
         if req.get("state") == "waiting" and os.path.exists(os.path.join(root, "answers", name)):
             return True

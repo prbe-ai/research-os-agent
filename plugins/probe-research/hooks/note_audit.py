@@ -52,13 +52,7 @@ INLINE_SKILL = os.path.join("inline", "audit-team-note", "SKILL.md")
 #: The subprocess budget sits UNDER the hook's own 5s: if the harness kills
 #: the hook first there is no chance to fail soft, and the researcher sees a
 #: hook error instead of nothing. Measured cold on this box: 0.77s.
-#: The CLI is not always on PATH -- a uv tool install puts it somewhere a hook's
-#: stripped environment has never heard of. Same search `team-note-sync.sh` does.
-CANDIDATES = (
-    os.path.expanduser("~/.local/bin/probe"),
-    os.path.expanduser("~/.local/share/uv/tools/probe-research/bin/probe"),
-)
-
+AUDIT_TIMEOUT_S = 4
 
 
 def _hook_harness():
@@ -76,14 +70,24 @@ def _hook_harness():
     return module
 
 def _probe_bin():
-    for directory in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = os.path.join(directory, "probe")
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    for candidate in CANDIDATES:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
+    """The `probe` the agent's shell would run (`version_check._probe_bin`, the
+    one lookup the hooks share), or None when there is none."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks.version_check"
+    module = sys.modules.get(key)
+    if module is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "version_check.py")
+        spec = importlib.util.spec_from_file_location(key, path)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[key] = module
+        spec.loader.exec_module(module)
+    binary = module._probe_bin()
+    if not os.path.isabs(binary):  # a bare name (PROBE_BIN=probe, or nothing found): on PATH, or none
+        import shutil  # noqa: PLC0415
+
+        binary = shutil.which(binary) or ""
+    return binary if binary and os.access(binary, os.X_OK) else None
 
 
 def _session_id(payload):
@@ -206,7 +210,7 @@ def main() -> int:
             [binary, "notes", "audit-advisory", "--source", source],
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            timeout=4,
+            timeout=AUDIT_TIMEOUT_S,
             # Names the holder of the machine's audit lease, so this session is
             # told again if this telling never reaches the model. An env var,
             # not a flag: an older CLI would refuse an unknown option.
