@@ -17,7 +17,7 @@
     {
       "name": "probe-research-daemon",
       "source": "./plugins/probe-research-daemon",
-      "description": "The daemon profile (installed by `probe wizard` in place of probe-research): the Probe daemon records and reads for your coding agent. Carries instrument-code, plan-research-review, the daemon's messages and questions, and the guard; no MCP."
+      "description": "The daemon profile (installed by `probe wizard` in place of probe-research): the Probe daemon records and reads for your coding agent. Carries instrument-code, plan-research-review, visualize-progress, the daemon's messages and questions, and the guard; no MCP."
     },
     {
       "name": "probe-research-tap",

@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Probe Research (daemon)",
     "shortDescription": "The Probe daemon records and reads for this agent",
-    "longDescription": "The Probe daemon records this agent's research sessions and reads the team's prior work for it. Installs the instrument-code and plan-research-review skills, the daemon's messages and questions, and the guard; no MCP.",
+    "longDescription": "The Probe daemon records this agent's research sessions and reads the team's prior work for it. Installs the instrument-code, plan-research-review and visualize-progress skills, the daemon's messages and questions, and the guard; no MCP.",
     "developerName": "Probe",
     "category": "Developer Tools",
     "capabilities": [

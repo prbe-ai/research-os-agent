@@ -38,7 +38,8 @@ export type ProbeStateValue = (typeof ProbeState)[keyof typeof ProbeState];
  * The CLI owns it (`<sid>.profile`, refreshed from `defaults.recorders.pi` on
  * every `session initialize`) and reports it as `profile`. In the daemon
  * profile this extension switches itself to the lean set: no MCP bridge, the
- * daemon's `probe` skill, the guard's allowlist. See `profile.ts`.
+ * daemon's own skills (`DAEMON_OWN_SKILLS`), the guard's allowlist. See
+ * `profile.ts`.
  */
 export const Recorder = {
   Agent: "agent",

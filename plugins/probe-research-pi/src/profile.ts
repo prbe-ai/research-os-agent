@@ -4,12 +4,14 @@
  *
  * On Claude Code and Codex the daemon profile is a second, lean plugin
  * (`plugins/probe-research-daemon`): `instrument-code`, `plan-research-review`
- * and its own `probe` skill, no MCP server, no daemon notices. pi has one
- * package for both profiles (decision D1), so this extension narrows ITSELF:
+ * and its own `probe` and `visualize-progress` skills, no MCP server, no daemon
+ * notices. pi has one package for both profiles (decision D1), so this
+ * extension narrows ITSELF:
  *
- *   - skills: `resources_discover` adds `daemon-skills/probe` (a byte copy of
- *     the lean plugin's skill) and `DAEMON_ADDED_SKILLS` (this package's own
- *     copies, which the settings filter written before them does not load),
+ *   - skills: `resources_discover` adds `DAEMON_OWN_SKILLS` from
+ *     `daemon-skills/` (byte copies of the lean plugin's) and
+ *     `DAEMON_ADDED_SKILLS` (this package's own copies, which the settings
+ *     filter written before them does not load),
  *     and every prompt lists only `DAEMON_PROFILE_SKILLS`
  *     -- `leanSkills` below, which also covers a project-level pi settings
  *     entry that loads every skill of this package;
@@ -26,8 +28,13 @@ import { join } from "node:path";
 import { DAEMON_REASON_WORDS, DaemonReason, DaemonStatus, type DaemonStatusValue } from "./core/daemonNotice.js";
 import { TOOL_NAME_PREFIX } from "./mcpSchema.js";
 
-/** The skills a daemon-profile prompt keeps of this package's: the lean plugin's three. */
-export const DAEMON_PROFILE_SKILLS: ReadonlySet<string> = new Set(["instrument-code", "probe", "plan-research-review"]);
+/** The skills a daemon-profile prompt keeps of this package's: the lean plugin's four. */
+export const DAEMON_PROFILE_SKILLS: ReadonlySet<string> = new Set([
+  "instrument-code",
+  "probe",
+  "plan-research-review",
+  "visualize-progress",
+]);
 
 /**
  * Every skill this package ships: package.json's `pi.skills`, which is
@@ -47,12 +54,19 @@ export const PACKAGE_SKILLS: ReadonlySet<string> = new Set([
   "plan-research-review",
 ]);
 
-/** Where the daemon's `probe` skill lives inside this package. Never named in package.json. */
+/** Where the daemon's own skills live inside this package. Never named in package.json. */
 export const DAEMON_SKILLS_DIR = "daemon-skills";
-export const DAEMON_PROBE_SKILL = "probe";
 
-export function daemonSkillDir(extensionDir: string): string {
-  return join(extensionDir, DAEMON_SKILLS_DIR, DAEMON_PROBE_SKILL);
+/**
+ * The lean plugin's hand-kept skills (the Makefile's `DAEMON_HAND_KEPT`): the
+ * daemon's own wording of a skill this package also ships under `skills/` for
+ * the agent profile -- `probe` the switch, `visualize-progress` asking the
+ * daemon instead of reading Probe.
+ */
+export const DAEMON_OWN_SKILLS: readonly string[] = ["probe", "visualize-progress"];
+
+export function daemonSkillDir(extensionDir: string, name: string): string {
+  return join(extensionDir, DAEMON_SKILLS_DIR, name);
 }
 
 /**
@@ -69,7 +83,10 @@ export const DAEMON_ADDED_SKILLS: readonly string[] = ["plan-research-review"];
 
 /** Every skill path `resources_discover` adds in the daemon profile. */
 export function daemonSkillPaths(extensionDir: string): string[] {
-  return [daemonSkillDir(extensionDir), ...DAEMON_ADDED_SKILLS.map((name) => join(extensionDir, "skills", name))];
+  return [
+    ...DAEMON_OWN_SKILLS.map((name) => daemonSkillDir(extensionDir, name)),
+    ...DAEMON_ADDED_SKILLS.map((name) => join(extensionDir, "skills", name)),
+  ];
 }
 
 /**
@@ -95,12 +112,13 @@ export interface PromptSkill {
 
 export type DaemonSkill = Omit<PromptSkill, "name">;
 
-/** The daemon skill's file, and the description its frontmatter declares; null when unreadable. */
+/** One of `DAEMON_OWN_SKILLS`: its file, and the description its frontmatter declares; null when unreadable. */
 export function readDaemonSkill(
   extensionDir: string,
+  name: string,
   read: (path: string) => string = (path) => readFileSync(path, "utf-8"),
 ): DaemonSkill | null {
-  const baseDir = daemonSkillDir(extensionDir);
+  const baseDir = daemonSkillDir(extensionDir, name);
   const filePath = join(baseDir, "SKILL.md");
   try {
     const frontmatter = /^---\n([\s\S]*?)\n---/.exec(read(filePath));
@@ -109,6 +127,19 @@ export function readDaemonSkill(
   } catch {
     return null;
   }
+}
+
+/** Every readable one of `DAEMON_OWN_SKILLS`, by name. */
+export function readDaemonSkills(
+  extensionDir: string,
+  read?: (path: string) => string,
+): ReadonlyMap<string, DaemonSkill> {
+  const skills = new Map<string, DaemonSkill>();
+  for (const name of DAEMON_OWN_SKILLS) {
+    const skill = readDaemonSkill(extensionDir, name, read);
+    if (skill) skills.set(name, skill);
+  }
+  return skills;
 }
 
 function samePath(a: string, b: string): boolean {
@@ -122,25 +153,31 @@ function samePath(a: string, b: string): boolean {
 
 /**
  * The prompt's skills with this package's narrowed to `DAEMON_PROFILE_SKILLS`,
- * `probe` the daemon's, and every other skill (the researcher's own
- * `~/.pi/agent/skills`, a project's, another package's) kept as it was.
+ * each of `DAEMON_OWN_SKILLS` the daemon's, and every other skill (the
+ * researcher's own `~/.pi/agent/skills`, a project's, another package's) kept
+ * as it was.
  *
  * pi keeps the FIRST skill of a name (`skills.js`'s `loadSkills`) and loads an
  * extension's `resources_discover` paths after every package's, so wherever
  * this package's full `skills/probe` is loaded (a project entry with every
  * skill), it wins over `daemon-skills/probe` -- and that one tells the agent it
- * records. Its entry is pointed at the daemon's file instead, so the skill the
- * model is told to read is the daemon's. New objects: pi's own list is not
+ * records (`skills/visualize-progress` names MCP reads it does not have). Such
+ * an entry is pointed at the daemon's file instead, so the skill the model is
+ * told to read is the daemon's; with no readable daemon file it is dropped,
+ * never listed as the agent profile's. New objects: pi's own list is not
  * edited in place.
  */
-export function leanSkills<T extends PromptSkill>(skills: readonly T[], daemonSkill: DaemonSkill | null): T[] {
+export function leanSkills<T extends PromptSkill>(
+  skills: readonly T[],
+  daemonSkills: ReadonlyMap<string, DaemonSkill>,
+): T[] {
   return skills
     .filter((skill) => !PACKAGE_SKILLS.has(skill.name) || DAEMON_PROFILE_SKILLS.has(skill.name))
-    .map((skill) =>
-      skill.name === DAEMON_PROBE_SKILL && daemonSkill && !samePath(skill.filePath, daemonSkill.filePath)
-        ? { ...skill, ...daemonSkill }
-        : skill,
-    );
+    .filter((skill) => !DAEMON_OWN_SKILLS.includes(skill.name) || daemonSkills.has(skill.name))
+    .map((skill) => {
+      const own = daemonSkills.get(skill.name);
+      return own && !samePath(skill.filePath, own.filePath) ? { ...skill, ...own } : skill;
+    });
 }
 
 /**

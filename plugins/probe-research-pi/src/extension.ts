@@ -44,7 +44,7 @@ import {
   type DaemonNoticeDeps,
   type DaemonStatusValue,
 } from "./core/daemonNotice.js";
-import { daemonSkillPaths, isProbeMcpTool, leanSkills, readDaemonSkill, researcherDaemonNotice, withoutPackageSkills } from "./profile.js";
+import { daemonSkillPaths, isProbeMcpTool, leanSkills, readDaemonSkills, researcherDaemonNotice, withoutPackageSkills } from "./profile.js";
 import { trackingOff } from "./trackingSetting.js";
 import {
   initializeTrackingState,
@@ -482,8 +482,8 @@ export function agentSessionEnv(): readonly string[] {
 }
 
 export function registerExtension(pi: ExtensionAPI, extensionDir: string): void {
-  // Read once: the file ships with the package and only changes with it.
-  const daemonSkill = readDaemonSkill(extensionDir);
+  // Read once: the files ship with the package and only change with it.
+  const daemonSkills = readDaemonSkills(extensionDir);
 
   /**
    * Start capture (the tap watcher, which starts the daemon) for one session:
@@ -798,7 +798,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       // recorder, the state is this session's. Trimmed BEFORE the prompt is
       // read below: `event.systemPrompt` renders from these options.
       if (event.systemPromptOptions?.skills) {
-        event.systemPromptOptions.skills = leanSkills(event.systemPromptOptions.skills, daemonSkill);
+        event.systemPromptOptions.skills = leanSkills(event.systemPromptOptions.skills, daemonSkills);
       }
       deactivateProbeTools(pi);
     }

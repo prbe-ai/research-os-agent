@@ -234,9 +234,9 @@ When `probe wizard` sets Who records to the daemon for pi, the CLI reports
 start, resume and `/reload`). The extension then narrows itself to what Claude
 Code's lean `probe-research-daemon` plugin offers:
 
-- the prompt lists only `instrument-code`, `plan-research-review` and the daemon's `probe` skill
-  (`daemon-skills/probe`, a byte copy of the lean plugin's, added through
-  `resources_discover` and never named in `package.json`);
+- the prompt lists only `instrument-code`, `plan-research-review` and the daemon's own `probe`
+  and `visualize-progress` skills (`daemon-skills/<name>`, byte copies of the lean plugin's,
+  added through `resources_discover` and never named in `package.json`);
 - no Probe MCP tools: the bridge stays off and pi-mcp-adapter's Probe tools are
   deactivated (the daemon reads, through `probe ask`);
 - the agent is told nothing about the daemon; when the daemon stops recording,

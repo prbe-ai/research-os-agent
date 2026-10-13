@@ -1173,7 +1173,7 @@ describe("registerExtension — the daemon profile", () => {
     expect(activeTools()).toEqual(["read", "bash"]);
   });
 
-  it("adds the daemon's probe skill and plan-research-review through resources_discover, and only in the daemon profile", async () => {
+  it("adds the daemon's own skills and plan-research-review through resources_discover, and only in the daemon profile", async () => {
     installProbeCli();
     cliReports({ state: "daemon", profile: "daemon" });
     const { api, handlers } = fakeExtensionAPI();
@@ -1186,6 +1186,7 @@ describe("registerExtension — the daemon profile", () => {
     };
     expect(discovered.skillPaths).toEqual([
       join(PACKAGE_ROOT, "daemon-skills", "probe"),
+      join(PACKAGE_ROOT, "daemon-skills", "visualize-progress"),
       join(PACKAGE_ROOT, "skills", "plan-research-review"),
     ]);
     for (const path of discovered.skillPaths) expect(existsSync(join(path, "SKILL.md"))).toBe(true);
@@ -1198,7 +1199,7 @@ describe("registerExtension — the daemon profile", () => {
     expect(await handlers.get("resources_discover")!({ type: "resources_discover", cwd: "/repo", reason: "startup" }, agentCtx)).toBeUndefined();
   });
 
-  it("lists only the lean skills, with the daemon's probe, and tells the model nothing about the daemon", async () => {
+  it("lists only the lean skills, with the daemon's own, and tells the model nothing about the daemon", async () => {
     const { DAEMON_CONTEXT } = await import("../src/core/daemonNotice.js");
     installProbeCli();
     const config = join(tmp, "config.json");
@@ -1218,8 +1219,10 @@ describe("registerExtension — the daemon profile", () => {
     }
 
     const lean = results[0].event.systemPromptOptions.skills;
-    expect(lean.map((skill) => skill.name).sort()).toEqual(["instrument-code", "plan-research-review", "probe"]);
-    expect(lean.find((skill) => skill.name === "probe")!.filePath).toBe(join(PACKAGE_ROOT, "daemon-skills", "probe", "SKILL.md"));
+    expect(lean.map((skill) => skill.name).sort()).toEqual(["instrument-code", "plan-research-review", "probe", "visualize-progress"]);
+    for (const name of ["probe", "visualize-progress"]) {
+      expect(lean.find((skill) => skill.name === name)!.filePath).toBe(join(PACKAGE_ROOT, "daemon-skills", name, "SKILL.md"));
+    }
     for (const { result } of results) {
       expect(result?.systemPrompt ?? "").not.toContain(DAEMON_CONTEXT);
       expect(result?.message).toBeUndefined();

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`visualize-progress` in the daemon profile.** The STATUS block and ASCII research timeline now work when the Probe daemon records: the lean plugin (Claude Code, Codex, Kimi) and pi's daemon profile ship a daemon copy of the skill that gets its facts from one `probe ask --wait` and `probe session status`, since the agent there cannot read Probe itself. The drawing is the same doctrine, held to the canonical skill by `tests/test_visualize_progress_daemon.py`; a run's captured inputs, which no read reaches in this profile, draw as `?`, and the local upload queue is left out.
+
 ## 0.245.2
 
 - **`plan-research-review` logs every run to Probe.** A project already on W&B (or TensorBoard, MLflow) used to keep it, read as code to reuse; the plan and its implementation contract now replace it with Probe (`instrument-code`), without asking.
