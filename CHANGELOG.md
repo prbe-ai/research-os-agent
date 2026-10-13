@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.246.0
+
 - **`visualize-progress` in the daemon profile.** The STATUS block and ASCII research timeline now work when the Probe daemon records: the lean plugin (Claude Code, Codex, Kimi) and pi's daemon profile ship a daemon copy of the skill that gets its facts from one `probe ask --wait` and `probe session status`, since the agent there cannot read Probe itself. The drawing is the same doctrine, held to the canonical skill by `tests/test_visualize_progress_daemon.py`; a run's captured inputs, which no read reaches in this profile, draw as `?`, and the local upload queue is left out.
 - **The daemon's writer ends a run in the same model response as its last writes.** pydantic-ai already runs the commands that come before `final_result` in one response, but nothing told the writer it could, so every run paid one more model round, re-reading the whole conversation, only to end (about 30% of writer spend on strand-ai, 2026-10-12). `record_session.md` now says so. A write in that ending response that did not land (a nonzero exit, a pre-check block, a refusal, a write skipped after `&&` because the part before it failed, a tool that raised; not a question to the researcher or a lost lease) cancels the end, and the writer is shown what the command answered. On the tool's last retry the end goes through, and the next run's open-failures list still carries the write.
 - **`edit-notes` names `probe notes append` and `probe notes edit` for adding or changing one paragraph.** Each is one command that reads the note on the server. Checkout and push stay for restructuring a note. This applies to the main agent, the daemon, Codex and pi.
