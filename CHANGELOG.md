@@ -2,10 +2,11 @@
 
 ## Unreleased
 
+- **Capy setup is one step.** The installer's last page, `probe capy setup` and `probe wizard --action manual` now say: in Capy, Settings > MCP & plugins > Add > From GitHub repository, paste `https://github.com/prbe-ai/research-os-agent/tree/main/capy`, choose Only me, Add plugin, then Connect. The plugin carries Probe's MCP server and the skills, so the separate MCP server, `npx skills add` and AGENTS.md steps are gone (Capy shows every skill's description to the agent). Its server now asks Capy for one sign-in per member (`connection: member`), and its bundle ships `audit-team-note` instead of the `notes-audit` stub. A self-hosted Probe, whose MCP server is not the plugin's, still gets the server and skills steps.
+
 ## 0.246.2
 
 - **An auto-update no longer reports Probe removed from a machine.** Update runs once for each coding agent on the machine, and the server keeps one record per machine. Each pass used to send only its own agent's capabilities, so on a machine with Session capture in one agent and not another, every update reported capture `absent` and then `installed` a few seconds later. Each `absent` posted a false "Probe removed from a machine" to #probe-usage: all 3 of one customer's removal pings from 2026-10-02 to 10-13, and 37 of 444 across all machines in 30 days. Update and Settings now send one report after the last agent. Install's final report works the same way. A capability counts as installed when any agent in the run has it, and only each agent's latest state counts. An agent whose step did not finish can make a field `unknown`, never `absent`. An Update that stops with an error sends nothing, so the record keeps its last state. A run that names one agent (`--agent codex`) still reports that agent alone.
-- **Capy setup is one step.** The installer's last page, `probe capy setup` and `probe wizard --action manual` now say: in Capy, Settings > MCP & plugins > Add > From GitHub repository, paste `https://github.com/prbe-ai/research-os-agent/tree/main/capy`, choose Only me, Add plugin, then Connect. The plugin carries Probe's MCP server and the skills, so the separate MCP server, `npx skills add` and AGENTS.md steps are gone (Capy shows every skill's description to the agent). Its server now asks Capy for one sign-in per member (`connection: member`), and its bundle ships `audit-team-note` instead of the `notes-audit` stub. A self-hosted Probe, whose MCP server is not the plugin's, still gets the server and skills steps.
 
 ## 0.246.1
 
