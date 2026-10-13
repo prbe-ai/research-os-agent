@@ -921,6 +921,42 @@ describe("registerExtension — team note", () => {
     expect(sendMessage.mock.calls[0][0].content).toContain("66.8%");
   });
 
+  it("starts a turn for a run alert that lands while pi is idle", async () => {
+    // A run alert is the daemon's own message, yet it wakes an idle pi like an
+    // answer: the 2 s poller hands it over with triggerTurn.
+    const { api, handlers } = fakeExtensionAPI();
+    const sendMessage = vi.fn();
+    (api as unknown as { sendMessage: typeof sendMessage }).sendMessage = sendMessage;
+    registerExtension(api as never, tmp);
+    const sessionId = uniqueSessionId("idle-alert");
+    const ctx = { ...fakeContext({ sessionId, sessionFile: undefined }), isIdle: () => true };
+    const reads = join(paths.probeStateDir(process.env), "reads");
+    mkdirSync(join(reads, "status"), { recursive: true });
+    writeFileSync(join(reads, "status", `${sessionId}.json`), JSON.stringify({ state: "ok", reason: "", since: 1 }));
+    mkdirSync(join(reads, "messages", sessionId), { recursive: true });
+    writeFileSync(
+      join(reads, "messages", sessionId, `${"1".padStart(20, "0")}-r0123456789ab.json`),
+      JSON.stringify({
+        id: "r0123456789ab", session: sessionId, kind: "alert", ask: null, question: null, reason: null,
+        text: "digits-svm (digits-svm-7) crashed at step 900 after 2h 10m: OutOfMemoryError.",
+        made_at: 1, expires_at: Date.now() / 1000 + 3600, keep: true, alerts: [7],
+      }),
+    );
+    vi.useFakeTimers();
+    try {
+      await handlers.get("agent_settled")!({}, ctx);
+      await vi.advanceTimersByTimeAsync(2_500);
+    } finally {
+      vi.useRealTimers();
+      await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+    }
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0][0].content).toBe(
+      "[Probe] Run alert\ndigits-svm (digits-svm-7) crashed at step 900 after 2h 10m: OutOfMemoryError.",
+    );
+    expect(sendMessage.mock.calls[0][1]).toEqual({ deliverAs: "steer", triggerTurn: true });
+  });
+
   it("never registers a turn_end handler -- only agent_settled can trigger a sync", () => {
     const { api, handlers } = fakeExtensionAPI();
     registerExtension(api as never, tmp);

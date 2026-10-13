@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Agents hear about their runs' alerts.** In the daemon profile, when a run the session launched or wrote to crashes, is still running with a flagged metric, or was flagged and then stopped, the agent gets a `[Probe] Run alert` message naming the run and what happened: the same alerts, and the same gates, as the alert email. The daemon asks Probe every 30 seconds (in `on` and `read only`), sends each alert once, and puts a batch in one message (ten runs listed, then "and N more runs."). An idle Claude Code or pi session wakes for it; Codex and Kimi get it at their next prompt or tool call. An undelivered alert waits 12 hours. Claude Code's Stop hook now also waits while the daemon serves the session, for up to 7 days, and stops at the next prompt or once the session's daemon is gone. Until the server serves the alerts, the daemon finds nothing and stays quiet.
+
 ## 0.247.3
 
 - **The Capy install can open Capy on the plugin's Add box.** On a Mac with the Capy app and the hosted Probe (not over SSH), the installer's last page offers **Open Capy >**, which opens `capy://app/settings/mcp?github=…` (the plugin URL percent-encoded; Capy ignores a raw one) so the step is Continue, Only me, Add plugin, Connect. It opens only when chosen, after the step is on screen: Capy's box defaults to Organization, which signs every teammate in as you. Windows is left out until its deep links are checked. The plugin manifest no longer sets `connection: member`, which Capy ignores.

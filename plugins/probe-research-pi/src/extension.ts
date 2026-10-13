@@ -170,9 +170,10 @@ let cachedProbeConfigContext: string | null = null;
 let pendingParentAsk: string | null = null;
 
 // DAEMON READS (reads.ts): the daemon's reader answers `probe ask` and sends
-// team context; pi gets it at each prompt and, between prompts, from a 2 s
-// poller that steers an answer into a running agent or starts a turn for one
-// that lands while pi is idle (pi's analogue of Claude Code's Stop wake). The
+// team context, and the worker's run-alert poller sends run alerts; pi gets
+// them at each prompt and, between prompts, from a 2 s poller that steers an
+// answer or a run alert into a running agent or starts a turn for one that
+// lands while pi is idle (pi's analogue of Claude Code's Stop wake). The
 // same poller asks the daemon's held questions (approvals.ts).
 const READS_POLL_MS = 2000;
 let readsCtx: { ctx: any; timer: ReturnType<typeof setInterval> } | null = null;
@@ -250,8 +251,9 @@ function startReadsPoller(pi: ExtensionAPI, ctx: any): void {
       const box = mailboxFor(sid);
       if (!box.served()) return;
       const idle = typeof live.isIdle === "function" ? live.isIdle() : true;
-      // Idle: answers only, and they start a turn. Running: one unasked
-      // message per turn too, steered in after the current tool calls.
+      // Idle: answers and run alerts only, and they start a turn. Running:
+      // one unasked message per turn too, steered in after the current tool
+      // calls.
       const texts = box.deliver(box.currentTurn(), "pi poller", !idle);
       if (texts.length) {
         if (idle) box.markWoke(); // the turn this starts is the same turn going on
