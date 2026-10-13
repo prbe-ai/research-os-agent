@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.247.0
+
 - **Agents can send the Probe team feedback about Probe, with the researcher's yes.** `probe feedback send "<text>"` (at most 1,000 characters) is open to every coding agent, the daemon's writer, and the daemon's reader through a new `feedback` tool. Nothing is sent until the researcher says yes. The text becomes a question on the approvals board (policy `feedback.send`): Claude Code and Kimi ask it with their question tool, pi in its own dialog, and on Codex the researcher answers with `probe approvals`. It is asked in every permission mode, bypass included (the one exception to "bypass means bypass"), and is refused under `off` and where there is no session to ask in (Capy). The question shows the whole text, after credentials are redacted, and says what else is sent: the researcher's name and team, the coding agent, the CLI version and the session id. One feedback question waits per session at a time. Hidden characters (control codes, bidi overrides) are removed first, so a terminal or dialog cannot hide part of it. A yes starts `probe feedback flush`, which sends it with the researcher's own credential for the account it was asked under (`POST /v1/feedback`, keyed so it lands once); a send that fails for now (offline, a server without the route yet) stays unsent, and session start runs the flush again when a yes is unsent, pi included. The daemon leaves these questions alone and keeps their text out of its writer's prompt. The dashboard assistant's direct send is accepted only from its own turn credential. Both CLAUDE.md blocks (pointer 43), the writer's and the reader's instructions gain one FEEDBACK line.
 
 ## 0.246.3
