@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.245.0
+
 ## 0.244.1
 
 - **A daemon that lost its AI libraries gets them back, and its session gets its daemon back.** A bare `uv tool install --force probe-research` drops the `daemon` extra. Updates used to restate `[all]` alone after that, because they only asked whether the libraries were importable. Updates of a uv or pipx tool install now also keep `daemon` when the daemon records for any coding agent on the machine. A pip install gets them only from `probe daemon install`. The update that installs this release runs the previous release's code, so a stripped install heals on the update after it, or at once with `probe daemon install`. A worker that finds the libraries missing now tells capture plugin 0.9.19 to try again in 5 minutes. Older capture plugins stopped for good until the switch moved. The missing-libraries line reaches `daemon-errors.log` once an hour per session, and a half-installed extra (`pydantic_ai` without `pydantic_ai_harness`) takes that path instead of crashing later. A session already stranded on an older capture plugin still needs `/probe read` then `/probe on` (or a restart) to start its daemon again.
