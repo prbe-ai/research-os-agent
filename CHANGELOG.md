@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **The daemon's writer no longer misses the first [Probe] message after the reader's mailbox is swept.** The claim log is deleted after a week idle and made again by the next claim; the new file often gets the old inode number back, so the writer read it from the old cursor and skipped its first message(s). It now compares the bytes just before its cursor, as it does for the chat log, and reads a new log from the start.
+
+- **Kimi Code can ask Probe's questions again.** Plugin 0.142.1's answer hook allowed only Claude Code's spelling of a question's fields (`multiSelect`), so every Probe question put through Kimi's question tool (`multi_select`) was refused. Both spellings pass now.
+
 ## 0.247.1
 
 - **Only the researcher answers a Probe question, and only as asked.** A shell that carries a coding agent's session (a pseudo-terminal included) lists `probe approvals` but answers nothing; the answer hook refuses a question whose options carry any description but their own label; `PROBE_DAEMON_SESSION` in an agent's own shell no longer makes its feedback read as the daemon's; and a yes that a daemon from before 0.247.0 voided is still sent. The note-audit hook now finds `probe` the way the other hooks do (`PROBE_BIN` first).

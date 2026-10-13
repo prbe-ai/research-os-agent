@@ -79,7 +79,9 @@ def _shim() -> dict:
     return {"question_tool": harness.question_tool, "inject": harness.can("prompt_context")}
 HEADER_PREFIX = "Probe "
 #: All a Probe question may carry: no description line under it, nothing else.
-QUESTION_FIELDS = frozenset({"header", "question", "options", "multiSelect"})
+#: Claude Code spells the flag `multiSelect`, Kimi Code `multi_select`
+#: (agent/tests/fixtures/kimi_code/hook_payloads/tui-ask-PreToolUse.json).
+QUESTION_FIELDS = frozenset({"header", "question", "options", "multiSelect", "multi_select"})
 #: `probe.daemon.approvals.FEEDBACK`: the policy whose yes this hook sends itself.
 FEEDBACK_POLICY = "feedback.send"
 
@@ -266,7 +268,9 @@ def on_pre_question(payload: dict) -> None:
             return
         want = req["question"]
         if (q.get("question") != want["question"] or _labels(q) != [want["yes_label"], want["no_label"]]
-                or not _plain_options(q) or set(q) - QUESTION_FIELDS or tool_input.get("title")):
+                or not _plain_options(q) or set(q) - QUESTION_FIELDS or tool_input.get("title")
+                # Kimi's `background` returns a task id, never the pick: the answer would go unrecorded.
+                or tool_input.get("background")):
             _emit({"hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
                 "permissionDecision": "deny",
