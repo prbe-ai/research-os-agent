@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.245.2
+
 - **`plan-research-review` logs every run to Probe.** A project already on W&B (or TensorBoard, MLflow) used to keep it, read as code to reuse; the plan and its implementation contract now replace it with Probe (`instrument-code`), without asking.
 
 ## 0.245.1
