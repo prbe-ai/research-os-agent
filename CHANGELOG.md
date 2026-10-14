@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Shorter, simpler daemon prompts so notes stay short: `edit-notes` makes every write an in-place, top-down update (what this is, then the latest or most important thing) instead of a new section per event; `track-work` is ~60% shorter and leads every human-facing write with the most recent or most important thing; the writer no longer records every caveat the main agent states, and the main agent's Probe block drops "Say your caveats ... the daemon records what you state" (`POINTER_VERSION` 45).
+
 ## 0.251.0
 
 - **Runs launched together to compare settings get an experiment, even when nobody wrote the question down.** track-work's "No question, no experiment" was read literally: one session filed six SFT arms of one base run project-direct, one by one. Note 2 of section 2 now reads: arms, variants and branches of one run answer one question even if nobody wrote it down, so the writer creates the experiment with that question and files them in it; with no such question it still opens a project-direct run. A `run move` that files a branch of a run outside any experiment now adds one fact line when two or more branches of that run sit that way (`N runs branch from <run>; none is in an experiment`), from the writer's own logbook (Richard's approved text). The replay bench tied main on this (writer-filing-a/-b, 100% vs 100%); shipped on Richard's call (10-14).
