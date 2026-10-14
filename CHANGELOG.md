@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.252.1
+
 - **The daemon's reader never stops to summarize its history; it starts fresh instead.** When a turn's new events would take the reader's kept conversation past its size (120K tokens), the reader used to make a summary call before the turn's first step. On gpt-6.1-sol that call took 140-310 s, inside the turn's 420 s limit, so one failed attempt and a retry cut the turn with nothing read (strand-ai, 2026-10-14: "reader turn stopped: 420 seconds", twice in 15 minutes). That turn now starts the conversation fresh, told what the reader already sent, the same as rule A already did when a turn ended over the size. The reader has no compaction step at all; instead a turn ends once a round's request reaches 180K tokens (or 1,800 messages), so it can never grow into the model route's 260K ceiling and lose its whole turn. A conversation an older CLI compacted starts fresh once. The writer still compacts.
 
 ## 0.252.0
