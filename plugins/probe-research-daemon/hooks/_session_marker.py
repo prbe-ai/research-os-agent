@@ -1116,6 +1116,11 @@ WRITE_GROUPS = frozenset(
         # write gate and the daemon profile's guard both let it through (live
         # T13 on the released 0.111.2 plugin, 2026-09-29).
         "version",
+        # The data catalog (data-catalog C5): `source add`, `dataset add|use`
+        # and `checkpoint use` record; `list`, `show` and `download` read.
+        "source",
+        "dataset",
+        "checkpoint",
     }
 )
 
@@ -1220,7 +1225,7 @@ HELP_FLAG = "--help"
 
 #: Groups whose whole job is READING research content. Refused only under `off`.
 READ_GROUPS = frozenset(
-    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared"}
+    {"metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance"}
 )
 
 #: WHAT THE AGENT STILL WRITES IN THE `daemon` STATE, without `--directed`: the

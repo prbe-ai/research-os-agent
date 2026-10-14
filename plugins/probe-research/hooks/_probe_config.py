@@ -6,7 +6,18 @@ A `.probe.config` in any folder sets a LEVEL for paths under that folder:
   opened there, no artifact or note about them, no daemon event;
 - `read`: the Probe daemon may see the agent's work on them, as context; Probe
   records nothing about them (to the SDK, the CLI and the agent this is `off`);
+- `hash`: the SDK records each file's IDENTITY and nothing else -- its path,
+  sha256 (or the >1 GiB fingerprint), size and row count -- so a step over the
+  data still opens a run (metrics, config, these identities) and its arrows
+  appear; never bytes, previews, uploads, output capture or text from the
+  file. Below 64 bytes not even the hash. To the daemon this is `off`;
 - `on`: recorded as usual (what `!pattern` means).
+
+`read` and `hash` do not combine: one path has one winning level, and where
+two verdicts meet (a symlink and its target) one at `read` and one at `hash`
+make `off`. The guarantee is about what Probe RECORDS: text an agent prints
+into its own session transcript still uploads with the transcript, as under
+`off`. A client from before `hash` existed reads it as `off`.
 
 A plain line is `off`. `@probe <level>` on a line of its own sets the level of
 the lines after it (written first, it is the file's default), and
@@ -22,8 +33,9 @@ applies them:
   it is looked at (its own `.probe.config` included) and no line turns
   anything inside it back on. `secret/*` closes nothing, so
   `secret/important.txt @probe on` after it works;
-- a folder at `read` or `on` stays open: what is inside it takes the folder's
-  level unless a line matches it directly;
+- a folder at `read`, `hash` or `on` stays open: what is inside it takes the
+  folder's level unless a line matches it directly; a deeper `.probe.config`
+  inside a `read` or `hash` folder may narrow it to `off`, never loosen it;
 - `/` anchors, a trailing `/` matches folders only, `**` spans folders.
 
 One deliberate difference from git: files ABOVE a repository root count too,
@@ -75,13 +87,22 @@ PARENT_SUFFIX = ".parent-config"
 #: Where a session started, beside its state file (written once, at seed).
 LAUNCH_SUFFIX = ".launch-dir"
 
-#: The levels, least restrictive first. `on` is recorded; `read` and `off` are
-#: not recorded (`Verdict.excluded`); `off` is not even read (`Verdict.hidden`).
+#: The levels, least restrictive first. `on` is recorded; `read`, `hash` and
+#: `off` are not recorded as usual (`Verdict.excluded`): `hash` records only a
+#: file's identity (`Verdict.identity_only`), and `off` is not even read
+#: (`Verdict.hidden`). `read` and `hash` are not ordered against each other
+#: (`read` lets the daemon see, `hash` lets the SDK record identity): where both
+#: meet, the answer is `off` (`stricter`). The rank orders the rest, and makes
+#: `read` the looser of the two where only a loosest is asked (`check_cwd`).
 ON = "on"
 READ = "read"
+HASH = "hash"
 OFF = "off"
-LEVELS = (ON, READ, OFF)
-_RANK = {ON: 0, READ: 1, OFF: 2}
+LEVELS = (ON, READ, HASH, OFF)
+_RANK = {ON: 0, READ: 1, HASH: 2, OFF: 3}
+#: The levels inside which a deeper `.probe.config` may narrow (to `off`) but
+#: never loosen (`_ceiling`).
+_CEILINGS = (READ, HASH)
 #: The word that sets a level: `@probe <level>` alone on a line sets the lines
 #: after it, `<pattern> @probe <level>` one line.
 LEVEL_WORD = "@probe"
@@ -106,6 +127,10 @@ SCAN_SKIP_DIRS = frozenset(
 
 # What the SDK and CLI print (agent-facing refusals live in session_marker).
 INIT_EXCLUDED = "probe: `{path}` is excluded by `{source}`, so no run was opened. The script runs as usual."
+INIT_HASH_ONLY = (
+    "probe: `{path}` is at `hash` by `{source}`: the run records metrics, config and the identity "
+    "(path, hash, size, rows) of the files it reads and writes there, never their contents or its console log."
+)
 ARTIFACT_EXCLUDED = "probe: `{path}` is excluded by `{source}`, so it was not uploaded."
 FOLDER_DEFAULT_RETIRED = (
     "Folder defaults are retired. List paths Probe should never record in a `.probe.config` "
@@ -386,7 +411,7 @@ def _extends(pat: tuple, path: tuple[str, ...]) -> bool:
 
 
 def level_of(word: str) -> str | None:
-    """`on` / `read` / `off` from a level word (any case), else None."""
+    """`on` / `read` / `hash` / `off` from a level word (any case), else None."""
     low = word.lower()
     return low if low in _RANK else None
 
@@ -450,7 +475,7 @@ def _parse(raw: str, base: str, source: str, line: int, default: str = OFF) -> t
     if word is not None:
         level = level_of(word) or OFF
         if level_of(word) is None:
-            note = f"`{word}` is not a level (on, read, off), so the line counts as `off`."
+            note = f"`{word}` is not a level (on, read, hash, off), so the line counts as `off`."
     text = _trim_trailing_spaces(text)
     if not text:
         return None, None
@@ -712,7 +737,7 @@ def _load_unlocked(folder: str, ttl: float) -> _Loaded | None:
                     default = level_of(word) or OFF
                     if level_of(word) is None:
                         warnings.append(
-                            f"`{path}:{number}`: `{word}` is not a level (on, read, off), so the lines "
+                            f"`{path}:{number}`: `{word}` is not a level (on, read, hash, off), so the lines "
                             "after it count as `off`."
                         )
                     continue
@@ -749,7 +774,8 @@ def _stamp(folder: str, at: float) -> None:
 
 @dataclass(frozen=True)
 class Verdict:
-    #: Probe records nothing about the path (`read` or `off`).
+    #: Probe records nothing about the path as usual (`read`, `hash` or `off`);
+    #: at `hash` the SDK still records its identity (`identity_only`).
     excluded: bool
     rule: Rule | None = None
     #: The path the verdict was reached on (a closed parent folder, or the path).
@@ -765,6 +791,17 @@ class Verdict:
         """Probe never even reads the path (`off`)."""
         return self.level == OFF
 
+    @property
+    def identity_only(self) -> bool:
+        """The SDK records the path's identity and nothing else (`hash`): path,
+        sha256 or fingerprint, size and row count; never bytes or text."""
+        return self.level == HASH
+
+    @property
+    def daemon_hidden(self) -> bool:
+        """The daemon treats the path as `off`: `off` itself, and `hash`."""
+        return self.level in (OFF, HASH)
+
 
 NOT_EXCLUDED = Verdict(False)
 #: What a check that broke answers: `off` (fail closed, as for an unreadable file).
@@ -777,8 +814,20 @@ def _verdict(rule: Rule | None, at: str) -> Verdict:
     return Verdict(True, rule, at, rule.level)
 
 
+def daemon_view(verdict: Verdict) -> Verdict:
+    """A verdict as the Probe daemon applies it: `hash` is `off` to the daemon
+    (it never sees the path); every other level is itself."""
+    if verdict.level == HASH:
+        return Verdict(True, verdict.rule, verdict.at, OFF)
+    return verdict
+
+
 def stricter(a: Verdict, b: Verdict) -> Verdict:
-    """The more restrictive of two verdicts (`a` on a tie)."""
+    """The more restrictive of two verdicts (`a` on a tie). `read` and `hash`
+    each allow what the other withholds, so where they meet the answer is
+    `off`: never looser than either."""
+    if a.level != b.level and {a.level, b.level} == {READ, HASH}:
+        return Verdict(True, a.rule, a.at, OFF)
     return b if _RANK[b.level] > _RANK[a.level] else a
 
 
@@ -919,13 +968,14 @@ class _Walk:
 
 
 def _ceiling(rule: Rule | None, parent: _Frame) -> Rule | None:
-    """A `read` folder is a ceiling for the files inside it: a deeper
-    `.probe.config` (one in the `read` folder or below it) may narrow it to
-    `off` but never turn it back `on`. Lines of the file that set `read` may
-    (`notebooks/ @probe read` then `notebooks/public.md @probe on`). A loosening
-    line from a deeper file is replaced by the `read` rule it would override."""
+    """A `read` or `hash` folder is a ceiling for the files inside it: a deeper
+    `.probe.config` (one in that folder or below it) may narrow it to `off` but
+    never set another level (`on`, or `hash` under `read` and `read` under
+    `hash`, each of which lets something see more). Lines of the file that set
+    the level may (`notebooks/ @probe read` then `notebooks/public.md @probe on`).
+    Such a line from a deeper file is replaced by the rule it would override."""
     held = parent.inherited
-    if rule is None or held is None or held.level != READ or rule.level != ON:
+    if rule is None or held is None or held.level not in _CEILINGS or rule.level in (OFF, held.level):
         return rule
     if rule.base != held.base and (rule.base == parent.inherited_at or _is_strict_ancestor(parent.inherited_at, rule.base)):
         return held
@@ -995,9 +1045,12 @@ class Checker:
         legacy: bool = False,
         ttl: float = 0.0,
         resolve: bool = True,
+        daemon: bool = False,
     ) -> None:
         self.cwd = cwd
         self.resolve = resolve
+        #: Answer as the daemon applies them (`daemon_view`: `hash` is `off`).
+        self.daemon = daemon
         self._walk = _Walk(frozenset(skip or ()), legacy, ttl)
         self._given: list = []
         self._real: list = []
@@ -1018,6 +1071,10 @@ class Checker:
         return os.path.realpath(joined) if os.path.islink(joined) else joined
 
     def check(self, path: str | os.PathLike, *, is_dir: bool | None = None) -> Verdict:
+        verdict = self._check(path, is_dir=is_dir)
+        return daemon_view(verdict) if self.daemon else verdict
+
+    def _check(self, path: str | os.PathLike, *, is_dir: bool | None = None) -> Verdict:
         try:
             raw = os.fspath(path)
             if raw.startswith("~"):
@@ -1198,10 +1255,11 @@ def off_inside(
     budget_s: float = 1.0,
     max_entries: int = 1_000_000,
 ) -> bool:
-    """Is `folder`, or anything below it, at `off`? For a command that reads a
-    whole tree (`rg`, `find`, `grep -r`, `git diff`): its output cannot be
-    trusted to name every file it read, so such a command is refused, or its
-    event dropped, when this is True. Skips what a search skips by default
+    """Is `folder`, or anything below it, at `off` -- or `hash`, which the
+    daemon treats as `off` (the daemon's question: its only caller)? For a
+    command that reads a whole tree (`rg`, `find`, `grep -r`, `git diff`): its
+    output cannot be trusted to name every file it read, so such a command is
+    refused, or its event dropped, when this is True. Skips what a search skips by default
     (hidden folders, `SCAN_SKIP_DIRS`). Exact when it finishes; True (fail
     closed) when it cannot finish in `budget_s` or `max_entries`. Never raises.
 
@@ -1220,7 +1278,7 @@ def off_inside(
 
 def _off_inside_one(full: str, skip, legacy: bool, ttl: float, budget_s: float, max_entries: int) -> bool:
     """`off_inside` for one spelling of the folder."""
-    checker = Checker(skip=skip, legacy=legacy, ttl=ttl)
+    checker = Checker(skip=skip, legacy=legacy, ttl=ttl, daemon=True)
     if checker.check(full, is_dir=True).hidden:
         return True
     deadline = time.monotonic() + budget_s
@@ -1228,7 +1286,7 @@ def _off_inside_one(full: str, skip, legacy: bool, ttl: float, budget_s: float, 
     checker._walk.one(stack, os.path.join(full, "x"), False)
     frame = stack[-1] if stack else None
     reaches = frame is not None and any(
-        rule.level == OFF and (legacy or not rule.legacy) and rule.could_reach(_rel(full, base))
+        rule.level in (OFF, HASH) and (legacy or not rule.legacy) and rule.could_reach(_rel(full, base))
         for base, rules in frame.layers
         for rule in rules
     )
@@ -1471,6 +1529,10 @@ def session_check(
 # ---------------------------------------------------------------------------
 
 
+#: Beside a `hash` place in a summary: Probe records only its files' identity.
+HASH_ONLY_SUFFIX = " (hash only: identity, never content)"
+
+
 @dataclass
 class Summary:
     entries: list[str] = field(default_factory=list)
@@ -1516,7 +1578,7 @@ def summarize(
     def add(rule: Rule) -> None:
         if rule.level == ON:
             return
-        text = describe_rule(rule)
+        text = describe_rule(rule) + (HASH_ONLY_SUFFIX if rule.level == HASH else "")
         if text in seen:
             return
         if len(out.entries) >= max_entries:
@@ -1528,7 +1590,7 @@ def summarize(
     skipped = frozenset(skip or ())
     verdict = check_cwd(start, skip=skipped, legacy=legacy)
     if verdict.excluded and verdict.rule is not None:
-        out.entries.append(f"this folder ({_display(start)})")
+        out.entries.append(f"this folder ({_display(start)})" + (HASH_ONLY_SUFFIX if verdict.identity_only else ""))
         seen.add(out.entries[-1])
     for parent in parents_reaching(start):
         if parent.folder in skipped:

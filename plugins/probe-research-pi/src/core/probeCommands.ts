@@ -42,6 +42,9 @@ export const WRITE_GROUPS: ReadonlySet<string> = new Set([
   "paper",
   "wandb",
   "version",
+  "source",
+  "dataset",
+  "checkpoint",
 ]);
 
 /** `session_marker.SUBGROUPS`. */
@@ -127,7 +130,7 @@ export const ProbeKind = {
 export type ProbeKindValue = (typeof ProbeKind)[keyof typeof ProbeKind];
 
 /** `session_marker.READ_GROUPS`. */
-export const READ_GROUPS: ReadonlySet<string> = new Set(["metrics", "series", "get", "bundle", "events", "coordinates", "shared"]);
+export const READ_GROUPS: ReadonlySet<string> = new Set(["metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance"]);
 
 /** `session_marker.DAEMON_AGENT_WRITES`: the agent's writes under the daemon (a run and its own data). */
 export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
