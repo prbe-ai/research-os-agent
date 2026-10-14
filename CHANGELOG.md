@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.249.1
+
 - **Live runs get a readable name and a description when they start.** The `track-work` skill told the daemon's writer "Do not name runs" and "Descriptions are server-written", so a run kept its script's name (`willow-sft-Adecay-real-sol-20261013`) and an empty description until it finished. It now says to set both when a run starts (`probe run set RUN --name --description`), and to add `--authored-by human` when the researcher chose the words. The daemon's own writes now count as `agent`: its `probe` calls carry no coding-agent marker, so every name and description it wrote arrived undeclared and was locked as a person's choice (the experiment it filed that Willow run under is one). Agent-written text is still replaced by the generated title and description when the run ends; human-written text never is.
 
 ## 0.249.0
