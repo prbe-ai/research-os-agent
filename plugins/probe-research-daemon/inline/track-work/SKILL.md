@@ -52,6 +52,7 @@ A session can hold both: record the ML part only.
 - Everything a person reads (slugs, names, questions, summaries, reasons, tags, metric keys, notes) is short and plain, and leads with the most recent or most important thing. No hashes, uuids, timestamps, ticket numbers, command lines, parameter piles, bare counters or private abbreviations.
 - Exact and machine-shaped: `--external-id`, `probe link` keys, `--config`, `--spec`, an artifact's `--name` (its relative path), a paper's real title.
 - A path `.probe.config` sets to `read`: use it, record nothing about it.
+- A path `.probe.config` sets to `hash`: run the work on it as usual (`probe exec`); Probe records only each file's hash and row count. Never print its contents.
 - Slug: 3 lowercase hyphenated words naming the thing, permanent. `--name`: a plain title, always set, never the slug re-cased.
 - Read an entity's notes and Markdown before writing to it. Check `probe session status`; `/probe` moves the switch.
 
@@ -59,7 +60,7 @@ A session can hold both: record the ML part only.
 
 Put each fact on the lowest entity it is true of. Tracking on means everything is recorded; do not curate. Drop nothing: a file with no better home goes to the project's artifacts. Notes are the exception: only what would help the next agent or teammate, as hidden prose written by `edit-notes`.
 
-- A file can sit on a run, experiment, project, your workspace or the team's Shared folder.
+- A file can sit on a run, experiment or project. Shared and workspace files are read-only; team data goes in `probe dataset add`.
 - The authored Markdown (`summary_markdown`, a block in the Overview page; on a run, below AI Summary) is the RESEARCHER's - never write it.
 - The team note is one synced file, `probe-team-note.md` (`edit-notes`).
 - Automatically tracked: transcripts, launch context, lockfiles, lifecycle events.
@@ -92,6 +93,8 @@ Every run needs an owner that keeps it alive:
 - Don't name runs; `--slug` only when you must find one by hand.
 - Under a CLI `run start`, run the work with `probe exec RUN -- cmd` or nothing it reads or writes is recorded.
 - Inputs: what the run read that changes its result (dataset, checkpoint, tokenizer, outside config): `probe snapshot RUN --include`, `inputs-decision.json`, `snapshot-restore --verify-only` (reference §3).
+    - Say what a run trained on: `probe dataset use REF --run R --role train`, or `run.use_dataset(REF)`. Starting weights (a Hub model, another run's checkpoint) are `--role init`. A mix of datasets: `run.use_mixture({REF: share, ...})`, shares summing to 1.
+    - Each step that changes data (filter, dedup, relabel, split) is a run. Register what it wrote: `probe dataset add OUT --name N --run R --note "<what changed>"`. A shell step names its files: `probe exec --input IN --output OUT -- CMD`.
 - Run writes queue: check `probe outbox status` before calling one missing. Upload files as soon as they exist; retry once, then say so.
 
 Close:
@@ -102,9 +105,10 @@ Close:
 
 ## Files and numbers
 
-Every file that directly affects an entity should be uploaded as an artifact (`probe artifact add RUN`, or `--experiment`, `--project`, `--workspace`, `--shared`; reference §4). A note links to a file, never repeats it.
+Every file that directly affects an entity should be uploaded as an artifact (`probe artifact add RUN`, or `--experiment`, `--project`; reference §4). A note links to a file, never repeats it.
 - A run from `probe.init()` / `probe exec` captures its own outputs and log; add only what it misses.
 - Over 5 GB: `--reference` (on this box or a shared volume) or `--uri` (in a bucket); on a box that will be destroyed, use a bucket.
+    - A dataset folder: `probe dataset add DIR --name N --upload` stores it in Probe (separate quota); without `--upload` Probe keeps its hash and location only.
 - NEVER UPLOAD SECRETS (`.env`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, tokens) or a customer's private content, as bytes, pointer or prose, nor what a build recreates (`.venv`, `node_modules`, `__pycache__`).
 - A file anchored above the run that wrote it still records lineage back to it: `probe edge add --source run:RUN --relation produces --target artifact:ID`.
 - A changed file with a registry name is a new version (`version-add`); read the chain first (`view="versions"`).

@@ -25,12 +25,18 @@ probe run fork SRC --step N | end --status S | check | reproduce | tag | set RUN
 probe group create EXPERIMENT_ID --name NAME [--kind K] [--spec JSON|@FILE] | list | get | set
 probe trial list RUN | get TRIAL | set TRIAL --name
 probe workspace create SLUG [--name] [--use] | list | get | rename | use | delete ID --yes
-probe shared add PATH | list | download | share ARTIFACT_ID [--replace] | unshare ARTIFACT_ID | delete
+probe shared list | download | delete
 probe edge add --source TYPE:REF --relation R --target TYPE:REF --reason "..." [--evidence EVENT_ID] | remove EDGE_ID
 probe run inputs RUN | upstream RUN [--depth N] | input dismiss|pin|reset RUN PATH
 probe project reference add --to PROJECT | remove
 probe project code attach OWNER/REPO | detach | list
 ```
+
+| entity | for | create | change | delete |
+|---|---|---|---|---|
+| dataset | a named, versioned team dataset | `dataset add PATH --name N --run R` (`--upload` to store it in Probe) | same command: a new version | - (the dashboard; refused while runs use it) |
+| source | where outside data came from (Hub id, bucket path) | `source add URI` | - | - (refused while runs use it) |
+| Shared folder | older team files; read and delete only | - | - | `delete` (soft) |
 
 Prefer `--project` or `PROBE_PROJECT` over `project use` (machine-global -
 skill §2). `probe experiment set EXP --question "..."` is the only way to
@@ -124,8 +130,8 @@ into a durable local outbox and return immediately. `--sync` forces blocking.
   the same way.
 - **`probe run end` is the barrier.** `--async` queues the close BEHIND the
     data; `--flush-timeout N` bounds the wait.
-- **Only run-anchored artifacts queue.** Project, experiment, workspace and
-    Shared uploads are synchronous unless you pass `--async`.
+- **Only run-anchored artifacts queue.** Project and experiment uploads are
+    synchronous unless you pass `--async`.
 - **Failures surface** as a stderr `outbox:` banner and in `probe outbox
     status` / `probe doctor`. `probe outbox retry` requeues dead-lettered
     items.
@@ -141,7 +147,7 @@ An artifact is a name with immutable versions, each pinned from an upload.
 | what | command |
 |---|---|
 | upload an output | `probe artifact add RUN PATH --name N --kind KIND --step N` |
-| upload to a non-run anchor | `probe artifact add --project P \| --experiment E \| --workspace W \| --shared PATH --name N` |
+| upload to a non-run anchor | `probe artifact add --project P \| --experiment E PATH --name N` |
 | list a run's outputs | `probe artifact list RUN` |
 | browse one folder at a time | `probe artifact tree RUN --prefix P --limit N` |
 | download a pinned version | `probe artifact download ARTIFACT_ID --version N --to PATH` |
