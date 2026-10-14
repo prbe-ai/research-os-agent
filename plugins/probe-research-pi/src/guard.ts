@@ -56,8 +56,12 @@ export const DAEMON_PROFILE_DENY =
 /** `session_marker.DIRECTED_RETRY`. */
 export const DIRECTED_RETRY = "If the researcher asked for exactly this, run it again with `--directed`.";
 
-/** `session_marker.DAEMON_PROFILE_DENY_WRITE`: a write is told `--directed` runs it. Placeholder: `{matched}`. */
-export const DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY;
+/** `session_marker.WRITER_RETRY`. */
+export const WRITER_RETRY = "Otherwise ask the daemon's writer: `probe ask --writer \"<request>\"`.";
+
+/** `session_marker.DAEMON_PROFILE_DENY_WRITE`: a write is told `--directed` runs it, and the
+ * daemon's writer takes any other. Placeholder: `{matched}`. */
+export const DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY + " " + WRITER_RETRY;
 
 /** `session_marker._APPROVALS_TEXT`'s pattern: the folder as a command's text names it. */
 export const APPROVALS_TEXT_SOURCE = String.raw`probe/+approvals\b|\bapprovals/+(answers|requests)\b`;

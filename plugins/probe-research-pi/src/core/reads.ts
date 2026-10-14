@@ -8,13 +8,16 @@
  * pins these texts to the mailbox's.
  *
  *   before_agent_start  a new turn token; every waiting answer (answer / nothing
- *                       found / failed) and run alert, plus at most ONE unasked
- *                       message, as the turn's message
+ *                       found / failed) and run alert, every message from the
+ *                       daemon's writer, plus at most ONE unasked message of the
+ *                       reader's, as the turn's message
  *   the poller (2 s)    an answer or a run alert that lands mid-run is steered in
  *                       after the current tool calls; one that lands while pi is
  *                       idle starts a turn (pi's `triggerTurn`: the wake). An
  *                       unasked message goes in mid-run only (one per turn);
- *                       idle, it waits for the next prompt.
+ *                       idle, it waits for the next prompt. A writer's receipt
+ *                       likewise: mid-run, outside the one-per-turn slot; never a
+ *                       wake.
  *   the researcher      one line per change of the reader's state (the
  *                       `status/<sid>.json` the worker writes), as a UI notice.
  *
@@ -44,6 +47,10 @@ export const TEXT_ANSWER = "[Probe] Answer to your ask {id} (\"{question}\") - e
 export const TEXT_NOTHING = "[Probe] Answer to your ask {id} (\"{question}\"): nothing in the team's records.";
 export const TEXT_FAILED = "[Probe] Your ask {id} (\"{question}\") failed: {reason}. No answer is coming for it.";
 export const TEXT_ALERT = "[Probe] Run alert\n{message}";
+export const ORIGIN_WRITER = "writer";
+export const TEXT_WRITER_REPLY = "[Probe] The writer's reply:\n{message}";
+export const TEXT_WRITER_RECEIPT = "[Probe] The writer recorded: {message}";
+export const TEXT_WRITER_FAILED = "[Probe] The writer did not run your request: {reason}";
 
 export const STATUS_OK = "ok";
 export const STATUS_TURN_STOPPED = "reader_turn_stopped";
@@ -77,6 +84,8 @@ export interface Message {
   question: string | null;
   reason: string | null;
   expiresAt: number;
+  /** ORIGIN_WRITER for the daemon writer's messages; null for the reader's. */
+  origin: string | null;
 }
 
 export function safe(sessionId: string): string {
@@ -100,10 +109,11 @@ function parseMessage(data: Record<string, unknown> | null): Message | null {
   const ask = optionalString(data.ask);
   const question = optionalString(data.question);
   const reason = optionalString(data.reason);
-  if (ask === undefined || question === undefined || reason === undefined) return null;
+  const origin = optionalString(data.origin);
+  if (ask === undefined || question === undefined || reason === undefined || origin === undefined) return null;
   return {
     id: data.id, kind: data.kind, text: typeof data.text === "string" ? data.text : "", ask, question, reason,
-    expiresAt: Number(data.expires_at) || 0,
+    expiresAt: Number(data.expires_at) || 0, origin,
   };
 }
 
@@ -118,6 +128,11 @@ export function rendered(msg: Message): string {
     id: String(msg.ask), question, message: msg.text, reason: msg.reason || "unknown",
   };
   const fill = (t: string) => t.replace(/\{(id|question|message|reason)\}/g, (_m, k: string) => values[k]);
+  if (msg.origin === ORIGIN_WRITER) {
+    if (msg.kind === KIND_FAILED) return fill(TEXT_WRITER_FAILED);
+    if (msg.kind === KIND_MESSAGE) return fill(TEXT_WRITER_RECEIPT);
+    return fill(TEXT_WRITER_REPLY);
+  }
   if (msg.kind === KIND_ANSWER) return fill(TEXT_ANSWER);
   if (msg.kind === KIND_NOTHING) return fill(TEXT_NOTHING);
   if (msg.kind === KIND_FAILED) return fill(TEXT_FAILED);
@@ -264,7 +279,8 @@ export class Mailbox {
   }
 
   /** Claim every answer not held for a waiting `probe ask --wait`, every run
-   * alert, and -- when `unasked` -- this turn's one unasked message. */
+   * alert, and -- when `unasked` -- every writer receipt and this turn's one
+   * unasked message of the reader's. */
   deliver(token: string, by: string, unasked = true): string[] {
     const out: string[] = [];
     let unaskedDone = !unasked;
@@ -273,6 +289,13 @@ export class Mailbox {
         // The end of an ask, or a run alert (no ask, so never held): each one,
         // whenever this runs, outside the turn's unasked slot.
         if (this.held(msg.ask)) continue;
+        const got = this.claim(path, by);
+        if (got) out.push(rendered(got));
+        continue;
+      }
+      if (msg.origin === ORIGIN_WRITER) {
+        // A receipt: no slot of its own, and never a wake (idle, it waits).
+        if (!unasked) continue;
         const got = this.claim(path, by);
         if (got) out.push(rendered(got));
         continue;

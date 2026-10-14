@@ -119,7 +119,7 @@ describe("the daemon profile's allowlist", () => {
   });
 
   it("lets the agent ask, launch and instrument its runs", () => {
-    for (const command of ['probe ask "what did we try"', "probe exec -- python train.py", "probe session status", "probe run end r1"]) {
+    for (const command of ['probe ask "what did we try"', 'probe ask --writer "group the arms"', "probe exec -- python train.py", "probe session status", "probe run end r1"]) {
       expect(guardToolCall(PiTool.Bash, { command }, daemon())).toBeNull();
     }
   });

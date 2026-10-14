@@ -10,21 +10,23 @@ same files through both.
     UserPromptSubmit   start a new turn token (not for the Stop waiter's own
                        wake, which is the same turn going on); deliver every
                        waiting answer (answer / nothing found / failed) and run
-                       alert, plus at most ONE unasked message for the turn, as
-                       `additionalContext`
+                       alert, every message from the daemon's writer (its
+                       replies and receipts), plus at most ONE unasked message of
+                       the reader's for the turn, as `additionalContext`
     PostToolUse        the same, after each MAIN-agent tool call. A helper
                        agent's tool call never claims: its context is not the
                        main agent's, and a message put there would vanish with it
-    Stop               the wake, only in an interactive session: while an ask is
-                       open, and while the session's daemon worker runs. Waits
-                       in the background (Claude Code's `asyncRewake`) up to
-                       WAKE_MAX_S for an open ask's end, and up to
-                       ALERT_WAKE_MAX_S for a run alert; claims what came, writes
-                       it to stderr and exits 2, which wakes the model with it. A
-                       new prompt, a tool call that took the answer first, the
-                       worker gone (the session closed: nobody would read a
-                       claimed alert), or a newer Stop's waiter (one waits per
-                       session), and it exits 0 quietly.
+    Stop               the wake, only in an interactive session: while an ask (or
+                       a request to the writer, `probe ask --writer`) is open,
+                       and while the session's daemon worker runs. Waits in the
+                       background (Claude Code's `asyncRewake`) up to WAKE_MAX_S
+                       for an open ask's end, and up to ALERT_WAKE_MAX_S for a
+                       run alert; claims what came, writes it to stderr and exits
+                       2, which wakes the model with it. A new prompt, a tool call
+                       that took the answer first, the worker gone (the session
+                       closed: nobody would read a claimed alert), or a newer
+                       Stop's waiter (one waits per session), and it exits 0
+                       quietly. A writer's receipt never wakes it.
 
 ONE UNASKED MESSAGE PER TURN. Every prompt writes a new token to `turns/<sid>`:
 this hook when a message waits, and otherwise the bash fast path in its
@@ -72,6 +74,10 @@ TEXT_ANSWER = ('[Probe] Answer to your ask {id} ("{question}") - evidence from t
 TEXT_NOTHING = '[Probe] Answer to your ask {id} ("{question}"): nothing in the team\'s records.'
 TEXT_FAILED = '[Probe] Your ask {id} ("{question}") failed: {reason}. No answer is coming for it.'
 TEXT_ALERT = "[Probe] Run alert\n{message}"
+ORIGIN_WRITER = "writer"
+TEXT_WRITER_REPLY = "[Probe] The writer's reply:\n{message}"
+TEXT_WRITER_RECEIPT = "[Probe] The writer recorded: {message}"
+TEXT_WRITER_FAILED = "[Probe] The writer did not run your request: {reason}"
 
 #: What the RESEARCHER sees when something fails: a `systemMessage` (shown in
 #: the UI, never in the model's context), once per change of state. Mirrors
@@ -100,6 +106,11 @@ UNASKED_WINDOW_S = 10 * 60
 WAKE_POLL_S = 0.5
 #: ...for at most this long for an open ask's end.
 WAKE_MAX_S = 150.0
+#: A request to the writer (`probe ask --writer`, ids "w...") is answered or failed
+#: by the end of its run, at most twice the writer's 45-minute timeout
+#: (`requests.py`): the waiter waits for it this long, at ALERT_POLL_S past WAKE_MAX_S.
+REQUEST_WAKE_MAX_S = 95 * 60.0
+REQUEST_ID_PREFIX = "w"
 #: With no ask left to wait for, it looks for run alerts this often...
 ALERT_POLL_S = 2.0
 #: ...for at most this long (its hook timeout, in `claude-reads.json`, is a minute
@@ -161,6 +172,10 @@ def _asks_dir(sid: str) -> Path:
     return _root() / "asks" / _safe(sid)
 
 
+def _requests_dir(sid: str) -> Path:
+    return _root() / "requests" / _safe(sid)
+
+
 def _turn_path(sid: str) -> Path:
     return _root() / "turns" / _safe(sid)
 
@@ -215,21 +230,27 @@ def _message(data: "dict | None") -> "dict | None":
             "id": str(data["id"]), "session": str(data["session"]), "kind": str(data["kind"]),
             "text": str(data.get("text") or ""), "ask": data.get("ask"), "question": data.get("question"),
             "reason": data.get("reason"), "made_at": float(data.get("made_at") or 0.0),
-            "expires_at": float(data.get("expires_at") or 0.0),
+            "expires_at": float(data.get("expires_at") or 0.0), "origin": data.get("origin"),
         }
     except (KeyError, TypeError, ValueError):
         return None
-    if not all(_optional_str(msg[k]) for k in ("ask", "question", "reason")):
+    if not all(_optional_str(msg[k]) for k in ("ask", "question", "reason", "origin")):
         return None
     return msg
 
 
 def rendered(msg: dict) -> str:
     """`Message.rendered`: what the main agent reads."""
+    kind = msg.get("kind")
+    if msg.get("origin") == ORIGIN_WRITER:
+        if kind == KIND_FAILED:
+            return TEXT_WRITER_FAILED.format(reason=msg.get("reason") or "unknown")
+        if kind == KIND_MESSAGE:
+            return TEXT_WRITER_RECEIPT.format(message=msg.get("text") or "")
+        return TEXT_WRITER_REPLY.format(message=msg.get("text") or "")
     question = msg.get("question") or ""
     if len(question) > LABEL_QUESTION_CHARS:
         question = question[:LABEL_QUESTION_CHARS - 3].rstrip() + "..."
-    kind = msg.get("kind")
     if kind == KIND_ANSWER:
         return TEXT_ANSWER.format(id=msg.get("ask"), question=question, message=msg.get("text") or "")
     if kind == KIND_NOTHING:
@@ -285,18 +306,21 @@ def claim(sid: str, path: Path, by: str) -> "dict | None":
 
 
 def open_asks(sid: str, now: "float | None" = None) -> "list[str]":
-    """Ask ids still waiting for their end: filed or taken, younger than
-    ANSWER_TTL_S, with no ending message claimed yet."""
+    """Ask and request ids still waiting for their end: filed or taken, younger
+    than ANSWER_TTL_S, with no ending message claimed yet."""
     now = time.time() if now is None else now
     asked = {}
-    for folder in (_asks_dir(sid), _asks_dir(sid) / ".taken"):
+    for folder, pattern, field in ((_asks_dir(sid), "a*.json", "question"),
+                                   (_asks_dir(sid) / ".taken", "a*.json", "question"),
+                                   (_requests_dir(sid), "w*.json", "text"),
+                                   (_requests_dir(sid) / ".taken", "w*.json", "text")):
         if not folder.is_dir():
             continue
-        for path in folder.glob("a*.json"):
+        for path in folder.glob(pattern):
             data = _read_json(path)
             try:
                 ask_id, asked_at = str(data["id"]), float(data["asked_at"])  # type: ignore[index]
-                str(data["session"]), str(data["question"])  # type: ignore[index]
+                str(data["session"]), str(data[field])  # type: ignore[index]
             except (KeyError, TypeError, ValueError):
                 continue
             if now - asked_at < ANSWER_TTL_S:
@@ -512,14 +536,14 @@ def _take_unasked_slot(sid: str, token: str) -> "Path | None":
 
 def deliver(sid: str, token: str, by: str) -> "list[str]":
     """Claim what this hook may hand over now: every answer not held for a
-    waiting `probe ask --wait`, every run alert, and this turn's one unasked
-    message."""
+    waiting `probe ask --wait`, every run alert, every writer message, and this
+    turn's one unasked message of the reader's."""
     out = []
     unasked_done = False
     for path, msg in waiting(sid):
-        if msg["kind"] != KIND_MESSAGE:
-            # The end of an ask, or a run alert (no ask, so never held): each one,
-            # whenever a hook runs, outside the turn's unasked slot.
+        if msg["kind"] != KIND_MESSAGE or msg.get("origin") == ORIGIN_WRITER:
+            # The end of an ask, a run alert (no ask, so never held) or a writer
+            # message: each one, whenever a hook runs, outside the turn's unasked slot.
             if held(sid, msg["ask"]):
                 continue
             got = claim(sid, path, by)
@@ -607,7 +631,7 @@ def on_tool(payload: dict) -> int:
 
 def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_POLL_S,
             alert_max_s: float = ALERT_WAKE_MAX_S, alert_poll_s: float = ALERT_POLL_S,
-            worker_grace_s: float = WORKER_GONE_GRACE_S) -> int:
+            worker_grace_s: float = WORKER_GONE_GRACE_S, request_max_s: float = REQUEST_WAKE_MAX_S) -> int:
     sid = _session(payload)
     if not sid or no_wake() or not attended() or from_helper_agent(payload):
         return 0
@@ -647,8 +671,11 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
             return 2
         waited = time.monotonic() - started
         if asks:
-            # A prompt or a tool call may take every answer first.
-            asks = set() if waited >= max_s else asks & set(open_asks(sid))
+            # A prompt or a tool call may take every answer first. Past `max_s`
+            # only requests to the writer are still waited for: its runs are long.
+            if waited >= max_s:
+                asks = {a for a in asks if a.startswith(REQUEST_ID_PREFIX)} if waited < request_max_s else set()
+            asks = asks & set(open_asks(sid))
         if alerts:
             if worker_alive(sid):
                 worker_gone_since = None
@@ -658,7 +685,7 @@ def on_stop(payload: dict, *, max_s: float = WAKE_MAX_S, poll_s: float = WAKE_PO
             alerts = waited < alert_max_s and gone_for < worker_grace_s
         if not asks and not alerts:
             return 0  # timed out, nothing left to wait for, or the worker stayed gone
-        time.sleep(poll_s if asks else alert_poll_s)
+        time.sleep(poll_s if asks and waited < max_s else alert_poll_s)
 
 
 def no_wake() -> bool:

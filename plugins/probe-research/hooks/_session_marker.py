@@ -1271,6 +1271,9 @@ DIRECTED_FLAG = "--directed"
 #: (`DENY_REASON_DAEMON`) and the daemon profile's, for a write
 #: (`DAEMON_PROFILE_DENY_WRITE`).
 DIRECTED_RETRY = "If the researcher asked for exactly this, run it again with `--directed`."
+#: ...and the daemon-profile agent's other way to a write (Richard's approved
+#: text, 2026-10-13): a request to the daemon's writer (`probe ask --writer`).
+WRITER_RETRY = 'Otherwise ask the daemon\'s writer: `probe ask --writer "<request>"`.'
 
 
 def carries_directed(args: "list[str]") -> bool:
@@ -1411,8 +1414,9 @@ DAEMON_PROFILE_DENY = (
 )
 
 #: `DAEMON_PROFILE_DENY` for a WRITE: `--directed` admits one the researcher
-#: asked for. A read keeps the plain text: no flag admits it, `probe ask` reads.
-DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY
+#: asked for, and the daemon's writer takes any other (`probe ask --writer`). A
+#: read keeps the plain text: no flag admits it, `probe ask` reads.
+DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY + " " + WRITER_RETRY
 
 #: What the papers hook answers a paper-type web search it holds (`papers_hook.py`):
 #: at most once per `PAPER_FIND_WINDOW_S`, and never after `probe paper find` ran
