@@ -146,7 +146,10 @@ NOTES:
 1. Create both before the scaffold. `run start` never creates them - a typo'd
    slug mints a second identity. The SDK's `client.run(project=, experiment=,
    question=)` does.
-2. No question, no experiment - open a project-direct run.
+2. Runs launched together to compare settings - arms, variants, branches of
+   one run - answer one question even if nobody wrote it down: create the
+   experiment with that question and file them in it. No such question -
+   open a project-direct run.
 3. A phase of a bigger effort is a SUBPROJECT of it, never a new top-level
    sibling: `--parent <project>`. Related but separate work is a reference
    (`probe project reference add`), not a child.

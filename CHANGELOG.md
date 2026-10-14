@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Runs launched together to compare settings get an experiment, even when nobody wrote the question down.** track-work's "No question, no experiment" was read literally: one session filed six SFT arms of one base run project-direct, one by one. Note 2 of section 2 now reads: arms, variants and branches of one run answer one question even if nobody wrote it down, so the writer creates the experiment with that question and files them in it; with no such question it still opens a project-direct run. A `run move` that files a branch of a run outside any experiment now adds one fact line when two or more branches of that run sit that way (`N runs branch from <run>; none is in an experiment`), from the writer's own logbook (Richard's approved text). The replay bench tied main on this (writer-filing-a/-b, 100% vs 100%); shipped on Richard's call (10-14).
+
 ## 0.250.0
 
 - **A captured session is named the way Claude Code names it (tap 0.9.20).** Claude Code titles a session after its first exchange (the terminal tab, e.g. "Research-os live run titles") and keeps re-appending that title to the transcript as an `ai-title` line, or a `custom-title` line after `/rename`, which wins. The capture tap reads those lines and, after a batch is accepted, sends the newest title to the gateway's new title door (`POST /ingest/v1/sessions/{source}/{session_id}/title`) whenever it changes; credentials in it are redacted first and a leading `[DONE]` or status glyph is dropped. It travels beside the batch, never in it, because the engine's receipts door digests every batch key. `probe import` sends it the same way. Other harnesses send none yet.
