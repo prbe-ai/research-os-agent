@@ -64,6 +64,7 @@ A SLUG is permanent. A NAME is not.
 - SLUG: 3 lowercase hyphenated words saying what the thing IS - ex: `tool-calling-reliability`. It never changes, and it is the fallback heading, so it must read alone
 - `--name`: a simple concise English title. Always try to set this - this session has some of the best context on what this work is about. 
     - Never just re-case the slug ("Bfcl Toolcall Sft")
+- If the researcher chose a name or description, add `--authored-by human`.
 
 ## 1. THE MAP
 
@@ -183,7 +184,8 @@ are currently only three possible owners:
    project
 
 NOTE:
-- Do not name runs. The server gives each one a readable slug, and a finished run gets a title generated from its content. Use `--slug` only when you will need to find the run by hand later (a nightly job, say).
+- When a run starts, name and describe it: `probe run set RUN --name "<title>" --description "<what it tests, one sentence>"`.
+- Use `--slug` only when you will need to find the run by hand later (a nightly job, say).
 
 ### Inputs
 

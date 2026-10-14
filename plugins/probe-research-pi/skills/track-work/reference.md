@@ -45,8 +45,6 @@ For a teammate, not a log. Slugs and names: ENTITY NAMING in the skill.
 |---|---|
 | question | one testable question, ≤30 words: the change and what it might move. Never the outcome you expect |
 
-Descriptions are server-written.
-
 Explain acronyms. Use product or milestone names only when given - never
 invent or expand a codename. Checkpoints, paths, commands and parameters go in
 config or notes.
