@@ -179,6 +179,9 @@ run name, external id), then check where it actually wrote:
 | one value per step | `probe.log({...}, step=i)` |
 | a value per sample | LABELS, never dimensions - per-sample ids shatter one series into hundreds of one-point tiles. Labeled points NEVER plot, so the curve needs a second, unlabeled key |
 
+A score of a training run's checkpoint is a metric on that run at the
+checkpoint's step (`probe log RUN key=value --step N`), not a new run.
+
 `spans: 0` on a training run is usually correct - check the phases are not
 already timing metrics.
 
