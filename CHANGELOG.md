@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.250.0
+
 - **A captured session is named the way Claude Code names it (tap 0.9.20).** Claude Code titles a session after its first exchange (the terminal tab, e.g. "Research-os live run titles") and keeps re-appending that title to the transcript as an `ai-title` line, or a `custom-title` line after `/rename`, which wins. The capture tap reads those lines and, after a batch is accepted, sends the newest title to the gateway's new title door (`POST /ingest/v1/sessions/{source}/{session_id}/title`) whenever it changes; credentials in it are redacted first and a leading `[DONE]` or status glyph is dropped. It travels beside the batch, never in it, because the engine's receipts door digests every batch key. `probe import` sends it the same way. Other harnesses send none yet.
 
 ## 0.249.3
