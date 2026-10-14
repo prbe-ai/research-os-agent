@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.255.0
+
 - **`probe paper add --relates-to <paper id|none> --relates-reason "<how the two relate>"` records the earlier paper in the project the new one connects to.** `--relates-provenance` defaults to `inferred` (`human` when the researcher said so); a paper id without a reason is refused before the write, naming `--relates-reason`. SDK: `add_paper(relates_to={"paper": ..., "reason": ..., "provenance": ...})`. `probe edge add --relation relates_to` works (the generated models know the relation), and `paper edges` and `paper graph --include-discovery` show the links. track-work's Papers section now asks for `--relates-to` on every paper, and rule 5 points paper similarity there. Needs server 0357; an older server ignores the field.
 
 ## 0.254.1
