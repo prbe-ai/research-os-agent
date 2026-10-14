@@ -696,9 +696,46 @@ def no_wake() -> bool:
     return not _hook_harness().current().can("wake")
 
 
+#: A Stop payload bigger than this is not handed over (it goes through a pipe).
+HAND_OVER_MAX_BYTES = 32768
+
+
+def hand_over_stop(raw: str) -> None:
+    """The Stop wake runs from claude-reads.json, outside dispatch.py, straight
+    from the folder the session started in. Hand it to the installed copy as
+    dispatch.py hands every other event (`dispatch.installed_root`), so one
+    session's waiter and its deliverers run one version: its reads_hook.py is
+    exec'd with this payload on stdin. A copy whose reads_hook.py will not
+    compile, or any failure before the exec: wait here."""
+    try:
+        import dispatch
+
+        target = dispatch.installed_root(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), os.environ)
+        if target is None:
+            return
+        script = os.path.join(target, "hooks", "reads_hook.py")
+        with open(script, encoding="utf-8") as handle:
+            compile(handle.read(), script, "exec")
+        data = raw.encode("utf-8")
+        if len(data) > HAND_OVER_MAX_BYTES:
+            return
+        env = dict(os.environ)
+        env["CLAUDE_PLUGIN_ROOT"] = target
+        env[dispatch.HANDED_OVER] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        read, write = os.pipe()
+        os.write(write, data)
+        os.close(write)
+        os.dup2(read, 0)
+        os.close(read)
+        os.execve(sys.executable, [sys.executable, script], env)
+    except Exception:  # noqa: BLE001 -- a hook never breaks the session: wait here
+        return
+
+
 def main() -> int:
     try:
-        payload = json.load(sys.stdin)
+        raw = sys.stdin.read()
+        payload = json.loads(raw)
     except ValueError:
         return 0
     if not isinstance(payload, dict):
@@ -710,6 +747,7 @@ def main() -> int:
         if event == "PostToolUse":
             return on_tool(payload)
         if event == "Stop":
+            hand_over_stop(raw)
             return on_stop(payload)
     except Exception:  # noqa: BLE001 -- a hook never breaks the session
         return 0

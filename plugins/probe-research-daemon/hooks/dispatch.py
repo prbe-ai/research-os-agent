@@ -36,6 +36,16 @@ Contract, as for every hook here: STDLIB ONLY, PYTHON 3.9, FAIL-OPEN. Started as
 every event). Never exits non-zero unless a route did (an exit of 2 is a veto on
 PreToolUse/UserPromptSubmit, and only a route may cast one).
 
+Hand-over: Claude Code fixes a session's plugin folder at its start
+(`CLAUDE_PLUGIN_ROOT`), so a session left open across releases keeps running the
+hooks it started with while what it reads (the managed CLAUDE.md block, the CLI)
+moves on: a 0.129.0 guard refused `probe paper find`, the command the block named
+(2026-10-13). Before anything else, this hands the event to the copy Claude Code's
+install ledger names, when that is another version folder of this same plugin
+(`installed_root`, `hand_over`), so every event hooks.json sends here runs the
+installed hooks. The Stop wake (claude-reads.json, outside this dispatcher) does
+the same in reads_hook.py.
+
 Heartbeat: under Codex (`PLUGIN_ROOT` set), the session-start and prompt lanes
 touch `$XDG_STATE_HOME/probe/hooks/alive/<session>`. The capture plugin's prompt
 hook (probe-research-tap, hooks/probe-hooks-trust.sh) tells the researcher to
@@ -127,7 +137,8 @@ MIN_SESSION_END_S = 0.1
 #: dispatcher reads every `"tool_name": "..."` in its raw bytes (JSON escaping
 #: keeps file contents from faking one; a nested key only adds a name) and goes
 #: on only if TOOL_FILTER takes one of them or, after a tool call, a Probe
-#: daemon message waits: most tool calls cost a python start and nothing else.
+#: daemon message waits: most tool calls cost a python start and the install
+#: ledger's byte scan (`installed_root`), and nothing else.
 TOOL_LANES = ("pre-tool", "post-tool")
 
 #: Per tool lane: the exact tool names, and the substrings (the Probe MCP
@@ -239,38 +250,45 @@ _KEY = b'"tool_name"'
 _SPACE = b" \t\r\n"
 
 
-def named_tools(payload: bytes) -> set:
-    """Every `tool_name` string value in the raw payload (a superset of the
-    real one), read without parsing the payload or importing anything."""
-    names = set()
-    at = payload.find(_KEY)
+def string_values(data: bytes, key: bytes) -> set:
+    """Every string value of `key` (quoted, e.g. b'"tool_name"') anywhere in
+    raw JSON bytes (a superset of the real ones), read without parsing the JSON
+    or importing anything."""
+    values = set()
+    at = data.find(key)
     while at >= 0:
-        i = at + len(_KEY)
-        while i < len(payload) and payload[i] in _SPACE:
+        i = at + len(key)
+        while i < len(data) and data[i] in _SPACE:
             i += 1
-        if payload[i : i + 1] == b":":
+        if data[i : i + 1] == b":":
             i += 1
-            while i < len(payload) and payload[i] in _SPACE:
+            while i < len(data) and data[i] in _SPACE:
                 i += 1
-            if payload[i : i + 1] == b'"':
+            if data[i : i + 1] == b'"':
                 end, escaped = i + 1, False
-                while end < len(payload) and payload[end] != 0x22:
-                    if payload[end] == 0x5C:
+                while end < len(data) and data[end] != 0x22:
+                    if data[end] == 0x5C:
                         escaped = True
                         end += 1
                     end += 1
-                raw = payload[i + 1 : end]
+                raw = data[i + 1 : end]
                 if escaped:
                     import json
 
                     try:
-                        names.add(json.loads(b'"' + raw + b'"'))
+                        values.add(json.loads(b'"' + raw + b'"'))
                     except ValueError:
-                        names.add(raw.decode("utf-8", "replace"))
+                        values.add(raw.decode("utf-8", "replace"))
                 else:
-                    names.add(raw.decode("utf-8", "replace"))
-        at = payload.find(_KEY, i)
-    return names
+                    values.add(raw.decode("utf-8", "replace"))
+        at = data.find(key, i)
+    return values
+
+
+def named_tools(payload: bytes) -> set:
+    """Every `tool_name` string value in the raw payload (a superset of the
+    real one), read without parsing the payload or importing anything."""
+    return string_values(payload, _KEY)
 
 
 def could_route(lane: str, payload: bytes) -> bool:
@@ -283,6 +301,161 @@ def could_route(lane: str, payload: bytes) -> bool:
         # writes, or an odd payload): parse it rather than guess.
         return True
     return any(n in exact or any(p in n for p in parts) for n in names)
+
+
+# --- HAND-OVER -----------------------------------------------------------------
+
+#: Set while this dispatcher hands an event to the installed copy (to the folder
+#: it came from): that copy's `hand_over` takes it out of the environment, so an
+#: event moves at most once and nothing a route starts inherits it.
+HANDED_OVER = "PROBE_HOOKS_HANDED_OVER"
+_INSTALL_PATH = b'"installPath"'
+#: A ledger bigger than this is not read (it is ~2 KB with a handful of plugins).
+LEDGER_MAX_BYTES = 1 << 20
+
+
+def _ledger(env) -> str:
+    """Claude Code's install ledger: `$CLAUDE_CONFIG_DIR` or `~/.claude`, then
+    `plugins/installed_plugins.json` (as `probe.cli.root_skills` reads it)."""
+    home = (env.get("CLAUDE_CONFIG_DIR") or "").strip()
+    base = os.path.expanduser(home) if home else os.path.join(os.path.expanduser("~"), ".claude")
+    return os.path.join(base, "plugins", "installed_plugins.json")
+
+
+def _read_ledger(path: str):
+    """The ledger's bytes, or None: a regular file only (never blocks on a FIFO),
+    at most LEDGER_MAX_BYTES."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        import stat
+
+        if not stat.S_ISREG(info.st_mode) or info.st_size > LEDGER_MAX_BYTES:
+            return None
+        chunks, size = [], 0
+        while size <= LEDGER_MAX_BYTES:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+            size += len(chunk)
+        return None
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _complete(real: str) -> bool:
+    """Does the copy at `real` hold a whole dispatcher: dispatch.sh and
+    dispatch.py, a routes.json that parses, and every hooks/ file its routes
+    name? A copy still being written (or half deleted) never takes an event."""
+    import json
+    import re
+
+    hooks = os.path.join(real, "hooks")
+    if not os.access(os.path.join(hooks, "dispatch.sh"), os.X_OK):
+        return False
+    if not os.access(os.path.join(hooks, "dispatch.py"), os.R_OK):
+        return False
+    try:
+        with open(os.path.join(hooks, "routes.json"), encoding="utf-8") as handle:
+            wiring = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(wiring, dict) or not isinstance(wiring.get("hooks"), dict):
+        return False
+    named = set(re.findall(r"\$ROOT/hooks/([A-Za-z0-9_.-]+)", json.dumps(wiring)))
+    return all(os.path.isfile(os.path.join(hooks, name)) for name in named)
+
+
+def installed_root(root: str, env) -> "str | None":
+    """The plugin folder to hand this event to, or None to run it here.
+
+    Only in Claude Code (`PLUGIN_ROOT` marks Codex), and only once per event.
+    `root` sits in Claude Code's cache as `<marketplace>/<plugin>/<version>`; the
+    copy to hand to is the one folder the ledger lists under that same
+    `<plugin>@<marketplace>`, when every entry there is user scope (a
+    project-scoped install is per project, and this does not know the project),
+    it resolves to another version folder beside `root` (a symlink out of the
+    cache, a `..` or a `--plugin-dir` checkout never does), and it is
+    `_complete`. Anything else: stay. It follows the ledger both ways, so a
+    release rolled back stops running in open sessions too.
+
+    The ledger is read on every event: a byte scan first, so the usual answer
+    (it lists this folder) costs no `json` import (~10 ms); the ledger is
+    parsed only when the scan finds another copy beside this one."""
+    if env.get("PLUGIN_ROOT") or env.get(HANDED_OVER):
+        return None
+    raw = _read_ledger(_ledger(env))
+    if raw is None:
+        return None
+    here = os.path.realpath(root)
+    folder = os.path.dirname(here)
+
+    def other(path: str) -> bool:
+        real = os.path.realpath(path)
+        return real != here and os.path.dirname(real) == folder
+
+    if not any(other(p) for p in string_values(raw, _INSTALL_PATH)):
+        return None
+    import json
+
+    key = os.path.basename(folder) + "@" + os.path.basename(os.path.dirname(folder))
+    try:
+        entries = json.loads(raw.decode("utf-8"))["plugins"][key]
+        if not isinstance(entries, list) or not entries:
+            return None
+        if any(not isinstance(e, dict) or e.get("scope") != "user" for e in entries):
+            return None
+        listed = {os.path.realpath(e["installPath"]) for e in entries}
+    except (ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if len(listed) != 1:
+        return None
+    real = listed.pop()
+    if real == here or os.path.dirname(real) != folder or not _complete(real):
+        return None
+    return real
+
+
+def hand_over(argv: list) -> None:
+    """Run this event in the installed copy (`installed_root`) instead, in this
+    process: its dispatch.py is imported in place of this one, with sys.path[0]
+    (where its routes import their modules from) and `$CLAUDE_PLUGIN_ROOT`
+    (where its routes' commands run from) pointing at it, and its `run` takes
+    the event; stdin is still unread. If it will not import, the event runs
+    here. Once its `run` starts, the event is its own, exits and tracebacks
+    included."""
+    if os.environ.pop(HANDED_OVER, None) is not None:
+        return
+    try:
+        root = os.path.dirname(HERE)
+        target = installed_root(root, os.environ)
+        if target is None:
+            return
+        name = __name__
+        if name == "__main__":
+            return
+        mine = sys.modules.pop(name, None)
+        sys.path[0] = os.path.join(target, "hooks")
+        try:
+            entry = __import__(name).run
+        except Exception:  # noqa: BLE001 - a copy that will not import: run here
+            sys.path[0] = HERE
+            sys.modules.pop(name, None)
+            if mine is not None:
+                sys.modules[name] = mine
+            return
+        os.environ["CLAUDE_PLUGIN_ROOT"] = target
+        os.environ[HANDED_OVER] = root
+    except Exception:  # noqa: BLE001 - fail open: run the event here
+        return
+    entry(argv)
+    sys.exit(0)
 
 
 def routes(lane: str, payload: dict, wiring: dict) -> list[dict]:
@@ -696,6 +869,7 @@ def main(argv: list[str]):
 def run(argv: list) -> None:
     """The entry point: `dispatch.sh` imports this module (so its compiled
     bytecode is cached, ~6ms saved on every event) and calls run([lane])."""
+    hand_over(argv)
     try:
         code = main(["dispatch.py", *argv])
     except Exception:  # noqa: BLE001 - fail open: a broken dispatcher abstains
