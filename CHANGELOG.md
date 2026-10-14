@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.254.0
+
 - **The daemon's writer can run on a lean history and an index of the new events (daemon cost round 5, off unless the server turns it on for a team).** Two switches, pushed per team on every chat answer (`x-probe-writer-history: full|lean`, `x-probe-writer-events: raw|index`; `PROBE_DAEMON_WRITER_HISTORY` / `PROBE_DAEMON_WRITER_EVENTS` override them). LEAN: when a run completes, its saved conversation keeps only what the writer was sent (and a compaction's summary) and drops its own answers and tool traffic; the next message starts with the writes it made since (from the logbook, written once), so each run's request extends the last run's first one byte for byte -- the only prefix the model's prompt cache was measured to serve. A paused run keeps its tool results until the run that finishes it. INDEX: a run's new events reach the writer as one line per step with event ids, made by a cheap model on the server's new `index` lane (30 s, no retries, no refusal fallback); the researcher's prompts, the main agent's requests, the reader's messages and the daemon's notices are shown whole by plain code, an id the indexer was not given is removed, and any failed call shows its events raw. A run's trace carries `layout` (both switches, `cache_reset`, the index's calls, failures, bad ids and cost). Bench: the fake Probe forwards the server's `x-probe-*` settings. On a 2.9 h session (2 runs each): today's writer $0.72 a session and 6.0 of 7 checks; lean + index $0.60 and 7.0.
 
 ## 0.253.0
