@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.249.3
+
 - **A cursor keeps the arguments of the read that returned it.** Page two of a transcript read sent without its `view_options` (the grep) was refused as a changed request, and the refusal said to repeat the read without cursor, so the agent started the read over. A cursor from `entity`, `search`, `metrics` or `find_papers` now carries the call's optional non-default arguments (up to 160 bytes of them; past that it stays hash-only, as before, so it never costs a page more than ~150 tokens). An argument a continuation leaves out is taken from the cursor; one it changes is refused by name before anything is read ("`view_options` differs"), telling the agent to send the same arguments with the cursor. `token_budget` may still change, `refs` stays required, and cursors already in transcripts still continue. `browse` cursors are unchanged. `query_sql`: a result cut to `token_budget` now says `rows_fetched` (rows the server returned) beside `row_count` (rows kept), and its description says a byte_limit cut means raise `token_budget` (up to 8000), select fewer columns, use DISTINCT, aggregate or filter harder. Ships with the hosted MCP's deploy.
 
 ## 0.249.2
