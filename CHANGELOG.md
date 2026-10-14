@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.249.2
+
 - **The daemon can describe a run when it starts.** 0.249.1 told it to, but its command check still refused `probe run set --description` ("a run's description is written by the server once the run finishes"), so on the first live Willow runs it set the name and dropped the description. The check dated from when the daemon's writes locked the server's description out for good; they are `agent` now, so the server still replaces the description when the run finishes. Project descriptions stay the server's.
 
 ## 0.249.1
