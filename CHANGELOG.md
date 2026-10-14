@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The daemon's reader never stops to summarize its history; it starts fresh instead.** When a turn's new events would take the reader's kept conversation past its size (120K tokens), the reader used to make a summary call before the turn's first step. On gpt-6.1-sol that call took 140-310 s, inside the turn's 420 s limit, so one failed attempt and a retry cut the turn with nothing read (strand-ai, 2026-10-14: "reader turn stopped: 420 seconds", twice in 15 minutes). That turn now starts the conversation fresh, told what the reader already sent, the same as rule A already did when a turn ended over the size. The reader has no compaction step at all; instead a turn ends once a round's request reaches 180K tokens (or 1,800 messages), so it can never grow into the model route's 260K ceiling and lose its whole turn. A conversation an older CLI compacted starts fresh once. The writer still compacts.
+
 ## 0.252.0
 
 - Shorter, simpler daemon prompts so notes stay short: `edit-notes` makes every write an in-place, top-down update (what this is, then the latest or most important thing) instead of a new section per event; `track-work` is ~60% shorter and leads every human-facing write with the most recent or most important thing; the writer no longer records every caveat the main agent states, and the main agent's Probe block drops "Say your caveats ... the daemon records what you state" (`POINTER_VERSION` 45).
