@@ -264,6 +264,9 @@ Two doors for a metric you thought of after the run finished:
 | `--summary` | the main idea in YOUR words (`@file.md` works) |
 | `--discrepancies` | what the repo does that the paper does not say: censored code, a missing ablation, a contradicted hyperparameter (`@file.md` works) |
 | `--tag` | one concept, repeatable - the axis a forty-paper review gets grouped on |
+| `--relates-to` | the earlier paper in this project this one connects to (its id), or `none` for the project's first paper |
+| `--relates-reason` | REQUIRED with a paper id - one or two sentences on how the two relate |
+| `--relates-provenance` | `inferred` (the default: your judgment) or `human` (the researcher said so) |
 
 `--via-provenance`, required with `--via <paper id>`:
 
@@ -280,7 +283,8 @@ Amend, never re-add:
   `--title` and `--source`.
 - `paper tag <id> <concept>` adds, `--remove` drops, `--set` replaces.
 - `paper list <project> [--tag <concept>] [--limit 50]` reads newest first;
-  `--tag` requires ALL of them. `paper edges <project>` reads the chain.
+  `--tag` requires ALL of them. `paper edges <project>` reads the chain
+  and the `--relates-to` links.
 - Adding counts as project activity; editing and removing do not.
 
 ## 6. NOTES

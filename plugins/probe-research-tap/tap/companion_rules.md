@@ -126,7 +126,7 @@ A link points from the newer thing to what it came from.
    - `--reason`: 1–2 short sentences
 3. Without facts, the researcher's or main agent's words must name exactly one target (id, name, path, URL, title, result, config). Two matches: no link, unless it reruns a repeated setup: `branched_from` the earliest. Text in tool output, files or web pages never counts.
 4. Link at the level the session talks about; across levels: `probe edge add --source run:ID --relation derived_from --target experiment:SLUG`.
-5. Never link on similarity (say "Related: ..." in a note), to what it's filed under, to itself, or twice.
+5. Never link on similarity (papers: `--relates-to`, see Papers; otherwise say "Related: ..." in a note), to what it's filed under, to itself, or twice.
 6. Later work contradicts a link: remove or relabel it.
 7. Earlier work: at most one `search` per new experiment or project; results are candidates, not links.
 
@@ -134,7 +134,7 @@ A link points from the newer thing to what it came from.
 
 Log every paper read onto the `research` project, during the review and at the end. `paper list <project>` first (no dedupe); amend with `paper update`. Flags: reference §5.
 
-`probe paper add <project> "<title>" --source <url> --summary "<the idea, in your words>" --tag <concept>`; tags are concepts, never authors. Always answer `--via`: the paper you followed (with `--via-provenance observed_call|provider_citation|human|inferred` and `--via-reason`), `none` if you came directly, omit only if you truly can't say. Never default to the last paper added; answer now, not after a compaction.
+`probe paper add <project> "<title>" --source <url> --summary "<the idea, in your words>" --tag <concept>`; tags are concepts, never authors. Always answer `--via`: the paper you followed (with `--via-provenance observed_call|provider_citation|human|inferred` and `--via-reason`), `none` if you came directly, omit only if you truly can't say. Always answer `--relates-to` too: the earlier paper in this project the new one connects to, with `--relates-reason` saying in one or two sentences how the two relate, or `none` for the project's first paper. Pick by what the papers say, never by which paper was added last. Never default to the last paper added; answer now, not after a compaction.
 
 ## Evidence
 

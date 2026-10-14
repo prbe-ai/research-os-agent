@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **`probe paper add --relates-to <paper id|none> --relates-reason "<how the two relate>"` records the earlier paper in the project the new one connects to.** `--relates-provenance` defaults to `inferred` (`human` when the researcher said so); a paper id without a reason is refused before the write, naming `--relates-reason`. SDK: `add_paper(relates_to={"paper": ..., "reason": ..., "provenance": ...})`. `probe edge add --relation relates_to` works (the generated models know the relation), and `paper edges` and `paper graph --include-discovery` show the links. track-work's Papers section now asks for `--relates-to` on every paper, and rule 5 points paper similarity there. Needs server 0357; an older server ignores the field.
+
 ## 0.254.1
 
 - **`probe workspace default <slug>` makes a workspace yours: where your writes that name no workspace land, on every machine and agent.** The server now files an unaddressed create in the caller's own default workspace (the first one they created) instead of the team's oldest; this command changes it (`PUT /v1/workspaces/{id}/default`, SDK `Client.set_default_workspace`). `probe workspace list` shows `default` for yours, and `probe workspace create` says on stderr when the new workspace became your default (your first). `probe workspace use` still pins one CLI context and wins over it. Folder imports with no workspace selected pick your default first. Older CLIs get the new server rule without upgrading.
