@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.252.0
+
 - Shorter, simpler daemon prompts so notes stay short: `edit-notes` makes every write an in-place, top-down update (what this is, then the latest or most important thing) instead of a new section per event; `track-work` is ~60% shorter and leads every human-facing write with the most recent or most important thing; the writer no longer records every caveat the main agent states, and the main agent's Probe block drops "Say your caveats ... the daemon records what you state" (`POINTER_VERSION` 45).
 
 ## 0.251.0
