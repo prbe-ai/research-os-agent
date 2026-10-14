@@ -70,7 +70,7 @@ from urllib.parse import urlsplit
 
 from . import capy_sanitize, codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
 from .sanitize import PastedImage
-from .secrets import redact_event
+from .secrets import redact, redact_event
 from .transcript import nesting_exceeds
 
 log = logging.getLogger(__name__)
@@ -205,6 +205,12 @@ def _harness(source: str):
 
 def _sanitizer(source: str):
     return _SANITIZER_MODULES[_harness(source).capture.sanitizer].sanitize_event
+
+
+def _title_reader(source: str):
+    """The harness's reader of the session's own name (`session_title`), or
+    None for a harness whose transcript carries none."""
+    return getattr(_SANITIZER_MODULES[_harness(source).capture.sanitizer], "session_title", None)
 
 
 def _pasted_extractor(source: str):
@@ -797,6 +803,8 @@ def canonical_payload(payload: dict) -> bytes:
 
 #: Scrub passes before giving up on a fixed point. Real content settles in two.
 _MAX_SCRUB_PASSES = 8
+#: How often a session with no batch to send retries a refused title.
+TITLE_RETRY_SECONDS = 600
 
 
 def _scrub_content(payload: dict) -> dict:
@@ -950,6 +958,12 @@ class Wire:
 
     def post(self, body: bytes) -> tuple[int, dict]:
         return self._request(f"/ingest/v1/sessions/{_route(self.source)}", body)
+
+    def title(self, session_id: str, title: str) -> tuple[int, dict]:
+        """Tell the gateway the name the agent gave this session (research-os
+        `capture_session_title`): `{"status": "ok"}`."""
+        body = json.dumps({"title": title}, separators=(",", ":"), ensure_ascii=False).encode()
+        return self._request(f"/ingest/v1/sessions/{self.source}/{session_id}/title", body)
 
     def media(self, session_id: str, sha256: str, size_bytes: int, media_type: str) -> tuple[int, dict]:
         """Ask the gateway's media door where one pasted image goes
@@ -1680,6 +1694,7 @@ class Journal:
             records = 0  # source lines that retained an event
             marks: list[_Mark] = []  # after each packed line, to give lines back
             sanitize = _sanitizer(self.source)  # an unknown source refuses, never guesses
+            read_title = _title_reader(self.source)
             with path.open("rb") as handle:
                 handle.seek(end)
                 while True:
@@ -1724,6 +1739,13 @@ class Journal:
                             # never moves past an exception, so raising here would
                             # stop this session's capture for good.
                             value = None
+                        if read_title is not None and line is not None:
+                            named = read_title(line)
+                            if named is not None:
+                                # Kept beside the batch, never in it (`send_title`).
+                                # A /rename outranks the generated title lines that
+                                # keep following it.
+                                state["custom_title" if named[1] else "ai_title"] = named[0]
                         retained = (
                             value if isinstance(value, list) else ([] if value is None else [value])
                         )
@@ -2005,7 +2027,49 @@ class Journal:
                 safe_message=_request_failure(wire, code),
             )
         self.acknowledge(session_id, result, sent_body=body)
+        try:
+            self.send_title(session_id, wire)
+        except Exception:  # noqa: BLE001
+            # The batch is delivered and acknowledged; its session's name is
+            # cosmetic and goes again later.
+            log.debug("session title not sent", exc_info=True)
         return True
+
+    def send_title(self, session_id: str, wire: Wire, *, idle: bool = False) -> None:
+        """Name the session on the server: the title the agent gave it
+        (`sanitize.session_title`), whenever it differs from the last one the
+        server took.
+
+        BESIDE THE BATCH, NOT IN IT. A batch's every key is digested by the
+        engine's receipts door (`_FIELDS`), so a key only the gateway reads would
+        break every receipt. `deliver` sends it after each batch lands; a caller
+        with no batch to send passes `idle`, which retries a refused title at
+        most every TITLE_RETRY_SECONDS -- the case of a session whose LAST batch
+        was followed by a refusal (a network drop, a server without the door, a
+        laptop change the server had not seen yet), which no later batch fixes.
+        """
+        state = self.get(session_id)
+        title = state and (state.get("custom_title") or state.get("ai_title"))
+        if not title:
+            return
+        # The batch is scrubbed by `_scrub_content`; this string goes on its own,
+        # to the same fixed point, and is cut only after (a cut could split a
+        # credential into a fragment no rule recognises).
+        for _ in range(_MAX_SCRUB_PASSES):
+            redacted = redact(title)[0]
+            if redacted == title:
+                break
+            title = redacted
+        title = title[: sanitize.TITLE_MAX_LEN]
+        if state.get("title_sent") == title:
+            return
+        if idle and time.time() - state.get("title_tried_at", 0) < TITLE_RETRY_SECONDS:
+            return
+        code, _ = wire.title(session_id, title)
+        if code == 200:
+            self.update(session_id, title_sent=title)
+        else:
+            self.update(session_id, title_tried_at=time.time())
 
     def _upload_media(self, session_id: str, body: bytes, wire: Wire) -> None:
         """Upload the pasted images `body` names that still wait here, before

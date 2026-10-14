@@ -263,6 +263,44 @@ _MAX_IMAGE_URL = 2048
 #: a dropped block type.
 _METADATA_MAX_LEN = 128
 
+# The session's NAME as Claude Code shows it (the terminal tab), from the two
+# lines it re-appends to the transcript every few turns: `custom-title` (the
+# researcher's own /rename) and `ai-title` (the title Claude Code writes after
+# the first exchange). The name never rides a batch: `Journal.stage` keeps it on
+# the session's state and `Journal.send_title` sends it to its own door. (The
+# lines themselves: `ai-title` is on _DROP_EVENT_TYPES; `custom-title` ships as
+# its bare type, its title dropped with every unlisted key.)
+_TITLE_KEYS: dict[str, str] = {"custom-title": "customTitle", "ai-title": "aiTitle"}
+#: Bound on a shipped title, applied AFTER redaction (`Journal.send_title`), so a
+#: cut never splits a credential the redactor would have recognised whole.
+#: Claude Code's titles are a few words; a longer one is a /rename typed by hand.
+TITLE_MAX_LEN = 200
+#: Bound on a title as read and kept, before redaction: room for a credential
+#: that straddles TITLE_MAX_LEN, and a cap on what one line can make us hold.
+TITLE_READ_MAX_LEN = 4 * TITLE_MAX_LEN
+# What a terminal puts in front of the name, never part of it: a status marker
+# such as `[DONE]`, and Claude Code's own busy/idle glyphs.
+_TITLE_PREFIX = re.compile(r"^(?:\s*(?:\[done\]|[✳✻✽✶✢⠀-⣿]))+\s*", re.IGNORECASE)
+
+
+def clean_title(value: Any) -> str | None:
+    """`value` as a one-line display name, or None when nothing is left."""
+    if not isinstance(value, str):
+        return None
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in value).split())
+    text = _TITLE_PREFIX.sub("", text).strip()
+    return text[:TITLE_READ_MAX_LEN] or None
+
+
+def session_title(event: Any) -> tuple[str, bool] | None:
+    """`(title, chosen_by_researcher)` from a title line, else None. A /rename
+    (`custom-title`) is the researcher's choice and outranks the generated one."""
+    if not isinstance(event, dict):
+        return None
+    key = _TITLE_KEYS.get(event.get("type")) if isinstance(event.get("type"), str) else None
+    title = clean_title(event.get(key)) if key else None
+    return None if title is None else (title, event["type"] == "custom-title")
+
 
 def sanitize_event(event: Any) -> Any:
     """Trim a transcript event to ship only the conversation, not metadata.

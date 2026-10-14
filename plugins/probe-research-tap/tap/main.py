@@ -533,6 +533,12 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                                     pasted_images=cfg.pasted_images_on(),
                                 )
                                 if body is None:
+                                    try:
+                                        # Nothing left to send: a title refused
+                                        # after the last batch gets no other try.
+                                        journal.send_title(state["session_id"], wire, idle=True)
+                                    except Exception:
+                                        log.debug("session title not sent", exc_info=True)
                                     break
                                 _require_capture_eligible(source_cwd)
                                 journal.deliver(state["session_id"], wire)
