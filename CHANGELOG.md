@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.251.0
+
 - **Runs launched together to compare settings get an experiment, even when nobody wrote the question down.** track-work's "No question, no experiment" was read literally: one session filed six SFT arms of one base run project-direct, one by one. Note 2 of section 2 now reads: arms, variants and branches of one run answer one question even if nobody wrote it down, so the writer creates the experiment with that question and files them in it; with no such question it still opens a project-direct run. A `run move` that files a branch of a run outside any experiment now adds one fact line when two or more branches of that run sit that way (`N runs branch from <run>; none is in an experiment`), from the writer's own logbook (Richard's approved text). The replay bench tied main on this (writer-filing-a/-b, 100% vs 100%); shipped on Richard's call (10-14).
 
 ## 0.250.0
