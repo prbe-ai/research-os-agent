@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+
+## 0.257.1
 - `probe provenance --steps` prints each output of a step on its own line with its own note (the server's `outputs_detail`); a step that made two dataset versions printed one note, the other version's. `probe checkpoint list` says `in Probe` in WHERE for a checkpoint Probe stores, instead of its internal `r2://` blob address; a reference keeps its host:path or uri.
 
 - **instrument-code tells a script under `probe exec` to pass its config.** It said to call `probe.init()` with no arguments when `PROBE_RUN_ID` is set, so a customer's RL trainer joined the run and sent no config, though the SDK merges `config=` into the joined run. It now says `probe.init(config=args)` with nothing that names the run (all six arguments that raise), and to pass the whole config object as is (a Hydra `DictConfig`, never a resolved copy), without credentials, unless a trainer integration already records it.
