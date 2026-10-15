@@ -11,13 +11,17 @@ Example:
 
 ```python
 import probe
-probe.init(description="dockq sweep, temperature 0.7", tags=["dockq"], config={"temperature": 0.7},
+probe.init(description="dockq sweep, temperature 0.7", tags=["dockq"], config=args,
            intent="does 0.7 beat 1.0 on DockQ?")   # `daemon` state: no project, the daemon files the run
 # `on` state: name what you created instead, e.g.
 # probe.init(project="folding", experiment="dockq-sweep", question="does temperature 0.7 beat 1.0 on DockQ?")
 probe.log({"loss": 0.42}, step=42)   # ambient: no handle to thread through call frames
 probe.finish()
 ```
+
+Pass the run's whole config object as is - `args`, a Hydra `DictConfig` (never a
+resolved copy), a dataclass or a dict - not a few picked keys. Keep credentials
+out of it. A trainer integration that already records config needs none.
 
 ## FILES AND LOGS ARE CAPTURED FOR YOU:
 
@@ -108,10 +112,11 @@ boundary:
 | Slurm | `sbatch --export=ALL,PROBE_RUN_ID=...,PROBE_RUN_EPOCH=...` | the venv the job activates |
 | Docker / k8s | `-e PROBE_RUN_ID=...` / `env:` on the pod | the image |
 
-When those two variables are set, call `probe.init()` with no arguments. Naming
-a project or experiment there contradicts the run the launcher opened, and it
-raises. If the launcher only submitted the job, `probe exec` opened the run
-AWAITING ATTACH and this same call takes ownership.
+When those two variables are set, call `probe.init(config=args)` with nothing
+that names the run (`project`, `experiment`, `name`, `slug`, `question`,
+`hypothesis`): that contradicts the run the launcher opened, and it raises. The
+config still lands on that run. If the launcher only submitted the job, `probe
+exec` opened the run AWAITING ATTACH and this same call takes ownership.
 
 The credential is `PROBE_TOKEN`, plus `PROBE_BASE_URL` if you are not on the
 default server. There is NO `PROBE_API_KEY` - nothing reads it, though `probe
