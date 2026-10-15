@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.256.0
+
 - **The daemon's reader sees a changed file as one line, and a session's first daemon catches up only its last 2 hours (daemon cost round 6).** (1) The reader is sent a file change as its first line (`changed train.py (1,200 -> 1,350 bytes) · 24 more lines: session op=open event_id=...`); the new file's start or the diff stays one `session` call away. File bodies were 76% of the text the reader was sent on strand-ai (150 turns, 10-14). The writer still gets the diff. (2) When a session's first worker finds history already there (Probe switched to the daemon late, or an old session resumed after the daemon became the default), events stamped more than 2 hours before the newest are context: the writer's window and `session` still show them, but they are never new, and the reader starts at the current turn (or at the first new event when that turn began earlier). Before, the daemon replayed the whole history: 13 sessions 1-38 days old in one week, one of 29 days in 1,980 model calls. No bite or reader turn runs until the history is read. A restarted worker never judges again. `PROBE_DAEMON_CATCH_UP_S` changes the window. Bench (gpt-6.1-sol, main vs this, 2-3 runs each): reader recall, asks and grounding equal, reader prompt 4-7K tokens smaller on a session writing 54 files; with the daemon switched on 2 h into a 2.7 h session (30-min window), writer checks 5.3 vs 5.5 of 7 at $0.32 vs $0.48 a session.
 
 ## 0.255.0
