@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- `probe provenance --steps` prints each output of a step on its own line with its own note (the server's `outputs_detail`); a step that made two dataset versions printed one note, the other version's. `probe checkpoint list` says `in Probe` in WHERE for a checkpoint Probe stores, instead of its internal `r2://` blob address; a reference keeps its host:path or uri.
 
 ## 0.257.0
 
