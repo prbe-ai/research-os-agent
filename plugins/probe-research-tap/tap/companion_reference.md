@@ -18,7 +18,7 @@ Lookup only; judgment is in the skill. Sections mirror the skill's numbering.
 
 ```
 probe project create SLUG --kind K [--parent P] [--tag T] | list | get | use | set | move | delete
-probe experiment create SLUG --project P --question "..." | set | freeze --label L | delete | edges
+probe experiment create SLUG --project P --question "..." | set [--question|--conclusion] | freeze --label L | delete | edges
 probe experiment fork SRC NEW --question "..." | inherited EXP [--runs]
 probe exec [--project P | --experiment E] [--parent RUN --relation R] -- CMD
 probe run fork SRC --step N | end --status S | check | reproduce | tag | set RUN --name
@@ -41,7 +41,7 @@ probe project code attach OWNER/REPO | detach | list
 Prefer `--project` or `PROBE_PROJECT` over `project use` (machine-global -
 skill §2). `probe experiment set EXP --question "..."` is the only way to
 change a question: opening a run with `question=` on an existing experiment
-never rewrites it.
+never rewrites it. `--conclusion` sets the answer; `--conclusion ""` clears it.
 
 ## 2. QUESTION AND TAGS
 
@@ -50,6 +50,7 @@ For a teammate, not a log. Slugs and names: ENTITY NAMING in the skill.
 | field | shape |
 |---|---|
 | question | one testable question, ≤30 words: the change and what it might move. Never the outcome you expect |
+| conclusion | the answer and its evidence: "decay wins real-dev F1, 0.71 vs 0.66"; "dead end: OOM at batch 64 on 80 GB". Never a plan or a guess |
 
 Explain acronyms. Use product or milestone names only when given - never
 invent or expand a codename. Checkpoints, paths, commands and parameters go in

@@ -76,7 +76,7 @@ Create both first; `run start` never creates them, and a typo'd slug makes a sec
 | `evaluation` | weights don't: evals, sweeps, ablations. A sweep is an experiment, not a project. |
 | `research` | lit reviews, design, theory; a review feeding training sits beside it |
 | `general` | anything else |
-| `experiment` | one question (`--question`) under one of the above; holds runs |
+| `experiment` | one question (`--question`) under one of the above; holds runs; its answer is `--conclusion` |
 
 - A phase of a bigger effort is a SUBPROJECT of it, never a new top-level sibling: `--parent <project>`. Related but separate: `project reference add --to`. A repo: `project code attach PROJECT OWNER/REPO`.
 - No question: a project-direct run. A variation of an experiment: `probe experiment fork A B --question "..."`. `freeze` pins an experiment's runs.
@@ -100,6 +100,7 @@ Every run needs an owner that keeps it alive:
 Close:
 - `probe run check RUN` and report it (exit 2: add what's missing or say why); put what `probe run reproduce RUN` lists under `completeness.missing`.
 - `probe run end RUN --status completed|failed|crashed|canceled|untracked` (the process, not the result). A result not to trust: `probe run tag RUN invalid` plus a note on what to believe instead.
+- When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer and its evidence in one or two sentences, with both sides' numbers when it is a comparison. Change it when later work changes the answer.
 - No run this session: what's next and open goes in the project's notes.
 - End with the dashboard URL of everything you created or closed, verbatim as printed.
 

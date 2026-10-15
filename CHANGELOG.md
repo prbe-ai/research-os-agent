@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Agents, the daemon included, set an experiment's conclusion when the work answers its question.** track-work's Close step: `probe experiment set EXP --conclusion "..."` with the answer and its evidence (both sides' numbers for a comparison), changed when later work changes the answer; the experiment row and reference §1/§2 name the flag and its shape. In the replay A/B the daemon set a conclusion whenever the work answered the question (4/4) and never otherwise (0/2); the answer then often sits in the conclusion rather than the notes (sxs-mlp 9/12 counting conclusions, 6/12 without; control 9/12). The companion bench's fake Probe stores conclusions (with the server's agent-over-person 409) and its scorer counts an agent's conclusion as a recorded document; a cut fixture's clock stands still at the cut.
+
 ## 0.257.1
 - `probe provenance --steps` prints each output of a step on its own line with its own note (the server's `outputs_detail`); a step that made two dataset versions printed one note, the other version's. `probe checkpoint list` says `in Probe` in WHERE for a checkpoint Probe stores, instead of its internal `r2://` blob address; a reference keeps its host:path or uri.
 
