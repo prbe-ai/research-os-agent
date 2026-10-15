@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.257.0
+
 - **`probe experiment set EXP --conclusion "..."` records an experiment's answer.** `""` clears it; `@file` and `-` read it like `--summary` (not both from stdin at once). SDK: `update_experiment(conclusion=)`. The MCP experiment card shows it under the question with `conclusion_source` (who wrote it), and local search matches it. An agent's write over a person's conclusion is refused by the server (409) and the CLI prints its reason. The daemon cannot mark its own text as a person's: its checker refuses `--authored-by human` on `experiment set` as on `run set`, now also when an unknown flag comes first. visualize-progress's stage table names the conclusion, and the SDK examples ask a real question (`does temperature 0.7 beat 1.0 on DockQ?`). The track-work/edit-notes wording that would have the daemon set it is held. Needs the server that stores conclusions (#2857); an older one refuses the field (422).
 
 ## 0.256.0
