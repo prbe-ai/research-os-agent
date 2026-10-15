@@ -63,6 +63,7 @@ happen.
 | --- | --- |
 | project | it resolves |
 | question | `question` is non-null |
+| conclusion | `conclusion` is non-null |
 | reuse check | the name resolves at the shared level |
 | snapshot | `env_ref` set **and** the execution record resolves |
 | inputs captured | no read in this profile - always `?` |

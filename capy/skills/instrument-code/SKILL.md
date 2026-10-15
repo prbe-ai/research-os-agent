@@ -14,7 +14,7 @@ import probe
 probe.init(description="dockq sweep, temperature 0.7", tags=["dockq"], config={"temperature": 0.7},
            intent="does 0.7 beat 1.0 on DockQ?")   # `daemon` state: no project, the daemon files the run
 # `on` state: name what you created instead, e.g.
-# probe.init(project="folding", experiment="dockq-sweep", question="temp 0.7 wins")
+# probe.init(project="folding", experiment="dockq-sweep", question="does temperature 0.7 beat 1.0 on DockQ?")
 probe.log({"loss": 0.42}, step=42)   # ambient: no handle to thread through call frames
 probe.finish()
 ```

@@ -55,6 +55,7 @@ happen.
 | --- | --- | --- |
 | project | it resolves | `browse`, or the project card |
 | question | `question` is non-null | experiment card, or a run's `reproduce` |
+| conclusion | `conclusion` is non-null | experiment card |
 | reuse check | the name resolves at the shared level | `entity(refs=["artifact:<name>"], view="versions")` |
 | snapshot | `env_ref` set **and** the record resolves | `reproduce` - `execution_record` in `missing` means NOT done |
 | inputs captured | `0 unavailable` | `probe snapshot-restore RUN --verify-only` |
