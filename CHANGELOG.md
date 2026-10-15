@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.259.1
+
 - **Updating Probe updates pi's package while pi runs.** It waited until no `pi` process was left ("not updated while pi is running ... it updates after pi exits"), so a researcher with pi agents running around the clock never got the package. Now it runs `pi update` as pi itself allows and says `updated 0.4.0 → 0.5.0 (open pi sessions pick it up when restarted)`. pi's session start no longer waits for pi to exit before a retry; an update held back by an older CLI is retried at the next pi session start or run end, and one that failed or was killed at most every 10 minutes. Checked in real pi 1.0.0: with the package updated 0.4.0 → 0.5.0 under a running session (and with its `node_modules` deleted), turns, `/new`, `/probe-status`, `/probe-mcp-login` and the capture watcher kept working, and `/reload` loaded 0.5.0; killed mid-`npm install`, the orphaned npm still finished. A pi started in the second or two in which `pi update` has removed `node_modules` fails to load the package and exits 1: an automated pi launcher should retry an exit 1 right after an update.
 
 ## 0.259.0
