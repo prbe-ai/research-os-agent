@@ -8,15 +8,15 @@ description: Record ML work in Probe - track ALL related work (training runs, ev
 You are the main agent, the researcher's coding agent, and you record your own
 work. Check `probe session status` first: if it is `read` or `off`, write
 nothing, say so once and carry on. Never move the switch (`probe session
-track`); only the researcher does.
+track`); only the researcher does, with `/probe`.
 
 Commands and flags are in `track-work/reference.md` (reference §N below).
 
 ## What counts as ML work
 
 ML work is work on a model: training it, evaluating it, the data it learns
-from, or the research behind it. Work that fits both lists below is ML work.
-What the researcher asks to record is recorded, whatever the lists say.
+from, or the research behind it. Work on both lists below is ML work. What the
+researcher asks to record is recorded, whatever the lists say.
 
 ML work - record it:
 - training, fine-tuning, RL - and the scripts, configs and launches for them
@@ -31,11 +31,10 @@ Setup - note it, never log it:
 - installs, drivers, CUDA, container images, provisioning, cluster or GPU
   access - and, in a repo that trains or evaluates models, its CI fixes and
   dependency bumps
-- no project, run or artifact for it: one short line where `edit-notes` puts
-  it - the notes of the project it serves once that project exists, or the
-  team note when it holds across projects - for what tripped you up (a pinned
-  version, a driver fix, a stocked-out zone). Nothing went wrong -> write
-  nothing.
+- no project, run or artifact for it. Only what tripped you up (a pinned
+  version, a driver fix, a stocked-out zone) gets one short line (`edit-notes`):
+  in the notes of the project it serves once that project exists, or in the
+  team note when it holds across projects.
 - fetching a dataset or a base checkpoint is not setup: it is an input the run
   records when it reads it.
 
@@ -51,16 +50,15 @@ A session can hold both: record the ML part only.
 
 - Everything a person reads (slugs, names, questions, summaries, reasons, tags, metric keys, notes) is short and plain, and leads with the most recent or most important thing. No hashes, uuids, timestamps, ticket numbers, command lines, parameter piles, bare counters or private abbreviations.
 - Exact and machine-shaped: `--external-id`, `probe link` keys, `--config`, `--spec`, an artifact's `--name` (its relative path), a paper's real title.
-- A path `.probe.config` sets to `read`: use it, record nothing about it.
-- A path `.probe.config` sets to `hash`: run the work on it as usual (`probe exec`); Probe records only each file's hash and row count. Never print its contents.
 - Slug: 3 lowercase hyphenated words naming the thing, permanent. `--name`: a plain title, always set, never the slug re-cased.
-- Read an entity's notes and Markdown before writing to it. Check `probe session status`; `/probe` moves the switch.
+- A name or description the researcher chose for a project, experiment or run: write it with `--authored-by human`, in a command of its own (never with words you wrote).
+- A path `.probe.config` sets to `read`: use it, record nothing about it. Set to `hash`: run the work on it as usual (`probe exec`); Probe records only each file's hash and row count. Never print its contents.
+- Read an entity's notes and Markdown before writing to it.
 
 ## Where things go
 
 Put each fact on the lowest entity it is true of. Tracking on means everything is recorded; do not curate. Drop nothing: a file with no better home goes to the project's artifacts. Notes are the exception: only what would help the next agent or teammate, as hidden prose written by `edit-notes`.
 
-- A file can sit on a run, experiment or project. Shared and workspace files are read-only; team data goes in `probe dataset add`.
 - The authored Markdown (`summary_markdown`, a block in the Overview page; on a run, below AI Summary) is the RESEARCHER's - never write it.
 - The team note is one synced file, `probe-team-note.md` (`edit-notes`).
 - Automatically tracked: transcripts, launch context, lockfiles, lifecycle events.
@@ -79,8 +77,8 @@ Create both first; `run start` never creates them, and a typo'd slug makes a sec
 | `experiment` | one question (`--question`) under one of the above; holds runs; its answer is `--conclusion` |
 
 - A phase of a bigger effort is a SUBPROJECT of it, never a new top-level sibling: `--parent <project>`. Related but separate: `project reference add --to`. A repo: `project code attach PROJECT OWNER/REPO`.
-- No question: a project-direct run. A variation of an experiment: `probe experiment fork A B --question "..."`. `freeze` pins an experiment's runs.
-- The server writes the title and description itself once a run under it finishes.
+- No question: a project-direct run. `freeze` pins an experiment's runs.
+- The server writes a project's description itself once a run under it finishes.
 - Pass `--project`; `project use` is machine-wide.
 
 ## Run
@@ -90,12 +88,13 @@ Every run needs an owner that keeps it alive:
 2. `probe exec -- CMD` for code you can't edit; a submit-only launcher (`sbatch`, `ray job submit`, `modal deploy`) opens it awaiting attach (unknown launcher: `--detached-launcher`).
 3. W&B: the project attached in the dashboard, or `probe wandb import-local|import-hosted`.
 
-- Don't name runs; `--slug` only when you must find one by hand.
+- When a run starts, name and describe it: `probe run set RUN --name "<title>" --description "<what it tests, one sentence>"`. Leave out a field `probe run get RUN` shows locked (`name_customized`, `description_customized` true): your words would replace a person's for good. `--slug` only when you must find one by hand.
 - Under a CLI `run start`, run the work with `probe exec RUN -- cmd` or nothing it reads or writes is recorded.
 - Inputs: what the run read that changes its result (dataset, checkpoint, tokenizer, outside config): `probe snapshot RUN --include`, `inputs-decision.json`, `snapshot-restore --verify-only` (reference §3).
-    - Say what a run trained on: `probe dataset use REF --run R --role train`, or `run.use_dataset(REF)`. Starting weights (a Hub model, another run's checkpoint) are `--role init`. A mix of datasets: `run.use_mixture({REF: share, ...})`, shares summing to 1.
+    - What it trained on: `probe dataset use REF --run R --role train`, or `run.use_dataset(REF)`. Starting weights (a Hub model, another run's checkpoint) are `--role init`. A mix: `run.use_mixture({REF: share, ...})`, shares summing to 1.
     - Each step that changes data (filter, dedup, relabel, split) is a run. Register what it wrote: `probe dataset add OUT --name N --run R --note "<what changed>"`. A shell step names its files: `probe exec --input IN --output OUT -- CMD`.
-- Run writes queue: check `probe outbox status` before calling one missing. Upload files as soon as they exist; retry once, then say so.
+- Another attempt at a run is its child: launch it with `--parent RUN --relation retry|resume|fork|branch` (`retry` only if RUN failed or crashed; still `running`: link later), or `edge add` after.
+- Run writes queue: check `probe outbox status` before calling one missing.
 
 Close:
 - `probe run check RUN` and report it (exit 2: add what's missing or say why); put what `probe run reproduce RUN` lists under `completeness.missing`.
@@ -106,14 +105,13 @@ Close:
 
 ## Files and numbers
 
-Every file that directly affects an entity should be uploaded as an artifact (`probe artifact add RUN`, or `--experiment`, `--project`; reference §4). A note links to a file, never repeats it.
+Every file that directly affects an entity should be uploaded as an artifact (`probe artifact add RUN`, or `--experiment`, `--project`; reference §4) as soon as it exists; retry once, then say so. A note links to a file, never repeats it.
 - A run from `probe.init()` / `probe exec` captures its own outputs and log; add only what it misses.
+- Workspace and Shared files take no new uploads; team data goes in `probe dataset add`. Its `--upload` stores the bytes against the team's hosted-data quota: only when the researcher asks; without it Probe keeps the hash and location.
 - Over 5 GB: `--reference` (on this box or a shared volume) or `--uri` (in a bucket); on a box that will be destroyed, use a bucket.
-    - A dataset folder: `probe dataset add DIR --name N --upload` stores it in Probe (separate quota); without `--upload` Probe keeps its hash and location only.
 - NEVER UPLOAD SECRETS (`.env`, `*.pem`, `*.key`, `id_rsa*`, `credentials*`, tokens) or a customer's private content, as bytes, pointer or prose, nor what a build recreates (`.venv`, `node_modules`, `__pycache__`).
 - A file anchored above the run that wrote it still records lineage back to it: `probe edge add --source run:RUN --relation produces --target artifact:ID`.
 - A changed file with a registry name is a new version (`version-add`); read the chain first (`view="versions"`).
-- Another attempt at a run is its parent: `--parent RUN --relation retry|resume|fork|branch` at launch (`retry` only if RUN failed or crashed; still `running`: link later), or `edge add` after.
 
 Numbers: changes over steps -> metric (`step=`); fixed setting -> `--config`; one headline number -> one-point metric plus the run summary; per-item detail -> artifact, never a metric; nested timed phase -> span (`run.span`, `probe span add`). Before logging a metric, read reference §4.
 
@@ -123,7 +121,7 @@ A link points from the newer thing to what it came from.
 
 1. Facts first: `probe run inputs RUN`, `probe run upstream RUN` (no coverage yet: retry within ~30 min, then use the session's words), or `entity(refs=["experiment:SLUG"], view="lineage")`. Fix a wrong read with `probe run input dismiss|pin`, never an edge.
 2. B built on A:
-   - a new experiment varying experiment A: `probe experiment fork A B` (links `forked_from`)
+   - a new experiment varying experiment A: `probe experiment fork A B --question "..."` (links `forked_from`)
    - B relaunches run A because A failed or crashed: `retried_from`
    - B reruns A's setup any other way: `branched_from`
    - B uses only A's outputs: `derived_from`; B replaces A: also `supersedes`
@@ -140,4 +138,4 @@ A link points from the newer thing to what it came from.
 
 Log every paper read onto the `research` project, during the review and at the end. `paper list <project>` first (no dedupe); amend with `paper update`. Flags: reference §5.
 
-`probe paper add <project> "<title>" --source <url> --summary "<the idea, in your words>" --tag <concept>`; tags are concepts, never authors. Always answer `--via`: the paper you followed (with `--via-provenance observed_call|provider_citation|human|inferred` and `--via-reason`), `none` if you came directly, omit only if you truly can't say. Always answer `--relates-to` too: the earlier paper in this project the new one connects to, with `--relates-reason` saying in one or two sentences how the two relate, or `none` for the project's first paper. Pick by what the papers say, never by which paper was added last. Never default to the last paper added; answer now, not after a compaction.
+`probe paper add <project> "<title>" --source <url> --summary "<the idea, in your words>" --tag <concept>`; tags are concepts, never authors. Always answer `--via`: the paper you followed (with `--via-provenance observed_call|provider_citation|human|inferred` and `--via-reason`), `none` if you came directly, omit only if you truly can't say. Always answer `--relates-to` too: the earlier paper in this project the new one connects to, with `--relates-reason` saying in one or two sentences how the two relate, or `none` for the project's first paper. Pick by what the papers say, never by which paper was added last; answer now, not after a compaction.

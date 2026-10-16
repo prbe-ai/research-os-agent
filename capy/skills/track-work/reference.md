@@ -1,18 +1,18 @@
 # Reference
 
-Lookup only; judgment is in the skill. Sections mirror the skill's numbering.
+Lookup only; judgment is in the skill.
 
 ## INDEX
 
-| skill | reference |
+| section | holds |
 |---|---|
-| §1 the map | §1 ENTITY COMMANDS - every create/change/delete verb, per entity |
-| §2 project and experiment | §2 QUESTION AND TAGS |
-| §3 run | §3 RUN - snapshot inputs, capture calls, delivery (the outbox) |
-| §4 files and numbers | §4 FILES AND NUMBERS - artifact commands, big files, names and versions, metric shape, derived metrics |
-| §5 papers | §5 PAPERS |
-| notes, reading, publishing | §6 NOTES, §7 READING BACK, §8 PUBLISHING |
-| worked examples | §9 RECIPES - data processing, provisioning, trials |
+| §1 ENTITY COMMANDS | every create/change/delete verb, per entity |
+| §2 QUESTION AND TAGS | question, conclusion and tag shapes |
+| §3 RUN | snapshot inputs, capture calls, delivery (the outbox) |
+| §4 FILES AND NUMBERS | artifact commands, big files, names and versions, metric shape, derived metrics |
+| §5 PAPERS | paper flags |
+| §6 NOTES, §7 READING BACK, §8 PUBLISHING | notes, reads, experiment versions |
+| §9 RECIPES | data processing, provisioning, trials |
 
 ## 1. ENTITY COMMANDS
 
@@ -21,7 +21,7 @@ probe project create SLUG --kind K [--parent P] [--tag T] | list | get | use | s
 probe experiment create SLUG --project P --question "..." | set [--question|--conclusion] | freeze --label L | delete | edges
 probe experiment fork SRC NEW --question "..." | inherited EXP [--runs]
 probe exec [--project P | --experiment E] [--parent RUN --relation R] -- CMD
-probe run fork SRC --step N | end --status S | check | reproduce | tag | set RUN --name
+probe run fork SRC --step N | end --status S | check | reproduce | tag | set RUN --name --description
 probe group create EXPERIMENT_ID --name NAME [--kind K] [--spec JSON|@FILE] | list | get | set
 probe trial list RUN | get TRIAL | set TRIAL --name
 probe workspace create SLUG [--name] [--use] | list | get | rename | use | delete ID --yes
@@ -34,18 +34,15 @@ probe project code attach OWNER/REPO | detach | list
 
 | entity | for | create | change | delete |
 |---|---|---|---|---|
-| dataset | a named, versioned team dataset | `dataset add PATH --name N --run R` (`--upload` to store it in Probe) | same command: a new version | - (the dashboard; refused while runs use it) |
+| dataset | a named, versioned team dataset | `dataset add PATH --name N --run R` (`--upload`, only when the researcher asks, stores it in Probe) | same command: a new version | - (the dashboard; refused while runs use it) |
 | source | where outside data came from (Hub id, bucket path) | `source add URI` | - | - (refused while runs use it) |
 | Shared folder | older team files; read and delete only | - | - | `delete` (soft) |
 
-Prefer `--project` or `PROBE_PROJECT` over `project use` (machine-global -
-skill §2). `probe experiment set EXP --question "..."` is the only way to
+`probe experiment set EXP --question "..."` is the only way to
 change a question: opening a run with `question=` on an existing experiment
 never rewrites it. `--conclusion` sets the answer; `--conclusion ""` clears it.
 
 ## 2. QUESTION AND TAGS
-
-For a teammate, not a log. Slugs and names: ENTITY NAMING in the skill.
 
 | field | shape |
 |---|---|
@@ -72,7 +69,8 @@ probe snapshot-restore RUN --verify-only # can it be rebuilt: want "0 unavailabl
 
 - A glob matching nothing is an error; a path outside the snapshot root is
   refused; naming a file already in the manifest adds no duplicate.
-- Size is handled: `--reference-over-mb`, default 100.
+- Big files are recorded, not stored: `--reference-over-mb`, default 100 (the
+  snapshot's own threshold, not the 5 GB artifact upload limit).
 - A non-git directory is captured whole, skipping lockfile-rebuilt trees and
   credential-shaped names.
 - Files git cannot supply are stored one artifact row per file
@@ -125,14 +123,14 @@ what opens inside it, and it closes `failed` if the body raises.
 ### Delivery - what queues
 
 `probe log`, `probe span add` and a RUN-anchored `probe artifact add` queue
-into a durable local outbox and return immediately. `--sync` forces blocking.
+into a durable local outbox and return immediately; a project or experiment
+upload blocks unless it is over 64 MB or you pass `--async`. `--sync` forces
+blocking.
 
 - `probe outbox status` exits 0 when everything is delivered; MCP reads lag
   the same way.
 - **`probe run end` is the barrier.** `--async` queues the close BEHIND the
     data; `--flush-timeout N` bounds the wait.
-- **Only run-anchored artifacts queue.** Project and experiment uploads are
-    synchronous unless you pass `--async`.
 - **Failures surface** as a stderr `outbox:` banner and in `probe outbox
     status` / `probe doctor`. `probe outbox retry` requeues dead-lettered
     items.
@@ -159,18 +157,16 @@ An artifact is a name with immutable versions, each pinned from an upload.
 
 ### Big files
 
-`artifact add` streams, so the upload itself handles any size. Over 100 MB,
+Up to 5 GB, upload the file (over 64 MB it goes up in parts). Over 5 GB,
 record a pointer instead:
 
 | the bytes live | pass | what lands |
 |---|---|---|
-| on this box or a shared volume | `--reference` | a `file://` uri plus path and host - name the host in `--notes`. `--hash` fingerprints; `--allow-missing` for a path this host cannot see |
+| on this box or a shared volume | `--reference` | a `file://` uri plus path and host - name the host in `--notes`. `--hash` fingerprints it by reading it whole (minutes on tens of GB); `--allow-missing` for a path this host cannot see |
 | already in a bucket | `--uri s3://...` | the object uri, resolvable by anyone with the bucket |
 
-`--kind`, `--step`, `--span` and `--meta` are run-anchor only. References are
-run/project/experiment only — a workspace or Shared file IS its bytes, so
-`--reference` and `--uri` are errors there. Code is always stored, never
-pointed at (`--kind code`, or the snapshot's `code_bytes`).
+`--kind`, `--step`, `--span` and `--meta` are run-anchor only. Code is always
+stored, never pointed at (`--kind code`, or the snapshot's `code_bytes`).
 Uploads are content-addressed: bytes already held are never re-sent. From the
 SDK, `run.log_artifact(name, path=…, reference=True)` records where the bytes
 are without moving them.
@@ -265,8 +261,8 @@ Two doors for a metric you thought of after the run finished:
 | `--summary` | the main idea in YOUR words (`@file.md` works) |
 | `--discrepancies` | what the repo does that the paper does not say: censored code, a missing ablation, a contradicted hyperparameter (`@file.md` works) |
 | `--tag` | one concept, repeatable - the axis a forty-paper review gets grouped on |
-| `--relates-to` | the earlier paper in this project this one connects to (its id), or `none` for the project's first paper |
-| `--relates-reason` | REQUIRED with a paper id - one or two sentences on how the two relate |
+| `--relates-to` | an earlier paper's id, or `none` |
+| `--relates-reason` | REQUIRED with a paper id |
 | `--relates-provenance` | `inferred` (the default: your judgment) or `human` (the researcher said so) |
 
 `--via-provenance`, required with `--via <paper id>`:
@@ -351,11 +347,6 @@ deletions are provenance, not housekeeping.
 
 ### Provisioning
 
-Provisioning is setup (SKILL "WHAT COUNTS AS ML WORK"): no run, no artifact.
-When it trips you up - every zone stocked out, a quota, a driver pin - write
-one short line in the notes of the project it serves (`edit-notes`), once that
-project exists.
-
 The machine a training run got goes on THAT run:
 
 ```
@@ -366,7 +357,7 @@ probe link $TRAIN --set gcp_zone=us-central1-a --set gcp_machine_type=a3-highgpu
 for what the lineage vocabulary cannot say** (`consumes` `produces`
 `evaluates_on` `forked_from` `resumed_from` `retried_from` `branched_from`
 `promoted_to` `derived_from` `supersedes` `informed_by`) - a relaunch after a
-crash is `run child --relation retry`, not a key.
+crash is `--parent RUN --relation retry`, not a key.
 
 ### Trials
 
