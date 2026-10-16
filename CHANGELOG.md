@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.260.0
+
 - Export native Miles dashboard telemetry and safe rollout/token diagnostics to Probe in the background when `--dump-details` is enabled. Upload immutable stream segments with durable retry cursors, and provide a repair command for existing dumps.
 
 
