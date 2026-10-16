@@ -892,8 +892,7 @@ def _inline_reminder() -> str | None:
         return None
     _session_marker.forget_inline_shown(sid)
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
-    track_work, edit_notes = (os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES)
-    return inline_notice_for(track_work, edit_notes)
+    return inline_notice_for(*(os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES))
 
 
 def _daemon_profile_excluded() -> str | None:
@@ -1157,9 +1156,9 @@ def paper_find_ready() -> "bool | None":
     return None
 
 
-def inline_notice_for(track_work: str, edit_notes: str) -> str:
+def inline_notice_for(track_work: str, write_summary: str, edit_notes: str) -> str:
     """`_session_marker.INLINE_NOTICE`, its last sentence by what the local CLI can do."""
-    return _session_marker.inline_notice(track_work, edit_notes, bridge=inline_bridge_ready())
+    return _session_marker.inline_notice(track_work, write_summary, edit_notes, bridge=inline_bridge_ready())
 
 
 def _local_plugin(plugin_json: str):

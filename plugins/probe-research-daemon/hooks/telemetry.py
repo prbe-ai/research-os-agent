@@ -121,6 +121,8 @@ RESEARCH_SKILLS = {
     "audit-team-note",
     "edit-notes",
     "plan-research-review",
+    "write-summary",
+    "overview-visuals",
     "probe-research-setup",
     "probe-capy",
     # retired names (kept for resumed transcripts and cached installs);

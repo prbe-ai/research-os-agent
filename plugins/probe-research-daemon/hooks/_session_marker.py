@@ -2161,7 +2161,7 @@ INLINE_DISPLAY = "on (inline)"
 #: The skills an inline agent records by (the main agent's versions), shipped as
 #: plain files in the lean plugin's `inline/` folder (`make sync-daemon-plugin`;
 #: never under `skills/`, which would list them); pi names its own package's.
-INLINE_SKILL_FILES = ("track-work/SKILL.md", "edit-notes/SKILL.md")
+INLINE_SKILL_FILES = ("track-work/SKILL.md", "write-summary/SKILL.md", "edit-notes/SKILL.md")
 #: What the agent is told when the researcher switches to inline, and again after
 #: a compaction or resume (Richard's approved text, 2026-10-06). Short on purpose:
 #: Claude Code saves hook context over ~2 KB to a file, so the skills go by path.
@@ -2170,7 +2170,8 @@ INLINE_SKILL_FILES = ("track-work/SKILL.md", "edit-notes/SKILL.md")
 INLINE_NOTICE = (
     "Probe is `on (inline)` for this conversation: the Probe daemon is off, and you read and "
     "write Probe yourself with the `probe` CLI, recording the work as it happens. Before "
-    "recording, read the two skills you record by: {track_work} and {edit_notes}. {reads}"
+    "recording, read the three skills you record by: {track_work}, {write_summary} and {edit_notes}. "
+    "{reads}"
 )
 #: How an inline agent reads where the CLI has the read bridge (`probe mcp tools|call`,
 #: CLI 0.220.0: the hooks' `version_check.INLINE_BRIDGE_MIN_CLI`).
@@ -2398,12 +2399,17 @@ def inline_intervals(session_id: str) -> "list[tuple[float, float | None]]":
     return out
 
 
-def inline_notice(track_work: "str | Path", edit_notes: "str | Path", *, bridge: bool) -> str:
-    """`INLINE_NOTICE` naming the two skill files the agent records by; `bridge`:
+def inline_notice(
+    track_work: "str | Path", write_summary: "str | Path", edit_notes: "str | Path", *, bridge: bool
+) -> str:
+    """`INLINE_NOTICE` naming the skill files the agent records by, in
+    `INLINE_SKILL_FILES` order; `bridge`:
     this machine's CLI has `probe mcp tools|call` (`INLINE_READS`), else it is
     too old to read Probe inline (`INLINE_READS_OLD_CLI`)."""
     reads = INLINE_READS if bridge else INLINE_READS_OLD_CLI
-    return INLINE_NOTICE.format(track_work=track_work, edit_notes=edit_notes, reads=reads)
+    return INLINE_NOTICE.format(
+        track_work=track_work, write_summary=write_summary, edit_notes=edit_notes, reads=reads
+    )
 
 
 def _inline_shown_path(session_id: str) -> Path:

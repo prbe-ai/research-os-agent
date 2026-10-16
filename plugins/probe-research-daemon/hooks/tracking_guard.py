@@ -1158,11 +1158,11 @@ def _inline_notice() -> str:
     last sentence by what the local CLI can do (`version_check.inline_notice_for`).
     Unreadable: the too-old-CLI sentence, never commands the CLI may lack."""
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
-    track_work, edit_notes = (os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES)
+    skills = [os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES]
     try:
-        return _version_check().inline_notice_for(track_work, edit_notes)
+        return _version_check().inline_notice_for(*skills)
     except Exception:  # noqa: BLE001 -- the notice still lands
-        return _session_marker.inline_notice(track_work, edit_notes, bridge=False)
+        return _session_marker.inline_notice(*skills, bridge=False)
 
 
 def _version_check():

@@ -42,7 +42,7 @@ describe("the inline notice (/probe inline)", () => {
     const pkg = join(__dirname, "..");
     const notice = inlineNotice(pkg, true);
     expect(notice).not.toContain("{");
-    for (const name of ["track-work", "edit-notes"]) {
+    for (const name of ["track-work", "write-summary", "edit-notes"]) {
       const path = join(pkg, "skills", name, "SKILL.md");
       expect(notice).toContain(path);
       expect(readFileSync(path, "utf8")).toContain(`name: ${name}`);

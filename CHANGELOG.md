@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Plugin: the `write-summary` and `overview-visuals` skills reach the main agent, `/probe inline` and pi** (plan writer-owns-summary D2, after CLI 0.261.0 shipped `probe summary` and `probe visuals`). The main agent with Probe on keeps project and experiment summaries (`probe summary checkout`, edit, `probe summary push`) and sets an experiment's tables and charts at Close (`probe visuals set`); track-work's copies carry the same three approved edits as the CLI wheel's (the researcher's `document` block, the project description from the summary's first line, the Close line). The tap's vendored rules and the lean daemon plugin's inline copies follow.
+
 ## 0.261.0
 
 - **The MCP reads a project's or experiment's sessions, and a summary's history.** `entity(refs=["project:P"], view="sessions")` (and `experiment:E`) lists the captured sessions that worked on it, newest first, with each row's `title` (the agent's own name for the session), owner, first and last sighting and `direct`; `next_cursor` walks past the route's page of 50, and the daemon's reader still never sees the session it reads beside. `view="summary_history"` lists the summary's versions (who, when, through what, how long) newest first, and `view_options={"version": N}` reads one version's markdown; any other option is refused by name. `view="overview"` gains `markdown`, the page as recorders read and write it, left out on a server without the summary route. A `search` with `project_id` that reaches transcripts (`search_in` names them, or is omitted and so asks for every corpus) now says in `note` that transcripts are not project-scoped (the scope drops every transcript hit) and points at the sessions view plus `view_options.grep`; the `project_id` parameter says the same. Against a server before the paged sessions routes, the sessions view reads the uncursored page as the capped list it is (`sessions_beyond_server_limit`), never as a complete walk. SDK: `list_project_sessions`, `list_experiment_sessions`, `get_summary`, `list_summary_versions`, `get_summary_version` (one name for both anchors: `project=` or `experiment=`). Needs the server with the sessions routes (this release) and, for summaries, the one that stores them.
@@ -367,7 +369,6 @@
 - Companion bench: the MLP side-by-side key's "paper why" check (F4) accepts the stopping rule in any
   verb form ("stops after", "keeps the best"); it failed notes that stated the rule correctly.
 
-
 - **Auto-update now tells the server how each attempt went, so a machine whose tap or plugin stays behind says why.** After every attempt (the SessionStart hook's, the CLI's own, a run end's, or a person's Update) the CLI sends `POST /v1/client/update-reports`: per component (CLI, plugin, tap) its versions, the target and a result that separates a tap that is not installed, one installed only under a retired id (`prbe-cc-tap-plugin`, `prbe-codex-tap-plugin`, or another marketplace), `claude`/`codex` missing from the updater's PATH, a failed marketplace refresh, a failed command, and a tap still behind after a clean update. Free text leaves the machine without its home folder or login name (any spelling, Windows forms included). Skips (`run in flight`, `not an interactive terminal`, ...) are recorded locally as before and sent by the next detached manifest refresh or update, never from the command that skipped (it may be inside a training loop). The send is best-effort: it starts after the update has finished, takes at most 3 s of wall-clock time in all (only when the server does not answer), keeps the report for a later try when there is no answer, drops it after 7 days, and never fails or changes the update. Nothing about what the updater installs changed; `probe doctor` reads the same local record.
 
 ## 0.224.0
@@ -380,7 +381,6 @@
   differ from the arm's own `agent/skills`. The daemon reads skills through `bite.skills_root()`,
   which prefers `<venv>/share/probe-research/skills`, and `--src` swaps only Python code, so a
   skill-text arm on a venv installed from main silently ran main's text (found benching #2418).
-
 
 - The daemon's writer compacts its conversation at 250K tokens (was 950K): every model round re-reads
   the whole context, and 78% of writer spend in the week to 10-07 was calls over 200K tokens.

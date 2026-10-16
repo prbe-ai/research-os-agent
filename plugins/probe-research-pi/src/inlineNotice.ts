@@ -2,9 +2,9 @@
  * `/probe inline` (Richard 2026-10-06), pi's half of telling the agent: the
  * researcher handed Probe to it (typed, or `probe session state inline` from a
  * terminal), so on its next prompt -- once per stretch, and again after a
- * compaction or resume -- it hears that the daemon is off and which two skill
- * files it records by. pi's own package ships the main agent's track-work and
- * edit-notes under `skills/`; the daemon profile only stops listing them.
+ * compaction or resume -- it hears that the daemon is off and which three skill
+ * files it records by. pi's own package ships the main agent's track-work,
+ * write-summary and edit-notes under `skills/`; the daemon profile only stops listing them.
  *
  * `<sid>.inline-shown` holds the stretch's `since` once the agent was told:
  * shared with the Python hooks (`session_marker.inline_notice_due`), which read
@@ -25,7 +25,7 @@ import type { TrackingExecFileFn } from "./core/trackingState.js";
 
 /** `session_marker.INLINE_NOTICE`, verbatim (Richard's approved text, 2026-10-06). */
 export const INLINE_NOTICE =
-  "Probe is `on (inline)` for this conversation: the Probe daemon is off, and you read and write Probe yourself with the `probe` CLI, recording the work as it happens. Before recording, read the two skills you record by: {track_work} and {edit_notes}. {reads}";
+  "Probe is `on (inline)` for this conversation: the Probe daemon is off, and you read and write Probe yourself with the `probe` CLI, recording the work as it happens. Before recording, read the three skills you record by: {track_work}, {write_summary} and {edit_notes}. {reads}";
 
 /** `session_marker.INLINE_READS`: the last sentence beside a CLI with the read bridge. */
 export const INLINE_READS =
@@ -45,11 +45,12 @@ export const INLINE_CLI_TIMEOUT_MS = 3_000;
 export const INLINE_SHOWN_SUFFIX = ".inline-shown";
 
 /**
- * The notice, naming this package's copies of the two skills; `bridge`: the
+ * The notice, naming this package's copies of the three skills; `bridge`: the
  * local CLI has `probe mcp tools|call` (`cliHasInlineBridge`).
  */
 export function inlineNotice(extensionDir: string, bridge: boolean): string {
   return INLINE_NOTICE.replace("{track_work}", join(extensionDir, "skills", "track-work", "SKILL.md"))
+    .replace("{write_summary}", join(extensionDir, "skills", "write-summary", "SKILL.md"))
     .replace("{edit_notes}", join(extensionDir, "skills", "edit-notes", "SKILL.md"))
     .replace("{reads}", bridge ? INLINE_READS : INLINE_READS_OLD_CLI);
 }

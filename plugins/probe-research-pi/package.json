@@ -17,7 +17,9 @@
       "skills/audit-team-note",
       "skills/edit-notes",
       "skills/notes-audit",
-      "skills/plan-research-review"
+      "skills/plan-research-review",
+      "skills/write-summary",
+      "skills/overview-visuals"
     ],
     "mcp": "./mcp.json"
   },

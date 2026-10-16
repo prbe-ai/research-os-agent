@@ -17,7 +17,9 @@
       "plugins/probe-research-pi/skills/audit-team-note",
       "plugins/probe-research-pi/skills/edit-notes",
       "plugins/probe-research-pi/skills/notes-audit",
-      "plugins/probe-research-pi/skills/plan-research-review"
+      "plugins/probe-research-pi/skills/plan-research-review",
+      "plugins/probe-research-pi/skills/write-summary",
+      "plugins/probe-research-pi/skills/overview-visuals"
     ],
     "mcp": "./plugins/probe-research-pi/mcp.json"
   },

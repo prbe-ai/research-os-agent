@@ -59,7 +59,7 @@ A session can hold both: record the ML part only.
 
 Put each fact on the lowest entity it is true of. Tracking on means everything is recorded; do not curate. Drop nothing: a file with no better home goes to the project's artifacts. Notes are the exception: only what would help the next agent or teammate, as hidden prose written by `edit-notes`.
 
-- The authored Markdown (`summary_markdown`, a block in the Overview page; on a run, below AI Summary) is the RESEARCHER's - never write it.
+- `document`, the researcher's block on a summary, is theirs - never write it; the rest of a summary is yours (write-summary).
 - The team note is one synced file, `probe-team-note.md` (`edit-notes`).
 - Automatically tracked: transcripts, launch context, lockfiles, lifecycle events.
 - Entities and their commands: reference §1. `delete` is permanent. Use a deterministic `--external-id`, and `probe link` for foreign keys.
@@ -78,7 +78,7 @@ Create both first; `run start` never creates them, and a typo'd slug makes a sec
 
 - A phase of a bigger effort is a SUBPROJECT of it, never a new top-level sibling: `--parent <project>`. Related but separate: `project reference add --to`. A repo: `project code attach PROJECT OWNER/REPO`.
 - No question: a project-direct run. `freeze` pins an experiment's runs.
-- The server writes a project's description itself once a run under it finishes.
+- A project's description comes from its summary's first line.
 - Pass `--project`; `project use` is machine-wide.
 
 ## Run
@@ -99,7 +99,7 @@ Every run needs an owner that keeps it alive:
 Close:
 - `probe run check RUN` and report it (exit 2: add what's missing or say why); put what `probe run reproduce RUN` lists under `completeness.missing`.
 - `probe run end RUN --status completed|failed|crashed|canceled|untracked` (the process, not the result). A result not to trust: `probe run tag RUN invalid` plus a note on what to believe instead.
-- When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer and its evidence in one or two sentences, with both sides' numbers when it is a comparison. Change it when later work changes the answer.
+- When the work answers an experiment's question (a winner, a decision, a dead end): `probe experiment set EXP --conclusion "..."`: the answer and its evidence in one or two sentences, with both sides' numbers when it is a comparison. Change it when later work changes the answer. Set the experiment's tables and charts (`overview-visuals`): `probe visuals options`, then `probe visuals set`.
 - No run this session: what's next and open goes in the project's notes.
 - End with the dashboard URL of everything you created or closed, verbatim as printed.
 

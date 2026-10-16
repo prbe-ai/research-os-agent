@@ -52,6 +52,8 @@ export const PACKAGE_SKILLS: ReadonlySet<string> = new Set([
   "edit-notes",
   "notes-audit",
   "plan-research-review",
+  "write-summary",
+  "overview-visuals",
 ]);
 
 /** Where the daemon's own skills live inside this package. Never named in package.json. */
