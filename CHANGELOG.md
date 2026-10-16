@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.263.1
+
 - **A `Users/` or `home/` folder no longer erases a file's name.** Artifact names went through the prose scrubber, whose home-path rule read any `/Users/<x>` or `/home/<x>` folder in a repo path as a home directory and cut the rest to `<path>`: every file under `apps/web/pages/Admin/Users/` was uploaded as `apps/web/pages/Admin<path>`, overwriting the others, and the next one 409'd as superseded, so a folder import could never finish (one customer, 10-16, CLI 0.260.0; since 0.173.0, #1698). Names now get the credential scrub only (`Client.upload`, `Run.log_artifact`, the outbox, `probe artifact add`'s multipart door). A folder import frozen under a cut name is reissued once on resume, under the file's real name; its old request -- dead-lettered, or still queued when the import was cut off -- is discarded instead of retried forever. Artifacts already stored under a `<path>` name stay in the project until deleted.
 
 ## 0.263.0
