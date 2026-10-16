@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `probe summary`: the lane mode a checkout or push saw is kept per server (the active context's, or `--base-url`), so a team still in lane mode on one server no longer quiets the summary reminder on another.
 - **Plugin: the `write-summary` and `overview-visuals` skills reach the main agent, `/probe inline` and pi** (plan writer-owns-summary D2, after CLI 0.261.0 shipped `probe summary` and `probe visuals`). The main agent with Probe on keeps project and experiment summaries (`probe summary checkout`, edit, `probe summary push`) and sets an experiment's tables and charts at Close (`probe visuals set`); track-work's copies carry the same three approved edits as the CLI wheel's (the researcher's `document` block, the project description from the summary's first line, the Close line). The tap's vendored rules and the lean daemon plugin's inline copies follow.
 
 ## 0.261.0
