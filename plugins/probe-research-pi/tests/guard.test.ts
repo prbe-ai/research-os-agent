@@ -124,6 +124,15 @@ describe("the daemon profile's allowlist", () => {
     }
   });
 
+  it("lets the agent list the daemon's held questions, and leaves saying no to the researcher", () => {
+    for (const command of ["probe approvals --list", "probe approvals"]) {
+      expect(guardToolCall(PiTool.Bash, { command }, daemon())).toBeNull();
+    }
+    expect(guardToolCall(PiTool.Bash, { command: "probe deny 7f3a09c1" }, daemon())).toBe(
+      DAEMON_PROFILE_DENY.replace("{matched}", "probe deny"),
+    );
+  });
+
   it("refuses every Probe MCP tool, naming it", () => {
     for (const tool of ["probe-research-pi__probe_browse", "probe_mcp_search_knowledge", "mcp__probe_research__entity"]) {
       expect(guardToolCall(tool, { query: "x" }, daemon())).toBe(DAEMON_PROFILE_DENY.replace("{matched}", tool));

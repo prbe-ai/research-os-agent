@@ -161,6 +161,7 @@ export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "doctor",
   "paper find",
   "feedback send",
+  "approvals",
 ]);
 
 /** `session_marker.command_words`: the (at most three) words click dispatches on. */

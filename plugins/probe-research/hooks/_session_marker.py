@@ -1383,10 +1383,13 @@ def daemon_allows_agent(matched: str) -> bool:
 #: records, so the agent runs it itself (Richard 2026-10-12: "just the tools
 #: where it makes sense for the agent to call it directly"). `feedback send`
 #: holds feedback for the Probe team as a question for the researcher
-#: (`probe.feedback`); nothing leaves without their yes.
+#: (`probe.feedback`); nothing leaves without their yes. `approvals` lists the
+#: questions the daemon holds for the researcher: in an agent's shell the CLI
+#: only lists them and answers nothing (`daemon_cli.approvals_cmd`). Never
+#: `deny`: a no is the researcher's.
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session parent", "ignore check", "run expect", "doctor", "paper find",
-     "feedback send"}
+     "feedback send", "approvals"}
 )
 
 #: The researcher's switch and defaults, typed into a shell. In the daemon

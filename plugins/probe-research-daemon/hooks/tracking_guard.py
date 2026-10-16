@@ -565,7 +565,8 @@ def probe_write(command: str) -> "str | None":
 def _asks_help(args: "list[str]") -> bool:
     """`--help` before any `--`, as the CLI's gate reads it: after `--` it is an
     argument (`probe project contributors -- --help` looks up a project). Right
-    after a redirection it is a file name (`probe project create x &> --help`)."""
+    after a redirection it is a file name (`probe project create x &> --help`).
+    A token search: the CLI's write gate asks click (`write_gate._asks_help`), and it holds."""
     words = args[: args.index("--")] if "--" in args else args
     return any(
         word == _session_marker.HELP_FLAG and (i == 0 or words[i - 1] not in _REDIRECTIONS)
