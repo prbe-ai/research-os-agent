@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.262.1
+
 - **Update cannot report a removal.** `probe wizard --action update` changes versions, never settings, so a tracking plugin or capture it does not see is now registered `unknown` (the server keeps what it knew) instead of `absent`. Updates spawned by a session's start see the agents on that shell's PATH, so one reaching fewer agents than the last report posted a false "Probe removed from a machine" and the next put it back (one customer, 10-15, CLI 0.258.0). Needs the server that keeps known values on an `unknown` report (this change's own server half); against an older one an update can show a known value moving to `unknown`.
 
 ## 0.262.0
