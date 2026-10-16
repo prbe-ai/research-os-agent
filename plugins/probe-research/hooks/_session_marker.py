@@ -1121,6 +1121,11 @@ WRITE_GROUPS = frozenset(
         "source",
         "dataset",
         "checkpoint",
+        # A project's or experiment's summary and its Metrics-center visuals,
+        # kept by the recorder (writer-owns-summary): `summary push` and
+        # `visuals set` record; `summary checkout` and `visuals options` read.
+        "summary",
+        "visuals",
     }
 )
 
@@ -1192,6 +1197,8 @@ READ_VERBS = frozenset(
         # `paper find`: the research literature (the MCP's `find_papers`), an
         # outside index; it adds nothing to the team's records.
         "find",
+        # `visuals options`: what a summary's tables and charts may name.
+        "options",
     }
 )
 

@@ -45,6 +45,8 @@ export const WRITE_GROUPS: ReadonlySet<string> = new Set([
   "source",
   "dataset",
   "checkpoint",
+  "summary",
+  "visuals",
 ]);
 
 /** `session_marker.SUBGROUPS`. */
@@ -96,6 +98,7 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "graph",
   "find",
   "inherited",
+  "options",
 ]);
 
 /** `session_marker.REMOVAL_VERBS`. */
