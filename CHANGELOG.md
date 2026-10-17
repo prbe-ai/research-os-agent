@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A `probe visuals set` no longer puts back a tables version this session's own `probe summary push` had already moved past.** Every write of the remembered version now takes one lock beside the draft (`<session>.visuals.lock`), the push re-checks it under that lock, and a set never moves it backwards. Before, a set that finished just after such a push could leave the next set refused (exit 2) until `probe visuals options` ran again. One narrower window stays open (a set landing while the push merges, before the push re-reads): the same exit 2, and `probe visuals options` still recovers it.
+
 ## 0.266.0
 
 - **The installer repairs a Codex marketplace whose config entry was deleted.** Removing `[marketplaces.research-os-agent]` from `~/.codex/config.toml` (or the whole file) left the checkout in `~/.codex/.tmp/marketplaces/`, and from then on `codex plugin marketplace add` refused ("already added from a different source"), `upgrade` refused ("not configured as a Git marketplace") and both plugins were "not found in marketplace". Re-running `npx probe-research install` could not get out of it. The installer and `probe update` now remove that orphaned checkout and add the marketplace again. A name Codex still lists (a fork, a local checkout) is never removed; the error names it and the `codex plugin marketplace remove` that would replace it. When adding and refreshing the marketplace both fail, the installer prints both errors, not only the refresh's.
