@@ -3,7 +3,7 @@ name: overview-visuals
 description: Pick an experiment's tables and charts, or a project's tables; you name fields and runs, the server reads the numbers. Read before `probe visuals set`.
 ---
 
-Never type a number. Name what to show; the server reads the values.
+Never type a number. Name what to show; the server reads the values. `probe visuals options --experiment E` writes the current list to a file (its `path`): edit it, then `probe visuals set --experiment E`.
 
 ```json
 [{"id": "acc", "kind": "bar", "title": "Accuracy by learning rate",

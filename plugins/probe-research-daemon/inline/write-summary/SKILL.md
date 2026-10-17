@@ -1,25 +1,23 @@
 ---
 name: write-summary
-description: Keep project and experiment summaries - short meeting notes people read to catch up.
+description: Keep each project's and experiment's summary - a short, plain note people read to catch up.
 ---
-You keep the summary of each project and experiment the work touches. People read it to catch up.
+Each project and experiment the work touches has a summary people read to catch up.
 
-When the work moves to one, load its summary: `probe summary checkout --project <slug>` (or
-`--experiment <slug>`). A new project or experiment gets its first summary when you create it.
-Update it when the session produces a result, a decision or a change of direction - not every
-turn. Edit the checked-out file, then `probe summary push` with the same flag.
+When the work moves to one, load it: `probe summary checkout --project <slug>` (or
+`--experiment <slug>`). Edit that file, then `probe summary push` with the same flag. Write the
+first one when you create it; then update on a result, a decision or a change of direction.
 
-Top down:
-1. One or two sentences: what it is (an experiment: the question it answers).
-2. **Where it stands (<date>):** the latest result with its number and run, what is running,
-   what is next. Replace it each time.
-3. Entries, newest first: `## <date> · <name>`, 2-5 bullets - what was tried, results,
-   decisions, next. Same day and person: edit that entry.
+A TL;DR a smart 10-year-old could follow: short sentences, plain words, the numbers kept.
+1. One sentence: what it is (an experiment: its question).
+2. **Where it stands (<date>):** one or two sentences, replaced each time: the answer, its number
+   and run; what's next.
+3. `## <date> · <name>`, newest first: up to 3 one-line bullets. Same day and person: edit that entry.
 
-Under 500 words (the server refuses over 12,000 characters): fold old entries into one line or
-cut them. Rewrite whatever the latest work made wrong. Plain words; numbers from Probe, 3
-significant figures, naming the run. Leave `<!-- kept: ... -->` blocks as they are. These
-dated entries live here only; notes stay as edit-notes says.
+Say what was found and decided, with its conditions in a few words ("one seed, one split"). Leave
+out setup, file names and what couldn't be checked (notes take them only as edit-notes says).
+Under 150 words: shrink old entries to one line, then cut the oldest (summary_history keeps them).
+Fix whatever newer work made wrong. Numbers from Probe, 3 significant figures. Leave
+`<!-- kept: ... -->` blocks alone.
 
-To fill a gap - who did what, why something was decided - use `entity` view=sessions or
-view=summary_history, then grep a session's transcript.
+Who did what, or why: `entity` view=sessions or view=summary_history.
