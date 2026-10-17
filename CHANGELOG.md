@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.266.1
+
 - **A `probe visuals set` no longer puts back a tables version this session's own `probe summary push` had already moved past.** Every write of the remembered version now takes one lock beside the draft (`<session>.visuals.lock`), the push re-checks it under that lock, and a set never moves it backwards. Before, a set that finished just after such a push could leave the next set refused (exit 2) until `probe visuals options` ran again. One narrower window stays open (a set landing while the push merges, before the push re-reads): the same exit 2, and `probe visuals options` still recovers it.
 
 ## 0.266.0
