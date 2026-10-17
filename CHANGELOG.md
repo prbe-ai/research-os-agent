@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.264.1
+
 - **`probe visuals set` is no longer refused for the same session's own `probe summary push`, nor the next push merged for its own `visuals set`.** Both writes bump one page counter but each keeps the other's half (a push keeps the tables, a set keeps the text byte for byte), so once this session's write lands on the exact version the other half was read at, that half moves to the new version. Before, every tables set after a summary push in the same bite was refused (exit 2) and redone after another `probe visuals options`: 21 of the writer's 42 visuals commands a session on the companion bench. A version anyone else moved still refuses or merges as before.
 - **The daemon no longer refuses `probe visuals set --help` (or `summary push --help`).** The scan of the file a document command sends looked for it even on a help request, which sends nothing, and refused for want of a `visuals options` with the same flags: 4 of 6 bites on the bench.
 
