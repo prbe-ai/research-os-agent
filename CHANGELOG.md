@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.266.5
+
 - **The daemon no longer crashes on a command that names an over-long path.** The folder check reads paths out of the agent's shell commands; before Python 3.14, `Path.is_dir()` raises `OSError: [Errno 63] File name too long` on a name over 255 bytes, and the worker died on every restart. A heredoc holding a dict with a secret-scan marker (`<redacted:anchored-secret>`) did it: the marker's `>` read as a redirect and the 300-character dict after it as the file written. One strand-ai session went unrecorded for 13 hours. Those checks now answer "not a folder", and a command the check cannot read is skipped.
 - **A Probe MCP tool that keeps returning errors no longer fails the whole bite.** pydantic-ai fails a run on a tool's third retry in a row ("Tool 'entity' exceeded max retries count of 2"), losing every round of the bite. That call now answers the model with the error (`tool error (entity): failed 3 times in a row; not retried.`), and a second model round that runs out of retries, whatever the tool, fails the run as before (its events stay queued and the next try backs off). A reader turn whose tool runs out of retries is now a failed turn, retried with backoff, no longer read as the model's prose answer with its events passed over. Arguments the daemon's own tools refuse to accept still fail the run as before.
 - **A reader turn the size guard wraps up is not reported as stopped.** Past 180,000 tokens (or the message cap) the reader is told to end its turn; when it then does, with its answer, the status stays OK and #eng-alerts gets no "Reader turn stopped". Round, time and loop limits still report.
