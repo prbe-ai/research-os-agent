@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- The MCP's `NoteCatalogKind` and the generated `NoteKind` lose their `group`/`artifact` tombstones: no server produces either since files and sweep groups stopped carrying notes.
 
 ## 0.266.1
 
