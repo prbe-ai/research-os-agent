@@ -162,7 +162,7 @@ record a pointer instead:
 
 | the bytes live | pass | what lands |
 |---|---|---|
-| on this box or a shared volume | `--reference` | a `file://` uri plus path and host - name the host in `--notes`. `--hash` fingerprints it by reading it whole (minutes on tens of GB); `--allow-missing` for a path this host cannot see |
+| on this box or a shared volume | `--reference` | a `file://` uri plus path and host - say where it lives in the run's notes. `--hash` fingerprints it by reading it whole (minutes on tens of GB); `--allow-missing` for a path this host cannot see |
 | already in a bucket | `--uri s3://...` | the object uri, resolvable by anyone with the bucket |
 
 `--kind`, `--step`, `--span` and `--meta` are run-anchor only. Code is always
@@ -174,8 +174,9 @@ are without moving them.
 ### Artifact names and versions
 
 **`--name` is the file's relative path; its extension is kept** (`--name ckpt`
-on `ckpt-4000.pt` stores `ckpt.pt`) so the dashboard can preview it. What the
-file IS goes in `--notes`, never in `--name`.
+on `ckpt-4000.pt` stores `ckpt.pt`) so the dashboard can preview it. Never put a
+description in a name. Files carry no notes: say what a file is, and where it
+lives, in its run's notes (a project's file: the project's).
 
 **Before creating an artifact, check `entity(refs=["artifact:<name>"],
 view="versions")`:**
@@ -286,8 +287,8 @@ Amend, never re-add:
 
 ## 6. NOTES
 
-Projects, experiments, runs, groups, artifacts, plus ONE team note; a trial
-has none. `probe notes checkout` -> edit the file -> `probe notes push`. The
+Projects, experiments and runs, plus ONE team note; files, sweep groups and
+trials have none. `probe notes checkout` -> edit the file -> `probe notes push`. The
 `edit-notes` skill is the manual: caps, merging, sub-notes, compaction. The
 CLI is the only writer; a script shells out to it.
 
