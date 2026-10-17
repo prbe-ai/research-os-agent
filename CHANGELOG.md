@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.266.4
+
 - **Recorder-written summaries are a short TL;DR** (the daemon's, and a main agent's or pi's when it records). `write-summary` now asks for one sentence on what the project or experiment is, one or two on where it stands (the answer, its number and run, what's next) and up to three one-line bullets per dated entry, under 150 words (was 500; the oldest entries are cut once shrinking is not enough), in plain words. Conditions go in a few words ("one seed, one split"); setup, file names and what couldn't be checked stay out (notes take them only as edit-notes says). On the companion bench, summaries fell from 140 to 78 words on average, the summary gate passed 5 of 6 runs, and the writer cost 7% less a session. `overview-visuals` now says how the list reaches `probe visuals set`: `probe visuals options` writes it to a file, you edit it, then set.
 - **`probe doctor` and the setup wizard now mark a CLI before 0.261.0 "UPDATE NEEDED", with the reason** (`client-version.json` `cli.recommended` and `message`): every team's project and experiment summaries are now written by its daemon or agent, which a CLI before 0.261.0 cannot do, so that team's summaries would stop updating.
 
