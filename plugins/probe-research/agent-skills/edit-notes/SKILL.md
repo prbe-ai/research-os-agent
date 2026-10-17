@@ -1,11 +1,11 @@
 ---
 name: edit-notes
-description: How to write notes on a project, experiment or run, and the team note.
+description: How to write notes on any entity (project, experiment, run, etc.) and the team note.
 ---
 
 # Notes
 
-Notes sit on a project, experiment or run, or are the one team note. People and agents read them. Write only what the next person on this work needs, not what happened.
+Notes sit on a project, experiment, run, group or artifact, or are the one team note. People and agents read them. Write only what the next person on this work needs, not what happened.
 
 ## Before you write
 
