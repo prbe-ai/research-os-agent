@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The Probe question dialog no longer shows each option twice, and the feedback question asks first.** The agent was told an option's description could be empty or repeat its label, and Claude Code agents repeated it, so every option showed twice (`Send it` / `Send it`). Agents are now told to leave it empty (`""`), and the approvals hook refuses a description that repeats the label. The feedback question now reads "Send this feedback to the Probe team?", then who wrote it and the text, then what else is sent, with a blank line between each. A feedback question asked under the old wording and still unsent at upgrade no longer matches its re-rendered words, so it is voided, not sent.
+
 ## 0.266.2
 - The MCP's `NoteCatalogKind` and the generated `NoteKind` lose their `group`/`artifact` tombstones: no server produces either since files and sweep groups stopped carrying notes.
 
