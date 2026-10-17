@@ -335,6 +335,10 @@ _SHORT_ANCHORED = re.compile(
 # Password assignments carry context even when the value is a short word or
 # a human passphrase. Quoting ends at its matching quote; an unquoted value
 # continues through spaces until a statement delimiter, never just word one.
+#: A JSON/Python number literal. After a QUOTED `"password"` key it is a
+#: tokenizer vocabulary's id (`"password": 20786` in BERT's tokenizer.json),
+#: never a credential: replacing it also breaks the JSON.
+_NUMBER_LITERAL = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
 _PASSWORD_ASSIGNMENT = re.compile(
     r"(?i)" + _ANCHOR_START + r"(?:password|passwd)(?![A-Za-z0-9])(?P<gap>[\"']?\s*)[:=]\s*" + _STRING_PREFIX +
     r"(?:\"(?P<double>(?:\\.|[^\"\\])*)\"|'(?P<single>(?:\\.|[^'\\])*)'|"
@@ -941,6 +945,8 @@ def scan(
             group = next(name for name in ("double", "single", "bare") if match.group(name) is not None)
             value = match.group(group).rstrip()
             if not value or _is_indirect(value):
+                continue
+            if group == "bare" and match.group("gap")[:1] in ("\"", "'") and _NUMBER_LITERAL.fullmatch(value):
                 continue
             if _is_word_like(value) and ("/" in value or value.startswith("--")):
                 continue
