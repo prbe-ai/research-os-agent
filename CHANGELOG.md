@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.264.0
+
 - **`probe approvals` lists what Jev ran without asking you.** After the questions (or "nothing is waiting for you"), it shows the shell commands the daemon ran on Jev's yes in the last 24 hours, by session, newest first: when, Jev's lowest score, the exit code (or that it timed out, was stopped, or was cut short while it ran), and the whole command, line breaks kept. At most 20; it says how many more ran (each is in `probe companion log <session>`) and when a session's logbook could not be read. Until now such a yes was seen only in the daemon's logbook. Only the rows the daemon writes on a Jev yes count, matched whole, so the daemon's model cannot list its own `probe` writes there by naming Jev in their reason. A coding agent's shell, and the daemon's, sees only its own session's. Characters a terminal would act on (escape sequences, carriage returns, bidi overrides) now print as escapes, in the held questions too, whose later lines are now indented so none reads as a question of its own. A Jev-approved command cut short now keeps `auto-approved: Jev p=…` in its logbook reason.
 
 ## 0.263.1
