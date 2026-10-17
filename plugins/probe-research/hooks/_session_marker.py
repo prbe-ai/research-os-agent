@@ -1159,7 +1159,6 @@ READ_VERBS = frozenset(
         "cat",
         "diff",
         "search",
-        "export",
         "events",
         "coordinates",
         "download",
@@ -1234,6 +1233,16 @@ HELP_FLAG = "--help"
 READ_GROUPS = frozenset(
     {"metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance"}
 )
+
+#: Commands inside a `READ_GROUPS` group that record rather than print:
+#: `metrics backfill` stores a derived curve, `shared add` uploads into the
+#: team's Shared folder, `shared share|unshare` move a file into or out of it.
+#: Read as reads, `read` let them through.
+READ_GROUP_WRITES = frozenset({"metrics backfill", "shared add", "shared share", "shared unshare"})
+
+#: ...and the ones that remove: cleanup, never refused, as `REMOVAL_VERBS` is in
+#: a write group. Read as reads, `off` refused them.
+READ_GROUP_REMOVALS = frozenset({"metrics delete", "shared delete"})
 
 #: WHAT THE AGENT STILL WRITES IN THE `daemon` STATE, without `--directed`: the
 #: launch of a run and the run's own data -- the `instrument-code` surface the
@@ -1347,6 +1356,10 @@ def classify_probe_args(args: "list[str]") -> "tuple[str | None, str]":
         return (None, "probe " + command)
     if head in TOP_LEVEL_WRITES:
         return ("write", "probe " + head)
+    if command in READ_GROUP_WRITES:
+        return ("write", "probe " + command)
+    if command in READ_GROUP_REMOVALS:
+        return (None, "probe " + head)
     if head in READ_GROUPS:
         return ("read", "probe " + head)
     if command in DIRECTED_ONLY:
@@ -1394,9 +1407,19 @@ def daemon_allows_agent(matched: str) -> bool:
 #: questions the daemon holds for the researcher: in an agent's shell the CLI
 #: only lists them and answers nothing (`daemon_cli.approvals_cmd`). Never
 #: `deny`: a no is the researcher's.
+#: The rest, none a listing of the team's work: what Probe's own messages send
+#: the agent to -- `outbox status` (the banner on every command, a `run end`
+#: that could not close), `run check` (the SDK's capture warning), `sync` (an
+#: offline run's "deliver it with `probe sync`"), `artifact download`
+#: (`instrument-code`: a checkpoint back, bytes `probe ask` cannot hand over) --
+#: and this machine's diagnostics: `daemon status` (is the daemon `probe ask`
+#: waits on alive), `whoami` and `context list` (which team the runs land in),
+#: `wandb discover` and `wandb key status` (local scans ahead of a `--directed`
+#: W&B import).
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session parent", "ignore check", "run expect", "doctor", "paper find",
-     "feedback send", "approvals"}
+     "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
+     "daemon status", "whoami", "context list", "wandb discover", "wandb key status"}
 )
 
 #: The researcher's switch and defaults, typed into a shell. In the daemon
@@ -1484,8 +1507,9 @@ def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
         return (True, "probe")
     head = words[0]
     two = " ".join(words[:2])
-    if head in DAEMON_PROFILE_ALLOWED or two in DAEMON_PROFILE_ALLOWED:
-        return (True, "probe " + (two if two in DAEMON_PROFILE_ALLOWED else head))
+    for key in (" ".join(words[:3]), two, head):
+        if key in DAEMON_PROFILE_ALLOWED:
+            return (True, "probe " + key)
     kind, matched = classify_probe_args(args)
     if kind == "write" and carries_directed(args) and two not in RESEARCHER_SWITCH:
         return (True, matched)

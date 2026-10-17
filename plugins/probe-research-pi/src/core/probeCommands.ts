@@ -74,7 +74,6 @@ export const READ_VERBS: ReadonlySet<string> = new Set([
   "cat",
   "diff",
   "search",
-  "export",
   "events",
   "coordinates",
   "download",
@@ -135,6 +134,12 @@ export type ProbeKindValue = (typeof ProbeKind)[keyof typeof ProbeKind];
 /** `session_marker.READ_GROUPS`. */
 export const READ_GROUPS: ReadonlySet<string> = new Set(["metrics", "series", "get", "bundle", "events", "coordinates", "shared", "provenance"]);
 
+/** `session_marker.READ_GROUP_WRITES`: the commands inside a read group that record. */
+export const READ_GROUP_WRITES: ReadonlySet<string> = new Set(["metrics backfill", "shared add", "shared share", "shared unshare"]);
+
+/** `session_marker.READ_GROUP_REMOVALS`: the commands inside a read group that remove (cleanup, never refused). */
+export const READ_GROUP_REMOVALS: ReadonlySet<string> = new Set(["metrics delete", "shared delete"]);
+
 /** `session_marker.DAEMON_AGENT_WRITES`: the agent's writes under the daemon (a run and its own data). */
 export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
   "exec",
@@ -165,6 +170,15 @@ export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "paper find",
   "feedback send",
   "approvals",
+  "outbox status",
+  "run check",
+  "sync",
+  "artifact download",
+  "daemon status",
+  "whoami",
+  "context list",
+  "wandb discover",
+  "wandb key status",
 ]);
 
 /** `session_marker.command_words`: the (at most three) words click dispatches on. */
@@ -208,6 +222,8 @@ export function classifyProbeArgs(args: readonly string[]): [ProbeKindValue | nu
   const command = `${head} ${verb}`;
   if (UNGATED_COMMANDS.has(command)) return [null, `probe ${command}`];
   if (TOP_LEVEL_WRITES.has(head)) return [ProbeKind.Write, `probe ${head}`];
+  if (READ_GROUP_WRITES.has(command)) return [ProbeKind.Write, `probe ${command}`];
+  if (READ_GROUP_REMOVALS.has(command)) return [null, `probe ${head}`];
   if (READ_GROUPS.has(head)) return [ProbeKind.Read, `probe ${head}`];
   if (DIRECTED_ONLY.has(command)) return [ProbeKind.Write, `probe ${command}`];
   if (READ_UNLESS_FLAGS_COMMANDS.has(command)) {
@@ -248,8 +264,9 @@ export function daemonProfileAllows(args: readonly string[]): [boolean, string] 
   if (words.length === 0) return [true, "probe"];
   const head = words[0];
   const two = words.slice(0, 2).join(" ");
-  if (DAEMON_PROFILE_ALLOWED.has(two)) return [true, `probe ${two}`];
-  if (DAEMON_PROFILE_ALLOWED.has(head)) return [true, `probe ${head}`];
+  for (const key of [words.slice(0, 3).join(" "), two, head]) {
+    if (DAEMON_PROFILE_ALLOWED.has(key)) return [true, `probe ${key}`];
+  }
   const [kind, matched] = classifyProbeArgs(args);
   if (kind === ProbeKind.Write && carriesDirected(args) && !RESEARCHER_SWITCH.has(two)) return [true, matched];
   return [daemonAllowsAgent(matched), matched];
