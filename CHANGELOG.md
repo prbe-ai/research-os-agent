@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.269.0
+
 - **`probe project delete`, `probe experiment delete` and `probe run delete` take `--dry-run`.** It resolves the ref like the delete, asks the same route with `?dry_run=true` and prints the server's answer (what would go to the trash, whose it is, when its newest work last changed) with no prompt and nothing moved. A server without the trash refuses it, in the SDK too: `delete_project`, `delete_run` and `delete_experiment` raise before sending a `dry_run=True` DELETE to a server that would ignore the flag and delete for good. The dashboard assistant's approval card shows it for every trash delete it proposes.
 ## 0.268.0
 
