@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **A code snapshot never captures a folder that declares itself a cache.** A folder holding a Cache Directory Tagging Spec `CACHEDIR.TAG` (cargo's `target/`, uv venvs, Gradle and pytest caches) is skipped by the code snapshot (outside git, and inside git whether its files are tracked or not) and by run-output capture, and reported once as `generated`. The folder importer is unchanged: its classifier decides what an import keeps. The name list (`.venv`, `node_modules`, ...) stays; this catches caches with ordinary names, which went up as a run's code before (3,674 files of cargo's `quadread/target/` on 2026-10-17). An explicit `include=` still captures one.
+- **instrument-code tells the agent to keep a run's code capture to what a rerun needs.** Before the first run in a folder the agent writes a `.probeignore` (gitignore syntax; `!` re-includes) keeping the code the run executes, its configs and its build and dependency files, and leaving out what those rebuild (build output, venvs, caches), data and checkpoints, other projects in the folder and earlier runs' outputs. Ships in the plugin's skills (a plugin release) and in the CLI the daemon reads them from.
 
 ## 0.269.0
 

@@ -74,6 +74,16 @@ On SIGTERM (a preemption, `docker stop`, a deleted pod) the SDK spends up to
 closes the run `failed` (`probe_finish.reason` = `preempted`), then exits by
 SIGTERM. A SIGTERM handler installed before `probe.init()` runs first.
 
+## UPLOAD ONLY WHAT A RERUN NEEDS:
+
+Before the first run in a folder, write a `.probeignore` there (gitignore
+syntax; `!` re-includes) so the code capture holds what a fresh sandbox needs to
+rerun it: the code the run executes, its configs, and its build and dependency
+files (lockfiles, `pyproject.toml`, `Cargo.toml`). Leave out what those rebuild
+(build output, venvs, caches), data and checkpoints (link them instead), other
+projects in the folder, and earlier runs' outputs. Update it when the run starts
+using something new.
+
 ## THE ONE RULE:
 
 **A process that emits telemetry must itself be configured to emit it.**
