@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- **MCP: a series page leaves room for the heaviest cursor it can carry.** A page of metric series is fitted to `token_budget` with a stand-in for the delivery cursor that replaces its native one. Base64 of the cursor's compressed identity hash takes 120 to 146 tokens depending on the hash, and the stand-in measured with one fixed hash (130) was outweighed about half the time, so a tightly fitted page went out as JSON fragments. The stand-in is now the heaviest of 64 sampled hashes for the read's own request, plus an 8-token slack (`Budget.fits(..., reserve=)`).
+- pi: the five page skills (`overview-page`, `overview-contract`, `overview-charts`, `artifact-diagramming`, `artifact-design`) are in `PACKAGE_SKILLS`, so a daemon-profile pi session drops them from the main agent's prompt like the package's other skills.
+
 ## 0.267.1
 
 - **The page skills are named by their path, to be read before a page is edited.** `write-summary` now says "Before you edit a page, read `overview-page/SKILL.md` ... and `overview-contract/SKILL.md` ... in your skills folder" (and the three others by path). In the first live daemon test on 0.267.0 the writer never opened them, so it touched up an old short page instead of writing a full one; the daemon's `read` opens a skills-folder path like these (`daemon/tools.py` `_in_skills`), and an inline agent finds them beside `write-summary`.

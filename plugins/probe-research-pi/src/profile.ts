@@ -54,6 +54,13 @@ export const PACKAGE_SKILLS: ReadonlySet<string> = new Set([
   "plan-research-review",
   "write-summary",
   "overview-visuals",
+  // The page skills a full-page summary is written by (writer-owns-summary
+  // ARTIFACT-PAGES P2): the agent profile's pi writes summaries too.
+  "overview-page",
+  "overview-contract",
+  "overview-charts",
+  "artifact-diagramming",
+  "artifact-design",
 ]);
 
 /** Where the daemon's own skills live inside this package. Never named in package.json. */

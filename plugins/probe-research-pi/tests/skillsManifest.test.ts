@@ -67,6 +67,12 @@ const EXPECTED_SKILLS = [
   "plan-research-review",
   "write-summary",
   "overview-visuals",
+  // ARTIFACT-PAGES P2: the page skills a full-page summary is written by.
+  "overview-page",
+  "overview-contract",
+  "overview-charts",
+  "artifact-diagramming",
+  "artifact-design",
 ].sort();
 
 let scratchHome: string;
