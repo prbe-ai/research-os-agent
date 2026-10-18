@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **`probe project delete`, `probe experiment delete` and `probe run delete` take `--dry-run`.** It resolves the ref like the delete, asks the same route with `?dry_run=true` and prints the server's answer (what would go to the trash, whose it is, when its newest work last changed) with no prompt and nothing moved. A server without the trash refuses it, in the SDK too: `delete_project`, `delete_run` and `delete_experiment` raise before sending a `dry_run=True` DELETE to a server that would ignore the flag and delete for good. The dashboard assistant's approval card shows it for every trash delete it proposes.
 ## 0.268.0
 
 - **The MCP says when hiding the caller's own session work left a listing short.** `browse` of runs, notes, datasets or checkpoints adds `hidden_own_session_work: N` (and `hidden_own_session_work_more` when a runs count stopped at 200 rows) instead of an empty page that reads as "nothing here". The dataset card keeps `producer: null` and the version's `preview_artifact_id` explicit.
