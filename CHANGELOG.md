@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.267.1
+
 - **The page skills are named by their path, to be read before a page is edited.** `write-summary` now says "Before you edit a page, read `overview-page/SKILL.md` ... and `overview-contract/SKILL.md` ... in your skills folder" (and the three others by path). In the first live daemon test on 0.267.0 the writer never opened them, so it touched up an old short page instead of writing a full one; the daemon's `read` opens a skills-folder path like these (`daemon/tools.py` `_in_skills`), and an inline agent finds them beside `write-summary`.
 
 ## 0.267.0
