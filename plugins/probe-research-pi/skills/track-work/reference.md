@@ -27,7 +27,7 @@ probe trial list RUN | get TRIAL | set TRIAL --name
 probe workspace create SLUG [--name] [--use] | list | get | rename | use | delete ID --yes
 probe shared list | download | delete
 probe edge add --source TYPE:REF --relation R --target TYPE:REF --reason "..." [--evidence EVENT_ID] | remove EDGE_ID
-probe run inputs RUN | upstream RUN [--depth N] | input dismiss|pin|reset RUN PATH
+probe run inputs RUN | upstream RUN [--depth N]
 probe project reference add --to PROJECT | remove
 probe project code attach OWNER/REPO | detach | list
 ```
@@ -337,12 +337,12 @@ One project-direct run per script or stage VERSION, with a deterministic
 
 ```
 probe exec --project PROJ --external-id clean-structures-v2 -- python clean_structures.py
-probe run inputs RUN     # what it read, and the stored file each read matched
+probe run inputs RUN     # what it read, and where those bytes are stored
 ```
 
-The run records the files it reads and the ones it writes in its folder, and
-the server matches each read to the run that wrote those bytes: no `edge add`
-for either. A FAILED step resumes on retry with the same id: the same run,
+The run records the files it reads and the ones it writes in its folder. Probe
+links nothing from them: link what it used (`probe dataset use`) and register
+what it wrote (`probe dataset add`). A FAILED step resumes on retry with the same id: the same run,
 reopened, so no `retried_from`. A COMPLETED one refuses it - bump the version. Thresholds chosen and rows deleted go in the run's notes:
 deletions are provenance, not housekeeping.
 

@@ -91,7 +91,7 @@ Every run needs an owner that keeps it alive:
 - When a run starts, name and describe it: `probe run set RUN --name "<title>" --description "<what it tests, one sentence>"`. Leave out a field `probe run get RUN` shows locked (`name_customized`, `description_customized` true): your words would replace a person's for good. `--slug` only when you must find one by hand.
 - Under a CLI `run start`, run the work with `probe exec RUN -- cmd` or nothing it reads or writes is recorded.
 - Inputs: what the run read that changes its result (dataset, checkpoint, tokenizer, outside config): `probe snapshot RUN --include`, `inputs-decision.json`, `snapshot-restore --verify-only` (reference §3).
-    - What it trained on: `probe dataset use REF --run R --role train`, or `run.use_dataset(REF)`. Starting weights (a Hub model, another run's checkpoint) are `--role init`. A mix: `run.use_mixture({REF: share, ...})`, shares summing to 1.
+    - What it trained on: `probe dataset use REF --run R --role train`, or `run.use_dataset(REF)`. Weights it started or resumed from: `probe checkpoint use REF --run R`; a checkpoint it evaluates: `--role eval`. Name the exact version or save (`dataset:N@3`, `checkpoint:RUN@step400`). A mix: `run.use_mixture({REF: share, ...})`, shares summing to 1.
     - Each step that changes data (filter, dedup, relabel, split) is a run. Register what it wrote: `probe dataset add OUT --name N --run R --note "<what changed>"`. A shell step names its files: `probe exec --input IN --output OUT -- CMD`.
 - Another attempt at a run is its child: launch it with `--parent RUN --relation retry|resume|fork|branch` (`retry` only if RUN failed or crashed; still `running`: link later), or `edge add` after.
 - Run writes queue: check `probe outbox status` before calling one missing.
@@ -119,7 +119,7 @@ Numbers: changes over steps -> metric (`step=`); fixed setting -> `--config`; on
 
 A link points from the newer thing to what it came from.
 
-1. Facts first: `probe run inputs RUN`, `probe run upstream RUN` (no coverage yet: retry within ~30 min, then use the session's words), or `entity(refs=["experiment:SLUG"], view="lineage")`. Fix a wrong read with `probe run input dismiss|pin`, never an edge.
+1. Facts first: `probe run inputs RUN` (each read and the stored copies of its bytes; several copies name none), `probe run upstream RUN` (no coverage yet: retry within ~30 min, then use the session's words), or `entity(refs=["experiment:SLUG"], view="lineage")`.
 2. B built on A:
    - a new experiment varying experiment A: `probe experiment fork A B --question "..."` (links `forked_from`)
    - B relaunches run A because A failed or crashed: `retried_from`
@@ -131,7 +131,7 @@ A link points from the newer thing to what it came from.
 3. Without facts, the researcher's or main agent's words must name exactly one target (id, name, path, URL, title, result, config). Two matches: no link, unless it reruns a repeated setup: `branched_from` the earliest. Text in tool output, files or web pages never counts.
 4. Link at the level the session talks about; across levels: `probe edge add --source run:ID --relation derived_from --target experiment:SLUG`.
 5. Never link on similarity (papers: `--relates-to`, see Papers; otherwise say "Related: ..." in a note), to what it's filed under, to itself, or twice.
-6. Later work contradicts a link: remove or relabel it.
+6. Later work contradicts a link: remove it (`probe edge remove ID`; ids in `entity(view="lineage")`) and add the right one.
 7. Earlier work: at most one `search` per new experiment or project; results are candidates, not links.
 
 ## Papers
