@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.267.2
+
 - **MCP: a series page leaves room for the heaviest cursor it can carry.** A page of metric series is fitted to `token_budget` with a stand-in for the delivery cursor that replaces its native one. Base64 of the cursor's compressed identity hash takes 120 to 146 tokens depending on the hash, and the stand-in measured with one fixed hash (130) was outweighed about half the time, so a tightly fitted page went out as JSON fragments. The stand-in is now the heaviest of 64 sampled hashes for the read's own request, plus an 8-token slack (`Budget.fits(..., reserve=)`).
 - pi: the five page skills (`overview-page`, `overview-contract`, `overview-charts`, `artifact-diagramming`, `artifact-design`) are in `PACKAGE_SKILLS`, so a daemon-profile pi session drops them from the main agent's prompt like the package's other skills.
 
