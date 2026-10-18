@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **MCP: an agent can read a file's text by id, whatever it is filed under.** `entity artifact:<id> view="content"` returns the file's text in 40-line sections (page with `start_line`, search with `grep` + `context_lines`), with its sha256. It works for run-, experiment- and project-filed files, not only shared ones; before, a reader could list a file's id and hash from `view="artifacts"` but had no way to read its bytes. Binary files, files over 2 MiB and references refuse and name `probe artifact download <id>`. A non-shared id now resolves to its full card (name, hash, size, metadata) from `GET /v1/artifacts/{id}`, not an id-only stub.
+- **`probe summary checkout` and `push` on a team still at `lane` say the summary door is closed, not that the overview lane writes the summaries.** The overview lane was deleted on the server (writer-owns-summary R2), so a `lane` team has nobody writing its summaries; the note now matches the server's `summary_writer_off` words and says to ask Probe (support@prbe.ai) to switch the team to recorder. `(mode lane)`, the mark the daemon reads, is unchanged.
 
 ## 0.266.5
 
