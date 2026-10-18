@@ -327,8 +327,8 @@ exec` does the same for a Python child. Nothing to add - but know its edges:
   and writes). The files it WRITES are recorded too (path + final sha256); off
   alone with `capture_outputs=False`, `PROBE_CAPTURE_OUTPUTS=0` or
   `PROBE_CAPTURE_WRITES=0`
-- A wrong match is corrected, never deleted: `client.correct_run_input(run,
-  path, dismissed=True)` drops it, `version_id=` pins the version really read
+- A read is evidence, not a link. A wrong data link: `probe edge remove ID`,
+  then `probe dataset use` / `probe checkpoint use`
 
 ## RELAUNCHING A RUN:
 
