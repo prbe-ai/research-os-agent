@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **MCP: an agent can read a file's text by id, whatever it is filed under.** `entity artifact:<id> view="content"` returns the file's text in 40-line sections (page with `start_line`, search with `grep` + `context_lines`), with its sha256. It works for run-, experiment- and project-filed files, not only shared ones; before, a reader could list a file's id and hash from `view="artifacts"` but had no way to read its bytes. Binary files, files over 2 MiB and references refuse and name `probe artifact download <id>`. A non-shared id now resolves to its full card (name, hash, size, metadata) from `GET /v1/artifacts/{id}`, not an id-only stub.
+
 ## 0.266.5
 
 - **The daemon no longer crashes on a command that names an over-long path.** The folder check reads paths out of the agent's shell commands; before Python 3.14, `Path.is_dir()` raises `OSError: [Errno 63] File name too long` on a name over 255 bytes, and the worker died on every restart. A heredoc holding a dict with a secret-scan marker (`<redacted:anchored-secret>`) did it: the marker's `>` read as a redirect and the 300-character dict after it as the file written. One strand-ai session went unrecorded for 13 hours. Those checks now answer "not a folder", and a command the check cannot read is skipped.
