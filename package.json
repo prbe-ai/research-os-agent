@@ -19,7 +19,12 @@
       "plugins/probe-research-pi/skills/notes-audit",
       "plugins/probe-research-pi/skills/plan-research-review",
       "plugins/probe-research-pi/skills/write-summary",
-      "plugins/probe-research-pi/skills/overview-visuals"
+      "plugins/probe-research-pi/skills/overview-visuals",
+      "plugins/probe-research-pi/skills/overview-page",
+      "plugins/probe-research-pi/skills/overview-contract",
+      "plugins/probe-research-pi/skills/overview-charts",
+      "plugins/probe-research-pi/skills/artifact-diagramming",
+      "plugins/probe-research-pi/skills/artifact-design"
     ],
     "mcp": "./plugins/probe-research-pi/mcp.json"
   },

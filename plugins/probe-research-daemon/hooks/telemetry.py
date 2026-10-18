@@ -123,6 +123,12 @@ RESEARCH_SKILLS = {
     "plan-research-review",
     "write-summary",
     "overview-visuals",
+    # the page skills a full-page summary is written by (ARTIFACT-PAGES P2)
+    "overview-page",
+    "overview-contract",
+    "overview-charts",
+    "artifact-diagramming",
+    "artifact-design",
     "probe-research-setup",
     "probe-capy",
     # retired names (kept for resumed transcripts and cached installs);
