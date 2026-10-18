@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.267.0
+
 - **The page skills ship: a recorder writes a summary as a full page.** `write-summary` is replaced by the full-page version (the page is free: no TL;DR or word cap; load, read the part you change, edit it in place, push once), and five page skills join it, a `read` away for the daemon and plain skills for the main agent, inline agent and pi: `overview-page` (what the page says, in what order), `overview-contract` (the HTML, CSS and chart rules push enforces), `overview-charts` (when and how to declare a chart), `artifact-diagramming` and `artifact-design`. They are in `skills/profiles.json` "full", the daemon plugin's `inline/` copies (`INLINE_SKILLS`), pi's `package.json` and `mirror-package.json`, and the plugin hooks' telemetry list.
 - **`probe summary checkout` never replaces a draft holding unpushed edits.** In either format, with or without a session id: it exits 2, prints JSON naming the draft (`refused: "unpushed edits"`) and says to push or check out again with `--steal`. Before, a session's checkout overwrote its own draft and base, and dropped the other format's draft, so the daemon's automatic checkout could erase a writer's edits. The erasure, missing-base and other-server messages now say `--steal`.
 - **The first write's own checkout is bounded.** One attempt per request and 5 seconds for all of them (`FIRST_WRITE_LOAD_S`); past that, the reminder line as before.
