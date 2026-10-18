@@ -11,9 +11,10 @@ when you are done is enough. Write the first one when you create it; then update
 decision or a change of direction.
 A `.md` draft (an older CLI) takes Markdown, never html.
 
-`overview-page` says what the page says and in what order; `overview-contract` its rules (push refuses a
-page that breaks one). Also `overview-charts` when there are metrics, `artifact-diagramming` for a
-diagram and `artifact-design` for the look.
+Before you edit a page, read `overview-page/SKILL.md` (what the page says and in what order) and
+`overview-contract/SKILL.md` (its rules; push refuses a page that breaks one) in your skills folder. Also
+`overview-charts/SKILL.md` when there are metrics, `artifact-diagramming/SKILL.md` for a diagram and
+`artifact-design/SKILL.md` for the look.
 
 Fix whatever newer work made wrong. Numbers from Probe, 3 significant figures. Leave
 `<!-- kept: ... -->` blocks alone.

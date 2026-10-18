@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The page skills are named by their path, to be read before a page is edited.** `write-summary` now says "Before you edit a page, read `overview-page/SKILL.md` ... and `overview-contract/SKILL.md` ... in your skills folder" (and the three others by path). In the first live daemon test on 0.267.0 the writer never opened them, so it touched up an old short page instead of writing a full one; the daemon's `read` opens a skills-folder path like these (`daemon/tools.py` `_in_skills`), and an inline agent finds them beside `write-summary`.
+
 ## 0.267.0
 
 - **The page skills ship: a recorder writes a summary as a full page.** `write-summary` is replaced by the full-page version (the page is free: no TL;DR or word cap; load, read the part you change, edit it in place, push once), and five page skills join it, a `read` away for the daemon and plain skills for the main agent, inline agent and pi: `overview-page` (what the page says, in what order), `overview-contract` (the HTML, CSS and chart rules push enforces), `overview-charts` (when and how to declare a chart), `artifact-diagramming` and `artifact-design`. They are in `skills/profiles.json` "full", the daemon plugin's `inline/` copies (`INLINE_SKILLS`), pi's `package.json` and `mirror-package.json`, and the plugin hooks' telemetry list.
