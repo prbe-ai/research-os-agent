@@ -188,9 +188,11 @@ def test_reregisters_at_once_when_the_service_goes_away(service):
         assert service.registers()[0]["mode"] == "inline"
         service.drop_connections()  # a restarted service
         assert _wait(lambda: len(service.registers()) == 2, 2.0), service.calls
+        # One reconnect for the restart. Counted before stop(): its session.end may
+        # open a connection of its own if the thread is between connections then.
+        assert service.methods().count("service.hello") == 2
     finally:
         link.stop()
-    assert service.methods().count("service.hello") == 2
 
 
 def test_an_off_session_never_starts_or_contacts_the_service(service):
