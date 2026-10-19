@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { isDaemonAlive, pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type PruneDeps } from "../src/core/daemon.js";
 import { pidFile, shutdownSentinelFile } from "../src/core/paths.js";
+import { SERVICE_OWNER_PID_ENV } from "../src/core/service.js";
 import type { TapRuntime } from "../src/core/tapRuntime.js";
 
 /**
@@ -135,6 +136,19 @@ describe("spawnDaemon", () => {
     expect(command).toBe("/usr/bin/python3");
     const env = (options as { env: Record<string, string | undefined> }).env;
     expect(env.PROBE_TAP_SOURCE).toBe("pi");
+  });
+
+  it("names this pi process as the session's owner for the Probe service", () => {
+    const deps = fakeDeps();
+
+    spawnDaemon({ sessionId: "sess-o", transcriptPath: "/tmp/o.jsonl", cwd: "/repo", runtime, ownerPid: 4321 }, deps);
+    const env = (deps.spawnCalls[0].options as { env: Record<string, string | undefined> }).env;
+    expect(env[SERVICE_OWNER_PID_ENV]).toBe("4321");
+
+    const plain = fakeDeps();
+    spawnDaemon({ sessionId: "sess-p", transcriptPath: "/tmp/p.jsonl", cwd: "/repo", runtime }, plain);
+    const plainEnv = (plain.spawnCalls[0].options as { env: Record<string, string | undefined> }).env;
+    expect(plainEnv[SERVICE_OWNER_PID_ENV]).toBeUndefined();
   });
 
   it("passes --session-id, --cwd and --transcript through to `tap start`'s argv", () => {

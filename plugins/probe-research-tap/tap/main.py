@@ -49,7 +49,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tap import config as cfg
-from tap import killswitch, outbox, reconcile, sources
+from tap import killswitch, outbox, reconcile, service_link, sources
 from tap import owner as session_owner
 from tap.companion_supervisor import Supervisor
 from tap.outbox import HaltError
@@ -302,10 +302,15 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     storage = Storage(cfg.state_db_path())
+    # The machine-wide Probe service (only while switched on): this session
+    # registers on its own thread and ends its registration on the way out.
+    link = service_link.start(args.session_id)
 
     try:
         return _run_durable_loop(config, storage)
     finally:
+        if link is not None:
+            link.stop()
         storage.close()
         log.info("tap exited")
 

@@ -33,6 +33,7 @@ import { Mailbox } from "./core/reads.js";
 import { checkPairing } from "./core/pairing.js";
 import { buildStatusReport } from "./status.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
+import { ensureService, serviceEnabled } from "./core/service.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./core/trackingSwitch.js";
 import { writeTurnSignal, type TurnSignalDeps } from "./core/turnSignal.js";
 import {
@@ -545,7 +546,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   }
 
   const deps = realDaemonDeps();
-  const result = spawnDaemon({ sessionId, transcriptPath, cwd: ctx.cwd, runtime }, deps);
+  const result = spawnDaemon({ sessionId, transcriptPath, cwd: ctx.cwd, runtime, ownerPid: process.pid }, deps);
   // Marked SYNCHRONOUSLY, with no await between the spawn decision and this
   // line: spawnedSessionIds is the same-process fast path (see its own
   // comment above), and the whole point of it is to close before
@@ -633,6 +634,15 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     } else {
       await syncTeamNoteThenRead(realTeamNoteSyncDeps());
       cachedTeamNote = readTeamNote(process.env);
+    }
+    // The machine-wide Probe service (core/service.ts): started now, detached
+    // and never waited on, so it is up by the time capture registers this
+    // session. Not under `off` (plan A2), and not where capture cannot start.
+    if (!probeIsOff() && serviceEnabled({ env: process.env, readFileSync: (path) => fs.readFileSync(path, "utf-8") })) {
+      const runtime = resolveTapRuntime({ existsSync: fs.existsSync, isExecutable, env: process.env, extensionDir });
+      if (runtime && checkPairing(process.env).paired) {
+        ensureService(runtime, { spawn: realSpawn, env: process.env, log: logLine });
+      }
     }
     // Feedback for the Probe team the researcher said yes to and that was not
     // sent yet (offline, or the dialog's own send failed). Not under `off`.

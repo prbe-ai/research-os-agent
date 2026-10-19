@@ -26,6 +26,7 @@ def _print_help() -> int:
     print("  redaction-notice  print (and clear) what was redacted last session")
     print("  cloud-catchup  start a background sync of a connected cloud agent (SessionStart)")
     print("  companion  the Probe daemon worker (started by `watch` in the daemon state)")
+    print("  service  the machine-wide Probe service: ensure | register | end | status (pi)")
     return 0
 
 
@@ -56,6 +57,14 @@ def main(argv: list[str] | None = None) -> int:
         from tap.companion_worker import main as companion_main
 
         return companion_main(rest)
+    if cmd == "service":
+        from tap import __version__
+        from tap.service.client import main as service_main
+        from tap.service.protocol import Client
+
+        # pi's extension (`src/core/service.ts`) is the caller: it cannot import
+        # the client, so it runs this copy of it.
+        return service_main(rest, client=Client.PI, client_version=__version__)
     if cmd == "start":
         from tap.start import main as start_main
 

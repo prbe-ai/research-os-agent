@@ -33,6 +33,7 @@ import { execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
 
 import { pidFile, sessionLogFile, shutdownSentinelFile, WATCHER_PREFIX, type PathEnv } from "./paths.js";
+import { SERVICE_OWNER_PID_ENV } from "./service.js";
 import type { TapRuntime } from "./tapRuntime.js";
 
 export interface ChildLike {
@@ -146,6 +147,8 @@ export interface SpawnParams {
   cwd: string;
   runtime: TapRuntime;
   baseEnv?: PathEnv;
+  /** This pi process: the session's owner for the Probe service (`service.ts`). */
+  ownerPid?: number;
 }
 
 // session-start.sh's own post-spawn wait: `for _ in $(seq 1 40); do [ -s
@@ -274,6 +277,8 @@ export function spawnDaemon(params: SpawnParams, deps: DaemonDeps): SpawnResult 
     ...baseEnv,
     PROBE_TAP_SOURCE: "pi",
     ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
+    // Read by the tap's registration thread only while the service is on.
+    ...(params.ownerPid ? { [SERVICE_OWNER_PID_ENV]: String(params.ownerPid) } : {}),
   };
 
   // `tap start` owns the wrapper, the pid file, the stale-sentinel clear and

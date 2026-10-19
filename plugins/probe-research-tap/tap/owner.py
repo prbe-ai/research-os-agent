@@ -31,7 +31,6 @@ import argparse
 import contextlib
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -39,6 +38,7 @@ from enum import StrEnum
 from pathlib import Path
 
 from tap import config as cfg
+from tap.service import procid
 
 #: Process names that own a session. Claude Code sets its process title to
 #: `claude` (native and npm installs alike); Codex's native binary is `codex`
@@ -51,8 +51,6 @@ AGENT_NAMES = frozenset({"claude", "codex", "kimi-code"})  # harness-literal-ok:
 #: plus ensure-daemon.sh on the self-heal path). Past this, the chain is not a
 #: hook's and the owner is unknown.
 MAX_WALK = 16
-
-_PS_TIMEOUT_S = 5
 
 
 class OwnerState(StrEnum):
@@ -68,74 +66,14 @@ class Owner:
     name: str
 
 
-@dataclass(frozen=True)
-class _Proc:
-    ppid: int
-    start: str
-    zombie: bool
-    names: frozenset[str]
-
-
-def _proc_linux(pid: int) -> _Proc | None:
-    try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    # `pid (comm) state ppid ...`: comm may hold spaces and parens, so split at
-    # the LAST ')'. Field 22 (starttime, clock ticks since boot) is index 19 of
-    # what follows it.
-    close = raw.rfind(")")
-    fields = raw[close + 2 :].split()
-    if close < 0 or len(fields) < 20:
-        return None
-    comm = raw[raw.find("(") + 1 : close]
-    names = {comm}
-    with contextlib.suppress(OSError):
-        argv0 = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0", 1)[0]
-        names.add(os.path.basename(argv0.decode("utf-8", "replace")))
-    try:
-        ppid = int(fields[1])
-    except ValueError:
-        return None
-    return _Proc(ppid, fields[19], fields[0] == "Z", frozenset(names))
-
-
-def _proc_ps(pid: int) -> _Proc | None:
-    try:
-        out = subprocess.run(
-            ["ps", "-ww", "-o", "ppid=,stat=,lstart=,args=", "-p", str(pid)],
-            capture_output=True,
-            text=True,
-            timeout=_PS_TIMEOUT_S,
-            check=False,
-            # `lstart` is LOCAL time: a laptop changing timezone would change
-            # every recorded start and read every live owner as gone.
-            env={**os.environ, "LC_ALL": "C", "TZ": "UTC0"},
-        ).stdout
-    except (OSError, subprocess.SubprocessError):
-        return None
-    # `lstart` is always five tokens under LC_ALL=C: `Wed Sep 23 07:43:28 2026`.
-    tokens = out.split()
-    if len(tokens) < 8:
-        return None
-    try:
-        ppid = int(tokens[0])
-    except ValueError:
-        return None
-    return _Proc(
-        ppid,
-        " ".join(tokens[2:7]),
-        tokens[1].startswith("Z"),
-        frozenset({os.path.basename(tokens[7])}),
-    )
-
-
-def _proc(pid: int) -> _Proc | None:
-    if pid <= 0:
-        return None
-    if Path("/proc/self/stat").exists():
-        return _proc_linux(pid)
-    return _proc_ps(pid)
+#: Which process a pid names -- its parent, kernel start time and names -- is
+#: ONE definition shared with the Probe service, which checks the `{pid, start}`
+#: this module records (`tap/service/procid.py`, a byte copy of
+#: `probe.service.procid`; `make sync-service-client`).
+_Proc = procid.Proc
+_proc_linux = procid.proc_linux
+_proc_ps = procid.proc_ps
+_proc = procid.proc
 
 
 def find_owner(start_pid: int) -> Owner | None:
@@ -194,18 +132,9 @@ def state(session_id: str) -> OwnerState:
     owner = _read(session_id)
     if owner is None:
         return OwnerState.UNKNOWN
-    try:
-        os.kill(owner.pid, 0)
-    except ProcessLookupError:
-        return OwnerState.GONE
-    except OSError:
-        pass  # exists but is not ours to signal: a reused pid, most likely
-    info = _proc(owner.pid)
-    if info is None:
-        return OwnerState.ALIVE  # alive, but its start time cannot be read here
-    if info.zombie or info.start != owner.start:
-        return OwnerState.GONE  # exited and unreaped, or the pid was reused
-    return OwnerState.ALIVE
+    # False: gone, exited and unreaped, or the pid was reused. None: alive, but
+    # its start time cannot be read here.
+    return OwnerState.GONE if procid.alive(owner.pid, owner.start) is False else OwnerState.ALIVE
 
 
 def keep(session_id: str) -> None:
