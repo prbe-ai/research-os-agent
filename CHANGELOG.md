@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.271.1
+
 - **Skills name Probe's read tools as commands.** `track-work` now says Probe's read tools (`entity`, `search`, `metrics`, `browse`, `query_sql`, `find_papers`) run as `probe mcp call <tool> '<json args>'` (`probe mcp tools` lists them), so its `entity(...)` mentions read right for the daemon's bash-only writer and inline agents, which have no native MCP tools. `write-summary` says the page skills sit beside it (no "skills folder") and spells the who-did-what read as `probe mcp call entity`; `track-work`'s one-`search` rule and `reference.md`'s `metrics`/`entity` description lines name the command. In the bench the bash-only writer made ~1 MCP call a run against 3-5 before.
 
 ## 0.271.0
