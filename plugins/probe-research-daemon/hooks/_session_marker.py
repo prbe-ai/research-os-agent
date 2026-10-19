@@ -3644,8 +3644,13 @@ def harness_process(
     pid: "int | None" = None, stop_titles: "tuple[str, ...] | list[str]" = ()
 ) -> "tuple[str, str, int] | None":
     """(harness id, session id, harness pid) for the nearest recorded harness
-    ancestor; see `harness_process_session`. Never raises."""
+    ancestor; see `harness_process_session`. Never raises. No record at all
+    (no Kimi Code session on this machine) is None without walking the
+    ancestors, which runs `ps` where there is no /proc: every `probe` command
+    asks this (`agent_session.adopt_harness_process_session`)."""
     try:
+        if not _any_harness_process_record():
+            return None
         for ancestor, start, title in _ancestors(pid):
             if any(_titled(title, wanted) for wanted in stop_titles):
                 return None
@@ -3660,6 +3665,15 @@ def harness_process(
     except Exception:  # noqa: BLE001
         return None
     return None
+
+
+def _any_harness_process_record() -> bool:
+    """Whether any harness process is recorded here (`record_harness_process`)."""
+    try:
+        with os.scandir(harness_processes_dir()) as entries:
+            return any(entry.name.endswith(".json") for entry in entries)
+    except OSError:
+        return False
 
 
 def harness_process_session(
