@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The daemon writer's commands live in its skill, and the daemon's newer prompt text is cut to the minimum.** `track-work`'s new `versions/commands.writer.md` (a piece of the writer's version shown only with the `bash` tool set) says how to read files, skills and data files, how to change a draft with `probe draft edit` (the exact heredoc in a fenced block, one edit per call, nothing after `EOF`), the session commands, and that independent reads go in separate calls of one response; `versions/task.writer.md`, shown only while tasks are on, gives a big read to `probe daemon task` as a heredoc (the reader's `bash` shows the same), since a quoted question with a backtick or `$` is refused. The writer's `bash` description keeps only the skills folder's path. The task instructions (754 -> 371 chars), the reader's, audit's and task's `bash` text, the parallel line, the replies of `probe draft edit`, `probe daemon task` and a probe heredoc, and the `edit` tool's description are shorter. Most refused commands in the bash benches were malformed `probe draft edit` heredocs.
+
 ## 0.273.0
 
 ## 0.272.0
