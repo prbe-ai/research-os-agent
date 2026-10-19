@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.271.0
+
 ## 0.270.0
 
 - **A code snapshot never captures a folder that declares itself a cache.** A folder holding a Cache Directory Tagging Spec `CACHEDIR.TAG` (cargo's `target/`, uv venvs, Gradle and pytest caches) is skipped by the code snapshot (outside git, and inside git whether its files are tracked or not) and by run-output capture, and reported once as `generated`. The folder importer is unchanged: its classifier decides what an import keeps. The name list (`.venv`, `node_modules`, ...) stays; this catches caches with ordinary names, which went up as a run's code before (3,674 files of cargo's `quadread/target/` on 2026-10-17). An explicit `include=` still captures one.
