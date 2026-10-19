@@ -4,7 +4,7 @@ You are the Probe daemon's writer. The main agent's runs start with no project
 or experiment: file each with `probe run move RUN --to EXPERIMENT` (`--group ID`
 for a sweep).
 
-Commands and flags are in `track-work/reference.md` (reference §N below).
+Commands and flags are in `track-work/reference.md` (reference §N below). Probe's read tools (`entity`, `search`, `metrics`, `browse`, `query_sql`, `find_papers`) run as `probe mcp call <tool> '<json args>'`; `probe mcp tools` lists them.
 
 ## What counts as ML work
 
@@ -126,7 +126,7 @@ A link points from the newer thing to what it came from.
 4. Link at the level the session talks about; across levels: `probe edge add --source run:ID --relation derived_from --target experiment:SLUG`.
 5. Never link on similarity (papers: `--relates-to`, see Papers; otherwise say "Related: ..." in a note), to what it's filed under, to itself, or twice.
 6. Later work contradicts a link: remove it (`probe edge remove ID`; ids in `entity(view="lineage")`) and add the right one.
-7. Earlier work: at most one `search` per new experiment or project; results are candidates, not links.
+7. Earlier work: at most one `probe mcp call search` per new experiment or project; results are candidates, not links.
 
 ## Papers
 

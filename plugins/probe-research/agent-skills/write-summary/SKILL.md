@@ -12,11 +12,11 @@ decision or a change of direction.
 A `.md` draft (an older CLI) takes Markdown, never html.
 
 Before you edit a page, read `overview-page/SKILL.md` (what the page says and in what order) and
-`overview-contract/SKILL.md` (its rules; push refuses a page that breaks one) in your skills folder. Also
+`overview-contract/SKILL.md` (its rules; push refuses a page that breaks one); they sit beside this skill. Also
 `overview-charts/SKILL.md` when there are metrics, `artifact-diagramming/SKILL.md` for a diagram and
 `artifact-design/SKILL.md` for the look.
 
 Fix whatever newer work made wrong. Numbers from Probe, 3 significant figures. Leave
 `<!-- kept: ... -->` blocks alone.
 
-Who did what, or why: `entity` view=sessions or view=summary_history.
+Who did what, or why: `probe mcp call entity '{"refs": ["<kind>:<slug>"], "view": "sessions"}'` (or `"summary_history"`).

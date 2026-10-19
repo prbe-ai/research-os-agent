@@ -294,7 +294,7 @@ CLI is the only writer; a script shells out to it.
 
 ## 7. READING BACK
 
-**`metrics` has three modes**; each refuses the others' arguments, so a
+**`metrics` (`probe mcp call metrics`) has three modes**; each refuses the others' arguments, so a
 refusal means re-issue in the right mode.
 
 | mode | reads |
@@ -303,7 +303,7 @@ refusal means re-issue in the right mode.
 | `coordinates` | enumerates the axes a run logged on — call it first when guessing at `by` |
 | `points` | raw points, a page at a time |
 
-`entity`'s own description lists every view and `card` returns
+`entity`'s own description (`probe mcp tools`) lists every view and `card` returns
 `available_views` - ask the tool, never a memorised table. Take the narrowest
 view that answers the question; `view_options` narrows server-side. A
 `partial` read is not the whole record: name what you did not see next to the
