@@ -5,6 +5,9 @@
                 unless asked: a hook's budget is a connect() and a fork.
     register()  session.register over one short connection (hello first).
     end()       session.end, likewise.
+    check_now() ensure the service (waiting for it), then update.check_now:
+                what the CLI and the plugin hook do instead of spawning an
+                updater of their own while the switch is on (plan Q4)
     call()      any method, for the CLI and tests.
     Connection  a kept connection: the tap's registration thread holds one, so
                 a restarted service is noticed (EOF) and re-told at once.
@@ -54,6 +57,12 @@ START_WINDOW_S = 60.0
 #: A spawn younger than this whose pid still runs is starting: no second spawn.
 SPAWN_SETTLE_S = 3.0
 START_LOCK_WAIT_S = 2.0
+#: `check_now` waits this long for a service it had to start (never in a hook:
+#: the hook and the CLI run it as a detached process).
+CHECK_NOW_WAIT_S = 5.0
+#: `check-now --wait-for-pid` waits at most this long for the command that
+#: asked (`probe._shared.autoupdate.WAIT_FOR_PID_TIMEOUT`).
+WAIT_FOR_PID_S = 1800.0
 
 #: The only variables the service starts with (plan X2): never an agent's
 #: PROBE_TOKEN, endpoint or PYTHONPATH, which would leak the first launcher's
@@ -278,6 +287,44 @@ def end(
     return answer if isinstance(answer, dict) else {}
 
 
+def wait_for_exit(pid: int, *, timeout: float = WAIT_FOR_PID_S, poll: float = 0.25) -> bool:
+    """Until `pid` is gone (True), or `timeout` passed (False).
+
+    The CLI asks for an update from its root callback, before its own command
+    runs, and imports lazily all the way through it: an update that started
+    now would replace files that command is still reaching for (a
+    `ModuleNotFoundError`; `probe._shared.autoupdate.wait_for_pid_exit`). The
+    barrier stops new starts only, so the asking process waits it out here."""
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except OSError:
+            pass  # exists, not ours to signal: still there
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(poll)
+
+
+def check_now(
+    trigger: str = "cli",
+    *,
+    wait: float = CHECK_NOW_WAIT_S,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+) -> dict:
+    """Ask the service for an update check now, starting it when none runs.
+    `trigger` says what asks (app | cli | session | schedule). OSError when no
+    service answers after `wait`."""
+    ensure(wait=wait)
+    answer = call(
+        Method.UPDATE_CHECK_NOW, {"trigger": trigger}, client=client, client_version=client_version
+    )
+    return answer if isinstance(answer, dict) else {}
+
+
 # -- starting the service ------------------------------------------------------
 
 #: Services this process spawned, polled on every later `ensure` so a
@@ -492,6 +539,12 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     p_end.add_argument("--session-id", required=True)
     p_end.add_argument("--generation", type=int, required=True)
     sub.add_parser("status", help="service.status")
+    p_check = sub.add_parser("check-now", help="update.check_now, starting the service when none runs")
+    p_check.add_argument("--trigger", default="cli", choices=("app", "cli", "session", "schedule"))
+    p_check.add_argument("--if-enabled", action="store_true", help="do nothing unless PROBE_SERVICE is on")
+    p_check.add_argument(
+        "--wait-for-pid", type=int, default=None, help="first wait for this process (the asking command) to exit"
+    )
     p_call = sub.add_parser("call", help="any method with JSON params")
     p_call.add_argument("method")
     p_call.add_argument("params", nargs="?", default="{}")
@@ -516,6 +569,13 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
             answer = end(args.session_id, args.generation, client=client, client_version=client_version)
         elif args.cmd == "status":
             answer = call(Method.STATUS, client=client, client_version=client_version)
+        elif args.cmd == "check-now":
+            if args.if_enabled and not enabled():
+                print(json.dumps({"outcome": None, "enabled": False}))
+                return 0
+            if args.wait_for_pid:
+                wait_for_exit(args.wait_for_pid)
+            answer = check_now(args.trigger, client=client, client_version=client_version)
         else:
             try:
                 params = json.loads(args.params)

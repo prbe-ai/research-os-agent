@@ -36,6 +36,17 @@ LOG_NAME = "service.log"
 #: `{"python": "<abs path>", "cli_version": "..."}`: the CLI's own interpreter,
 #: written by the CLI, read by every client that may have to spawn the service.
 RUNTIME_NAME = "runtime.json"
+#: `<action_id>.jsonl` (each action's journal) and `<action_id>.log` (its
+#: child's stderr): what `action.status` / `action.events` answer from, also
+#: after the service restarted (plan X5).
+ACTIONS_DIRNAME = "actions"
+#: Present while the service applies a CLI or plugin update: every CLI start
+#: and daemon worker start waits for it to go (plan X1; `barrier.py`).
+BARRIER_NAME = "update.barrier"
+#: The updater's own record: when it last checked, what came of it.
+UPDATE_STATE_NAME = "update.json"
+#: Written by the desktop app's `--background-update` run (prbe-ai/desktop #11).
+APP_UPDATE_NAME = "app-update.json"
 
 #: Where `uv tool install probe-research` puts the CLI's interpreter, for a
 #: client that finds no runtime.json (a CLI that has not run since its install).
@@ -78,6 +89,22 @@ def log_path() -> Path:
 
 def runtime_path() -> Path:
     return service_dir() / RUNTIME_NAME
+
+
+def actions_dir() -> Path:
+    return service_dir() / ACTIONS_DIRNAME
+
+
+def barrier_path() -> Path:
+    return service_dir() / BARRIER_NAME
+
+
+def update_state_path() -> Path:
+    return service_dir() / UPDATE_STATE_NAME
+
+
+def app_update_path() -> Path:
+    return service_dir() / APP_UPDATE_NAME
 
 
 def fallback_python() -> Path:

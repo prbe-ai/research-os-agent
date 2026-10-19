@@ -1220,6 +1220,39 @@ def _autoupdate_settings() -> dict:
     return version_policy.read_state()
 
 
+#: The Probe service switch's words (`probe.service.client`: `PROBE_SERVICE`,
+#: else `"service"` at the top of the CLI's config.json).
+_SERVICE_ON = frozenset({"on", "1", "true", "yes"})
+_SERVICE_OFF = frozenset({"off", "0", "false", "no"})
+#: `sh -c` with $1 = the probe binary and "$@" = the wizard's update argv: ask
+#: the service first, and run the wizard's update as before when it cannot be
+#: asked (a CLI older than the service exits 2, one whose service does not
+#: start exits 1). Not on 75: that is `probe` turned away by the update
+#: barrier, so the service is updating right now.
+_SERVICE_CHECK_OR_UPDATE = '"$1" service check-now --trigger session; s=$?; [ "$s" = 0 ] || [ "$s" = 75 ] || exec "$@"'
+
+
+def _service_on() -> bool:
+    """Is the Probe service this machine's updater? Read exactly as
+    `probe.service.client.enabled` reads it (this hook cannot import it;
+    tests/test_service_updater.py holds the two to one answer). POSIX only,
+    like the service."""
+    if os.name != "posix":
+        return False
+    raw = (os.environ.get("PROBE_SERVICE") or "").strip().lower()
+    if raw in _SERVICE_ON:
+        return True
+    if raw in _SERVICE_OFF:
+        return False
+    try:
+        with open(version_policy.config_path(), encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return False
+    value = data.get("service") if isinstance(data, dict) else None
+    return value is True or (isinstance(value, str) and value.strip().lower() in _SERVICE_ON)
+
+
 def _spawn_autoupdate(probe_bin: str) -> None:
     """Fire the upgrade and forget it. Never raises into the hook."""
     settings = _autoupdate_settings()
@@ -1228,11 +1261,15 @@ def _spawn_autoupdate(probe_bin: str) -> None:
     # No `--channel`: there is one channel, and the flag it used to pass did
     # nothing. Newer CLIs still ACCEPT it (hidden and ignored) because a plugin
     # updates on the user's schedule, so older copies of this file keep working.
+    # `wizard --action update`, not the deprecated `probe update`.
+    argv = [probe_bin, "wizard", "--action", "update", "--yes"]
+    if _service_on():
+        # The Probe service owns updates here (plan Q4): it applies them only on
+        # a quiet machine, so this hook asks it instead of spawning its own.
+        argv = ["/bin/sh", "-c", _SERVICE_CHECK_OR_UPDATE, "sh", *argv]
     try:
-        subprocess.Popen(  # noqa: S603 - resolved binary, no shell
-            # `wizard --action update`, not the deprecated `probe update`.
-            # Old CLIs do not have the wizard, so fall back below.
-            [probe_bin, "wizard", "--action", "update", "--yes"],
+        subprocess.Popen(  # noqa: S603 - resolved binary; the shell runs a fixed script
+            argv,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

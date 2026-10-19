@@ -51,10 +51,15 @@ class Method:
     SESSION_LIST = "session.list"
     EVENTS_SUBSCRIBE = "events.subscribe"
     STATUS_GET = "status.get"
+    ACTION_RUN = "action.run"
+    ACTION_STATUS = "action.status"
+    ACTION_EVENTS = "action.events"
+    ACTION_CANCEL = "action.cancel"
+    UPDATE_STATUS = "update.status"
+    UPDATE_CHECK_NOW = "update.check_now"
 
 
-#: The methods this service answers. Every other name -- `action.*` and
-#: `update.*` included until the updater lands (plan T4) -- is `-32601`.
+#: The methods this service answers. Every other name is `-32601`.
 METHODS = frozenset(
     {
         Method.HELLO,
@@ -65,8 +70,188 @@ METHODS = frozenset(
         Method.SESSION_LIST,
         Method.EVENTS_SUBSCRIBE,
         Method.STATUS_GET,
+        Method.ACTION_RUN,
+        Method.ACTION_STATUS,
+        Method.ACTION_EVENTS,
+        Method.ACTION_CANCEL,
+        Method.UPDATE_STATUS,
+        Method.UPDATE_CHECK_NOW,
     }
 )
+
+
+class Action:
+    """`action.run`'s `action`: the `python -m probe.core.run` actions that
+    change the device (`probe.core.requests.ActionName`, its reads excepted).
+    Every one of them is mutating, so they run one at a time."""
+
+    CONFIGURE = "configure"
+    RECORDER = "recorder"
+    LOGOUT = "logout"
+    UNINSTALL = "uninstall"
+    UPDATE = "update"
+    SESSION_DEFAULT = "session_default"
+
+
+ACTIONS = frozenset(
+    {Action.CONFIGURE, Action.RECORDER, Action.LOGOUT, Action.UNINSTALL, Action.UPDATE, Action.SESSION_DEFAULT}
+)
+
+
+class ActionState:
+    QUEUED = "queued"
+    RUNNING = "running"
+    DONE = "done"
+
+
+class CheckTrigger:
+    """What asked for an update cycle (`update.check_now`'s `trigger`, and what
+    the updater records)."""
+
+    APP = "app"  # the desktop app (its launch check)
+    CLI = "cli"  # the CLI on its own: the every-command check, a run's end
+    SESSION = "session"  # a coding agent's session start (the plugin hook, pi)
+    SCHEDULE = "schedule"  # the service's own 6-hourly check
+
+
+CHECK_TRIGGERS = frozenset({CheckTrigger.APP, CheckTrigger.CLI, CheckTrigger.SESSION, CheckTrigger.SCHEDULE})
+
+
+class ReportTrigger:
+    """The server's update-report words (`app/client_version/
+    update_report_router.py` `UpdateTrigger`): what an update child reports
+    under (`PROBE_AUTOUPDATE_TRIGGER`), so the report lands under a trigger the
+    server knows. `action.run`'s `trigger` takes these."""
+
+    SESSION_START = "session_start"
+    CLI = "cli"
+    MANUAL = "manual"
+
+
+REPORT_TRIGGERS = frozenset({ReportTrigger.SESSION_START, ReportTrigger.CLI, ReportTrigger.MANUAL})
+
+#: A cycle's trigger as the server's report names it, until the server learns
+#: `app` and `schedule`: both are automatic and tied to no agent session.
+REPORT_FOR_CHECK = {
+    CheckTrigger.APP: ReportTrigger.CLI,
+    CheckTrigger.CLI: ReportTrigger.CLI,
+    CheckTrigger.SESSION: ReportTrigger.SESSION_START,
+    CheckTrigger.SCHEDULE: ReportTrigger.CLI,
+}
+
+
+class CheckOutcome:
+    """`update.check_now`'s `outcome`."""
+
+    STARTED = "started"  # a cycle starts now
+    SCHEDULED = "scheduled"  # the service is discovering: the cycle starts when that ends
+    RUNNING = "running"  # a cycle is already running
+    RECENT = "recent"  # a cycle finished less than the cooldown ago
+    DEFERRED = "deferred"  # not now: `reason` says why (DeferReason)
+
+
+class DeferReason:
+    """Why an update cycle did not apply anything (`update.deferred`)."""
+
+    AUTO_UPDATE_OFF = "auto_update_off"
+    #: A Probe daemon worker holds its session lock (`<state>/daemon/<sid>.lock`).
+    DAEMON_RECORDING = "daemon_recording"
+    #: A training run holds a run lock (`<state>/runs/`).
+    RUN_IN_FLIGHT = "run_in_flight"
+    #: A terminal `probe wizard` (or the update child's own lock) holds `wizard.lock`.
+    SETUP_RUNNING = "setup_running"
+    #: An `action.run` of this service is running.
+    ACTION_RUNNING = "action_running"
+
+
+class UpdateStep:
+    """An update cycle's steps, in order (plan D3, X1, R2)."""
+
+    #: `python -m probe.core.run update`: the CLI's uv tool env (CLI, daemon,
+    #: SDK) and every coding agent's plugins and pi's package, in one run.
+    CLI_AND_PLUGINS = "cli_and_plugins"
+    #: The desktop app, through its own signed updater (`--background-update`).
+    APP = "app"
+    #: The service's own code: a new CLI version means a restart.
+    SELF = "self"
+
+
+class StepState:
+    STARTED = "started"
+    DONE = "done"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+    DEFERRED = "deferred"
+
+
+class StopReason:
+    """`service.stopping`'s `reason`."""
+
+    IDLE = "idle"
+    STOP = "stop"
+    SIGNAL = "signal"
+    #: An update cycle installed a new CLI: the next `ensure` starts its code.
+    UPDATE = "update"
+
+
+#: What a request may carry as its `context` (plan X2): the environment the
+#: action's (or `status.get`'s) child runs with, on top of the service's own
+#: clean one. Where Probe and the agents keep their files, and how the CLI,
+#: uv and what they run reach the network -- the desktop app's IMPORTED_ENV
+#: (prbe-ai/desktop `src-tauri/src/wizard.rs`), the variables a Finder-started
+#: app imports from the login shell. Never a credential by name: no token, no
+#: endpoint (that is `base_url`), no PYTHONPATH. A name outside this set is
+#: refused, never dropped. The service also allows each coding agent's
+#: session-id variable, read from the harness registry (`session_env`; not
+#: written here: this file is the tap's too, and names no harness): a request
+#: from inside an agent's session names it, so `probe.core.run` refuses what it
+#: refuses there (`probe session default`, the wizard actions in a
+#: daemon-recorded session). An id, never a credential.
+#: `tests/test_service_actions.py` keeps both covering every harness.
+CONTEXT_ENV = frozenset(
+    {
+        "PROBE_CONFIG_PATH",
+        "CLAUDE_CONFIG_DIR",
+        "CODEX_HOME",
+        "PI_CODING_AGENT_DIR",
+        "KIMI_CODE_HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_STATE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "UV_TOOL_DIR",
+        "UV_TOOL_BIN_DIR",
+        "UV_CACHE_DIR",
+        "PIPX_HOME",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "all_proxy",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "REQUESTS_CA_BUNDLE",
+        "NODE_EXTRA_CA_CERTS",
+        "CURL_CA_BUNDLE",
+        "GIT_SSL_CAINFO",
+        "UV_INDEX_URL",
+        "UV_EXTRA_INDEX_URL",
+        "UV_DEFAULT_INDEX",
+        "UV_INDEX",
+        "UV_NATIVE_TLS",
+        "PIP_INDEX_URL",
+        "PIP_EXTRA_INDEX_URL",
+        "NPM_CONFIG_REGISTRY",
+        "PROBE_SESSION_STATE",
+        "PROBE_SESSION_TRACKING",
+    }
+)
+#: `base_url` reaches the child as this variable (`probe.sdk.config.resolve`).
+BASE_URL_ENV = "PROBE_BASE_URL"
+MAX_CONTEXT_VALUE = 4096
 
 
 class Client:
@@ -106,8 +291,7 @@ class Topic:
     SERVICE_STOPPING = "service.stopping"
 
 
-#: Every topic API v1 names. A subscription may name any of them; this service
-#: emits the session and stopping topics until the updater and actions land.
+#: Every topic API v1 names. A subscription may name any of them.
 TOPICS = frozenset(
     {
         Topic.SESSION_STARTED,
@@ -136,6 +320,21 @@ class RefusedReason:
     STATUS_UNAVAILABLE = "status_unavailable"
     #: A bug in the service answering one request; the service keeps serving.
     INTERNAL = "internal"
+    #: `action.cancel` of an action that is not waiting for a browser approval:
+    #: it may be writing, and stopping it there could leave a half-written file.
+    WRITING = "writing"
+    #: `action.cancel` of an action that already finished.
+    FINISHED = "finished"
+    #: `service.stop` while an update step or an action runs.
+    UPDATING = "updating"
+    ACTION_RUNNING = "action_running"
+
+
+class BusyHolder:
+    """`busy`'s `data.holder.kind`: what holds the one mutating slot."""
+
+    ACTION = "action"
+    UPDATE = "update"
 
 
 class RpcError(Exception):
@@ -232,6 +431,36 @@ def need_choice(params: dict, key: str, choices: frozenset) -> str:
     if value not in choices:
         raise invalid_params(f"{key} must be one of {sorted(choices)}")
     return value
+
+
+def need_context(params: dict, also: frozenset = frozenset()) -> dict:
+    """The request's `context` (CONTEXT_ENV names, and `also`'s, to strings)
+    and `base_url`, as the environment variables a child gets. `{}` when
+    neither is given."""
+    env: dict = {}
+    allowed = CONTEXT_ENV | also
+    context = params.get("context")
+    if context is not None:
+        if not isinstance(context, dict):
+            raise invalid_params("context must be an object of environment variables")
+        unknown = sorted(name for name in context if name not in allowed)
+        if unknown:
+            raise invalid_params(f"context may not set {unknown}; it takes {sorted(allowed)}")
+        for name, value in context.items():
+            if not isinstance(value, str) or len(value) > MAX_CONTEXT_VALUE or "\0" in value:
+                raise invalid_params(f"context.{name} must be a string of at most {MAX_CONTEXT_VALUE} characters")
+            env[name] = value
+    base_url = params.get("base_url")
+    if base_url is not None:
+        if (
+            not isinstance(base_url, str)
+            or len(base_url) > 2048
+            or not base_url.startswith(("https://", "http://"))
+            or any(ch.isspace() for ch in base_url)
+        ):
+            raise invalid_params("base_url must be an http(s) URL")
+        env[BASE_URL_ENV] = base_url
+    return env
 
 
 def need_owner(params: dict) -> dict | None:
