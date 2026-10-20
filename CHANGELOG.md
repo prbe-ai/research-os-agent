@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.281.0
+
 - **Capy support is removed.** The installer no longer finds, offers or configures Capy; `--agent capy`, `--capy-project` and `probe capy connect/status/setup` are gone, as are the Capy thread sync, the tap's Capy catch-up (tap 0.9.23), the `capy` skills profile and the mirror's `capy/` plugin folder. `probe wizard --action recorder --who-records daemon --json` no longer gives an agent with no daemon profile a result row (its row could never be ok), so the run reads `complete: true` and the Mac app's recording step no longer ends "Setup did not finish". A machine that connected Capy capture is cleaned up on its own, by the old timer's next `probe capy sync` (and `probe capy disconnect`), the next `probe wizard --action update`, or signing out: the Capy capture credential is revoked with the server it was paired to, `~/.local/state/probe/capy` (the saved Capy key and thread mirror) and Capy's upload journal are deleted, and the launchd agent / systemd timer is removed. It never deletes a folder an environment variable names, and never fails an update. A crontab line you added by hand stays yours to delete (`crontab -e`), and so does what you set up inside Capy: its Probe plugin, a `PROBE_TOKEN` (revoke that token too) and the Capy API key you gave Probe. Sessions already uploaded stay in Probe.
 
 ## 0.280.0
