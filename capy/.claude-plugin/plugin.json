@@ -1,6 +1,6 @@
 {
   "name": "probe-research",
-  "version": "0.158.0",
+  "version": "0.159.0",
   "description": "Probe Research for Capy: Probe's MCP server (search the team's ML work) and the skills probe-capy, track-work, instrument-code, plan-research-review, edit-notes, audit-team-note.",
   "author": {
     "name": "Probe",
