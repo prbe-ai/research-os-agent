@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.275.0
+
 - Respect desktop telemetry privacy through a boolean-only CLI policy read and fixed Finder environment imports. Human desktop actions keep existing wizard/import event names with explicit desktop provenance across service actions and background import workers; noninteractive prompting and automated updater attribution stay unchanged.
 - Add `probe desktop request --json` for the native management app: account-scoped backfill history, reviewed session prefixes and folders, durable background start/resume/cancel, authenticated profile reads, and live local agent counts. Desktop admission shares the setup lock; old reviews cannot follow an account or workspace switch. Delivery receipts remain explicitly unknown when unavailable.
 
