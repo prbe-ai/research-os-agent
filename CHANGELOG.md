@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add approved transcript producer IDs and a separate live activity stream to desktop backfills. Keep the newest 200 public progress/state changes with timestamps, credential redaction and explicit truncation; retain final reports separately and never expose raw worker stdout/stderr. Older workers provide their current progress snapshot without invented history.
+
 ## 0.277.0
 
 - Add explicit selected-agent integration reinstall through Configure `reinstall: true` and `probe wizard --reinstall`. Repair refreshes only the current profile's owned plugin files, preserves disabled capture/tracking and all recorder/account/default settings, and reports incomplete failures with safe retry recovery. Local/custom pi packages and non-owned plugin registrations remain untouched; repair telemetry uses its own event family.
