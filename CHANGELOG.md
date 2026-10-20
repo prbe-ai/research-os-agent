@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.277.0
+
 - Add explicit selected-agent integration reinstall through Configure `reinstall: true` and `probe wizard --reinstall`. Repair refreshes only the current profile's owned plugin files, preserves disabled capture/tracking and all recorder/account/default settings, and reports incomplete failures with safe retry recovery. Local/custom pi packages and non-owned plugin registrations remain untouched; repair telemetry uses its own event family.
 ## 0.276.0
 
