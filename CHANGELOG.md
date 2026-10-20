@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.280.0
+
 - Include the explicitly selected daemon’s scoped credential in the desktop’s existing one-use sign-in exchange, avoiding a second browser approval during app installation. Inline installs keep their existing grant set.
 
 ## 0.279.0
