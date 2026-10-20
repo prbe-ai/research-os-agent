@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.278.0
+
 - Add approved transcript producer IDs and a separate live activity stream to desktop backfills. Keep the newest 200 public progress/state changes with timestamps, credential redaction and explicit truncation; retain final reports separately and never expose raw worker stdout/stderr. Older workers provide their current progress snapshot without invented history.
 
 ## 0.277.0
