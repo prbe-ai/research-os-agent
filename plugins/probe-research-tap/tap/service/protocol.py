@@ -200,7 +200,8 @@ class StopReason:
 #: uv and what they run reach the network -- the desktop app's IMPORTED_ENV
 #: (prbe-ai/desktop `src-tauri/src/wizard.rs`), the variables a Finder-started
 #: app imports from the login shell. Never a credential by name: no token, no
-#: endpoint (that is `base_url`), no PYTHONPATH. A name outside this set is
+#: credentials, no PYTHONPATH. `PROBE_BASE_URL` and `base_url` both select only
+#: the endpoint, matching Finder's fixed imported environment. A name outside this set is
 #: refused, never dropped. The service also allows each coding agent's
 #: session-id variable, read from the harness registry (`session_env`; not
 #: written here: this file is the tap's too, and names no harness): a request
@@ -247,6 +248,8 @@ CONTEXT_ENV = frozenset(
         "NPM_CONFIG_REGISTRY",
         "PROBE_SESSION_STATE",
         "PROBE_SESSION_TRACKING",
+        "PROBE_TELEMETRY",
+        "PROBE_BASE_URL",
     }
 )
 #: `base_url` reaches the child as this variable (`probe.sdk.config.resolve`).
