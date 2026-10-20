@@ -15,8 +15,10 @@ import {
   RESEARCHER_SWITCH_DENY,
   resolveLikePi,
   sessionIsInline,
+  sessionInlineReadOnly,
 } from "../src/guard.js";
 import { approvalsDir } from "../src/core/paths.js";
+import { ProbeState } from "../src/core/trackingState.js";
 
 let tmp: string;
 let env: Record<string, string | undefined>;
@@ -32,6 +34,25 @@ afterEach(() => {
 
 const agent = () => ({ daemonProfile: false, env, cwd: tmp });
 const daemon = () => ({ daemonProfile: true, env, cwd: tmp });
+
+it("reads the automatic read-only inline marker without allowing writes", () => {
+  const sid = "11111111-2222-3333-4444-555555555555";
+  const dir = join(env.XDG_STATE_HOME!, "probe", "sessions");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${sid}.state`), ProbeState.ReadOnly);
+  writeFileSync(join(dir, `${sid}.inline`), JSON.stringify({ from: ProbeState.ReadOnly, since: 10, mode: ProbeState.ReadOnly, reason: "budget_exhausted" }));
+  expect(sessionIsInline(sid, env)).toBe(true);
+  expect(sessionInlineReadOnly(sid, env)).toBe(true);
+  const context = { ...daemon(), inline: true, inlineReadOnly: true };
+  expect(guardToolCall(PiTool.Bash, { command: "probe mcp call search '{}'" }, context)).toBeNull();
+  expect(guardToolCall(PiTool.Bash, { command: "probe project create research" }, context)).toContain("READ-ONLY");
+  expect(guardToolCall(PiTool.Bash, { command: "probe project create research --directed" }, context)).toContain("READ-ONLY");
+  expect(guardToolCall(PiTool.Bash, { command: "probe project create --help" }, context)).toBeNull();
+  expect(guardToolCall(PiTool.Bash, { command: "probe exec -- python train.py" }, context)).toBeNull();
+  expect(guardToolCall(PiTool.Bash, { command: "probe session state on" }, context)).toContain("researcher's Probe switch");
+  writeFileSync(join(dir, `${sid}.state`), ProbeState.Off);
+  expect(sessionIsInline(sid, env)).toBe(false);
+});
 
 function approvalsRefusal(tool: string, path: string): string {
   return DENY_REASON_APPROVALS.replace("{tool}", tool).replace("{path}", path);

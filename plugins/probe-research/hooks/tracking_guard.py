@@ -1152,17 +1152,20 @@ def _daemon_bypass(payload: dict, session_id: str) -> "str | None":
     return matched
 
 
-def _inline_notice() -> str:
+def _inline_notice(session_id: str = "") -> str:
     """`session_marker.INLINE_NOTICE`, naming this plugin's `inline/` copies of the
     skills the agent records by (the lean plugin ships them beside `hooks/`), its
     last sentence by what the local CLI can do (`version_check.inline_notice_for`).
     Unreadable: the too-old-CLI sentence, never commands the CLI may lack."""
     root = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "inline")
     skills = [os.path.join(root, name) for name in _session_marker.INLINE_SKILL_FILES]
+    marker = _session_marker.inline_marker(session_id) or {}
+    options = {"read_only": marker.get("mode") == _session_marker.STATE_READ_ONLY,
+               "budget": marker.get("reason") == "budget_exhausted"}
     try:
-        return _version_check().inline_notice_for(*skills)
+        return _version_check().inline_notice_for(*skills, **options)
     except Exception:  # noqa: BLE001 -- the notice still lands
-        return _session_marker.inline_notice(*skills, bridge=False)
+        return _session_marker.inline_notice(*skills, bridge=False, **options)
 
 
 def _version_check():
@@ -1249,13 +1252,13 @@ def _ask_parent_on_prompt(session_id: str, cwd: "str | None") -> None:
 
 
 def _announce_inline_once(hook_event: str, session_id: str) -> None:
-    """The researcher set Probe inline (typed, from pi or from a terminal) and the
+    """Manual or trusted confirmed-quota inline is active and the
     agent has not been told about this stretch: tell it now, once, where this
     harness lets it land (`_inline_reaches_model`). Marked told only then."""
     since = _session_marker.inline_notice_due(session_id)
     if since is None or not _inline_reaches_model(hook_event):
         return
-    _emit_context(hook_event, _inline_notice())
+    _emit_context(hook_event, _inline_notice(session_id))
     _session_marker.mark_inline_shown(session_id, since)
 
 
@@ -1378,8 +1381,9 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     flag (`RESEARCHER_SWITCH_DENY`).
     A session the researcher turned off keeps the off refusals (`_deny`); one set
     to read only also loses the runs' own data (a write). A session the
-    researcher set inline (`/probe inline`, `is_inline`) is refused only the
-    switch, which the agent never moves here, and the approvals folder."""
+    researcher set inline (`/probe inline`, `is_inline`), or the daemon handed
+    inline after a confirmed quota response, is refused the switch and approvals
+    folder. Read-only inline also keeps every normal read-only write refusal."""
     aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
     if aimed:
         _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
@@ -1393,10 +1397,13 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
         _deny(payload, session_id)
         return
     if _session_marker.is_inline(session_id, state):
-        # The researcher set Probe inline (`/probe inline`): only the switch is refused.
+        # Manual or confirmed-quota inline: the agent still cannot move the switch.
         matched = _switch_move(payload)
         if matched:
             _refuse(_session_marker.INLINE_SWITCH_DENY.format(matched=matched))
+            return
+        if state == _session_marker.STATE_READ_ONLY:
+            _deny(payload, session_id)
         return
     tool_name = payload.get("tool_name")
     if is_probe_mcp_tool(tool_name):

@@ -22,6 +22,22 @@ import {
 const SID = "11111111-2222-3333-4444-555555555555";
 let tmp: string;
 let env: Record<string, string>;
+
+it("explains quota handoff and preserves read-only without loading recording skills", () => {
+  const dir = join(env.XDG_STATE_HOME!, "probe", "sessions");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${SID}.state`), "read-only");
+  writeFileSync(join(dir, `${SID}.inline`), JSON.stringify({ from: "read-only", since: 100, mode: "read-only", reason: "budget_exhausted" }));
+  expect(inlineNoticeDue(SID, env)).toBe(100);
+  const notice = inlineNotice("/plugin", true, SID, env);
+  expect(notice).toContain("allowance is exhausted");
+  expect(notice).toContain("read only (inline)");
+  expect(notice).toContain("Record nothing new");
+  expect(notice).not.toContain("track-work");
+  expect(notice).toContain("probe mcp call");
+  markInlineShown(SID, 100, env);
+  expect(inlineNoticeDue(SID, env)).toBeNull();
+});
 const sessions = () => join(tmp, "state", "probe", "sessions");
 const write = (name: string, body: string) => {
   mkdirSync(sessions(), { recursive: true });

@@ -140,4 +140,17 @@ def reads_only(session_id: str, state: str | None = None) -> bool:
     session the daemon reads for. Its reader keeps running; its writer records
     nothing."""
     state = session_state(session_id) if state is None else state
-    return state == STATE_READ_ONLY and daemon_profile(session_id)
+    if state != STATE_READ_ONLY or not daemon_profile(session_id):
+        return False
+    # Read-only inline (monthly allowance handoff) keeps this state byte but
+    # stops the daemon. Mirror session_marker's narrow open-marker contract.
+    try:
+        marker = json.loads((sessions_dir() / (session_id + ".inline")).read_text(encoding="utf-8"))
+        import math
+        since = marker.get("since") if isinstance(marker, dict) else None
+        inline = (isinstance(marker, dict) and marker.get("from") in ("daemon", STATE_READ_ONLY, "off")
+                  and marker.get("mode") == STATE_READ_ONLY and "until" not in marker
+                  and isinstance(since, (int, float)) and not isinstance(since, bool) and math.isfinite(since))
+    except (OSError, ValueError):
+        inline = False
+    return not inline

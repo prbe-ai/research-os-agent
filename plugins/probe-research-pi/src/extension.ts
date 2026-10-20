@@ -17,7 +17,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
 import { QuestionAsker, feedbackUnsent, spawnFeedbackFlush, type ApprovalsDeps } from "./core/approvals.js";
-import { guardToolCall, sessionIsInline } from "./guard.js";
+import { guardToolCall, sessionInlineReadOnly, sessionIsInline } from "./guard.js";
 import {
   cliHasInlineBridge,
   forgetInlineShown,
@@ -149,6 +149,7 @@ function footerText(sessionId: string, daemonLive?: boolean): string | undefined
       : (daemonLive ?? daemonStatus(sessionId, realDaemonNoticeDeps()).status === DaemonStatus.Live);
   // `on (inline)`: the researcher set Probe inline (`/probe inline`).
   const inline = inDaemonProfile(sessionId) && sessionIsInline(sessionId);
+  if (inline && sessionInlineReadOnly(sessionId)) return "○ read only (inline)";
   return trackingStatusText(cachedTracking.tracking, cachedTracking.capture, live, inline);
 }
 
@@ -833,7 +834,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       const since = sessionId ? inlineNoticeDue(sessionId) : null;
       if (sessionId && since !== null) {
         const cli = await localCliVersion({ execFile: realTrackingExecFile, existsSync: fs.existsSync, isExecutable, env: process.env });
-        notice = inlineNotice(extensionDir, cliHasInlineBridge(cli));
+        notice = inlineNotice(extensionDir, cliHasInlineBridge(cli), sessionId);
         markInlineShown(sessionId, since);
       }
     } else {
@@ -905,6 +906,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       const reason = guardToolCall(event.toolName, event.input, {
         daemonProfile,
         inline: daemonProfile && sessionIsInline(sessionId),
+        inlineReadOnly: sessionInlineReadOnly(sessionId),
         env: process.env,
         cwd: ctx?.cwd ?? process.cwd(),
       });

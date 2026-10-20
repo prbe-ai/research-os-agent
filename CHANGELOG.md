@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Automatically hand the current conversation to inline recording when the daemon receives a confirmed budget-exhausted response. Read-only conversations stay read-only, active daemon work stops, and resumes keep the handoff without changing new-session defaults. Updated hooks, pi, and tap explain the change and prevent stale supervisors from repeatedly restarting a read-only daemon.
+- Let the desktop acknowledge a fully completed installation to the dashboard through a bounded, authenticated request pinned to the signed-in account and team. Retries preserve onboarding flow and cannot skip earlier website setup.
+
 ## 0.275.0
 
 - Respect desktop telemetry privacy through a boolean-only CLI policy read and fixed Finder environment imports. Human desktop actions keep existing wizard/import event names with explicit desktop provenance across service actions and background import workers; noninteractive prompting and automated updater attribution stay unchanged.

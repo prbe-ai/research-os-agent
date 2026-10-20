@@ -63,6 +63,8 @@ RESPAWN_LATER_SECONDS = 5
 #: `wanted()` is False while the researcher has Probe inline, so a worker leaving
 #: for it exits 0, not EXIT_DO_NOT_RESPAWN (whose hold a quick switch back would pin).
 FOLLOWS_INLINE_ENV = "PROBE_TAP_FOLLOWS_INLINE"
+#: This supervisor also recognizes a quota handoff that preserves read-only.
+READ_ONLY_INLINE_ENV = "PROBE_TAP_READ_ONLY_INLINE"
 #: The worker's exit when the daemon's AI libraries are missing
 #: (`probe.daemon.worker.EXIT_RETRY_LIBS`), sent only to a supervisor that says it
 #: retries (RETRIES_LIBS_ENV, `probe.daemon.worker.SUPERVISOR_RETRIES_LIBS_ENV`).
@@ -147,7 +149,7 @@ class Supervisor:
             return False
         # Daemon v2 has no shadow mode: it runs in `daemon`, and in `read only
         # (daemon)` for its reader alone (the worker records nothing there). Never
-        # in `off`, and never while the researcher has Probe inline (`full`).
+        # in `off`, or while manual/confirmed-quota inline hands work to the agent.
         return state == worker.STATE_DAEMON or lease.reads_only(self.session_id, state)
 
     def _open_socket(self) -> None:
@@ -268,7 +270,7 @@ class Supervisor:
                         stdout=log_file,
                         stderr=subprocess.STDOUT,
                         cwd=str(self.cwd) if Path(self.cwd).is_dir() else str(Path.home()),
-                        env={**os.environ, FOLLOWS_INLINE_ENV: "1", RETRIES_LIBS_ENV: "1"},
+                        env={**os.environ, FOLLOWS_INLINE_ENV: "1", READ_ONLY_INLINE_ENV: "1", RETRIES_LIBS_ENV: "1"},
                         # Its own group: a signal to the capture daemon's group must not
                         # cut the worker's final cycle short.
                         start_new_session=True,

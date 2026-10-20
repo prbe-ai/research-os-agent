@@ -16,9 +16,11 @@
  *   or `DAEMON_PROFILE_DENY_WRITE` for a write); a write carrying `--directed`
  *   runs. The researcher's switch is refused as the switch, flag or no flag
  *   (`RESEARCHER_SWITCH_DENY`).
- *   Unless the researcher set Probe inline (`/probe inline`, `sessionIsInline`):
- *   then only the question folder and the researcher's switch (`switchMove`,
- *   `INLINE_SWITCH_DENY`) are refused.
+ *   Manual inline (`/probe inline`) and a trusted, confirmed quota response
+ *   (`sessionIsInline`) open agent reads. Full inline also opens writes;
+ *   read-only inline keeps writes refused, including `--directed` writes.
+ *   The question folder and researcher's switch (`switchMove`,
+ *   `INLINE_SWITCH_DENY`) remain refused: an agent cannot switch itself.
  *
  * The `read-only`/`off` refusals of the Python guard are not ported: pi has
  * never carried them, and the CLI's own write gate refuses those writes on
@@ -38,7 +40,7 @@ import { fileURLToPath } from "node:url";
 
 import { approvalsDir, probeStateDir, type PathEnv } from "./core/paths.js";
 import { isProbeMcpTool } from "./profile.js";
-import { daemonProfileRefusal, switchMove } from "./core/probeCommands.js";
+import { asksHelp, classifyProbeArgs, daemonProfileRefusal, ProbeKind, probeInvocations, switchMove } from "./core/probeCommands.js";
 import { ProbeState } from "./core/trackingState.js";
 import { STATE_SUFFIX } from "./core/turnSignal.js";
 
@@ -168,6 +170,7 @@ export const INLINE_FROM: ReadonlySet<string> = new Set(["daemon", "read-only", 
 
 /** `session_marker.INLINE_SUFFIX`: the inline marker beside `<sid>.state`. */
 export const INLINE_SUFFIX = ".inline";
+export const InlineReason = { BudgetExhausted: "budget_exhausted" } as const;
 
 /**
  * `session_marker.inline_marker`'s `since` for an OPEN marker (a known origin, a
@@ -181,18 +184,19 @@ export function inlineSince(sessionId: string | undefined, env: PathEnv = proces
       readFileSync(join(probeStateDir(env), "sessions", `${sessionId}${INLINE_SUFFIX}`), "utf8"),
     ) as unknown;
     if (typeof marker !== "object" || marker === null || "until" in marker) return null;
-    const { from, since } = marker as { from?: unknown; since?: unknown };
-    return INLINE_FROM.has(String(from)) && typeof since === "number" && Number.isFinite(since) ? since : null;
+    const { from, since, mode } = marker as { from?: unknown; since?: unknown; mode?: unknown };
+    return INLINE_FROM.has(String(from)) && typeof since === "number" && Number.isFinite(since)
+      && (mode === undefined || mode === ProbeState.Full || mode === ProbeState.ReadOnly) ? since : null;
   } catch {
     return null;
   }
 }
 
 /**
- * `session_marker.is_inline`, ported: the researcher set Probe inline
- * (`/probe inline`, Richard 2026-10-06). The session's state is `full` AND its
- * `<sid>.inline` marker is open (`inlineSince`). The caller knows the profile
- * (the marker is only ever written in the daemon profile).
+ * `session_marker.is_inline`, ported: manual or trusted confirmed-quota inline.
+ * The session's state matches its open marker's mode (`full` for older markers,
+ * or `read-only` for a quota handoff preserving read-only). The caller knows
+ * the profile (the marker is only ever written in the daemon profile).
  */
 export function sessionIsInline(sessionId: string | undefined, env: PathEnv = process.env): boolean {
   return currentInlineSince(sessionId, env) !== null;
@@ -205,16 +209,27 @@ export function currentInlineSince(sessionId: string | undefined, env: PathEnv =
     const state = readFileSync(join(probeStateDir(env), "sessions", `${sessionId}${STATE_SUFFIX}`), "utf8")
       .trim()
       .toLowerCase();
-    return state === ProbeState.Full ? inlineSince(sessionId, env) : null;
+    const marker = JSON.parse(readFileSync(join(probeStateDir(env), "sessions", `${sessionId}${INLINE_SUFFIX}`), "utf8"));
+    return state === (marker?.mode ?? ProbeState.Full) ? inlineSince(sessionId, env) : null;
   } catch {
     return null;
   }
 }
 
+export function sessionInlineReadOnly(sessionId: string | undefined, env: PathEnv = process.env): boolean {
+  if (!sessionId || !sessionIsInline(sessionId, env)) return false;
+  try {
+    return readFileSync(join(probeStateDir(env), "sessions", `${sessionId}${STATE_SUFFIX}`), "utf8").trim() === ProbeState.ReadOnly;
+  } catch {
+    return false;
+  }
+}
+
 export interface GuardContext {
   daemonProfile: boolean;
-  /** The researcher set Probe inline (`sessionIsInline`): only the switch and the question folder are refused. */
+  /** Manual or trusted quota inline (`sessionIsInline`); the agent cannot move the switch. */
   inline?: boolean;
+  inlineReadOnly?: boolean;
   env: PathEnv;
   cwd: string;
 }
@@ -225,11 +240,21 @@ export function guardToolCall(toolName: string, input: unknown, context: GuardCo
   if (aimed !== null) return fill(DENY_REASON_APPROVALS, { tool: toolName, path: aimed });
   if (!context.daemonProfile) return null;
   if (context.inline) {
-    // The researcher set Probe inline: only the switch is refused.
+    // Inline never lets the agent move the researcher's switch.
     const field = SHELL_FIELD[toolName];
     const line = field !== undefined && typeof input === "object" && input !== null ? (input as Record<string, unknown>)[field] : undefined;
     const moved = typeof line === "string" ? switchMove(line) : null;
-    return moved === null ? null : fill(INLINE_SWITCH_DENY, { matched: moved });
+    if (moved !== null) return fill(INLINE_SWITCH_DENY, { matched: moved });
+    if (context.inlineReadOnly && typeof line === "string") {
+      for (const args of probeInvocations(line)) {
+        const [kind, matched] = classifyProbeArgs(args);
+        // `probe exec` still launches a run, unrecorded, as the CLI gate does.
+        if (!asksHelp(args) && kind === ProbeKind.Write && matched !== "probe exec") {
+          return `Probe is READ-ONLY for this conversation, so \`${matched}\` was refused before it ran. Reads are still fine.`;
+        }
+      }
+    }
+    return null;
   }
   if (isProbeMcpTool(toolName)) return fill(DAEMON_PROFILE_DENY, { matched: toolName });
   const shellField = SHELL_FIELD[toolName];

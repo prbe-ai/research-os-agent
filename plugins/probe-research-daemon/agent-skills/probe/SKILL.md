@@ -22,6 +22,11 @@ To see where it landed, run `probe session status`.
 and write Probe yourself, recording by the two skills the notice names; any
 other `/probe` move hands Probe back to the daemon.
 
+If the team's free daemon allowance runs out, Probe automatically hands this
+session to inline mode and tells you why. Record and read by the inline notice;
+if this session was read-only, keep it read-only and record nothing. The saved
+recorder preference stays unchanged. `/probe on` tries the daemon again.
+
 Bare `/probe` toggles `on` <-> `read`. `off` is reached only by typing it; one
 press leaves it for `read`. Whether the daemon is used at all is set in
 `probe wizard`, not by this switch.

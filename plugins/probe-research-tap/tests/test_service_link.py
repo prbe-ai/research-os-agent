@@ -336,6 +336,17 @@ def test_session_mode(home, state, profile, mode):
     assert service_link.session_mode("sid-m") == mode
 
 
+@pytest.mark.parametrize("state", ["full", "read-only"])
+def test_quota_handoff_registers_inline_with_the_main_service(home, state):
+    _state("sid-q", state)
+    (lease.sessions_dir() / "sid-q.profile").write_text("daemon")
+    (lease.sessions_dir() / "sid-q.inline").write_text(json.dumps({
+        "from": "read-only" if state == "read-only" else "daemon", "since": time.time(),
+        "mode": state, "reason": "budget_exhausted",
+    }))
+    assert service_link.session_mode("sid-q") == Mode.INLINE
+
+
 def test_nothing_starts_while_the_service_is_switched_off(home, monkeypatch):
     monkeypatch.setenv("PROBE_SERVICE", "off")
     assert service_link.start("sid-8") is None

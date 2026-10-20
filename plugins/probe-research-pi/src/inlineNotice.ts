@@ -18,7 +18,8 @@
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { currentInlineSince } from "./guard.js";
+import { currentInlineSince, InlineReason } from "./guard.js";
+import { ProbeState } from "./core/trackingState.js";
 import { probeStateDir, type PathEnv } from "./core/paths.js";
 import { findProbeBinary, type ProbeBinaryDeps } from "./core/teamNote.js";
 import type { TrackingExecFileFn } from "./core/trackingState.js";
@@ -48,11 +49,24 @@ export const INLINE_SHOWN_SUFFIX = ".inline-shown";
  * The notice, naming this package's copies of the three skills; `bridge`: the
  * local CLI has `probe mcp tools|call` (`cliHasInlineBridge`).
  */
-export function inlineNotice(extensionDir: string, bridge: boolean): string {
-  return INLINE_NOTICE.replace("{track_work}", join(extensionDir, "skills", "track-work", "SKILL.md"))
+export function inlineNotice(extensionDir: string, bridge: boolean, sessionId?: string, env: PathEnv = process.env): string {
+  let marker: {mode?: unknown; reason?: unknown} = {};
+  if (sessionId) {
+    try {
+      marker = JSON.parse(readFileSync(join(probeStateDir(env), "sessions", `${sessionId}.inline`), "utf8")) ?? {};
+    } catch { /* A missing marker keeps the manual notice. */ }
+  }
+  const prefix = marker.reason === InlineReason.BudgetExhausted
+    ? "The team's free daemon allowance is exhausted. Probe switched to inline automatically. " : "";
+  const reads = bridge ? INLINE_READS : INLINE_READS_OLD_CLI;
+  if (marker.mode === ProbeState.ReadOnly) {
+    return prefix + "Probe is `read only (inline)` for this conversation: the daemon is off, and you read "
+      + "Probe yourself. Record nothing new; the researcher's read-only choice stays in effect. " + reads;
+  }
+  return prefix + INLINE_NOTICE.replace("{track_work}", join(extensionDir, "skills", "track-work", "SKILL.md"))
     .replace("{write_summary}", join(extensionDir, "skills", "write-summary", "SKILL.md"))
     .replace("{edit_notes}", join(extensionDir, "skills", "edit-notes", "SKILL.md"))
-    .replace("{reads}", bridge ? INLINE_READS : INLINE_READS_OLD_CLI);
+    .replace("{reads}", reads);
 }
 
 /**

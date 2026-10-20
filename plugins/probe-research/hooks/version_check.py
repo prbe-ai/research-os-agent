@@ -1156,9 +1156,11 @@ def paper_find_ready() -> "bool | None":
     return None
 
 
-def inline_notice_for(track_work: str, write_summary: str, edit_notes: str) -> str:
+def inline_notice_for(track_work: str, write_summary: str, edit_notes: str, *,
+                      read_only: bool = False, budget: bool = False) -> str:
     """`_session_marker.INLINE_NOTICE`, its last sentence by what the local CLI can do."""
-    return _session_marker.inline_notice(track_work, write_summary, edit_notes, bridge=inline_bridge_ready())
+    return _session_marker.inline_notice(track_work, write_summary, edit_notes, bridge=inline_bridge_ready(),
+                                          read_only=read_only, budget=budget)
 
 
 def _local_plugin(plugin_json: str):

@@ -145,6 +145,24 @@ def test_every_worker_is_told_the_supervisor_retries_missing_libraries(tmp_path,
     sup.poll()
     assert spawned[0]["env"][supervisor_mod.RETRIES_LIBS_ENV] == "1"
     assert spawned[0]["env"][supervisor_mod.FOLLOWS_INLINE_ENV] == "1"
+    assert spawned[0]["env"][supervisor_mod.READ_ONLY_INLINE_ENV] == "1"
+
+
+def test_read_only_quota_inline_does_not_respawn_but_explicit_read_does(tmp_path, monkeypatch):
+    sup, spawned, _ = _sup(tmp_path, monkeypatch, [0, None])
+    _set_state("read-only")
+    (lease.sessions_dir() / f"{SID}.profile").write_text("daemon")
+    sup.poll()
+    marker = lease.sessions_dir() / f"{SID}.inline"
+    marker.write_text(json.dumps({"from": "read-only", "since": 100.0,
+                                  "mode": "read-only", "reason": "budget_exhausted"}))
+    for _ in range(4):
+        sup.poll()
+    assert len(spawned) == 1 and sup.gave_up_in is None
+    # /probe read closes the inline marker; the read-only byte stays unchanged.
+    marker.unlink()
+    sup.poll()
+    assert len(spawned) == 2
 
 
 def test_a_worker_that_left_over_the_switch_waits_while_it_is_not_daemon(tmp_path, monkeypatch):

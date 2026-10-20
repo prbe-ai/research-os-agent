@@ -958,6 +958,8 @@ def state_display(state: "str | None", daemon: bool = False, inline: bool = Fals
     an inline session (`is_inline`) reads `on (inline)`."""
     if inline and state == STATE_FULL:
         return INLINE_DISPLAY
+    if inline and state == STATE_READ_ONLY:
+        return "read only (inline)"
     if state == STATE_DAEMON or (daemon and state in DAEMON_STATE_DISPLAY):
         return DAEMON_STATE_DISPLAY[state]
     return state_label(state)
@@ -2150,10 +2152,13 @@ def clear_auto_pause(session_id: str) -> bool:
 # `/probe inline`, typed by the researcher in a daemon-profile session, turns
 # the daemon off and lets the agent read and write Probe itself, recording by
 # track-work as written. Reachable from any state; any other switch move ends
-# it. ONLY THE RESEARCHER moves it: a typed prompt, pi's `/probe` command or
+# it. The researcher moves it: a typed prompt, pi's `/probe` command or
 # `probe session state inline` from a terminal -- never a tool call the agent
 # can make (the guard ignores `inline` in a Skill call and refuses every switch
-# command the agent types). Replaces the agent-initiated takeover of 10-05.
+# command the agent types). The one automatic exception is a trusted daemon
+# model response with HTTP 429/code budget_exhausted (`inline_on_budget`): full
+# daemon becomes full inline, while read-only daemon stays read-only inline.
+# Replaces the agent-initiated takeover of 10-05.
 # In the agent profile `inline` is `on`: the agent already records there.
 #
 # STORED AS `full` PLUS A MARKER. Every gate already reads `full` as "the agent
@@ -2161,8 +2166,12 @@ def clear_auto_pause(session_id: str) -> bool:
 # read it as recording anyway, so no new byte. The marker `<sid>.inline` is what
 # makes a `full` inline: a `full` without one (an older CLI's `track`) is NOT
 # inline and opens nothing.
+# Read-only inline keeps the existing `read-only` state and adds `mode` to the
+# marker. Every write gate therefore continues refusing writes in that state.
 #
 #     <sid>.inline      {"from": "daemon" | "read-only" | "off", "since": <epoch s>}
+#                       (+ "mode": "full" | "read-only", "reason": "budget_exhausted"
+#                          for a confirmed quota handoff)
 #                       (+ "until" once closed but not yet logged: see below)
 #     <sid>.inline-log  one {"since", "until", "from"} line per interval that ended
 #
@@ -2284,6 +2293,12 @@ def inline_marker(session_id: str) -> "dict | None":
     if since is None:
         return None
     marker: dict = {"from": data["from"], "since": since}
+    if "mode" in data:
+        if data["mode"] not in (STATE_FULL, STATE_READ_ONLY):
+            return None
+        marker["mode"] = data["mode"]
+    if data.get("reason") == "budget_exhausted":
+        marker["reason"] = "budget_exhausted"
     if "until" in data:
         until = _finite(data.get("until"))
         if until is None or until < since:
@@ -2294,18 +2309,18 @@ def inline_marker(session_id: str) -> "dict | None":
 
 def _open_marker(session_id: str, state: "str | None" = None) -> "dict | None":
     """The marker of the stretch the session is in now, or None: the state is
-    `full`, the session is the daemon's (`<sid>.profile`), and the marker is
+    the marker's mode (`full` by default), the session is the daemon's, and the marker is
     open (no `until`). One read of each file; the guard asks before every call."""
     if state is None:
         state = session_state(session_id)
-    if state != STATE_FULL or session_profile(session_id) != RECORDER_DAEMON:
+    if state not in (STATE_FULL, STATE_READ_ONLY) or session_profile(session_id) != RECORDER_DAEMON:
         return None
     marker = inline_marker(session_id)
-    return marker if marker is not None and "until" not in marker else None
+    return marker if marker is not None and "until" not in marker and marker.get("mode", STATE_FULL) == state else None
 
 
 def is_inline(session_id: str, state: "str | None" = None) -> bool:
-    """Did the researcher hand Probe to the agent (`/probe inline`)? See `_open_marker`."""
+    """Is manual or trusted confirmed-quota inline active? See `_open_marker`."""
     return _open_marker(session_id, state) is not None
 
 
@@ -2323,9 +2338,12 @@ def switch_to_inline(session_id: str, now: "float | None" = None) -> bool:
         return set_session_state(session_id, STATE_FULL, now)
     with _StateLock(session_id):
         state = session_state(session_id)
-        if is_inline(session_id, state):
+        if is_inline(session_id, state) and state == STATE_FULL:
             return True
         stale = inline_marker(session_id)
+        if stale is not None and "until" not in stale and is_inline(session_id, state):
+            if _close_inline(session_id, stale, now) is not False:
+                return False
         if stale is not None and "until" in stale and not _log_inline_interval(session_id, stale, stale["until"]):
             return False
         at = time.time() if now is None else now
@@ -2336,6 +2354,34 @@ def switch_to_inline(session_id: str, now: "float | None" = None) -> bool:
             _remove_inline_marker(session_id)
             return False
     return True
+
+
+def inline_on_budget(session_id: str, expected_state: str, now: "float | None" = None) -> bool:
+    """Trusted daemon handoff after a structured monthly-quota refusal.
+
+    Never a CLI/agent switch door. The worker classifies the refusal first;
+    this atomic compare-and-set preserves a concurrent explicit read/off move,
+    the configured recorder and machine defaults. Read-only stays read-only.
+    """
+    if not valid_session_id(session_id) or expected_state not in (STATE_DAEMON, STATE_READ_ONLY):
+        return False
+    with _StateLock(session_id):
+        if session_profile(session_id) != RECORDER_DAEMON or session_state(session_id) != expected_state:
+            return False
+        if is_inline(session_id, expected_state):
+            return True
+        stale = inline_marker(session_id)
+        if stale is not None and "until" in stale and not _log_inline_interval(session_id, stale, stale["until"]):
+            return False
+        target = STATE_FULL if expected_state == STATE_DAEMON else STATE_READ_ONLY
+        at = time.time() if now is None else now
+        marker = {"from": expected_state, "since": at, "mode": target, "reason": "budget_exhausted"}
+        if not _publish_atomically(inline_path(session_id), json.dumps(marker) + "\n"):
+            return False
+        if not _set_state_unlocked(session_id, target):
+            _remove_inline_marker(session_id)
+            return False
+        return True
 
 
 def _close_inline(session_id: str, marker: "dict | None", now: "float | None") -> "bool | None":
@@ -2351,7 +2397,7 @@ def _close_inline(session_id: str, marker: "dict | None", now: "float | None") -
         return False
     if "until" in marker:
         return not _log_inline_interval(session_id, marker, marker["until"])
-    if session_state(session_id) != STATE_FULL:
+    if session_state(session_id) != marker.get("mode", STATE_FULL):
         return False  # a crashed entry: the marker beside another state claims nothing
     if _log_inline_interval(session_id, marker, now):
         return False
@@ -2384,7 +2430,7 @@ def _remove_inline_marker(session_id: str) -> None:
 
 
 def inline_intervals(session_id: str) -> "list[tuple[float, float | None]]":
-    """Every stretch the researcher handed Probe to the agent in this session,
+    """Every manual or trusted confirmed-quota inline stretch in this session,
     `(since, until)` in epoch seconds, the open one first with `until` None. The
     daemon leaves the events stamped inside them to the agent.
 
@@ -2424,14 +2470,19 @@ def inline_intervals(session_id: str) -> "list[tuple[float, float | None]]":
 
 
 def inline_notice(
-    track_work: "str | Path", write_summary: "str | Path", edit_notes: "str | Path", *, bridge: bool
+    track_work: "str | Path", write_summary: "str | Path", edit_notes: "str | Path", *, bridge: bool,
+    read_only: bool = False, budget: bool = False,
 ) -> str:
     """`INLINE_NOTICE` naming the skill files the agent records by, in
     `INLINE_SKILL_FILES` order; `bridge`:
     this machine's CLI has `probe mcp tools|call` (`INLINE_READS`), else it is
     too old to read Probe inline (`INLINE_READS_OLD_CLI`)."""
     reads = INLINE_READS if bridge else INLINE_READS_OLD_CLI
-    return INLINE_NOTICE.format(
+    prefix = "The team's free daemon allowance is exhausted. Probe switched to inline automatically. " if budget else ""
+    if read_only:
+        return prefix + ("Probe is `read only (inline)` for this conversation: the daemon is off, and you read "
+                         "Probe yourself. Record nothing new; the researcher's read-only choice stays in effect. " + reads)
+    return prefix + INLINE_NOTICE.format(
         track_work=track_work, write_summary=write_summary, edit_notes=edit_notes, reads=reads
     )
 
@@ -3401,6 +3452,8 @@ def render(
         if daemon and session_state == STATE_READ_ONLY:
             # The daemon still reads for this session; it records nothing.
             label = DAEMON_STATE_DISPLAY[STATE_READ_ONLY]
+        if inline and session_state == STATE_READ_ONLY:
+            label = "read only (inline)"
         return _INDENT + _paint(_DOT, hue, color) + " " + label
 
     # Read PAST the `not tracking` return above on purpose: capture is a fact
@@ -3831,4 +3884,3 @@ def take_parent_ask(session_id: str, statuses: "tuple[str, ...] | None" = None) 
         return PARENT_ASK.format(files=parent_files_label(parents))
     except Exception:  # noqa: BLE001
         return None
-
