@@ -68,7 +68,7 @@ from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
-from . import capy_sanitize, codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
+from . import codex_sanitize, kimi_sanitize, pi_sanitize, sanitize
 from .sanitize import PastedImage
 from .secrets import redact, redact_event
 from .transcript import nesting_exceeds
@@ -191,7 +191,6 @@ _SANITIZER_MODULES = {
     "codex_sanitize": codex_sanitize,
     "pi_sanitize": pi_sanitize,
     "kimi_sanitize": kimi_sanitize,
-    "capy_sanitize": capy_sanitize,
 }
 
 

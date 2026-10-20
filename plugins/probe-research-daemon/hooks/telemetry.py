@@ -130,7 +130,6 @@ RESEARCH_SKILLS = {
     "artifact-diagramming",
     "artifact-design",
     "probe-research-setup",
-    "probe-capy",
     # retired names (kept for resumed transcripts and cached installs);
     # notes-audit and pull-rules were renamed on 2026-09-17
     "notes-audit",

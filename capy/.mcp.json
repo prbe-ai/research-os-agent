@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "probe": {
-      "type": "http",
-      "url": "https://mcp.research.prbe.ai/mcp",
-      "auth": "oauth"
-    }
-  }
-}

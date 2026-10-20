@@ -14,7 +14,6 @@ import json
 from pathlib import Path
 from uuid import UUID
 
-from . import capy_sanitize
 from .session_journal import ReconciliationRequired, _harness, prefix_hash
 
 #: The transcript formats this check knows (a registry row's
@@ -24,11 +23,8 @@ FORMAT_CLAUDE = "claude_jsonl"
 FORMAT_CODEX = "codex_rollout"
 FORMAT_PI = "pi_jsonl"
 FORMAT_KIMI = "kimi_wire"
-#: Capy: Probe's own mirror of a thread read from Capy's API
-#: (cli/capy_discovery.py); its first line names the session it holds.
-FORMAT_CAPY = "capy_jsonl"
 #: Where each format's identity record lives, and its record type.
-_HEADER_TYPE = {FORMAT_CODEX: "session_meta", FORMAT_PI: "session", FORMAT_CAPY: capy_sanitize.HEADER_TYPE}
+_HEADER_TYPE = {FORMAT_CODEX: "session_meta", FORMAT_PI: "session"}
 #: Kimi Code: the wire's first record, and the identity file in the session folder.
 _KIMI_HEADER_TYPE = "metadata"
 _KIMI_STATE_FILE = "state.json"

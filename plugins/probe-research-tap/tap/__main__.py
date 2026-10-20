@@ -24,7 +24,6 @@ def _print_help() -> int:
     print("  status   print local state")
     print("  revoke   revoke device + wipe local state")
     print("  redaction-notice  print (and clear) what was redacted last session")
-    print("  cloud-catchup  start a background sync of a connected cloud agent (SessionStart)")
     print("  companion  the Probe daemon worker (started by `watch` in the daemon state)")
     print("  service  the machine-wide Probe service: ensure | register | end | status (pi)")
     return 0
@@ -73,10 +72,6 @@ def main(argv: list[str] | None = None) -> int:
         from tap.pair import main as pair_main
 
         return pair_main(rest)
-    if cmd == "cloud-catchup":
-        from tap.cloud_catchup import main as catchup_main
-
-        return catchup_main(rest)
     if cmd == "redaction-notice":
         # Reads and CLEARS the pending report, so the researcher is told once.
         # Silent and exit 0 when there is nothing pending or no local state
