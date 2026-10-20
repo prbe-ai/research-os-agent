@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report signing out of a machine as `wizard.signed_out` (`probe wizard` › Account, `--action logout`, the Mac app's Sign out, `probe logout`), attributed to the person by pinning the identity before the token is revoked. `wizard.install_settled` now names the run's `agents`, the `agents_added` it installed, and `was_configured` (Probe was installed on the device before the run; a sign-in alone does not count), so a coding agent added to a set-up machine can be announced once.
+
 ## 0.278.0
 
 - Add approved transcript producer IDs and a separate live activity stream to desktop backfills. Keep the newest 200 public progress/state changes with timestamps, credential redaction and explicit truncation; retain final reports separately and never expose raw worker stdout/stderr. Older workers provide their current progress snapshot without invented history.
