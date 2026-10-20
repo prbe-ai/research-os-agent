@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add explicit selected-agent integration reinstall through Configure `reinstall: true` and `probe wizard --reinstall`. Repair refreshes only the current profile's owned plugin files, preserves disabled capture/tracking and all recorder/account/default settings, and reports incomplete failures with safe retry recovery. Local/custom pi packages and non-owned plugin registrations remain untouched; repair telemetry uses its own event family.
 ## 0.276.0
 
 - Automatically hand the current conversation to inline recording when the daemon receives a confirmed budget-exhausted response. Read-only conversations stay read-only, active daemon work stops, and resumes keep the handoff without changing new-session defaults. Updated hooks, pi, and tap explain the change and prevent stale supervisors from repeatedly restarting a read-only daemon.
