@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.283.0
+
 - Derive desktop/service configure agents from the shared harness registry, including canonical status ids and every installable agent's aliases.
 
 ## 0.282.0
