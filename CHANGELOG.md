@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Derive desktop/service configure agents from the shared harness registry, including canonical status ids and every installable agent's aliases.
+
 ## 0.282.0
 
 - **A folder import whose files were redacted on upload now finishes.** Uploads replace credential-shaped spans before they are hashed, so such a file lands under its redacted digest, and the import's receipt check, which compared it with the approved file's hash, failed it on every run ("Delivery receipt does not match the approved file, bytes and destination"). Every outbox receipt for an upload with an expected hash now carries the digest of the source its snapshot was read from (`source_content_hash`, taken from that same read, so a file edited and reverted mid-staging can never be stamped as approved), and the import accepts the approved file's redaction as delivered. Receipts from before this release carry no stamp; they were held to the same check at staging and are accepted on the next resume, without uploading again. The project-summary step accepts the same receipts; its text excerpts are redacted with the upload's own check before they reach the drafting model, which is given the stored file's hash, never the original's.
