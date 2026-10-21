@@ -536,6 +536,11 @@ def test_shannon_entropy_matches_the_outage_measurements() -> None:
         ("dockerfile_env_flood", ("ENV A_KEY " + "a" * 600 + "\n") * 100),
         ("identitytoken_flood", ('"identitytoken": "' + "a" * 5_000) * 10),
         ("npmrc_flood", ("_auth=" + "A" * 5_000 + "\n") * 10),
+        ("gap_quote_space_flood", 'token"' + " " * 60_000),
+        ("gap_suffix_flood", ('"API_TOKEN_' + "A" * 30 + '" ' + " " * 300 + ",") * 150),
+        ("gap_value_end_flood", ('"forgot password" ], "x": ' * 2_000)),
+        ("gap_label_slot_flood", ('"Password for DB", ' + " " * 300 + '"value" ') * 150),
+        ("gap_label_assign_flood", ('name = "Password for DB", ' + " " * 300 + "value ") * 150),
     ],
 )
 def test_no_rule_is_pathological(label: str, text: str) -> None:

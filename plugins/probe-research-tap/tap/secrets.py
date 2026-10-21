@@ -261,6 +261,25 @@ _ANCHOR_WORDS = (
 #: `AWS Secret Access Key [None]:` (a credential) and
 #: `... secret configuration. BEFORE:` (prose about credentials, followed by a
 #: CLI flag) — which was 6 of the 7 entropy-based false positives in that sample.
+#: Nor may it leave a string the anchor is not the name in: a closing quote
+#: followed by `,`, `}` or `],` ends a VALUE, and the separator after it
+#: belongs to the next key. A JSONL glossary
+#: (`{"term": "Token"}, {"term": "Amazon US"}`) masked whatever term followed
+#: "Token", and a transcript (`"input": "...forgot password should",
+#: "output": "..."`) its whole output. One `",` may still follow the anchor's
+#: own name, run on by identifier characters (`{"name": "DB_PASSWORD_PROD",
+#: "value": "..."}`): a value that merely ENDS in an anchor word reads the same
+#: and is still masked. Any other label (`"Password for DB"`, `"API Key
+#: (prod)"`, an AWS tag's `"Key"`) may close its string only into a value
+#: slot -- `value`, `string_value`, `data`, `val`, `default`/`defaultValue`,
+#: quoted or not, before `:` or `=` (JSON, JS, YAML flow, HCL, kwargs) --
+#: which the transcript's `output` is not (`secret` is an anchor of its own;
+#: `valueFrom` is a reference, not a value). Spaces, never newlines: the gap
+#: stays on its line.
+_GAP = (r"(?P<gap>(?:[A-Za-z0-9_\-/}]{0,24}[ \t]*[\"'][ \t]*,"
+        r"|[^\n.!?\"']{0,24}[\"'][ \t]*(?:\][ \t]*)?,"
+        r"(?=[ \t]*[\"']?(?:(?:string_?)?value|data|val|default(?:_?value)?)[\"']?[ \t]*[:=]))?"
+        r"(?:(?![\"'][ \t]*(?:\][ \t]*)?[,}])[^\n.!?]){0,24}?)")
 #: Where an anchor may start: after a non-alphanumeric character, or at a
 #: camelCase hump -- a lowercase letter or digit, then the anchor's capital
 #: (`postgresPassword`, `openaiApiKey`), or the last capital of an acronym
@@ -298,7 +317,7 @@ _ANCHORED = re.compile(
     + r"|(?P<keyname>" + "|".join(_LONG_VALUE_ANCHOR_WORDS) + r")"
     + r"|(?P<vendorkey>" + _VENDOR_KEY_ANCHOR + r"))"
     r"(?![A-Za-z0-9])"
-    r"(?P<gap>[^\n.!?]{0,24}?)[:=]\s*" + _STRING_PREFIX +
+    + _GAP + r"[:=]\s*" + _STRING_PREFIX +
     r"[\"']?(?P<value>[" + _SECRET_CHARS + r"]{" + str(_ENTROPY_MIN_LEN) + r",512})",
 )
 
@@ -329,7 +348,7 @@ _ANCHOR_KEYWORDS = ("secret", "password", "passwd", "api key", "api_key", "apike
 # references must not become the bare-entropy gate this module replaced.
 _SHORT_ANCHORED = re.compile(
     r"(?i)" + _ANCHOR_START + r"(?P<anchor>" + "|".join(_ANCHOR_WORDS) + r")(?![A-Za-z0-9])"
-    r"(?P<gap>[^\n.!?]{0,24}?)[:=]\s*" + _STRING_PREFIX + r"(?:\"(?P<double>[^\"\n]{1,512})\"|"
+    + _GAP + r"[:=]\s*" + _STRING_PREFIX + r"(?:\"(?P<double>[^\"\n]{1,512})\"|"
     r"'(?P<single>[^'\n]{1,512})'|(?P<bare>[^\s\"'`,;]{1,512}))"
 )
 # Password assignments carry context even when the value is a short word or
