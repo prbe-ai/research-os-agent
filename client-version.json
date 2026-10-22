@@ -1,12 +1,12 @@
 {
   "cli": {
-    "latest": "0.285.2",
+    "latest": "0.286.0",
     "min": "0.177.0",
     "recommended": "0.261.0",
     "message": "CLIs before 0.261.0 cannot write project and experiment summaries, so your team's summaries stop updating."
   },
   "plugin": {
-    "latest": "0.162.1",
+    "latest": "0.163.0",
     "min": "0.90.0"
   },
   "tap": {
