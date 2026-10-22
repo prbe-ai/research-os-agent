@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A session deleted from your machine after you approved an import no longer fails it.** Claude Code deletes transcripts nobody has opened for 30 days (`cleanupPeriodDays`), silently, after any session starts, so a sweep that ran between review and upload left the import unable to open the approved file: the session failed with "reviewed snapshot: local transcript access failed (FileNotFoundError, errno 2)", the job stopped, and the "Session import stopped" email said to resume, which could never work. Such a session is now a skip in background and foreground imports alike, reported as "N removed from this machine before upload (nothing sent)", and counts toward the import's progress, so the import finishes. It stays a failure when the error names another file, when the folder that held the file is gone too (an unmounted drive, a moved config directory), when the absence cannot be proved (a permission error), or when an upload of the session is still in progress (sent but not finished, or staged to send), so those still stop the import and reach you.
+
 ## 0.283.0
 
 - Derive desktop/service configure agents from the shared harness registry, including canonical status ids and every installable agent's aliases.
