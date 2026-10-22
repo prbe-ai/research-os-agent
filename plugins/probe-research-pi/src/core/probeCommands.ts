@@ -159,7 +159,10 @@ export const DAEMON_AGENT_WRITES: ReadonlySet<string> = new Set([
   "trial expand",
 ]);
 
-/** `session_marker.DAEMON_PROFILE_ALLOWED`: what else the daemon profile leaves to the agent. */
+/**
+ * `session_marker.DAEMON_PROFILE_ALLOWED`: what else the daemon profile leaves to the agent,
+ * Probe's own upkeep included. A list: a word the guard cannot read stays refused.
+ */
 export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "ask",
   "session status",
@@ -179,6 +182,80 @@ export const DAEMON_PROFILE_ALLOWED: ReadonlySet<string> = new Set([
   "context list",
   "wandb discover",
   "wandb key status",
+  "update",
+  "status",
+  "flush",
+  "service status",
+  "service start",
+  "service stop",
+  "service check-now",
+  "token list",
+  "context show",
+  "outbox drain",
+  "outbox retry",
+  "outbox watch",
+  "statusline status",
+  "statusline show",
+  "mcp status",
+  "workspace list",
+  "workspace get",
+  "workspace writers show",
+  "access-group list",
+  "notes sync",
+  "agent-rules refresh",
+  "wandb key set",
+  "draft edit",
+  "file preview",
+  "feedback flush",
+  "capy sync",
+  "capy disconnect",
+]);
+
+/**
+ * `session_marker.DAEMON_PROFILE_RUN_READS`: reads of one run, by its id. The agent looks at
+ * the runs it launched itself; listings across the team's work stay the daemon's.
+ */
+export const DAEMON_PROFILE_RUN_READS: ReadonlySet<string> = new Set([
+  "run get",
+  "run series",
+  "run metrics",
+  "run inputs",
+  "run upstream",
+  "run reproduce",
+  "get",
+  "bundle",
+  "events",
+  "metrics wide",
+  "metrics plot",
+  "metrics export",
+  "metrics grouped",
+  "span list",
+  "span get",
+  "trial list",
+  "trial get",
+  "artifact tree",
+  "artifact versions",
+  "snapshot-show",
+]);
+
+/**
+ * `session_marker.DAEMON_PROFILE_RUN_READ_WRITES`: flags that make a run read write what it
+ * read (`run reproduce --materialize` restores the run's captured tree).
+ */
+export const DAEMON_PROFILE_RUN_READ_WRITES: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["run reproduce", new Set(["--materialize", "--export"])],
+]);
+
+/** `session_marker.DAEMON_PROFILE_WIZARD_ACTIONS`: the wizard actions the daemon profile runs. */
+export const DAEMON_PROFILE_WIZARD_ACTIONS: ReadonlySet<string> = new Set(["update", "diagnose"]);
+const WIZARD_PLAIN_FLAGS: ReadonlySet<string> = new Set(["--action", "--yes", "-y", "--json", "--no-browser"]);
+/**
+ * `session_marker.DAEMON_PROFILE_PLAIN_FLAGS`: the only flags the wizard runs with in the
+ * daemon profile. The rest hold the researcher's settings and the account the daemon records with.
+ */
+export const DAEMON_PROFILE_PLAIN_FLAGS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ["wizard", WIZARD_PLAIN_FLAGS],
+  ["setup", WIZARD_PLAIN_FLAGS],
 ]);
 
 /** `session_marker.command_words`: the (at most three) words click dispatches on. */
@@ -227,15 +304,7 @@ export function classifyProbeArgs(args: readonly string[]): [ProbeKindValue | nu
   if (READ_GROUPS.has(head)) return [ProbeKind.Read, `probe ${head}`];
   if (DIRECTED_ONLY.has(command)) return [ProbeKind.Write, `probe ${command}`];
   if (READ_UNLESS_FLAGS_COMMANDS.has(command)) {
-    const writes = args.some((arg) => {
-      const name = arg.split("=", 1)[0];
-      return (
-        READ_UNLESS_FLAGS_WRITE_FLAGS.has(name) ||
-        hasAny(arg, SHELL_EXPANSION_CHARS) ||
-        (name.startsWith("-") && hasAny(name, GLOB_CHARS))
-      );
-    });
-    return [writes ? ProbeKind.Write : ProbeKind.Read, `probe ${command}`];
+    return [flagWrites(args, READ_UNLESS_FLAGS_WRITE_FLAGS) ? ProbeKind.Write : ProbeKind.Read, `probe ${command}`];
   }
   if (WRITE_GROUPS.has(group)) {
     if (READ_VERBS.has(verb)) return [ProbeKind.Read, `probe ${command}`];
@@ -257,19 +326,62 @@ export function daemonAllowsAgent(matched: string): boolean {
 
 /**
  * `session_marker.daemon_profile_allows`: `[allowed, matched]` for the args after `probe`.
- * A write carrying `--directed` is allowed; a read is not, nor the researcher's switch.
+ * A write carrying `--directed` is allowed; a read is not but one run's, nor the researcher's switch.
+ * Probe's own upkeep runs; the wizard only plainly. Anything else is refused.
  */
 export function daemonProfileAllows(args: readonly string[]): [boolean, string] {
   const words = commandWords(args);
   if (words.length === 0) return [true, "probe"];
   const head = words[0];
   const two = words.slice(0, 2).join(" ");
+  if (DAEMON_PROFILE_PLAIN_FLAGS.has(head)) return [runsPlainly(args, head), `probe ${head}`];
   for (const key of [words.slice(0, 3).join(" "), two, head]) {
     if (DAEMON_PROFILE_ALLOWED.has(key)) return [true, `probe ${key}`];
+    if (DAEMON_PROFILE_RUN_READS.has(key)) {
+      return [!flagWrites(args, DAEMON_PROFILE_RUN_READ_WRITES.get(key) ?? new Set()), `probe ${key}`];
+    }
   }
   const [kind, matched] = classifyProbeArgs(args);
   if (kind === ProbeKind.Write && carriesDirected(args) && !RESEARCHER_SWITCH.has(two)) return [true, matched];
   return [daemonAllowsAgent(matched), matched];
+}
+
+/**
+ * `session_marker._runs_plainly`: the wizard with nothing but its plain flags, and every
+ * `--action` (click runs the last) one it may run.
+ */
+function runsPlainly(args: readonly string[], head: string): boolean {
+  const rest = [...args];
+  rest.splice(rest.indexOf(head), 1);
+  const flags = DAEMON_PROFILE_PLAIN_FLAGS.get(head) ?? new Set<string>();
+  let actions = 0;
+  for (let i = 0; i < rest.length; i++) {
+    const eq = rest[i].indexOf("=");
+    const name = eq >= 0 ? rest[i].slice(0, eq) : rest[i];
+    if (name === "--action") {
+      let value = eq >= 0 ? rest[i].slice(eq + 1) : "";
+      if (eq < 0) {
+        value = i + 1 < rest.length ? rest[i + 1] : "";
+        i += 1;
+      }
+      if (!DAEMON_PROFILE_WIZARD_ACTIONS.has(value)) return false;
+      actions += 1;
+    } else if (eq >= 0 || !flags.has(rest[i])) {
+      return false;
+    }
+  }
+  return actions > 0;
+}
+
+/** `session_marker._flag_writes`: one of `flags` named, or a word the shell may yet expand into one. */
+function flagWrites(args: readonly string[], flags: ReadonlySet<string>): boolean {
+  return (
+    flags.size > 0 &&
+    args.some((arg) => {
+      const name = arg.split("=", 1)[0];
+      return flags.has(name) || hasAny(arg, SHELL_EXPANSION_CHARS) || (name.startsWith("-") && hasAny(name, GLOB_CHARS));
+    })
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +713,20 @@ export function asksHelp(args: readonly string[]): boolean {
   return words.some((word, i) => word === HELP_FLAG && (i === 0 || !REDIRECTIONS.has(words[i - 1])));
 }
 
+/**
+ * `tracking_guard._asks_help_plainly`: `asksHelp`, minus a `--help` click hands to the bare
+ * option before it as its value (`probe wizard --folder --help` runs the wizard).
+ */
+export function asksHelpPlainly(args: readonly string[]): boolean {
+  const end = args.indexOf("--");
+  const words = end >= 0 ? args.slice(0, end) : args;
+  return words.some(
+    (word, i) =>
+      word === HELP_FLAG &&
+      (i === 0 || (!REDIRECTIONS.has(words[i - 1]) && (!words[i - 1].startsWith("-") || words[i - 1].includes("=")))),
+  );
+}
+
 /** `session_marker.RESEARCHER_SWITCH`: the researcher's switch and defaults, which the agent never moves. */
 export const RESEARCHER_SWITCH: ReadonlySet<string> = new Set([
   "session state",
@@ -629,7 +755,7 @@ export interface DaemonProfileRefused {
 /** The first `probe` invocation in a shell line the daemon profile refuses; null if none. */
 export function daemonProfileRefusal(command: string): DaemonProfileRefused | null {
   for (const args of probeInvocations(command)) {
-    if (asksHelp(args)) continue;
+    if (asksHelpPlainly(args)) continue;
     const [allowed, matched] = daemonProfileAllows(args);
     if (!allowed) return { matched, write: classifyProbeArgs(args)[0] === ProbeKind.Write };
   }

@@ -1367,14 +1367,7 @@ def classify_probe_args(args: "list[str]") -> "tuple[str | None, str]":
     if command in DIRECTED_ONLY:
         return ("write", "probe " + command)
     if command in READ_UNLESS_FLAGS:
-        flags = READ_UNLESS_FLAGS[command]
-        writes = any(
-            name in flags
-            or not _SHELL_EXPANSION_CHARS.isdisjoint(arg)
-            or (name.startswith("-") and not _GLOB_CHARS.isdisjoint(name))
-            for arg in args
-            for name in [arg.split("=", 1)[0]]
-        )
+        writes = _flag_writes(args, READ_UNLESS_FLAGS[command])
         return ("write" if writes else "read", "probe " + command)
     if group in WRITE_GROUPS:
         if verb in READ_VERBS:
@@ -1393,9 +1386,11 @@ def daemon_allows_agent(matched: str) -> bool:
 
 #: THE DAEMON PROFILE (daemon reads): the machine installed the lean
 #: `probe-research-daemon` plugin, so the daemon records AND reads, and the main
-#: agent's `probe` is `ask`, `exec`, its runs' own data (`DAEMON_AGENT_WRITES`)
-#: and `session status`. The guard in that plugin refuses every other `probe`
-#: command, reads included, with `DAEMON_PROFILE_DENY` (the approved text:
+#: agent's `probe` is `ask`, `exec`, its runs' own data (`DAEMON_AGENT_WRITES`),
+#: reads of one run (`DAEMON_PROFILE_RUN_READS`), `session status` and Probe's
+#: own upkeep (`DAEMON_PROFILE_ALLOWED`). The guard in that
+#: plugin refuses every other `probe` command, reads included, with
+#: `DAEMON_PROFILE_DENY` (the approved text:
 #: `~/daemon-prompts/reads/agent-facing/guard-refusal.NEW.md`), except a write
 #: the researcher asked for (`--directed`), which runs as in the `daemon` state.
 #: `probe --version` needs no entry (no command words); `probe version` is the
@@ -1418,11 +1413,65 @@ def daemon_allows_agent(matched: str) -> bool:
 #: waits on alive), `whoami` and `context list` (which team the runs land in),
 #: `wandb discover` and `wandb key status` (local scans ahead of a `--directed`
 #: W&B import).
+#: And Probe's own upkeep: keeping this machine's Probe updated, running and
+#: delivering (`update`, `status`, `service`, `outbox drain|retry|watch`,
+#: `flush`, `token list`), local files (`draft edit`, `file preview`), and
+#: team-note and managed-block upkeep. A daemon-profile agent could not run `probe update
+#: --check` (2026-10-21) while nothing it ran touched the team's records.
+#: A list, not "whatever the classifier calls neither read nor write": a word
+#: the guard cannot read (`probe $G delete r1`) or a command added later stays
+#: refused, and `test_daemon_profile.py` sorts every such command into this list
+#: or the daemon's, so a new one fails a test instead of going stale here.
+#: The daemon's, though the classifier says neither: what moves the key, account,
+#: server or folder the daemon records with (`login` -- `PROBE_BASE_URL` in the
+#: environment moves the server, out of the guard's sight -- `logout`, `context
+#: use|delete`, `workspace use`, `project use`, `token revoke`, `session
+#: initialize`), what drops, holds or releases queued writes (`outbox
+#: discard|pause|resume`), the team's permissions and workspaces, printed
+#: secrets (`mcp headers|env`, `token create`), the researcher's agent settings
+#: (`statusline install|uninstall`), and the daemon's own ledger and install.
 DAEMON_PROFILE_ALLOWED = frozenset(
     {"ask", "session status", "session parent", "ignore check", "run expect", "doctor", "paper find",
      "feedback send", "approvals", "outbox status", "run check", "sync", "artifact download",
-     "daemon status", "whoami", "context list", "wandb discover", "wandb key status"}
+     "daemon status", "whoami", "context list", "wandb discover", "wandb key status",
+     "update", "status", "flush", "service status", "service start", "service stop", "service check-now",
+     "token list", "context show", "outbox drain", "outbox retry", "outbox watch", "statusline status",
+     "statusline show", "mcp status", "workspace list", "workspace get", "workspace writers show",
+     "access-group list", "notes sync", "agent-rules refresh", "wandb key set", "draft edit",
+     "file preview", "feedback flush", "capy sync", "capy disconnect"}
 )
+
+#: Reads of ONE run, named by its id: the agent looks at the runs it launched
+#: (is the loss falling, did the checkpoint land) without waiting on `probe ask`
+#: (Richard 2026-10-21: the agent should see its own runs). Any run id passes --
+#: the hook cannot tell this session's runs from a teammate's, and the ids an
+#: agent holds are the ones `probe exec` printed or the daemon handed it.
+#: Listings and searches across the team's work (`run list`, `series latest`,
+#: `artifact list`, `provenance`, `commits`) stay the daemon's, through `probe ask`.
+DAEMON_PROFILE_RUN_READS = frozenset(
+    {"run get", "run series", "run metrics", "run inputs", "run upstream", "run reproduce", "get",
+     "bundle", "events", "metrics wide", "metrics plot", "metrics export", "metrics grouped",
+     "span list", "span get", "trial list", "trial get", "artifact tree", "artifact versions",
+     "snapshot-show"}
+)
+
+#: ...but not where a flag writes what it read: `run reproduce --materialize`
+#: restores the run's captured tree, as the kept `snapshot-restore` does, and
+#: `--export` writes a file. A word the shell still expands may be either.
+DAEMON_PROFILE_RUN_READ_WRITES = {"run reproduce": frozenset({"--materialize", "--export"})}
+
+#: `probe wizard` (and its old name `setup`) also holds the researcher's own
+#: settings -- who records, capture, the new-session default, imports,
+#: uninstall, and signing in and out, which set the account, server and key the
+#: daemon records with -- so the daemon profile runs it plainly only: for one of
+#: these actions, with no flag but `DAEMON_PROFILE_PLAIN_FLAGS`, nothing
+#: positional and no root option. `probe install` (the guided install) is kept
+#: outright.
+DAEMON_PROFILE_WIZARD_ACTIONS = frozenset({"update", "diagnose"})
+DAEMON_PROFILE_PLAIN_FLAGS = {
+    "wizard": frozenset({"--action", "--yes", "-y", "--json", "--no-browser"}),
+    "setup": frozenset({"--action", "--yes", "-y", "--json", "--no-browser"}),
+}
 
 #: The researcher's switch and defaults, typed into a shell. In the daemon
 #: profile the agent never moves them (`probe session state inline` included):
@@ -1502,20 +1551,66 @@ def daemon_profile_allows(args: "list[str]") -> "tuple[bool, str]":
 
     A write carrying `--directed` is allowed, as the CLI's gate allows it in the
     `daemon` state (`write_gate.refusal`). A read is not (reads go through
-    `probe ask`), and neither is the researcher's switch (`RESEARCHER_SWITCH`).
+    `probe ask`) but one run's (`DAEMON_PROFILE_RUN_READS`), and neither is the
+    researcher's switch (`RESEARCHER_SWITCH`). Probe's own upkeep runs
+    (`DAEMON_PROFILE_ALLOWED`); the wizard runs only plainly
+    (`DAEMON_PROFILE_PLAIN_FLAGS`). Anything else -- a word the guard cannot
+    read included -- is refused.
     """
     words = command_words(args)
     if not words:
         return (True, "probe")
     head = words[0]
     two = " ".join(words[:2])
+    if head in DAEMON_PROFILE_PLAIN_FLAGS:
+        return (_runs_plainly(args, head), "probe " + head)
     for key in (" ".join(words[:3]), two, head):
         if key in DAEMON_PROFILE_ALLOWED:
             return (True, "probe " + key)
+        if key in DAEMON_PROFILE_RUN_READS:
+            return (not _flag_writes(args, DAEMON_PROFILE_RUN_READ_WRITES.get(key, frozenset())), "probe " + key)
     kind, matched = classify_probe_args(args)
     if kind == "write" and carries_directed(args) and two not in RESEARCHER_SWITCH:
         return (True, matched)
     return (daemon_allows_agent(matched), matched)
+
+
+def _runs_plainly(args: "list[str]", head: str) -> bool:
+    """Is this `head` (the wizard) run with nothing but
+    `DAEMON_PROFILE_PLAIN_FLAGS`, and with every `--action` one of
+    `DAEMON_PROFILE_WIZARD_ACTIONS`? Every `--action`, because click runs the
+    LAST of a repeated one (`--action update --action recorder` runs
+    `recorder`); a word the shell still expands matches nothing."""
+    rest = list(args)
+    rest.remove(head)
+    flags = DAEMON_PROFILE_PLAIN_FLAGS[head]
+    actions = 0
+    i = 0
+    while i < len(rest):
+        name, eq, value = rest[i].partition("=")
+        if name == "--action":
+            if not eq:
+                value = rest[i + 1] if i + 1 < len(rest) else ""
+                i += 1
+            if value not in DAEMON_PROFILE_WIZARD_ACTIONS:
+                return False
+            actions += 1
+        elif eq or rest[i] not in flags:
+            return False
+        i += 1
+    return actions > 0
+
+
+def _flag_writes(args: "list[str]", flags: "frozenset[str]") -> bool:
+    """Does one of these args name one of `flags` (`--flag=value` too), or may it
+    once the shell expands it (`$F`, `--{add,x}`, `--a[d]d`)?"""
+    return bool(flags) and any(
+        name in flags
+        or not _SHELL_EXPANSION_CHARS.isdisjoint(arg)
+        or (name.startswith("-") and not _GLOB_CHARS.isdisjoint(name))
+        for arg in args
+        for name in [arg.split("=", 1)[0]]
+    )
 
 
 def daemon_profile_deny(args: "list[str]", matched: str) -> str:

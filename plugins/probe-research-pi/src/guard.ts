@@ -11,8 +11,10 @@
  *   be answering for them. `session_marker.touches_approvals`, ported.
  *
  *   DAEMON PROFILE -- the daemon records and reads, so a shell command running
- *   `probe <anything>` outside `DAEMON_PROFILE_ALLOWED` and the agent's runs'
- *   own data, and every Probe MCP tool call, are refused (`DAEMON_PROFILE_DENY`,
+ *   `probe <anything>` outside `DAEMON_PROFILE_ALLOWED` (Probe's own upkeep
+ *   included; the wizard plainly only), the agent's runs' own data
+ *   and reads of one run (`DAEMON_PROFILE_RUN_READS`), and every Probe MCP
+ *   tool call, are refused (`DAEMON_PROFILE_DENY`,
  *   or `DAEMON_PROFILE_DENY_WRITE` for a write); a write carrying `--directed`
  *   runs. The researcher's switch is refused as the switch, flag or no flag
  *   (`RESEARCHER_SWITCH_DENY`).

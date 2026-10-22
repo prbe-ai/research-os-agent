@@ -131,8 +131,8 @@ describe("the daemon profile's allowlist", () => {
   });
 
   it("refuses a read carrying `--directed` with the plain refusal: reads go through `probe ask`", () => {
-    expect(guardToolCall(PiTool.Bash, { command: "probe workspace list --directed" }, daemon())).toBe(
-      DAEMON_PROFILE_DENY.replace("{matched}", "probe workspace"),
+    expect(guardToolCall(PiTool.Bash, { command: "probe run list --directed" }, daemon())).toBe(
+      DAEMON_PROFILE_DENY.replace("{matched}", "probe run list"),
     );
     expect(guardToolCall(PiTool.Bash, { command: "probe session state on --directed" }, daemon())).toBe(
       RESEARCHER_SWITCH_DENY.replace("{matched}", "probe session state"),

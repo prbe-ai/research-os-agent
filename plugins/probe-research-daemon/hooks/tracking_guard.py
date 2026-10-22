@@ -574,6 +574,20 @@ def _asks_help(args: "list[str]") -> bool:
     )
 
 
+def _asks_help_plainly(args: "list[str]") -> bool:
+    """`_asks_help`, minus a `--help` click hands to the option before it as its
+    value (`probe wizard --folder --help` runs the wizard). The daemon profile's
+    refusals have no CLI backstop -- the write gate refuses only writes -- so
+    there a `--help` after a bare option is checked like any other run."""
+    words = args[: args.index("--")] if "--" in args else args
+    return any(
+        word == _session_marker.HELP_FLAG
+        and (i == 0 or (words[i - 1] not in _REDIRECTIONS
+                        and (not words[i - 1].startswith("-") or "=" in words[i - 1])))
+        for i, word in enumerate(words)
+    )
+
+
 READ_GROUPS = _session_marker.READ_GROUPS
 
 
@@ -1374,8 +1388,11 @@ def daemon_profile() -> bool:
 
 def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     """The daemon profile's PreToolUse: the daemon records and reads, so every
-    `probe` command but `ask`, `exec`, the runs' own data, `session status` and a
-    write the researcher asked for (`--directed`) is refused (`DAEMON_PROFILE_DENY`,
+    `probe` command but `ask`, `exec`, the runs' own data, reads of one run
+    (`session_marker.DAEMON_PROFILE_RUN_READS`), `session status`, a
+    write the researcher asked for (`--directed`) and Probe's own upkeep
+    (`session_marker.DAEMON_PROFILE_ALLOWED`; the wizard plainly only)
+    is refused (`DAEMON_PROFILE_DENY`,
     or `DAEMON_PROFILE_DENY_WRITE` for a write), and so is a Probe MCP call; the
     researcher's switch (`RESEARCHER_SWITCH`) is refused as the switch, flag or no
     flag (`RESEARCHER_SWITCH_DENY`).
@@ -1423,7 +1440,7 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     if not isinstance(command, str):
         return
     for args in _probe_invocations(command):
-        if _asks_help(args):
+        if _asks_help_plainly(args):
             continue
         allowed, matched = _session_marker.daemon_profile_allows(args)
         if not allowed:
