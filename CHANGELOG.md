@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.287.0
+
 - Report completed update stages through the existing JSON step stream so the desktop app can show update percentage inside its button. Failed CLI or integration stages remain failures; only the final completed result finishes progress.
 
 ## 0.286.1
