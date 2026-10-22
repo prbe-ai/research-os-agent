@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.285.2
+
 - **The daemon profile's guard holds up when a session tries to slip past it.** A red-team of the released guard found two ways a coding agent the Probe daemon records for could get around it: writing Probe's own per-session state files (`<id>.state`, `<id>.inline`) to forge `on (inline)` and switch the guard off, and running a refused command through a shell form the hook does not read as `probe` (`eval`, `$(echo probe)`, a renamed copy, a Python import). Two fixes: (1) the hook now refuses a tool call that writes into Probe's per-session state folder, the same tripwire it already uses for the daemon's question folder; (2) the CLI itself now refuses, in a daemon-profile session, exactly what the hook refuses (a read, write or removal of the team's records), so a command that rebuilds its own name is still caught once it actually runs `probe`. The daemon's own calls, a run's own writes, `--directed` writes, `session initialize` and the commands with their own refusals (the switch, `mcp call|tools`) are unaffected. Both stay tripwires, not boundaries: the server-side key is the real limit. pi's guard follows.
 
 ## 0.285.1
