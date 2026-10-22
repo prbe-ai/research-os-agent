@@ -40,7 +40,7 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { approvalsDir, probeStateDir, type PathEnv } from "./core/paths.js";
+import { approvalsDir, probeStateDir, sessionsDir, type PathEnv } from "./core/paths.js";
 import { isProbeMcpTool } from "./profile.js";
 import { asksHelp, classifyProbeArgs, daemonProfileRefusal, ProbeKind, probeInvocations, switchMove } from "./core/probeCommands.js";
 import { ProbeState } from "./core/trackingState.js";
@@ -52,6 +52,13 @@ export const DENY_REASON_APPROVALS =
   "researcher and their answers, so it was refused before it ran. Only the researcher answers " +
   "them: through your question tool, word for word, or `probe approvals` in their own " +
   "terminal. Do not write there, and do not route around this.";
+
+/** `session_marker.DENY_REASON_SESSIONS`. Placeholders: `{tool}`, `{path}`. */
+export const DENY_REASON_SESSIONS =
+  "`{tool}` would write {path}, where Probe records which conversation this is and whether the " +
+  "researcher has it recording -- the files this guard reads to decide. Changing them yourself " +
+  "would turn the guard off, so it was refused before it ran. Only the researcher's `/probe` " +
+  "switch moves that state; do not write there, and do not route around this.";
 
 /** `session_marker.DAEMON_PROFILE_DENY`. Placeholder: `{matched}`. */
 export const DAEMON_PROFILE_DENY =
@@ -70,6 +77,10 @@ export const DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED
 /** `session_marker._APPROVALS_TEXT`'s pattern: the folder as a command's text names it. */
 export const APPROVALS_TEXT_SOURCE = String.raw`probe/+approvals\b|\bapprovals/+(answers|requests)\b`;
 const APPROVALS_TEXT = new RegExp(APPROVALS_TEXT_SOURCE);
+
+/** `session_marker._SESSIONS_TEXT`'s pattern: the per-session folder as a command names it. */
+export const SESSIONS_TEXT_SOURCE = String.raw`probe/+sessions\b`;
+const SESSIONS_TEXT = new RegExp(SESSIONS_TEXT_SOURCE);
 
 /** pi's built-in tools the guard reads, by name (`isToolCallEventType`'s names). */
 export const PiTool = {
@@ -159,6 +170,28 @@ export function touchesApprovals(toolName: string, input: unknown, env: PathEnv,
   return null;
 }
 
+/** `session_marker.touches_sessions_dir`: the per-session-state path a tool call aims at, or null. */
+export function touchesSessionsDir(toolName: string, input: unknown, env: PathEnv, cwd: string): string | null {
+  if (typeof input !== "object" || input === null) return null;
+  const fields = input as Record<string, unknown>;
+  const fileField = FILE_WRITE_FIELD[toolName];
+  if (fileField !== undefined) {
+    const target = fields[fileField];
+    if (typeof target !== "string" || !target) return null;
+    const root = realpathLoose(sessionsDir(env));
+    const real = realpathLoose(resolveLikePi(target, cwd));
+    return real === root || real.startsWith(root.endsWith(sep) ? root : root + sep) ? target : null;
+  }
+  const shellField = SHELL_FIELD[toolName];
+  if (shellField !== undefined) {
+    const command = fields[shellField];
+    if (typeof command === "string" && (SESSIONS_TEXT.test(command) || command.includes(sessionsDir(env)))) {
+      return sessionsDir(env);
+    }
+  }
+  return null;
+}
+
 /** `session_marker.INLINE_SWITCH_DENY`. Placeholder: `{matched}`. */
 export const INLINE_SWITCH_DENY =
   "`{matched}` moves the researcher's Probe switch, so it was refused before it ran: only the researcher moves it (`/probe on`, `/probe read`, `/probe off`, `/probe inline`).";
@@ -240,6 +273,8 @@ export interface GuardContext {
 export function guardToolCall(toolName: string, input: unknown, context: GuardContext): string | null {
   const aimed = touchesApprovals(toolName, input, context.env, context.cwd);
   if (aimed !== null) return fill(DENY_REASON_APPROVALS, { tool: toolName, path: aimed });
+  const forged = touchesSessionsDir(toolName, input, context.env, context.cwd);
+  if (forged !== null) return fill(DENY_REASON_SESSIONS, { tool: toolName, path: forged });
   if (!context.daemonProfile) return null;
   if (context.inline) {
     // Inline never lets the agent move the researcher's switch.

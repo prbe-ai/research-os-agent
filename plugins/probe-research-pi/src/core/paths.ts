@@ -151,6 +151,18 @@ export function approvalsDir(env: PathEnv = process.env): string {
   return join(probeStateDir(env), APPROVALS_DIRNAME);
 }
 
+export const SESSIONS_DIRNAME = "sessions";
+
+/**
+ * Where Probe keeps the per-session state files (`<sid>.state`, `<sid>.inline`,
+ * `<sid>.profile`, the lease): `SESSIONS_DIRNAME` under `probeStateDir`. Mirrors
+ * `session_marker.sessions_dir`. `guard.ts` keeps the agent out of it -- those
+ * files decide the guard's own verdict.
+ */
+export function sessionsDir(env: PathEnv = process.env): string {
+  return join(probeStateDir(env), SESSIONS_DIRNAME);
+}
+
 /**
  * Where the team note document lives -- ONE per machine, whatever harness is
  * running. This extension reads it to brief a session, and `probe notes sync`

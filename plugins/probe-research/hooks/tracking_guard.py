@@ -1338,6 +1338,10 @@ def _deny(payload: dict, session_id: str) -> None:
     if aimed:
         _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
         return
+    forged = _session_marker.touches_sessions_dir(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
+    if forged:
+        _refuse(_session_marker.DENY_REASON_SESSIONS.format(tool=payload.get("tool_name"), path=forged))
+        return
     state = _state(session_id, _payload_cwd(payload))
     if _session_marker.state_allows_writes(state):
         return
@@ -1404,6 +1408,10 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     aimed = _session_marker.touches_approvals(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
     if aimed:
         _refuse(_session_marker.DENY_REASON_APPROVALS.format(tool=payload.get("tool_name"), path=aimed))
+        return
+    forged = _session_marker.touches_sessions_dir(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
+    if forged:
+        _refuse(_session_marker.DENY_REASON_SESSIONS.format(tool=payload.get("tool_name"), path=forged))
         return
     state = _state(session_id, _payload_cwd(payload))
     if state == _session_marker.STATE_OFF:

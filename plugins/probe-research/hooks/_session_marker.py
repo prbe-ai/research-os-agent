@@ -1734,6 +1734,56 @@ def touches_approvals(tool_name: object, tool_input: object, cwd: "str | None" =
     return None
 
 
+#: The guard hook's refusal of a coding-agent tool call aimed at the per-session
+#: state folder. Those files (`<sid>.state`, `<sid>.inline`, `<sid>.profile`, the
+#: lease) are what the guard itself reads to decide a verdict, so writing one --
+#: forging `on (inline)`, say -- would turn the guard off. Only the researcher's
+#: `/probe` switch moves that state.
+DENY_REASON_SESSIONS = (
+    "`{tool}` would write {path}, where Probe records which conversation this is and whether the "
+    "researcher has it recording -- the files this guard reads to decide. Changing them yourself "
+    "would turn the guard off, so it was refused before it ran. Only the researcher's `/probe` "
+    "switch moves that state; do not write there, and do not route around this."
+)
+
+#: The sessions folder as a command's text names it.
+_SESSIONS_TEXT = re.compile(r"probe/+sessions\b")
+
+
+def touches_sessions_dir(tool_name: object, tool_input: object, cwd: "str | None" = None) -> "str | None":
+    """The per-session-state path a coding agent's tool call aims at, or None.
+
+    The same tripwire as `touches_approvals`, for the folder whose files decide
+    the guard's own verdict (state, inline marker, profile, lease). A TRIPWIRE,
+    NOT A BOUNDARY: the agent runs as the same user, so a path built at run time
+    still reaches the folder. What this refuses is the plain way -- the forge a
+    model talked into bypassing the guard would write first.
+    """
+    if not isinstance(tool_input, dict):
+        return None
+    fields = _FILE_WRITE_TOOLS.get(tool_name) if isinstance(tool_name, str) else None
+    if fields is not None:
+        root = os.path.realpath(str(sessions_dir()))
+        for field in fields:
+            target = tool_input.get(field)
+            if not isinstance(target, str) or not target:
+                continue
+            path = os.path.expanduser(target)
+            if not os.path.isabs(path) and isinstance(cwd, str) and cwd:
+                path = os.path.join(cwd, path)
+            real = os.path.realpath(path)
+            if real == root or real.startswith(root.rstrip(os.sep) + os.sep):
+                return target
+        return None
+    if tool_name == "Bash":
+        command = tool_input.get("command")
+        if isinstance(command, str) and (
+            _SESSIONS_TEXT.search(command) or str(sessions_dir()) in command
+        ):
+            return str(sessions_dir())
+    return None
+
+
 # ---------------------------------------------------------------------------
 # THE DAEMON'S WRITE LEASE.
 #
