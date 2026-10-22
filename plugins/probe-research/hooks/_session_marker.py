@@ -1390,8 +1390,8 @@ def daemon_allows_agent(matched: str) -> bool:
 #: reads of one run (`DAEMON_PROFILE_RUN_READS`), `session status` and Probe's
 #: own upkeep (`DAEMON_PROFILE_ALLOWED`). The guard in that
 #: plugin refuses every other `probe` command, reads included, with
-#: `DAEMON_PROFILE_DENY` (the approved text:
-#: `~/daemon-prompts/reads/agent-facing/guard-refusal.NEW.md`), except a write
+#: `DAEMON_PROFILE_DENY` (the approved text, pinned by `test_daemon_profile.py`:
+#: `agent/tests/fixtures/daemon_prompts/reads/agent-facing/guard-refusal.NEW.md`), except a write
 #: the researcher asked for (`--directed`), which runs as in the `daemon` state.
 #: `probe --version` needs no entry (no command words); `probe version` is the
 #: experiment-versions group, a write. While the researcher has Probe inline
@@ -1499,7 +1499,7 @@ RESEARCHER_SWITCH_DENY = (
 )
 
 DAEMON_PROFILE_DENY = (
-    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team\'s prior work: `probe ask "<question>"`. If you need to do it yourself, ask the researcher to type `/probe inline`.'
+    'The Probe daemon records this session and reads the team\'s work for you, so `{matched}` was refused before it ran. You instrument your runs with the SDK and can read one by its id (`probe run get <id>`). To ask about the team\'s prior work: `probe ask "<question>"`. If you need to do it yourself, ask the researcher to type `/probe inline`.'
 )
 
 #: `DAEMON_PROFILE_DENY` for a WRITE: `--directed` admits one the researcher

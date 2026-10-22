@@ -55,7 +55,7 @@ export const DENY_REASON_APPROVALS =
 
 /** `session_marker.DAEMON_PROFILE_DENY`. Placeholder: `{matched}`. */
 export const DAEMON_PROFILE_DENY =
-  "The Probe daemon records this session and reads the team's work for you, so `{matched}` was refused before it ran. You only instrument your runs with the SDK. To ask about the team's prior work: `probe ask \"<question>\"`. If you need to do it yourself, ask the researcher to type `/probe inline`.";
+  "The Probe daemon records this session and reads the team's work for you, so `{matched}` was refused before it ran. You instrument your runs with the SDK and can read one by its id (`probe run get <id>`). To ask about the team's prior work: `probe ask \"<question>\"`. If you need to do it yourself, ask the researcher to type `/probe inline`.";
 
 /** `session_marker.DIRECTED_RETRY`. */
 export const DIRECTED_RETRY = "If the researcher asked for exactly this, run it again with `--directed`.";
