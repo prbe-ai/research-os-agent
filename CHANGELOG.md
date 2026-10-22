@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.285.1
+
 - **A CLAUDE.md or AGENTS.md symlinked into a dotfiles repo stays a symlink.** Probe writes its section (and the team note) by writing a new file and swapping it into place, which replaced a symlink such as `~/.codex/AGENTS.md -> ~/.agents/AGENTS.md` with a plain file on the first write, so the machine quietly stopped following the repo and the next team-note sync undid any re-link. The wizard, the team-note sync and the opt-out now write to the file the link points at (a link whose file is missing gets it created there). To repair a machine already hit: move the Probe sections into the repo copy if you want them, then re-create the link.
 
 ## 0.285.0
