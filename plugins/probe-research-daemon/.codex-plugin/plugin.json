@@ -1,6 +1,6 @@
 {
   "name": "probe-research-daemon",
-  "version": "0.161.1",
+  "version": "0.162.0",
   "description": "Probe Research, daemon profile: the Probe daemon records and reads the team's work for this agent.",
   "author": {
     "name": "Probe",
