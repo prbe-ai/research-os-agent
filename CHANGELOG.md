@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Report completed update stages through the existing JSON step stream so the desktop app can show update percentage inside its button. Failed CLI or integration stages remain failures; only the final completed result finishes progress.
+
 ## 0.286.1
 
 - **pi's `settings.json`, Claude Code's `settings.json` and Codex's `config.toml` stay symlinks when Probe edits them, and keep their permissions.** After 0.285.1 fixed CLAUDE.md / AGENTS.md, two more writers still replaced a symlinked file with a plain one: installing, removing or switching Probe in pi's `~/.pi/agent/settings.json`, and the integration repair (`--reinstall`) restoring plugin on/off flags in Claude Code's `settings.json` or Codex's `config.toml`. Both now write to the file the link points at. Probe's edits of these files, of the status line settings and of CLAUDE.md / AGENTS.md now keep the file's permission bits (a `0600` file is no longer left `0644`, and a repair no longer forces `0600` onto Claude Code's settings or onto a dotfiles `config.toml`; `~/.codex/config.toml` itself is still tightened to `0600`), and go through a uniquely named temporary file instead of a fixed name beside the file. Saving Probe's MCP sign-in token into Codex's `config.toml` still replaces a symlinked file rather than writing through it (a `~/.codex` folder that is itself a link is not covered).
