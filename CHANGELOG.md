@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A CLAUDE.md or AGENTS.md symlinked into a dotfiles repo stays a symlink.** Probe writes its section (and the team note) by writing a new file and swapping it into place, which replaced a symlink such as `~/.codex/AGENTS.md -> ~/.agents/AGENTS.md` with a plain file on the first write, so the machine quietly stopped following the repo and the next team-note sync undid any re-link. The wizard, the team-note sync and the opt-out now write to the file the link points at (a link whose file is missing gets it created there). To repair a machine already hit: move the Probe sections into the repo copy if you want them, then re-create the link.
+
 ## 0.285.0
 
 - **A machine that always has a Probe daemon recording still updates.** The Probe service used to wait for every daemon-recorded session to end before it updated the CLI, so a machine that always had one never updated. Now, when a newer CLI is out, it holds new daemon workers back, asks each live session's worker to hand over at its next safe point (it finishes the model round it is in; its queue stays in its store), updates, and the recorder starts the workers again on the new version. When the CLI is already current it updates the plugins only and leaves the workers alone. The worker of a session that has ended is never cut short: it finishes its queue first. A worker that will not stop within 10 minutes, a training run, or one of the service's own actions still defers the update, but none of them for more than 24 hours: after a day the update goes ahead in place, as Probe's updater did before the service. A pip or pipx install the service cannot start from keeps the old updater.
