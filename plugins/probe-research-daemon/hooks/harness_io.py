@@ -1,6 +1,7 @@
-"""Run one Probe hook for a harness whose hook protocol is not Claude Code's.
+"""Run Probe's hooks for a harness whose hook protocol is not Claude Code's.
 
-    harness_io.py <hook file> [hook args...]
+    harness_io.py --event <event> [--unshown]   one event, every route of it
+    harness_io.py <hook file> [hook args...]    one hook (the old entries)
 
 The hooks in this folder speak Claude Code's protocol (Codex copied it): a
 payload with `transcript_path`, a string `prompt`, a `tool_response` object, a
@@ -17,16 +18,29 @@ The session's permission mode is deliberately NOT derived for Kimi: its
 transcript gets no new `permission.set_mode` on resume, so an old `auto` would
 read as bypass in a session that now asks. Without a mode the hooks ask.
 
-So a Kimi manifest runs every hook through this file instead of editing each
-hook: the payload is normalized to Claude's shape, the hook runs unchanged, and
-its output is translated by the registry row's `hook_output`. A harness whose
+So a Kimi manifest runs its hooks through this file instead of editing each
+hook: the payload is normalized to Claude's shape, the hooks run unchanged, and
+their output is translated by the registry row's `hook_output`. A harness whose
 row says `claude-json` gets its payload and output through untouched. Claude
 Code and Codex never run this file (their hooks.json is frozen).
+
+`--event` (one manifest entry per event, tools/kimi_hooks.py): the payload is
+normalized ONCE, and the event's lane runs through the dispatcher
+(`dispatch.serve`, the same path `dispatch.sh` takes for Claude Code and Codex:
+the Probe service's warm host, else here), with this process's stdout caught so
+the dispatcher's merged output is translated once. Other harnesses' session-id
+variables, inherited when Kimi runs inside one, are dropped first
+(`foreign_session_envs`): route gates read them before the payload. `--unshown` goes to the
+dispatcher as is (`dispatch.UNSHOWN`: the harness shows no one this event's
+output). `<hook file>` is how every manifest through plugin 0.163.0 ran each
+hook, one entry per script; a Kimi session left open keeps those entries while
+an update replaces the files under them, so it keeps working unchanged.
 
 A skill the person TYPES (`/probe on`) fires no UserPromptSubmit in Kimi: it
 arrives only as TurnStarted with `origin_kind: skill_activation` and a leading
 `<skill-loaded name=".." trigger="user-slash" args="..">` block that Kimi writes
-itself. That turn is handed to the hook as the UserPromptSubmit of the typed
+itself. That turn is handed to the hook (under `--event`, the dispatcher's
+`turn-started` lane: the switch alone) as the UserPromptSubmit of the typed
 line, so Probe's switch flips as it does when typed in Claude Code; every other
 TurnStarted is ignored (its prompt already came through UserPromptSubmit).
 
@@ -35,8 +49,9 @@ It also records which harness process runs this session
 for a harness with a `process_title`: that is how a `probe` command the harness
 starts finds its session.
 
-FAIL-OPEN: anything unexpected here runs the hook with the raw payload and
-passes its output through; a broken adapter must never block the harness.
+FAIL-OPEN: anything unexpected here runs the hooks with the raw payload and
+passes their output through, and a missing dispatcher runs nothing; a broken
+adapter must never block the harness.
 """
 
 from __future__ import annotations
@@ -74,6 +89,12 @@ _RECORD_EVENTS = ("SessionStart", "UserPromptSubmit")
 _INDEX_TAIL_BYTES = 8 * 1024 * 1024
 #: The one tool whose output is JSON Probe reads: an answered question.
 _JSON_OUTPUT_TOOLS = ("AskUserQuestion",)
+#: `harness_io.py --event <event>`: the event's whole lane, through the dispatcher.
+EVENT_FLAG = "--event"
+#: Passed on to the dispatcher as is (`dispatch.UNSHOWN`, which a test keeps equal).
+UNSHOWN_FLAG = "--unshown"
+#: Tells a hook its output reaches no model (`tracking_guard.QUIET_ENV`).
+_QUIET_ENV = "PROBE_HOOK_QUIET"
 
 
 #: The event a typed skill arrives as (see the module docstring), and Kimi's
@@ -228,11 +249,10 @@ def _record(payload: dict, row) -> None:
             _session_marker.record_harness_process(row.id, session_id, titles)
 
 
-def main(argv: "list[str]") -> int:
-    if not argv:
-        return 0
-    hook = argv[0] if os.path.isabs(argv[0]) else os.path.join(_HERE, argv[0])
-    raw_in = sys.stdin.buffer.read()
+def _adapt(raw_in: bytes):
+    """(row or None, the payload the hooks read, quiet), or None when the event
+    runs no hook at all (a TurnStarted that is not a typed switch). FAIL-OPEN:
+    anything unexpected leaves the raw payload."""
     stdin = raw_in
     row = None
     quiet = False
@@ -242,7 +262,7 @@ def main(argv: "list[str]") -> int:
         if isinstance(payload, dict):
             typed = typed_skill(payload) if payload.get("hook_event_name") == _TURN_STARTED else None
             if payload.get("hook_event_name") == _TURN_STARTED and typed is None:
-                return 0  # before `normalize`, which reads the session index
+                return None  # before `normalize`, which reads the session index
             normalized = normalize(payload, row)
             if typed is not None:
                 # The typed line, as UserPromptSubmit would have carried it. Its
@@ -252,19 +272,15 @@ def main(argv: "list[str]") -> int:
                 quiet = True
             _record(normalized, row)
             stdin = json.dumps(normalized).encode("utf-8")
-    except Exception:  # noqa: BLE001 -- fail-open: run the hook on the raw payload
+    except Exception:  # noqa: BLE001 -- fail-open: run the hooks on the raw payload
         stdin = raw_in
-    command = [sys.executable, hook] if hook.endswith(".py") else [hook]
-    # A hook whose output is dropped is told so: what it says reaches no model,
-    # so it must not record that it told one (`tracking_guard.QUIET_ENV`).
-    env = {**os.environ, "PROBE_HOOK_QUIET": "1"} if quiet else None
-    try:
-        done = subprocess.run(command + argv[1:], input=stdin, capture_output=True, check=False, env=env)
-    except OSError:
-        return 0
-    stdout = "" if quiet else done.stdout.decode("utf-8", "replace")
-    stderr = done.stderr.decode("utf-8", "replace")
-    code = 0 if quiet else done.returncode
+    return row, stdin, quiet
+
+
+def _reply(stdout: str, stderr: str, code: int, row, quiet: bool) -> int:
+    """The hooks' output, written in the harness's own protocol; the exit status."""
+    if quiet:
+        stdout, code = "", 0
     try:
         if row is not None:
             stdout, extra, forced = translate(stdout, row)
@@ -278,6 +294,147 @@ def main(argv: "list[str]") -> int:
     if stderr:
         sys.stderr.write(stderr)
     return code
+
+
+def _load_dispatch():
+    """`dispatch.py` beside this file, by EXPLICIT path (as `_load_hook_harness`)."""
+    import importlib.util  # noqa: PLC0415
+
+    key = "_probe_hooks.dispatch"
+    if key not in sys.modules:
+        spec = importlib.util.spec_from_file_location(key, os.path.join(_HERE, "dispatch.py"))
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[key] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(key, None)
+            raise
+    return sys.modules[key]
+
+
+def _exit_status(code) -> int:
+    """A SystemExit's code as the process would exit with it."""
+    if code is None:
+        return 0
+    if isinstance(code, int):
+        return code
+    try:
+        sys.stderr.write(f"{code}\n")
+    except Exception:  # noqa: BLE001
+        pass
+    return 1
+
+
+def captured(serve, argv: list, payload: bytes) -> "tuple[str, int]":
+    """`serve(argv, payload)` with this process's stdout sent to a scratch file
+    instead of the harness: (what it printed, its exit status).
+
+    File descriptor 1 itself, not only sys.stdout: the warm host and the routes'
+    children write to the descriptor they are handed. stderr goes to the harness
+    as it is. An in-process route's own exit and uncaught error end the event as
+    they end `python3 <route>`: its status; a traceback and 1."""
+    import tempfile  # noqa: PLC0415
+
+    code = 0
+    with tempfile.TemporaryFile() as sink:
+        sys.stdout.flush()
+        saved = os.dup(1)
+        try:
+            os.dup2(sink.fileno(), 1)
+            try:
+                code = serve(argv, payload)
+            except SystemExit as stop:
+                code = _exit_status(stop.code)
+            except BaseException:  # noqa: BLE001 -- a route's own error, as it ends `python3 <route>`
+                import traceback  # noqa: PLC0415
+
+                traceback.print_exc()
+                code = 1
+            finally:
+                for stream in (sys.stdout, sys.__stdout__):
+                    try:
+                        stream.flush()
+                    except Exception:  # noqa: BLE001
+                        pass
+        finally:
+            os.dup2(saved, 1)
+            os.close(saved)
+        sink.seek(0)
+        out = sink.read()
+    return out.decode("utf-8", "replace"), code
+
+
+def foreign_session_envs(row) -> list:
+    """Every other harness's session-id variable (its registry `session_env`).
+
+    A harness started inside another one inherits the parent's (Kimi run from
+    Claude Code's or Codex's shell), and the dispatcher's routes read those
+    BEFORE the payload: the reads route's shell gate (and `dispatch.reads_waiting`)
+    would look in the PARENT's inbox, skip the hook while Kimi's own answer
+    waits, and start a new turn for the parent. This event's session is the
+    payload's, so `--event` runs its routes without them."""
+    rows = _hook_harness._document()["harnesses"]  # noqa: SLF001 -- the plain JSON rows
+    return [raw["session_env"] for raw in rows if raw.get("id") != row.id and raw.get("session_env")]
+
+
+def run_event(argv: "list[str]") -> int:
+    """`--event <event> [--unshown]`: every route of the event's lane, through
+    the dispatcher (`dispatch.serve`: warm host, else here), on the payload put
+    in Claude's shape once; its merged output translated once."""
+    event = argv[0] if argv else ""
+    options = [a for a in argv[1:] if a == UNSHOWN_FLAG]
+    raw_in = sys.stdin.buffer.read()
+    adapted = _adapt(raw_in)
+    if adapted is None:
+        return 0
+    row, payload, quiet = adapted
+    if event == _TURN_STARTED and not quiet:
+        return 0  # a turn it could not read: no typed switch to hand on
+    try:
+        dispatch = _load_dispatch()
+        lane = next((lane for lane, served in dispatch.LANE_EVENT.items() if served == event), None)
+        if lane is None:
+            return 0
+        # The routes read the plugin's folder where Claude Code puts it (Kimi's
+        # entry unset every other harness's root): never Codex's, which would
+        # mark them Codex's. PROBE_AGENT, exported by the entry, names Kimi.
+        os.environ.pop("PLUGIN_ROOT", None)
+        os.environ[dispatch.root_variable(os.environ)] = os.path.dirname(_HERE)
+        for name in foreign_session_envs(row) if row is not None else ():
+            os.environ.pop(name, None)
+        if quiet:
+            os.environ[_QUIET_ENV] = "1"
+    except Exception:  # noqa: BLE001 -- no dispatcher (a half-installed copy): abstain
+        return 0
+    try:
+        stdout, code = captured(dispatch.serve, [lane, *options], payload)
+    except OSError:
+        return 0  # no stdout to catch (closed, no scratch file): abstain
+    return _reply(stdout, "", code, row, quiet)
+
+
+def main(argv: "list[str]") -> int:
+    if not argv:
+        return 0
+    if argv[0] == EVENT_FLAG:
+        return run_event(argv[1:])
+    hook = argv[0] if os.path.isabs(argv[0]) else os.path.join(_HERE, argv[0])
+    raw_in = sys.stdin.buffer.read()
+    adapted = _adapt(raw_in)
+    if adapted is None:
+        return 0
+    row, stdin, quiet = adapted
+    command = [sys.executable, hook] if hook.endswith(".py") else [hook]
+    # A hook whose output is dropped is told so: what it says reaches no model,
+    # so it must not record that it told one (`tracking_guard.QUIET_ENV`).
+    env = {**os.environ, _QUIET_ENV: "1"} if quiet else None
+    try:
+        done = subprocess.run(command + argv[1:], input=stdin, capture_output=True, check=False, env=env)
+    except OSError:
+        return 0
+    return _reply(done.stdout.decode("utf-8", "replace"), done.stderr.decode("utf-8", "replace"),
+                  done.returncode, row, quiet)
 
 
 if __name__ == "__main__":

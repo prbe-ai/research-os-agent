@@ -28,8 +28,11 @@ harness ran it before:
     it overruns or when this process is told to stop; their outputs merged into
     one (MERGE), a lone output byte for byte.
 
-Kimi Code renders its own per-script manifest from the same routes.json
-(tools/kimi_hooks.py) and never runs this.
+Kimi Code runs this too, through its own manifest (tools/kimi_hooks.py renders
+one entry per routes.json event): `harness_io.py --event <event>` puts Kimi's
+payload in Claude's shape, calls `serve` here with the event's lane (warm host,
+else here, exactly as `dispatch.sh` does), and translates the merged output
+back. Only it uses ADAPTER_LANES and the UNSHOWN option.
 
 Contract, as for every hook here: STDLIB ONLY, PYTHON 3.9, FAIL-OPEN. Started as
 `python3 -S` (no site-packages: a dispatcher needs none, and it saves ~10ms on
@@ -76,12 +79,21 @@ LANE_EVENT = {
     "post-tool": "PostToolUse",
     "session-end": "SessionEnd",
     "stop": "Stop",
+    "turn-started": "TurnStarted",
 }
+
+#: Lanes no hooks.json entry names: only `harness_io.py --event` runs them (the
+#: Kimi Code manifest). Kimi fires no UserPromptSubmit for a skill the person
+#: types (`/probe on`), only TurnStarted; harness_io hands that turn to its
+#: routes as the typed line's UserPromptSubmit.
+ADAPTER_LANES = frozenset({"turn-started"})
 
 #: Each lane's hooks.json entry `timeout`, in seconds (None: the harness's
 #: default). Frozen with the entries: a lane's routes must each fit in
 #: ENTRY_TIMEOUT[lane] - MARGIN_S (tests/test_hook_dispatch.py holds both).
-#: `prompt` keeps 4s of headroom on purpose, since it can never grow.
+#: `prompt` keeps 4s of headroom on purpose, since it can never grow. Kimi
+#: Code's entries take theirs from here too (tools/kimi_hooks.py), ADAPTER_LANES
+#: included.
 ENTRY_TIMEOUT = {
     "session-start": None,
     "prompt": 10,
@@ -90,7 +102,14 @@ ENTRY_TIMEOUT = {
     "post-tool": 6,
     "session-end": 3,
     "stop": 16,
+    "turn-started": 6,
 }
+
+#: An option after the lane: the harness shows no one this event's output (Kimi
+#: Code fires PostToolUse and forgets it). Then nothing waits on post-tool, so
+#: the catch-all reads route never runs there: it would claim a daemon message
+#: nobody sees. The next prompt delivers it instead.
+UNSHOWN = "--unshown"
 
 #: With no entry timeout the harness's own default applies: Claude Code's is
 #: 60s (Codex's 600s), so a lane with none is budgeted as 60s.
@@ -898,15 +917,22 @@ def _is_catch_all(hook: dict, lane: str, wiring: dict) -> bool:
     return False
 
 
+def waiting_after_tool(lane: str, options) -> bool:
+    """On post-tool: does a daemon message wait for this event to deliver it?
+    Never when the harness shows no one the output (UNSHOWN)."""
+    return lane == "post-tool" and UNSHOWN not in options and reads_waiting()
+
+
 def main(argv: list[str], payload: "bytes | None" = None):
     """0/2 (an exit code), or (route, payload, timeout) to run in-process.
-    `payload`: the event, when the caller read it already (`run`, the host)."""
+    `payload`: the event, when the caller read it already (`run`, the host).
+    argv: `dispatch.py <lane> [UNSHOWN]`."""
     if len(argv) < 2 or argv[1] not in LANE_EVENT:
         return 0
     lane = argv[1]
     if payload is None:
         payload = sys.stdin.buffer.read()
-    waiting = lane == "post-tool" and reads_waiting()
+    waiting = waiting_after_tool(lane, argv[2:])
     if lane in TOOL_LANES and not waiting and not could_route(lane, payload):
         return 0
     import json
@@ -1126,24 +1152,27 @@ def run_hosted(argv: list, payload: bytes) -> None:
     sys.exit(code)
 
 
-def run(argv: list) -> None:
-    """The entry point: `dispatch.sh` imports this module (so its compiled
-    bytecode is cached, ~6ms saved on every event) and calls run([lane])."""
-    hand_over(argv)
-    payload = None
+def serve(argv: list, payload: "bytes | None" = None) -> int:
+    """One event, in this folder's warm host when it answers in time, else
+    here; its exit status. `argv`: `[lane, options...]`; `payload`: the event,
+    when the caller read it already (`harness_io.py --event`), else stdin.
+
+    What `run` does after the hand-over, returning instead of exiting, so a
+    harness adapter can run an event the way `dispatch.sh` does and still read
+    what it printed. An in-process route's own exit (SystemExit) and uncaught
+    error leave it as they leave `python3 <route>`."""
     lane = argv[0] if argv else ""
     if lane in LANE_EVENT and os.environ.get(HOST_ENV) != "off" and not os.environ.get(HOSTED_ENV):
         try:
-            payload = sys.stdin.buffer.read()
-            if lane in TOOL_LANES and not (lane == "post-tool" and reads_waiting()) and not could_route(lane, payload):
-                sys.exit(0)
+            if payload is None:
+                payload = sys.stdin.buffer.read()
+            if lane in TOOL_LANES and not waiting_after_tool(lane, argv[1:]) and not could_route(lane, payload):
+                return 0
             hosted = via_host(lane, argv, payload)
-        except SystemExit:
-            raise
         except Exception:  # noqa: BLE001 - the host is a speed-up; the event runs here instead
             hosted = None
         if hosted is not None:
-            sys.exit(hosted)
+            return hosted
     try:
         code = main(["dispatch.py", *argv], payload=payload)
     except Exception:  # noqa: BLE001 - fail open: a broken dispatcher abstains
@@ -1153,7 +1182,14 @@ def run(argv: list) -> None:
         # tracebacks included (an uncaught error is exit 1, as `python3 <route>` gives).
         run_inline(*code)
         code = 0
-    sys.exit(code)
+    return code
+
+
+def run(argv: list) -> None:
+    """The entry point: `dispatch.sh` imports this module (so its compiled
+    bytecode is cached, ~6ms saved on every event) and calls run([lane])."""
+    hand_over(argv)
+    sys.exit(serve(argv))
 
 
 if __name__ == "__main__":

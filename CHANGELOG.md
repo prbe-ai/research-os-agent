@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Kimi Code's Probe hooks start faster, through the same dispatcher Claude Code and Codex use.** Kimi's plugin manifest had one hook per script (22 of them), each starting two fresh Python processes: a prompt started ten. It now has one hook per event, which puts Kimi's payload in Claude's shape once, runs that event's hooks through the dispatcher (in the warm process the Probe service keeps for the plugin folder, else in place, with the same budgets and merged output as Claude Code) and turns the result back into Kimi's format once. What Kimi sees is unchanged: the same refusals, the same context on a prompt, `/probe on` typed as a skill still flips the switch, and a daemon message is still never claimed after a tool call (Kimi drops that output) but delivered with the next prompt. Kimi has no hook approval step, so nothing needs re-approving; a Kimi session left open keeps its old per-script hooks, which still work, until it reloads plugins. The SessionStart hook now carries an explicit 60 s timeout (Kimi's default was 30 s), so the dispatcher always finishes inside it.
+
 ## 0.287.1
 
 - **`probe wizard --action configure --agent codex --reinstall` no longer crashes on a real install.** The repair edits Codex's `config.toml` with `tomlkit`, which was used since 0.277.0 but declared nowhere, so every installed CLI failed with `ModuleNotFoundError: No module named 'tomlkit'` (the test environments had it for another reason). It is now a dependency, and a test fails the build when the CLI side imports a package the CLI does not declare.
