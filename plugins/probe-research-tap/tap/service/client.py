@@ -76,6 +76,8 @@ ENV_ALLOWLIST = (
     "PROBE_SERVICE_WORKER_STOP_S",
     "PROBE_SERVICE_DEFER_LIMIT_S",
     "PROBE_SERVICE_LEGACY_RETRY_S",
+    "PROBE_SERVICE_RECORDER_RETRY_S",
+    "PROBE_SERVICE_KEEPER",
 )
 
 
@@ -392,6 +394,28 @@ def _write_starts(starts: list) -> None:
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
+
+
+def forget_start(*pids: int) -> None:
+    """A service restarting on purpose (an update, a newer tap) takes its own
+    start out of the count: only a service that dies backs `ensure` off
+    (MAX_STARTS). Without it an update's restart and the tap restart right
+    after it left the next start refused for most of a minute, and every hook
+    meanwhile found no service. Never raises."""
+    try:
+        paths.ensure_dirs()
+        fd = os.open(paths.start_lock_path(), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    except OSError:
+        return
+    try:
+        if not _lock(fd, time.monotonic() + START_LOCK_WAIT_S):
+            return
+        starts = _read_starts(time.time())
+        kept = [entry for entry in starts if entry.get("pid") not in pids]
+        if len(kept) != len(starts):
+            _write_starts(kept)
+    finally:
+        os.close(fd)  # releases start.lock
 
 
 def _pid_runs(pid: object) -> bool:

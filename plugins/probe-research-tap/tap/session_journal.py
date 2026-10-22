@@ -878,6 +878,26 @@ def state_root() -> Path:
     ).expanduser()
 
 
+_ENV_CONTEXTS: dict = {}
+
+
+def _env_context() -> ssl.SSLContext:
+    """TLS trust from THIS environment's SSL_CERT_FILE / SSL_CERT_DIR (cached by
+    them). OpenSSL reads those from the process's C environment, which a
+    recorder hosted by the Probe service does not have (its session's lives in
+    `os.environ`, per thread); passing a context also builds the request's
+    proxy handler from the same environment, never a process-wide cache."""
+    key = (os.environ.get("SSL_CERT_FILE") or None, os.environ.get("SSL_CERT_DIR") or None)
+    context = _ENV_CONTEXTS.get(key)
+    if context is None:
+        try:
+            context = ssl.create_default_context(cafile=key[0], capath=key[1])
+        except (OSError, ssl.SSLError, ValueError):
+            context = ssl.create_default_context()
+        _ENV_CONTEXTS[key] = context
+    return context
+
+
 class Wire:
     """The existing ingest routes and receipt read, using the paired credential."""
 
@@ -910,7 +930,7 @@ class Wire:
         )
         try:
             with urllib.request.urlopen(
-                request, timeout=self.timeout, context=self.context
+                request, timeout=self.timeout, context=self.context or _env_context()
             ) as response:
                 body = json.loads(response.read())
                 if not isinstance(body, dict):
@@ -984,7 +1004,7 @@ class Wire:
         request = urllib.request.Request(url, data=data, headers=headers, method="PUT")
         try:
             with urllib.request.urlopen(
-                request, timeout=self.timeout, context=self.context
+                request, timeout=self.timeout, context=self.context or _env_context()
             ) as response:
                 response.read(8192)
                 return response.status

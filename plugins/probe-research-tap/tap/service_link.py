@@ -102,8 +102,12 @@ class ServiceLink:
         heartbeat_s: float = HEARTBEAT_S,
         retry_s: float = RETRY_S,
         undecided_wait_s: float = UNDECIDED_WAIT_S,
+        env: dict | None = None,
     ) -> None:
         self.session_id = session_id
+        #: Hosted by the Probe service (plan A2): the session's environment,
+        #: which this link's own thread reads under (`tap.threadenv`).
+        self.env = env
         self.harness = harness
         self.mode_fn = mode_fn
         env_owner = _env_owner()
@@ -121,7 +125,16 @@ class ServiceLink:
         self._owner_dead = False
         self._conn: client.Connection | None = None
         self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="probe-service-link", daemon=True)
+        self._thread = threading.Thread(target=self._in_env, name=f"probe-service-link-{session_id[:12]}", daemon=True)
+
+    def _in_env(self) -> None:
+        if self.env is None:
+            self._run()
+            return
+        from tap import threadenv
+
+        with threadenv.install().session(self.env):
+            self._run()
 
     def _recorded_owner(self) -> dict | None:
         record = session_owner._read(self.session_id)
@@ -319,8 +332,12 @@ class ServiceLink:
             self._drop()
 
 
-def start(session_id: str) -> ServiceLink | None:
+def start(session_id: str, *, env: dict | None = None) -> ServiceLink | None:
     """The link for this `tap watch`, or None when it cannot start.
+
+    `env`: recorded by the Probe service (`tap.hosted`), the session's
+    environment, for the link's own thread. The link registers and heartbeats
+    the session there as a `tap watch` would, over the service's own socket.
 
     Off POSIX there is no link and no ensure: the service listens on a Unix
     socket and locks with fcntl (`tap/service/client.py`), so on Windows every
@@ -328,7 +345,7 @@ def start(session_id: str) -> ServiceLink | None:
     if os.name != "posix":
         return None
     try:
-        return ServiceLink(session_id, harness=cfg.capture_source()).start()
+        return ServiceLink(session_id, harness=cfg.capture_source(), env=env).start()
     except Exception:  # noqa: BLE001
         log.exception("probe service link not started")
         return None

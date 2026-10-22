@@ -34,7 +34,9 @@ def _no_real_probe_service(monkeypatch):
     build `ServiceLink` themselves."""
     from tap import service_link
 
-    monkeypatch.setattr(service_link, "start", lambda session_id: None)
+    monkeypatch.setattr(service_link, "start", lambda session_id, **_: None)
+    # Nor may `tap start` (or a hook under test) ask it to record a session (plan A2).
+    monkeypatch.setenv("PROBE_TAP_HOSTED", "0")
 
 
 @pytest.fixture(autouse=True)

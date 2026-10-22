@@ -74,6 +74,21 @@ if [ -s "$PIDF" ]; then
         quiet_exit
     fi
 fi
+# The Probe service records it (plan A2): its pid, in the marker `tap record`
+# wrote. A service that restarted resumes the session under a new pid; the cold
+# path below (at most every ten minutes) asks it again and rewrites the marker.
+HOSTF="/tmp/${PREFIX}-watcher-${SID}.hosted"
+HOSTED_GONE=""
+if [ -s "$HOSTF" ]; then
+    PID=$(cat "$HOSTF" 2>/dev/null || echo "")
+    case "$PID" in '' | *[!0-9]*) PID="" ;; esac
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+        quiet_exit
+    fi
+    # The service that recorded it is gone (a crash, a kill): no ten-minute
+    # wait below; starting it again resumes every session it recorded.
+    HOSTED_GONE=1
+fi
 
 # --- cold path only, from here down ---
 #
@@ -120,7 +135,7 @@ if [ -f "$MARKER" ]; then
     # belt: no `||` chain can ever put prose into the arithmetic again.
     THEN=$(stat -c %Y "$MARKER" 2>/dev/null || stat -f %m "$MARKER" 2>/dev/null || echo 0)
     case "$THEN" in '' | *[!0-9]*) THEN=0 ;; esac
-    [ $((NOW - THEN)) -lt 600 ] && quiet_exit
+    [ $((NOW - THEN)) -lt 600 ] && [ -z "$HOSTED_GONE" ] && quiet_exit
 fi
 
 mkdir -p "$STATE/heal" 2>/dev/null || true

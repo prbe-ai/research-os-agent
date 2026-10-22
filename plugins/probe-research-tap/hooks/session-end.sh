@@ -164,6 +164,18 @@ elif [ -z "$REGISTRY_ENV" ]; then
     if [ "$WAIT_TICKS" -gt 75 ]; then WAIT_TICKS=75; fi
     if [ "$WAIT_TICKS" -lt 0 ]; then WAIT_TICKS=0; fi
 fi
+# The Probe service records it (plan A2): the sentinel above ends its recorder
+# as it ends a `tap watch`, and `tap finish` waits for the last pass the same way.
+HOSTED_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
+if [ -s "$HOSTED_FILE" ]; then
+    if [ "$WAIT" = 1 ] && [ "$REASON" != clear ] && [ "$REASON" != resume ] && [ "$WAIT_TICKS" -gt 0 ]; then
+        TAP_ROOT="${TAP_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
+        PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" python3 -m tap finish --session-id "$SESSION_ID" \
+            --wait "$((WAIT_TICKS / 5)).$((WAIT_TICKS % 5 * 2))" </dev/null >/dev/null 2>&1 || true
+    fi
+    rm -f "$HOSTED_FILE"
+fi
+
 if [ "$WAIT" = 1 ]; then
     if [ "$LEADER" = 1 ] && [ "$REASON" != clear ] && [ "$REASON" != resume ]; then
         i=0

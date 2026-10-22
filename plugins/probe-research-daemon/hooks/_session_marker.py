@@ -3733,8 +3733,15 @@ def _ps_table() -> "dict[int, tuple[int, str, str]]":
 
 def _ancestors(pid: "int | None" = None) -> "list[tuple[int, str, str]]":
     """(pid, start time, title) for `pid` (default: this process's parent) and
-    each process above it, nearest first. Empty where processes can't be read."""
-    current = os.getppid() if pid is None else pid
+    each process above it, nearest first. Empty where processes can't be read.
+
+    A hook event run by the warm hook host (`hooks/zygote.py`, plan A0) has the
+    host for a parent, not the harness: the host names the harness's process
+    in PROBE_HOOK_PARENT_PID, and the walk starts there."""
+    if pid is None:
+        hosted = os.environ.get("PROBE_HOOK_PARENT_PID", "")
+        pid = int(hosted) if hosted.isdigit() and int(hosted) > 1 else os.getppid()
+    current = pid
     table = None if os.path.isdir("/proc/self") else _ps_table()
     chain = []
     for _ in range(_ANCESTOR_LIMIT):

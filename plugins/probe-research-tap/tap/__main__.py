@@ -26,6 +26,7 @@ def _print_help() -> int:
     print("  redaction-notice  print (and clear) what was redacted last session")
     print("  companion  the Probe daemon worker (started by `watch` in the daemon state)")
     print("  service  the machine-wide Probe service: ensure | register | end | status (pi)")
+    print("  record | recording | finish  the Probe service records this session (SessionStart / prompt / SessionEnd)")
     return 0
 
 
@@ -64,6 +65,11 @@ def main(argv: list[str] | None = None) -> int:
         # pi's extension (`src/core/service.ts`) is the caller: it cannot import
         # the client, so it runs this copy of it.
         return service_main(rest, client=Client.PI, client_version=__version__)
+    if cmd in ("record", "recording", "finish"):
+        # The Probe service records this session instead of a `tap watch` (plan A2).
+        from tap.record_client import main as record_main
+
+        return record_main(cmd, rest)
     if cmd == "start":
         from tap.start import main as start_main
 

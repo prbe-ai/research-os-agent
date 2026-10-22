@@ -155,7 +155,22 @@ def _install_signal_handlers() -> None:
 
 
 def _shutdown_observed(c: cfg.WatchConfig) -> bool:
-    return _shutdown_requested or c.shutdown_sentinel.exists() or cfg.killswitch_active()
+    # Hosted (`tap.hosted`), this session's own `stop` too. The flag is only
+    # ever set by `tap watch`'s signal handlers, which a hosted loop never
+    # installs: the process's signals are the service's.
+    stop = getattr(c, "stop", None)
+    return (
+        _shutdown_requested
+        or (stop is not None and stop.is_set())
+        or c.shutdown_sentinel.exists()
+        or cfg.killswitch_active()
+    )
+
+
+def _paused(c: cfg.WatchConfig) -> bool:
+    """Hosted, and told to leave without finishing (the service restarts)."""
+    pause = getattr(c, "pause", None)
+    return pause is not None and pause.is_set()
 
 
 def _transcript_has_active_reader(path: Path) -> bool | None:
@@ -205,11 +220,12 @@ def _wait_for_codex_transcript(
     *,
     poll_interval_s: float = 2.0,
     max_wait_s: int = 1800,
+    stop: object = None,
 ) -> Path | None:
     """Wait because Codex may fire SessionStart before creating its rollout."""
     deadline = time.time() + max_wait_s
     while time.time() < deadline:
-        if _shutdown_requested or cfg.killswitch_active():
+        if _shutdown_requested or cfg.killswitch_active() or (stop is not None and stop.is_set()):
             return None
         path = _resolve_codex_transcript(transcript_dir, session_id)
         if path is not None:
@@ -218,7 +234,11 @@ def _wait_for_codex_transcript(
     return None
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
+    """`tap watch`. `hosted`: run as one session's thread of the Probe service
+    (`tap.hosted`, plan A2): an object with `stop` and `pause` events; then
+    no logging setup (the service routes this thread's records to the
+    session's log) and no signal handlers (the process's are the service's)."""
     parser = argparse.ArgumentParser(prog="tap watch")
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--transcript", type=Path)
@@ -240,15 +260,16 @@ def main(argv: list[str] | None = None) -> int:
 
     log_dir = cfg.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)
-    # FileHandler only — the wrapper bash already redirects this python
-    # process's stdout+stderr into the same log file via `>>"$LOG" 2>&1`.
-    # Adding a StreamHandler too would double every line in the log.
-    logging.basicConfig(
-        level="INFO",
-        format="%(asctime)s %(levelname)s %(name)s %(message)s",
-        handlers=[logging.FileHandler(log_dir / f"{args.session_id}.log")],
-    )
-    _install_signal_handlers()
+    if hosted is None:
+        # FileHandler only — the wrapper bash already redirects this python
+        # process's stdout+stderr into the same log file via `>>"$LOG" 2>&1`.
+        # Adding a StreamHandler too would double every line in the log.
+        logging.basicConfig(
+            level="INFO",
+            format="%(asctime)s %(levelname)s %(name)s %(message)s",
+            handlers=[logging.FileHandler(log_dir / f"{args.session_id}.log")],
+        )
+        _install_signal_handlers()
 
     if cfg.killswitch_active():
         log.info("killswitch active, exiting")
@@ -283,7 +304,9 @@ def main(argv: list[str] | None = None) -> int:
     transcript_path = args.transcript
     if transcript_path is None:
         assert args.transcript_dir is not None
-        transcript_path = _wait_for_codex_transcript(args.transcript_dir, args.session_id)
+        transcript_path = _wait_for_codex_transcript(
+            args.transcript_dir, args.session_id, stop=getattr(hosted, "stop", None)
+        )
         if transcript_path is None:
             log.info("Codex rollout did not appear before shutdown/timeout")
             with contextlib.suppress(OSError):
@@ -299,12 +322,15 @@ def main(argv: list[str] | None = None) -> int:
         token=token,
         active_interval_s=active_s,
         idle_interval_s=idle_s,
+        stop=getattr(hosted, "stop", None),
+        pause=getattr(hosted, "pause", None),
     )
 
     storage = Storage(cfg.state_db_path())
-    # The machine-wide Probe service (only while switched on): this session
-    # registers on its own thread and ends its registration on the way out.
-    link = service_link.start(args.session_id)
+    # The machine-wide Probe service: this session registers on its own thread
+    # and ends its registration on the way out. Hosted by the service, the same
+    # link runs, under this session's environment, over the service's socket.
+    link = service_link.start(args.session_id, env=dict(os.environ) if hosted is not None else None)
 
     try:
         return _run_durable_loop(config, storage)
@@ -440,6 +466,8 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     companion = Supervisor(session_id=c.session_id, transcript=c.transcript_path, cwd=c.cwd)
     try:
         while True:
+            if _paused(c):
+                return 0
             stopping = _shutdown_observed(c)
             if not stopping:
                 companion.poll()
@@ -659,15 +687,18 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                 c.idle_interval_s if empty_ticks >= IDLE_THRESHOLD_TICKS else c.active_interval_s
             )
             slept = 0
-            while slept < cadence and not _shutdown_observed(c):
+            while slept < cadence and not _shutdown_observed(c) and not _paused(c):
                 time.sleep(1)
                 slept += 1
                 if slept % COMPANION_POLL_SECONDS == 0:
                     companion.poll()
     finally:
         # Ask the daemon worker to finish. It runs its own bounded final cycle in
-        # its own process group; FINALIZE below never waits on it.
-        companion.stop()
+        # its own process group; FINALIZE below never waits on it. Paused (the
+        # service restarts), it is left running: the next copy's worker asks it
+        # to hand over and carries the same conversation on.
+        if not _paused(c):
+            companion.stop()
         if journal is not None:
             journal.close()
 

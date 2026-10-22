@@ -98,18 +98,41 @@ def _looks_like_the_uploader(pid: int) -> bool:
     return "tap" in completed.stdout
 
 
+def _hosted(session_id: str) -> int | None:
+    """The service's pid when it records THIS session now (its marker, then the
+    service asked: a marker outlives a recorder that ended)."""
+    from tap import record_client
+
+    pid = record_client.hosted_pid(session_id)
+    if pid is None:
+        return None
+    return pid if record_client.recording(argparse.Namespace(session_id=session_id)) == 0 else None
+
+
+def _record(args) -> bool:
+    from tap import record_client
+
+    return record_client.try_record(
+        argparse.Namespace(session_id=args.session_id, cwd=args.cwd, transcript=args.transcript,
+                           transcript_dir=None, plugin_root=args.plugin_root)
+    )
+
+
 def daemon_state(session_id: str) -> tuple[str, int | None]:
     """`("running" | "stale" | "none", pid)`.
 
     THREE states, not two. "stale" is a pid file naming a dead pid, or a live
     pid that is not the tap — both mean no daemon is watching, and both must
-    be cleared rather than read as `already-running`.
+    be cleared rather than read as `already-running`. No pid file, but the
+    Probe service records the session (its marker, plan A2): "running", the
+    service's pid.
     """
     pf = cfg.pid_file(session_id)
     try:
         raw = pf.read_text(encoding="utf-8").strip()
     except OSError:
-        return ("none", None)
+        hosted = _hosted(session_id)
+        return ("running", hosted) if hosted is not None else ("none", None)
     try:
         pid = int(raw)
     except ValueError:
@@ -141,6 +164,7 @@ def main(
     *,
     spawn: Callable[[list[str]], None] = _default_spawn,
     version_info: tuple[int, ...] | None = None,
+    record: Callable[[argparse.Namespace], bool] = _record,
 ) -> int:
     parser = argparse.ArgumentParser(prog="tap start")
     parser.add_argument("--session-id", required=True)
@@ -172,6 +196,12 @@ def main(
     if state == "stale":
         with contextlib.suppress(OSError):
             cfg.pid_file(args.session_id).unlink()
+
+    # The Probe service records it itself when it can (plan A2): no wrapper.
+    with contextlib.suppress(OSError):
+        cfg.shutdown_sentinel(args.session_id).unlink()
+    if record(args):
+        return EXIT_OK
 
     log_dir = cfg.log_dir()
     log_dir.mkdir(parents=True, exist_ok=True)

@@ -376,12 +376,40 @@ def test_on_posix_start_links_the_session(home, monkeypatch):
     made = []
 
     class _Fake:
-        def __init__(self, sid, *, harness):
-            made.append((sid, harness))
+        def __init__(self, sid, *, harness, env=None):
+            made.append((sid, harness, env))
 
         def start(self):
             return self
 
     monkeypatch.setattr(service_link, "ServiceLink", _Fake)
     assert isinstance(REAL_START("sid-posix"), _Fake)
-    assert [sid for sid, _ in made] == ["sid-posix"]
+    assert [sid for sid, _, _ in made] == ["sid-posix"]
+    # Hosted by the service (plan A2): the session's environment, for the link's thread.
+    assert isinstance(REAL_START("sid-hosted", env={"HOME": "/h"}), _Fake)
+    assert made[-1][2] == {"HOME": "/h"}
+
+
+def test_a_hosted_link_reads_under_its_sessions_environment(monkeypatch):
+    """The link's own thread runs under the environment it was given: a hosted
+    session's harness and folders, never the service process's."""
+    import os
+
+    import threading
+
+    monkeypatch.setattr(os, "environ", os.environ)
+    seen = []
+    asked = threading.Event()
+
+    def mode(sid):
+        seen.append(os.environ.get("HOME"))
+        asked.set()
+
+    link = service_link.ServiceLink(
+        "sid-env", harness="codex", env={"PROBE_TAP_SOURCE": "codex", "HOME": "/h/x"},
+        mode_fn=mode, undecided_wait_s=0,
+    )
+    link.start()
+    assert asked.wait(5)
+    link.stop()
+    assert seen and set(seen) == {"/h/x"}

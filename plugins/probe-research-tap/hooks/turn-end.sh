@@ -56,4 +56,28 @@ try:
 except OSError:
     sys.exit(0)
 ' >/dev/null 2>&1 || true
+
+# The Probe service records this session (plan A2, its `.hosted` marker) and
+# is gone (a crash, a kill): start it again now, in the background, rather
+# than at the next prompt (a long autonomous turn has none). A service
+# started again resumes every session it recorded (and rewrites each one's
+# marker). Free otherwise: a pattern match, a file read, `kill -0`.
+PREFIX="probe-research-tap"
+[ "$SOURCE" = codex ] && PREFIX="prbe-codex-tap"
+[ -n "${TAP_WATCHER_PREFIX:-}" ] && PREFIX="$TAP_WATCHER_PREFIX"
+if [[ "$HOOK_INPUT" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]{1,128})\" ]]; then
+    HOSTF="/tmp/${PREFIX}-watcher-${BASH_REMATCH[1]}.hosted"
+    if [ -s "$HOSTF" ]; then
+        PID=$(cat "$HOSTF" 2>/dev/null || echo "")
+        case "$PID" in '' | *[!0-9]*) PID="" ;; esac
+        if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
+            # Only the service, which resumes every session it recorded: never
+            # SessionStart in the background (its owner lookup walks up from
+            # itself, and a detached copy would find no agent and drop the record).
+            TAP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+            PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" nohup python3 -m tap service ensure \
+                </dev/null >/dev/null 2>&1 &
+        fi
+    fi
+fi
 exit 0

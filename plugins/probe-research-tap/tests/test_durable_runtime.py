@@ -63,8 +63,45 @@ class Wire:
         return 202, dict(protocol_version=2, receipt=receipt)
 
 
-@pytest.fixture
-def setup(tmp_path, monkeypatch):
+def _hosted(monkeypatch):
+    """Run every `_run_durable_loop` below as the Probe service runs it (plan A2,
+    D21): on a thread of its own, under the session's environment
+    (`tap.threadenv`), with the hosted `stop` and `pause` controls."""
+    import threading
+
+    from tap import threadenv
+
+    monkeypatch.setattr(os, "environ", os.environ)  # undone after the test
+    original = tapmain._run_durable_loop
+
+    def hosted(config, storage):
+        config.stop, config.pause = threading.Event(), threading.Event()
+        env = dict(os.environ)
+        out = {}
+        db = Path(storage._conn.execute("PRAGMA database_list").fetchone()[2])
+
+        def run():
+            # The loop's own thread opens its storage, as `tap.main.main` does there.
+            own = Storage(db)
+            try:
+                with threadenv.install().session(env):
+                    out["code"] = original(config, own)
+            finally:
+                own.close()
+
+        thread = threading.Thread(target=run, name="recorder-test")
+        thread.start()
+        thread.join(60)
+        assert not thread.is_alive(), "the hosted loop did not return"
+        return out["code"]
+
+    monkeypatch.setattr(tapmain, "_run_durable_loop", hosted)
+
+
+@pytest.fixture(params=["watch", "hosted"])
+def setup(request, tmp_path, monkeypatch):
+    if request.param == "hosted":
+        _hosted(monkeypatch)
     monkeypatch.setenv("PROBE_TRANSCRIPT_STATE_DIR", str(tmp_path / "v2"))
     monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(tmp_path / "plugin"))
     monkeypatch.setenv("PROBE_BASE_URL", Wire.base_url)

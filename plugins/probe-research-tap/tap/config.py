@@ -184,6 +184,15 @@ def shutdown_sentinel(session_id: str) -> Path:
     return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.shutdown"
 
 
+def hosted_file(session_id: str) -> Path:
+    """The Probe service records this session (`tap record`, plan A2): its pid.
+
+    In place of the wrapper's pid file, which a hosted session has none of:
+    `ensure-daemon.sh`'s fast path, `tap start` and `probe status` read it.
+    Beside the others, so session-start.sh's prune covers it too."""
+    return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.hosted"
+
+
 def owner_file(session_id: str) -> Path:
     """The agent process that owns this session (`tap/owner.py`).
 
@@ -570,6 +579,12 @@ class WatchConfig:
     token: str
     active_interval_s: int
     idle_interval_s: int
+    #: Hosted by the Probe service (`tap.hosted`, plan A2): `stop` set means the
+    #: session ended (finish it, as SIGTERM does); `pause` set means leave now
+    #: without finishing it (the service restarts; its next copy resumes from
+    #: this session's saved progress). None in a `tap watch` process.
+    stop: object = None
+    pause: object = None
 
     @property
     def shutdown_sentinel(self) -> Path:

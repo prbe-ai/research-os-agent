@@ -127,3 +127,70 @@ def test_the_marker_path_is_the_one_config_py_computes(hook_env, monkeypatch):
     for key, value in hook_env["env"].items():
         monkeypatch.setenv(key, value)
     assert cfg.heal_marker(SID).is_file()
+
+
+def _hosted_marker(pid: int) -> Path:
+    path = Path("/tmp") / f"probe-research-tap-watcher-{SID}.hosted"
+    path.write_text(str(pid), encoding="utf-8")
+    return path
+
+
+def test_a_live_service_recording_the_session_spawns_nothing(hook_env):
+    """Plan A2: the `.hosted` marker names the Probe service that records it."""
+    marker = _hosted_marker(os.getpid())
+    try:
+        result = _run({"session_id": SID}, hook_env["env"])
+        assert result.returncode == 0
+        assert not hook_env["spawn_log"].exists()
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+def test_a_gone_service_is_started_again_without_the_ten_minute_wait(hook_env):
+    """Its recorder's service crashed: the next prompt starts it again (it
+    resumes every session it recorded), a fresh heal marker or not."""
+    marker = _hosted_marker(999999999)
+    try:
+        assert _run({"session_id": SID}, hook_env["env"]).returncode == 0
+        assert _run({"session_id": SID}, hook_env["env"]).returncode == 0
+        assert hook_env["spawn_log"].read_text(encoding="utf-8").count("ran") == 2
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+def test_the_turn_end_hook_starts_a_gone_service_in_the_background(hook_env, tmp_path):
+    """A long autonomous turn has no prompt: its Stop hook starts the service
+    again (`tap service ensure`: it resumes every session it recorded), and
+    never SessionStart in the background (a detached owner lookup finds no
+    agent and drops the record, Codex R2)."""
+    turn_end = tmp_path / "plugin" / "hooks" / "turn-end.sh"
+    turn_end.write_text((HOOK.parent / "turn-end.sh").read_text(encoding="utf-8"), encoding="utf-8")
+    turn_end.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "python3-calls.txt"
+    (bin_dir / "python3").write_text(f'#!/bin/sh\necho "$*" >> {calls}\ncat >/dev/null\nexit 0\n')
+    (bin_dir / "python3").chmod(0o755)
+    env = {**hook_env["env"], "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    payload = json.dumps({"session_id": SID, "transcript_path": str(tmp_path / "t.jsonl"), "cwd": str(tmp_path)})
+
+    def run():
+        return subprocess.run(["/bin/bash", str(turn_end)], input=payload, capture_output=True, text=True,
+                              env={**os.environ, **env}, timeout=10)
+
+    marker = _hosted_marker(os.getpid())
+    try:
+        assert run().returncode == 0
+        time.sleep(0.5)
+        assert "service ensure" not in (calls.read_text() if calls.exists() else ""), "a live service: nothing to do"
+        _hosted_marker(999999999)
+        started = time.monotonic()
+        assert run().returncode == 0
+        assert time.monotonic() - started < 2, "never waits for the start"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and "service ensure" not in (calls.read_text() if calls.exists() else ""):
+            time.sleep(0.05)
+        assert "-m tap service ensure" in calls.read_text()
+        assert not hook_env["spawn_log"].exists(), "never SessionStart in the background"
+    finally:
+        marker.unlink(missing_ok=True)

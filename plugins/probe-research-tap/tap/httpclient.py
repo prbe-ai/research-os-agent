@@ -7,7 +7,9 @@ Success / Poison / Halt / Retry. Backoff is exponential with jitter.
 from __future__ import annotations
 
 import json
+import os
 import platform
+import ssl
 import random
 import secrets
 import urllib.error
@@ -72,6 +74,26 @@ def trace_id() -> str:
     return secrets.token_hex(16)
 
 
+
+_CONTEXTS: dict = {}
+
+
+def tls_context() -> ssl.SSLContext:
+    """TLS trust from this environment's SSL_CERT_FILE / SSL_CERT_DIR (cached by
+    them): a recorder hosted by the Probe service has its session's environment
+    in `os.environ` only (per thread), never in the C environment OpenSSL reads.
+    A context per call also builds the proxy handler from that environment."""
+    key = (os.environ.get("SSL_CERT_FILE") or None, os.environ.get("SSL_CERT_DIR") or None)
+    context = _CONTEXTS.get(key)
+    if context is None:
+        try:
+            context = ssl.create_default_context(cafile=key[0], capath=key[1])
+        except (OSError, ssl.SSLError, ValueError):
+            context = ssl.create_default_context()
+        _CONTEXTS[key] = context
+    return context
+
+
 def post_json(
     url: str,
     body: bytes,
@@ -92,7 +114,7 @@ def post_json(
         req.add_header("Authorization", f"Bearer {bearer}")
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=tls_context()) as resp:
             data = resp.read()
             status = resp.status
             return Response(status=status, body=data, classification=classify(status, False))
@@ -132,7 +154,7 @@ def get_json(
         req.add_header("Authorization", f"Bearer {bearer}")
 
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=tls_context()) as resp:
             data = resp.read()
             status = resp.status
             return Response(status=status, body=data, classification=classify(status, False))

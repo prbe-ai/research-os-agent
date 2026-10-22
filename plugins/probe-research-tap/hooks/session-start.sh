@@ -67,7 +67,8 @@ mkdir -p "$LOG_DIR"
 # a running daemon refreshes its owner record every tick, so only a finished
 # session's files are ever 2 days old.
 find /tmp/ -maxdepth 1 \( -name "${WATCHER_PREFIX}-watcher-*.shutdown" \
-    -o -name "${WATCHER_PREFIX}-watcher-*.owner" -o -name "${WATCHER_PREFIX}-watcher-*.stopping" \) \
+    -o -name "${WATCHER_PREFIX}-watcher-*.owner" -o -name "${WATCHER_PREFIX}-watcher-*.stopping" \
+    -o -name "${WATCHER_PREFIX}-watcher-*.hosted" \) \
     -mtime +2 -delete 2>/dev/null || true
 # A wrapper's version record is written once and never refreshed, and a live
 # session can be days old: of the 2-day-old ones, only those whose pid file is
@@ -318,6 +319,30 @@ fi
 SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 rm -f "$SHUTDOWN_FILE"
 
+if [ -n "$TRANSCRIPT_PATH" ]; then
+    TRANSCRIPT_ARGS=(--transcript "$TRANSCRIPT_PATH")
+else
+    TRANSCRIPT_ARGS=(--transcript-dir "${PRBE_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}")
+fi
+
+# The Probe service records this session itself when it can (plan A2): one
+# thread of the service instead of a wrapper and a `tap watch` per session.
+# `tap record` writes the service's pid to the session's `.hosted` marker
+# (ensure-daemon.sh's fast path and session-end.sh read it). Bounded at 6s,
+# inside this hook's 10s; any other answer (no service, an older one, no
+# owner, PROBE_TAP_HOSTED=0) starts the wrapper below, as before.
+HOSTED=""
+if [ "${PROBE_TAP_HOSTED:-1}" != 0 ] && PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
+    "$PY" -m tap record --session-id "$SESSION_ID" --cwd "$CWD" --plugin-root "$PLUGIN_ROOT" \
+    "${TRANSCRIPT_ARGS[@]}" </dev/null >>"$LOG_FILE" 2>&1; then
+    HOSTED=1
+    rm -f "$VERSION_FILE"
+    echo "[$(date -u +%FT%TZ)] tap: the Probe service records this session (tap ${RUNNING_VER:-unknown})" >>"$LOG_FILE"
+fi
+
+if [ -z "$HOSTED" ]; then
+rm -f "/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
+
 # Which tap the wrapper below runs, for the next resume's check above. Written
 # before the spawn, so there is no moment when a live wrapper carries an older
 # one's version; unknown (no manifest) leaves none, which never replaces.
@@ -325,12 +350,6 @@ if [ -n "$RUNNING_VER" ]; then
     printf '%s' "$RUNNING_VER" >"$VERSION_FILE" 2>/dev/null || true
 else
     rm -f "$VERSION_FILE"
-fi
-
-if [ -n "$TRANSCRIPT_PATH" ]; then
-    TRANSCRIPT_ARGS=(--transcript "$TRANSCRIPT_PATH")
-else
-    TRANSCRIPT_ARGS=(--transcript-dir "${PRBE_CODEX_SESSIONS_DIR:-$HOME/.codex/sessions}")
 fi
 
 # Crash-recovery wrapper: respawn up to 5 times per minute.
@@ -438,6 +457,7 @@ elif ! kill -0 "$(cat "$PID_FILE" 2>/dev/null || echo 0)" 2>/dev/null; then
     echo "[$(date -u +%FT%TZ)] tap: wrapper pid $(cat "$PID_FILE" 2>/dev/null) not alive just \
 after spawn; session=$SESSION_ID — transcript will be recovered by the reconciler" >>"$LOG_FILE"
 fi
+fi  # no hosted recorder
 
 # Tell the researcher what was redacted from their LAST session. The daemon
 # has no terminal of its own — it is spawned detached below and everything it

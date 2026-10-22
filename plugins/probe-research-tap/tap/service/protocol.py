@@ -57,6 +57,13 @@ class Method:
     ACTION_CANCEL = "action.cancel"
     UPDATE_STATUS = "update.status"
     UPDATE_CHECK_NOW = "update.check_now"
+    #: A session's dispatcher asks for a warm host for its plugin folder (plan A0).
+    HOOKS_HOST = "hooks.host"
+    #: The tap asks the service to record a session itself (plan A2): register
+    #: it, and run its recorder on a thread here instead of a `tap watch`.
+    SESSION_RECORD = "session.record"
+    SESSION_RECORDING = "session.recording"
+    SESSION_FINISH = "session.finish"
 
 
 #: The methods this service answers. Every other name is `-32601`.
@@ -76,6 +83,10 @@ METHODS = frozenset(
         Method.ACTION_CANCEL,
         Method.UPDATE_STATUS,
         Method.UPDATE_CHECK_NOW,
+        Method.HOOKS_HOST,
+        Method.SESSION_RECORD,
+        Method.SESSION_RECORDING,
+        Method.SESSION_FINISH,
     }
 )
 
@@ -192,6 +203,8 @@ class StopReason:
     SIGNAL = "signal"
     #: An update cycle installed a new CLI: the next `ensure` starts its code.
     UPDATE = "update"
+    #: A session asked to be recorded by a newer tap than the one loaded (plan A2).
+    TAP_UPDATE = "tap_update"
 
 
 #: What a request may carry as its `context` (plan X2): the environment the

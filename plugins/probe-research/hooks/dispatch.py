@@ -898,12 +898,14 @@ def _is_catch_all(hook: dict, lane: str, wiring: dict) -> bool:
     return False
 
 
-def main(argv: list[str]):
-    """0/2 (an exit code), or (route, payload, timeout) to run in-process."""
+def main(argv: list[str], payload: "bytes | None" = None):
+    """0/2 (an exit code), or (route, payload, timeout) to run in-process.
+    `payload`: the event, when the caller read it already (`run`, the host)."""
     if len(argv) < 2 or argv[1] not in LANE_EVENT:
         return 0
     lane = argv[1]
-    payload = sys.stdin.buffer.read()
+    if payload is None:
+        payload = sys.stdin.buffer.read()
     waiting = lane == "post-tool" and reads_waiting()
     if lane in TOOL_LANES and not waiting and not could_route(lane, payload):
         return 0
@@ -956,12 +958,194 @@ def main(argv: list[str]):
     return 2 if any(code == 2 for _, code in results) else 0
 
 
+# --- THE HOST (plan A0) ----------------------------------------------------------
+
+#: Hand the event to this folder's warm host (`zygote.py`, run by the Probe
+#: service) when it is ready within this; else run the event here (plan D28).
+HOST_WAIT_S = 0.3
+#: Lanes never handed to the host: SessionEnd has 1.5 s in all under Claude
+#: Code (3 s under Codex), and a warm start gains it nothing it can spend.
+UNHOSTED_LANES = frozenset({"session-end"})
+#: `off`: never hand an event to the host (a test, a fault being chased).
+HOST_ENV = "PROBE_HOOK_HOST"
+#: Set in the host's children: an event already hosted is never handed on.
+HOSTED_ENV = "PROBE_HOOK_HOSTED"
+#: A miss asks the service for a host at most this often.
+ASK_EVERY_S = 30.0
+
+
+def host_socket(root: str) -> str:
+    """`/tmp/probe-<uid>/hooks-<hash of the folder>.sock`: this machine's own
+    (a home folder shared by many machines never shares it), private to the user."""
+    import hashlib
+
+    digest = hashlib.sha256(os.fsencode(os.path.realpath(root))).hexdigest()[:16]
+    return os.path.join("/tmp", "probe-%d" % os.getuid(), "hooks-%s.sock" % digest)
+
+
+def _private(folder: str) -> bool:
+    try:
+        st = os.lstat(folder)
+    except OSError:
+        return False
+    import stat
+
+    return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o022
+
+
+def _ask_for_host(root: str, path: str) -> None:
+    """No host answered: ask the Probe service to start one for this folder,
+    for the next event. A quick, bounded call; at most every ASK_EVERY_S."""
+    marker = path[: -len(".sock")] + ".asked"
+    try:
+        if time.time() - os.stat(marker).st_mtime < ASK_EVERY_S:
+            return
+    except OSError:
+        pass
+    try:
+        if not os.path.isdir(os.path.dirname(path)):
+            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        if not _private(os.path.dirname(path)):
+            return
+        with open(marker, "a"):
+            pass
+        os.utime(marker, None)
+        import json
+        import socket
+
+        sys.path.insert(1, HERE)
+        import _service_paths  # noqa: PLC0415 - only on a miss
+
+        service = str(_service_paths.socket_path())
+        _service_paths.require_private(_service_paths.Path(service).parent)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        sock.settimeout(0.2)
+        try:
+            sock.connect(service)
+            lines = [
+                {"jsonrpc": "2.0", "id": 1, "method": "service.hello",
+                 "params": {"client": "cli", "client_version": "hooks", "api": 1, "keepalive": False}},
+                {"jsonrpc": "2.0", "id": 2, "method": "hooks.host",
+                 "params": {"root": os.path.realpath(root), "python": sys.executable}},
+            ]
+            sock.sendall(b"".join(json.dumps(line).encode() + b"\n" for line in lines))
+            sock.recv(4096)
+        finally:
+            sock.close()
+    except Exception:  # noqa: BLE001 - only the next event's speed is at stake
+        return
+
+
+def via_host(lane: str, argv: list, payload: bytes) -> "int | None":
+    """Run this event in the folder's warm host, exactly once (zygote.py's
+    handshake): its exit status, or None to run it here. None whenever the host
+    is not there or not ready in time; once it said ready and was told to go,
+    the event is the host's, and a host lost after that reads as exit 0."""
+    if os.environ.get(HOST_ENV) == "off" or os.environ.get(HOSTED_ENV) or os.name != "posix":
+        return None
+    if sys.version_info < (3, 9) or lane in UNHOSTED_LANES:
+        return None
+    root = os.path.dirname(HERE)
+    path = host_socket(root)
+    if not os.path.isfile(os.path.join(HERE, "zygote.py")):
+        return None
+    wait = HOST_WAIT_S
+    started = time.monotonic()
+    import socket
+
+    if not _private(os.path.dirname(path)):
+        _ask_for_host(root, path)
+        return None
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        sock.settimeout(wait)
+        try:
+            sock.connect(path)
+        except OSError:
+            _ask_for_host(root, path)
+            return None
+        import json
+
+        env = dict(os.environ)
+        env[HOSTED_ENV] = "1"
+        header = {
+            "v": 1, "argv": list(argv), "cwd": os.getcwd(), "env": env, "parent": os.getppid(),
+            "deadline": time.time() + budget(lane) + MARGIN_S, "payload": len(payload),
+        }
+        data = json.dumps(header).encode("utf-8") + b"\n" + payload
+        try:
+            # The fds ride the first send, which may take less than it was given.
+            sent = socket.send_fds(sock, [data[:65536]], [1, 2])
+            if sent < len(data):
+                sock.sendall(data[sent:])
+            sock.settimeout(max(0.01, wait - (time.monotonic() - started)))
+            if sock.recv(1) != b"R":
+                return None
+            sock.sendall(b"G")
+        except OSError:
+            return None
+        # Told to go: from here only an explicit `N` (it will not run it:
+        # stopping, no fork) runs it here. A late `S`, a timeout or a lost host
+        # may mean it runs there: never here too.
+        try:
+            sock.settimeout(budget(lane) + MARGIN_S)
+            answer = sock.recv(1)
+        except OSError:
+            return 0
+        if answer == b"N":
+            return None
+        if answer != b"S":
+            return 0
+        # From here the event is the host's.
+        try:
+            sock.settimeout(budget(lane) + MARGIN_S + 5)
+            reply = b""
+            while not reply.endswith(b"\n"):
+                chunk = sock.recv(4096)
+                if not chunk:
+                    return 0
+                reply += chunk
+            code = json.loads(reply.decode("utf-8")).get("exit")
+            return code if isinstance(code, int) and 0 <= code < 256 else 0
+        except (OSError, ValueError, AttributeError):
+            return 0
+    finally:
+        sock.close()
+
+
+def run_hosted(argv: list, payload: bytes) -> None:
+    """The event inside the host's child (`zygote.py`): what `run` does after
+    the hand-over, with the payload the client read."""
+    try:
+        code = main(["dispatch.py", *argv], payload=payload)
+    except Exception:  # noqa: BLE001 - fail open: a broken dispatcher abstains
+        code = 0
+    if isinstance(code, tuple):
+        run_inline(*code)
+        code = 0
+    sys.exit(code)
+
+
 def run(argv: list) -> None:
     """The entry point: `dispatch.sh` imports this module (so its compiled
     bytecode is cached, ~6ms saved on every event) and calls run([lane])."""
     hand_over(argv)
+    payload = None
+    lane = argv[0] if argv else ""
+    if lane in LANE_EVENT and os.environ.get(HOST_ENV) != "off" and not os.environ.get(HOSTED_ENV):
+        try:
+            payload = sys.stdin.buffer.read()
+            if lane in TOOL_LANES and not (lane == "post-tool" and reads_waiting()) and not could_route(lane, payload):
+                sys.exit(0)
+            hosted = via_host(lane, argv, payload)
+        except SystemExit:
+            raise
+        except Exception:  # noqa: BLE001 - the host is a speed-up; the event runs here instead
+            hosted = None
+        if hosted is not None:
+            sys.exit(hosted)
     try:
-        code = main(["dispatch.py", *argv])
+        code = main(["dispatch.py", *argv], payload=payload)
     except Exception:  # noqa: BLE001 - fail open: a broken dispatcher abstains
         code = 0
     if isinstance(code, tuple):
