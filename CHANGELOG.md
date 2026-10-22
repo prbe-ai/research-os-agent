@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.287.1
+
 - **`probe wizard --action configure --agent codex --reinstall` no longer crashes on a real install.** The repair edits Codex's `config.toml` with `tomlkit`, which was used since 0.277.0 but declared nowhere, so every installed CLI failed with `ModuleNotFoundError: No module named 'tomlkit'` (the test environments had it for another reason). It is now a dependency, and a test fails the build when the CLI side imports a package the CLI does not declare.
 
 - **The Claude Code status line no longer replaces a `settings.json` it cannot parse.** Installing the status line read a file with a JSON error (a trailing comma typed by hand) as empty and saved that back: the file became just the status line, losing env tokens, permission rules and hooks, and the `.probe-backup` (taken only once) did not hold the newer contents. It now leaves such a file, or one it cannot read, untouched and says why (`probe statusline install` exits 1; the wizard reports it and goes on).
