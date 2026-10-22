@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.284.1
+
 - **An agent the Probe daemon records for is told it can look at its own runs.** The Probe section in its CLAUDE.md / AGENTS.md and the guard's refusal said "you only instrument your runs", so the agent kept asking the daemon about runs it had launched itself, though 0.284.0 opened reading one run by its id. Both now name `probe run get <id>` (the block also `probe metrics plot <id>`); the daemon does all other reads and writes. Installed blocks are rewritten the next time the hooks sync the team note (pointer version 47); pi's guard follows.
 
 ## 0.284.0
