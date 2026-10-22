@@ -1,6 +1,6 @@
 {
   "name": "probe-research-tap",
-  "version": "0.9.24",
+  "version": "0.9.25",
   "description": "Ships sanitized per-session Kimi Code transcripts to Probe Research OS.",
   "author": {
     "name": "Probe",
@@ -31,11 +31,6 @@
       "event": "UserPromptSubmit",
       "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_TAP_SOURCE=kimi_code; [ -x \"$ROOT/hooks/ensure-daemon.sh\" ] || exit 0; exec \"$ROOT/hooks/ensure-daemon.sh\" >/dev/null'",
       "timeout": 5
-    },
-    {
-      "event": "SessionEnd",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code PROBE_TAP_SOURCE=kimi_code; [ -x \"$ROOT/hooks/session-end.sh\" ] || exit 0; exec \"$ROOT/hooks/session-end.sh\" >/dev/null'",
-      "timeout": 3
     },
     {
       "event": "SessionEnd",

@@ -12,17 +12,23 @@
 # 46 of 51 claude_code sessions the server had to end by itself came from one
 # containerized device.
 #
-# WHY TWO hooks.json ENTRIES, not one with a longer timeout. Codex trusts each
-# hook by a hash of its whole entry, timeout included, and silently skips one
-# whose hash changed until the researcher re-approves it. So the original
-# entry (timeout 3, no flag) stays byte-identical, and a second entry runs this
-# script with `--wait` under a 20s timeout. Claude Code runs both in parallel
-# and waits for the longer, up to its exit budget (below); Codex keeps running
-# the old one until the new one is approved, and clamps the new one to 3s (it
-# says so in `/hooks` as "1 issue loading hooks"; the 20s stays, because Claude
-# Code enforces each hook's own timeout and a container that raises its exit
-# budget needs the full wait). Either may run first, so the pid is handed over
-# in a `.stopping` file before the pid file is removed.
+# ONE hooks.json ENTRY: this script with `--wait`, under a 20s timeout. Through
+# tap 0.9.24 there were two: the original entry (timeout 3, no flag), kept
+# byte-identical because Codex trusts each hook by a hash of its whole entry,
+# timeout included, and silently skips one whose hash changed until the
+# researcher re-approves it, plus a second entry with `--wait`. Every Probe
+# plugin now keeps exactly one entry per event, so the flagless one is gone: a
+# Codex user who had approved only that one approves this one once in `/hooks`
+# (`probe status` says so, and its `--json` `codex_hooks` tells the desktop
+# app). Codex clamps the 20s to 3s (it says so in `/hooks` as "1 issue loading
+# hooks"; the 20s stays, because Claude Code enforces each hook's own timeout
+# and a container that raises its exit budget needs the full wait).
+#
+# Without the flag the script still stops the daemon and returns at once. A
+# Codex session that started on an older release keeps the two entries it
+# loaded then, and once its start folder is replaced both run THIS script, in
+# either order, so the pid is handed over in a `.stopping` file before the pid
+# file is removed.
 #
 # CLAUDE CODE'S EXIT BUDGET IS NOT THE ENTRY'S TIMEOUT. At exit Claude Code
 # bounds the whole SessionEnd phase at CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS,

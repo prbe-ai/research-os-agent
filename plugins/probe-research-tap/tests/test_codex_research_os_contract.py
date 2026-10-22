@@ -48,21 +48,20 @@ def test_codex_lifecycle_hooks_start_and_stop_capture() -> None:
     assert "session-start.sh" in start["command"]
     assert "session-end.sh" in end["command"]
     assert "ensure-daemon.sh" in ensure["command"]
-    assert end["timeout"] == 3
-    # The waiting SessionEnd is a SECOND entry, never a change to the first:
-    # Codex trusts a hook by a hash of its whole entry (timeout included) and
-    # silently skips a changed one until the researcher re-approves it. Claude
-    # Code runs both and waits for the longer (up to 15s for the FINALIZE).
-    assert len(hooks["hooks"]["SessionEnd"]) == 2
-    wait = hooks["hooks"]["SessionEnd"][1]["hooks"][0]
-    assert wait["command"] == end["command"].replace(
-        'session-end.sh\"\'', 'session-end.sh\" --wait\''
-    )
+    # ONE SessionEnd entry, the waiting one (D15/D45): every Probe plugin keeps
+    # exactly one entry per event. Through 0.9.24 a flagless timeout-3 entry
+    # stood beside it, kept only because Codex trusts a hook by a hash of its
+    # whole entry; dropping it costs a Codex user who approved only that one a
+    # single re-approval, which `probe status` announces (`codex_hooks`).
+    # Never change this entry again: that would ask every Codex user again.
+    assert [len(group["hooks"]) for groups in hooks["hooks"].values() for group in groups] == [1] * 4
+    assert len(hooks["hooks"]["SessionEnd"]) == 1
+    assert end["command"].endswith('exec \"$ROOT/hooks/session-end.sh\" --wait\'')
     # 20s, though Codex (0.159) clamps it to 3s and flags it in `/hooks`:
     # Claude Code enforces each hook's own timeout, and a container that raises
     # its exit budget needs the full 15s wait. session-end.sh budgets its Codex
     # wait inside the clamp instead.
-    assert wait["timeout"] == 20
+    assert end["timeout"] == 20
     assert ensure["timeout"] == 5
     # Silent on the common path: this one fires on every prompt.
     assert "statusMessage" not in ensure

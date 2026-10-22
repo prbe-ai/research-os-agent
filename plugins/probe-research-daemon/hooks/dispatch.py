@@ -37,12 +37,14 @@ every event). Never exits non-zero unless a route did (an exit of 2 is a veto on
 PreToolUse/UserPromptSubmit, and only a route may cast one).
 
 Hand-over: Claude Code fixes a session's plugin folder at its start
-(`CLAUDE_PLUGIN_ROOT`), so a session left open across releases keeps running the
-hooks it started with while what it reads (the managed CLAUDE.md block, the CLI)
-moves on: a 0.129.0 guard refused `probe paper find`, the command the block named
-(2026-10-13). Before anything else, this hands the event to the copy Claude Code's
-install ledger names, when that is another version folder of this same plugin
-(`installed_root`, `hand_over`), so every event hooks.json sends here runs the
+(`CLAUDE_PLUGIN_ROOT`), and Codex does too (`PLUGIN_ROOT`), so a session left
+open across releases keeps running the hooks it started with while what it reads
+(the managed CLAUDE.md block, the CLI) moves on: a 0.129.0 guard refused `probe
+paper find`, the command the block named (2026-10-13). Before anything else, this
+hands the event to the installed copy, when that is another version folder of
+this same plugin (`installed_root`, `hand_over`): under Claude Code the one its
+install ledger names, under Codex the newest complete version in Codex's plugin
+cache (`codex_installed_root`). So every event hooks.json sends here runs the
 installed hooks. The Stop wake (claude-reads.json, outside this dispatcher) does
 the same in reads_hook.py.
 
@@ -138,7 +140,8 @@ MIN_SESSION_END_S = 0.1
 #: keeps file contents from faking one; a nested key only adds a name) and goes
 #: on only if TOOL_FILTER takes one of them or, after a tool call, a Probe
 #: daemon message waits: most tool calls cost a python start and the install
-#: ledger's byte scan (`installed_root`), and nothing else.
+#: ledger's byte scan (`installed_root`; under Codex, one listing of its plugin
+#: folder), and nothing else.
 TOOL_LANES = ("pre-tool", "post-tool")
 
 #: Per tool lane: the exact tool names, and the substrings (the Probe MCP
@@ -372,11 +375,76 @@ def _complete(real: str) -> bool:
     return all(os.path.isfile(os.path.join(hooks, name)) for name in named)
 
 
+def _codex_cache(env) -> str:
+    """Codex's plugin cache: `$CODEX_HOME` or `~/.codex`, then `plugins/cache`
+    (as `probe.cli.codex_config` and probe-research-tap's hooks read it)."""
+    home = (env.get("CODEX_HOME") or "").strip()
+    base = os.path.expanduser(home) if home else os.path.join(os.path.expanduser("~"), ".codex")
+    return os.path.join(base, "plugins", "cache")
+
+
+def _version(name: str):
+    """A version folder's name as a tuple to compare (`0.161.1` -> (0, 161, 1)),
+    or None for any other name: numbers, not text, so 0.10.0 is newer than 0.9.9."""
+    parts = name.split(".")
+    if len(parts) < 2 or not all(p and p.isascii() and p.isdigit() for p in parts):
+        return None
+    return tuple(int(p) for p in parts)
+
+
+def codex_installed_root(root: str, env) -> "str | None":
+    """`installed_root` for Codex: the newest complete version of this plugin
+    in Codex's cache, when that is newer than `root`; None to run the event here.
+
+    Codex caches a plugin as `<cache>/<marketplace>/<plugin>/<version>` and sets
+    `PLUGIN_ROOT` to that folder once, at session start. Installing a version
+    replaces the folder, and nothing else records which version is installed
+    (config.toml holds only `enabled`), so the newest version folder is the
+    copy Codex runs now: by version number, never by mtime (the frozen entries'
+    own fallback for a deleted start folder picks by mtime; this only ever moves
+    an event forward from a folder that still exists). It must sit beside
+    `root` inside Codex's own cache (a symlink out of it, a checkout or another
+    plugin's folder never does), carry Codex's manifest, and be `_complete`.
+    Anything else: stay.
+
+    One listing of the plugin's folder on every event, and no `json` import
+    unless a newer copy is there."""
+    here = os.path.realpath(root)
+    folder = os.path.dirname(here)
+    if os.path.dirname(os.path.dirname(folder)) != os.path.realpath(_codex_cache(env)):
+        return None
+    current = _version(os.path.basename(here))
+    if current is None:
+        return None
+    newer = sorted(
+        ((version, name) for name in _listdir(folder) for version in [_version(name)]
+         if version is not None and version > current),
+        reverse=True,
+    )
+    # Newest first, and the first COMPLETE one: a newer copy still being
+    # written (or half deleted) must not keep the session on an older one.
+    for _version_key, name in newer:
+        real = os.path.realpath(os.path.join(folder, name))
+        if os.path.dirname(real) != folder or not os.path.isfile(os.path.join(real, ".codex-plugin", "plugin.json")):
+            continue
+        if _complete(real):
+            return real
+    return None
+
+
+def root_variable(env) -> str:
+    """Where the harness gave this plugin's folder, and so where a route reads
+    it: `PLUGIN_ROOT` under Codex (a route's `$ROOT` reads it first), else
+    `CLAUDE_PLUGIN_ROOT`."""
+    return "PLUGIN_ROOT" if env.get("PLUGIN_ROOT") else "CLAUDE_PLUGIN_ROOT"
+
+
 def installed_root(root: str, env) -> "str | None":
     """The plugin folder to hand this event to, or None to run it here.
 
-    Only in Claude Code (`PLUGIN_ROOT` marks Codex), and only once per event.
-    `root` sits in Claude Code's cache as `<marketplace>/<plugin>/<version>`; the
+    Only once per event. Under Codex (`PLUGIN_ROOT` marks it), the newest copy
+    in its plugin cache (`codex_installed_root`). Under Claude Code, `root` sits
+    in its cache as `<marketplace>/<plugin>/<version>`; the
     copy to hand to is the one folder the ledger lists under that same
     `<plugin>@<marketplace>`, when every entry there is user scope (a
     project-scoped install is per project, and this does not know the project),
@@ -388,8 +456,10 @@ def installed_root(root: str, env) -> "str | None":
     The ledger is read on every event: a byte scan first, so the usual answer
     (it lists this folder) costs no `json` import (~10 ms); the ledger is
     parsed only when the scan finds another copy beside this one."""
-    if env.get("PLUGIN_ROOT") or env.get(HANDED_OVER):
+    if env.get(HANDED_OVER):
         return None
+    if env.get("PLUGIN_ROOT"):
+        return codex_installed_root(root, env)
     raw = _read_ledger(_ledger(env))
     if raw is None:
         return None
@@ -425,11 +495,11 @@ def installed_root(root: str, env) -> "str | None":
 def hand_over(argv: list) -> None:
     """Run this event in the installed copy (`installed_root`) instead, in this
     process: its dispatch.py is imported in place of this one, with sys.path[0]
-    (where its routes import their modules from) and `$CLAUDE_PLUGIN_ROOT`
-    (where its routes' commands run from) pointing at it, and its `run` takes
-    the event; stdin is still unread. If it will not import, the event runs
-    here. Once its `run` starts, the event is its own, exits and tracebacks
-    included."""
+    (where its routes import their modules from) and the harness's root
+    variable (`root_variable`: where its routes' commands run from) pointing at
+    it, and its `run` takes the event; stdin is still unread. If it will not
+    import, the event runs here. Once its `run` starts, the event is its own,
+    exits and tracebacks included."""
     if os.environ.pop(HANDED_OVER, None) is not None:
         return
     try:
@@ -450,7 +520,7 @@ def hand_over(argv: list) -> None:
             if mine is not None:
                 sys.modules[name] = mine
             return
-        os.environ["CLAUDE_PLUGIN_ROOT"] = target
+        os.environ[root_variable(os.environ)] = target
         os.environ[HANDED_OVER] = root
     except Exception:  # noqa: BLE001 - fail open: run the event here
         return
@@ -486,6 +556,23 @@ def budget(lane: str) -> float:
         return max(ms / 1000.0 - SESSION_END_MARGIN_S, MIN_SESSION_END_S)
     timeout = ENTRY_TIMEOUT.get(lane)
     return (HARNESS_DEFAULT_TIMEOUT_S if timeout is None else timeout) - MARGIN_S
+
+
+#: The `probe` commands a route runs wait for an update in progress only until
+#: this (epoch seconds; `probe.service.barrier.DEADLINE_ENV`): a hook that gives
+#: up busy beats one the harness kills at its timeout (plan D12).
+DEADLINE_ENV = "PROBE_HOOK_DEADLINE"
+
+
+def _deadline(seconds: float) -> None:
+    """Tell every `probe` this event's routes start when the event must be done.
+    Never later than a deadline already set (a route that runs a hook)."""
+    deadline = time.time() + max(0.0, seconds)
+    try:
+        inherited = float(os.environ.get(DEADLINE_ENV) or "inf")
+    except ValueError:
+        inherited = float("inf")
+    os.environ[DEADLINE_ENV] = repr(min(deadline, inherited))
 
 
 def _own_timeout(hook: dict):
@@ -851,7 +938,10 @@ def main(argv: list[str]):
         parts = plain_route(chosen[0]["command"])
         if parts is not None and os.path.isfile(os.path.join(HERE, parts[1])):
             own = _own_timeout(chosen[0])
-            return (parts, payload, limit if own is None else min(own, limit))
+            timeout = limit if own is None else min(own, limit)
+            _deadline(timeout)
+            return (parts, payload, timeout)
+    _deadline(limit)
     results = run_all(chosen, payload, time.monotonic() + limit)
     outputs = [out for out, code in results if code == 0]
     try:

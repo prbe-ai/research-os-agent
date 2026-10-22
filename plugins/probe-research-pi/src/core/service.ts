@@ -13,57 +13,45 @@
  *                      the service sees the session end the moment pi exits
  *   session_shutdown -> stopping capture ends the registration (`session.end`)
  *
- * Only while the service is switched on: `PROBE_SERVICE=on|off`, else
- * `"service": "on"` in the probe CLI's config.json (the same rule as the
- * client's `enabled()`), and never in a session whose Probe is `off` (A2).
+ * The service has no switch; it is never started from a session whose Probe is
+ * `off` (A2), and never on Windows yet: it listens on a Unix socket and locks
+ * with fcntl, so every session there would try, and fail, to start it (D16).
  */
 
 import { delimiter } from "node:path";
 
-import { probeConfigPath, type PathEnv } from "./paths.js";
+import type { PathEnv } from "./paths.js";
 import type { SpawnFn } from "./daemon.js";
 import type { TapRuntime } from "./tapRuntime.js";
 
-/** The switch's environment variable (`tap/service/client.py::ENV_FLAG`). */
-export const SERVICE_ENV = "PROBE_SERVICE";
-/** Its config.json key (`client.py::CONFIG_KEY`). */
-export const SERVICE_CONFIG_KEY = "service";
 /** The pid the tap's registration thread names as the owner (`service_link.py::OWNER_PID_ENV`). */
 export const SERVICE_OWNER_PID_ENV = "PROBE_SERVICE_OWNER_PID";
 
-const ON = new Set(["on", "1", "true", "yes"]);
-const OFF = new Set(["off", "0", "false", "no"]);
+/** The platforms the service cannot run on yet (Node's `process.platform` names). */
+export const ServicelessPlatform = { Windows: "win32" } as const satisfies Record<string, NodeJS.Platform>;
 
-export interface ServiceSwitchDeps {
-  env: PathEnv;
-  readFileSync: (path: string) => string;
-}
+const SERVICELESS: ReadonlySet<string> = new Set(Object.values(ServicelessPlatform));
 
-/** Is the Probe service switched on for this machine? Never throws. */
-export function serviceEnabled(deps: ServiceSwitchDeps): boolean {
-  const raw = (deps.env[SERVICE_ENV] ?? "").trim().toLowerCase();
-  if (ON.has(raw)) return true;
-  if (OFF.has(raw)) return false;
-  try {
-    const config = JSON.parse(deps.readFileSync(probeConfigPath(deps.env))) as Record<string, unknown>;
-    const value = config?.[SERVICE_CONFIG_KEY];
-    return value === true || (typeof value === "string" && ON.has(value.trim().toLowerCase()));
-  } catch {
-    return false;
-  }
+/** Can the service run here? Not on Windows until it has a named-pipe transport. */
+export function serviceSupported(platform: NodeJS.Platform = process.platform): boolean {
+  return !SERVICELESS.has(platform);
 }
 
 export interface EnsureServiceDeps {
   spawn: SpawnFn;
   env: PathEnv;
   log: (message: string) => void;
+  /** Defaults to `process.platform`; tests name another. */
+  platform?: NodeJS.Platform;
 }
 
 /**
  * Start the service if none runs: `python -m tap service ensure`, detached.
- * Returns at once (the hook-budget rule: never wait on the service).
+ * Returns at once (the hook-budget rule: never wait on the service). Where the
+ * service cannot run (`serviceSupported`) it starts nothing and returns false.
  */
 export function ensureService(runtime: TapRuntime, deps: EnsureServiceDeps): boolean {
+  if (!serviceSupported(deps.platform)) return false;
   const pythonPath = runtime.tapRoot
     ? [runtime.tapRoot, deps.env.PYTHONPATH].filter((v): v is string => Boolean(v)).join(delimiter)
     : deps.env.PYTHONPATH;

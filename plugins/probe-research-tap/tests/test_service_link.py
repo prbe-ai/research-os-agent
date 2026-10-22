@@ -26,6 +26,10 @@ from tap import service_link
 from tap.service import client, paths
 from tap.service.protocol import Mode
 
+#: The real `start`: conftest stubs it for every test so no `tap watch` reaches
+#: the developer's own service.
+REAL_START = service_link.start
+
 
 class FakeService:
     """Answers hello / session.register / session.end, and records them."""
@@ -119,7 +123,6 @@ def home(monkeypatch):
     root = Path(tempfile.mkdtemp(prefix="pt-", dir="/tmp"))
     monkeypatch.setenv("HOME", str(root))
     monkeypatch.delenv("XDG_STATE_HOME", raising=False)
-    monkeypatch.delenv("PROBE_SERVICE", raising=False)
     yield root
     shutil.rmtree(root, ignore_errors=True)
 
@@ -172,6 +175,8 @@ def test_registers_heartbeats_and_ends(service):
     assert first == {
         "sid": "sid-1", "harness": "test_harness", "mode": "daemon", "owner": owner,
         "generation": link.generation,
+        # Where this session's locks live, for the service's quiet check (plan D13).
+        "state_dir": str(lease.sessions_dir().parent.resolve()),
     }
     assert service.methods()[0] == "service.hello"
     # Heartbeats are the same generation on the same connection: one hello.
@@ -347,13 +352,36 @@ def test_quota_handoff_registers_inline_with_the_main_service(home, state):
     assert service_link.session_mode("sid-q") == Mode.INLINE
 
 
-def test_nothing_starts_while_the_service_is_switched_off(home, monkeypatch):
-    monkeypatch.setenv("PROBE_SERVICE", "off")
-    assert service_link.start("sid-8") is None
-
-
 def test_pi_names_its_own_process_as_the_owner(home, monkeypatch):
     monkeypatch.setenv(service_link.OWNER_PID_ENV, str(os.getpid()))
     link = service_link.ServiceLink("sid-9", harness="x")
     owner = link.owner_fn()
     assert owner["pid"] == os.getpid() and owner["start_time"]
+
+
+def test_off_posix_there_is_no_link_and_no_ensure(home, monkeypatch):
+    """Windows has no service yet (Unix socket, fcntl): `tap watch` must not
+    try to start one from every session (D16)."""
+    started = []
+    monkeypatch.setattr(service_link, "ServiceLink", lambda *a, **k: started.append(a) or pytest.fail("linked"))
+    monkeypatch.setattr(client, "ensure", lambda *a, **k: started.append("ensure") or client.Ensured.SPAWNED)
+    with monkeypatch.context() as windows:
+        # Only around the call: pathlib reads os.name on every Path().
+        windows.setattr(service_link.os, "name", "nt")
+        link = REAL_START("sid-win")
+    assert link is None and started == []
+
+
+def test_on_posix_start_links_the_session(home, monkeypatch):
+    made = []
+
+    class _Fake:
+        def __init__(self, sid, *, harness):
+            made.append((sid, harness))
+
+        def start(self):
+            return self
+
+    monkeypatch.setattr(service_link, "ServiceLink", _Fake)
+    assert isinstance(REAL_START("sid-posix"), _Fake)
+    assert [sid for sid, _ in made] == ["sid-posix"]

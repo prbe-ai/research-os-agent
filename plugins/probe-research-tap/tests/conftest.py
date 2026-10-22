@@ -28,6 +28,16 @@ KIMI_FIXTURES = Path(__file__).resolve().parents[3] / "tests" / "fixtures" / "ki
 
 
 @pytest.fixture(autouse=True)
+def _no_real_probe_service(monkeypatch):
+    """The Probe service has no switch and these tests keep the developer's HOME:
+    no `tap watch` under test may reach (or start) the real one. Service link tests
+    build `ServiceLink` themselves."""
+    from tap import service_link
+
+    monkeypatch.setattr(service_link, "start", lambda session_id: None)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_transcript_roots(monkeypatch, tmp_path_factory):
     """Point every flavour's transcript discovery at an empty per-test directory."""
     root = tmp_path_factory.mktemp("transcripts")

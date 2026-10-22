@@ -34,10 +34,14 @@ const spawnMock = vi.fn(
 
 /** Daemon spawns only — `session_start` also spawns the team-note sync, which
  * is deliberately independent of pairing, the killswitch and the dedup guard
- * (the note is the team's document, not this session's capture). Assertions
- * about "did we spawn the daemon" have to say which spawn they mean. */
+ * (the note is the team's document, not this session's capture), and the Probe
+ * service's `tap service ensure` (core/service.ts). Assertions about "did we
+ * spawn the daemon" have to say which spawn they mean. */
 const daemonSpawns = () =>
-  spawnMock.mock.calls.filter(([, args]) => !(args[0] === "notes" && args[1] === "sync"));
+  spawnMock.mock.calls.filter(
+    ([, args]) =>
+      !(args[0] === "notes" && args[1] === "sync") && !(args[2] === "service" && args[3] === "ensure"),
+  );
 
 const execFileMock = vi.fn(
   (

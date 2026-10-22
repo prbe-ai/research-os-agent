@@ -720,7 +720,7 @@ def hand_over_stop(raw: str) -> None:
         if len(data) > HAND_OVER_MAX_BYTES:
             return
         env = dict(os.environ)
-        env["CLAUDE_PLUGIN_ROOT"] = target
+        env[dispatch.root_variable(env)] = target
         env[dispatch.HANDED_OVER] = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         read, write = os.pipe()
         os.write(write, data)

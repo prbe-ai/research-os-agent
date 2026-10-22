@@ -1,9 +1,8 @@
 """Tells the Probe service this session is alive, from inside `tap watch` (plan T5).
 
 Every daemon AND inline session runs `tap watch`, so it is the one carrier of
-"this session is alive" for the machine-wide service (`probe.service`). Only
-while the service is switched on (`PROBE_SERVICE=on`, or `"service": "on"` in
-the CLI config; see `tap/service/client.py`): otherwise nothing here starts.
+"this session is alive" for the machine-wide service (`probe.service`), which
+has no switch: only a session whose mode is off starts nothing here.
 
     thread start ──mode off──> nothing: no ensure, no connection (plan A2)
                  └─otherwise─> ensure() once, connect, hello, session.register
@@ -236,6 +235,9 @@ class ServiceLink:
             "mode": mode,
             "owner": self._owner,
             "generation": self.generation,
+            # Where this session's worker, runs and setups keep their locks: the
+            # service's quiet check looks there too (plan D13).
+            "state_dir": str(lease.sessions_dir().parent.resolve()),
         }
         try:
             answer = self._conn.call(Method.SESSION_REGISTER, params)
@@ -318,10 +320,14 @@ class ServiceLink:
 
 
 def start(session_id: str) -> ServiceLink | None:
-    """The link for this `tap watch`, or None while the service is switched off."""
+    """The link for this `tap watch`, or None when it cannot start.
+
+    Off POSIX there is no link and no ensure: the service listens on a Unix
+    socket and locks with fcntl (`tap/service/client.py`), so on Windows every
+    session would try, and fail, to start it (D16). Capture runs as before."""
+    if os.name != "posix":
+        return None
     try:
-        if not client.enabled():
-            return None
         return ServiceLink(session_id, harness=cfg.capture_source()).start()
     except Exception:  # noqa: BLE001
         log.exception("probe service link not started")

@@ -33,7 +33,7 @@ import { Mailbox } from "./core/reads.js";
 import { checkPairing } from "./core/pairing.js";
 import { buildStatusReport } from "./status.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
-import { ensureService, serviceEnabled } from "./core/service.js";
+import { ensureService } from "./core/service.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./core/trackingSwitch.js";
 import { writeTurnSignal, type TurnSignalDeps } from "./core/turnSignal.js";
 import {
@@ -639,7 +639,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // The machine-wide Probe service (core/service.ts): started now, detached
     // and never waited on, so it is up by the time capture registers this
     // session. Not under `off` (plan A2), and not where capture cannot start.
-    if (!probeIsOff() && serviceEnabled({ env: process.env, readFileSync: (path) => fs.readFileSync(path, "utf-8") })) {
+    if (!probeIsOff()) {
       const runtime = resolveTapRuntime({ existsSync: fs.existsSync, isExecutable, env: process.env, extensionDir });
       if (runtime && checkPairing(process.env).paired) {
         ensureService(runtime, { spawn: realSpawn, env: process.env, log: logLine });

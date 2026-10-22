@@ -457,8 +457,9 @@ def test_claude_code_wait_ends_inside_its_exit_budget(budget, ticks) -> None:
 
 
 def test_the_original_entry_still_returns_at_once() -> None:
-    """The flagless entry is the one Codex already trusts: its behavior, and
-    its 3s budget, must not change."""
+    """hooks.json dropped the flagless entry in 0.9.25, but a Codex session
+    started on an older release still runs it, against this script once its
+    start folder is replaced: its behavior, and its 3s budget, must not change."""
     session_id = f"pytest-nowait-{os.getpid()}"
     proc = _fake_daemon_group(session_id, linger_s=1.5)
     try:
@@ -468,9 +469,10 @@ def test_the_original_entry_still_returns_at_once() -> None:
 
 
 def test_the_waiting_entry_finds_the_daemon_after_its_sibling_ran() -> None:
-    """Claude Code runs both SessionEnd entries at once, in either order. When
-    the flagless one has already signalled and removed the pid file, the
-    waiting one must still find the daemon and wait for it."""
+    """A session that loaded an older plugin's two SessionEnd entries runs both
+    at once, in either order. When the flagless one has already signalled and
+    removed the pid file, the waiting one must still find the daemon and wait
+    for it."""
     session_id = f"pytest-sibling-{os.getpid()}"
     proc = _fake_daemon_group(session_id, linger_s=1.5)
     try:

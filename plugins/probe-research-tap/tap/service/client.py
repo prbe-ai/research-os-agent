@@ -19,12 +19,8 @@ the system python). `make sync-service-client` copies it with `paths.py`,
 `procid.py` and `protocol.py`; `tests/test_service_client_sync.py` fails on
 drift. Stdlib only, imports between the four relative.
 
-The switch: `PROBE_SERVICE=on|off` in the environment, else `"service": "on"`
-at the top of the probe CLI's config.json (`PROBE_CONFIG_PATH`, else
-`$XDG_CONFIG_HOME/probe/config.json`, else `~/.config/probe/config.json`).
-Off by default in the first release. `ensure` itself does not read it: the
-callers that start the service on their own (a tap, pi) ask `enabled()`
-first; `probe service start` starts it whatever the switch says.
+There is no switch: the service runs on every POSIX machine with a new
+enough CLI. A session whose Probe mode is `off` never starts or holds it.
 """
 
 from __future__ import annotations
@@ -37,15 +33,10 @@ import socket
 import subprocess
 import sys
 import time
-from pathlib import Path
 
 from . import paths, procid
 from .protocol import API_VERSION, JSONRPC, MAX_LINE_BYTES, Client, Method, Mode, encode, request
 
-ENV_FLAG = "PROBE_SERVICE"
-CONFIG_KEY = "service"
-_ON = frozenset({"on", "1", "true", "yes"})
-_OFF = frozenset({"off", "0", "false", "no"})
 
 #: Every socket operation's deadline (plan X6: the registrant's own 2 s).
 TIMEOUT_S = 2.0
@@ -66,8 +57,8 @@ WAIT_FOR_PID_S = 1800.0
 
 #: The only variables the service starts with (plan X2): never an agent's
 #: PROBE_TOKEN, endpoint or PYTHONPATH, which would leak the first launcher's
-#: context into every later client's requests. The three PROBE_SERVICE_* are
-#: test-only overrides of the lifecycle timers.
+#: context into every later client's requests. The PROBE_SERVICE_* are
+#: test-only overrides of the lifecycle and updater timers.
 ENV_ALLOWLIST = (
     "HOME",
     "PATH",
@@ -82,6 +73,9 @@ ENV_ALLOWLIST = (
     "PROBE_SERVICE_GRACE_S",
     "PROBE_SERVICE_DISCOVERY_S",
     "PROBE_SERVICE_TTL_S",
+    "PROBE_SERVICE_WORKER_STOP_S",
+    "PROBE_SERVICE_DEFER_LIMIT_S",
+    "PROBE_SERVICE_LEGACY_RETRY_S",
 )
 
 
@@ -105,34 +99,6 @@ class ServiceError(Exception):
         self.data = data
 
 
-# -- the switch ---------------------------------------------------------------
-
-
-def _config_path(env: dict) -> Path:
-    override = env.get("PROBE_CONFIG_PATH")
-    if override:
-        return Path(override)
-    base = env.get("XDG_CONFIG_HOME")
-    root = Path(base) if base else paths.home() / ".config"
-    return root / "probe" / "config.json"
-
-
-def enabled(env: dict | None = None) -> bool:
-    """Is the service on for this machine (`PROBE_SERVICE`, else config `service`)?"""
-    env = os.environ if env is None else env
-    raw = (env.get(ENV_FLAG) or "").strip().lower()
-    if raw in _ON:
-        return True
-    if raw in _OFF:
-        return False
-    try:
-        data = json.loads(_config_path(env).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    value = data.get(CONFIG_KEY) if isinstance(data, dict) else None
-    return value is True or (isinstance(value, str) and value.strip().lower() in _ON)
-
-
 # -- connections --------------------------------------------------------------
 
 
@@ -150,8 +116,21 @@ class Connection:
     def open(cls, timeout: float = TIMEOUT_S) -> Connection:
         """Connect, or raise OSError (FileNotFoundError / ConnectionRefusedError
         when no service runs; PermissionError when the socket's folder is not
-        this user's alone, so what answers there could be anyone's)."""
-        path = paths.socket_path()
+        this user's alone, so what answers there could be anyone's).
+
+        This machine's socket first, then the one a service from before the
+        machine key listens on (plan D8): a CLI that is not updated yet starts
+        that older service, and this client must still find it."""
+        try:
+            return cls._at(paths.socket_path(), timeout)
+        except (FileNotFoundError, ConnectionRefusedError) as first:
+            try:
+                return cls._at(paths.legacy_socket_path(), timeout)
+            except OSError:
+                raise first from None
+
+    @classmethod
+    def _at(cls, path, timeout: float) -> Connection:
         paths.require_private(path.parent)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(timeout)
@@ -527,7 +506,6 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     sub = parser.add_subparsers(dest="cmd", required=True)
     p_ensure = sub.add_parser("ensure", help="start the service when none runs")
     p_ensure.add_argument("--wait", type=float, default=0.0)
-    p_ensure.add_argument("--if-enabled", action="store_true", help="do nothing unless PROBE_SERVICE is on")
     p_reg = sub.add_parser("register", help="session.register")
     p_reg.add_argument("--session-id", required=True)
     p_reg.add_argument("--harness", required=True)
@@ -541,7 +519,6 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     sub.add_parser("status", help="service.status")
     p_check = sub.add_parser("check-now", help="update.check_now, starting the service when none runs")
     p_check.add_argument("--trigger", default="cli", choices=("app", "cli", "session", "schedule"))
-    p_check.add_argument("--if-enabled", action="store_true", help="do nothing unless PROBE_SERVICE is on")
     p_check.add_argument(
         "--wait-for-pid", type=int, default=None, help="first wait for this process (the asking command) to exit"
     )
@@ -551,9 +528,6 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     args = parser.parse_args(argv)
 
     if args.cmd == "ensure":
-        if args.if_enabled and not enabled():
-            print(json.dumps({"ensured": None, "enabled": False}))
-            return 0
         print(json.dumps({"ensured": ensure(wait=args.wait)}))
         return 0
     try:
@@ -570,9 +544,6 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
         elif args.cmd == "status":
             answer = call(Method.STATUS, client=client, client_version=client_version)
         elif args.cmd == "check-now":
-            if args.if_enabled and not enabled():
-                print(json.dumps({"outcome": None, "enabled": False}))
-                return 0
             if args.wait_for_pid:
                 wait_for_exit(args.wait_for_pid)
             answer = check_now(args.trigger, client=client, client_version=client_version)

@@ -42,10 +42,9 @@ exit 0
 """
 
 
-def _command(event: str, *, wait: bool = False) -> str:
+def _command(event: str) -> str:
+    """The one Kimi entry for `event` (one per event, as hooks/hooks.json)."""
     entries = [h for h in MANIFEST["hooks"] if h["event"] == event]
-    if event == "SessionEnd":
-        entries = [h for h in entries if ("--wait" in h["command"]) == wait]
     assert len(entries) == 1, (event, entries)
     return entries[0]["command"]
 
@@ -113,9 +112,9 @@ def kimi(kimi_fixtures, tmp_path):
         Path(f"/tmp/probe-research-tap-watcher-{sid}{suffix}").unlink(missing_ok=True)
 
 
-def _run(ctx, event: str, payload: str, *, wait: bool = False, cwd: Path | None = None):
+def _run(ctx, event: str, payload: str, *, cwd: Path | None = None):
     return subprocess.run(
-        ["/bin/bash", "-c", _command(event, wait=wait)],
+        ["/bin/bash", "-c", _command(event)],
         input=payload, text=True, capture_output=True, env=ctx["env"],
         cwd=str(cwd or ctx["plugin"]), timeout=60,
     )
@@ -208,7 +207,7 @@ def test_session_end_stops_the_canonical_session_and_waits_its_full_budget(kimi)
     proc = _fake_daemon(kimi["sid"], linger_s=2.5)
     try:
         started = time.monotonic()
-        _run(kimi, "SessionEnd", _payload("SessionEnd", kimi["fixtures"], kimi["sid"]), wait=True)
+        _run(kimi, "SessionEnd", _payload("SessionEnd", kimi["fixtures"], kimi["sid"]))
         elapsed = time.monotonic() - started
         assert Path(f"/tmp/probe-research-tap-watcher-{kimi['sid']}.shutdown").is_file()
         assert proc.wait(timeout=5) == 0

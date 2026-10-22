@@ -331,6 +331,11 @@ class RefusedReason:
     #: `service.stop` while an update step or an action runs.
     UPDATING = "updating"
     ACTION_RUNNING = "action_running"
+    #: `action.run` from inside a coding agent's session the Probe daemon
+    #: records (its caller's process ancestry or environment says so, plan D9).
+    DAEMON_SESSION = "daemon_session"
+    #: `action.run` on a connection whose opener has exited (plan D9).
+    CALLER_GONE = "caller_gone"
 
 
 class BusyHolder:
@@ -458,12 +463,31 @@ def need_context(params: dict, also: frozenset = frozenset()) -> dict:
         if (
             not isinstance(base_url, str)
             or len(base_url) > 2048
-            or not base_url.startswith(("https://", "http://"))
+            or not base_url.startswith("https://")
             or any(ch.isspace() for ch in base_url)
         ):
-            raise invalid_params("base_url must be an http(s) URL")
+            raise invalid_params("base_url must be an https URL")
         env[BASE_URL_ENV] = base_url
+    elif BASE_URL_ENV in env and not env[BASE_URL_ENV].startswith("https://"):
+        # The same endpoint, named through `context`: the stored token follows
+        # it (plan D10), so the same rule.
+        raise invalid_params(f"context.{BASE_URL_ENV} must be an https URL")
     return env
+
+
+#: `session.register`'s `state_dir` is at most this long.
+MAX_STATE_DIR = 1024
+
+
+def need_state_dir(params: dict) -> str | None:
+    """`session.register`'s optional `state_dir` (plan D13): the session's own
+    state folder, an absolute path. Absent or null: an older registrant."""
+    value = params.get("state_dir")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.startswith("/") or len(value) > MAX_STATE_DIR or "\0" in value:
+        raise invalid_params(f"state_dir must be an absolute path of at most {MAX_STATE_DIR} characters")
+    return value
 
 
 def need_owner(params: dict) -> dict | None:
