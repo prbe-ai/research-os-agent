@@ -17,6 +17,9 @@
     drain_outbox() / watch_box() / send_telemetry()  outbox.drain, box.watch,
                 telemetry.send: a training process's background work (plan
                 Q5), each within one short budget (`call_within`)
+    refresh_statusline() / sync_notes()  statusline.refresh / notes.sync: a
+                hook's status-line read and team-note sync
+    start_import()  import.start: an approved import's worker
                 Never start the service: each is for a service that already
                 runs (OSError when none answers), and the caller falls back.
     locations() where this machine's service keeps its socket and files
@@ -583,6 +586,59 @@ def locations() -> dict:
         "runtime": str(paths.runtime_path()),
         "machine_key": paths.machine_key(),
     }
+def refresh_statusline(
+    sid: str,
+    plugin_root: str,
+    *,
+    agent: str | None = None,
+    python: str | None = None,
+    context: dict | None = None,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+    timeout: float = TIMEOUT_S,
+) -> dict:
+    """`statusline.refresh`: `{scheduled: true, due_in}` or `{scheduled: false, reason}`."""
+    params: dict = {"sid": sid, "plugin_root": plugin_root}
+    if agent:
+        params["agent"] = agent
+    if python:
+        params["python"] = python
+    if context:
+        params["context"] = context
+    return _dict(call(Method.STATUSLINE_REFRESH, params, client=client, client_version=client_version,
+                      timeout=timeout))
+
+
+def sync_notes(
+    mode: str,
+    *,
+    rules_for: list | None = None,
+    feedback: bool = False,
+    context: dict | None = None,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+    timeout: float = TIMEOUT_S,
+) -> dict:
+    """`notes.sync`: `{outcome: scheduled | queued}` or `{outcome: null, reason}`."""
+    params: dict = {"mode": mode, "rules_for": list(rules_for or []), "feedback": feedback}
+    if context:
+        params["context"] = context
+    return _dict(call(Method.NOTES_SYNC, params, client=client, client_version=client_version, timeout=timeout))
+
+
+def start_import(
+    job_id: str,
+    directory: str,
+    attempt: int,
+    env: dict,
+    *,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+    timeout: float = TIMEOUT_S,
+) -> dict:
+    """`import.start`: `{started: true, pid, start_time}` or `{started: false, reason}`."""
+    params = {"job_id": job_id, "directory": directory, "attempt": attempt, "env": env}
+    return _dict(call(Method.IMPORT_START, params, client=client, client_version=client_version, timeout=timeout))
 
 
 def wait_for_exit(pid: int, *, timeout: float = WAIT_FOR_PID_S, poll: float = 0.25) -> bool:

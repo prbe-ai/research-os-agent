@@ -828,6 +828,25 @@ def _feedback_unsent() -> bool:
     return False
 
 
+def _service_syncs_notes(feedback: bool) -> bool:
+    """Hand a session start's maintenance to the Probe service: `agent-rules
+    refresh` for this session's agent (its `PROBE_AGENT`, or the CLI's own
+    default, as the spawned command reads it), `notes sync`, and `feedback
+    flush` when asked. True when it took them. Never raises."""
+    try:
+        import importlib.util  # noqa: PLC0415
+
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_service_call.py")
+        spec = importlib.util.spec_from_file_location("_probe_hooks._service_call", path)
+        _service_call = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(_service_call)
+        return _service_call.notes_sync(
+            "reconcile", rules_for=[os.environ.get("PROBE_AGENT") or ""], feedback=feedback
+        )
+    except Exception:  # noqa: BLE001 - spawn as before
+        return False
+
+
 def _spawn_session_maintenance() -> str | None:
     """Fire and forget. Never raises, never waits, never blocks a session start.
 
@@ -853,10 +872,18 @@ def _spawn_session_maintenance() -> str | None:
     # it unless what it wrote belongs to the team either way. So an edit that
     # exists is an edit that should land, and the toggle has no opinion about it.
     command = f'{shlex.quote(binary)} agent-rules refresh; {shlex.quote(binary)} notes sync'
-    if _feedback_unsent():
-        # Feedback for the Probe team the researcher said yes to and that was
-        # not sent yet (offline, or the answer hook's own send failed).
+    # Feedback for the Probe team the researcher said yes to and that was
+    # not sent yet (offline, or the answer hook's own send failed).
+    feedback = _feedback_unsent()
+    if feedback:
         command += f'; {shlex.quote(binary)} feedback flush'
+    # The Probe service runs the same three, once per machine and debounced
+    # (`notes.sync`), with the CLI it runs from, where it answers: a session
+    # start then spawns nothing. (`PROBE_BIN` is always set here -- session-
+    # start.sh exports the `probe` it resolved -- so it says nothing about
+    # which CLI the researcher meant; `team-note-sync.sh` resolves its own.)
+    if _service_syncs_notes(feedback):
+        return None
     try:
         subprocess.Popen(  # noqa: S602 -- fixed command, only the resolved binary path varies
             ["/bin/sh", "-c", command],

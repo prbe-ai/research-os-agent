@@ -103,6 +103,18 @@ class Method:
     OUTBOX_DRAIN = "outbox.drain"
     BOX_WATCH = "box.watch"
     TELEMETRY_SEND = "telemetry.send"
+    #: A session's status line wants its server read (plan Q4): the service
+    #: runs the plugin's own `hooks/statusline_refresh.py` for every session
+    #: that asked, one child per plugin folder at most every few seconds,
+    #: instead of a detached fetch per tool call.
+    STATUSLINE_REFRESH = "statusline.refresh"
+    #: The team note's sync (`probe notes sync`, and a session start's `probe
+    #: agent-rules refresh`): once per machine, debounced, instead of a
+    #: detached `probe` per session per hook event.
+    NOTES_SYNC = "notes.sync"
+    #: An approved import's worker (`probe.cli.import_jobs`), started and
+    #: watched by the service instead of detached from the CLI.
+    IMPORT_START = "import.start"
 
 
 #: The methods this service answers. Every other name is `-32601`.
@@ -139,6 +151,9 @@ METHODS = frozenset(
         Method.OUTBOX_DRAIN,
         Method.BOX_WATCH,
         Method.TELEMETRY_SEND,
+        Method.STATUSLINE_REFRESH,
+        Method.NOTES_SYNC,
+        Method.IMPORT_START,
     }
 )
 
@@ -212,6 +227,40 @@ HARNESS_RECEIPT_FIELDS = (
     "pending_lines",
     "pending_batches",
 )
+class Cap:
+    """`service.hello`'s `caps`: what this service guarantees beyond its
+    methods, for a client that must not rely on it where an older service
+    (same method, older code) does not. A service from before `caps` sends none."""
+
+    #: `action.run` refuses a caller in a sandbox, whatever client kind it
+    #: names (`refused: sandboxed`). The CLI hands a wizard action only to a
+    #: service that says so: an older one would run it outside the sandbox.
+    ACTION_SANDBOX = "action.sandbox"
+
+
+CAPS = frozenset({Cap.ACTION_SANDBOX})
+
+
+class NotesMode:
+    """`notes.sync`'s `mode`: the two `probe notes sync`s the hooks run."""
+
+    #: `probe notes sync --push-only`: a turn's edits out, no pull (Stop).
+    PUSH = "push"
+    #: `probe notes sync`: fetch, merge, push, and re-render the instruction
+    #: files' block (a session's start and end).
+    RECONCILE = "reconcile"
+
+
+NOTES_MODES = frozenset({NotesMode.PUSH, NotesMode.RECONCILE})
+
+
+class JobOutcome:
+    """`notes.sync`'s `outcome`."""
+
+    #: A run starts once the debounce has passed (requests meanwhile join it).
+    SCHEDULED = "scheduled"
+    #: One runs now: this request joins the one run right after it.
+    QUEUED = "queued"
 
 
 class Action:
@@ -391,6 +440,14 @@ CONTEXT_ENV = frozenset(
         "PROBE_TELEMETRY",
         "PROBE_BASE_URL",
     }
+)
+#: The credentials a process may hold in its environment (`probe.sdk.config`'s
+#: env table), which outrank the CLI config's stored ones and which a request's
+#: `context` never carries: a caller holding one does the work itself, since a
+#: child of the service would act with another credential (or none).
+#: `hooks/_service_call.py` keeps a copy (tests/test_service_cli_surfaces.py).
+CREDENTIAL_ENV = frozenset(
+    {"PROBE_TOKEN", "PROBE_MCP_TOKEN", "PROBE_SERVICE_TOKEN", "PROBE_INGEST_TOKEN", "PROBE_HMAC_SECRET"}
 )
 #: `base_url` reaches the child as this variable (`probe.sdk.config.resolve`).
 BASE_URL_ENV = "PROBE_BASE_URL"
@@ -881,6 +938,63 @@ def _need_path(params: dict, key: str) -> str:
     return value
 
 
+def need_path(params: dict, key: str) -> str:
+    """An absolute path of at most MAX_HOOK_PATH characters."""
+    return _need_path(params, key)
+
+
+def need_env(params: dict, key: str = "env") -> dict:
+    """A process environment the caller hands over (`hooks.run`'s session
+    environment, `import.start`'s CLI environment): an object of at most
+    MAX_HOOK_ENV strings, each at most MAX_HOOK_ENV_VALUE long; `{}` when left out."""
+    env = params.get(key, {})
+    if (
+        not isinstance(env, dict)
+        or len(env) > MAX_HOOK_ENV
+        or not all(
+            isinstance(k, str)
+            and k
+            and len(k) <= 256
+            and "=" not in k
+            and "\0" not in k
+            and isinstance(v, str)
+            and len(v) <= MAX_HOOK_ENV_VALUE
+            and "\0" not in v
+            for k, v in env.items()
+        )
+    ):
+        raise invalid_params(
+            f"{key} must be an object of at most {MAX_HOOK_ENV} variables, each a string of at most "
+            f"{MAX_HOOK_ENV_VALUE} characters"
+        )
+    return dict(env)
+
+
+#: A coding agent's session id as Probe keys it (`probe.sdk.session_marker.valid_session_id`).
+SID_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._:-")
+#: A harness registry id's characters (`probe.harness`'s `id`s: lower case, digits, `_`).
+AGENT_CHARS = frozenset("abcdefghijklmnopqrstuvwxyz0123456789_")
+
+
+def need_sid(params: dict, key: str = "sid") -> str:
+    """A session id the status line and its marker files accept: 8 to 200 of
+    `SID_CHARS` (it names a file, so never a path)."""
+    value = params.get(key)
+    if not isinstance(value, str) or not 8 <= len(value) <= 200 or not set(value) <= SID_CHARS:
+        raise invalid_params(f"{key} must be a session id (8 to 200 letters, digits, '.', '_', ':' or '-')")
+    return value
+
+
+def is_agent_id(value: object) -> bool:
+    """Is `value` shaped like a harness registry id (lower-case, digits, `_`)?"""
+    return (
+        isinstance(value, str)
+        and 0 < len(value) <= 64
+        and value[0].isalpha()
+        and set(value) <= AGENT_CHARS
+    )
+
+
 def need_hook_run(params: dict) -> dict:
     """`hooks.run`'s params, checked: `{root, lane, event, payload (bytes),
     env, cwd, timeout_s}`.
@@ -905,26 +1019,7 @@ def need_hook_run(params: dict) -> dict:
     if named is not None and named != event:
         raise invalid_params(f"payload.hook_event_name must be {event!r} on lane {lane!r}")
     payload = {**payload, "hook_event_name": event}
-    env = params.get("env", {})
-    if (
-        not isinstance(env, dict)
-        or len(env) > MAX_HOOK_ENV
-        or not all(
-            isinstance(k, str)
-            and k
-            and len(k) <= 256
-            and "=" not in k
-            and "\0" not in k
-            and isinstance(v, str)
-            and len(v) <= MAX_HOOK_ENV_VALUE
-            and "\0" not in v
-            for k, v in env.items()
-        )
-    ):
-        raise invalid_params(
-            f"env must be an object of at most {MAX_HOOK_ENV} variables, each a string of at most "
-            f"{MAX_HOOK_ENV_VALUE} characters"
-        )
+    env = need_env(params)
     cwd = _need_path(params, "cwd")
     timeout = params.get("timeout_ms", HOOK_WAIT_MS)
     if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= MAX_HOOK_WAIT_MS:

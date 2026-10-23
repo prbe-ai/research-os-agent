@@ -111,8 +111,21 @@ fi
 # a missing or unrecognised value is "did less", never "did more".
 if [ "${PROBE_HOOK_EVENT:-}" = "sessionend" ]; then
   set -- notes sync
+  _MODE=reconcile
 else
   set -- notes sync --push-only
+  _MODE=push
+fi
+
+# THE PROBE SERVICE RUNS IT ONCE PER MACHINE where one answers (`notes.sync`):
+# debounced, so every session's Stop in a burst is one push, never a `probe`
+# per session per turn. `_service_call.py` exits 0 when the service took it;
+# anything else (no service, an older one, a credential in this environment
+# the service cannot be given) spawns the sync below, as before.
+_HOOKDIR="${_HOOKDIR:-$(cd "$(dirname "$0")" && pwd)}"
+if [ -f "$_HOOKDIR/_service_call.py" ] && command -v python3 >/dev/null 2>&1 \
+  && python3 -I "$_HOOKDIR/_service_call.py" notes-sync "$_MODE" </dev/null >/dev/null 2>&1; then
+  exit 0
 fi
 
 if command -v setsid >/dev/null 2>&1; then

@@ -17,9 +17,14 @@ stores the project its last write landed in (`<session>.scope`), and
 
 CONTRACT — this is a hook, so it inherits the house rules:
 
-  * NEVER BLOCKS. The observing process throttles, then hands the fetch to a
-    DETACHED child (`start_new_session`, as telemetry.py's sender does) and
-    returns. A slow or unreachable API costs the tool call nothing.
+  * NEVER BLOCKS. The observing process throttles, then hands the fetch on
+    and returns. A slow or unreachable API costs the tool call nothing. Where
+    the Probe service answers, it takes the fetch (`statusline.refresh`): ONE
+    child per plugin folder on its schedule, `fetch-all` below, refreshes
+    every session that asked, instead of a process per session per refresh.
+    Else (no service, an older one, a credential in this environment the
+    service cannot be given) a DETACHED child of this script does it
+    (`start_new_session`, as telemetry.py's sender does), as before.
   * SILENT ALWAYS. Exit 0 whatever happens; print nothing on stdout, which for a
     PostToolUse hook is a channel that can alter the session.
   * NOT TELEMETRY, so deliberately NOT gated on `PROBE_TELEMETRY`. That
@@ -303,7 +308,7 @@ def _watcher_prefix(source: str) -> str:
     return _harness(source).capture.watcher_prefix
 
 
-def _capture_reading(session_id: str) -> dict:
+def _capture_reading(session_id: str, agent: str | None = None) -> dict:
     """Is a transcript daemon live for this session, and if not, why? Stdlib only.
 
     COMPUTED HERE, IN THE DETACHED CHILD, AND NEVER IN THE RENDERER.
@@ -332,8 +337,11 @@ def _capture_reading(session_id: str) -> dict:
     this runs every few seconds for the life of a session; the accident it
     guards against is pid reuse inside the refresh window, which costs one
     over-optimistic reading that the next refresh corrects.
+
+    `agent` is the session's harness as its hook resolved it, for a refresh
+    the Probe service runs (its environment names no harness).
     """
-    source = _agent_source()
+    source = agent or _agent_source()
 
     plugin_dir = _tap_plugin_dir(source)
     if not os.path.exists(plugin_dir):
@@ -354,10 +362,11 @@ def _capture_reading(session_id: str) -> dict:
     return {"running": True, "reason": "running"}
 
 
-def refresh(session_id: str) -> None:
-    """Fetch and store. Runs in the DETACHED child, never in the hook."""
-    core = _load("_telemetry_core")
-    marker = _load("_session_marker")
+def refresh(session_id: str, agent: str | None = None, *, core=None, marker=None) -> None:
+    """Fetch and store. Runs in the DETACHED child (or the service's
+    `fetch-all`, which hands over the modules it loaded once), never in the hook."""
+    core = core if core is not None else _load("_telemetry_core")
+    marker = marker if marker is not None else _load("_session_marker")
     config = core.read_cli_config()
     token = core.effective_token(config)
     if not token:
@@ -379,12 +388,84 @@ def refresh(session_id: str) -> None:
     # published without the identity it qualifies: `not capturing session
     # transcript` on a segment that does not yet name a project is a warning
     # about nothing.
-    state["capture"] = _capture_reading(session_id)
+    state["capture"] = _capture_reading(session_id, agent)
     marker.write(session_id, state)
 
 
+#: `fetch-all` refreshes at most this many sessions (the service sends fewer)...
+MAX_FETCH_ALL = 64
+#: ... this many at once: each is a few reads of up to FETCH_TIMEOUT, and the
+#: detached fetches it replaces ran side by side too.
+FETCH_ALL_THREADS = 8
+
+
+def fetch_all(request: object) -> None:
+    """The Probe service's child: `{"sessions": [{"sid", "agent"}, ...]}` on
+    stdin, each session refreshed as `fetch` refreshes one (several at once),
+    the gate re-checked first. One session's failure never costs another its turn."""
+    if disabled() or not installed() or not isinstance(request, dict):
+        return
+    sessions = request.get("sessions")
+    if not isinstance(sessions, list):
+        return
+    marker = _load("_session_marker")
+    work = []
+    for item in sessions[:MAX_FETCH_ALL]:
+        if not isinstance(item, dict):
+            continue
+        session_id, agent = item.get("sid"), item.get("agent")
+        if isinstance(session_id, str) and marker.valid_session_id(session_id):
+            work.append((session_id, agent if isinstance(agent, str) and agent else None))
+
+    # Everything a session's refresh loads, loaded HERE, once, before any
+    # thread runs: a module loaded by path is registered in sys.modules before
+    # it has run (`_hook_harness.load_sibling`), so a second thread loading
+    # one could read it half built. The threads then only read them.
+    core = _load("_telemetry_core")
+    for source in {agent for _sid, agent in work} | {None}:
+        try:
+            resolved = source or _agent_source()
+            _tap_plugin_dir(resolved)
+            _watcher_prefix(resolved)
+        except Exception:  # noqa: BLE001 - the session's own refresh says what fails
+            pass
+
+    def one(job) -> None:
+        try:
+            refresh(*job, core=core, marker=marker)
+        except Exception:  # noqa: BLE001 - silent by contract; the others still refresh
+            pass
+
+    if len(work) <= 1:
+        for job in work:
+            one(job)
+        return
+    from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+    with ThreadPoolExecutor(max_workers=min(FETCH_ALL_THREADS, len(work))) as pool:
+        list(pool.map(one, work))
+
+
+def _service_takes(session_id: str) -> bool:
+    """Hand the fetch to the Probe service (`statusline.refresh`): True when
+    it took it. Never raises."""
+    try:
+        service = _load("_service_call")
+        root = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        try:
+            agent = _agent_source()
+        except Exception:  # noqa: BLE001 - then the service's child resolves its default
+            agent = None
+        return bool(service.statusline_refresh(session_id, root, agent=agent))
+    except Exception:  # noqa: BLE001 - a hook contracted to silence: spawn as before
+        return False
+
+
 def spawn(session_id: str) -> None:
-    """Hand the fetch to a detached copy of this script and return at once."""
+    """Hand the fetch on (the service, else a detached copy of this script)
+    and return at once."""
+    if _service_takes(session_id):
+        return
     try:
         subprocess.Popen(  # noqa: S603 - sys.executable + this file
             [sys.executable, os.path.abspath(__file__), "fetch", session_id],
@@ -410,6 +491,13 @@ def main(argv: list[str] | None = None) -> int:
                 refresh(session_id)
             except BaseException:  # noqa: BLE001 - detached and silent by contract
                 pass
+        return 0
+    # The Probe service's child: every session that asked, in one process.
+    if argv[:1] == ["fetch-all"]:
+        try:
+            fetch_all(json.load(sys.stdin))
+        except BaseException:  # noqa: BLE001 - silent by contract
+            pass
         return 0
 
     # Hook: gate, parse, throttle, spawn. The gate comes FIRST — it is one stat,
