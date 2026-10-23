@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.298.1
+
 - **A debug log is filed under every session and coding agent it holds.** The server listed only the sessions live at the moment it was sent (one, in the first live check, for a log holding 11 session folders, and no coding agent), so staff searching by a session or an agent missed it. It now names each session it has a folder for and each coding agent whose settings it collected.
 
 ## 0.298.0
