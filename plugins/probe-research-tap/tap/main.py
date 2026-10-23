@@ -58,6 +58,7 @@ from tap.session_journal import (
     DeliveryPending,
     Journal,
     ProtocolRestarted,
+    RebaseCooling,
     ReconciliationRequired,
     SessionDeleted,
     SourceRewritten,
@@ -548,6 +549,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                         historical=True,
                         cwd=str(c.cwd),
                         complete_lines_only=True,
+                        continue_server_stream=True,
                     )
                     journal.update(c.session_id, finalize_requested=True)
                 # Recover only sessions with durable consent/capture ownership.
@@ -635,7 +637,13 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                                 # Settle it against the server's receipt, then
                                 # stage again. Raises when it cannot be settled;
                                 # None leaves the original error standing.
-                                outcome = journal.reconcile_pending(state["session_id"], wire)
+                                try:
+                                    outcome = journal.reconcile_pending(state["session_id"], wire)
+                                except RebaseCooling:
+                                    # Asked again once its wait is over: the
+                                    # racing producer may be gone by then.
+                                    reconciled_conflicts.discard(conflict)
+                                    raise
                                 if outcome is None:
                                     raise
                                 log.warning("session %s: %s", state["session_id"], outcome)

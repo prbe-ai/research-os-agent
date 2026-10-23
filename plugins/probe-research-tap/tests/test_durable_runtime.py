@@ -850,6 +850,33 @@ def test_the_wait_outlives_a_restart_and_ends_once_the_batch_is_accepted(setup, 
     journal.close()
 
 
+def test_a_cooling_rebase_is_asked_again_after_each_wait(setup, monkeypatch):
+    """A batch refused again soon after its journal continued the server's
+    stream waits out the 409 (`RebaseCooling`), and this same daemon asks
+    `reconcile_pending` again after each wait: the racing producer may be
+    gone by then. Before, the first answer stood for the process's life."""
+    config, storage, wire = setup
+    monkeypatch.setattr(tapmain_journal, "CONFLICT_RETRY_JITTER", 0.0)
+    clock = _clock(monkeypatch, ticks=30)
+    posts = _refuse(monkeypatch, wire, config.session_id, clock)
+    asked = []
+
+    def cooling(self, sid, _wire):
+        asked.append(clock[0])
+        raise tapmain_journal.RebaseCooling(
+            "racing",
+            status_code=409,
+            body_sha256=hashlib.sha256(self.pending(sid)).hexdigest(),
+        )
+
+    monkeypatch.setattr(tapmain_journal.Journal, "reconcile_pending", cooling)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    refused = [at for sid, at in posts if sid == config.session_id]
+    assert len(refused) >= 4 and asked == refused  # one ask per refusal, each after a wait
+    gaps = [round(later - earlier) for earlier, later in itertools.pairwise(refused)]
+    assert gaps[:3] == [60, 120, 240]
+
+
 @pytest.mark.parametrize("status", [422, 503])
 def test_other_refusals_keep_their_cadence_and_record_no_wait(setup, monkeypatch, status):
     """Only a 409 that reconciliation leaves standing waits. A 422 or a 5xx

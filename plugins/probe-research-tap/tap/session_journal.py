@@ -86,6 +86,20 @@ log = logging.getLogger(__name__)
 PROTOCOL_EVENTS = 2
 PROTOCOL_FRAGMENTS = 3
 RECEIPTED_PROTOCOLS = (PROTOCOL_EVENTS, PROTOCOL_FRAGMENTS)
+#: What a receipt and a pending batch must share for one to acknowledge the
+#: other (`Journal.acknowledge`, `Journal.reconcile_pending`).
+_RECEIPT_RANGE = ("batch_seq", "source_byte_end", "source_line_end", "event_end", "prefix_sha256")
+#: What a session's state keeps across `Journal._rebuild_from_server`: what
+#: this machine decided about the session, not where its stream stands.
+_KEPT_ON_REBASE = (
+    "live_enabled", "finalize_requested", "custom_title", "ai_title", "title_sent", "title_tried_at",
+)
+#: Where a session's stream stands: what `Journal._rebase_on_server` checks
+#: did not move while it asked the server.
+_STREAM_VIEW = (
+    "stream_id", "protocol_version", "last_seq", "source_byte_end", "source_line_end", "event_end",
+    "prefix_sha256", "finalized",
+)
 #: The protocol of a stream nothing else is recorded for: every stream a tap
 #: before protocol 3 started.
 PROTOCOL_VERSION = PROTOCOL_EVENTS
@@ -652,6 +666,12 @@ class ReconciliationRequired(RuntimeError):
         self.body_sha256 = body_sha256
 
 
+class RebaseCooling(ReconciliationRequired):
+    """A session refused again soon after its journal continued the server's
+    stream (`Journal._rebase_on_server`): its batch waits out the 409, and the
+    daemon asks `reconcile_pending` again once that wait is over."""
+
+
 class SourceRewritten(ReconciliationRequired):
     """The transcript's bytes changed inside a range already uploaded or
     reserved: its producer rewrote the file in place. Kimi Code does, on
@@ -825,6 +845,10 @@ TITLE_RETRY_SECONDS = 600
 #: by up to CONFLICT_RETRY_JITTER of itself, so refused sessions do not re-send
 #: in step. See `conflict_retry_seconds` and `Journal.defer_conflict`.
 CONFLICT_RETRY_MIN_SECONDS = 60
+#: A session refused again this soon after its journal continued the server's
+#: stream has another producer racing it (a second journal on this machine):
+#: its batch waits out the 409 instead of continuing the stream again.
+REBASE_COOLDOWN_SECONDS = 600
 CONFLICT_RETRY_MAX_SECONDS = 3600
 CONFLICT_RETRY_JITTER = 0.25
 
@@ -871,6 +895,14 @@ def _require_safe_pending(body: bytes) -> None:
             'pending transcript contains credentials requiring redaction; '
             'reconcile its receipt before rebuilding the reservation'
         )
+
+
+def _continues(stream: dict, payload: dict) -> bool:
+    """Whether a batch picks up exactly where the server's stream ends."""
+    return payload["batch_seq"] == stream["last_seq"] + 1 and all(
+        payload[f"{unit}_start"] == stream[f"{unit}_end"]
+        for unit in ("source_byte", "source_line", "event")
+    )
 
 
 def prefix_hash(path: Path, end: int) -> str:
@@ -1101,6 +1133,8 @@ class Journal:
         self.base_url = base_url.rstrip("/")
         self.cap_bytes = cap_bytes
         self._live_owners = {}
+        self._in_transaction = False
+        self._savepoints = 0
         namespace = hashlib.sha256(
             json.dumps([self.base_url, customer_id, source]).encode()
         ).hexdigest()
@@ -1200,6 +1234,7 @@ class Journal:
                 remote,
                 historical=True,
                 complete_lines_only=True,
+                continue_server_stream=True,
             )
             return True
         finally:
@@ -1207,7 +1242,24 @@ class Journal:
 
     @contextmanager
     def transaction(self):
+        if self._in_transaction:
+            # Inside one this journal opened (`_rebuild_from_server` around
+            # `ensure`): a savepoint, so a failure the outer block catches
+            # undoes this block's writes only. The outermost one commits.
+            self._savepoints += 1
+            name = f"nested_{self._savepoints}"
+            self.conn.execute(f"SAVEPOINT {name}")
+            try:
+                yield
+                self.conn.execute(f"RELEASE {name}")
+            except BaseException:
+                if self.conn.in_transaction:  # not when SQLite already rolled it all back
+                    self.conn.execute(f"ROLLBACK TO {name}")
+                    self.conn.execute(f"RELEASE {name}")
+                raise
+            return
         self.conn.execute("BEGIN IMMEDIATE")
+        self._in_transaction = True
         try:
             yield
             self.conn.execute("COMMIT")
@@ -1215,6 +1267,8 @@ class Journal:
             if self.conn.in_transaction:
                 self.conn.execute("ROLLBACK")
             raise
+        finally:
+            self._in_transaction = False
 
     def get(self, session_id: str) -> dict | None:
         for table in (_FRAGMENT_SESSIONS, "sessions"):
@@ -1427,6 +1481,9 @@ class Journal:
         complete_lines_only: bool = False,
         reconcile_body: bytes | None = None,
         expected_history: tuple[int, str] | None = None,
+        sweep: bool = True,
+        carried_history: dict | None = None,
+        continue_server_stream: bool = False,
     ) -> dict:
         if (remote.get("customer_id"), remote.get("source"), remote.get("session_id")) != (
             self.customer_id,
@@ -1451,20 +1508,23 @@ class Journal:
                 raise ReconciliationRequired("pending reservation changed before reconciliation")
             # A process may die between snapshot fsync and the SQLite commit.
             # The write lock proves no other producer is still creating these.
-            states = self.sessions()
-            for item in states:
-                if item.get("historical_complete") and not self.pending(item["session_id"]):
-                    snapshot_path = item.get("snapshot_path")
-                    if snapshot_path:
-                        Path(snapshot_path).unlink(missing_ok=True)
-            referenced = {item.get("snapshot_path") for item in states}
-            for suffix in _SNAPSHOT_SUFFIXES.values():
-                for orphan in self.directory.glob("*" + suffix):
-                    if str(orphan) not in referenced:
+            # Not inside a rebuild (`sweep=False`): it can still roll back to
+            # the state that names the snapshot it would find unreferenced.
+            if sweep:
+                states = self.sessions()
+                for item in states:
+                    if item.get("historical_complete") and not self.pending(item["session_id"]):
+                        snapshot_path = item.get("snapshot_path")
+                        if snapshot_path:
+                            Path(snapshot_path).unlink(missing_ok=True)
+                referenced = {item.get("snapshot_path") for item in states}
+                for suffix in _SNAPSHOT_SUFFIXES.values():
+                    for orphan in self.directory.glob("*" + suffix):
+                        if str(orphan) not in referenced:
+                            orphan.unlink(missing_ok=True)
+                for orphan in self.directory.glob("tmp*"):
+                    if orphan.is_file():
                         orphan.unlink(missing_ok=True)
-            for orphan in self.directory.glob("tmp*"):
-                if orphan.is_file():
-                    orphan.unlink(missing_ok=True)
             state = self.get(session_id)
             if state is None:
                 stream = remote.get("stream") or {}
@@ -1495,6 +1555,10 @@ class Journal:
                     )
                 else:
                     state["protocol_offer"], state["send_events"] = negotiate(remote)
+                if carried_history:
+                    # The frozen history a rebuilt session already had
+                    # (`_rebuild_from_server`): the same pin, the same copy.
+                    state.update(carried_history, historical_complete=False)
                 _record_terms(state, remote)
                 self._validate_source(state, path)
             else:
@@ -1505,8 +1569,24 @@ class Journal:
                 _record_terms(state, remote)
                 stream = remote.get("stream")
                 if stream and stream["stream_id"] != state["stream_id"]:
-                    raise ReconciliationRequired(
-                        "server stream changed; existing pending bytes retained"
+                    if not continue_server_stream or reconcile_body is not None:
+                        raise ReconciliationRequired(
+                            "server stream changed; existing pending bytes retained"
+                        )
+                    # The tap's orphan and stopping passes (`continue_server_stream`)
+                    # meet another journal's stream here, before any batch is
+                    # posted, so no 409 ever reaches `reconcile_pending`:
+                    # continue that stream, as `_rebuild_from_server` proves safe.
+                    return self._rebuild_from_server(
+                        session_id,
+                        state,
+                        path,
+                        remote,
+                        historical=historical,
+                        complete_lines_only=complete_lines_only,
+                        provenance=provenance or state.get("provenance"),
+                        cwd=cwd or state.get("cwd"),
+                        expected_history=expected_history,
                     )
                 if stream:
                     served, pinned = remote.get("protocol_version"), state.get("protocol_version")
@@ -2038,13 +2118,7 @@ class Journal:
                 raise ReconciliationRequired(
                     "server acknowledgment does not match the immutable pending batch"
                 )
-            for key in (
-                "batch_seq",
-                "source_byte_end",
-                "source_line_end",
-                "event_end",
-                "prefix_sha256",
-            ):
+            for key in _RECEIPT_RANGE:
                 if receipt.get(key) != payload[key]:
                     raise ReconciliationRequired(
                         "server acknowledgment cursor does not match the pending batch"
@@ -2391,8 +2465,13 @@ class Journal:
         So ask it, for this one batch_seq:
 
           it has a receipt  -> adopt it. Same cursors and prefix hash means the
-                               same source range, even if another scrub of
+          for the same range   same source range, even if another scrub of
                                those bytes was the body it accepted.
+          its stream does not line up with this batch (another stream_id, a
+          receipt for another range, or a cursor this batch does not continue)
+                            -> continue the server's stream instead
+                               (`_rebase_on_server`), once its accepted bytes
+                               are proven to be this transcript's own prefix.
           it has none, and the body fails today's redaction
                             -> re-redact the SAME reservation in place: same
                                batch_seq, same cursors, only content changes.
@@ -2404,7 +2483,11 @@ class Journal:
                                own error is the more specific one.
 
         Before this, a batch staged by an older scrubber was refused by every
-        newer daemon, and its session stopped shipping for good.
+        newer daemon, and its session stopped shipping for good. And a journal
+        that no longer matched the server's stream (two taps on one machine
+        raced a session, 2026-10-17..19) re-sent its batch every few seconds
+        for days: 409 "batch identity already accepted with different
+        content" or "session owned by another stream".
         """
         body = self.pending(session_id)
         state = self.get(session_id)
@@ -2423,9 +2506,12 @@ class Journal:
             (item for item in remote.get("receipts") or [] if item.get("batch_seq") == sequence),
             None,
         )
-        if receipt is not None:
-            if stream.get("stream_id") != state["stream_id"]:
-                raise ReconciliationRequired("server stream changed; existing pending bytes retained")
+        same_stream = stream.get("stream_id") == state["stream_id"] == payload.get("stream_id")
+        if (
+            receipt is not None
+            and same_stream
+            and all(receipt.get(key) == payload[key] for key in _RECEIPT_RANGE)
+        ):
             self.acknowledge(
                 session_id,
                 {"protocol_version": remote.get("protocol_version"), "receipt": receipt},
@@ -2433,6 +2519,8 @@ class Journal:
                 content_may_differ=True,
             )
             return f"adopted the server's receipt for batch {sequence}"
+        if stream and (not same_stream or receipt is not None or not _continues(stream, payload)):
+            return self._rebase_on_server(session_id, state, body, wire)
         scrubbed = _scrub_content(payload)
         if scrubbed == payload:
             return None
@@ -2456,6 +2544,143 @@ class Journal:
             if updated.rowcount != 1:
                 raise ReconciliationRequired("pending reservation changed before reconciliation")
         return f"re-redacted batch {sequence} in place; the server holds no copy of it"
+
+    def _rebase_on_server(self, session_id: str, state: dict, body: bytes, wire: Wire) -> str:
+        """Drop a pending batch the server's stream will never take and go on
+        from where that stream ends (`_rebuild_from_server`).
+
+        A refusal carries the 409 and this body's digest, so the batch waits
+        out its conflict (`defer_conflict`) like any other lasting 409, and so
+        does a session refused again within `REBASE_COOLDOWN_SECONDS` of its
+        last rebuild: another producer is racing it, and continuing the
+        stream every time would only trade refusals with that producer.
+        """
+        digest = hashlib.sha256(body).hexdigest()
+        rebased_at = state.get("rebased_at")
+        if type(rebased_at) in (int, float) and 0 <= time.time() - rebased_at < REBASE_COOLDOWN_SECONDS:
+            raise RebaseCooling(
+                "refused again soon after continuing the server's stream; "
+                "another producer is racing this session",
+                status_code=409,
+                body_sha256=digest,
+            )
+        remote = wire.receipts(session_id)
+        self._deleted_remote(session_id, remote)
+        dropped = json.loads(body)["batch_seq"]
+        try:
+            with self.transaction():
+                current = self.get(session_id)
+                if (
+                    self.pending(session_id) != body
+                    or current is None
+                    or [current.get(k) for k in _STREAM_VIEW] != [state.get(k) for k in _STREAM_VIEW]
+                ):
+                    raise ReconciliationRequired("pending reservation changed before reconciliation")
+                rebuilt = self._rebuild_from_server(
+                    session_id,
+                    current,
+                    Path(current["path"]),
+                    remote,
+                    historical=not current.get("live_enabled", False),
+                    complete_lines_only=True,
+                    provenance=current.get("provenance"),
+                    cwd=current.get("cwd"),
+                )
+        except SourceRewritten:
+            raise
+        except ReconciliationRequired as exc:
+            raise ReconciliationRequired(str(exc), status_code=409, body_sha256=digest) from exc
+        return (
+            f"dropped pending batch {dropped}; continuing the server's stream "
+            f"from batch {rebuilt['last_seq'] + 1}"
+        )
+
+    def _rebuild_from_server(
+        self,
+        session_id: str,
+        state: dict,
+        path: Path,
+        remote: dict,
+        *,
+        historical: bool,
+        complete_lines_only: bool,
+        provenance: dict | None,
+        cwd: str | None,
+        expected_history: tuple[int, str] | None = None,
+    ) -> dict:
+        """Replace this journal's state for a session with the server's stream
+        of it, as `ensure` builds it for a journal lost here. Inside the
+        caller's transaction: a refusal anywhere leaves the journal as it was.
+
+        Only once the server's accepted bytes are proven to be this
+        transcript's first bytes (its `prefix_sha256`): then nothing the
+        server holds is lost or doubled, and bytes this journal had staged
+        past them are staged again from the file. A source rewritten inside
+        what this journal sent or staged stays `SourceRewritten`, never
+        re-uploaded. A frozen history that still covers the server's stream
+        is kept, copy and all; otherwise `ensure` freezes complete lines only.
+        """
+        stream = remote.get("stream")
+        if not stream:
+            raise ReconciliationRequired("server holds no stream to continue; pending bytes retained")
+        try:
+            self._validate_source(state, path)  # SourceRewritten stays itself
+        except OSError as exc:
+            raise ReconciliationRequired("source is unreadable; pending bytes retained") from exc
+        try:
+            held = prefix_hash(path, stream["source_byte_end"])
+        except OSError as exc:
+            raise ReconciliationRequired("source is unreadable; pending bytes retained") from exc
+        except ReconciliationRequired as exc:  # the file is shorter than the stream
+            raise ReconciliationRequired(
+                "server stream holds more than this source; pending bytes retained"
+            ) from exc
+        if held != stream["prefix_sha256"]:
+            raise ReconciliationRequired(
+                "server stream holds another source prefix; pending bytes retained"
+            )
+        history = None
+        snapshot = state.get("snapshot_path")
+        server_pin = None if stream.get("finalized") else stream.get("snapshot_byte_end")
+        if (
+            snapshot
+            and not state.get("historical_complete")
+            and state.get("historical_end", -1) >= stream["source_byte_end"]
+            and (
+                server_pin is None
+                or (server_pin, stream.get("snapshot_sha256"))
+                == (state.get("historical_end"), state.get("historical_hash"))
+            )
+        ):
+            try:
+                if prefix_hash(Path(snapshot), stream["source_byte_end"]) == stream["prefix_sha256"]:
+                    history = {
+                        key: state[key]
+                        for key in ("snapshot_path", "historical_end", "historical_hash")
+                    }
+            except (OSError, ReconciliationRequired):
+                history = None  # a lost or short copy: `ensure` freezes a new one
+        kept = {key: state[key] for key in _KEPT_ON_REBASE if key in state}
+        with self.transaction():
+            self.conn.execute("DELETE FROM pending WHERE session_id=?", (session_id,))
+            self._drop_media(session_id)
+            for table in (_FRAGMENT_SESSIONS, "sessions"):
+                self.conn.execute(f"DELETE FROM {table} WHERE session_id=?", (session_id,))
+            rebuilt = self.ensure(
+                session_id,
+                path,
+                remote,
+                historical=historical,
+                provenance=provenance,
+                cwd=cwd,
+                complete_lines_only=complete_lines_only,
+                expected_history=expected_history,
+                sweep=False,
+                carried_history=history,
+            )
+            rebuilt.update(kept, rebased_at=time.time())
+            self._save(rebuilt)
+        return rebuilt
 
     def _pending_digest(self, session_id: str) -> str | None:
         row = self.conn.execute(
