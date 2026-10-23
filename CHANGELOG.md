@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.296.1
+
 - **A failed update report now says what failed.** Some machines told the server an update had failed while the CLI, the plugin and the tap each read "updated" or "current", with no reason given (four machines on 10-22 and 10-23, updating from CLI 0.285.0, 0.292.0 and 0.295.0). The failure belonged to something the report did not show: pi's package failing on a Claude Code or Codex pass, a coding agent with no Probe plugin in it whose update command failed because there was nothing to update, or a plugin list that could not be read. When the Probe service's update ran one pass per agent, a failed pass's result also lost to a pass that had not failed. Now a failed update always names the failing step in the report: pi's failure fills the plugin slot (marked pi), an unreadable Codex or Kimi Code plugin list is an error with its message, a tap still behind says by how far, and a failed pass's failure wins in the merged report. Two rules now agree. A coding agent that has none of Probe's plugins, before or after the update, is not a failed update, and no longer prints the commands to update them by hand; it reads "not installed", as an agent missing from PATH does. A tap the update removed (installed before, gone after) is a failed update; before, it read "not installed (skipped)" with the update marked OK.
 
 ## 0.296.0
