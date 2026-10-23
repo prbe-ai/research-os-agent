@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.293.1
+
 - **On macOS, a pi tool call whose hooks run past their wait now warms the plugin folder for the next one.** The Probe service starts a warm hook process for a plugin folder after an event runs without one, but when the event ran past its wait (`hooks.run`'s 300 ms by default), stopping it on a Mac takes longer than the service waits for its answer (macOS has no `os.waitid`), and the service answered "timed out" without starting the warm process. A slow first call could then leave every later call starting its hooks cold, past the wait, with pi's built-in guard deciding alone. The service now starts the warm process when that late answer arrives.
 
 ## 0.293.0
