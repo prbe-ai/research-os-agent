@@ -61,6 +61,11 @@ class Method:
     ACTION_CANCEL = "action.cancel"
     UPDATE_STATUS = "update.status"
     UPDATE_CHECK_NOW = "update.check_now"
+    #: The desktop app reports the update check the service handed it
+    #: (`update.check_now`'s `app`, or an `app.check` event): what its own
+    #: signed updater found and did. The service records it as the cycle's
+    #: `app` step; it never launches the app itself.
+    UPDATE_APP_RESULT = "update.app_result"
     #: A session's dispatcher asks for a warm host for its plugin folder (plan A0).
     HOOKS_HOST = "hooks.host"
     #: A harness with no hooks of its own (pi) has one hook event run for a
@@ -134,6 +139,7 @@ METHODS = frozenset(
         Method.ACTION_CANCEL,
         Method.UPDATE_STATUS,
         Method.UPDATE_CHECK_NOW,
+        Method.UPDATE_APP_RESULT,
         Method.HOOKS_HOST,
         Method.HOOKS_RUN,
         Method.HOOKS_QUEUE,
@@ -236,9 +242,16 @@ class Cap:
     #: names (`refused: sandboxed`). The CLI hands a wizard action only to a
     #: service that says so: an older one would run it outside the sandbox.
     ACTION_SANDBOX = "action.sandbox"
+    #: The service decides when the desktop app checks for its update and
+    #: never launches the app to do it: `update.check_now` with `app` answers
+    #: `app: {due, reason}`, an open app subscribed to `app.check` is sent
+    #: one when a cycle wants it, and `update.app_result` records what the
+    #: app's own updater did. An older service launched a hidden copy of the
+    #: app instead (`--background-update`) and knows none of these.
+    UPDATE_APP = "update.app"
 
 
-CAPS = frozenset({Cap.ACTION_SANDBOX})
+CAPS = frozenset({Cap.ACTION_SANDBOX, Cap.UPDATE_APP})
 
 
 class NotesMode:
@@ -357,7 +370,9 @@ class UpdateStep:
     #: `python -m probe.core.run update`: the CLI's uv tool env (CLI, daemon,
     #: SDK) and every coding agent's plugins and pi's package, in one run.
     CLI_AND_PLUGINS = "cli_and_plugins"
-    #: The desktop app, through its own signed updater (`--background-update`).
+    #: The desktop app: the service decides when, and the open app's own
+    #: signed updater checks and installs (`app.check`, `update.app_result`).
+    #: The service never launches the app.
     APP = "app"
     #: The service's own code: a new CLI version means a restart.
     SELF = "self"
@@ -369,6 +384,100 @@ class StepState:
     FAILED = "failed"
     SKIPPED = "skipped"
     DEFERRED = "deferred"
+    #: The `app` step is in the open app's hands: its own updater checks, and
+    #: the app reports `update.app_result`. No report within
+    #: `APP_RESULT_TIMEOUT_S` reads as failed.
+    DELEGATED = "delegated"
+    #: The app reported `ready`: a newer app is downloaded and verified and
+    #: installs when the app quits. No timeout; one final report (`updated`
+    #: or `failed`) closes it, or the app's next launch check does.
+    READY = "ready"
+
+
+#: A delegated app check with no `update.app_result` this long after it was
+#: handed over reads as failed, and the next ask is due again. The app's own
+#: bound (prbe-ai/desktop `background_update.rs`): a 10-minute check and
+#: install, a minute more for an install under way, and a margin.
+APP_RESULT_TIMEOUT_S = 12 * 60
+
+
+class AppCheckReason:
+    """`update.check_now`'s `app.reason` and `update.status`'s `app.reason`:
+    why the app's update check is due now, or not."""
+
+    #: Due: no app check was ever handed over on this machine.
+    NEVER_CHECKED = "never_checked"
+    #: Due: the last one was handed over at least CHECK_EVERY_S (6 h) ago.
+    INTERVAL_PASSED = "interval_passed"
+    #: Due: the last one failed, never reported within APP_RESULT_TIMEOUT_S,
+    #: or lost the app connection it was sent to before a report.
+    LAST_FAILED = "last_failed"
+    #: Due: the app asked with `force` (a person's "Check for updates"),
+    #: which passes over the interval and the automatic-updates setting but
+    #: never over a check already in the app's hands (`in_progress`).
+    FORCED = "forced"
+    #: Not due: one was handed over less than CHECK_EVERY_S ago and did not fail.
+    CHECKED_RECENTLY = "checked_recently"
+    #: Not due: one is in the app's hands now (no result yet, not timed out),
+    #: or a downloaded update waits for the app to quit (`ready`).
+    IN_PROGRESS = "in_progress"
+    #: Not due: automatic updates are off (`autoupdate.json`).
+    AUTO_UPDATE_OFF = "auto_update_off"
+
+
+class AppResult:
+    """`update.app_result`'s `result`: what the app's own updater did."""
+
+    UPDATED = "updated"  # a newer app was installed (it runs after a restart)
+    CURRENT = "current"  # the installed app is the newest
+    FAILED = "failed"  # the check or the install failed (`error` says why)
+    #: A newer app (`version_after`) is downloaded and verified and installs
+    #: when the app quits. Not the check's end: the same check then takes one
+    #: final `updated` or `failed` (same `cycle_id`), and no second check is
+    #: handed over while it waits.
+    READY = "ready"
+
+
+APP_RESULTS = frozenset({AppResult.UPDATED, AppResult.CURRENT, AppResult.FAILED, AppResult.READY})
+
+
+class AppReportIgnored:
+    """`update.app_result`'s `reason` when it answers `recorded: false`: the
+    report changed nothing (the app need not send it again)."""
+
+    #: Its `cycle_id` names an earlier check than the one in the app's hands
+    #: now: it never settles (or ends) the current one.
+    STALE = "stale"
+    #: The check it answers already has the app's report (after `ready`:
+    #: anything but one final `updated` or `failed`).
+    DUPLICATE = "duplicate"
+
+
+class AppStepOutcome:
+    """A cycle's `app` step `outcome` (`update.step`, `update.done`'s `steps.app`)
+    while it is delegated or skipped. Once the app reports (or its delegation
+    times out) the step is `done` or `failed` and its outcome is the AppResult
+    word: `updated`, `current` or `failed`."""
+
+    #: Delegated: `app.check` was sent to the open app.
+    APP_CHECK_SENT = "app_check_sent"
+    #: Delegated: the app already has this check (its launch `update.check_now`
+    #: handed it over, or an earlier `app.check` that has not reported yet).
+    ALREADY_DELEGATED = "already_delegated"
+    #: Skipped: no Probe app is connected. Nothing is launched; the app's
+    #: next launch is due.
+    APP_CLOSED = "app_closed"
+    #: Skipped: no Probe app is connected and none is installed.
+    NOT_INSTALLED = "not_installed"
+    #: Skipped: a Probe app is connected but did not subscribe to `app.check`
+    #: (an older build, which checks for its own update at its launch).
+    APP_NOT_LISTENING = "app_not_listening"
+    #: Skipped: the app checked less than CHECK_EVERY_S ago.
+    CHECKED_RECENTLY = "checked_recently"
+    #: Skipped: automatic updates were turned off while the cycle ran.
+    AUTO_UPDATE_OFF = "auto_update_off"
+    #: Skipped: a downloaded update (`ready`) waits for the app to quit.
+    READY_WAITING = "ready_waiting"
 
 
 class StopReason:
@@ -670,6 +779,14 @@ class Topic:
     #: A held question of a watched session was filed, rewritten, answered or
     #: removed on the approvals board (plan Q2): `{sid, ids}`.
     APPROVALS_CHANGED = "approvals.changed"
+    #: An update cycle hands the open desktop app its update check:
+    #: `{cycle_id}`. The app runs its own updater (installing on quit, or
+    #: offering its "Restart to update" banner, never restarting under the
+    #: person) and reports `update.app_result` with that `cycle_id`. Sent to
+    #: ONE connection: the newest one whose `service.hello` said `client: app`
+    #: and that subscribed to it (`Cap.UPDATE_APP`). That connection owns the
+    #: check: closed before a report, the check is failed (due again).
+    APP_CHECK = "app.check"
 
 
 #: Every topic API v1 names. A subscription may name any of them.
@@ -686,6 +803,7 @@ TOPICS = frozenset(
         Topic.SERVICE_STOPPING,
         Topic.MAILBOX_CHANGED,
         Topic.APPROVALS_CHANGED,
+        Topic.APP_CHECK,
     }
 )
 
@@ -1201,6 +1319,59 @@ def need_mailbox_answer(params: dict) -> dict:
         raise invalid_params("channel must name where the answer was given (at most 64 plain characters)")
     out.update(id=rid, choice=choice, channel=channel)
     return out
+
+
+#: `update.app_result`'s `error` is kept to this many characters.
+MAX_APP_ERROR = 500
+
+
+def _optional_version(value: object, key: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise invalid_params(f"{key} must be a version string of at most 64 characters, or null")
+    return value
+
+
+def need_app_check(params: dict, trigger: str) -> dict | None:
+    """`update.check_now`'s optional `app` (the desktop app's launch check):
+    `{version, force}`, or None when the caller sent none (an older app, the
+    CLI, a hook): then the answer has no `app` either. Only with trigger `app`."""
+    app = params.get("app")
+    if app is None:
+        return None
+    if not isinstance(app, dict):
+        raise invalid_params("app must be an object {version, force}")
+    if trigger != CheckTrigger.APP:
+        raise invalid_params("app is the desktop app's: only with trigger app")
+    force = app.get("force", False)
+    if not isinstance(force, bool):
+        raise invalid_params("app.force must be a boolean")
+    return {"version": _optional_version(app.get("version"), "app.version"), "force": force}
+
+
+def need_app_result(params: dict) -> dict:
+    """`update.app_result`: `result` (AppResult), and optional `version_before`,
+    `version_after`, `error` (kept to MAX_APP_ERROR characters) and
+    `cycle_id`: the `app.check`'s, or the launch check's `app.cycle_id`, which
+    names the check it answers. None (an older build sends none): the check in
+    the app's hands now."""
+    result = params.get("result")
+    if result not in APP_RESULTS:
+        raise invalid_params(f"result must be one of {sorted(APP_RESULTS)}")
+    error = params.get("error")
+    if error is not None and not isinstance(error, str):
+        raise invalid_params("error must be a string or null")
+    cycle_id = params.get("cycle_id")
+    if cycle_id is not None and (not isinstance(cycle_id, str) or not cycle_id or len(cycle_id) > 64):
+        raise invalid_params("cycle_id must be a string of at most 64 characters, or null")
+    return {
+        "result": result,
+        "version_before": _optional_version(params.get("version_before"), "version_before"),
+        "version_after": _optional_version(params.get("version_after"), "version_after"),
+        "error": error[:MAX_APP_ERROR] if error else None,
+        "cycle_id": cycle_id,
+    }
 
 
 def need_owner(params: dict) -> dict | None:
