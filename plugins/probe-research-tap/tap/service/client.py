@@ -8,6 +8,11 @@
     check_now() ensure the service (waiting for it), then update.check_now:
                 what the CLI and the plugin hook do instead of spawning an
                 updater of their own while the switch is on (plan Q4)
+    finish_recorders()  recorders.finish: `probe capture off` for one agent
+    hold_run() / release_run()  run.hold / run.release: a `probe exec`'s run
+    refresh_manifest()  manifest.refresh: a stale release-manifest cache
+                Never start the service: each is for a service that already
+                runs (OSError when none answers), and the caller falls back.
     call()      any method, for the CLI and tests.
     Connection  a kept connection: the tap's registration thread holds one, so
                 a restarted service is noticed (EOF) and re-told at once.
@@ -122,13 +127,16 @@ class Connection:
 
         This machine's socket first, then the one a service from before the
         machine key listens on (plan D8): a CLI that is not updated yet starts
-        that older service, and this client must still find it."""
+        that older service, and this client must still find it. "None runs"
+        (the first error) only when that one is absent or unlistened too; its
+        own timeout or foreign folder is raised as itself, never read as no
+        service."""
         try:
             return cls._at(paths.socket_path(), timeout)
         except (FileNotFoundError, ConnectionRefusedError) as first:
             try:
                 return cls._at(paths.legacy_socket_path(), timeout)
-            except OSError:
+            except (FileNotFoundError, ConnectionRefusedError):
                 raise first from None
 
     @classmethod
@@ -266,6 +274,70 @@ def end(
     params = {"sid": sid, "generation": generation}
     answer = call(Method.SESSION_END, params, client=client, client_version=client_version, timeout=timeout)
     return answer if isinstance(answer, dict) else {}
+
+
+def _dict(answer: object) -> dict:
+    return answer if isinstance(answer, dict) else {}
+
+
+def finish_recorders(
+    harness: str,
+    *,
+    wait: float = 0.0,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+    timeout: float = TIMEOUT_S,
+) -> dict:
+    """`recorders.finish`: `{finished: [sid], unfinished: [sid]}`. The socket
+    waits `wait` longer than `timeout`, the service's own wait."""
+    params = {"harness": harness, "wait": wait}
+    return _dict(call(Method.RECORDERS_FINISH, params, client=client, client_version=client_version,
+                      timeout=timeout + wait))
+
+
+def hold_run(
+    run: str,
+    owner: dict,
+    *,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+    timeout: float = TIMEOUT_S,
+) -> dict:
+    """`run.hold`: `{held: true}` or `{held: false, reason}`."""
+    params = {"run": run, "owner": owner}
+    return _dict(call(Method.RUN_HOLD, params, client=client, client_version=client_version, timeout=timeout))
+
+
+def release_run(
+    run: str,
+    owner: dict | None = None,
+    *,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+    timeout: float = TIMEOUT_S,
+) -> dict:
+    """`run.release`: `{released: n}`."""
+    params: dict = {"run": run}
+    if owner is not None:
+        params["owner"] = owner
+    return _dict(call(Method.RUN_RELEASE, params, client=client, client_version=client_version, timeout=timeout))
+
+
+def refresh_manifest(
+    context: dict | None = None,
+    *,
+    wait: float = 0.0,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+    timeout: float = TIMEOUT_S,
+) -> dict:
+    """`manifest.refresh`: `{outcome, done, result}`. `context`: the caller's
+    environment, by `protocol.CONTEXT_ENV` name."""
+    params: dict = {"wait": wait}
+    if context:
+        params["context"] = context
+    return _dict(call(Method.MANIFEST_REFRESH, params, client=client, client_version=client_version,
+                      timeout=timeout + wait))
 
 
 def wait_for_exit(pid: int, *, timeout: float = WAIT_FOR_PID_S, poll: float = 0.25) -> bool:

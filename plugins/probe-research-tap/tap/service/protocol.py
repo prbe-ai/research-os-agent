@@ -67,6 +67,16 @@ class Method:
     SESSION_RECORD = "session.record"
     SESSION_RECORDING = "session.recording"
     SESSION_FINISH = "session.finish"
+    #: `probe capture off` for one agent: finish every recorder this service
+    #: runs for that harness, as `session.finish` does for one session.
+    RECORDERS_FINISH = "recorders.finish"
+    #: A `probe exec` names the run it wraps, and itself as its owner: the
+    #: updater's quiet check sees a run in flight without a lock-file scan.
+    RUN_HOLD = "run.hold"
+    RUN_RELEASE = "run.release"
+    #: A CLI whose cached release manifest is stale asks the service to
+    #: refresh it, instead of spawning a refresher of its own.
+    MANIFEST_REFRESH = "manifest.refresh"
 
 
 #: The methods this service answers. Every other name is `-32601`.
@@ -91,8 +101,15 @@ METHODS = frozenset(
         Method.SESSION_RECORD,
         Method.SESSION_RECORDING,
         Method.SESSION_FINISH,
+        Method.RECORDERS_FINISH,
+        Method.RUN_HOLD,
+        Method.RUN_RELEASE,
+        Method.MANIFEST_REFRESH,
     }
 )
+
+#: `recorders.finish`'s `wait`, and `manifest.refresh`'s, at most (seconds).
+MAX_WAIT_S = 60.0
 
 
 class Action:
@@ -156,7 +173,8 @@ REPORT_FOR_CHECK = {
 
 
 class CheckOutcome:
-    """`update.check_now`'s `outcome`."""
+    """`update.check_now`'s `outcome`; `manifest.refresh` answers with the
+    first three (`started`, `running`, `recent`)."""
 
     STARTED = "started"  # a cycle starts now
     SCHEDULED = "scheduled"  # the service is discovering: the cycle starts when that ends
@@ -378,6 +396,9 @@ class RefusedReason:
     DAEMON_SESSION = "daemon_session"
     #: `action.run` on a connection whose opener has exited (plan D9).
     CALLER_GONE = "caller_gone"
+    #: `manifest.refresh` or `recorders.finish` from a caller in a sandbox:
+    #: what it asks for would run (or stop) outside it, with the context it chose.
+    SANDBOXED = "sandboxed"
 
 
 class BusyHolder:
@@ -474,6 +495,14 @@ def need_bool(params: dict, key: str, *, default: bool = False) -> bool:
     if not isinstance(value, bool):
         raise invalid_params(f"{key} must be a boolean")
     return value
+
+
+def need_wait(params: dict, key: str = "wait", *, maximum: float = MAX_WAIT_S) -> float:
+    """An optional number of seconds from 0 to `maximum` (default 0)."""
+    value = params.get(key, 0)
+    if not isinstance(value, (int, float)) or isinstance(value, bool) or not 0 <= value <= maximum:
+        raise invalid_params(f"{key} must be a number of seconds from 0 to {maximum:g}")
+    return float(value)
 
 
 def need_choice(params: dict, key: str, choices: frozenset) -> str:
