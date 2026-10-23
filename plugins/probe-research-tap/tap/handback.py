@@ -9,7 +9,16 @@ ASK_EVERY_S while it holds the session's live claim (`Journal.claim_live`) and
 between two passes, asks the service to record it: `session.record`, the call
 SessionStart makes, on a connection only (it never starts a service):
 
-    no service, or refused ──> record on; ask again in ASK_EVERY_S
+    (before the first ask) ──> the transcript proves whose it is first; while
+                               the watcher is younger than SOON_FOR_S it is
+                               looked at every SOON_S until it does (a session
+                               just started has no line yet), not a cadence
+                               (60 s) later
+    no service answers ──────> record on; ask again in SOON_S while the watcher
+                               is younger than SOON_FOR_S (the next copy of a
+                               restarting service is up seconds later), else
+                               in ASK_EVERY_S
+    refused ─────────────────> record on; ask again in ASK_EVERY_S
     refused: sandboxed ──────> record on; never ask again (the service never
                                records a confined caller's session)
     a service before 0.294 ──> not asked: it cannot say its recorder holds
@@ -74,6 +83,21 @@ WAIT_S = 60.0
 RETRY_AFTER_S = 600.0
 #: The service restarts onto this tap (`restart`): the next one, this soon.
 RESTARTING_S = 10.0
+#: No service answered (none runs yet, it is starting, or it was too busy to
+#: answer within CALL_TIMEOUT_S): asked again this soon, in place of
+#: ASK_EVERY_S, for the first SOON_FOR_S of the watcher's life. A session gets
+#: its `tap watch` when the service could not take it at SessionStart, most
+#: often because an update was restarting it; the next copy is up seconds
+#: later (live run 39946691999, Windows: 6 to 10 s). Past the window a service
+#: still not answering is likely gone for longer: once a minute is enough. At
+#: most 1 + SOON_FOR_S / SOON_S asks in the window, each a connect to a socket
+#: (or pipe) that is not there, or one call bounded by CALL_TIMEOUT_S.
+#: The same window and interval for a transcript that has not proven whose it
+#: is yet (`HandBack.young`): nothing is offered before it does, and a session
+#: just started has no line (live run 40004468897: each late session's first
+#: offer came a whole cadence after its first pass).
+SOON_S = 5.0
+SOON_FOR_S = 180.0
 #: While waiting: how often the service is asked whether it holds the claim.
 POLL_S = 0.5
 #: Taking the claim back: how long another holder's brief hold (an orphan pin)
@@ -260,12 +284,22 @@ class HandBack:
         self.nap = nap
         #: The first ask comes after the first pass that holds the claim.
         self.next_at = clock()
+        #: Until then, a service that does not answer is asked again in SOON_S.
+        self.soon_until = clock() + SOON_FOR_S
+        #: The last answer logged (`_say`): one line per change, not one per ask.
+        self.said: str | None = None
         #: Refused for the caller's confinement: never asked again.
         self.confined = False
         #: Taken back, and the service's recorder not yet confirmed gone: this
         #: session registers again once it is (`_relink_once_gone`).
         self.relink_pending = False
         self.relink_at = 0.0
+
+    def young(self) -> bool:
+        """In the watcher's first SOON_FOR_S, and the service may still take
+        the session: a pass every SOON_S until the transcript proves whose it
+        is (`tap.main._run_durable_loop`), since nothing is offered before."""
+        return not self.confined and self.clock() < self.soon_until
 
     def due(self) -> bool:
         now = self.clock()
@@ -308,7 +342,15 @@ class HandBack:
                 self.next_at = self.clock() + RESTARTING_S
             elif answer.get("reason") == TOO_OLD:
                 self.next_at = self.clock() + self.retry_after_s  # until it updates
+            elif not answer and self.clock() < self.soon_until:
+                # None answered: most likely the next copy is still starting.
+                # A refusal is the service's answer, and is asked again at the
+                # cadence (asking again sooner gets the same one).
+                self.next_at = self.clock() + min(SOON_S, self.ask_every_s)
+            if not self.confined:
+                self._say(answer)
             return Outcome.KEPT
+        self.said = None
         log.info("the Probe service (pid %s) will record this session; handing it over", answer.get("pid"))
         journal.release_live(sid)
         deadline = self.clock() + self.wait_s
@@ -321,6 +363,29 @@ class HandBack:
             tick()
             self.nap(POLL_S)
         return self._take_back(journal, stopping=stopping)
+
+    def _say(self, answer: dict) -> None:
+        """Log why the session stays here, once for each run of the same answer:
+        what a live run's tap log shows of a hand-back that took long."""
+        if not answer:
+            said = "unanswered"
+        elif answer.get("restart"):
+            said = "restart"
+        else:
+            said = str(answer.get("reason") or "refused")
+        if said == self.said:
+            return
+        self.said = said
+        wait = max(0.0, self.next_at - self.clock())
+        if said == "unanswered":
+            log.info("no Probe service answered (none runs, or it is starting or busy); this tap watch records "
+                     "the session, and asks again in %.0f s", wait)
+        elif said == "restart":
+            log.info("the Probe service restarts onto this tap; this tap watch records the session, and asks the "
+                     "next one in %.0f s", wait)
+        else:
+            log.info("the Probe service did not take this session (%s); this tap watch records it, and asks again "
+                     "in %.0f s", said, wait)
 
     def _take_back(self, journal, *, stopping: Callable[[], bool] = lambda: False) -> str:
         sid = self.session_id

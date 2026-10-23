@@ -203,6 +203,19 @@ def _transcript_has_active_reader(path: Path) -> bool | None:
     return bool(result.stdout.strip())
 
 
+def _identity_ready(path: Path, source: str, session_id: str) -> bool:
+    """Can a pass now settle whose transcript this is (it proves it is this
+    session's, or another's)? False while it cannot (no file, no line yet).
+    Logs nothing: an expected absence, looked at again shortly."""
+    try:
+        validate_identity(path, source, session_id)
+    except IdentityMismatch:
+        return True  # the pass lets go of the session
+    except Exception:  # noqa: BLE001 -- not yet
+        return False
+    return True
+
+
 def _quiet_for(path: Path) -> float:
     """Seconds since the transcript last changed; 0 when it cannot be read."""
     try:
@@ -828,8 +841,28 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
             cadence = (
                 c.idle_interval_s if empty_ticks >= IDLE_THRESHOLD_TICKS else c.active_interval_s
             )
+            # Nothing is offered to the service before the transcript proves
+            # whose it is, and a session just started has no line yet: while
+            # the watcher is young its transcript is looked at every SOON_S,
+            # and a pass comes as soon as it can prove it, not a whole cadence
+            # later (live run 40004468897: each late session's first offer
+            # came 60 s after its first pass). The look is the pass's own
+            # identity check, silent; the pass keeps its cadence otherwise.
+            probe_every = max(1, round(handback.SOON_S))
             slept = 0
             while slept < cadence and not _shutdown_observed(c) and not _paused(c):
+                if (
+                    slept
+                    and slept % probe_every == 0
+                    and offer is not None
+                    and journal is not None
+                    and not identity_ok
+                    and not mismatched
+                    and c.session_id not in deleted
+                    and offer.young()
+                    and _identity_ready(c.transcript_path, wire.source, c.session_id)
+                ):
+                    break
                 if (
                     offer is not None
                     and journal is not None

@@ -10,6 +10,7 @@ processes. Only the service's three calls are stood in for (`ServiceCalls`:
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import subprocess
@@ -323,6 +324,248 @@ def test_a_running_worker_gets_a_fresh_handover_ask_never_one_dated_ahead(tmp_pa
     finally:
         child.kill()
         child.wait()
+
+
+# -- a service not there yet: asked again soon, for a while -----------------------------------
+#
+# Live run 39946691999 (windows-latest): a session started as an update restarted
+# the service fell back to `tap watch`; its first ask found no service, the next
+# came ASK_EVERY_S (60 s) later, and two such sessions were recorded by the
+# service in 4 of 11 and 1 of 7 samples. For SOON_FOR_S after the watcher starts,
+# a service that does not answer is asked again in SOON_S.
+
+
+class Clock:
+    """The hand-back's clock and nap: virtual seconds."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def nap(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class Claim:
+    """The journal's live claim, as the hand-back sees it: held by this watcher
+    until it lets go, and taken back when free."""
+
+    def __init__(self) -> None:
+        self.held = True
+
+    def holds_live(self, _sid: str) -> bool:
+        return self.held
+
+    def release_live(self, _sid: str) -> None:
+        self.held = False
+
+    def claim_live(self, _sid: str) -> bool:
+        self.held = True
+        return True
+
+
+class Starting:
+    """A Probe service on the hand-back's clock: none answers before `up_at`;
+    from then on it answers `answer`, and an accepting one's recorder holds the
+    claim at once."""
+
+    def __init__(self, clock: Clock, *, up_at: float = float("inf"), answer: dict | None = None) -> None:
+        self.clock = clock
+        self.up_at = up_at
+        self.answer = answer or {"recording": True, "started": True, "pid": SERVICE_PID}
+        self.asked: list[float] = []
+        self.accepted = False
+
+    def record(self, _params: dict) -> dict:
+        self.asked.append(self.clock())
+        if self.clock() < self.up_at:
+            return {}
+        self.accepted = self.answer.get("recording") is True
+        return dict(self.answer)
+
+    def holds(self, _sid: str) -> int | None:
+        return SERVICE_PID if self.accepted else None
+
+    def listed(self, _sid: str) -> bool | None:
+        return False
+
+    def finish(self, _sid: str) -> None:
+        pass
+
+
+def _gaps(times: list[float]) -> list[float]:
+    return [b - a for a, b in itertools.pairwise(times)]
+
+
+@pytest.fixture
+def offline(tmp_path, monkeypatch):
+    """A hand-back on a virtual clock, driven as `_run_durable_loop` drives it
+    (`due` looked at once a second between two passes)."""
+    monkeypatch.setattr(cfg, "_watcher_dir", lambda: tmp_path)  # the `.hosted` marker
+    monkeypatch.setattr(handback.record_client, "_params", lambda args: {"sid": args.session_id})
+    monkeypatch.delenv(handback.ASK_ENV, raising=False)  # the real cadence, whatever the shell sets
+    clock = Clock()
+
+    def make(service_kw: dict | None = None, **offer_kw):
+        service = Starting(clock, **(service_kw or {}))
+        offer = handback.HandBack(
+            "s-soon", cwd=tmp_path, transcript=tmp_path / "t.jsonl", service=service, clock=clock, nap=clock.nap,
+            **offer_kw,
+        )
+        return offer, service
+
+    def run(offer, until: float) -> float | None:
+        """Seconds on the clock when the session was handed over; None if not by `until`."""
+        claim = Claim()
+        while clock.now < until:
+            if offer.due() and offer.attempt(claim) == handback.Outcome.HANDED_OVER:
+                return clock.now
+            clock.now += 1.0
+        return None
+
+    return SimpleNamespace(clock=clock, make=make, run=run)
+
+
+@pytest.mark.parametrize("up_at", [5.0, 42.0, handback.SOON_FOR_S - 10])
+def test_a_service_up_moments_after_the_first_ask_takes_the_session_within_soon_s(offline, up_at):
+    offer, service = offline.make({"up_at": up_at})
+    handed = offline.run(offer, until=handback.SOON_FOR_S + 10 * handback.ASK_EVERY_S)
+    assert service.asked[0] == 0.0 and service.asked[0] < up_at, "the first ask found no service"
+    assert handed is not None and handed - up_at <= handback.SOON_S + 1, (
+        f"handed over {handed} s in, the service up at {up_at} s: not within SOON_S")
+    assert offer.ask_every_s == handback.ASK_EVERY_S, "the minute cadence itself is unchanged"
+
+
+def test_an_absent_service_is_asked_at_most_every_soon_s_in_the_window_then_every_minute(offline, caplog):
+    caplog.set_level("INFO", logger="tap.handback")
+    offer, service = offline.make()
+    tail = 5
+    assert offline.run(offer, until=handback.SOON_FOR_S + tail * handback.ASK_EVERY_S + 1) is None
+    asked = service.asked
+    early = [t for t in asked if t < handback.SOON_FOR_S]
+    assert len(early) <= 1 + handback.SOON_FOR_S / handback.SOON_S, f"{len(early)} asks in the window"
+    gaps = _gaps(asked)
+    assert min(gaps) >= handback.SOON_S, "never asked faster than SOON_S"
+    late = [gap for t, gap in zip(asked[1:], gaps, strict=False) if t > handback.SOON_FOR_S + handback.SOON_S]
+    assert late and all(abs(gap - handback.ASK_EVERY_S) <= 1 for gap in late), f"past the window: {late}"
+    assert len(asked) <= 1 + handback.SOON_FOR_S / handback.SOON_S + tail + 1
+    said = [r.getMessage() for r in caplog.records if r.name == "tap.handback"]
+    assert len(said) == 1 and "answered" in said[0], f"one line for a run of unanswered asks, not one each: {said}"
+
+
+def test_a_refusal_is_the_services_answer_and_waits_the_full_cadence(offline):
+    """`no_owner`, `no_tap`, `owner_gone`: a service that answered. Asking again
+    in SOON_S would get the same answer (and `no_tap` a load attempt each time)."""
+    offer, service = offline.make({"up_at": 0.0, "answer": {"recording": False, "reason": "no_owner"}})
+    assert offline.run(offer, until=3 * handback.ASK_EVERY_S + 1) is None
+    gaps = _gaps(service.asked)
+    assert gaps and all(gap >= handback.ASK_EVERY_S for gap in gaps), gaps
+
+
+def test_a_cadence_set_shorter_than_soon_s_is_kept(offline):
+    """`PROBE_TAP_HANDBACK_S` (tests, the service's own suite) below SOON_S: the
+    shorter one wins, as before."""
+    offer, service = offline.make(ask_every_s=1.0)
+    offline.run(offer, until=20.0)
+    gaps = _gaps(service.asked)
+    assert gaps and max(gaps) <= 1.0 + 1, gaps
+
+
+def test_a_watcher_whose_first_ask_finds_no_service_hands_over_soon_after_it_appears(session, monkeypatch):
+    """The real loop: the minute cadence left as it is, SOON_S scaled down."""
+    monkeypatch.setattr(handback, "SOON_S", 0.2)
+    service = Service(session)
+    watcher = Watcher(session, service, ask_every_s=60.0).start()
+    assert _wait(lambda: len(service.records) >= 1), "the first ask, once the claim is held"
+    assert _wait(lambda: len(service.records) >= 2, timeout=10.0), "asked again soon, not a minute later"
+    session.write(2)
+    assert _wait(lambda: session.delivered(5)), "recording on meanwhile"
+    service.present = True
+    appeared = time.monotonic()
+    assert watcher.join() == handback.EXIT_HANDED_OVER
+    assert time.monotonic() - appeared < 15.0, "handed over well before the minute cadence's next ask"
+    session.write(1)
+    assert _wait(lambda: session.delivered(6)), "the service's recorder goes on from the journal"
+    service.end()
+    assert session.lines() == list(range(6)), "every line once, in order, across the hand-over"
+    _each_batch_posted_once(session)
+    assert session.batches()[-1]["finalize"] is True
+
+
+class VirtualTime:
+    """The watcher loop's `time.sleep` and the hand-back's clock, in virtual
+    seconds, with what happens at them (`at`)."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.at: list[tuple[float, object]] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+        for item in [item for item in self.at if item[0] <= self.now]:
+            self.at.remove(item)
+            item[1]()
+        if self.now > 3000:
+            tapmain._shutdown_requested = True  # never handed over: end the session, end the test
+        _REAL_SLEEP(0.0005)
+
+
+@pytest.mark.parametrize("first_line_at", [8.0, handback.SOON_FOR_S + 120])
+def test_a_watcher_started_before_its_transcript_has_a_line_asks_soon_after_it_has_one(
+    session, monkeypatch, caplog, first_line_at
+):
+    """Live run 40004468897 (windows-latest): each late session's watcher met
+    no transcript at its first pass (Claude Code writes it with the first
+    prompt), so nothing proved whose transcript it was; nothing is offered
+    before that, and the next pass came a whole cadence (60 s) later. The
+    service had been up, with the same tap, for 57 s and 68 s by then. Now a
+    young watcher looks again in SOON_S until the transcript proves it; past
+    SOON_FOR_S, at its cadence as before."""
+    caplog.set_level("INFO")
+    clock = VirtualTime()
+    monkeypatch.setattr(tapmain.time, "sleep", clock.sleep)
+    session.path.unlink()
+    session.written = 0
+    clock.at.append((first_line_at, lambda: session.write(3)))
+    service = Service(session, host=False)
+    service.present = True
+    asked: list[float] = []
+
+    def record(_params):
+        asked.append(clock.now)
+        service.claimed = "held"  # its recorder takes the claim at once
+        return dict(service.answer)
+
+    service.record = record
+    looked: list[float] = []
+    validate = tapmain.validate_identity
+    monkeypatch.setattr(tapmain, "validate_identity",
+                        lambda *args, **kw: looked.append(clock.now) or validate(*args, **kw))
+    config = session.config()
+    config.active_interval_s, config.idle_interval_s = 60, 300  # the tap's own cadence
+    offer = handback.HandBack(session.sid, cwd=session.tmp, transcript=session.path, service=service,
+                              clock=clock, nap=clock.sleep)
+    storage = Storage(session.tmp / "watch-legacy.db")
+    try:
+        assert tapmain._run_durable_loop(config, storage, offer=offer) == handback.EXIT_HANDED_OVER
+    finally:
+        storage.close()
+    assert session.lines() == [0, 1, 2], "the identity proven before the first upload and the offer"
+    young = [t for t in looked if t < handback.SOON_FOR_S]
+    assert len(young) <= 2 + handback.SOON_FOR_S / handback.SOON_S, f"{len(young)} looks in the window"
+    pending = [r for r in caplog.records if "capture pending" in r.getMessage()]
+    assert len(pending) <= 3, f"the looks are silent, and passes keep their cadence: {len(pending)} warnings"
+    if first_line_at < handback.SOON_FOR_S:
+        assert asked[0] - first_line_at <= handback.SOON_S + 1, f"first line at {first_line_at}, asked at {asked}"
+    else:
+        assert asked[0] - first_line_at > handback.SOON_S + 1, "past the window, the cadence as before"
+        assert not [t for t in looked if handback.SOON_FOR_S + handback.SOON_S < t < first_line_at], (
+            f"no look every SOON_S past the window: {looked}")
 
 
 # -- refusals and a service that does not take over ---------------------------------------
