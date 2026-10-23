@@ -25,8 +25,8 @@ the system python). `make sync-service-client` copies it with `paths.py`,
 `procid.py` and `protocol.py`; `tests/test_service_client_sync.py` fails on
 drift. Stdlib only, imports between the four relative.
 
-There is no switch: the service runs on every POSIX machine with a new
-enough CLI. A session whose Probe mode is `off` never starts or holds it.
+There is no switch: the service runs on every Linux, macOS and (since R3,
+over a named pipe: `winpipe.py`) Windows machine with a new enough CLI. A session whose Probe mode is `off` never starts or holds it.
 """
 
 from __future__ import annotations
@@ -86,6 +86,23 @@ ENV_ALLOWLIST = (
     "PROBE_SERVICE_KEEPER",
     "PROBE_SERVICE_WORKER_POLL_S",
     "PROBE_SERVICE_WORKER_BACKOFF_S",
+    # Windows: what a Python process and its children need there to run at all
+    # (SYSTEMROOT for sockets and random), and where the user's folders are.
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "WINDIR",
+    "COMSPEC",
+    "PATHEXT",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "USERNAME",
+    "USERDOMAIN",
+    "HOMEDRIVE",
+    "HOMEPATH",
+    "LOCALAPPDATA",
+    "APPDATA",
+    "PROGRAMDATA",
 )
 
 
@@ -134,6 +151,8 @@ class Connection:
         (the first error) only when that one is absent or unlistened too; its
         own timeout or foreign folder is raised as itself, never read as no
         service."""
+        if paths.WINDOWS:  # this user's named pipe (`winpipe.py`); no older service there
+            return cls._at(None, timeout)
         try:
             return cls._at(paths.socket_path(), timeout)
         except (FileNotFoundError, ConnectionRefusedError) as first:
@@ -144,6 +163,10 @@ class Connection:
 
     @classmethod
     def _at(cls, path, timeout: float) -> Connection:
+        if paths.WINDOWS:
+            from . import winpipe
+
+            return cls(winpipe.connect(paths.pipe_name(), timeout))
         paths.require_private(path.parent)
         sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         sock.settimeout(timeout)
@@ -156,6 +179,19 @@ class Connection:
 
     def fileno(self) -> int:
         return self.sock.fileno()
+
+    def wait_readable(self, timeout: float) -> bool:
+        """Has the service sent something (or closed), within `timeout`?
+        `select` on POSIX; the pipe's own poll on Windows, which `select`
+        cannot wait on."""
+        if self._buffer:
+            return True
+        if paths.WINDOWS:
+            return self.sock.readable(timeout)
+        import select
+
+        readable, _, _ = select.select([self.sock.fileno()], [], [], max(0.0, timeout))
+        return bool(readable)
 
     def close(self) -> None:
         with contextlib.suppress(OSError):
@@ -370,12 +406,8 @@ def wait_for_exit(pid: int, *, timeout: float = WAIT_FOR_PID_S, poll: float = 0.
     barrier stops new starts only, so the asking process waits it out here."""
     deadline = time.monotonic() + timeout
     while True:
-        try:
-            os.kill(pid, 0)
-        except ProcessLookupError:
+        if not procid.exists(pid):
             return True
-        except OSError:
-            pass  # exists, not ours to signal: still there
         if time.monotonic() >= deadline:
             return False
         time.sleep(poll)
@@ -446,7 +478,7 @@ def write_runtime(python: str, cli_version: str) -> bool:
     try:
         with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
             json.dump(wanted, handle)
-        os.replace(tmp, target)
+        paths.replace(tmp, target)
     finally:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
@@ -480,7 +512,7 @@ def _write_starts(starts: list) -> None:
     try:
         with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w", encoding="utf-8") as handle:
             json.dump({"starts": starts}, handle)
-        os.replace(tmp, target)
+        paths.replace(tmp, target)
     except OSError:
         pass
     finally:
@@ -513,13 +545,77 @@ def forget_start(*pids: int) -> None:
 def _pid_runs(pid: object) -> bool:
     if not isinstance(pid, int) or pid <= 1:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    if not procid.exists(pid):
         return False
-    except OSError:
-        return True
     return procid.start_time(pid) is not None  # a zombie we spawned does not run
+
+
+#: A child that outlives its parent and never gets its console's Ctrl-C:
+#: its own session on POSIX; on Windows its own process group and a console of
+#: its own with no window (CREATE_NO_WINDOW, which DETACHED_PROCESS would
+#: cancel), so neither it nor the console programs it starts show a window.
+_DETACHED: dict = (
+    {"creationflags": 0x00000200 | 0x08000000}  # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    if os.name == "nt" else {"start_new_session": True}
+)
+#: Windows: out of the spawner's job too, when the job allows it (a job that
+#: kills its processes when it closes would take the service with it).
+_BREAKAWAY = 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
+
+
+def _without_venv_launcher(argv: list, env: dict) -> tuple[list, dict]:
+    """Windows: a venv's `Scripts\\python.exe` is CPython's venv launcher, which
+    runs the base interpreter as its child inside a job object that kills
+    everything in it when the launcher goes (KILL_ON_JOB_CLOSE): the service
+    then died with whatever ended its launcher, with no word in its log. Start
+    the base interpreter directly, as the launcher does (`__PYVENV_LAUNCHER__`
+    names the venv's python, so sys.executable, sys.prefix and site-packages
+    are the venv's): no launcher, no job of its own. Anything unexpected: as
+    before."""
+    python = argv[0]
+    try:
+        base = _venv_base(os.path.dirname(os.path.dirname(os.path.abspath(python))))
+    except OSError:
+        return argv, env
+    if not base or not os.path.isfile(base) or os.path.normcase(base) == os.path.normcase(os.path.abspath(python)):
+        return argv, env
+    return [base, *argv[1:]], {**env, "__PYVENV_LAUNCHER__": os.path.abspath(python)}
+
+
+def _venv_base(venv: str) -> "str | None":
+    """The very interpreter a venv's launcher runs, so the service keeps its
+    build (a free-threaded python3.13t.exe beside a regular python.exe in one
+    `home`, whose native packages the other cannot import): the exact one
+    pyvenv.cfg names (CPython 3.11+ `executable`, virtualenv `base-executable`),
+    else, for a free-threaded venv (a Scripts\\python3.Nt.exe, or a version
+    saying so), that name in `home`, else `home`'s python.exe. None: no
+    pyvenv.cfg, or a free-threaded venv whose interpreter is not there (the
+    launcher then stays: never the other build)."""
+    with open(os.path.join(venv, "pyvenv.cfg"), encoding="utf-8") as handle:
+        cfg = {key.strip().lower(): value.strip()
+               for key, sep, value in (line.partition("=") for line in handle) if sep}
+    for key in ("executable", "base-executable"):
+        named = cfg.get(key)
+        # Never another venv's launcher (a venv made from inside a venv names
+        # that one's Scripts\python.exe), which would set its own prefix.
+        if named and os.path.isfile(named) and not os.path.isfile(
+                os.path.join(os.path.dirname(os.path.dirname(named)), "pyvenv.cfg")):
+            return named
+    home = cfg.get("home")
+    if not home:
+        return None
+    try:
+        threaded = sorted(n for n in os.listdir(os.path.join(venv, "Scripts"))
+                          if n.lower().startswith("python3") and n.lower().endswith("t.exe"))
+    except OSError:
+        threaded = []
+    version = cfg.get("version_info", cfg.get("version", "")).lower()
+    if not threaded and ("freethreaded" in version or cfg.get("gil", "").lower() == "disabled"):
+        threaded = ["python{}t.exe".format(".".join(version.split("+")[0].split(".")[:2]))]
+    if threaded:
+        base = os.path.join(home, threaded[0])
+        return base if os.path.isfile(base) else None
+    return os.path.join(home, "python.exe")
 
 
 def _spawn(python: str) -> int:
@@ -527,16 +623,23 @@ def _spawn(python: str) -> int:
         paths.log_path(), os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600
     )
     try:
-        child = subprocess.Popen(  # noqa: S603 -- the CLI's own interpreter, our own module
-            [python, "-I", "-m", "probe.service"],
+        spawn = dict(
             stdin=subprocess.DEVNULL,
             stdout=log_fd,
             stderr=log_fd,
             cwd=str(paths.service_dir()),
             env=_clean_env(),
-            start_new_session=True,
             close_fds=True,
+            **_DETACHED,
         )
+        argv = [python, "-I", "-m", "probe.service"]
+        child = None
+        if os.name == "nt":
+            argv, spawn["env"] = _without_venv_launcher(argv, spawn["env"])
+            with contextlib.suppress(OSError):  # the job forbids breaking away: stay in it
+                child = subprocess.Popen(argv, **{**spawn, "creationflags": spawn["creationflags"] | _BREAKAWAY})  # noqa: S603
+        if child is None:
+            child = subprocess.Popen(argv, **spawn)  # noqa: S603 -- the CLI's own interpreter, our own module
     finally:
         os.close(log_fd)
     _children.append(child)
@@ -544,16 +647,12 @@ def _spawn(python: str) -> int:
 
 
 def _lock(fd: int, deadline: float) -> bool:
-    import fcntl
-
     while True:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if paths.try_lock(fd):
             return True
-        except BlockingIOError:
-            if time.monotonic() >= deadline:
-                return False
-            time.sleep(0.01)
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
 
 
 def ensure(*, wait: float = 0.0) -> str:

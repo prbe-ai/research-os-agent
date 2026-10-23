@@ -54,6 +54,7 @@ else
     [ -n "$SID" ] || SID=$(printf '%s' "$HOOK_INPUT" | python3 -c \
         'import json,sys; v=json.load(sys.stdin).get("session_id"); print(v if isinstance(v,str) else "")' \
         2>/dev/null || echo "")
+    SID="${SID%$'\r'}"
 fi
 [ -n "$SID" ] || exit 0
 
@@ -97,6 +98,11 @@ if [ -s "$HOSTF" ]; then
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
         quiet_exit
     fi
+    # Git Bash on Windows: its `kill` knows MSYS pids, not the Windows pid the
+    # marker holds. The marker is trusted there: the service rewrites it each
+    # time it resumes a session, and the OS keeper (a Task Scheduler task)
+    # starts a gone service again within a minute.
+    case "${OSTYPE:-}" in msys* | cygwin* | win*) [ -n "$PID" ] && quiet_exit ;; esac
     # The service that recorded it is gone (a crash, a kill): no ten-minute
     # wait below; starting it again resumes every session it recorded.
     HOSTED_GONE=1

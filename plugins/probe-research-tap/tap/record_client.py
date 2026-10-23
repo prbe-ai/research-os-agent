@@ -50,6 +50,10 @@ TAP_ENV_NAMES = frozenset({
     "HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "PLUGIN_ROOT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR",
     "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
     "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+    # Windows: where the profile and temp folders are (Path.home() reads
+    # USERPROFILE there, not HOME), and what a Python process needs to run.
+    "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "LOCALAPPDATA", "APPDATA", "PROGRAMDATA", "TEMP", "TMP",
+    "SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "COMSPEC", "PATHEXT", "USERNAME", "USERDOMAIN",
 })
 TAP_ENV_PREFIXES = ("PROBE_", "PRBE_", "CLAUDE_", "CODEX_", "KIMI_", "PI_", "XDG_", "LC_")
 #: All of `record`, a service start and a restart onto this tap included.
@@ -74,7 +78,7 @@ def tap_env(environ=None) -> dict:
 
 
 def enabled() -> bool:
-    return os.name == "posix" and os.environ.get(HOSTED_ENV, "1") != "0"
+    return os.name in ("posix", "nt") and os.environ.get(HOSTED_ENV, "1") != "0"
 
 
 def _connection(start: bool, deadline: float):
@@ -147,18 +151,33 @@ def hosted_pid(sid: str) -> int | None:
     `kill -0`, the process's command line."""
     path = cfg.hosted_file(sid)
     try:
-        if path.lstat().st_uid != os.getuid():
+        if hasattr(os, "getuid") and path.lstat().st_uid != os.getuid():
             return None
         pid = int(path.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return None
     if pid <= 1:
         return None
-    try:
-        os.kill(pid, 0)
-    except OSError:
+    from tap.service import procid
+
+    if not procid.exists(pid):
         return None
-    return pid if "probe.service" in _cmdline(pid) else None
+    return pid if _is_service(pid) else None
+
+
+def _is_service(pid: int) -> bool:
+    """Is `pid` this user's Probe service? Its command line names it on POSIX;
+    on Windows (no other process's command line to read) it is the process
+    that named itself in the service's lock file, still running."""
+    if os.name != "nt":
+        return "probe.service" in _cmdline(pid)
+    from tap.service import paths, procid
+
+    try:
+        pid_s, _, start = paths.lock_path().read_text(encoding="utf-8").strip().partition(" ")
+    except OSError:
+        return False
+    return pid_s == str(pid) and bool(start) and procid.alive(pid, start) is True
 
 
 def _params(args) -> dict:

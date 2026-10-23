@@ -119,7 +119,7 @@ def _read(session_id: str) -> Owner | None:
     path = cfg.owner_file(session_id)
     try:
         # /tmp is shared: only a record this user wrote may end this user's session.
-        if path.stat().st_uid != os.getuid():
+        if hasattr(os, "getuid") and path.stat().st_uid != os.getuid():
             return None
         data = json.loads(path.read_text(encoding="utf-8"))
         owner = Owner(int(data["pid"]), str(data["start"]), str(data["name"]))
@@ -153,8 +153,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--session-id", required=True)
     parser.add_argument("--from-pid", required=True, type=int)
     args = parser.parse_args(argv)
+    # Windows: the hook's `$$` is Git Bash's own (MSYS) pid, not a Windows one;
+    # this process's parent (the hook's bash) is where the walk starts there.
+    start = os.getppid() if os.name == "nt" else args.from_pid
     with contextlib.suppress(Exception):
-        record(args.session_id, args.from_pid)
+        record(args.session_id, start)
     return 0
 
 

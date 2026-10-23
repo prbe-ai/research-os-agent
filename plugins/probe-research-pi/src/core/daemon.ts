@@ -32,7 +32,7 @@
 import { execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
 
-import { pidFile, sessionLogFile, shutdownSentinelFile, WATCHER_PREFIX, type PathEnv } from "./paths.js";
+import { pidFile, sessionLogFile, shutdownSentinelFile, WATCHER_PREFIX, watcherDir, type PathEnv } from "./paths.js";
 import { SERVICE_OWNER_PID_ENV } from "./service.js";
 import type { TapRuntime } from "./tapRuntime.js";
 
@@ -390,7 +390,7 @@ export interface PruneDeps {
 export function pruneStaleShutdownSentinels(deps: PruneDeps): void {
   let names: string[];
   try {
-    names = deps.readdirSync("/tmp");
+    names = deps.readdirSync(watcherDir());
   } catch {
     return;
   }
@@ -398,7 +398,7 @@ export function pruneStaleShutdownSentinels(deps: PruneDeps): void {
   const prefix = `${WATCHER_PREFIX}-watcher-`;
   for (const name of names) {
     if (!name.startsWith(prefix) || !name.endsWith(".shutdown")) continue;
-    const full = join("/tmp", name);
+    const full = join(watcherDir(), name);
     let mtimeMs: number;
     try {
       mtimeMs = deps.statMtimeMs(full);

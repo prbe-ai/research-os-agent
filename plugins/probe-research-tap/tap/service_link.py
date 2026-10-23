@@ -297,7 +297,13 @@ class ServiceLink:
             if conn is None:
                 return False
             try:
-                readable, _, _ = select.select([conn.fileno()], [], [], min(remaining, 0.5))
+                # The stream, not `conn.wait_readable`: what this keeps in the
+                # buffer below must not read as more to come. Windows: the
+                # pipe's own wait (`select` takes sockets only there).
+                if hasattr(conn.sock, "readable"):
+                    readable = conn.sock.readable(min(remaining, 0.5))
+                else:
+                    readable, _, _ = select.select([conn.fileno()], [], [], min(remaining, 0.5))
                 if readable:
                     data = conn.sock.recv(65536)
                     if not data:
@@ -339,11 +345,8 @@ def start(session_id: str, *, env: dict | None = None) -> ServiceLink | None:
     environment, for the link's own thread. The link registers and heartbeats
     the session there as a `tap watch` would, over the service's own socket.
 
-    Off POSIX there is no link and no ensure: the service listens on a Unix
-    socket and locks with fcntl (`tap/service/client.py`), so on Windows every
-    session would try, and fail, to start it (D16). Capture runs as before."""
-    if os.name != "posix":
-        return None
+    On Windows too since R3: the service listens on this user's named pipe
+    there (`tap/service/winpipe.py`)."""
     try:
         return ServiceLink(session_id, harness=cfg.capture_source(), env=env).start()
     except Exception:  # noqa: BLE001

@@ -10,6 +10,8 @@ Stdlib only: the service's start path imports nothing heavier (plan S1, Q3).
 
 from __future__ import annotations
 
+import os
+
 import json
 import time
 from typing import Any
@@ -201,6 +203,9 @@ class DeferReason:
     SETUP_RUNNING = "setup_running"
     #: An `action.run` of this service is running.
     ACTION_RUNNING = "action_running"
+    #: This system's CLI is not updated by the service (Windows, R3: its files
+    #: cannot be replaced or moved while it runs; the CLI updates itself there).
+    UNSUPPORTED = "unsupported"
 
 
 class UpdateStep:
@@ -637,7 +642,7 @@ def need_state_dir(params: dict) -> str | None:
     value = params.get("state_dir")
     if value is None:
         return None
-    if not isinstance(value, str) or not value.startswith("/") or len(value) > MAX_STATE_DIR or "\0" in value:
+    if not isinstance(value, str) or not os.path.isabs(value) or len(value) > MAX_STATE_DIR or "\0" in value:
         raise invalid_params(f"state_dir must be an absolute path of at most {MAX_STATE_DIR} characters")
     return value
 

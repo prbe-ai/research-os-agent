@@ -23,7 +23,7 @@
  *     daemon would never see our shutdown signal.
  */
 
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
 export const PLUGIN_NAME = "probe-research-tap";
@@ -229,10 +229,17 @@ export function mcpOAuthStateFile(env: PathEnv = process.env): string {
   return join(piAgentDir(env), "state", "probe-research-mcp", "oauth.json");
 }
 
+/** Where a session's watcher files live: `/tmp`, as the tap computes it
+ *  (`tap/config.py::_watcher_dir`); on Windows the user's temp folder (the
+ *  hooks' Git Bash `/tmp`), never `\\tmp` on the current drive. */
+export function watcherDir(platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? tmpdir() : "/tmp";
+}
+
 export function pidFile(sessionId: string): string {
-  return join("/tmp", `${WATCHER_PREFIX}-watcher-${sessionId}.pid`);
+  return join(watcherDir(), `${WATCHER_PREFIX}-watcher-${sessionId}.pid`);
 }
 
 export function shutdownSentinelFile(sessionId: string): string {
-  return join("/tmp", `${WATCHER_PREFIX}-watcher-${sessionId}.shutdown`);
+  return join(watcherDir(), `${WATCHER_PREFIX}-watcher-${sessionId}.shutdown`);
 }

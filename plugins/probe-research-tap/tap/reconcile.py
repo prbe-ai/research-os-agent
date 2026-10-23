@@ -265,6 +265,11 @@ def has_live_daemon(session_id: str) -> bool:
         pid = int(pid_file.read_text(encoding="utf-8").strip())
     except (OSError, ValueError):
         return False
+    if os.name == "nt":
+        # Never `os.kill(pid, 0)` there: signal 0 is CTRL_C_EVENT, sent to a group.
+        from tap.service import procid
+
+        return procid.exists(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

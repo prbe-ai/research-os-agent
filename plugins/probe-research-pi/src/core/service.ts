@@ -45,12 +45,13 @@ import type { TrackingExecFileFn } from "./trackingState.js";
 /** The pid the tap's registration thread names as the owner (`service_link.py::OWNER_PID_ENV`). */
 export const SERVICE_OWNER_PID_ENV = "PROBE_SERVICE_OWNER_PID";
 
-/** The platforms the service cannot run on yet (Node's `process.platform` names). */
-export const ServicelessPlatform = { Windows: "win32" } as const satisfies Record<string, NodeJS.Platform>;
+/** The platforms the service cannot run on (Node's `process.platform` names): none
+ *  since R3, when Windows got its named-pipe transport. */
+export const ServicelessPlatform = {} as const satisfies Record<string, NodeJS.Platform>;
 
 const SERVICELESS: ReadonlySet<string> = new Set(Object.values(ServicelessPlatform));
 
-/** Can the service run here? Not on Windows until it has a named-pipe transport. */
+/** Can the service run here? */
 export function serviceSupported(platform: NodeJS.Platform = process.platform): boolean {
   return !SERVICELESS.has(platform);
 }

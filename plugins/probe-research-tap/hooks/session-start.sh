@@ -13,6 +13,15 @@ set -euo pipefail
 
 PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"
 SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
+# Git Bash on Windows: the Windows path of this script's `/tmp`, for the Python
+# side and the Probe service's recorder of this session (`tap/config.py`
+# WATCHER_DIR_ENV): the temp folder Python finds there need not be it.
+case "${OSTYPE:-}" in
+msys* | cygwin*)
+    PROBE_TAP_WATCHER_DIR=$(cygpath -w /tmp 2>/dev/null || true)
+    [ -n "$PROBE_TAP_WATCHER_DIR" ] && export PROBE_TAP_WATCHER_DIR
+    ;;
+esac
 HOOK_INPUT="$(cat)"
 REGISTRY_ENV=""
 case "$SOURCE" in
@@ -418,6 +427,13 @@ done
 PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$PLUGIN_ROOT" \
     nohup "$PY" -c '
 import os, sys
+if os.name == "nt":
+    # No setsid there, and execv does not quote its arguments (Git Bash hands
+    # `/bin/bash` over as `C:/Program Files/Git/usr/bin/bash`): a child of its
+    # own process group, which the wrapper rewrites the pid file for.
+    import subprocess
+    subprocess.Popen(sys.argv[1:], creationflags=0x00000200)  # CREATE_NEW_PROCESS_GROUP
+    os._exit(0)
 try:
     os.setsid()
 except OSError:

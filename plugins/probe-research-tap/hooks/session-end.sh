@@ -130,6 +130,11 @@ REASON=""
 { IFS= read -r SESSION_ID || true; IFS= read -r REASON || true; } <<EOF
 $PARSED
 EOF
+# Windows: python3 ends each line with CR LF, and only the last one's goes with
+# the command substitution: the session id kept its CR, and every file named
+# after it (the sentinel the service's recorder watches) was another file.
+SESSION_ID="${SESSION_ID%$'\r'}"
+REASON="${REASON%$'\r'}"
 
 if [ -z "$SESSION_ID" ]; then
     exit 0

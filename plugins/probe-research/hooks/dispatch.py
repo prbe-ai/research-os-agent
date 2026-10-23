@@ -825,6 +825,23 @@ _CODEX_AGENT = '[ -n "${PLUGIN_ROOT:-}" ] && export PROBE_AGENT=codex; '
 _CODEX_EXPORT = _CODEX_AGENT.split("export ", 1)[1].rstrip("; ")
 
 
+def _bash() -> str:
+    """The bash a route's own command line runs under: `/bin/bash`, and on
+    Windows the Git Bash this dispatcher was started from (first on the PATH
+    it handed down; never System32's WSL launcher), where `/bin/bash` is no
+    file a native Python can start."""
+    if os.name != "nt":
+        return "/bin/bash"
+    import shutil
+
+    system = os.path.normcase(os.environ.get("SYSTEMROOT", r"C:\Windows"))
+    for folder in os.environ.get("PATH", "").split(os.pathsep):
+        found = shutil.which("bash", path=folder) if folder else None
+        if found and not os.path.normcase(found).startswith(system):
+            return found
+    return "bash"
+
+
 def _plain_command(exports: list, script: str, codex: bool, args: list) -> str:
     return (
         "/bin/bash -c '"
@@ -861,11 +878,21 @@ def plain_route(command: str):
 def _arm_alarm(seconds) -> None:
     """Bound an in-process route by its own timeout, as the harness did:
     SIGALRM's default action ends the process."""
-    if seconds:
-        import signal
+    if not seconds:
+        return
+    import signal
 
+    if hasattr(signal, "SIGALRM"):
         signal.signal(signal.SIGALRM, signal.SIG_DFL)
         signal.alarm(max(1, int(round(seconds))))
+        return
+    # Windows has no SIGALRM: a timer thread ends the process the same way
+    # (fail open: the exit the harness's own timeout would have left).
+    import threading
+
+    timer = threading.Timer(seconds, lambda: os._exit(0))
+    timer.daemon = True
+    timer.start()
 
 
 def run_inline(parts, payload: bytes, timeout=None) -> None:
@@ -888,6 +915,80 @@ def run_inline(parts, payload: bytes, timeout=None) -> None:
     runpy.run_path(path, run_name="__main__")
 
 
+def _route_argv(hook: dict) -> "tuple[list, dict | None]":
+    """What a route's child runs, and its environment (None: this process's).
+    Its bash line, under `_bash()`; on Windows a plain python route starts its
+    python at once (what its bash line would exec), since every bash start
+    there costs a few hundred milliseconds more, on every event."""
+    command = hook["command"]
+    if os.name == "nt":
+        parts = plain_route(command)
+        if parts is not None:
+            exports, script, codex, args = parts
+            path = os.path.join(HERE, script)
+            if os.path.isfile(path) and sys.executable:
+                env = dict(os.environ)
+                for export in exports:
+                    key, _, value = export.partition("=")
+                    env[key] = value
+                if codex and env.get("PLUGIN_ROOT"):
+                    key, _, value = _CODEX_EXPORT.partition("=")
+                    env[key] = value
+                return [sys.executable, path, *args], env
+    return [_bash(), "-c", command], None
+
+
+_WINDOWS = os.name == "nt"
+#: Windows: how long ending routes' process trees may take, all of them at once
+#: (one `taskkill` each, started together), before each route is ended itself.
+KILL_TREE_S = 0.5
+_KILLED: dict = {}
+
+
+def _kill_routes(children) -> None:
+    """End routes and what they started. POSIX: each one's process group (each
+    route leads its own). Windows has no group to signal (`start_new_session`
+    is ignored there, and `os.killpg` does not exist): each one's process
+    tree by pid (its bash's children included), every route's at once and
+    for KILL_TREE_S at most, then the route itself; a route is ended once
+    however many threads ask (the waiter, the final sweep, a signal)."""
+    import subprocess
+
+    live = [child for child in children if child is not None and child.poll() is None]
+    if not _WINDOWS:
+        import signal
+
+        for child in live:
+            try:
+                os.killpg(child.pid, signal.SIGKILL)
+            except OSError:
+                pass
+        return
+    mine = object()
+    # setdefault is one step under the GIL: of threads asking at once, one wins.
+    fresh = [child for child in live if _KILLED.setdefault(child.pid, mine) is mine]
+    trees = []
+    for child in fresh:
+        try:
+            trees.append(subprocess.Popen(  # noqa: S603,S607 -- Windows' own taskkill
+                ["taskkill", "/F", "/T", "/PID", str(child.pid)], stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                creationflags=0x08000000))  # CREATE_NO_WINDOW: no console flashes up
+        except OSError:
+            pass
+    end = time.monotonic() + KILL_TREE_S
+    for tree in trees:
+        try:
+            tree.wait(timeout=max(end - time.monotonic(), 0.0))
+        except subprocess.TimeoutExpired:
+            pass  # still walking a slow machine's tree: it finishes on its own
+    for child in fresh:
+        try:
+            child.kill()
+        except OSError:
+            pass
+
+
 def run_all(chosen: list[dict], payload: bytes, deadline: float):
     """Every route as a child, in parallel. -> [(stdout, exit code or None)].
 
@@ -908,18 +1009,13 @@ def run_all(chosen: list[dict], payload: bytes, deadline: float):
     children: list = []
 
     def kill(child) -> None:
-        try:
-            os.killpg(child.pid, signal.SIGKILL)
-        except OSError:
-            pass
+        _kill_routes([child])
 
     stopping = []
     starting = [True]
 
     def stop_now() -> None:
-        for child in children:
-            if child is not None and child.poll() is None:
-                kill(child)
+        _kill_routes(children)
         os._exit(0)
 
     def stop(signum, _frame) -> None:
@@ -933,8 +1029,10 @@ def run_all(chosen: list[dict], payload: bytes, deadline: float):
 
     for hook in chosen:
         try:
+            argv, env = _route_argv(hook)
             child = subprocess.Popen(  # noqa: S603 - the routes' own commands
-                ["/bin/bash", "-c", hook["command"]],
+                argv,
+                env=env,
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -1008,9 +1106,7 @@ def run_all(chosen: list[dict], payload: bytes, deadline: float):
         threads.append(thread)
     for thread in threads:
         thread.join(max(deadline - time.monotonic(), 0.0) + KILL_WAIT_S + JOIN_SLACK_S)
-    for child in children:
-        if child is not None and child.poll() is None:
-            kill(child)
+    _kill_routes(children)
     for err in errors:
         if err:
             try:

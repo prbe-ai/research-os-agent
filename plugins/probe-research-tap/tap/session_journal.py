@@ -47,7 +47,10 @@ from __future__ import annotations
 
 import base64
 import errno
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows: `_lock_now`
+    fcntl = None  # type: ignore[assignment]
 import hashlib
 import ipaddress
 import json
@@ -921,6 +924,43 @@ def _env_context() -> ssl.SSLContext:
     return context
 
 
+#: Windows locks one byte this far in (byte-range locks are mandatory there):
+#: the same offset as `probe._shared.oscompat.LOCK_OFFSET`.
+_WIN_LOCK_OFFSET = 0x7FFFFFFF
+
+
+def _sync_directory(directory) -> None:
+    """Make a rename in `directory` durable: fsync the folder. POSIX only:
+    Windows cannot open a folder as a file (NTFS journals the rename itself)."""
+    if os.name == "nt":
+        return
+    directory_fd = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _lock_now(handle) -> bool:
+    """An exclusive, non-blocking whole-file lock on an open file, per handle
+    (a second open in this process conflicts): `flock`, or one byte with
+    `msvcrt.locking` on Windows. False when another holds it."""
+    if fcntl is None:
+        import msvcrt
+
+        try:
+            handle.seek(_WIN_LOCK_OFFSET)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+
+
 class Wire:
     """The existing ingest routes and receipt read, using the paired credential."""
 
@@ -1101,9 +1141,7 @@ class Journal:
         # unlink lock files: another process may still hold the old inode.
         name = hashlib.sha256(session_id.encode()).hexdigest() + ".owner.lock"
         handle = (self.directory / name).open("a+b")
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
+        if not _lock_now(handle):
             handle.close()
             return None
         return handle
@@ -1210,11 +1248,7 @@ class Journal:
                     os.replace(temporary, target)
                 finally:
                     Path(temporary).unlink(missing_ok=True)
-            directory_fd = os.open(self.directory, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            _sync_directory(self.directory)
         state["snapshot_path"] = str(target)
 
     def is_deleted(self, session_id: str) -> bool:
@@ -1611,11 +1645,7 @@ class Journal:
                             "copied source differs from the pinned historical snapshot"
                         )
                     os.replace(temporary, snapshot)
-                    directory_fd = os.open(self.directory, os.O_RDONLY)
-                    try:
-                        os.fsync(directory_fd)
-                    finally:
-                        os.close(directory_fd)
+                    _sync_directory(self.directory)
                 finally:
                     Path(temporary).unlink(missing_ok=True)
                 state["snapshot_path"] = str(snapshot)

@@ -239,7 +239,8 @@ def test_record_asks_again_after_a_restart_onto_this_tap_and_names_the_service(t
     assert params["transcript"] == str(tmp_path / "t.jsonl") and isinstance(params["env"], dict)
     marker = tmp_path / "s-1.hosted"
     assert marker.read_text() == str(os.getpid())
-    assert stat.S_IMODE(marker.stat().st_mode) == 0o600
+    if os.name != "nt":  # POSIX modes (Windows: the temp folder is the user's own)
+        assert stat.S_IMODE(marker.stat().st_mode) == 0o600
     assert record_client.hosted_pid("s-1") is None, "a pytest process is no Probe service"
 
 

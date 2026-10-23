@@ -114,7 +114,8 @@ def record(session: dict, controls: Controls) -> tuple[str, str]:
                     logger.propagate = False
             except OSError:
                 handler = None
-            logging.getLogger("tap.hosted").info("recording in the Probe service (thread %s)", threading.get_ident())
+            logging.getLogger("tap.hosted").info("recording in the Probe service (thread %s); the session's end: %s",
+                                                 threading.get_ident(), cfg.shutdown_sentinel(str(session["sid"])))
             # This process records it now (a resumed session's marker named the
             # last service): the hooks' fast path and `probe status` read it.
             try:

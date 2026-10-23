@@ -359,19 +359,6 @@ def test_pi_names_its_own_process_as_the_owner(home, monkeypatch):
     assert owner["pid"] == os.getpid() and owner["start_time"]
 
 
-def test_off_posix_there_is_no_link_and_no_ensure(home, monkeypatch):
-    """Windows has no service yet (Unix socket, fcntl): `tap watch` must not
-    try to start one from every session (D16)."""
-    started = []
-    monkeypatch.setattr(service_link, "ServiceLink", lambda *a, **k: started.append(a) or pytest.fail("linked"))
-    monkeypatch.setattr(client, "ensure", lambda *a, **k: started.append("ensure") or client.Ensured.SPAWNED)
-    with monkeypatch.context() as windows:
-        # Only around the call: pathlib reads os.name on every Path().
-        windows.setattr(service_link.os, "name", "nt")
-        link = REAL_START("sid-win")
-    assert link is None and started == []
-
-
 def test_on_posix_start_links_the_session(home, monkeypatch):
     made = []
 

@@ -139,10 +139,17 @@ def daemon_state(session_id: str) -> tuple[str, int | None]:
         return ("stale", None)
     if pid <= 0:
         return ("stale", None)
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return ("stale", pid)
+    if os.name == "nt":
+        # Never `os.kill(pid, 0)` there: signal 0 is CTRL_C_EVENT, sent to a group.
+        from tap.service import procid
+
+        if not procid.exists(pid):
+            return ("stale", pid)
+    else:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return ("stale", pid)
     return ("running" if _looks_like_the_uploader(pid) else "stale", pid)
 
 

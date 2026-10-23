@@ -46,6 +46,7 @@ if [ "${#HOOK_INPUT}" -le 262144 ] && [[ "$HOOK_INPUT" =~ \"session_id\"[[:space
         *)
             TURN_STATE=""
             read -r TURN_STATE 2>/dev/null <"${XDG_STATE_HOME:-$HOME/.local/state}/probe/sessions/$TURN_SID.state" || true
+            TURN_STATE="${TURN_STATE//[[:space:]]/}"  # a CR too: a file written on Windows
             case "$TURN_STATE" in [Dd][Aa][Ee][Mm][Oo][Nn]) ;; *) WRITE_TURN="" ;; esac
             ;;
     esac
@@ -88,6 +89,8 @@ if [[ "$HOOK_INPUT" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]{
     if [ -s "$HOSTF" ]; then
         PID=$(cat "$HOSTF" 2>/dev/null || echo "")
         case "$PID" in '' | *[!0-9]*) PID="" ;; esac
+        # (Git Bash on Windows: `kill` knows MSYS pids only; the marker is trusted.)
+        case "${OSTYPE:-}" in msys* | cygwin* | win*) PID="" ;; esac
         if [ -n "$PID" ] && ! kill -0 "$PID" 2>/dev/null; then
             # Only the service, which resumes every session it recorded: never
             # SessionStart in the background (its owner lookup walks up from

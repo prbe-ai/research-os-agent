@@ -4,7 +4,7 @@ import { ensureService, serviceSupported, ServicelessPlatform } from "../src/cor
 import type { SpawnFn } from "../src/core/daemon.js";
 
 describe("ensureService", () => {
-  it("starts nothing on Windows, where the service cannot run yet (D16)", () => {
+  it("starts the service on Windows too, since its named-pipe transport (R3)", () => {
     const calls: string[][] = [];
     const spawn: SpawnFn = (_command, args) => {
       calls.push(args);
@@ -12,13 +12,14 @@ describe("ensureService", () => {
     };
     const ok = ensureService(
       { python: "C:\\Python\\python.exe", tapRoot: "C:\\tap" },
-      { spawn, env: {}, log: () => {}, platform: ServicelessPlatform.Windows },
+      { spawn, env: {}, log: () => {}, platform: "win32" },
     );
-    expect(ok).toBe(false);
-    expect(calls).toEqual([]);
-    expect(serviceSupported(ServicelessPlatform.Windows)).toBe(false);
-    expect(serviceSupported("darwin")).toBe(true);
-    expect(serviceSupported("linux")).toBe(true);
+    expect(ok).toBe(true);
+    expect(calls).toEqual([["-m", "tap", "service", "ensure"]]);
+    expect(Object.keys(ServicelessPlatform)).toEqual([]);
+    for (const platform of ["win32", "darwin", "linux"] as const) {
+      expect(serviceSupported(platform)).toBe(true);
+    }
   });
 
   it("runs the tap's copy of the client, detached, with the tap on PYTHONPATH", () => {

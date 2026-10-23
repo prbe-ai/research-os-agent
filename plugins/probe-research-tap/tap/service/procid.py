@@ -8,7 +8,8 @@ start time, and that reads as gone, never as alive.
 This is the ONE definition of that pair. The tap's `owner.py` records an
 agent's `{pid, start}` with it at SessionStart and the Probe service checks the
 same pair with it, so both sides must compute the start time the same way (on
-Linux, clock ticks since boot from /proc; elsewhere `ps`'s `lstart` in UTC).
+Linux, clock ticks since boot from /proc; on Windows the creation FILETIME;
+elsewhere `ps`'s `lstart` in UTC).
 Moved here from the tap's `owner.py`, which now imports it.
 
 Stdlib only, and synced byte-for-byte into the tap (`tap/service/procid.py`,
@@ -88,12 +89,100 @@ def proc_ps(pid: int) -> Proc | None:
     )
 
 
+def _windows_parents() -> dict:
+    """{pid: parent pid} for every process (one Toolhelp snapshot)."""
+    import ctypes
+    from ctypes import wintypes
+
+    class PROCESSENTRY32W(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                    ("th32DefaultHeapID", ctypes.c_void_p), ("th32ModuleID", wintypes.DWORD),
+                    ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                    ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                    ("szExeFile", wintypes.WCHAR * 260)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+    k32.Process32FirstW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    k32.Process32NextW.argtypes = [wintypes.HANDLE, ctypes.POINTER(PROCESSENTRY32W)]
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    snapshot = k32.CreateToolhelp32Snapshot(0x00000002, 0)  # TH32CS_SNAPPROCESS
+    if not snapshot or snapshot == wintypes.HANDLE(-1).value:
+        return {}
+    parents = {}
+    try:
+        entry = PROCESSENTRY32W()
+        entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+        ok = k32.Process32FirstW(snapshot, ctypes.byref(entry))
+        while ok:
+            parents[int(entry.th32ProcessID)] = int(entry.th32ParentProcessID)
+            ok = k32.Process32NextW(snapshot, ctypes.byref(entry))
+    finally:
+        k32.CloseHandle(snapshot)
+    return parents
+
+
+def proc_windows(pid: int) -> Proc | None:
+    """OpenProcess + GetProcessTimes (the creation FILETIME is the start) +
+    the image name; the parent from a Toolhelp snapshot. Never `os.kill`: on
+    Windows that terminates the process."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return None
+        try:
+            code = wintypes.DWORD()
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return None
+            if not k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                return None
+            created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+            image = ctypes.create_unicode_buffer(32768)
+            size = wintypes.DWORD(32768)
+            name = image.value if k32.QueryFullProcessImageNameW(handle, 0, image, ctypes.byref(size)) else ""
+        finally:
+            k32.CloseHandle(handle)
+    except (OSError, AttributeError, ValueError):
+        return None
+    base = os.path.basename(name)
+    names = {base, os.path.splitext(base)[0]} - {""}
+    return Proc(_windows_parents().get(int(pid), 0), str(created), code.value != 259, frozenset(names))  # 259: STILL_ACTIVE
+
+
 def proc(pid: int) -> Proc | None:
     if pid <= 0:
         return None
+    if os.name == "nt":
+        return proc_windows(pid)
     if Path("/proc/self/stat").exists():
         return proc_linux(pid)
     return proc_ps(pid)
+
+
+def exists(pid: int) -> bool:
+    """Does a process `pid` exist (ours or not)? `os.kill(pid, 0)` on POSIX;
+    on Windows the process is opened instead (there os.kill terminates it)."""
+    if pid <= 0:
+        return False
+    if os.name == "nt":
+        info = proc_windows(pid)
+        return info is not None and not info.zombie
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
 
 
 def start_time(pid: int) -> str | None:
@@ -113,13 +202,16 @@ def alive(pid: int, start: str) -> bool | None:
     """
     if pid <= 1 or not start:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except OSError:
-        pass  # exists but is not ours to signal: a reused pid, most likely
+    if os.name != "nt":  # on Windows os.kill(pid, 0) terminates it: proc() asks
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except OSError:
+            pass  # exists but is not ours to signal: a reused pid, most likely
     info = proc(pid)
+    if info is None and os.name == "nt":
+        return False  # OpenProcess failed: gone (or another user's, never an owner of ours)
     if info is None:
         return None
     return not info.zombie and info.start == start

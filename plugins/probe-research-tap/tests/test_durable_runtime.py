@@ -19,6 +19,10 @@ from tap.session_identity import validate_identity
 from tap.session_journal import DeliveryPending, Journal
 from tap.storage import Storage
 
+# Another session's folder: an absolute path on this system (`/synthetic/...`
+# has no drive, so Windows reads it as relative and the tap retains its lines).
+OTHER_CWD = "C:\\synthetic\\other" if os.name == "nt" else "/synthetic/other"
+
 
 class Wire:
     base_url = "http://synthetic.invalid"
@@ -192,7 +196,7 @@ def test_unavailable_protocol_never_stages_or_downgrades(setup):
     journal.close()
 
 
-def _other_source(config, *, cwd="/synthetic/other", native=True):
+def _other_source(config, *, cwd=OTHER_CWD, native=True):
     sid = str(uuid4())
     path = config.transcript_path.parent / f"{sid}.jsonl"
     event = dict(type="user", message=dict(role="user", content="other session"))
@@ -238,7 +242,7 @@ def test_reconcile_admits_fifth_and_sixth_after_reserved_or_poison_prefix(
     journal = Journal(wire.base_url, "synthetic", wire.source)
     for gap in gaps[-2:]:
         assert journal.get(gap.session_id)["source_byte_end"] == gap.size
-        assert journal.get(gap.session_id)["cwd"] == "/synthetic/other"
+        assert journal.get(gap.session_id)["cwd"] == OTHER_CWD
     journal.close()
 
 
@@ -276,7 +280,7 @@ def test_disable_between_staging_and_delivery_retains_immutable_pending(setup, m
     config, storage, wire = setup
     sid, path = _other_source(config)
     journal = Journal(wire.base_url, "synthetic", wire.source)
-    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd="/synthetic/other")
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd=OTHER_CWD)
     journal.close()
     disabled = tapmain.cfg.disabled_paths_file()
     disabled.parent.mkdir(parents=True, exist_ok=True)
@@ -285,7 +289,7 @@ def test_disable_between_staging_and_delivery_retains_immutable_pending(setup, m
     def disable_after_stage(self, session_id, **kwargs):
         result = stage(self, session_id, **kwargs)
         if session_id == sid:
-            disabled.write_text("/synthetic/other\n")
+            disabled.write_text(OTHER_CWD + "\n")
         return result
 
     monkeypatch.setattr(Journal, "stage", disable_after_stage)
@@ -307,7 +311,7 @@ def test_shared_drain_migrates_native_cwd_but_never_guesses_missing_cwd(setup):
     journal.close()
     assert tapmain._run_durable_loop(config, storage) == 0
     journal = Journal(wire.base_url, "synthetic", wire.source)
-    assert journal.get(native_sid)["cwd"] == "/synthetic/other"
+    assert journal.get(native_sid)["cwd"] == OTHER_CWD
     assert journal.get(native_sid)["source_byte_end"] == native_path.stat().st_size
     assert "working directory is unverified" in journal.get(unknown_sid)["error"]
     assert journal.get(unknown_sid)["source_byte_end"] == 0
@@ -325,14 +329,14 @@ def _own_and_stage_in_child(sid, path, ready, partial=b""):
         wire.receipts(sid),
         historical=False,
         provenance=validate_identity(Path(path), wire.source, sid),
-        cwd="/synthetic/other",
+        cwd=OTHER_CWD,
     )
     if partial:
         with Path(path).open("ab") as handle:
             handle.write(partial)
             handle.flush()
             os.fsync(handle.fileno())
-    journal.stage(sid, cwd="/synthetic/other")
+    journal.stage(sid, cwd=OTHER_CWD)
     ready.send(True)
     # The parent kills us with SIGKILL while the live owner lock is held.
     ready.recv()
@@ -381,7 +385,7 @@ def test_sigkill_orphan_finalizes_pinned_prefix_and_appended_tail_reopens(setup,
                         dict(
                             type="user",
                             sessionId=sid,
-                            cwd="/synthetic/other",
+                            cwd=OTHER_CWD,
                             message=dict(role="user", content="resumed"),
                         )
                     )
@@ -414,7 +418,7 @@ def test_live_wrapper_blocks_orphan_completion_even_without_owner_lock(setup, mo
     config, storage, wire = setup
     sid, path = _other_source(config)
     journal = Journal(wire.base_url, "synthetic", wire.source)
-    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd="/synthetic/other")
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd=OTHER_CWD)
     journal.close()
     old = time.time() - tapmain.ORPHAN_QUIET_SECONDS - 1
     os.utime(path, (old, old))
@@ -440,7 +444,7 @@ def test_sigkill_partial_record_pins_complete_prefix_then_restart_consumes_compl
             dict(
                 type="user",
                 sessionId=sid,
-                cwd="/synthetic/other",
+                cwd=OTHER_CWD,
                 message=dict(role="user", content="resumed " + "x" * 70000),
             )
         )
@@ -489,7 +493,7 @@ def test_sigkill_partial_record_pins_complete_prefix_then_restart_consumes_compl
         handle.write(remainder)
     resumed = SimpleNamespace(**vars(config))
     resumed.session_id, resumed.transcript_path = sid, path
-    resumed.cwd = Path("/synthetic/other")
+    resumed.cwd = Path(OTHER_CWD)
     resumed.shutdown_sentinel = path.parent / "resumed.shutdown"
     tapmain._shutdown_requested = False
     assert tapmain._run_durable_loop(resumed, storage) == 0
@@ -605,7 +609,7 @@ def test_another_daemon_never_completes_a_session_whose_agent_is_alive(
     config, storage, wire = setup
     sid, path = _other_source(config)
     journal = Journal(wire.base_url, "synthetic", wire.source)
-    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd="/synthetic/other")
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd=OTHER_CWD)
     journal.close()
     old = time.time() - tapmain.ORPHAN_QUIET_SECONDS - 1
     os.utime(path, (old, old))
@@ -659,7 +663,7 @@ def test_stopping_drains_only_its_own_session(setup, monkeypatch):
     config, storage, wire = setup
     sid, path = _other_source(config)
     journal = Journal(wire.base_url, "synthetic", wire.source)
-    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd="/synthetic/other")
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd=OTHER_CWD)
     journal.close()
     tapmain._shutdown_requested = True
     assert tapmain._run_durable_loop(config, storage) == 0
@@ -770,7 +774,7 @@ def test_a_lasting_409_is_sent_again_on_a_backoff_while_other_sessions_flow(setu
     other, other_path = _other_source(config)
     journal = Journal(wire.base_url, "synthetic", wire.source)
     journal.ensure(
-        other, other_path, wire.receipts(other), historical=False, cwd="/synthetic/other"
+        other, other_path, wire.receipts(other), historical=False, cwd=OTHER_CWD
     )
     journal.close()
     _owner_states(monkeypatch, {}, default=Owner.ALIVE)
@@ -782,7 +786,7 @@ def test_a_lasting_409_is_sent_again_on_a_backoff_while_other_sessions_flow(setu
             event = dict(
                 type="user",
                 sessionId=other,
-                cwd="/synthetic/other",
+                cwd=OTHER_CWD,
                 message=dict(role="user", content=f"later {len(written)}"),
             )
             with other_path.open("a") as handle:

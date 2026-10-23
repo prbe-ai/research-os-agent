@@ -151,9 +151,32 @@ def watcher_prefix() -> str:
     return sources.harness(current_source()).capture.watcher_prefix
 
 
+#: Windows: the hooks' own `/tmp`, as Git Bash maps it (`cygpath -w /tmp`),
+#: set by session-start.sh for everything it starts, the service's recorder of
+#: the session included (its environment). The temp folder Python finds there
+#: need not be the one Git Bash maps, and a sentinel the hooks touch in one
+#: folder is never seen in the other.
+WATCHER_DIR_ENV = "PROBE_TAP_WATCHER_DIR"
+
+
+def _watcher_dir() -> Path:
+    """Where the hooks keep a session's watcher files: `/tmp`. On Windows the
+    hooks' Git Bash maps `/tmp` to a folder of its own, which Python's
+    `Path("/tmp")` (`C:\\tmp`) is not: the folder the hooks named
+    (WATCHER_DIR_ENV), else the user's temp folder."""
+    if os.name == "nt":
+        given = os.environ.get(WATCHER_DIR_ENV, "")
+        if given and os.path.isabs(given):
+            return Path(given)
+        import tempfile
+
+        return Path(tempfile.gettempdir())
+    return Path("/tmp")
+
+
 def pid_file(session_id: str) -> Path:
     """The wrapper's pid file — the single fact that says a daemon is live."""
-    return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.pid"
+    return _watcher_dir() / f"{watcher_prefix()}-watcher-{session_id}.pid"
 
 
 def version_file(session_id: str) -> Path:
@@ -181,7 +204,7 @@ HEAL_RETRY_SECONDS = 600
 
 
 def shutdown_sentinel(session_id: str) -> Path:
-    return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.shutdown"
+    return _watcher_dir() / f"{watcher_prefix()}-watcher-{session_id}.shutdown"
 
 
 def hosted_file(session_id: str) -> Path:
@@ -190,7 +213,7 @@ def hosted_file(session_id: str) -> Path:
     In place of the wrapper's pid file, which a hosted session has none of:
     `ensure-daemon.sh`'s fast path, `tap start` and `probe status` read it.
     Beside the others, so session-start.sh's prune covers it too."""
-    return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.hosted"
+    return _watcher_dir() / f"{watcher_prefix()}-watcher-{session_id}.hosted"
 
 
 def owner_file(session_id: str) -> Path:
@@ -199,7 +222,7 @@ def owner_file(session_id: str) -> Path:
     Written by SessionStart, read by the daemon every tick. Beside the pid
     file and the shutdown sentinel, so one prune covers all three.
     """
-    return Path("/tmp") / f"{watcher_prefix()}-watcher-{session_id}.owner"
+    return _watcher_dir() / f"{watcher_prefix()}-watcher-{session_id}.owner"
 
 
 def capture_source() -> str:
