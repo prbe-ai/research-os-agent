@@ -362,7 +362,9 @@ else
 fi
 
 # Crash-recovery wrapper: respawn up to 5 times per minute.
-# Self-terminates when shutdown sentinel exists (SessionEnd touches it).
+# Self-terminates when shutdown sentinel exists (SessionEnd touches it), and
+# when `tap watch` exits 12 (tap/handback.py EXIT_HANDED_OVER): the Probe
+# service took the session over, so its pid file goes with it.
 #
 # The wrapper runs as a SESSION LEADER (see the spawn below), so its PID is
 # also its PGID and nothing outside its own group can take it down. It still
@@ -396,9 +398,15 @@ while true; do
     fi
     "$PY" -m tap watch --session-id "$SID" --cwd "$CWD" --plugin-root "$ROOT" "$@" >>"$LOG" 2>&1 &
     CHILD_PID=$!
-    wait "$CHILD_PID" 2>/dev/null || true
+    CODE=0
+    wait "$CHILD_PID" 2>/dev/null || CODE=$?
     CHILD_PID=""
     [ -f "$SHUTDOWN" ] && exit 0
+    # 12: the Probe service records the session now (tap/handback.py): done.
+    if [ "$CODE" = 12 ]; then
+        [ "$(cat "$PIDF" 2>/dev/null)" = "$$" ] && rm -f "$PIDF"
+        exit 0
+    fi
     RESTART_COUNT=$((RESTART_COUNT + 1))
     sleep 5
 done

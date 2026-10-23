@@ -31,6 +31,7 @@ from pathlib import Path
 
 from tap import __version__
 from tap import config as cfg
+from tap.handback import EXIT_HANDED_OVER
 
 EXIT_OK = 0
 EXIT_NOT_PAIRED = 2
@@ -43,7 +44,9 @@ MIN_PYTHON = (3, 11)
 
 #: Verbatim from `daemon.ts::buildWrapperScript`, which is verbatim from
 #: `hooks/session-start.sh`. Positional args, not env, so the wrapper text is
-#: identical for every caller and a snapshot test can pin it.
+#: identical for every caller and a snapshot test can pin it. A `tap watch`
+#: that handed its session to the Probe service (`tap/handback.py`) exits
+#: EXIT_HANDED_OVER: the wrapper ends, and its pid file goes.
 WRAPPER = "\n".join(
     [
         'SID="$1"; CWD="$2"; PY="$3"; LOG="$4"; PIDF="$5"; PREFIX="$6"; shift 6',
@@ -66,9 +69,14 @@ WRAPPER = "\n".join(
         "  fi",
         '  "$PY" -m tap watch --session-id "$SID" --cwd "$CWD" "$@" >>"$LOG" 2>&1 &',
         "  CHILD_PID=$!",
-        '  wait "$CHILD_PID" 2>/dev/null || true',
+        "  CODE=0",
+        '  wait "$CHILD_PID" 2>/dev/null || CODE=$?',
         '  CHILD_PID=""',
         '  [ -f "$SHUTDOWN" ] && exit 0',
+        f'  if [ "$CODE" = {EXIT_HANDED_OVER} ]; then',
+        '    [ "$(cat "$PIDF" 2>/dev/null)" = "$$" ] && rm -f "$PIDF"',
+        "    exit 0",
+        "  fi",
         "  RESTART_COUNT=$((RESTART_COUNT + 1))",
         "  sleep 5",
         "done",

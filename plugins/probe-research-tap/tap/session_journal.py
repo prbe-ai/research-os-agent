@@ -997,6 +997,20 @@ def _lock_now(handle) -> bool:
         return False
 
 
+def _unlock(handle) -> None:
+    """Let go of `_lock_now`'s lock before the handle closes. Closing alone
+    releases it too, but Windows may release a closed handle's byte lock
+    late, and another process's `_lock_now` must find it free at once."""
+    with suppress(OSError):
+        if fcntl is None:
+            import msvcrt
+
+            handle.seek(_WIN_LOCK_OFFSET)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 class Wire:
     """The existing ingest routes and receipt read, using the paired credential."""
 
@@ -1213,6 +1227,19 @@ class Journal:
             return False
         self._live_owners[session_id] = handle
         return True
+
+    def holds_live(self, session_id: str) -> bool:
+        """Does this journal hold the session's live claim (`claim_live`)?"""
+        return session_id in self._live_owners
+
+    def release_live(self, session_id: str) -> None:
+        """Let go of the session's live claim, so another recorder can take it
+        (the Probe service's, when `tap watch` hands the session to it:
+        `tap/handback.py`). The lock file stays (see `_try_owner`)."""
+        handle = self._live_owners.pop(session_id, None)
+        if handle is not None:
+            _unlock(handle)
+            handle.close()
 
     def pin_orphan(self, session_id: str, remote: dict) -> bool:
         """Freeze an observed prefix only while no local live producer owns it.

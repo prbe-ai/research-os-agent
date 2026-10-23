@@ -16,6 +16,7 @@ import stat
 import threading
 import time
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -145,6 +146,92 @@ def test_the_hosted_loop_says_while_it_holds_the_sessions_claim(setup, monkeypat
     assert tapmain._run_durable_loop(config, storage) == 0
     assert seen and all(seen), "held while it recorded"
     assert published[-1] is None, "let go of when the loop returned"
+
+
+@pytest.mark.parametrize("setup", ["hosted", "watch"], indirect=True)
+def test_a_just_started_sessions_claim_is_held_before_its_first_upload_tick(setup, monkeypatch):
+    """Live run 39936954062: a session's transcript has no line yet when its
+    recorder starts, so it cannot prove its identity; the claim used to wait
+    for that, a sync interval later (~60 s of `recording: false`). The
+    journal's account comes from the server's receipts alone: the claim (and,
+    hosted, its publication) comes on the first pass."""
+    config, storage, wire = setup
+    config.transcript_path.write_text("")  # nothing written yet
+    published = []
+    config.claimed = published.append
+    at_first_tick = {}
+
+    def sleep(_seconds):
+        if not at_first_tick:
+            at_first_tick["published"] = list(published)
+            other = Journal(wire.base_url, "synthetic", "claude_code")
+            try:
+                at_first_tick["free"] = other.claim_live(config.session_id)
+            finally:
+                other.close()
+            # The session's first line, then its end: the same recorder records it.
+            config.transcript_path.write_text(json.dumps(
+                dict(type="user", sessionId=config.session_id, message=dict(role="user", content="first"))) + "\n")
+        if getattr(config, "stop", None) is not None:
+            config.stop.set()
+        else:
+            tapmain._shutdown_requested = True
+
+    monkeypatch.setattr(tapmain.time, "sleep", sleep)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert at_first_tick["free"] is False, "the claim is held from the first pass"
+    if getattr(config, "stop", None) is not None:
+        assert at_first_tick["published"] and at_first_tick["published"][-1], "and says so, hosted"
+    batches = [json.loads(body) for body in wire.accepted.values()]
+    assert [e["line_no"] for b in batches for e in b.get("events", [])] == [0]
+    assert batches[-1]["finalize"] is True
+
+
+@pytest.mark.parametrize("reserved", [True, False], ids=["reserved", "fresh"])
+@pytest.mark.parametrize("setup", ["hosted", "watch"], indirect=True)
+def test_a_transcript_that_is_another_sessions_is_never_uploaded_and_its_claim_goes(setup, monkeypatch, reserved):
+    """Codex on 59ac0c431: the claim came before the identity check, and a
+    journal that already held the session's reservation (an empty acknowledged
+    prefix) skipped the check on later passes, so SessionEnd uploaded another
+    session's transcript, FINALIZE included, under this session's id. Nothing
+    is staged before the transcript proves it is this session's, and a proven
+    mismatch lets go of the claim, so the right recorder can take it."""
+    config, storage, wire = setup
+    config.transcript_path.write_text("")
+    if reserved:
+        journal = Journal(wire.base_url, "synthetic", "claude_code")
+        try:
+            journal.ensure(config.session_id, config.transcript_path, wire.receipts(config.session_id),
+                           historical=False)
+        finally:
+            journal.close()
+    other = str(uuid4())
+    config.transcript_path.write_text("".join(json.dumps(
+        dict(type="user", sessionId=other, message=dict(role="user", content=f"not yours {i}"))) + "\n"
+        for i in range(2)))
+    published = []
+    config.claimed = published.append
+    free = []
+
+    def sleep(_seconds):
+        if not free:
+            probe = Journal(wire.base_url, "synthetic", "claude_code")
+            try:
+                free.append(probe.claim_live(config.session_id))
+            finally:
+                probe.close()
+        if len(free) == 1:
+            free.append("ended")
+            if getattr(config, "stop", None) is not None:
+                config.stop.set()
+            else:
+                tapmain._shutdown_requested = True
+
+    monkeypatch.setattr(tapmain.time, "sleep", sleep)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert wire.accepted == {}, "nothing of another session's transcript left the machine"
+    assert free[0] is True, "the claim was let go once the mismatch was proven"
+    assert not published or published[-1] is None
 
 
 # -- hosted.record ---------------------------------------------------------------------

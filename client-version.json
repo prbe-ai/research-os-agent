@@ -10,7 +10,7 @@
     "min": "0.125.0"
   },
   "tap": {
-    "latest": "0.10.12",
+    "latest": "0.10.13",
     "min": "0.9.17",
     "recommended": "0.9.14",
     "message": "Taps before 0.9.14 upload sessions in the older format, and taps before 0.9.13 also send what your own commands printed."

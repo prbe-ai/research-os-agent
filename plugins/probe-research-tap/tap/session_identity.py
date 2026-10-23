@@ -33,6 +33,14 @@ _KIMI_STATE_MAX_BYTES = 1024 * 1024
 SAMPLE_BYTES = 2 * 1024 * 1024
 
 
+class IdentityMismatch(ReconciliationRequired):
+    """The transcript is proven to be another session's: it names a native
+    session id that is not this one (or two that disagree), or a Kimi Code wire
+    sits in another session's folder. Not merely unprovable yet, as a
+    transcript with no record so far is (plain ReconciliationRequired): a
+    recorder that claimed the session lets go of it (`tap/main.py`)."""
+
+
 def validate_identity(path: Path, source: str, session_id: str) -> dict:
     try:
         expected = str(UUID(session_id))
@@ -97,13 +105,13 @@ def validate_identity(path: Path, source: str, session_id: str) -> dict:
                 (r.get("payload", {}) if nested else r).get("id") != native
                 for r in headers
             ):
-                raise ReconciliationRequired("conflicting native session headers")
+                raise IdentityMismatch("conflicting native session headers")
     try:
         matches = str(UUID(native)) == expected
     except (ValueError, TypeError, AttributeError):
         matches = False
     if not matches:
-        raise ReconciliationRequired(
+        raise (ReconciliationRequired if native is None else IdentityMismatch)(
             "native transcript identity is absent or differs from the filename/session"
         )
     proof = {
@@ -147,7 +155,7 @@ def _kimi_identity(path: Path, head_lines: list[bytes], harness, expected: str) 
         None,
     )
     if folder is None:
-        raise ReconciliationRequired(
+        raise IdentityMismatch(
             "native transcript identity is absent or differs from the filename/session"
         )
     try:
@@ -159,7 +167,7 @@ def _kimi_identity(path: Path, head_lines: list[bytes], harness, expected: str) 
         harness.canonical_session_id(state.get("id") if isinstance(state.get("id"), str) else ""),
         expected,
     ):
-        raise ReconciliationRequired(
+        raise (IdentityMismatch if isinstance(state, dict) and state.get("id") else ReconciliationRequired)(
             "native transcript identity is absent or differs from the filename/session"
         )
     proof = {

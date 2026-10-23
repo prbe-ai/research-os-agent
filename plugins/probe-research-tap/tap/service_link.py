@@ -15,7 +15,8 @@ has no switch: only a session whose mode is off starts nothing here.
                                only a NEWER generation's refusal steps back
     switched to off ─────────> one register with mode off: the session stops
                                holding the service, and no ensure while off
-    tap watch exits ─────────> session.end
+    tap watch exits ─────────> session.end (none when it handed the session
+                               to the service: `tap/handback.py`)
 
 On its OWN thread with its own 2 s socket deadlines (plan X6), never between
 capture operations: a capture tick that runs for minutes must not let the
@@ -119,6 +120,8 @@ class ServiceLink:
         self.generation = _now_ms()
         self.registered_mode: str | None = None
         self.superseded = False
+        #: `session.end` on the way out (`stop(end=False)`: not).
+        self.end_on_exit = True
         self._owner: dict | None = None
         self._owner_seen = False
         #: The service answered `alive: false` for this owner: it is not running.
@@ -146,7 +149,11 @@ class ServiceLink:
         self._thread.start()
         return self
 
-    def stop(self, timeout: float = END_TIMEOUT_S + 1.0) -> None:
+    def stop(self, timeout: float = END_TIMEOUT_S + 1.0, *, end: bool = True) -> None:
+        """`end=False`: the session goes on under another registrant (this
+        `tap watch` handed it to the Probe service, `tap/handback.py`, or a
+        newer link of this one replaces it): no `session.end` on the way out."""
+        self.end_on_exit = end
         self._stop.set()
         self._thread.join(timeout)
 
@@ -322,7 +329,7 @@ class ServiceLink:
         """`session.end` on the way out, if this thread registered it (a hint:
         the owner's exit is the truth). Bounded by END_TIMEOUT_S."""
         try:
-            if self.registered_mode is not None and not self.superseded:
+            if self.registered_mode is not None and not self.superseded and self.end_on_exit:
                 conn = self._conn
                 if conn is None:
                     conn = client.connect(END_TIMEOUT_S)

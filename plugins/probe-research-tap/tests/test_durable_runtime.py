@@ -979,3 +979,38 @@ def test_hosted_controls_hold_what_the_recorder_published():
     assert controls.claimed == "/journal/ns"
     controls.claim(None)
     assert controls.claimed is None
+
+
+@pytest.mark.parametrize("orphan", [False, True], ids=["live", "orphan"])
+def test_a_recovered_reservation_whose_file_is_another_sessions_sends_nothing(setup, monkeypatch, orphan):
+    """Codex on 33d27365e: another session's journal row with an empty
+    acknowledged prefix (a reservation nothing was sent of yet) whose file now
+    holds a different session's transcript. Recovering it (the shared drain,
+    or pinning it as an orphan) skipped the native identity check, which only
+    the recorder's own session got: it uploaded that transcript under the
+    reserved id, and finalized it. Each recovered session's source proves it
+    is that session's before anything of it is pinned, staged or sent."""
+    config, storage, wire = setup
+    sid, path = _other_source(config)
+    path.write_text("")  # reserved before its first line
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    journal.ensure(sid, path, wire.receipts(sid), historical=False, cwd=OTHER_CWD)
+    journal.close()
+    foreign = str(uuid4())
+    path.write_text("".join(json.dumps(dict(type="user", sessionId=foreign, cwd=OTHER_CWD,
+                                            message=dict(role="user", content=f"not {sid} {i}"))) + "\n"
+                            for i in range(2)))
+    if orphan:
+        old = time.time() - tapmain.ORPHAN_QUIET_SECONDS - 1
+        os.utime(path, (old, old))
+        monkeypatch.setattr(tapmain.reconcile, "has_live_daemon", lambda _: False)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert not any(key[0] == sid for key in wire.accepted), "nothing of it left the machine"
+    assert any(key[0] == config.session_id for key in wire.accepted), "the recorder's own session still goes"
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    try:
+        state = journal.get(sid)
+        assert state["source_byte_end"] == 0 and not state["finalized"] and journal.pending(sid) is None
+        assert not state.get("snapshot_path"), "not pinned either"
+    finally:
+        journal.close()

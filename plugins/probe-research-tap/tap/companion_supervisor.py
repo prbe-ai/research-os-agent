@@ -30,6 +30,11 @@ must be killable without touching capture.
                        its own -- capture's FINALIZE never waits on a model. A
                        worker whose tap watch died without stop() sees its
                        parent gone and does the same.
+    handed to the  ──> hand_over(): no SIGTERM; a fresh `.handover` ask,
+    service            which the service recorder's supervisor keeps fresh
+                       while it waits for the lock: the worker hands over to
+                       that recorder's (tap/handback.py) instead of ending the
+                       session. Ending meanwhile, nobody asks: it finishes.
 
 Hosted by a Probe service that supervises workers itself (`service`: the
 `probe.service.workers.Link` on the recorder's controls), the worker is handed
@@ -419,6 +424,39 @@ class Supervisor:
                 log.info("companion worker started (pid %s)", self.child.pid)
         except Exception:  # noqa: BLE001
             log.exception("companion supervisor poll failed")
+
+    def hand_over(self) -> None:
+        """This recorder handed the session to the Probe service's
+        (`tap/handback.py`), whose recorder already holds the session: the
+        worker is left running and asked to hand over to that recorder's (a
+        fresh `.handover` ask: it sees this process gone, and hands over at its
+        next model round instead of ending the session). Fresh, never dated
+        ahead: the service recorder's supervisor keeps it fresh while it waits
+        for the worker's lock, and stops once the session ends, so a session
+        ending meanwhile still finishes its queue. The SDK socket closes; its
+        path stays, the next recorder binds there."""
+        if self.sock is not None:
+            try:
+                self._drain_socket()
+                self.sock.close()
+            except OSError:
+                pass
+            self.sock = None
+        child, self.child = self.child, None
+        if child is None or child.poll() is not None:
+            self._withdraw_ask()
+            return
+        marker = daemon_dir() / (_safe_sid(self.session_id) + ".handover")
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            if marker.stat().st_mtime > time.time():
+                return  # dated ahead by a service restart: not ours to replace
+        except OSError:
+            pass
+        try:
+            marker.touch()
+        except OSError:
+            log.exception("could not ask the daemon worker to hand over; it ends its session")
 
     def stop(self) -> None:
         """Ask the worker to finish, and do not wait: its final cycle is bounded

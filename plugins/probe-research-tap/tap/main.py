@@ -22,13 +22,17 @@ Exits cleanly on:
     and SessionEnd never fires; touches the shutdown sentinel so the wrapper
     exits too instead of respawning a doomed daemon. A quiet session whose
     agent is still running is never ended: silence is not an ending.
+  - the Probe service took the session over (tap/handback.py): it started
+    here only because the service could not take it at SessionStart; exit
+    EXIT_HANDED_OVER, no FINALIZE (the session goes on in the service), and
+    the wrapper ends instead of respawning.
 
 On the way out (every path except the killswitch, whose contract is "ship
-nothing") the daemon reads one last transcript tail and enqueues a FINALIZE for
-the session. That finalize is what tells the engine the session is over, and
-completion is the only thing that triggers its knowledge-unit extraction —
-qa, code_change, decision, file_ref. Without it a session is captured as a live
-transcript and never mined. Protocol 2 requires a pinned client completion;
+nothing", and the hand-over) the daemon reads one last transcript tail and
+enqueues a FINALIZE for the session. That finalize is what tells the engine the
+session is over, and completion is the only thing that triggers its
+knowledge-unit extraction — qa, code_change, decision, file_ref. Without it a
+session is captured as a live transcript and never mined. Protocol 2 requires a pinned client completion;
 another local daemon recovers quiet orphans after their process ownership ends.
 """
 
@@ -49,11 +53,11 @@ from collections.abc import Callable
 from pathlib import Path
 
 from tap import config as cfg
-from tap import killswitch, outbox, reconcile, service_link, sources
+from tap import handback, killswitch, outbox, reconcile, record_client, service_link, sources
 from tap import owner as session_owner
 from tap.companion_supervisor import Supervisor
 from tap.outbox import HaltError
-from tap.session_identity import validate_identity
+from tap.session_identity import IdentityMismatch, validate_identity
 from tap.session_journal import (
     DeliveryPending,
     Journal,
@@ -302,6 +306,12 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
             cfg.shutdown_sentinel(args.session_id).touch()
         return 0
 
+    if hosted is None and handback.recorded_by_service(args.session_id):
+        # The service records it already, its claim held (a hand-off this
+        # session made, then a wrapper that respawned us): nothing to do here.
+        log.info("the Probe service records this session; this tap watch leaves it to it")
+        return handback.EXIT_HANDED_OVER
+
     transcript_path = args.transcript
     if transcript_path is None:
         assert args.transcript_dir is not None
@@ -334,14 +344,46 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
     # and ends its registration on the way out. Hosted by the service, the same
     # link runs, under this session's environment, over the service's socket.
     link = service_link.start(args.session_id, env=dict(os.environ) if hosted is not None else None)
+    # `tap watch` only: offered to the service once it can record the session.
+    offer = None
+    if hosted is None and record_client.enabled():
+        offer = handback.HandBack(
+            args.session_id, cwd=args.cwd, transcript=transcript_path, plugin_root=args.plugin_root, link=link
+        )
 
+    code = None
     try:
-        return _run_durable_loop(config, storage)
+        code = _run_durable_loop(config, storage, **({"offer": offer} if offer is not None else {}))
+        return code
     finally:
+        if offer is not None:
+            link = offer.link  # a newer one, after a take-back
         if link is not None:
-            link.stop()
+            # Handed over: the service's own registration goes on.
+            link.stop(end=code != handback.EXIT_HANDED_OVER)
         storage.close()
         log.info("tap exited")
+
+
+def _prove_source(state: dict, source: str, proven: dict) -> None:
+    """A recovered session's source is that session's own transcript, or
+    nothing of it is pinned, staged or sent (`validate_identity`'s errors, the
+    session's retry).
+
+    Its reservation was proven when it was made, and every pass checks the
+    acknowledged prefix's hash (`Journal._validate_source`); an empty prefix
+    proves nothing, so a file that now holds another session's transcript went
+    up under the reserved id, finalized too (Codex on 33d27365e; as on main).
+    Proven once per process and file, then the prefix carries it; proven again
+    on every pass while nothing of it is acknowledged."""
+    path = Path(state["path"])
+    stat = path.stat()
+    key = (stat.st_dev, stat.st_ino)
+    if proven.get(state["session_id"]) == key and state.get("source_byte_end", 0) > 0:
+        return
+    proven.pop(state["session_id"], None)
+    validate_identity(path, source, state["session_id"])
+    proven[state["session_id"]] = key
 
 
 def _reservation_cwd(journal: Journal, state: dict, storage: Storage) -> Path:
@@ -464,12 +506,16 @@ def _require_capture_eligible(cwd: Path) -> None:
         raise DeliveryPending("capture disabled for this source folder; pending bytes retained")
 
 
-def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
+def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.HandBack | None = None) -> int:
     """Protocol negotiation precedes source reservation. No legacy downgrade.
 
     The old outbox is a different namespace. Old processes cannot clear or
     evict durable pending bytes; the server fences their writes to v2 streams.
     Every compatible producer uses the same atomic session reservation.
+
+    `offer` (`tap watch` only): between two passes, the session is offered to
+    the Probe service (`tap/handback.py`); EXIT_HANDED_OVER once its recorder
+    holds the session's claim.
     """
     wire = Wire(cfg.api_base_url(), c.token, cfg.capture_source())
     journal = None
@@ -484,6 +530,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     deleted: set[str] = set()
     # Sessions whose transcript was rewritten under the cursor, said once each.
     rewritten: set[str] = set()
+    # Recovered sessions whose source proved, in this process, that it is
+    # theirs: {session: the file's (device, inode)} (`_prove_source`).
+    proven: dict[str, tuple[int, int]] = {}
     empty_ticks = 0
     # The Probe daemon worker rides this process's lifecycle as a child; see
     # companion_supervisor.py. Polled every tick and every few seconds of the
@@ -493,6 +542,13 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
         session_id=c.session_id, transcript=c.transcript_path, cwd=c.cwd, service=getattr(c, "workers", None)
     )
     looped = False
+    handed_over = False
+    # The transcript proved, in this process, that it is this session's
+    # (`validate_identity`): nothing is staged, uploaded or finalized before,
+    # whatever reservation the journal already holds for it.
+    identity_ok = False
+    # It proved it is another session's: the claim waits for the check again.
+    mismatched = False
     try:
         while True:
             if _paused(c):
@@ -518,19 +574,47 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
             try:
                 sent_bytes = 0
                 if c.session_id not in deleted and (
-                    journal is None or journal.get(c.session_id) is None
+                    not identity_ok or journal.get(c.session_id) is None
                 ):
-                    provenance = validate_identity(c.transcript_path, wire.source, c.session_id)
-                    remote = wire.receipts(c.session_id)
-                    journal = journal or Journal(wire.base_url, remote["customer_id"], wire.source)
-                    if not journal.claim_live(c.session_id):
-                        return 0  # another compatible daemon owns this session
-                    companion.claimed()
-                    _publish_claim(c, str(journal.directory))
+                    remote = None
+                    if not mismatched and (journal is None or not journal.holds_live(c.session_id)):
+                        # The claim first, on the first pass: the journal's account
+                        # needs only the server's receipts, not the transcript's
+                        # identity, which a session just started cannot prove yet (no
+                        # line). It waited for that before: a sync interval of a
+                        # recorder that held nothing and said so (`recording: false`).
+                        # Nothing is staged before the identity is proven, below.
+                        remote = wire.receipts(c.session_id)
+                        journal = journal or Journal(wire.base_url, remote["customer_id"], wire.source)
+                        if not journal.claim_live(c.session_id):
+                            return 0  # another compatible daemon owns this session
+                        companion.claimed()
+                        _publish_claim(c, str(journal.directory))
+                    try:
+                        provenance = validate_identity(c.transcript_path, wire.source, c.session_id)
+                    except IdentityMismatch:
+                        # Another session's transcript: never this recorder's to
+                        # hold, so the right one can take the session. Checked
+                        # before any claim from now on, as before the early claim.
+                        if journal is not None and journal.holds_live(c.session_id):
+                            journal.release_live(c.session_id)
+                            _publish_claim(c, None)
+                            log.warning("session %s: its transcript %s is another session's; "
+                                        "let go of the session", c.session_id, c.transcript_path)
+                        mismatched = True
+                        raise
+                    if journal is None or not journal.holds_live(c.session_id):
+                        remote = wire.receipts(c.session_id)
+                        journal = journal or Journal(wire.base_url, remote["customer_id"], wire.source)
+                        if not journal.claim_live(c.session_id):
+                            return 0  # another compatible daemon owns this session
+                        companion.claimed()
+                        _publish_claim(c, str(journal.directory))
+                    identity_ok, mismatched = True, False
                     journal.ensure(
                         c.session_id,
                         c.transcript_path,
-                        remote,
+                        remote or wire.receipts(c.session_id),
                         historical=False,
                         provenance=provenance,
                         cwd=str(c.cwd),
@@ -577,6 +661,11 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                             # Its batch still waits out a lasting 409
                             # (`_defer_conflict`); the others keep going.
                             continue
+                        if state["session_id"] != c.session_id:
+                            # Recovered: its source proves it is that session's
+                            # (the recorder's own did, above) before anything of
+                            # it is pinned, staged or sent.
+                            _prove_source(state, wire.source, proven)
                         source_cwd = _reservation_cwd(journal, state, storage)
                         _require_capture_eligible(source_cwd)
                         if (
@@ -741,6 +830,24 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
             )
             slept = 0
             while slept < cadence and not _shutdown_observed(c) and not _paused(c):
+                if (
+                    offer is not None
+                    and journal is not None
+                    and identity_ok
+                    and c.session_id not in deleted
+                    and c.session_id not in rewritten
+                    and offer.due()
+                ):
+                    # Between two passes: this one's batch is delivered, or
+                    # pending in the journal for whichever recorder is next.
+                    outcome = offer.attempt(journal, stopping=lambda: _shutdown_observed(c), tick=companion.poll)
+                    if outcome == handback.Outcome.HANDED_OVER:
+                        handed_over = True
+                        return handback.EXIT_HANDED_OVER
+                    if outcome == handback.Outcome.LOST:
+                        return 0  # as when the claim is found taken at the start
+                    if outcome == handback.Outcome.TAKEN_BACK:
+                        break  # a pass now: what was written while it waited
                 time.sleep(1)
                 slept += 1
                 if slept % COMPANION_POLL_SECONDS == 0:
@@ -749,8 +856,12 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
         # Ask the daemon worker to finish. It runs its own bounded final cycle in
         # its own process group; FINALIZE below never waits on it. Paused (the
         # service restarts), it is left running: the next copy's worker asks it
-        # to hand over and carries the same conversation on.
-        if not _paused(c):
+        # to hand over and carries the same conversation on. Handed to the
+        # service's recorder, the same: that recorder's worker carries it on,
+        # unless the session ends now (no worker comes next: it finishes).
+        if handed_over and not _shutdown_observed(c):
+            companion.hand_over()
+        elif not _paused(c):
             companion.stop()
         _publish_claim(c, None)
         if journal is not None:
