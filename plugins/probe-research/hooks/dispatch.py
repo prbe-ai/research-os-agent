@@ -49,7 +49,11 @@ this same plugin (`installed_root`, `hand_over`): under Claude Code the one its
 install ledger names, under Codex the newest complete version in Codex's plugin
 cache (`codex_installed_root`). So every event hooks.json sends here runs the
 installed hooks. The Stop wake (claude-reads.json, outside this dispatcher) does
-the same in reads_hook.py.
+the same in reads_hook.py. Skills follow too: Claude Code reads Probe's from its
+own skills folder (copies of the plugin's, which it re-reads when they change),
+and the pre-tool route on the Skill tool (`root_skills_sync.py skill-call`) brings
+those copies to the installed copy's before the call (`is_installed_copy`); Codex
+lists a plugin's skills again on every turn from its cache, so it needs nothing.
 
 Heartbeat: under Codex (`PLUGIN_ROOT` set), the session-start and prompt lanes
 touch `$XDG_STATE_HOME/probe/hooks/alive/<session>`. The capture plugin's prompt
@@ -169,7 +173,7 @@ TOOL_LANES = ("pre-tool", "post-tool")
 #: accept in both plugins: a new tool route needs its name here too.
 TOOL_FILTER = {
     "pre-tool": (
-        frozenset(("Bash", "AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebSearch")),
+        frozenset(("Bash", "AskUserQuestion", "Write", "Edit", "MultiEdit", "NotebookEdit", "WebSearch", "Skill")),
         ("probe-research", "probe_research"),
     ),
     "post-tool": (
@@ -337,8 +341,13 @@ LEDGER_MAX_BYTES = 1 << 20
 
 
 def _ledger(env) -> str:
-    """Claude Code's install ledger: `$CLAUDE_CONFIG_DIR` or `~/.claude`, then
-    `plugins/installed_plugins.json` (as `probe.cli.root_skills` reads it)."""
+    """Claude Code's install ledger, where Claude Code itself keeps it: in its
+    plugins folder, `$CLAUDE_CODE_PLUGIN_CACHE_DIR` when that moves it, else
+    `$CLAUDE_CONFIG_DIR` or `~/.claude`, then `plugins/`; the file is
+    `installed_plugins.json` (as `probe.cli.root_skills` reads it)."""
+    moved = (env.get("CLAUDE_CODE_PLUGIN_CACHE_DIR") or "").strip()
+    if moved:
+        return os.path.join(os.path.expanduser(moved), "installed_plugins.json")
     home = (env.get("CLAUDE_CONFIG_DIR") or "").strip()
     base = os.path.expanduser(home) if home else os.path.join(os.path.expanduser("~"), ".claude")
     return os.path.join(base, "plugins", "installed_plugins.json")
@@ -493,22 +502,77 @@ def installed_root(root: str, env) -> "str | None":
         return None
     import json
 
-    key = os.path.basename(folder) + "@" + os.path.basename(os.path.dirname(folder))
     try:
-        entries = json.loads(raw.decode("utf-8"))["plugins"][key]
-        if not isinstance(entries, list) or not entries:
+        entries = json.loads(raw.decode("utf-8"))["plugins"][ledger_key(here)]
+        if isinstance(entries, list) and any(not isinstance(e, dict) or e.get("scope") != "user" for e in entries):
             return None
-        if any(not isinstance(e, dict) or e.get("scope") != "user" for e in entries):
-            return None
-        listed = {os.path.realpath(e["installPath"]) for e in entries}
     except (ValueError, KeyError, TypeError, AttributeError):
         return None
-    if len(listed) != 1:
+    listed = _install_paths(entries)
+    if listed is None or len(listed) != 1:
         return None
     real = listed.pop()
     if real == here or os.path.dirname(real) != folder or not _complete(real):
         return None
     return real
+
+
+def ledger_key(root: str) -> str:
+    """The ledger's key for the plugin a cache folder holds: Claude Code caches
+    `<marketplace>/<plugin>/<version>` and keys it `<plugin>@<marketplace>`."""
+    folder = os.path.dirname(os.path.realpath(root))
+    return os.path.basename(folder) + "@" + os.path.basename(os.path.dirname(folder))
+
+
+def _install_paths(entries) -> "set | None":
+    """The install folders (resolved) a ledger key's entries name, whatever
+    their scope, or None for anything but a non-empty list of entries."""
+    if not isinstance(entries, list) or not entries:
+        return None
+    try:
+        return {os.path.realpath(e["installPath"]) for e in entries}
+    except (KeyError, TypeError, AttributeError, ValueError):
+        # ValueError: a path with a NUL byte in it.
+        return None
+
+
+def installed_copies(env) -> "dict | None":
+    """Claude Code's install ledger as `{"<plugin>@<marketplace>": {install
+    folders}}`, or None when it cannot be read (absent, not a file, too big,
+    not the shape it has)."""
+    raw = _read_ledger(_ledger(env))
+    if raw is None:
+        return None
+    import json
+
+    try:
+        plugins = json.loads(raw.decode("utf-8"))["plugins"]
+    except (ValueError, KeyError, TypeError):
+        return None
+    if not isinstance(plugins, dict):
+        return None
+    found = {}
+    for key, entries in plugins.items():
+        paths = _install_paths(entries)
+        if isinstance(key, str) and paths:
+            found[key] = paths
+    return found
+
+
+def is_installed_copy(root: str, env, copies: "dict | None" = None) -> bool:
+    """Is `root` THE copy Claude Code has installed of its plugin: every entry
+    the install ledger keeps under its `<plugin>@<marketplace>`, whatever its
+    scope, names this one folder? False when the ledger names another copy or
+    several, does not name this one (a `--plugin-dir` checkout, a folder outside
+    the cache), or cannot be read. `copies`: `installed_copies`, already read.
+
+    Asked before writing what every session reads (`root_skills_sync.py
+    skill-call`): after `hand_over` the installed copy runs the event, and a
+    copy that could not hand over is an older one, whose text must not
+    overwrite the installed one's."""
+    copies = installed_copies(env) if copies is None else copies
+    here = os.path.realpath(root)
+    return bool(copies) and copies.get(ledger_key(here)) == {here}
 
 
 def hand_over(argv: list) -> None:
