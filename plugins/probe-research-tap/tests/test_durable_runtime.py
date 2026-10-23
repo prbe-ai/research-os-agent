@@ -1,6 +1,7 @@
 """Exercise the actual v2 daemon path with the shared journal and no network."""
 
 import hashlib
+import itertools
 import json
 import multiprocessing
 import os
@@ -711,4 +712,153 @@ def test_a_lasting_409_costs_one_receipts_lookup_per_batch(setup, monkeypatch):
     assert calls == [config.session_id]
     journal = Journal(wire.base_url, "synthetic", "claude_code")
     assert "disconnected" in journal.get(config.session_id)["error"]
+    journal.close()
+
+
+# ---------------------------------------------------------------------------
+# A 409 reconciliation leaves standing waits, and only its own session waits.
+# bucket-robotics, 2026-10-22: six sessions the engine kept refusing were
+# re-POSTed (a 1.1 MB body among them) every ~10 s, for good.
+# ---------------------------------------------------------------------------
+
+REFUSAL = {"detail": "batch identity already accepted with different content"}
+
+
+def _clock(monkeypatch, *, ticks: int, step: float = 60, each=None) -> list[float]:
+    """The journal's clock, moved `step` seconds by each daemon tick's sleep
+    (one sleep per tick at these tests' 1 s cadence: a minute per tick is the
+    real active cadence), and a stop after `ticks` sleeps."""
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(tapmain_journal, "time", SimpleNamespace(time=lambda: clock[0]))
+    monkeypatch.setattr(tapmain, "_transcript_has_active_reader", lambda _path: None)
+    sleeps = 0
+
+    def sleep(_seconds):
+        nonlocal sleeps
+        sleeps += 1
+        clock[0] += step
+        if each is not None:
+            each(clock[0])
+        if sleeps >= ticks:
+            tapmain._shutdown_requested = True
+
+    monkeypatch.setattr(tapmain.time, "sleep", sleep)
+    return clock
+
+
+def _refuse(monkeypatch, wire, sid: str, clock: list[float]) -> list[tuple[str, float]]:
+    """The engine answers 409 to every batch of `sid`; other sessions' go through.
+    Returns every POST as (session, clock)."""
+    posts = []
+    accept = wire.post
+
+    def post(body):
+        session = json.loads(body)["session_id"]
+        posts.append((session, clock[0]))
+        return (409, REFUSAL) if session == sid else accept(body)
+
+    monkeypatch.setattr(wire, "post", post)
+    return posts
+
+
+def test_a_lasting_409_is_sent_again_on_a_backoff_while_other_sessions_flow(setup, monkeypatch):
+    """Six hours of minute ticks: the refused batch goes 11 times instead of 361,
+    a minute after the first refusal, then two, four ... and hourly from then
+    on. The other session's new lines go on the very tick after each is
+    written, while the refused one waits."""
+    config, storage, wire = setup
+    other, other_path = _other_source(config)
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    journal.ensure(
+        other, other_path, wire.receipts(other), historical=False, cwd="/synthetic/other"
+    )
+    journal.close()
+    _owner_states(monkeypatch, {}, default=Owner.ALIVE)
+    monkeypatch.setattr(tapmain_journal, "CONFLICT_RETRY_JITTER", 0.0)
+    written = []
+
+    def write_other(now):
+        if len(written) < 7 and round(now - start) % (45 * 60) == 0:
+            event = dict(
+                type="user",
+                sessionId=other,
+                cwd="/synthetic/other",
+                message=dict(role="user", content=f"later {len(written)}"),
+            )
+            with other_path.open("a") as handle:
+                handle.write(json.dumps(event) + "\n")
+            written.append(now)
+
+    clock = _clock(monkeypatch, ticks=6 * 60, each=write_other)
+    start = clock[0]
+    posts = _refuse(monkeypatch, wire, config.session_id, clock)
+    assert tapmain._run_durable_loop(config, storage) == 0
+
+    refused = [at for sid, at in posts if sid == config.session_id]
+    gaps = [round(later - earlier) for earlier, later in itertools.pairwise(refused)]
+    assert gaps[:6] == [60, 120, 240, 480, 960, 1920]
+    assert gaps[6:] and set(gaps[6:]) == {tapmain_journal.CONFLICT_RETRY_MAX_SECONDS}
+    assert len(refused) == 11  # 361 passes; every pass re-sent it before
+
+    sent_other = {at for sid, at in posts if sid == other}
+    assert len(written) == 7 and set(written) <= sent_other
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    assert journal.get(other)["source_byte_end"] == other_path.stat().st_size
+    assert journal.get(config.session_id)["conflict_wait"]["refusals"] == 11
+    journal.close()
+
+
+def test_the_wait_outlives_a_restart_and_ends_once_the_batch_is_accepted(setup, monkeypatch):
+    """Kept in the journal, not the process: a daemon (or Probe service
+    recorder) started during the wait does not send the batch either. Once the
+    server takes it, the wait is gone."""
+    config, storage, wire = setup
+    clock = _clock(monkeypatch, ticks=1, step=0)
+    posts = _refuse(monkeypatch, wire, config.session_id, clock)
+
+    def run():
+        tapmain._shutdown_requested = False
+        assert tapmain._run_durable_loop(config, storage) == 0
+        journal = Journal(wire.base_url, "synthetic", wire.source)
+        try:
+            return journal.get(config.session_id).get("conflict_wait"), journal.conflict_retry_in(
+                config.session_id
+            )
+        finally:
+            journal.close()
+
+    wait, left = run()  # refused, reconciled, still refused: it waits
+    assert len(posts) == 1 and wait["refusals"] == 1
+    assert 0.75 * 60 <= left <= 60
+    clock[0] += left - 1
+    wait, left = run()  # a new process, inside the wait: nothing sent
+    assert len(posts) == 1 and wait["refusals"] == 1 and left == pytest.approx(1, abs=1e-3)
+    clock[0] += 2
+    wait, left = run()  # past it: sent once, refused again, waits longer
+    assert len(posts) == 2 and wait["refusals"] == 2
+    assert 0.75 * 120 <= left <= 120
+    monkeypatch.delattr(wire, "post")  # the server takes it now
+    clock[0] += left
+    wait, left = run()
+    assert wait is None and left == 0
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    assert journal.get(config.session_id)["last_seq"] >= 0
+    journal.close()
+
+
+@pytest.mark.parametrize("status", [422, 503])
+def test_other_refusals_keep_their_cadence_and_record_no_wait(setup, monkeypatch, status):
+    """Only a 409 that reconciliation leaves standing waits. A 422 or a 5xx
+    keeps the behaviour it had: tried again on the next tick."""
+    config, storage, wire = setup
+    posts = []
+    monkeypatch.setattr(
+        wire, "post", lambda body: (posts.append(body), (status, {"detail": "not now"}))[1]
+    )
+    _stop_after(monkeypatch, 5)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert len(posts) >= 5  # one per tick, as before
+    journal = Journal(wire.base_url, "synthetic", wire.source)
+    assert "conflict_wait" not in journal.get(config.session_id)
+    assert journal.conflict_retry_in(config.session_id) == 0
     journal.close()

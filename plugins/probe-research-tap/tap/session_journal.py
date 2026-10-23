@@ -53,6 +53,7 @@ import ipaddress
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import socket
@@ -634,10 +635,14 @@ def _media_refusal(code: int) -> bool:
 class ReconciliationRequired(RuntimeError):
     def __init__(
         self, message: str, *, safe_message: str | None = None, status_code: int | None = None,
+        body_sha256: str | None = None,
     ):
         super().__init__(message)
         self.safe_message = message if safe_message is None else safe_message
         self.status_code = status_code
+        #: The digest of the body the server refused (`Journal.deliver`), so
+        #: a wait (`Journal.defer_conflict`) lands on that body and no other.
+        self.body_sha256 = body_sha256
 
 
 class SourceRewritten(ReconciliationRequired):
@@ -804,6 +809,24 @@ def canonical_payload(payload: dict) -> bytes:
 _MAX_SCRUB_PASSES = 8
 #: How often a session with no batch to send retries a refused title.
 TITLE_RETRY_SECONDS = 600
+#: A pending batch the server still refuses with 409 after `reconcile_pending`
+#: could not settle it waits before it is sent again: the same bytes get the
+#: same 409, and each refusal costs the server a full credential scrub of the
+#: body (one machine re-sent six refused sessions' batches, up to 1.1 MB each,
+#: every ~10 s, for good). The first wait is CONFLICT_RETRY_MIN_SECONDS, doubling with each
+#: further refusal up to CONFLICT_RETRY_MAX_SECONDS; each is shortened at random
+#: by up to CONFLICT_RETRY_JITTER of itself, so refused sessions do not re-send
+#: in step. See `conflict_retry_seconds` and `Journal.defer_conflict`.
+CONFLICT_RETRY_MIN_SECONDS = 60
+CONFLICT_RETRY_MAX_SECONDS = 3600
+CONFLICT_RETRY_JITTER = 0.25
+
+
+def conflict_retry_seconds(refusals: int) -> float:
+    """How long a batch waits after its `refusals`-th lasting 409 (1 = the first)."""
+    doublings = min(max(refusals, 1) - 1, 16)
+    wait = min(CONFLICT_RETRY_MAX_SECONDS, CONFLICT_RETRY_MIN_SECONDS * 2**doublings)
+    return wait * random.uniform(1 - CONFLICT_RETRY_JITTER, 1)
 
 
 def _scrub_content(payload: dict) -> dict:
@@ -2002,6 +2025,8 @@ class Journal:
                     "error": None,
                 }
             )
+            # Accepted: a wait out of a lasting 409 (`defer_conflict`) is over.
+            state.pop("conflict_wait", None)
             if (
                 state.get("historical_end") is not None
                 and state["finalized"]
@@ -2037,6 +2062,7 @@ class Journal:
             if code in (409, 422):
                 raise ReconciliationRequired(
                     message, safe_message=_request_failure(wire, code), status_code=code,
+                    body_sha256=hashlib.sha256(body).hexdigest(),
                 )
             raise DeliveryPending(
                 message,
@@ -2370,6 +2396,65 @@ class Journal:
             if updated.rowcount != 1:
                 raise ReconciliationRequired("pending reservation changed before reconciliation")
         return f"re-redacted batch {sequence} in place; the server holds no copy of it"
+
+    def _pending_digest(self, session_id: str) -> str | None:
+        row = self.conn.execute(
+            "SELECT digest FROM pending WHERE session_id=?", (session_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+    @staticmethod
+    def _conflict_left(wait: dict, now: float) -> float:
+        """Seconds left of a recorded wait: 0 once it is over, and 0 when the
+        clock was set back past it (no wait is ever longer than the cap)."""
+        until = wait.get("until")
+        if type(until) not in (int, float):
+            return 0.0
+        left = until - now
+        return left if 0 < left <= CONFLICT_RETRY_MAX_SECONDS + 1 else 0.0
+
+    def defer_conflict(self, session_id: str, refused: str | None = None) -> float:
+        """Hold back the session's pending batch after a 409 that
+        `reconcile_pending` left standing. Returns the seconds until it may be
+        sent again (`conflict_retry_seconds`); 0 with nothing pending, or when
+        the pending body is no longer `refused` (the digest of the body the
+        server refused): another drainer settled it meanwhile, and its
+        successor has earned no wait.
+
+        The wait is kept in the session's state (`conflict_wait`), so it
+        outlives the process and binds every tap and Probe service recorder on
+        this machine, each of which drains every session in this journal. It
+        names the pending body's digest, so it is the session's alone and ends
+        with that body: acknowledged, re-redacted, dropped or replaced, the
+        next body starts from the first wait. A refusal another drainer has
+        already deferred is not counted twice.
+        """
+        with self.transaction():
+            state = self.get(session_id)
+            digest = self._pending_digest(session_id)
+            if state is None or digest is None or refused not in (None, digest):
+                return 0.0
+            now = time.time()
+            wait = state.get("conflict_wait")
+            if not isinstance(wait, dict) or wait.get("digest") != digest:
+                wait = {}
+            left = self._conflict_left(wait, now)
+            if left:
+                return left
+            refusals = wait.get("refusals")
+            refusals = (refusals if type(refusals) is int else 0) + 1
+            delay = conflict_retry_seconds(refusals)
+            state["conflict_wait"] = {"digest": digest, "refusals": refusals, "until": now + delay}
+            self._save(state)
+        return delay
+
+    def conflict_retry_in(self, session_id: str) -> float:
+        """Seconds the session's pending batch still waits out a lasting 409
+        (`defer_conflict`); 0 when it may be sent."""
+        wait = (self.get(session_id) or {}).get("conflict_wait")
+        if not isinstance(wait, dict) or wait.get("digest") != self._pending_digest(session_id):
+            return 0.0
+        return self._conflict_left(wait, time.time())
 
     def update(self, session_id: str, **values):
         with self.transaction():

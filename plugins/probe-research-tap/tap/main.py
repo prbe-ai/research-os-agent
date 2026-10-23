@@ -434,6 +434,28 @@ def _note_rewritten(journal: Journal | None, session_id: str, noted: set[str]) -
     )
 
 
+def _defer_conflict(journal: Journal, session_id: str, exc: ReconciliationRequired) -> None:
+    """A 409 that reconciliation left standing: the batch waits before it goes again.
+
+    Only a 409 from the upload door gets here, after `Journal.reconcile_pending`
+    had its chance this run, so re-sending the same bytes gets the same answer.
+    Before this the batch went again every tick, from every daemon on the
+    machine; one machine re-sent six refused sessions every ~10 s for good. The
+    wait is this session's alone, and lasts only while that batch is pending
+    (`Journal.defer_conflict`); a protocol restart or a deletion never gets here.
+    """
+    try:
+        delay = journal.defer_conflict(session_id, exc.body_sha256)
+    except (ReconciliationRequired, OSError, sqlite3.Error) as err:
+        # Called from an `except` clause: a second error would end the daemon.
+        # Unrecorded, the batch only goes again on the next tick, as before.
+        log.warning(
+            "session %s retained for retry: %s (wait not recorded: %s)", session_id, exc, err
+        )
+        return
+    log.warning("session %s retained for retry in %ds: %s", session_id, round(delay), exc)
+
+
 def _require_capture_eligible(cwd: Path) -> None:
     if cfg.killswitch_active() or cfg.cwd_disabled(cwd):
         raise DeliveryPending("capture disabled for this source folder; pending bytes retained")
@@ -536,6 +558,10 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                     if sent_bytes >= reconcile.MAX_BACKFILL_BYTES_PER_SWEEP:
                         break
                     try:
+                        if journal.conflict_retry_in(state["session_id"]) > 0:
+                            # Its batch still waits out a lasting 409
+                            # (`_defer_conflict`); the others keep going.
+                            continue
                         source_cwd = _reservation_cwd(journal, state, storage)
                         _require_capture_eligible(source_cwd)
                         if (
@@ -609,7 +635,12 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                         _note_rewritten(journal, state["session_id"], rewritten)
                     except (DeliveryPending, ReconciliationRequired, OSError, sqlite3.Error) as exc:
                         journal.update(state["session_id"], error=str(exc))
-                        log.warning("session %s retained for retry: %s", state["session_id"], exc)
+                        if isinstance(exc, ReconciliationRequired) and exc.status_code == 409:
+                            _defer_conflict(journal, state["session_id"], exc)
+                        else:
+                            log.warning(
+                                "session %s retained for retry: %s", state["session_id"], exc
+                            )
                 # Existing eligibility remains authoritative for late files: the
                 # session has a daemon log or old cursor, never just a directory.
                 if tick % reconcile.RECONCILE_EVERY_TICKS == 0 and not stopping:

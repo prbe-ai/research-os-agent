@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -282,3 +283,78 @@ def test_a_line_nested_past_the_redactors_reach_is_dropped_not_fatal(tmp_path, m
         journal.close()
     assert body["source_line_end"] == 3
     assert [e["raw"]["message"]["content"] for e in body["events"]] == ["first", "after"]
+
+
+# ---------------------------------------------------------------------------
+# A 409 that reconciliation leaves standing: how long the batch waits.
+# ---------------------------------------------------------------------------
+
+
+def _journal_clock(monkeypatch) -> list[float]:
+    clock = [1_800_000_000.0]
+    monkeypatch.setattr(sj, "time", SimpleNamespace(time=lambda: clock[0]))
+    return clock
+
+
+def test_a_lasting_conflict_waits_longer_each_time_for_that_body_only(session):
+    """A minute, doubling to an hour; a second drainer deferring the same
+    refusal does not double it again. A new body (here the same batch
+    re-redacted) starts over, and acceptance ends the wait."""
+    sid, journal, server, monkeypatch = session
+    monkeypatch.setattr(sj, "CONFLICT_RETRY_JITTER", 0.0)
+    clock = _journal_clock(monkeypatch)
+    assert journal.defer_conflict(sid) == 0  # nothing pending: nothing to hold back
+    _stage_under_old_rules(sid, journal, monkeypatch)
+    assert journal.conflict_retry_in(sid) == 0
+    waits = []
+    for _ in range(8):
+        waits.append(journal.defer_conflict(sid))
+        assert journal.defer_conflict(sid) == waits[-1]  # another drainer, same refusal
+        assert journal.conflict_retry_in(sid) == waits[-1]
+        clock[0] += waits[-1]
+        assert journal.conflict_retry_in(sid) == 0
+    assert waits == [60, 120, 240, 480, 960, 1920, 3600, 3600]
+    assert journal.get(sid)["conflict_wait"]["refusals"] == 8
+
+    journal.defer_conflict(sid)
+    assert "re-redacted" in journal.reconcile_pending(sid, server)
+    assert journal.conflict_retry_in(sid) == 0  # another body: its own clock
+    assert journal.defer_conflict(sid) == 60
+    clock[0] += 60
+    assert journal.deliver(sid, server)
+    assert "conflict_wait" not in journal.get(sid)
+
+
+def test_a_refusal_of_a_batch_another_drainer_settled_puts_no_wait_on_the_next(session):
+    """Between this drainer's 409 and its deferral, another may have settled
+    the refused body and staged the next one: that one has earned no wait."""
+    sid, journal, _server, _monkeypatch = session
+    body = journal.stage(sid, cwd="/work")
+    assert journal.defer_conflict(sid, "0" * 64) == 0
+    assert "conflict_wait" not in journal.get(sid)
+    assert journal.defer_conflict(sid, hashlib.sha256(body).hexdigest()) > 0
+
+
+def test_a_clock_set_back_does_not_strand_the_batch_behind_its_wait(session):
+    """No wait is longer than the cap, so one further away than that was
+    recorded under a clock that has since been set back: it is over."""
+    sid, journal, _server, monkeypatch = session
+    clock = _journal_clock(monkeypatch)
+    journal.stage(sid, cwd="/work")
+    journal.defer_conflict(sid)
+    clock[0] -= 86400
+    assert journal.conflict_retry_in(sid) == 0
+    assert 0 < journal.defer_conflict(sid) <= sj.CONFLICT_RETRY_MAX_SECONDS
+    assert 0 < journal.conflict_retry_in(sid) <= sj.CONFLICT_RETRY_MAX_SECONDS
+
+
+def test_each_wait_is_jittered_below_its_step_and_never_past_the_cap():
+    for refusals in range(-1, 40):
+        step = min(
+            sj.CONFLICT_RETRY_MAX_SECONDS,
+            sj.CONFLICT_RETRY_MIN_SECONDS * 2 ** min(max(refusals, 1) - 1, 16),
+        )
+        for _ in range(50):
+            wait = sj.conflict_retry_seconds(refusals)
+            assert (1 - sj.CONFLICT_RETRY_JITTER) * step <= wait <= step
+    assert len({sj.conflict_retry_seconds(5) for _ in range(50)}) > 1
