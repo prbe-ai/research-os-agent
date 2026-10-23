@@ -25,6 +25,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -404,10 +405,16 @@ def _inside(elapsed: float, wait_s: float) -> bool:
     return wait_s <= elapsed < wait_s + RESERVE_S - HEADROOM_S
 
 
+#: A tap state folder with nothing in it: a SessionEnd under test must not find
+#: the interpreter the developer's own tap remembered (hooks/tap-python.sh) and
+#: run the real `tap finish` instead of the `python3` these tests put on PATH.
+_NO_STATE = tempfile.mkdtemp(prefix="tap-hook-state-")
+
+
 def _env(**overrides: str) -> dict:
     """The hook's environment with no budget and no source of the runner's own."""
     env = {k: v for k, v in os.environ.items() if k not in (BUDGET_ENV, "PROBE_TAP_SOURCE")}
-    return {**env, **overrides}
+    return {**env, "PROBE_RESEARCH_TAP_PLUGIN_DIR": _NO_STATE, **overrides}
 
 
 def _session_end(session_id: str, reason: str, *flags: str, env: dict | None = None) -> float:

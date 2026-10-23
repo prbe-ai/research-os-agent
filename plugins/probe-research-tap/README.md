@@ -9,7 +9,9 @@ agent-specific.
 Uploader identity is injected server-side from a source-bound device token.
 Authentication does not prove the original author of a historical conversation.
 The gateway validates tenant and source before forwarding the client-sanitized
-batch. Runtime code is Python 3.11+ stdlib only.
+batch. Runtime code is Python 3.11+ stdlib only. The hooks run it on the first
+interpreter that is new enough (`hooks/tap-python.sh`): the plugin's `.venv`,
+`python3`, the Probe CLI's own interpreter, then `python3.14`..`python3.11`.
 
 ## Install and authorize
 
@@ -104,6 +106,8 @@ compatible `PRBE_CODEX_TAP_PLUGIN_DIR` for Codex.
 | `.config` | Backend origin and optional cadence overrides |
 | `.disabled` | Local all-session killswitch |
 | `.disabled_paths` | Newline-separated cwd prefixes to skip |
+| `.python` | The interpreter the last SessionStart ran the tap on, for SessionEnd's `tap finish` |
+| `.python-missing` | Left by SessionStart when no Python 3.11+ was found to run the tap on (what it found instead); `probe doctor` reads it |
 | `state.db` | Legacy file offsets/outbox and device metadata, retained for compatibility |
 | `logs/<session_id>.log` | Session daemon log |
 

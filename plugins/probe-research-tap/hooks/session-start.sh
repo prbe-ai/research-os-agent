@@ -205,9 +205,49 @@ PYEOF
     fi
 fi
 
-# Resolve Python interpreter — prefer plugin-local venv.
-PY="$PLUGIN_ROOT/.venv/bin/python3"
-[ -x "$PY" ] || PY="$(command -v python3 || true)"
+# The interpreter the tap runs on: 3.11 or newer, which the first `python3` on
+# PATH need not be (Apple's is 3.9). hooks/tap-python.sh says where it looks.
+TAP_HOOKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY=""
+if [ -f "$TAP_HOOKS/tap-python.sh" ]; then
+    # shellcheck source=tap-python.sh
+    . "$TAP_HOOKS/tap-python.sh"
+    PY=$(tap_python "$PLUGIN_ROOT") || PY=""
+    MISSING_FILE="$PLUGIN_DIR/$TAP_PYTHON_MISSING"
+    if [ -z "$PY" ]; then
+        # Said to the researcher once a session (this hook runs again from
+        # ensure-daemon.sh while the session has no recorder), and left for
+        # `probe doctor`. Nothing else here can say it: the tap is the part
+        # that talks to the server, and it cannot start.
+        SEEN=$(tap_python_seen)
+        TOLD=""
+        grep -q "no Python 3.11 or newer" "$LOG_FILE" 2>/dev/null && TOLD=1
+        echo "[$(date -u +%FT%TZ)] tap: no Python 3.11 or newer found ($SEEN); not recording this session" >>"$LOG_FILE"
+        printf '%s\n' "$SEEN" >"$MISSING_FILE" 2>/dev/null || true
+        if [ -z "$TOLD" ]; then
+            # SEEN is one of tap_python_seen's fixed phrases (digits and dots at
+            # most), so it needs no JSON escaping.
+            printf '{"continue": true, "systemMessage": "Probe is not recording this session: session capture needs Python 3.11 or newer, and this machine has %s. Install Python 3.11 or newer, then start a new session (probe doctor shows what it found)."}\n' "$SEEN"
+        else
+            printf '{"continue": true}\n'
+        fi
+        exit 0
+    fi
+    rm -f "$MISSING_FILE" 2>/dev/null || true
+    # For session-end.sh's `tap finish` (tap_python_cached): replaced whole, so
+    # a SessionEnd reading it at that moment sees the old answer or the new one.
+    CACHED_PY=$(tap_python_cached "$PLUGIN_DIR" || true)
+    if [ "$CACHED_PY" != "$PY" ]; then
+        printf '%s\n' "$PY" >"$PLUGIN_DIR/$TAP_PYTHON_CACHE.$$" 2>/dev/null \
+            && mv -f "$PLUGIN_DIR/$TAP_PYTHON_CACHE.$$" "$PLUGIN_DIR/$TAP_PYTHON_CACHE" 2>/dev/null \
+            || rm -f "$PLUGIN_DIR/$TAP_PYTHON_CACHE.$$" 2>/dev/null || true
+    fi
+else
+    # No tap-python.sh beside this script (a plugin folder caught mid-update):
+    # the choice this hook made before it.
+    PY="$PLUGIN_ROOT/.venv/bin/python3"
+    [ -x "$PY" ] || PY="$(command -v python3 || true)"
+fi
 if [ -z "$PY" ] || [ ! -x "$PY" ]; then
     echo "[$(date -u +%FT%TZ)] no python3 found, daemon disabled" >>"$LOG_FILE"
     printf '{"continue": true}\n'

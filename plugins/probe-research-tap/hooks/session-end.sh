@@ -258,7 +258,23 @@ HOSTED_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
 if [ -s "$HOSTED_FILE" ]; then
     if [ "$WAITS" = 1 ]; then
         TAP_ROOT="${TAP_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
-        PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" python3 -m tap finish --session-id "$SESSION_ID" \
+        # On the interpreter session-start.sh ran the tap on (hooks/tap-python.sh):
+        # the one it remembered in the tap's state folder, a file read and no
+        # python start inside the exit budget. None remembered (an older tap
+        # started this session): `python3`, as before.
+        PY=""
+        TAP_HOOKS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+        if [ -f "$TAP_HOOKS/tap-python.sh" ]; then
+            # shellcheck source=tap-python.sh
+            . "$TAP_HOOKS/tap-python.sh"
+            if [ -n "$REGISTRY_ENV" ]; then
+                PY=$(tap_python_cached "${TAP_PLUGIN_DIR:-}" || true)
+            else
+                PY=$(tap_python_cached "$(tap_state_dir "$SOURCE")" || true)
+            fi
+        fi
+        [ -n "$PY" ] || PY=python3
+        PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" "$PY" -m tap finish --session-id "$SESSION_ID" \
             --wait "$WAIT_S" </dev/null >/dev/null 2>&1 &
         FINISH=$!
         wait_while kill -0 "$FINISH"
