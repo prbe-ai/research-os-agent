@@ -141,7 +141,11 @@ def _sandboxed(conn: socket.socket) -> bool:
     if not _OWN_CONFINEMENT:
         _OWN_CONFINEMENT.append(_confinement(os.getpid()))
     own, theirs = _OWN_CONFINEMENT[0], _confinement(pid)
-    return own is None or theirs is None or theirs != own
+    # A Landlock domain shows in none of those fields, and a process with
+    # no_new_privs may add one at any time: such a caller cannot be told from
+    # a sandboxed one (`probe.service.caller.landlock_possible`).
+    landlock = sys.platform.startswith("linux") and theirs is not None and len(theirs) >= 3 and theirs[2] == "1"
+    return own is None or theirs is None or theirs != own or landlock
 
 
 def _private_dir(path: str) -> None:

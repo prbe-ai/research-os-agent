@@ -261,7 +261,11 @@ the same checks Claude Code runs, in the same words. The built-in guard
 stands (the Python hooks fail open), so the service can only add refusals.
 When the service gives no clear answer within 300 ms (none running, a CLI from
 before `hooks.run`, a hook that failed), the built-in guard decides alone, as
-before. A session set to `off` never asks the service. See
+before. When the service refuses pi (it takes no work from a process it cannot
+rule out being sandboxed, such as one running with `no_new_privs` on Linux),
+the same pre-tool hooks run here instead, the plugin folder's own
+`hooks/dispatch.sh pre-tool`, within the same 250 ms, and their verdict counts
+as the service's would. A session set to `off` never asks the service. See
 `src/serviceGuard.ts` for the mapping.
 
 **The daemon's questions (both profiles).** When the daemon holds an action

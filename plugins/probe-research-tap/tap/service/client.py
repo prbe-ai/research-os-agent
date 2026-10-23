@@ -14,11 +14,15 @@
     refresh_manifest()  manifest.refresh: a stale release-manifest cache
     desktop_request()   desktop.request: one of the desktop app's
                 management requests, answered as `probe desktop request`
+    drain_outbox() / watch_box() / send_telemetry()  outbox.drain, box.watch,
+                telemetry.send: a training process's background work (plan
+                Q5), each within one short budget (`call_within`)
                 Never start the service: each is for a service that already
                 runs (OSError when none answers), and the caller falls back.
     locations() where this machine's service keeps its socket and files
                 (`python -m probe.service.client socket` prints them)
     call()      any method, for the CLI and tests.
+    call_within()  one request, hello pipelined with it, under ONE deadline.
     Connection  a kept connection: the tap's registration thread holds one, so
                 a restarted service is noticed (EOF) and re-told at once.
 
@@ -43,6 +47,7 @@ import socket
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 
 from . import paths, procid
 from .protocol import API_VERSION, JSONRPC, MAX_LINE_BYTES, Client, Method, Mode, encode, request
@@ -67,11 +72,15 @@ WAIT_FOR_PID_S = 1800.0
 #: `desktop_request`'s socket deadline: the service's longest (a change, 120 s)
 #: and a little more, so its own `timed_out` answer arrives first.
 DESKTOP_TIMEOUT_S = 125.0
+#: What a training process waits for the service, at most, all told (connect,
+#: hello, the call; plan Q5): a hand-off never holds a training loop longer.
+HANDOFF_BUDGET_S = 0.25
 
 #: The only variables the service starts with (plan X2): never an agent's
 #: PROBE_TOKEN, endpoint or PYTHONPATH, which would leak the first launcher's
 #: context into every later client's requests. The PROBE_SERVICE_* are
-#: test-only overrides of the lifecycle and updater timers.
+#: test-only overrides of the lifecycle and updater timers (and of where the
+#: telemetry thread POSTs, `background.TELEMETRY_HOST_ENV`).
 ENV_ALLOWLIST = (
     "HOME",
     "PATH",
@@ -111,6 +120,7 @@ ENV_ALLOWLIST = (
     "LOCALAPPDATA",
     "APPDATA",
     "PROGRAMDATA",
+    "PROBE_SERVICE_TELEMETRY_HOST",
 )
 
 
@@ -122,6 +132,19 @@ class Ensured:
     STARTING = "starting"  # another caller started one moments ago
     BACKOFF = "backoff"  # MAX_STARTS in START_WINDOW_S already: not again yet
     UNAVAILABLE = "unavailable"  # no interpreter to start it with
+    #: This process runs with no_new_privs (Linux): a service it started would
+    #: too, and could do no caller's work (`caller.landlock_possible`). None started.
+    CONFINED = "confined"
+
+
+class Unanswered(ConnectionError):
+    """`call_within`: the request went out (or may have, in part) and no
+    answer came back: the connection closed, or broke. The service may have
+    acted on it."""
+
+
+class AnswerTimeout(Unanswered, TimeoutError):
+    """`call_within`: the request went out and no answer came in time."""
 
 
 class ServiceError(Exception):
@@ -286,6 +309,125 @@ def call(
     with Connection.open(timeout) as conn:
         conn.hello(client, client_version)
         return conn.call(method, params)
+
+
+def call_within(
+    method: str,
+    params: dict | None = None,
+    *,
+    budget: float = HANDOFF_BUDGET_S,
+    deadline: float | None = None,
+    on_sent: Callable[[], None] | None = None,
+    client: str = Client.SDK,
+    client_version: str = "unknown",
+) -> object:
+    """One request on its own connection, its hello sent in the same write,
+    the answer by `deadline` (monotonic; default `budget` seconds from now)
+    all told (`call`'s timeout is per socket operation; here every operation
+    gets what is left). OSError when no service answers in time;
+    `Unanswered` (`AnswerTimeout` for time) once the request may have gone
+    out, so a caller can tell "it may have it" from "it never got it";
+    ServiceError for an error answer, the hello's included (a service from
+    before the client kind or the method). `on_sent` is called just before
+    the request is written."""
+    if deadline is None:
+        deadline = time.monotonic() + budget
+
+    def left() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise socket.timeout("the service did not answer in time")
+        return remaining
+
+    with Connection.open(left()) as conn:
+        hello = {"client": client, "client_version": client_version or "unknown", "api": API_VERSION}
+        conn.sock.settimeout(left())
+        if on_sent is not None:
+            on_sent()
+        buffer = b""
+        try:
+            conn.sock.sendall(encode(request(1, Method.HELLO, hello)) + encode(request(2, method, params)))
+            conn._next_id = 2
+            while True:
+                while b"\n" not in buffer:
+                    conn.sock.settimeout(left())
+                    chunk = conn.sock.recv(65536)
+                    if not chunk:
+                        raise ConnectionResetError("the service closed the connection")
+                    buffer += chunk
+                    if len(buffer) > MAX_LINE_BYTES + 1 and b"\n" not in buffer:
+                        raise ConnectionError("the service sent a line over 1 MiB")
+                line, buffer = buffer.split(b"\n", 1)
+                message = json.loads(line.decode("utf-8"))
+                if not isinstance(message, dict) or message.get("jsonrpc") != JSONRPC:
+                    continue
+                if message.get("id") not in (1, 2):
+                    continue  # an event (none before a subscribe), or not ours
+                if "error" in message:
+                    err = message["error"] or {}
+                    raise ServiceError(int(err.get("code", 0)), str(err.get("message", "")), err.get("data"))
+                if message.get("id") == 2:
+                    return message.get("result")
+        except socket.timeout as exc:
+            raise AnswerTimeout(str(exc) or "the service did not answer in time") from None
+        except (OSError, ValueError) as exc:  # closed, reset, or not an answer
+            raise Unanswered(f"no answer: {exc!r}") from None
+
+
+def drain_outbox(
+    directory: str,
+    python: str,
+    env: dict,
+    *,
+    cwd: str | None = None,
+    budget: float = HANDOFF_BUDGET_S,
+    deadline: float | None = None,
+    on_sent: Callable[[], None] | None = None,
+    client_version: str = "unknown",
+) -> dict:
+    """`outbox.drain`: `{accepted: true, state}` or `{accepted: false, reason}`."""
+    params = {"dir": directory, "python": python, "env": env}
+    if cwd:
+        params["cwd"] = cwd
+    return _dict(call_within(Method.OUTBOX_DRAIN, params, budget=budget, deadline=deadline, on_sent=on_sent,
+                             client_version=client_version))
+
+
+def watch_box(
+    python: str,
+    env: dict,
+    *,
+    cwd: str | None = None,
+    budget: float = HANDOFF_BUDGET_S,
+    deadline: float | None = None,
+    on_sent: Callable[[], None] | None = None,
+    client_version: str = "unknown",
+) -> dict:
+    """`box.watch`: `{accepted: true, state}` or `{accepted: false, reason}`.
+    `env` names the box registry folder (PROBE_BOX_DIR)."""
+    params = {"python": python, "env": env}
+    if cwd:
+        params["cwd"] = cwd
+    return _dict(call_within(Method.BOX_WATCH, params, budget=budget, deadline=deadline, on_sent=on_sent,
+                             client_version=client_version))
+
+
+def send_telemetry(
+    entries: list,
+    *,
+    batch_id: str | None = None,
+    budget: float = HANDOFF_BUDGET_S,
+    deadline: float | None = None,
+    on_sent: Callable[[], None] | None = None,
+    client_version: str = "unknown",
+) -> dict:
+    """`telemetry.send`: `{accepted: true}` or `{accepted: false, reason}`.
+    `batch_id`: the same id on a resend, so the service takes the batch once."""
+    params: dict = {"entries": entries}
+    if batch_id:
+        params["id"] = batch_id
+    return _dict(call_within(Method.TELEMETRY_SEND, params, budget=budget, deadline=deadline, on_sent=on_sent,
+                             client_version=client_version))
 
 
 def owner_of(pid: int) -> dict | None:
@@ -693,6 +835,24 @@ def _spawn(python: str) -> int:
     return child.pid
 
 
+def no_new_privs() -> bool:
+    """Linux: does this process run with no_new_privs (a hardened container,
+    a sandboxed agent's process tree)? A service started from here inherits
+    it, and every caller then reads as one it cannot rule out being
+    sandboxed (`probe.service.caller.landlock_possible`): it would start,
+    refuse all work and idle out, again at every hook. Elsewhere, no."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        with open("/proc/self/status", encoding="utf-8") as handle:
+            for line in handle:
+                if line.startswith("NoNewPrivs:"):
+                    return line.split(":", 1)[1].strip() == "1"
+    except OSError:
+        return False
+    return False
+
+
 def _lock(fd: int, deadline: float) -> bool:
     while True:
         if paths.try_lock(fd):
@@ -713,6 +873,8 @@ def ensure(*, wait: float = 0.0) -> str:
     if probe is not None:
         probe.close()
         return Ensured.RUNNING
+    if no_new_privs():
+        return Ensured.CONFINED
     try:
         paths.ensure_dirs()
         fd = os.open(paths.start_lock_path(), os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)

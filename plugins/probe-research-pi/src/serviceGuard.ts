@@ -8,9 +8,12 @@
  * folder beside this package (`hooks.run`, `core/service.ts`), and a refusal
  * of theirs is pi's, in their words. `guard.ts` stays, word for word, and runs
  * on every call as the floor (`extension.ts`): whenever the service gives no
- * clear answer in SERVICE_HOOK_WAIT_MS (none running, an older one, a refusal,
- * out of time, a route that exited non-zero), pi's own guard decides exactly
- * as it did before; and since the Python guard fails OPEN (a route that broke
+ * clear answer in SERVICE_HOOK_WAIT_MS (none running, an older one, out of
+ * time, a route that exited non-zero), pi's own guard decides exactly as it
+ * did before. A service that REFUSES this caller (it cannot rule out a sandbox
+ * around pi) is no such case: the same routes then run here
+ * (`runHookLocally`, the folder's dispatcher in place, within the same time),
+ * so the Python-only rules still hold. And since the Python guard fails OPEN (a route that broke
  * exits 0 with nothing to say), an allow from the service never overrides a
  * refusal of `guard.ts`'s. The service can only add refusals: the Python
  * rules `guard.ts` has not ported (a `probe` write in a `read` session, the
@@ -51,13 +54,19 @@ import { join, resolve } from "node:path";
 import {
   boundedHookEnv,
   HookLane,
+  isRefused,
+  refusedForSandbox,
   preToolVerdict,
   runHook,
+  runHookLocally,
   SERVICE_HOOK_RUN_MS,
+  SERVICE_HOOK_WAIT_MS,
   ToolVerdict,
   type HookClientDeps,
   type HookRun,
+  type HookRunRefused,
   type HookRunResult,
+  type LocalHookDeps,
 } from "./core/service.js";
 import type { PathEnv } from "./core/paths.js";
 import { PiTool, resolveLikePi } from "./guard.js";
@@ -142,10 +151,12 @@ export interface ServiceGuardCall {
   socket: string | null;
 }
 
-export interface ServiceGuardDeps extends HookClientDeps {
+export interface ServiceGuardDeps extends HookClientDeps, LocalHookDeps {
   exists?: (path: string) => boolean;
   /** Defaults to `runHook`; tests stand in for the service. */
-  run?: (socket: string, run: HookRun, deps: HookClientDeps) => Promise<HookRunResult | null>;
+  run?: (socket: string, run: HookRun, deps: HookClientDeps) => Promise<HookRunResult | HookRunRefused | null>;
+  /** Defaults to `runHookLocally`: the lane run here when the service refuses. */
+  runLocally?: (run: HookRun, deps: LocalHookDeps) => Promise<HookRunResult | null>;
 }
 
 /** The service's answer: `reason` null lets the call run. */
@@ -181,18 +192,30 @@ export async function guardViaService(at: ServiceGuardCall, deps: ServiceGuardDe
     if (call === null) return null;
     const root = pluginRoot(at.extensionDir, at.daemonProfile, deps.exists);
     if (root === null) return null;
-    const result = await (deps.run ?? runHook)(
-      at.socket,
-      {
-        pluginRoot: root,
-        lane: HookLane.PreTool,
-        payload: preToolUsePayload(call, at),
-        env: boundedHookEnv(at.env),
-        cwd: resolve(at.cwd),
-        timeoutMs: SERVICE_HOOK_RUN_MS,
-      },
-      deps,
-    );
+    const request: HookRun = {
+      pluginRoot: root,
+      lane: HookLane.PreTool,
+      payload: preToolUsePayload(call, at),
+      env: boundedHookEnv(at.env),
+      cwd: resolve(at.cwd),
+      timeoutMs: SERVICE_HOOK_RUN_MS,
+    };
+    const began = Date.now();
+    const asked = await (deps.run ?? runHook)(at.socket, request, deps);
+    let result: HookRunResult | null;
+    if (isRefused(asked)) {
+      // Refused for pi's confinement (the service cannot rule out a sandbox
+      // around it): the same routes run here, as Claude Code runs a hook no
+      // host takes -- never just pi's own port, which lacks the Python-only
+      // rules -- within what is left of the tool call's wait (D28). Any other
+      // refusal (busy, stopping) leaves it to pi's own guard, as before.
+      const left = Math.min(SERVICE_HOOK_RUN_MS, (deps.waitMs ?? SERVICE_HOOK_WAIT_MS) - (Date.now() - began));
+      result = refusedForSandbox(asked) && left > 0
+        ? await (deps.runLocally ?? runHookLocally)({ ...request, timeoutMs: left }, deps)
+        : null;
+    } else {
+      result = asked;
+    }
     const verdict = preToolVerdict(result);
     if (verdict === null) return null;
     return {

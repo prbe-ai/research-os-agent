@@ -33,9 +33,11 @@
  * with fcntl, so every session there would try, and fail, to start it (D16).
  */
 
-import { lstatSync } from "node:fs";
+import { spawn as nodeSpawn } from "node:child_process";
+import { existsSync, lstatSync } from "node:fs";
 import { createConnection, type Socket } from "node:net";
-import { delimiter, dirname } from "node:path";
+import { constants as osConstants } from "node:os";
+import { delimiter, dirname, join } from "node:path";
 
 import type { PathEnv } from "./paths.js";
 import type { SpawnFn } from "./daemon.js";
@@ -236,8 +238,38 @@ export function boundedHookEnv(env: PathEnv): Record<string, string> {
   return Object.fromEntries(ordered.slice(0, MAX_HOOK_ENV));
 }
 
-function readResult(value: unknown): HookRunResult | null {
-  if (typeof value !== "object" || value === null || "refused" in value) return null;
+/**
+ * `hooks.run` refused: the service will not run this event for this caller
+ * (it cannot rule out a sandbox around pi: `caller.sandboxed`), and says so.
+ * Unlike no answer at all, the event is then run here (`runHookLocally`).
+ */
+export interface HookRunRefused {
+  refused: string;
+  /** `RefusedReason`, from services that give one (`sandboxed`); else null. */
+  reason: string | null;
+}
+
+/** `protocol.RefusedReason.SANDBOXED`, and the words a service from before
+ * `reason` refuses a sandboxed caller with. */
+export const REFUSED_SANDBOXED = "sandboxed";
+export const REFUSED_SANDBOXED_WORDS = "a caller in a sandbox";
+
+export function isRefused(value: HookRunResult | HookRunRefused | null): value is HookRunRefused {
+  return value !== null && typeof (value as HookRunRefused).refused === "string";
+}
+
+/** A refusal for this caller's confinement (not busy, stopping, a folder it will not run). */
+export function refusedForSandbox(value: HookRunRefused): boolean {
+  return value.reason === REFUSED_SANDBOXED || (value.reason === null && value.refused === REFUSED_SANDBOXED_WORDS);
+}
+
+function readResult(value: unknown): HookRunResult | HookRunRefused | null {
+  if (typeof value !== "object" || value === null) return null;
+  if ("refused" in value) {
+    const why = (value as Record<string, unknown>).refused;
+    const reason = (value as Record<string, unknown>).reason;
+    return { refused: typeof why === "string" ? why : "refused", reason: typeof reason === "string" ? reason : null };
+  }
   const v = value as Record<string, unknown>;
   const exitCode = v.exit_code;
   if (exitCode !== null && !(typeof exitCode === "number" && Number.isInteger(exitCode))) return null;
@@ -256,12 +288,12 @@ function readResult(value: unknown): HookRunResult | null {
 }
 
 /**
- * `hooks.run` over the service's socket, within `waitMs`: the answer, or null
- * for anything else (no socket, a folder that is not this user's alone, a
- * refusal, an error answer, an older service without the method, a timeout).
- * One connection per event; never rejects.
+ * `hooks.run` over the service's socket, within `waitMs`: the answer, its
+ * refusal (`HookRunRefused`), or null for anything else (no socket, a folder
+ * that is not this user's alone, an error answer, an older service without
+ * the method, a timeout). One connection per event; never rejects.
  */
-export function runHook(socketPath: string, run: HookRun, deps: HookClientDeps): Promise<HookRunResult | null> {
+export function runHook(socketPath: string, run: HookRun, deps: HookClientDeps): Promise<HookRunResult | HookRunRefused | null> {
   return new Promise((resolve) => {
     if (!(deps.privateFolder ?? privateFolder)(dirname(socketPath))) {
       resolve(null);
@@ -271,7 +303,7 @@ export function runHook(socketPath: string, run: HookRun, deps: HookClientDeps):
     let settled = false;
     let buffer = "";
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (value: HookRunResult | null): void => {
+    const finish = (value: HookRunResult | HookRunRefused | null): void => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
@@ -333,6 +365,142 @@ export function runHook(socketPath: string, run: HookRun, deps: HookClientDeps):
     });
     sock.on("error", () => finish(null));
     sock.on("close", () => finish(null));
+  });
+}
+
+/** The variables a fresh dispatcher of the service's sets itself, never the
+ * caller's (`hookhosts.RUN_OWNED_ENV`). */
+export const RUN_OWNED_ENV: readonly string[] = [
+  "PLUGIN_ROOT",
+  "CLAUDE_PLUGIN_ROOT",
+  "PROBE_HOOKS_HANDED_OVER",
+  "PROBE_HOOK_HOSTED",
+  "PROBE_HOOK_HOST",
+  "PROBE_HOOK_DEADLINE",
+  "PROBE_HOOK_PARENT_PID",
+];
+/** A local run's stdout and stderr are each read this far (`hookhosts.MAX_HOOK_OUTPUT`). */
+export const MAX_LOCAL_HOOK_OUTPUT = 128 * 1024;
+/** `HookRunResult.via` for an event run here, not by the service. */
+export const VIA_LOCAL = "local";
+/** A local run past its time gets TERM, then KILL this much later (`hookhosts.KILL_WAIT_S`'s pace). */
+export const LOCAL_HOOK_KILL_AFTER_MS = 100;
+
+export interface LocalHookDeps {
+  /** Defaults to `node:child_process`'s. */
+  spawn?: typeof nodeSpawn;
+  /** The process the routes walk up to the agent from (PROBE_HOOK_PARENT_PID). Defaults to this one. */
+  parentPid?: number;
+}
+
+/** The event's environment for a dispatcher run here, as the service's fresh
+ * one gets it (`hookhosts.event_env`, not hosted): the session's, the
+ * dispatcher's own variables set by us. */
+export function localHookEnv(run: HookRun, parentPid: number): Record<string, string> {
+  const env: Record<string, string> = Object.fromEntries(
+    Object.entries(run.env).filter(([name]) => !RUN_OWNED_ENV.includes(name)),
+  );
+  for (const name of ["HOME", "PATH"]) {
+    const ours = process.env[name];
+    if (!env[name] && ours) env[name] = ours;
+  }
+  env.CLAUDE_PLUGIN_ROOT = run.pluginRoot;
+  env.PROBE_HOOK_PARENT_PID = String(parentPid);
+  // No warm host for it (the one the service keeps refuses this caller too),
+  // and no hand-over to another installed copy: this folder's routes, here.
+  env.PROBE_HOOK_HOST = "off";
+  env.PROBE_HOOKS_HANDED_OVER = run.pluginRoot;
+  return env;
+}
+
+/**
+ * The event run HERE, as Claude Code runs a hook no warm host takes and as the
+ * service runs it when it has no host (`hookhosts._via_process`): the folder's
+ * `hooks/dispatch.sh <lane>`, the payload on its stdin, in a process group of
+ * its own, killed with that group at `run.timeoutMs`. For when the service
+ * refuses this caller (`HookRunRefused`): its routes still decide, inside
+ * whatever sandbox pi runs in. The answer reads as `hooks.run`'s
+ * (`preToolVerdict`); null when nothing could run. Never rejects.
+ */
+export function runHookLocally(run: HookRun, deps: LocalHookDeps = {}): Promise<HookRunResult | null> {
+  return new Promise((resolve) => {
+    const script = join(run.pluginRoot, "hooks", "dispatch.sh");
+    const env = localHookEnv(run, deps.parentPid ?? process.pid);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    const size = { out: 0, err: 0 };
+    const cut = { out: false, err: false };
+    const text = (chunks: Buffer[]): string => Buffer.concat(chunks).toString("utf8");
+    const result = (exitCode: number | null, timedOut: boolean): HookRunResult => ({
+      exitCode,
+      stdout: text(out),
+      stderr: text(err),
+      timedOut,
+      truncated: cut.out || cut.err,
+      stdoutTruncated: cut.out,
+      stderrTruncated: cut.err,
+      via: VIA_LOCAL,
+    });
+    const finish = (value: HookRunResult | null): void => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(value);
+    };
+    let child: ReturnType<typeof nodeSpawn>;
+    try {
+      child = (deps.spawn ?? nodeSpawn)(script, [run.lane], {
+        cwd: existsSync(run.cwd) ? run.cwd : (env.HOME ?? "/"),
+        env,
+        detached: true, // its own process group: the whole of it is stopped at the deadline
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+    } catch {
+      finish(null);
+      return;
+    }
+    const keep = (chunks: Buffer[], which: "out" | "err") => (chunk: Buffer) => {
+      const room = MAX_LOCAL_HOOK_OUTPUT - size[which];
+      if (room <= 0) {
+        cut[which] = true;
+        return;
+      }
+      const part = chunk.length > room ? chunk.subarray(0, room) : chunk;
+      if (part.length < chunk.length) cut[which] = true;
+      chunks.push(part);
+      size[which] += part.length;
+    };
+    child.stdout?.on("data", keep(out, "out"));
+    child.stderr?.on("data", keep(err, "err"));
+    child.on("error", () => finish(null)); // could not run it at all
+    child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
+      // Killed by a signal: what its shell would report (128 + n), never a veto.
+      const signalled = signal ? 128 + ((osConstants.signals as Record<string, number>)[signal] ?? 0) : null;
+      finish(result(code ?? signalled, false));
+    });
+    timer = setTimeout(() => {
+      // As the service stops one (`hookhosts._stop_group`): TERM first, which
+      // the dispatcher passes to the routes it started in groups of their own,
+      // then KILL what is left of its group. The verdict does not wait.
+      const group = child.pid !== undefined ? -child.pid : undefined;
+      try {
+        if (group !== undefined) process.kill(group, "SIGTERM");
+      } catch {
+        // gone already
+      }
+      setTimeout(() => {
+        try {
+          if (group !== undefined) process.kill(group, "SIGKILL");
+        } catch {
+          // gone by now
+        }
+      }, LOCAL_HOOK_KILL_AFTER_MS).unref();
+      finish(result(null, true));
+    }, run.timeoutMs);
+    child.stdin?.on("error", () => undefined); // a dispatcher that exits before reading
+    child.stdin?.end(JSON.stringify(run.payload));
   });
 }
 

@@ -4,7 +4,7 @@
  * (`serviceGuard.ts`). The service is a stand-in on a real Unix socket
  * (`fakeService.ts`); the real one is `agent/tests/test_service_hooks_run.py`'s.
  */
-import { chmodSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -19,6 +19,7 @@ import {
   preToolVerdict,
   privateFolder,
   runHook,
+  runHookLocally,
   SERVICE_HOOK_RUN_MS,
   SERVICE_HOOK_WAIT_MS,
   ToolVerdict,
@@ -68,7 +69,7 @@ describe("runHook", () => {
     const service = await serve(() => ({ result: denial("not this one") }));
     const got = await runHook(service.socket, RUN, { clientVersion: "9.9.9" });
     expect(got).toMatchObject({ exitCode: 0, timedOut: false, via: "host" });
-    expect(preToolVerdict(got)).toEqual({ verdict: ToolVerdict.Block, reason: "not this one" });
+    expect(preToolVerdict(got as HookRunResult | null)).toEqual({ verdict: ToolVerdict.Block, reason: "not this one" });
     const [hello, run] = service.requests;
     expect(hello).toMatchObject({ method: "service.hello", params: { client: "pi", client_version: "9.9.9", api: 1 } });
     expect(run).toMatchObject({
@@ -90,12 +91,12 @@ describe("runHook", () => {
     }));
     const got = await runHook(service.socket, RUN, { clientVersion: "1" });
     expect(got).toMatchObject({ truncated: true, stdoutTruncated: false, stderrTruncated: true });
-    expect(preToolVerdict(got)).toEqual({ verdict: ToolVerdict.Block, reason: "not this one" });
+    expect(preToolVerdict(got as HookRunResult | null)).toEqual({ verdict: ToolVerdict.Block, reason: "not this one" });
   });
 
   it("returns an allow when the routes say nothing", async () => {
     const service = await serve(() => ({ result: answer() }));
-    expect(preToolVerdict(await runHook(service.socket, RUN, { clientVersion: "1" }))).toEqual({ verdict: ToolVerdict.Allow });
+    expect(preToolVerdict((await runHook(service.socket, RUN, { clientVersion: "1" })) as HookRunResult | null)).toEqual({ verdict: ToolVerdict.Allow });
   });
 
   it("gives up after its wait when the service never answers", async () => {
@@ -112,9 +113,15 @@ describe("runHook", () => {
     expect(Date.now() - started).toBeLessThan(SERVICE_HOOK_WAIT_MS);
   });
 
-  it("is null for a refusal, an error answer, or an older service without the method", async () => {
+  it("says so when the service refuses this caller (it cannot rule out a sandbox)", async () => {
+    const service = await serve(() => ({ result: { refused: "a caller in a sandbox" } }));
+    expect(await runHook(service.socket, RUN, { clientVersion: "1" })).toEqual({ refused: "a caller in a sandbox", reason: null });
+    const newer = await serve(() => ({ result: { refused: "a caller in a sandbox", reason: "sandboxed" } }));
+    expect(await runHook(newer.socket, RUN, { clientVersion: "1" })).toEqual({ refused: "a caller in a sandbox", reason: "sandboxed" });
+  });
+
+  it("is null for an error answer, or an older service without the method", async () => {
     for (const told of [
-      { result: { refused: "a caller in a sandbox" } },
       { error: { code: -32601, message: "unknown method: hooks.run" } },
       { error: { code: -32602, message: "invalid params" } },
       { result: { exit_code: "0" } },
@@ -331,6 +338,125 @@ describe("pluginRoot and guardViaService", () => {
     await expect(guardViaService(bad, { clientVersion: "1" })).resolves.toBeNull();
     await expect(guardViaService(call(ext, service.socket), { clientVersion: "1", run: () => Promise.reject(new Error("boom")) })).resolves.toBeNull();
     expect(service.requests).toEqual([]);
+  });
+});
+
+describe("a refusal runs the routes here (Codex P2, round 4)", () => {
+  /** A Probe plugin folder beside an extension folder, its dispatcher `script`. */
+  function pluginWith(script: string): string {
+    const root = socketFolder();
+    const hooks = join(root, PluginFolder.Agent, "hooks");
+    mkdirSync(hooks, { recursive: true });
+    writeFileSync(join(hooks, "dispatch.py"), "");
+    writeFileSync(join(hooks, "dispatch.sh"), "#!/bin/sh\n" + script + "\n");
+    chmodSync(join(hooks, "dispatch.sh"), 0o755);
+    mkdirSync(join(root, "probe-research-pi"));
+    return join(root, "probe-research-pi");
+  }
+
+  function call(extensionDir: string, socket: string, overrides: Partial<ServiceGuardCall> = {}): ServiceGuardCall {
+    return {
+      toolName: "bash",
+      input: { command: "probe run list" },
+      toolCallId: "call-1",
+      sessionId: "0199f0a2-6b1c-7d3e-8f40-5a6b7c8d9e0f",
+      cwd: "/",
+      daemonProfile: false,
+      extensionDir,
+      env: { HOME: homedir(), PATH: process.env.PATH ?? "/usr/bin:/bin" },
+      socket,
+      ...overrides,
+    };
+  }
+
+  const DENY_LOCALLY =
+    'cat > "$CLAUDE_PLUGIN_ROOT/../payload.json"; ' +
+    'env > "$CLAUDE_PLUGIN_ROOT/../env.txt"; ' +
+    "echo '{\"hookSpecificOutput\": {\"hookEventName\": \"PreToolUse\", \"permissionDecision\": \"deny\", " +
+    "\"permissionDecisionReason\": \"`Bash` refused here\"}}'";
+
+  it("runs the folder's pre-tool lane in place and takes its verdict", async () => {
+    const service = await serve(() => ({ result: { refused: "a caller in a sandbox" } }));
+    const ext = pluginWith(DENY_LOCALLY);
+    const got = await guardViaService(call(ext, service.socket), { clientVersion: "1" });
+    expect(got).toEqual({ reason: "`bash` refused here", via: "local" });
+    const folder = join(ext, "..");
+    const payload = JSON.parse(readFileSync(join(folder, "payload.json"), "utf8"));
+    expect(payload).toMatchObject({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command: "probe run list" } });
+    const env = readFileSync(join(folder, "env.txt"), "utf8");
+    expect(env).toContain(`CLAUDE_PLUGIN_ROOT=${resolve(folder, PluginFolder.Agent)}`);
+    expect(env).toContain("PROBE_HOOK_HOST=off");
+    expect(env).toContain(`PROBE_HOOK_PARENT_PID=${process.pid}`);
+  });
+
+  it("runs it here only for a sandbox refusal, never for a busy or stopping service", async () => {
+    for (const refused of ["busy: too many hook events in flight", "the service could not take it (stopping)"]) {
+      const service = await serve(() => ({ result: { refused } }));
+      const ext = pluginWith(DENY_LOCALLY);
+      expect(await guardViaService(call(ext, service.socket), { clientVersion: "1" })).toBeNull();
+      expect(existsSync(join(ext, "..", "payload.json"))).toBe(false);
+    }
+    const sandboxed = await serve(() => ({ result: { refused: "anything", reason: "sandboxed" } }));
+    const ext = pluginWith(DENY_LOCALLY);
+    expect((await guardViaService(call(ext, sandboxed.socket), { clientVersion: "1" }))?.via).toBe("local");
+  });
+
+  it("stops the routes the dispatcher started in groups of their own, as the service does", async () => {
+    if (process.platform !== "linux") return; // `setsid`
+    const service = await serve(() => ({ result: { refused: "a caller in a sandbox" } }));
+    // A dispatcher as dispatch.py is: each route in a session of its own,
+    // stopped by the dispatcher when it is told to stop (TERM).
+    const ext = pluginWith(
+      'setsid sleep 30 & echo $! > "$CLAUDE_PLUGIN_ROOT/../route.pid"; ' +
+        'trap \'kill "$(cat "$CLAUDE_PLUGIN_ROOT/../route.pid")"; exit 143\' TERM; wait',
+    );
+    expect(await guardViaService(call(ext, service.socket), { clientVersion: "1" })).toBeNull();
+    const route = Number(readFileSync(join(ext, "..", "route.pid"), "utf8").trim());
+    await new Promise((done) => setTimeout(done, 400));
+    expect(() => process.kill(route, 0)).toThrow(); // TERM first: the dispatcher stopped its route
+  });
+
+  it("never runs it here for an answer that is not a refusal", async () => {
+    const service = await serve(() => ({ error: { code: -32601, message: "unknown method: hooks.run" } }));
+    const ext = pluginWith(DENY_LOCALLY);
+    expect(await guardViaService(call(ext, service.socket), { clientVersion: "1" })).toBeNull();
+    expect(existsSync(join(ext, "..", "payload.json"))).toBe(false);
+  });
+
+  it("gives no verdict when the lane here runs past the time it has, and stops it", async () => {
+    const service = await serve(() => ({ result: { refused: "a caller in a sandbox" } }));
+    const ext = pluginWith('echo $$ > "$CLAUDE_PLUGIN_ROOT/../pid"; exec sleep 30');
+    const started = Date.now();
+    expect(await guardViaService(call(ext, service.socket), { clientVersion: "1" })).toBeNull();
+    expect(Date.now() - started).toBeLessThan(SERVICE_HOOK_RUN_MS + 1000);
+    const pid = Number(readFileSync(join(ext, "..", "pid"), "utf8").trim());
+    await new Promise((done) => setTimeout(done, 200));
+    expect(() => process.kill(pid, 0)).toThrow(); // its group was stopped
+  });
+
+  it("answers as the service's run of the real routes does (parity, daemon profile)", async () => {
+    // The shipped lean plugin beside this package, as `test_service_hooks_run.py`
+    // asks it through the service: a `probe` read in a daemon-recorded session
+    // is refused, in the routes' own words; `probe ask` is not.
+    const ext = resolve(__dirname, "..");
+    const home = socketFolder();
+    const sessions = join(home, ".local", "state", "probe", "sessions");
+    mkdirSync(sessions, { recursive: true });
+    const sid = "0199f0a2-6b1c-7d3e-8f40-5a6b7c8d9e0f";
+    writeFileSync(join(sessions, `${sid}.state`), "daemon\n");
+    const service = await serve(() => ({ result: { refused: "a caller in a sandbox" } }));
+    const env = { HOME: home, PATH: process.env.PATH ?? "/usr/bin:/bin" };
+    const deps = { clientVersion: "1" };
+    const generous = (run: HookRun, local: Parameters<typeof runHookLocally>[1]) =>
+      runHookLocally({ ...run, timeoutMs: 10_000 }, local); // a loaded runner's cold python is not the subject
+    const refused = await guardViaService(call(ext, service.socket, { daemonProfile: true, env }), { ...deps, runLocally: generous });
+    expect(refused?.via).toBe("local");
+    expect(refused?.reason).toContain("`probe run list` was refused before it ran");
+    const asked = await guardViaService(
+      call(ext, service.socket, { daemonProfile: true, env, input: { command: "probe ask hi" } }),
+      { ...deps, runLocally: generous },
+    );
+    expect(asked).toEqual({ reason: null, via: "local" });
   });
 });
 

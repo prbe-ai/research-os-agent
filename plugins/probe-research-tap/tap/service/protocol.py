@@ -96,6 +96,13 @@ class Method:
     #: The desktop app's management requests (`probe desktop request --json`'s
     #: request in, its v1 envelope out), answered by a child of the service.
     DESKTOP_REQUEST = "desktop.request"
+    #: A training process's SDK hands the service its background work (plan
+    #: Q5) instead of forking a detached process of its own: an outbox's
+    #: drainer, this box's watcher (both run as the service's children, on the
+    #: caller's interpreter), a batch of client telemetry (sent from a thread).
+    OUTBOX_DRAIN = "outbox.drain"
+    BOX_WATCH = "box.watch"
+    TELEMETRY_SEND = "telemetry.send"
 
 
 #: The methods this service answers. Every other name is `-32601`.
@@ -129,6 +136,9 @@ METHODS = frozenset(
         Method.MAILBOX_CLAIM,
         Method.MAILBOX_ANSWER,
         Method.DESKTOP_REQUEST,
+        Method.OUTBOX_DRAIN,
+        Method.BOX_WATCH,
+        Method.TELEMETRY_SEND,
     }
 )
 
@@ -461,15 +471,90 @@ def hook_queue_env(env: dict) -> dict:
         kept[name] = value
     return kept
 
+#: `outbox.drain` / `box.watch`'s `env`: the caller's environment as far as
+#: the SDK's drainer and box watcher read it (its PROBE_* settings and knobs,
+#: where config and state live, the interpreter's own variables, the network's
+#: proxy and certificates), so the child runs as the detached one the caller
+#: would have forked. Never a credential (`secret_env`): the drainer delivers
+#: with the stored login, as the outbox's ops already pin it, and a caller
+#: holding a credential in its environment keeps forking its own drainer.
+RUNTIME_ENV_NAMES = frozenset(
+    {
+        "PATH",
+        "LANG",
+        "TZ",
+        "TMPDIR",
+        "VIRTUAL_ENV",
+        "REQUESTS_CA_BUNDLE",
+        "CURL_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "no_proxy",
+        "all_proxy",
+    }
+)
+RUNTIME_ENV_PREFIXES = ("PROBE_", "XDG_", "PYTHON", "LC_", "CONDA_", "SSL_", "LD_", "DYLD_")
+#: A PROBE_* name with one of these in it is a credential (PROBE_TOKEN,
+#: PROBE_INGEST_TOKEN, PROBE_HMAC_SECRET, ...): never sent, never accepted.
+SECRET_ENV_WORDS = ("TOKEN", "SECRET", "PASSWORD", "KEY")
+#: `telemetry.send`'s `entries`: at most this many (the SDK sender's own queue).
+MAX_TELEMETRY_ENTRIES = 256
+
+
+def secret_env(name: str) -> bool:
+    """A Probe credential's variable (`PROBE_TOKEN` and the like)."""
+    return name.startswith("PROBE_") and any(word in name for word in SECRET_ENV_WORDS)
+
+
+def runtime_env_name(name: str) -> bool:
+    """A variable `outbox.drain` / `box.watch` take in `env`."""
+    return (name in RUNTIME_ENV_NAMES or name.startswith(RUNTIME_ENV_PREFIXES)) and not secret_env(name)
+
+
+class BackgroundState:
+    """`outbox.drain` / `box.watch`'s `state` when `accepted`."""
+
+    STARTED = "started"  # a child starts now
+    RUNNING = "running"  # this service's child for it runs already
+
+
+class BackgroundRefusal:
+    """`{accepted: false, reason}`: the caller forks its own process, as before."""
+
+    SANDBOXED = "sandboxed"  # the caller is in a sandbox: its work would run outside it
+    BUSY = "busy"  # this service runs as many as it takes
+    FAILING = "failing"  # a child for it exited at its start lately
+    STOPPING = "stopping"  # this service is on its way out
+    UNUSABLE = "unusable"  # the folder or interpreter named is not this user's to run
+    UNKNOWN_ENDPOINT = "unknown_endpoint"  # PROBE_BASE_URL not an endpoint the config names (D10)
+
+
+BACKGROUND_REFUSALS = frozenset(
+    {
+        BackgroundRefusal.SANDBOXED,
+        BackgroundRefusal.BUSY,
+        BackgroundRefusal.FAILING,
+        BackgroundRefusal.STOPPING,
+        BackgroundRefusal.UNUSABLE,
+        BackgroundRefusal.UNKNOWN_ENDPOINT,
+    }
+)
+
 
 class Client:
     APP = "app"
     TAP = "tap"
     PI = "pi"  # harness-literal-ok: an API v1 client kind (the contract), not a harness lookup
     CLI = "cli"
+    #: A training process's SDK handing off its background work (plan Q5).
+    SDK = "sdk"
 
 
-CLIENTS = frozenset({Client.APP, Client.TAP, Client.PI, Client.CLI})
+CLIENTS = frozenset({Client.APP, Client.TAP, Client.PI, Client.CLI, Client.SDK})
 
 
 class Mode:
@@ -606,10 +691,12 @@ class RefusedReason:
     #: `action.run` from inside a coding agent's session the Probe daemon
     #: records (its caller's process ancestry or environment says so, plan D9).
     DAEMON_SESSION = "daemon_session"
-    #: `action.run` on a connection whose opener has exited (plan D9).
+    #: Any method that runs or stores work (the service's `Policy.WORK`) on a
+    #: connection whose opener has exited (plan D9).
     CALLER_GONE = "caller_gone"
-    #: `manifest.refresh` or `recorders.finish` from a caller in a sandbox:
-    #: what it asks for would run (or stop) outside it, with the context it chose.
+    #: Any method that runs or stores work, from a caller the service cannot
+    #: rule out being in a sandbox: what it asks for would run (or stop)
+    #: outside it, with the context it chose.
     SANDBOXED = "sandboxed"
     #: `desktop.request`: no child could start (no CLI interpreter). Nothing ran.
     CLI_UNAVAILABLE = "cli_unavailable"
@@ -1037,3 +1124,60 @@ def need_owner(params: dict) -> dict | None:
     if not isinstance(start, str) or not start or len(start) > 64:
         raise invalid_params("owner.start_time must be a non-empty string")
     return {"pid": pid, "start_time": start}
+
+
+def need_background(params: dict, *, directory: bool) -> dict:
+    """`outbox.drain`'s params (`directory`) or `box.watch`'s, checked:
+    `{dir, python, cwd, env}`.
+
+        dir     the outbox journal folder to drain (absolute; `outbox.drain` only)
+        python  the interpreter the child runs on: the caller's own (absolute)
+        cwd     the caller's working folder, the child's too (absolute; optional)
+        env     the caller's environment, by `runtime_env_name` (at most
+                MAX_HOOK_ENV strings); a credential's name is refused.
+                `box.watch` needs its registry folder, PROBE_BOX_DIR, in it.
+    """
+    found = {
+        "dir": _need_path(params, "dir") if directory else None,
+        "python": _need_path(params, "python"),
+        "cwd": _need_path(params, "cwd") if params.get("cwd") is not None else None,
+    }
+    env = params.get("env", {})
+    if not isinstance(env, dict) or len(env) > MAX_HOOK_ENV:
+        raise invalid_params(f"env must be an object of at most {MAX_HOOK_ENV} variables")
+    for name, value in env.items():
+        if not isinstance(name, str) or "\0" in name or "=" in name or not runtime_env_name(name):
+            raise invalid_params(f"env may not set {name!r}: never a credential, only what the drainer reads")
+        if not isinstance(value, str) or len(value) > MAX_HOOK_ENV_VALUE or "\0" in value:
+            raise invalid_params(f"env.{name} must be a string of at most {MAX_HOOK_ENV_VALUE} characters")
+    if not directory and not str(env.get("PROBE_BOX_DIR") or "").startswith("/"):
+        raise invalid_params("env.PROBE_BOX_DIR must name the box registry folder (an absolute path)")
+    found["env"] = dict(env)
+    return found
+
+
+def need_telemetry(params: dict) -> tuple[list, str | None]:
+    """`telemetry.send`'s `(entries, id)`. `entries`: PostHog batch entries
+    the caller built (its identity resolved, its opt-out and hosted gate
+    passed), each an object naming its `event`; at most
+    MAX_TELEMETRY_ENTRIES. `id` (optional): the batch's, the same on a resend,
+    so the service takes it once and acknowledges it again."""
+    batch_id = params.get("id")
+    if batch_id is not None and (
+        not isinstance(batch_id, str)
+        or not 1 <= len(batch_id) <= 64
+        or not batch_id.isascii()
+        or not batch_id.replace("-", "").isalnum()
+    ):
+        raise invalid_params("id must be a string of at most 64 letters, digits and dashes")
+    entries = params.get("entries")
+    if (
+        not isinstance(entries, list)
+        or not entries
+        or len(entries) > MAX_TELEMETRY_ENTRIES
+        or not all(isinstance(e, dict) and isinstance(e.get("event"), str) and e["event"] for e in entries)
+    ):
+        raise invalid_params(
+            f"entries must be a list of 1 to {MAX_TELEMETRY_ENTRIES} objects, each naming its event"
+        )
+    return entries, batch_id
