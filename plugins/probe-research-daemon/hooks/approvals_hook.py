@@ -19,7 +19,9 @@ the prompt, silent when nothing waits:
                                       is refused ("ask it word for word")
     PostToolUse on the question tool  the researcher's pick is read from the tool's
                                       result and written as the answer: the exact yes
-                                      label is a yes, anything else is a no
+                                      label is a yes, anything else is a no. Through
+                                      the Probe service when it answers
+                                      (`mailbox.answer`, plan Q2), else written here
 
 Every lookup is scoped to the payload's session: one session's hook never
 nudges, checks or answers another session's question.
@@ -324,6 +326,13 @@ def on_post_question(payload: dict) -> None:
             continue
         choice = answers.get(q.get("question"))
         verdict = "yes" if choice == req["question"]["yes_label"] else "no"
+        recorded = _answer_via_service(req["id"], choice)
+        if recorded is False:
+            continue  # the question no longer waits (answered elsewhere, or expired)
+        if recorded:
+            if verdict == "yes" and req.get("policy") == FEEDBACK_POLICY:
+                _spawn_feedback_flush()
+            continue
         path = _state() / "approvals" / "answers" / f"{req['id']}.json"
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -335,6 +344,43 @@ def on_post_question(payload: dict) -> None:
             continue
         if verdict == "yes" and req.get("policy") == FEEDBACK_POLICY:
             _spawn_feedback_flush()
+
+
+#: `mailbox.answer`'s deadline, and how long past it this hook waits for the
+#: answer before it writes the answer file itself (the service never writes
+#: past the deadline, so the two never both write it).
+ANSWER_WAIT_S = 0.8
+ANSWER_GRACE_S = 0.4
+
+
+def _answer_via_service(rid: str, choice: object) -> "bool | None":
+    """Record the pick through the Probe service (`mailbox.answer`, plan Q2),
+    which writes the same answer file and tells the session's watchers: True
+    when it did, False when the question no longer waits, None when no service
+    answered in time (or none runs, or it refused): this hook writes it."""
+    if not isinstance(choice, str):
+        return None
+    try:
+        rpc = _hook_harness().load_sibling("_service_rpc").Rpc.connect()
+    except Exception:  # noqa: BLE001 -- no helper beside this file
+        return None
+    if rpc is None:
+        return None
+    deadline = time.time() + ANSWER_WAIT_S
+    try:
+        answer = rpc.call("mailbox.answer", {"state_dir": os.path.abspath(str(_state())), "id": rid,
+                                             "choice": choice, "channel": "question-tool", "deadline": deadline,
+                                             "budget": ANSWER_WAIT_S},
+                          timeout=ANSWER_WAIT_S + ANSWER_GRACE_S)
+    except Exception as exc:  # noqa: BLE001 -- no answer: written here, past the deadline
+        if not getattr(exc, "answered", False):
+            time.sleep(max(0.0, deadline + ANSWER_GRACE_S - time.time()))
+        return None
+    finally:
+        rpc.close()
+    if answer.get("late"):
+        return None
+    return bool(answer.get("answered"))
 
 
 def _probe_bin() -> str:

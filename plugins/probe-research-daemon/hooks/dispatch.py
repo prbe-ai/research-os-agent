@@ -259,14 +259,18 @@ def matches(matcher, tool: str) -> bool:
 
 def reads_waiting() -> bool:
     """The reads route's own shell fast path (routes.json, PostToolUse), in
-    python: a Probe daemon message, or a newer status, waits for this session."""
+    python: a Probe daemon message, a service claim its caller never received
+    (`claimed/<sid>/<stem>.<token>.json`, the shell's `*.*.json`), or a newer
+    status, waits for this session."""
     sid = _safe_id(os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CODEX_THREAD_ID") or "")  # harness-literal-ok: the reads route's own gate
     base = os.environ.get("XDG_STATE_HOME") or os.path.join(os.path.expanduser("~"), ".local", "state")
     root = os.path.join(base, "probe", "reads")
-    messages = os.path.join(root, "messages")
-    for folder in [sid] if sid else _listdir(messages):
-        if any(n.endswith(".json") and not n.startswith(".") for n in _listdir(os.path.join(messages, folder))):
-            return True
+    for kind, dots in (("messages", 1), ("claimed", 2)):
+        folder = os.path.join(root, kind)
+        for sub in [sid] if sid else _listdir(folder):
+            names = _listdir(os.path.join(folder, sub))
+            if any(n.endswith(".json") and not n.startswith(".") and n.count(".") >= dots for n in names):
+                return True
     if not sid:
         return False
     status = os.path.join(root, "status", sid + ".json")

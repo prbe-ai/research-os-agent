@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 
 import json
+import re
 import time
 from typing import Any
 
@@ -84,6 +85,14 @@ class Method:
     #: A CLI whose cached release manifest is stale asks the service to
     #: refresh it, instead of spawning a refresher of its own.
     MANIFEST_REFRESH = "manifest.refresh"
+    #: The service owns the reads mailbox and the approvals board (plan Q2):
+    #: a worker posts a message or a held question, a hook or the app claims
+    #: messages and answers a held question. The files stay the store
+    #: (`probe.daemon.mailbox`), written with the same atomic operations, so a
+    #: caller with no service writes and claims them itself beside it.
+    MAILBOX_POST = "mailbox.post"
+    MAILBOX_CLAIM = "mailbox.claim"
+    MAILBOX_ANSWER = "mailbox.answer"
 
 
 #: The methods this service answers. Every other name is `-32601`.
@@ -113,6 +122,9 @@ METHODS = frozenset(
         Method.RUN_HOLD,
         Method.RUN_RELEASE,
         Method.MANIFEST_REFRESH,
+        Method.MAILBOX_POST,
+        Method.MAILBOX_CLAIM,
+        Method.MAILBOX_ANSWER,
     }
 )
 
@@ -438,6 +450,12 @@ class Topic:
     UPDATE_DONE = "update.done"
     UPDATE_DEFERRED = "update.deferred"
     SERVICE_STOPPING = "service.stopping"
+    #: A watched session's reads mailbox changed (plan Q2): `{sid, parts}`,
+    #: each part a MailboxPart. Only "look again": the files say what changed.
+    MAILBOX_CHANGED = "mailbox.changed"
+    #: A held question of a watched session was filed, rewritten, answered or
+    #: removed on the approvals board (plan Q2): `{sid, ids}`.
+    APPROVALS_CHANGED = "approvals.changed"
 
 
 #: Every topic API v1 names. A subscription may name any of them.
@@ -452,6 +470,42 @@ TOPICS = frozenset(
         Topic.UPDATE_DONE,
         Topic.UPDATE_DEFERRED,
         Topic.SERVICE_STOPPING,
+        Topic.MAILBOX_CHANGED,
+        Topic.APPROVALS_CHANGED,
+    }
+)
+
+#: The topics whose events are about one session: `events.subscribe`'s
+#: `sessions` (and `state_dir`) name which ones the service watches for the
+#: connection. A subscription to one of them that names no session watches
+#: every live registered session.
+SESSION_TOPICS = frozenset({Topic.MAILBOX_CHANGED, Topic.APPROVALS_CHANGED})
+#: `events.subscribe`'s `sessions` names at most this many.
+MAX_SUBSCRIBE_SESSIONS = 64
+
+
+class MailboxPart:
+    """What changed in a session's reads mailbox (`<state>/reads/`), as a
+    `mailbox.changed` event names it."""
+
+    MESSAGES = "messages"  # messages/<sid>/: a message arrived, or was claimed out
+    CLAIMED = "claimed"  # claimed/<sid>/: a deliverer took one
+    ASKS = "asks"  # asks/<sid>/: an ask filed, or taken by the worker
+    REQUESTS = "requests"  # requests/<sid>/: a request to the writer, likewise
+    TURN = "turn"  # turns/<sid>: a new prompt started a turn
+    WAITER = "waiter"  # turns/<sid>.waiter: a newer Stop waiter took over
+    STATUS = "status"  # status/<sid>.json: the reader's health
+
+
+MAILBOX_PARTS = frozenset(
+    {
+        MailboxPart.MESSAGES,
+        MailboxPart.CLAIMED,
+        MailboxPart.ASKS,
+        MailboxPart.REQUESTS,
+        MailboxPart.TURN,
+        MailboxPart.WAITER,
+        MailboxPart.STATUS,
     }
 )
 
@@ -766,6 +820,119 @@ def need_hook_queue(params: dict) -> dict:
     if len(json.dumps(item).encode("utf-8")) > MAX_HOOK_QUEUE_ITEM:
         raise invalid_params(f"a queued event must be at most {MAX_HOOK_QUEUE_ITEM} bytes as JSON")
     return item
+
+
+def need_sessions(params: dict) -> list[str] | None:
+    """`events.subscribe`'s optional `sessions`: the session ids whose mailbox
+    and held questions to watch (plan Q2). None when it names none."""
+    value = params.get("sessions")
+    if value is None:
+        return None
+    if (
+        not isinstance(value, list)
+        or not value
+        or len(value) > MAX_SUBSCRIBE_SESSIONS
+        or not all(isinstance(sid, str) and sid and len(sid) <= 128 and "\0" not in sid for sid in value)
+    ):
+        raise invalid_params(
+            f"sessions must be a non-empty list of at most {MAX_SUBSCRIBE_SESSIONS} session ids "
+            "(each at most 128 characters)"
+        )
+    return list(dict.fromkeys(value))
+
+
+#: `mailbox.*`'s `deadline` when the caller names none, and the furthest one
+#: taken: the service never acts past it, and a caller that heard nothing by
+#: then (and a moment after) does the step itself.
+MAILBOX_WAIT_S = 1.0
+MAX_MAILBOX_WAIT_S = 10.0
+#: `mailbox.claim`'s `names`, at most.
+MAX_MAILBOX_CLAIM = 64
+#: A message file's name (`probe.daemon.mailbox._file_name`), and the ids,
+#: tokens and deliverer names a `mailbox.*` call may carry.
+MESSAGE_FILE = re.compile(r"[0-9]{1,24}-[A-Za-z0-9_]{1,64}\.json")
+MAILBOX_ID = re.compile(r"[A-Za-z0-9_]{1,64}")
+_DELIVERER = re.compile(r"[A-Za-z0-9 _.:/@#()-]{1,64}")
+
+
+def _need_mailbox(params: dict, *, sid: bool = True) -> dict:
+    """What every `mailbox.*` call carries: the session (`sid`), the state
+    folder its files live under (`state_dir`, the caller's own
+    `<XDG_STATE_HOME>/probe`; null: the default), and when the service must
+    be done: `deadline` (epoch seconds) and `budget` (seconds from its arrival),
+    the sooner of the two, each optional (MAILBOX_WAIT_S when neither is
+    given), at most MAX_MAILBOX_WAIT_S. The absolute one holds against a
+    request that arrives late, the relative one against a clock stepped back.
+    `deadline_mono` is that moment on this process's monotonic clock."""
+    out: dict = {"state_dir": need_state_dir(params)}
+    if sid:
+        out["sid"] = need_str(params, "sid", max_len=128)
+    left = MAX_MAILBOX_WAIT_S
+    given = False
+    for key, now in (("deadline", time.time()), ("budget", 0.0)):
+        value = params.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, (int, float)) or isinstance(value, bool) or value != value:
+            raise invalid_params(f"{key} must be a number of seconds")
+        left, given = min(left, float(value) - now), True
+    if not given:
+        left = MAILBOX_WAIT_S
+    out["deadline_mono"] = time.monotonic() + max(0.0, left) if left > 0 else time.monotonic() - 1.0
+    return out
+
+
+def need_mailbox_post(params: dict) -> dict:
+    """`mailbox.post`: `{sid, state_dir, deadline}` and exactly one of
+    `message` (a `probe.daemon.mailbox.Message` as a dict: a reader's message,
+    an answer, a writer's reply, a run alert) or `question` (a held question,
+    `probe.daemon.approvals.Request.to_json()`). Their fields are checked where
+    they are written."""
+    out = _need_mailbox(params)
+    message, question = params.get("message"), params.get("question")
+    if (message is None) == (question is None) or not isinstance(message if question is None else question, dict):
+        raise invalid_params("give exactly one of message or question, as an object")
+    out["message"], out["question"] = message, question
+    return out
+
+
+def need_mailbox_claim(params: dict) -> dict:
+    """`mailbox.claim`: `{sid, state_dir, deadline}`, `names` (the message
+    files to take from `messages/<sid>/`, oldest first), `by` (the deliverer,
+    as the claim log records it) and `token` (the request's own, logged beside
+    each claim so a caller that lost the answer finds what was claimed for it)."""
+    out = _need_mailbox(params)
+    names = params.get("names")
+    if (
+        not isinstance(names, list)
+        or not names
+        or len(names) > MAX_MAILBOX_CLAIM
+        or not all(isinstance(n, str) and MESSAGE_FILE.fullmatch(n) for n in names)
+    ):
+        raise invalid_params(f"names must be a non-empty list of at most {MAX_MAILBOX_CLAIM} message file names")
+    by, token = params.get("by"), params.get("token")
+    if not isinstance(by, str) or not _DELIVERER.fullmatch(by):
+        raise invalid_params("by must name the deliverer (at most 64 plain characters)")
+    if not isinstance(token, str) or not MAILBOX_ID.fullmatch(token):
+        raise invalid_params("token must be at most 64 letters, digits or underscores")
+    out.update(names=list(dict.fromkeys(names)), by=by, token=token)
+    return out
+
+
+def need_mailbox_answer(params: dict) -> dict:
+    """`mailbox.answer`: `{state_dir, deadline}`, `id` (the held question's),
+    `choice` (the researcher's pick, as the question tool reported it: the yes
+    label is a yes, anything else a no) and `channel` (where it was given)."""
+    out = _need_mailbox(params, sid=False)
+    rid, choice, channel = params.get("id"), params.get("choice"), params.get("channel")
+    if not isinstance(rid, str) or not MAILBOX_ID.fullmatch(rid):
+        raise invalid_params("id must be a held question's id")
+    if not isinstance(choice, str) or len(choice) > 4096:
+        raise invalid_params("choice must be a string of at most 4096 characters")
+    if not isinstance(channel, str) or not _DELIVERER.fullmatch(channel):
+        raise invalid_params("channel must name where the answer was given (at most 64 plain characters)")
+    out.update(id=rid, choice=choice, channel=channel)
+    return out
 
 
 def need_owner(params: dict) -> dict | None:
