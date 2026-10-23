@@ -4,6 +4,7 @@
                 python `-m probe.service` detached. Never waits for readiness
                 unless asked: a hook's budget is a connect() and a fork.
     register()  session.register over one short connection (hello first).
+    queue_hook() hooks.queue: a hook event's record-keeping routes, run once (D36).
     end()       session.end, likewise.
     check_now() ensure the service (waiting for it), then update.check_now:
                 what the CLI and the plugin hook do instead of spawning an
@@ -338,6 +339,23 @@ def refresh_manifest(
         params["context"] = context
     return _dict(call(Method.MANIFEST_REFRESH, params, client=client, client_version=client_version,
                       timeout=timeout + wait))
+
+
+def queue_hook(
+    event: dict,
+    *,
+    client: str = Client.CLI,
+    client_version: str = "unknown",
+    timeout: float = TIMEOUT_S,
+) -> dict:
+    """`hooks.queue` (plan D36): hand the service one hook event's
+    record-keeping routes, to run once by `event["id"]` (`{id, plugin_root,
+    lane, payload, env, cwd, at}`, `protocol.need_hook_queue`). The answer:
+    `{"queued": true, "duplicate": bool}`, or `{"refused": why}` (then run them
+    yourself). OSError when no service runs. The plugin's dispatcher speaks it
+    on its own socket (`hooks/dispatch.py` `Miss`): it cannot import this."""
+    answer = call(Method.HOOKS_QUEUE, event, client=client, client_version=client_version, timeout=timeout)
+    return answer if isinstance(answer, dict) else {}
 
 
 def wait_for_exit(pid: int, *, timeout: float = WAIT_FOR_PID_S, poll: float = 0.25) -> bool:

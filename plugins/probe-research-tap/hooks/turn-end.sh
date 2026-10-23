@@ -32,7 +32,25 @@ case "$SOURCE" in
         fi
         ;;
 esac
-printf '%s' "$HOOK_INPUT" | python3 -c '
+# Only a session the daemon records gets a turn mark, so its switch is read
+# here first: every other Stop costs no python start (it was ~20 ms of this
+# hook's ~32). The payload's one plain "session_id" (as ensure-daemon.sh reads
+# it, up to 256 KB), its `<sid>.state` as the session marker writes it;
+# anything unexpected goes to the python below, which decides as it always did.
+WRITE_TURN=1
+if [ "${#HOOK_INPUT}" -le 262144 ] && [[ "$HOOK_INPUT" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]{1,128})\" ]]; then
+    TURN_SID="${BASH_REMATCH[1]}"
+    # Linear, as ensure-daemon.sh's: never `${x#*pat}` on a payload.
+    case "$HOOK_INPUT" in
+        *\"session_id\"*\"session_id\"*) ;;
+        *)
+            TURN_STATE=""
+            read -r TURN_STATE 2>/dev/null <"${XDG_STATE_HOME:-$HOME/.local/state}/probe/sessions/$TURN_SID.state" || true
+            case "$TURN_STATE" in [Dd][Aa][Ee][Mm][Oo][Nn]) ;; *) WRITE_TURN="" ;; esac
+            ;;
+    esac
+fi
+[ -z "$WRITE_TURN" ] || printf '%s' "$HOOK_INPUT" | python3 -c '
 import json, os, re, sys, tempfile, time
 from pathlib import Path
 

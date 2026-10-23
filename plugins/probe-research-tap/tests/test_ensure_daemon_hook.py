@@ -194,3 +194,102 @@ def test_the_turn_end_hook_starts_a_gone_service_in_the_background(hook_env, tmp
         assert not hook_env["spawn_log"].exists(), "never SessionStart in the background"
     finally:
         marker.unlink(missing_ok=True)
+
+
+# -- the hot paths start no python (plan Q1: the tap's cheapest warm path) ------------
+#
+# A bash hook reaches a warm host only through a second interpreter (bash
+# cannot hand a socket the harness's stdout and stderr), and that start alone
+# costs more than these hooks' whole common path once their one python start
+# is gone: measured on the devbox, ensure-daemon.sh 24.6 -> 5.1 ms per prompt
+# and turn-end.sh 32.3 -> 3.5 ms per Stop, against 28.6 ms for one bash route
+# behind the probe-research plugin's warm host.
+
+#: Ids of their own, one per test: the shared `/tmp` marker names must not
+#: meet another test's (xdist runs them side by side).
+HOT_SID = "01a06383-6f4e-751a-b94c-ee5ea70d0002"
+NESTED_SID = "01a06383-6f4e-751a-b94c-ee5ea70d0004"
+STOP_SID = "01a06383-6f4e-751a-b94c-ee5ea70d0005"
+
+
+def _python_spy(tmp_path):
+    """A `python3` first on PATH that records each start, then runs the real one."""
+    real = subprocess.run(["/bin/sh", "-c", "command -v python3"], capture_output=True, text=True).stdout.strip()
+    bin_dir = tmp_path / "spy-bin"
+    bin_dir.mkdir()
+    calls = tmp_path / "python3-starts.txt"
+    (bin_dir / "python3").write_text(f'#!/bin/sh\necho "$*" >> {calls}\nexec {real} "$@"\n')
+    (bin_dir / "python3").chmod(0o755)
+    return f"{bin_dir}:{os.environ['PATH']}", calls
+
+
+def test_a_prompt_with_a_live_daemon_starts_no_python(hook_env, tmp_path):
+    path, calls = _python_spy(tmp_path)
+    pid_path = Path("/tmp") / f"probe-research-tap-watcher-{HOT_SID}.pid"
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    try:
+        result = _run({"session_id": HOT_SID, "prompt": 'say "session_id": "x"'}, {**hook_env["env"], "PATH": path})
+        assert result.returncode == 0
+        assert not calls.exists(), "the common path started python"
+        assert not hook_env["spawn_log"].exists()
+    finally:
+        pid_path.unlink(missing_ok=True)
+
+
+def test_a_payload_naming_two_session_ids_is_parsed_as_before(hook_env, tmp_path):
+    path, calls = _python_spy(tmp_path)
+    nested = {"session_id": NESTED_SID, "extra": {"session_id": "01a06383-6f4e-751a-b94c-ee5ea70d0003"}}
+    result = _run(nested, {**hook_env["env"], "PATH": path})
+    assert result.returncode == 0
+    assert calls.exists(), "an ambiguous payload must be parsed, never guessed"
+    # The top-level id, as the parse reads it: its heal marker, not the nested one's.
+    assert (hook_env["state"] / "heal" / NESTED_SID).is_file()
+    assert not (hook_env["state"] / "heal" / "01a06383-6f4e-751a-b94c-ee5ea70d0003").exists()
+
+
+def test_a_stop_outside_the_daemon_starts_no_python_and_marks_nothing(tmp_path):
+    path, calls = _python_spy(tmp_path)
+    xdg = tmp_path / "xdg"
+    sessions = xdg / "probe" / "sessions"
+    sessions.mkdir(parents=True)
+    transcript = tmp_path / "t.jsonl"
+    transcript.write_bytes(b"x" * 7)
+    hook = HOOK.parent / "turn-end.sh"
+    env = {**os.environ, "PATH": path, "XDG_STATE_HOME": str(xdg), "PROBE_TAP_SOURCE": "claude_code"}
+    payload = json.dumps({"session_id": STOP_SID, "transcript_path": str(transcript)})
+
+    def stop():
+        return subprocess.run(["/bin/bash", str(hook)], input=payload, capture_output=True, text=True, env=env,
+                              timeout=10)
+
+    for state in (None, "full", "off"):
+        if state is not None:
+            (sessions / f"{STOP_SID}.state").write_text(state, encoding="utf-8")
+        assert stop().returncode == 0
+        assert not calls.exists(), f"a Stop in state {state!r} started python"
+        assert not (sessions / f"{STOP_SID}.turn").exists()
+    (sessions / f"{STOP_SID}.state").write_text(" Daemon\n", encoding="utf-8")  # read as the python reads it
+    assert stop().returncode == 0
+    assert json.loads((sessions / f"{STOP_SID}.turn").read_text())["offset"] == 7
+
+
+BIG_SID = "01a06383-6f4e-751a-b94c-ee5ea70d0006"
+
+
+@pytest.mark.parametrize("size", [200_000, 300_000], ids=["read-in-bash", "parsed"])
+def test_a_huge_prompt_stays_cheap_wherever_its_id_is(hook_env, tmp_path, size):
+    """A pasted log before the id: the bash read is linear (a `${x#*pat}`
+    here took 12 s at 120 KB), and past 256 KB the payload is parsed instead."""
+    path, calls = _python_spy(tmp_path)
+    pid_path = Path("/tmp") / f"probe-research-tap-watcher-{BIG_SID}.pid"
+    pid_path.write_text(str(os.getpid()), encoding="utf-8")
+    try:
+        payload = {"prompt": 'a "quoted" line\n' * (size // 16), "session_id": BIG_SID}
+        started = time.monotonic()
+        result = _run(payload, {**hook_env["env"], "PATH": path})
+        assert result.returncode == 0
+        assert time.monotonic() - started < 3
+        assert calls.exists() is (size > 262144)
+        assert not hook_env["spawn_log"].exists(), "the live daemon was found either way"
+    finally:
+        pid_path.unlink(missing_ok=True)

@@ -34,6 +34,16 @@ payload in Claude's shape, calls `serve` here with the event's lane (warm host,
 else here, exactly as `dispatch.sh` does), and translates the merged output
 back. Only it uses ADAPTER_LANES and the UNSHOWN option.
 
+The warm host (THE HOST, plan A0): an event goes to this folder's host, which
+the Probe service runs, when it answers within HOST_WAIT_S; else it runs here.
+Such a miss (A MISS, plan D35/D36) runs here only what the agent waits on (a
+decision, context, a message) and hands the record-keeping routes (routes.json
+`"record_keeping": true`) to the service, which runs them once, by the event's
+id (`hooks.queue`; with no service answering, straight into its queue, which
+the next service drains). Then it asks for the host, or starts the service
+(the CLI's own `client.ensure`, never waited on), for the next event. Whatever
+the service cannot take runs here, as before.
+
 Contract, as for every hook here: STDLIB ONLY, PYTHON 3.9, FAIL-OPEN. Started as
 `python3 -S` (no site-packages: a dispatcher needs none, and it saves ~10ms on
 every event). Never exits non-zero unless a route did (an exit of 2 is a veto on
@@ -73,6 +83,11 @@ import time
 # (Read, Grep, Glob, ...) leave at the byte filter below with os and sys alone.
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+#: When this interpreter reached the dispatcher (monotonic): as near the hook's
+#: own start as this process can see (bash and the interpreter's start come
+#: first, which STARTUP_ALLOWANCE_S covers). `hand_over` passes it to the copy
+#: it runs, so a hosted event's client counts from here (`host_end`).
+PROCESS_STARTED = time.monotonic()
 
 #: Lane -> the hook event it serves; the argument hooks.json passes.
 LANE_EVENT = {
@@ -582,8 +597,15 @@ def hand_over(argv: list) -> None:
     variable (`root_variable`: where its routes' commands run from) pointing at
     it, and its `run` takes the event; stdin is still unread. If it will not
     import, the event runs here. Once its `run` starts, the event is its own,
-    exits and tracebacks included."""
+    exits and tracebacks included.
+
+    Never for a queued event's run (`RECORD_KEEPING`): it belongs to the
+    folder that queued it, and another copy (a rollback's older dispatcher)
+    may know no `--record-keeping` and run every route, claiming messages and
+    audit lines whose output nobody reads."""
     if os.environ.pop(HANDED_OVER, None) is not None:
+        return
+    if RECORD_KEEPING in argv[1:]:
         return
     try:
         root = os.path.dirname(HERE)
@@ -596,7 +618,10 @@ def hand_over(argv: list) -> None:
         mine = sys.modules.pop(name, None)
         sys.path[0] = os.path.join(target, "hooks")
         try:
-            entry = __import__(name).run
+            target_module = __import__(name)
+            entry = target_module.run
+            # Its clock is this process's: the hook started when this one did.
+            target_module.PROCESS_STARTED = PROCESS_STARTED
         except Exception:  # noqa: BLE001 - a copy that will not import: run here
             sys.path[0] = HERE
             sys.modules.pop(name, None)
@@ -625,20 +650,34 @@ def routes(lane: str, payload: dict, wiring: dict) -> list[dict]:
     return chosen
 
 
+def _claude_session_end_s() -> float:
+    """Claude Code's whole SessionEnd phase, in seconds (its variable, else 1.5 s)."""
+    raw = (os.environ.get("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS") or "").strip()
+    try:
+        ms = int(raw) if raw.isascii() and raw.isdigit() else 0
+    except ValueError:
+        ms = 0
+    return (ms or CLAUDE_SESSION_END_DEFAULT_MS) / 1000.0
+
+
 def budget(lane: str) -> float:
     """Seconds this dispatcher may spend before printing what it has."""
     if lane == "session-end":
         if os.environ.get("PLUGIN_ROOT"):
             return CODEX_SESSION_END_S - CODEX_SESSION_END_MARGIN_S
-        raw = (os.environ.get("CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS") or "").strip()
-        try:
-            ms = int(raw) if raw.isascii() and raw.isdigit() else 0
-        except ValueError:
-            ms = 0
-        ms = ms or CLAUDE_SESSION_END_DEFAULT_MS
-        return max(ms / 1000.0 - SESSION_END_MARGIN_S, MIN_SESSION_END_S)
+        return max(_claude_session_end_s() - SESSION_END_MARGIN_S, MIN_SESSION_END_S)
     timeout = ENTRY_TIMEOUT.get(lane)
     return (HARNESS_DEFAULT_TIMEOUT_S if timeout is None else timeout) - MARGIN_S
+
+
+def harness_limit(lane: str) -> float:
+    """Seconds the harness gives this event, from the hook's start, before it
+    cancels or kills it: Claude Code's SessionEnd phase, Codex's SessionEnd
+    kill (CODEX_SESSION_END_S), every other lane its frozen entry's timeout."""
+    if lane == "session-end":
+        return CODEX_SESSION_END_S if os.environ.get("PLUGIN_ROOT") else _claude_session_end_s()
+    timeout = ENTRY_TIMEOUT.get(lane)
+    return float(HARNESS_DEFAULT_TIMEOUT_S if timeout is None else timeout)
 
 
 #: The `probe` commands a route runs wait for an update in progress only until
@@ -656,6 +695,14 @@ def _deadline(seconds: float) -> None:
     except ValueError:
         inherited = float("inf")
     os.environ[DEADLINE_ENV] = repr(min(deadline, inherited))
+
+
+def _deadline_left() -> float:
+    """Seconds until the deadline `_deadline` set (inf when none is set)."""
+    try:
+        return float(os.environ.get(DEADLINE_ENV) or "inf") - time.time()
+    except ValueError:
+        return float("inf")
 
 
 def _own_timeout(hook: dict):
@@ -987,16 +1034,28 @@ def waiting_after_tool(lane: str, options) -> bool:
     return lane == "post-tool" and UNSHOWN not in options and reads_waiting()
 
 
-def main(argv: list[str], payload: "bytes | None" = None):
+def record_keeping(hook: dict) -> bool:
+    """Is this route record-keeping (routes.json `"record_keeping": true`)?
+    Nothing waits on its outcome: no decision, no context, no message. On a
+    host miss it is queued for the Probe service instead of run here (plan
+    D36, `Miss`). tests/test_hook_dispatch.py holds which routes say so."""
+    return hook.get("record_keeping") is True
+
+
+def main(argv: list[str], payload: "bytes | None" = None, miss: "Miss | None" = None):
     """0/2 (an exit code), or (route, payload, timeout) to run in-process.
     `payload`: the event, when the caller read it already (`run`, the host).
-    argv: `dispatch.py <lane> [UNSHOWN]`."""
+    `miss`: no warm host took this event (`serve`); its record-keeping routes
+    go to the Probe service when it takes them (`Miss.queue`).
+    argv: `dispatch.py <lane> [UNSHOWN] [RECORD_KEEPING]`; RECORD_KEEPING (the
+    service running a queued event) runs only the record-keeping routes."""
     if len(argv) < 2 or argv[1] not in LANE_EVENT:
         return 0
     lane = argv[1]
     if payload is None:
         payload = sys.stdin.buffer.read()
-    waiting = waiting_after_tool(lane, argv[2:])
+    kept_only = RECORD_KEEPING in argv[2:]
+    waiting = not kept_only and waiting_after_tool(lane, argv[2:])
     if lane in TOOL_LANES and not waiting and not could_route(lane, payload):
         return 0
     import json
@@ -1012,20 +1071,36 @@ def main(argv: list[str], payload: "bytes | None" = None):
         parsed = {}
     if not isinstance(parsed, dict):
         parsed = {}
+    if miss is not None:
+        miss.parsed = parsed
     heartbeat(lane, parsed)
     if not isinstance(wiring, dict):
         return 0
     chosen = routes(lane, parsed, wiring)
-    if lane == "post-tool" and not waiting:
+    if kept_only:
+        chosen = [h for h in chosen if record_keeping(h)]
+    elif lane == "post-tool" and not waiting:
         # The tool lanes' only catch-all is the reads route behind this same
         # fast path (tests/test_hook_dispatch.py holds that): nothing waits,
         # so its shell would only check again and exit.
         chosen = [h for h in chosen if not _is_catch_all(h, lane, wiring)]
         if not chosen:
             return 0
+    if miss is not None and any(record_keeping(h) for h in chosen) and miss.queue(lane, payload, parsed):
+        # D36: the service runs them, once, by this event's id; here only
+        # what the agent waits on (a decision, context, a message).
+        chosen = [h for h in chosen if not record_keeping(h)]
     if not chosen:
         return 0
     limit = budget(lane)
+    if miss is not None:
+        # The entry's timeout runs from the harness's start: what the miss
+        # spent (the host's wait, the service's) is not the routes' to spend.
+        limit = max(limit - (time.monotonic() - miss.started), MIN_SESSION_END_S)
+    if lane == "session-end":
+        # The harness's clock started before this process did, and a host
+        # that never answered spent part of it (`serve` set the deadline).
+        limit = max(min(limit, _deadline_left()), MIN_SESSION_END_S)
     if len(chosen) == 1:
         parts = plain_route(chosen[0]["command"])
         if parts is not None and os.path.isfile(os.path.join(HERE, parts[1])):
@@ -1053,8 +1128,12 @@ def main(argv: list[str], payload: "bytes | None" = None):
 #: Hand the event to this folder's warm host (`zygote.py`, run by the Probe
 #: service) when it is ready within this; else run the event here (plan D28).
 HOST_WAIT_S = 0.3
-#: Lanes never handed to the host: SessionEnd has 1.5 s in all under Claude
-#: Code (3 s under Codex), and a warm start gains it nothing it can spend.
+#: Lanes never handed to the host: SessionEnd. Claude Code gives the whole
+#: phase 1.5 s (Codex 3 s) and waits for its output pipes to close: a host
+#: holds the harness's stdout and stderr (they ride the event to it), so a
+#: stalled host kept the phase open past the dispatcher's own cutoff (2.0 s
+#: measured against 1.5 s, #3300 review). It runs here, all of its routes,
+#: as through plugin 0.164 (no warm host, so no miss and nothing queued).
 UNHOSTED_LANES = frozenset({"session-end"})
 #: `off`: never hand an event to the host (a test, a fault being chased).
 HOST_ENV = "PROBE_HOOK_HOST"
@@ -1083,76 +1162,57 @@ def _private(folder: str) -> bool:
     return stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and not st.st_mode & 0o022
 
 
-def _ask_for_host(root: str, path: str) -> None:
-    """No host answered: ask the Probe service to start one for this folder,
-    for the next event. A quick, bounded call; at most every ASK_EVERY_S."""
-    marker = path[: -len(".sock")] + ".asked"
-    try:
-        if time.time() - os.stat(marker).st_mtime < ASK_EVERY_S:
-            return
-    except OSError:
-        pass
-    try:
-        if not os.path.isdir(os.path.dirname(path)):
-            os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-        if not _private(os.path.dirname(path)):
-            return
-        with open(marker, "a"):
-            pass
-        os.utime(marker, None)
-        import json
-        import socket
-
-        sys.path.insert(1, HERE)
-        import _service_paths  # noqa: PLC0415 - only on a miss
-
-        service = str(_service_paths.socket_path())
-        _service_paths.require_private(_service_paths.Path(service).parent)
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(0.2)
-        try:
-            sock.connect(service)
-            lines = [
-                {"jsonrpc": "2.0", "id": 1, "method": "service.hello",
-                 "params": {"client": "cli", "client_version": "hooks", "api": 1, "keepalive": False}},
-                {"jsonrpc": "2.0", "id": 2, "method": "hooks.host",
-                 "params": {"root": os.path.realpath(root), "python": sys.executable}},
-            ]
-            sock.sendall(b"".join(json.dumps(line).encode() + b"\n" for line in lines))
-            sock.recv(4096)
-        finally:
-            sock.close()
-    except Exception:  # noqa: BLE001 - only the next event's speed is at stake
-        return
+def hostable(lane: str) -> bool:
+    """Can this event be handed to a warm host at all? Never with hosting off,
+    in a host's own child, off POSIX, below Python 3.9 (`send_fds`), on an
+    unhosted lane, or in a folder with no host."""
+    if os.environ.get(HOST_ENV) == "off" or os.environ.get(HOSTED_ENV) or os.name != "posix":
+        return False
+    if sys.version_info < (3, 9) or lane in UNHOSTED_LANES:
+        return False
+    return os.path.isfile(os.path.join(HERE, "zygote.py"))
 
 
-def via_host(lane: str, argv: list, payload: bytes) -> "int | None":
+def host_end(lane: str) -> float:
+    """When (monotonic) a hosted event's client stops waiting for the host:
+    the harness's own limit for the event (`harness_limit`), counted from this
+    process's start (PROCESS_STARTED, less STARTUP_ALLOWANCE_S for bash and the
+    interpreter before it), so a stalled host never holds the hook past what
+    the harness gives it: 1.3 s of Claude Code's 1.5 s SessionEnd, 2.8 s of
+    Codex's 3 s. Past it the event stays the host's, whose child ends its
+    routes by the event's own deadline."""
+    return PROCESS_STARTED + harness_limit(lane) - STARTUP_ALLOWANCE_S
+
+
+def via_host(lane: str, argv: list, payload: bytes, started: "float | None" = None) -> "int | None":
     """Run this event in the folder's warm host, exactly once (zygote.py's
     handshake): its exit status, or None to run it here. None whenever the host
-    is not there or not ready in time; once it said ready and was told to go,
-    the event is the host's, and a host lost after that reads as exit 0."""
-    if os.environ.get(HOST_ENV) == "off" or os.environ.get(HOSTED_ENV) or os.name != "posix":
-        return None
-    if sys.version_info < (3, 9) or lane in UNHOSTED_LANES:
+    is not there or not ready in time (a miss: `Miss` then asks the service for
+    one); once it said ready and was told to go, the event is the host's, and a
+    host lost after that, or still silent at `host_end`, reads as exit 0.
+    `started`: when the event began here (monotonic; default now), for the
+    D28 wait; every wait is bounded by `host_end`."""
+    if not hostable(lane):
         return None
     root = os.path.dirname(HERE)
     path = host_socket(root)
-    if not os.path.isfile(os.path.join(HERE, "zygote.py")):
-        return None
     wait = HOST_WAIT_S
-    started = time.monotonic()
+    started = time.monotonic() if started is None else started
+    end = host_end(lane)
+
+    def left() -> float:
+        return max(end - time.monotonic(), 0.001)
+
     import socket
 
     if not _private(os.path.dirname(path)):
-        _ask_for_host(root, path)
         return None
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     try:
-        sock.settimeout(wait)
+        sock.settimeout(min(wait, left()))
         try:
             sock.connect(path)
         except OSError:
-            _ask_for_host(root, path)
             return None
         import json
 
@@ -1168,7 +1228,7 @@ def via_host(lane: str, argv: list, payload: bytes) -> "int | None":
             sent = socket.send_fds(sock, [data[:65536]], [1, 2])
             if sent < len(data):
                 sock.sendall(data[sent:])
-            sock.settimeout(max(0.01, wait - (time.monotonic() - started)))
+            sock.settimeout(max(0.01, min(wait - (time.monotonic() - started), left())))
             if sock.recv(1) != b"R":
                 return None
             sock.sendall(b"G")
@@ -1178,7 +1238,7 @@ def via_host(lane: str, argv: list, payload: bytes) -> "int | None":
         # stopping, no fork) runs it here. A late `S`, a timeout or a lost host
         # may mean it runs there: never here too.
         try:
-            sock.settimeout(budget(lane) + MARGIN_S)
+            sock.settimeout(left())
             answer = sock.recv(1)
         except OSError:
             return 0
@@ -1188,9 +1248,9 @@ def via_host(lane: str, argv: list, payload: bytes) -> "int | None":
             return 0
         # From here the event is the host's.
         try:
-            sock.settimeout(budget(lane) + MARGIN_S + 5)
             reply = b""
             while not reply.endswith(b"\n"):
+                sock.settimeout(left())
                 chunk = sock.recv(4096)
                 if not chunk:
                     return 0
@@ -1216,31 +1276,554 @@ def run_hosted(argv: list, payload: bytes) -> None:
     sys.exit(code)
 
 
+# --- A MISS (plan D35, D36) ------------------------------------------------------
+
+#: The lane option the Probe service runs a queued event with: its record-keeping
+#: routes only (`main`). The service hands it to the host's child, or to
+#: `dispatch.sh`, which passes every argument on.
+RECORD_KEEPING = "--record-keeping"
+#: A miss gives the Probe service this long, from the connect, to take its
+#: record-keeping routes (`hooks.queue`).
+QUEUE_WAIT_S = 0.3
+#: A queued event (its id, folder, lane, payload, environment and working
+#: folder, as one JSON object) is at most this big (`protocol.MAX_HOOK_QUEUE_ITEM`),
+#: and at most MAX_QUEUED wait in the queue (`hookqueue.MAX_QUEUED`): past
+#: either, its routes run here, as before. Its environment and folder are held
+#: to `protocol.need_hook_queue`'s limits too.
+MAX_QUEUED_BYTES = 256 * 1024
+MAX_QUEUED = 128
+MAX_QUEUED_ENV = 1024
+MAX_QUEUED_PATH = 4096
+#: A miss that found no service does not look for one again for this long:
+#: the misses right after it run as before, at the cost of a stat (a session
+#: set off, or a machine whose service will not start, pays no more than that).
+DOWN_RETRY_S = 2.0
+#: With no service answering, a miss starts one at most this often (the CLI's
+#: own client, `client.ensure`, in a detached process: `ensure_service`).
+ENSURE_EVERY_S = 10.0
+#: What this dispatcher sets in its own environment: never part of a queued
+#: event's (the service sets its own when it runs it).
+OWNED_ENV = (HANDED_OVER, HOSTED_ENV, HOST_ENV, DEADLINE_ENV, "PROBE_HOOK_PARENT_PID")
+#: What a queued event keeps of its environment (`protocol.hook_queue_env`; a
+#: test holds the two equal): what a record-keeping route reads, never a
+#: credential but Probe's own, nor a proxy URL with a user and password in it
+#: (such an event runs here: `proxy_credentials`). The queue is a file on disk.
+QUEUE_ENV_NAMES = frozenset(
+    {
+        "HOME", "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LANGUAGE", "TZ", "TMPDIR", "TERM",
+        "PLUGIN_ROOT", "UV_TOOL_DIR", "UV_TOOL_BIN_DIR", "UV_CACHE_DIR", "PIPX_HOME",
+        "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "no_proxy", "all_proxy",
+        "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "CURL_CA_BUNDLE",
+        "GIT_SSL_CAINFO",
+    }
+)
+QUEUE_ENV_PREFIXES = ("PROBE_", "CLAUDE", "CODEX_", "KIMI_", "PI_", "XDG_", "LC_")
+QUEUE_ENV_SECRET = ("TOKEN", "KEY", "SECRET", "PASSWORD", "PASSWD", "CREDENTIAL", "COOKIE", "AUTH")
+QUEUE_ENV_CREDENTIAL = "PROBE_TOKEN"
+#: Where a Probe CLI install shows, under $HOME (`paths.runtime_path`,
+#: `paths.fallback_python`; tests/test_service_hooks_queue.py holds them equal):
+#: with neither, no service ever runs here, and a miss asks nothing of one.
+CLI_MARKS = (
+    (".local", "state", "probe", "service", "runtime.json"),
+    (".local", "share", "uv", "tools", "probe-research", "bin", "python"),
+)
+
+
+def cli_here() -> bool:
+    """Is a Probe CLI installed for this user? Two stats, no import: what a
+    machine with the plugin and no CLI pays for every miss."""
+    home = os.path.expanduser("~")
+    return any(os.path.exists(os.path.join(home, *mark)) for mark in CLI_MARKS)
+
+
+def _proxy_userinfo(name: str, value: str) -> bool:
+    """Is this a proxy variable whose URL carries a user (and a password):
+    `http://user:secret@proxy:8080`, `user@proxy`? A credential, never queued."""
+    if not name.upper().endswith("_PROXY"):
+        return False
+    return "@" in value.split("://", 1)[-1].split("/", 1)[0]
+
+
+def proxy_credentials(environ) -> bool:
+    """Does this environment reach the network through a proxy with credentials?
+    Its event needs them, and they are never stored: it runs here."""
+    return any(_proxy_userinfo(name, value) for name, value in environ.items())
+
+
+def queue_env(environ) -> dict:
+    """The part of this event's environment a queued event keeps."""
+    kept = {}
+    for name, value in environ.items():
+        if name in OWNED_ENV or _proxy_userinfo(name, value):
+            continue
+        if name != QUEUE_ENV_CREDENTIAL:
+            upper = name.upper()
+            if any(word in upper for word in QUEUE_ENV_SECRET):
+                continue
+            if name not in QUEUE_ENV_NAMES and not name.startswith(QUEUE_ENV_PREFIXES):
+                continue
+        kept[name] = value
+    return kept
+
+
+def service_mark(kind: str) -> str:
+    """`/tmp/probe-<uid>/service-<hash of $HOME>.<kind>`: a miss's own marks
+    (`down`, `ensured`), in the hosts' private folder, one set per HOME, read
+    with a stat and no import of the service's paths."""
+    import hashlib
+
+    home = os.path.realpath(os.path.expanduser("~"))
+    digest = hashlib.sha256(os.fsencode(home)).hexdigest()[:16]
+    return os.path.join("/tmp", "probe-%d" % os.getuid(), "service-%s.%s" % (digest, kind))
+
+
+def _fresh(path: str, seconds: float) -> bool:
+    try:
+        return time.time() - os.stat(path).st_mtime < seconds
+    except OSError:
+        return False
+
+
+def _touch(path: str) -> bool:
+    """Mark `path` now, in a private folder only (made if missing)."""
+    folder = os.path.dirname(path)
+    try:
+        if not os.path.isdir(folder):
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+        if not _private(folder):
+            return False
+        with open(path, "a"):
+            pass
+        os.utime(path, None)
+        return True
+    except OSError:
+        return False
+
+
+class _Error:
+    """An error answer (an older service with no such method, a hello it refused)."""
+
+
+_ERROR = _Error()
+
+
+def _service_paths():
+    """`_service_paths.py` beside this file: the service's own `paths.py`."""
+    if HERE not in sys.path:
+        sys.path.insert(1, HERE)
+    import _service_paths  # noqa: PLC0415 - only on a miss
+
+    return _service_paths
+
+
+def _runtime(sp) -> dict:
+    """runtime.json (`client.write_runtime`): the CLI's interpreter and version."""
+    import json
+
+    raw = _read_ledger(str(sp.runtime_path()))
+    try:
+        data = json.loads(raw.decode("utf-8")) if raw else {}
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def runtime_python(sp) -> "str | None":
+    """The interpreter the service starts with, as `client.runtime_python`
+    finds it (runtime.json's, else the uv tool env's); None: no CLI here, so
+    no service will ever start."""
+    candidates = []
+    python = _runtime(sp).get("python")
+    if isinstance(python, str):
+        candidates.append(python)
+    candidates.append(str(sp.fallback_python()))
+    for candidate in candidates:
+        if os.path.isabs(candidate) and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def session_off(payload: dict) -> bool:
+    """Is this session's Probe switch `off`, by its own state or else the
+    machine's default (as the guard reads it)? A session set off never starts
+    the Probe service. True when it cannot be read: nothing is started then."""
+    try:
+        if HERE not in sys.path:
+            sys.path.insert(1, HERE)
+        import _session_marker as marker  # noqa: PLC0415 - only on a miss with no service
+
+        sid = payload.get("session_id")
+        state = marker.session_state(sid) if isinstance(sid, str) else None
+        if state is None:
+            cwd = payload.get("cwd")
+            state, _source = marker.resolve_state_default(cwd if isinstance(cwd, str) and cwd else None)
+        return state == marker.STATE_OFF
+    except Exception:  # noqa: BLE001 - unreadable: start nothing
+        return True
+
+
+def ensure_service(sp, allowed) -> None:
+    """No service answered: start one for the next event, at most every
+    ENSURE_EVERY_S (the `ensured` mark: set before `allowed()` is asked, so a
+    session set off pays its costly check at most that often too), when
+    `allowed()` (the session's switch). The CLI's own client does it
+    (`client.ensure`: its start lock, its back-off, its clean environment), in
+    a detached process this never waits on, so the event goes on at once
+    (plan D35)."""
+    marker = service_mark("ensured")
+    if _fresh(marker, ENSURE_EVERY_S):
+        return
+    python = runtime_python(sp)
+    if python is None or not _touch(marker) or not allowed():
+        return
+    import subprocess
+
+    env = {k: v for k, v in os.environ.items() if k not in OWNED_ENV}
+    try:
+        subprocess.Popen(  # noqa: S603 - the CLI's own interpreter and client
+            [python, "-I", "-m", "probe.service.client", "ensure"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            env=env, cwd="/", close_fds=True, start_new_session=True,
+        )
+    except OSError:
+        pass
+
+
+def queue_folder(sp, any_drainer: bool) -> "str | None":
+    """The service's hook queue (`paths.hook_queue_dir`), when an event written
+    there will run: it exists (a service that drains it made it) and, unless
+    `any_drainer` (a running service was just sent the event), the service
+    that made it is the CLI version the next one starts as (its
+    `HOOK_QUEUE_DRAINER` stamp against runtime.json's `cli_version`): an older
+    CLI's service never drains it."""
+    folder = str(sp.hook_queue_dir())
+    if not _private(folder):
+        return None
+    if any_drainer:
+        return folder
+    raw = _read_ledger(os.path.join(folder, sp.HOOK_QUEUE_DRAINER))
+    drainer = raw.decode("utf-8", "replace").strip() if raw else ""
+    return folder if drainer and drainer == _runtime(sp).get("cli_version") else None
+
+
+def write_queued(folder: str, item: dict, data: bytes) -> bool:
+    """`<id>.json` in the service's queue, whole or not at all (a private
+    temporary file renamed into place), while fewer than MAX_QUEUED wait.
+    True when it is there, or was there and taken already (`<id>.done`)."""
+    name = item["id"]
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return False
+    if name + ".done" in names or name + ".json" in names:
+        return True  # the service has it: one id runs once
+    if sum(1 for n in names if n.endswith(".json") and not n.startswith(".")) >= MAX_QUEUED:
+        return False
+    tmp = os.path.join(folder, ".%s.%d.tmp" % (name, os.getpid()))
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+        try:
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+        finally:
+            os.close(fd)
+        os.replace(tmp, os.path.join(folder, name + ".json"))
+        return True
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+
+
+def claim_event(folder: str, event_id: str) -> "bool | None":
+    """Claim a sent, unanswered event for running here: `<id>.claim` in the
+    service's queue, made only if it is not there (O_EXCL), which the service's
+    store honors (`hookqueue.HookQueue.store` makes the same claim before it
+    stores). True: claimed here, so the service never stores it late; False:
+    the service claimed it first, so it runs there; None: neither can tell."""
+    try:
+        os.close(os.open(os.path.join(folder, event_id + ".claim"),
+                         os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600))
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        return None
+
+
+def queued_item(root: str, lane: str, payload: bytes) -> "tuple[dict, bytes] | None":
+    """This event as `hooks.queue` takes it (and the queue file holds it): a
+    new id, the folder, the lane, the payload as the harness wrote it, what
+    the routes read of its environment (`queue_env`) and its working folder.
+    None when it is past `protocol.need_hook_queue`'s limits (MAX_QUEUED_*):
+    it then runs here."""
+    if len(payload) > MAX_QUEUED_BYTES:
+        return None  # a huge tool result: never encoded only to be refused
+    if proxy_credentials(os.environ):
+        return None  # its routes need a proxy credential the queue never stores
+    import json
+
+    root = os.path.realpath(root)
+    cwd = os.getcwd()
+    env = queue_env(os.environ)
+    if len(env) > MAX_QUEUED_ENV or max(len(root), len(cwd)) > MAX_QUEUED_PATH:
+        return None
+    item = {
+        "id": os.urandom(16).hex(),
+        "plugin_root": root,
+        "lane": lane,
+        # surrogateescape: bytes that are not UTF-8 come back as they were.
+        "payload": payload.decode("utf-8", "surrogateescape"),
+        "env": env,
+        "cwd": cwd,
+        "at": time.time(),
+    }
+    data = json.dumps(item).encode("utf-8")
+    return (item, data) if len(data) <= MAX_QUEUED_BYTES else None
+
+
+class Miss:
+    """An event no warm host took (`via_host` said None): what it asks of the
+    Probe service, each at most once (plan D35, D36).
+
+      queue    its record-keeping routes, for the service to run once, by this
+               event's id (`hooks.queue`); with no service answering, written
+               straight into the service's queue (`queue_folder`), which a
+               service drains when it starts. True: they do not run here.
+      finish   the folder's warm host for the next event (`hooks.host`, at most
+               every ASK_EVERY_S), and, when no service answered, the service
+               itself (`ensure_service`), unless the session is set off.
+
+    A service found missing is not looked for again for DOWN_RETRY_S (its
+    `down` mark), and nothing is connected to when nothing is due. Never waits
+    past QUEUE_WAIT_S. Fails open: whatever goes wrong, the routes run here,
+    as before."""
+
+    #: `connect`'s answers besides a socket.
+    DOWN = "down"  # no service answered: this miss may start one
+    SKIPPED = "skipped"  # one was found missing moments ago: ask nothing
+
+    def __init__(self, root: str, payload: bytes, started: float) -> None:
+        self.root = root
+        self.payload = payload
+        #: When the event began here (monotonic): its budget counts from then.
+        self.started = started
+        self.parsed: "dict | None" = None
+        self.sock = None
+        self.state: "str | None" = None
+        self.buffer = b""
+        self.next_id = 1
+        self.off: "bool | None" = None
+
+    def _session_off(self) -> bool:
+        if self.off is None:
+            parsed = self.parsed
+            if parsed is None:
+                import json
+
+                try:
+                    parsed = json.loads(self.payload.decode("utf-8", "replace") or "{}")
+                except ValueError:
+                    parsed = {}
+            self.off = session_off(parsed if isinstance(parsed, dict) else {})
+        return self.off
+
+    def connect(self):
+        """The service's socket (this machine's, in a folder only this user
+        can write), connected once; else DOWN (none answered, now marked so)
+        or SKIPPED (none answered moments ago)."""
+        if self.state is None:
+            if _fresh(service_mark("down"), DOWN_RETRY_S):
+                self.state = self.SKIPPED
+                return self.state
+            import socket
+
+            sock = None
+            try:
+                sp = _service_paths()
+                path = sp.socket_path()
+                sp.require_private(path.parent)
+                sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                sock.settimeout(QUEUE_WAIT_S)
+                sock.connect(str(path))
+                self.sock, sock = sock, None
+                self.state = "connected"
+            except Exception:  # noqa: BLE001 - no service: `finish` starts one
+                self.state = self.DOWN
+                _touch(service_mark("down"))
+            finally:
+                if sock is not None:
+                    sock.close()
+        return self.sock if self.sock is not None else self.state
+
+    def _request(self, method: str, params: dict) -> int:
+        """Send one request (the hello before the first): its id."""
+        import json
+
+        lines = []
+        if self.next_id == 1:
+            lines.append({"jsonrpc": "2.0", "id": 1, "method": "service.hello",
+                          "params": {"client": "cli", "client_version": "hooks", "api": 1, "keepalive": False}})
+            self.next_id = 2
+        request_id = self.next_id
+        self.next_id += 1
+        lines.append({"jsonrpc": "2.0", "id": request_id, "method": method, "params": params})
+        self.sock.sendall(b"".join(json.dumps(line).encode("utf-8") + b"\n" for line in lines))
+        return request_id
+
+    def _answer(self, request_id: int, until: float):
+        """Request `request_id`'s result, _ERROR for an error answer, or None
+        when none came by `until` (monotonic)."""
+        import json
+
+        while True:
+            while b"\n" in self.buffer:
+                line, self.buffer = self.buffer.split(b"\n", 1)
+                try:
+                    message = json.loads(line.decode("utf-8"))
+                except ValueError:
+                    return None
+                if isinstance(message, dict) and message.get("id") == request_id:
+                    return _ERROR if "error" in message else message.get("result")
+            left = until - time.monotonic()
+            if left <= 0:
+                return None
+            self.sock.settimeout(left)
+            chunk = self.sock.recv(65536)
+            if not chunk:
+                return None
+            self.buffer += chunk
+
+    def queue(self, lane: str, payload: bytes, parsed: dict) -> bool:
+        """Hand this event's record-keeping routes to the service: True when it
+        took them (or holds them in its queue), False to run them here."""
+        self.parsed = parsed
+        try:
+            made = queued_item(self.root, lane, payload)
+            if made is None:
+                return False
+            item, data = made
+            reached = self.connect()
+            if reached == self.SKIPPED:
+                return False
+            sp = _service_paths()
+            if reached != self.DOWN:
+                started = time.monotonic()
+                try:
+                    answer = self._answer(self._request("hooks.queue", item), started + QUEUE_WAIT_S)
+                except OSError:
+                    answer = None
+                if answer is _ERROR:
+                    return False  # a service from before hooks.queue: it never drains a queue
+                if isinstance(answer, dict):
+                    return answer.get("queued") is True  # a refusal runs them here
+                # No answer in time: it may hold it already, so it goes beside
+                # it in the queue (one id runs once). Only a write that took
+                # keeps them from running here: a request sent and never
+                # answered may be an older service's late refusal.
+                folder = queue_folder(sp, any_drainer=True)
+                if folder is None:
+                    return False
+                if write_queued(folder, item, data):
+                    return True
+                # Not written (the queue full): it runs here only once claimed
+                # here, so a store still on its way never runs it too.
+                # Claimed by the service, or no claim could be made (a full
+                # disk): never run here too, at most once (a late store may
+                # still claim and run it there).
+                return claim_event(folder, item["id"]) is not True
+            folder = queue_folder(sp, any_drainer=False)
+            if folder is None or self._session_off():
+                return False
+            return write_queued(folder, item, data)
+        except Exception:  # noqa: BLE001 - fail open: run them here
+            return False
+
+    def _ask_for_host(self, marker: str) -> None:
+        """The folder's warm host for the next event (`hooks.host`), marked
+        only once asked. Not waited on: the service starts it on a thread of
+        its own."""
+        folder = os.path.dirname(marker)
+        if not os.path.isdir(folder):
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+        if not _private(folder):
+            return
+        self._request("hooks.host", {"root": os.path.realpath(self.root), "python": sys.executable})
+        _touch(marker)
+
+    def finish(self) -> None:
+        """After the event: a host for the next one (when an ask is due), or,
+        with no service, the service (D35). Connects only when the queue did
+        or a host ask is due (a stat, otherwise). Never raises, never waits on
+        either."""
+        try:
+            asked = host_socket(self.root)[: -len(".sock")] + ".asked"
+            host_due = not _fresh(asked, ASK_EVERY_S)
+            if self.state is None and not host_due:
+                # Nothing asked of the service yet and no host ask due: no
+                # import, no connect. A service gone meanwhile is found by the
+                # next miss with something to queue, or a host ask due.
+                return
+            reached = self.connect()
+            if reached == self.SKIPPED:
+                return
+            if reached == self.DOWN:
+                ensure_service(_service_paths(), lambda: not self._session_off())
+            elif host_due:
+                self._ask_for_host(asked)
+        except Exception:  # noqa: BLE001 - only the next event's speed is at stake
+            pass
+        finally:
+            if self.sock is not None:
+                try:
+                    self.sock.close()
+                except OSError:
+                    pass
+                self.sock = None
+
+
 def serve(argv: list, payload: "bytes | None" = None) -> int:
     """One event, in this folder's warm host when it answers in time, else
     here; its exit status. `argv`: `[lane, options...]`; `payload`: the event,
     when the caller read it already (`harness_io.py --event`), else stdin.
+
+    A miss (no host took it) runs here only what the agent waits on, and hands
+    the record-keeping routes to the Probe service (`Miss`, plan D36); then it
+    asks for a host, or starts the service, for the next event.
 
     What `run` does after the hand-over, returning instead of exiting, so a
     harness adapter can run an event the way `dispatch.sh` does and still read
     what it printed. An in-process route's own exit (SystemExit) and uncaught
     error leave it as they leave `python3 <route>`."""
     lane = argv[0] if argv else ""
-    if lane in LANE_EVENT and os.environ.get(HOST_ENV) != "off" and not os.environ.get(HOSTED_ENV):
+    started = time.monotonic()
+    if lane == "session-end":
+        # The harness's SessionEnd budget runs from about now, wherever the
+        # routes end up running (`main` caps the lane's budget by it).
+        os.environ[DEADLINE_ENV] = repr(time.time() + budget(lane))
+    miss = None
+    if lane in LANE_EVENT and hostable(lane):
         try:
             if payload is None:
                 payload = sys.stdin.buffer.read()
             if lane in TOOL_LANES and not waiting_after_tool(lane, argv[1:]) and not could_route(lane, payload):
                 return 0
-            hosted = via_host(lane, argv, payload)
+            hosted = via_host(lane, argv, payload, started)
+            if hosted is None and RECORD_KEEPING not in argv[1:] and cli_here():
+                miss = Miss(os.path.dirname(HERE), payload, started)
         except Exception:  # noqa: BLE001 - the host is a speed-up; the event runs here instead
             hosted = None
         if hosted is not None:
             return hosted
     try:
-        code = main(["dispatch.py", *argv], payload=payload)
+        code = main(["dispatch.py", *argv], payload=payload, miss=miss)
     except Exception:  # noqa: BLE001 - fail open: a broken dispatcher abstains
         code = 0
+    if miss is not None:
+        miss.finish()
     if isinstance(code, tuple):
         # Outside the fail-open net: the route's own behavior, exits and
         # tracebacks included (an uncaught error is exit 1, as `python3 <route>` gives).

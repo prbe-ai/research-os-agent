@@ -24,6 +24,8 @@ command -v python3 >/dev/null 2>&1 || exit 0
 # a project's own os.py must never run in place of the stdlib's.
 # A dispatch.py that will not import (unreadable, half-written mid-update) exits
 # 0: python's own exit for a script it cannot open is 2, a veto.
+# Every argument goes on: hooks.json passes the lane alone; the Probe service
+# adds `--record-keeping` when it runs a queued event's routes (dispatch.py, D36).
 exec python3 -S -c '
 import sys
 sys.path[0] = sys.argv[1]
@@ -32,4 +34,4 @@ try:
 except BaseException:
     sys.exit(0)
 dispatch.run(sys.argv[2:])
-' "$HOOKS" "${1:-}"
+' "$HOOKS" "$@"

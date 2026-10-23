@@ -39,7 +39,19 @@ if [ -n "$REGISTRY_ENV" ]; then
     SID="$TAP_SESSION_ID"
     HOOK_INPUT="$TAP_HOOK_INPUT"
 else
-    SID=$(printf '%s' "$HOOK_INPUT" | python3 -c \
+    # No python start on the common path (it was ~19 ms of this hook's ~25):
+    # the payload's one "session_id", when it names exactly one and that is
+    # a plain id (JSON escaping keeps a prompt's own text from spelling one).
+    # Anything else is parsed, as before, and so is a payload past 256 KB
+    # (a pasted log), where python's parse is as quick. Only a regex and a
+    # whole-string match, both linear: never `${x#*pat}`, which is quadratic
+    # in where the match is (12 s at 120 KB).
+    SID=""
+    if [ "${#HOOK_INPUT}" -le 262144 ] && [[ "$HOOK_INPUT" =~ \"session_id\"[[:space:]]*:[[:space:]]*\"([A-Za-z0-9._-]{1,128})\" ]]; then
+        SID="${BASH_REMATCH[1]}"
+        case "$HOOK_INPUT" in *\"session_id\"*\"session_id\"*) SID="" ;; esac
+    fi
+    [ -n "$SID" ] || SID=$(printf '%s' "$HOOK_INPUT" | python3 -c \
         'import json,sys; v=json.load(sys.stdin).get("session_id"); print(v if isinstance(v,str) else "")' \
         2>/dev/null || echo "")
 fi

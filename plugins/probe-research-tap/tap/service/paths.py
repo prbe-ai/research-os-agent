@@ -67,6 +67,13 @@ BARRIER_NAME = "update.barrier"
 UPDATE_STATE_NAME = "update.json"
 #: Written by the desktop app's `--background-update` run (prbe-ai/desktop #11).
 APP_UPDATE_NAME = "app-update.json"
+#: Hook events' record-keeping routes, queued for the service to run once
+#: (plan D36; `hookqueue.py`): `<event id>.json` waits, `<event id>.done` marks
+#: one taken. `drained-by` holds the version of the service that drains it: a
+#: dispatcher with no service to ask writes here only when that is the CLI
+#: version the next service starts as (`hooks/dispatch.py` `queue_folder`).
+HOOK_QUEUE_DIRNAME = "hooks-queue"
+HOOK_QUEUE_DRAINER = "drained-by"
 
 #: Where `uv tool install probe-research` puts the CLI's interpreter, for a
 #: client that finds no runtime.json (a CLI that has not run since its install).
@@ -196,6 +203,10 @@ def actions_dir() -> Path:
 
 def barrier_path() -> Path:
     return service_dir() / BARRIER_NAME
+
+
+def hook_queue_dir() -> Path:
+    return service_dir() / HOOK_QUEUE_DIRNAME
 
 
 def update_state_path() -> Path:
