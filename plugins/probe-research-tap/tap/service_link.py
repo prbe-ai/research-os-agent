@@ -43,7 +43,15 @@ from tap import companion_lease as lease
 from tap import config as cfg
 from tap import owner as session_owner
 from tap.service import client, procid
-from tap.service.protocol import Client, ErrorCode, Method, Mode, RefusedReason
+from tap.service.protocol import (
+    REPORT_ENV,
+    Client,
+    ErrorCode,
+    Method,
+    Mode,
+    RefusedReason,
+    report_consent,
+)
 
 log = logging.getLogger("tap.service")
 
@@ -258,6 +266,11 @@ class ServiceLink:
             # Where this session's worker, runs and setups keep their locks: the
             # service's quiet check looks there too (plan D13).
             "state_dir": str(lease.sessions_dir().parent.resolve()),
+            # Whether this session's environment allows the service to send the
+            # Probe team an automatic diagnostic report about it (PROBE_TELEMETRY,
+            # PROBE_DIAGNOSTICS, a self-hosted PROBE_BASE_URL say no). A service
+            # from before it ignores the field.
+            REPORT_ENV: report_consent(self.env if self.env is not None else os.environ),
         }
         try:
             answer = self._conn.call(Method.SESSION_REGISTER, params)

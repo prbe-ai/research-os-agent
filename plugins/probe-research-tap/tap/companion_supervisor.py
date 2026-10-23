@@ -139,6 +139,10 @@ def socket_path(session_id: str) -> Path:
         raise OSError(f"{folder} is not a private folder of this user")
     return folder / (hashlib.sha256(session_id.encode()).hexdigest()[:24] + ".sock")
 
+#: A lease the worker released with one of these on its way out keeps it when
+#: this supervisor gives up (`_mark_given_up`): it says more than `error`.
+_FAILURE_REASONS = frozenset({lease.REASON_UNAUTHORIZED, lease.REASON_GATEWAY, lease.REASON_ERROR})
+
 #: How long `stop()` waits for the worker before returning; it is not killed.
 STOP_WAIT_SECONDS = 2
 #: While another worker holds the session lock, its `.handover` ask is
@@ -369,6 +373,7 @@ class Supervisor:
                 # (too old). Either way: stop until the switch moves; the agent records.
                 if code in (worker.EXIT_DO_NOT_RESPAWN, 2):
                     self.gave_up_in = lease.session_state(self.session_id)
+                    self._mark_given_up()
                 elif code == EXIT_RESPAWN_LATER:
                     self.crashes = 0
                     self.not_before = time.monotonic() + RESPAWN_LATER_SECONDS
@@ -403,6 +408,7 @@ class Supervisor:
                 if argv is None:
                     log.warning("no probe CLI found: the daemon cannot run; the agent records")
                     self.gave_up_in = lease.session_state(self.session_id)
+                    self._mark_given_up()
                     return
                 log_path = daemon_dir() / (self.session_id + ".log")
                 log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -424,6 +430,26 @@ class Supervisor:
                 log.info("companion worker started (pid %s)", self.child.pid)
         except Exception:  # noqa: BLE001
             log.exception("companion supervisor poll failed")
+
+    def _mark_given_up(self) -> None:
+        """This supervisor gave up on the session's worker (it exited 3 or 2, or
+        there is no CLI): its lease says so, released with reason `error`, so the
+        status line and the Probe service see a stopped daemon, not a lapse
+        (crash-report plan B5). A failure the worker itself released it with on
+        its way out (`unauthorized`, `gateway`, `error`) says more, and is kept.
+        Never raises; respawning is unchanged (none until the switch moves)."""
+        try:
+            current = json.loads(lease.lease_path(self.session_id).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            current = None
+        if isinstance(current, dict) and current.get("reason") in _FAILURE_REASONS:
+            expires = current.get("expires_at")
+            if isinstance(expires, (int, float)) and expires <= time.time():
+                return  # released already, with the worker's own failure
+        try:
+            lease.release(self.session_id, lease.REASON_ERROR)
+        except Exception:  # noqa: BLE001 -- the lease then lapses on its own, as before
+            log.exception("could not mark the daemon lease given up")
 
     def hand_over(self) -> None:
         """This recorder handed the session to the Probe service's

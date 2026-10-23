@@ -95,6 +95,62 @@ def test_a_cli_without_the_worker_command_is_not_respawned(tmp_path, monkeypatch
     assert len(spawned) == 1 and sup.gave_up_in == "daemon"
 
 
+def _lease() -> dict | None:
+    try:
+        return json.loads(lease.lease_path(SID).read_text())
+    except OSError:
+        return None
+
+
+@pytest.mark.parametrize("code", [3, 2])
+def test_a_give_up_releases_the_lease_with_reason_error_and_respawning_is_unchanged(tmp_path, monkeypatch, code):
+    """CRITICAL regression (crash-report plan B5): the give-up marks the lease,
+    so the status line and the Probe service see a stopped daemon instead of a
+    lapse; the supervisor's own rules (no respawn until the switch moves) hold."""
+    sup, spawned, clock = _sup(tmp_path, monkeypatch, [code, None])
+    _set_state("daemon")
+    lease.renew(SID)  # the worker held it
+    sup.poll()  # spawn
+    sup.poll()  # it gave up
+    data = _lease()
+    assert data["reason"] == lease.REASON_ERROR and data["expires_at"] <= time.time()
+    for _ in range(3):
+        clock.now += 3600
+        sup.poll()
+    assert len(spawned) == 1 and sup.gave_up_in == "daemon"
+    _set_state("off")
+    sup.poll()
+    _set_state("daemon")
+    sup.poll()
+    assert len(spawned) == 2, "the switch moved: it starts again, as before"
+
+
+def test_a_failure_the_worker_released_its_lease_with_is_kept(tmp_path, monkeypatch):
+    sup, _, _ = _sup(tmp_path, monkeypatch, [3])
+    _set_state("daemon")
+    lease.release(SID, lease.REASON_UNAUTHORIZED)  # the worker's own word on its way out: no key
+    sup.poll()
+    sup.poll()
+    assert _lease()["reason"] == lease.REASON_UNAUTHORIZED
+
+
+def test_no_cli_is_a_give_up_that_marks_the_lease(tmp_path, monkeypatch):
+    sup, spawned, _ = _sup(tmp_path, monkeypatch, [])
+    monkeypatch.setattr(supervisor_mod, "probe_cli", lambda: None)
+    _set_state("daemon")
+    sup.poll()
+    assert spawned == [] and sup.gave_up_in == "daemon" and _lease()["reason"] == lease.REASON_ERROR
+
+
+def test_a_crash_or_a_clean_exit_never_marks_the_lease(tmp_path, monkeypatch):
+    sup, _, clock = _sup(tmp_path, monkeypatch, [supervisor_mod.EXIT_CRASHED, 0, supervisor_mod.EXIT_RESPAWN_LATER])
+    _set_state("daemon")
+    for _ in range(6):
+        clock.now += supervisor_mod.CRASH_BACKOFF_CAP_SECONDS
+        sup.poll()
+    assert _lease() is None
+
+
 def test_a_crashing_worker_is_restarted_after_a_growing_wait(tmp_path, monkeypatch):
     sup, spawned, clock = _sup(tmp_path, monkeypatch, [supervisor_mod.EXIT_CRASHED, 1, 0, None])
     _set_state("daemon")

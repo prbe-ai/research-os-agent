@@ -178,6 +178,14 @@ def _paused(c: cfg.WatchConfig) -> bool:
     return pause is not None and pause.is_set()
 
 
+def _beat(c: cfg.WatchConfig) -> None:
+    """Hosted: the loop makes progress (`hosted.Controls.beat`). Never raises."""
+    beat = getattr(c, "beat", None)
+    if beat is not None:
+        with contextlib.suppress(Exception):
+            beat()
+
+
 def _transcript_has_active_reader(path: Path) -> bool | None:
     """True/False if lsof can determine; None if lsof is unavailable.
 
@@ -350,6 +358,7 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
         pause=getattr(hosted, "pause", None),
         workers=getattr(hosted, "workers", None),
         claimed=getattr(hosted, "claim", None),
+        beat=getattr(hosted, "beat", None),
     )
 
     storage = Storage(cfg.state_db_path())
@@ -564,6 +573,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
     mismatched = False
     try:
         while True:
+            _beat(c)
             if _paused(c):
                 return 0
             stopping = _shutdown_observed(c)
@@ -667,6 +677,10 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                 start = (tick * (MAX_DRAIN_PER_TICK - 1)) % len(others) if others else 0
                 states = current + others[start:] + others[:start]
                 for state in states[:MAX_DRAIN_PER_TICK]:
+                    # Per session and per batch (each behind HTTP timeouts): a
+                    # pass over 64 sessions on a slow server is progress, not a
+                    # stall (the Probe service reads the beat).
+                    _beat(c)
                     if sent_bytes >= reconcile.MAX_BACKFILL_BYTES_PER_SWEEP:
                         break
                     try:
@@ -697,6 +711,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                                     state["session_id"], wire.receipts(state["session_id"])
                                 )
                         for _ in range(4):
+                            _beat(c)
                             _require_capture_eligible(source_cwd)
                             try:
                                 body = journal.stage(
@@ -717,7 +732,9 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                                         log.debug("session title not sent", exc_info=True)
                                     break
                                 _require_capture_eligible(source_cwd)
+                                _beat(c)
                                 journal.deliver(state["session_id"], wire)
+                                _beat(c)
                             except ProtocolRestarted as exc:
                                 # Batch 0 refused on its protocol and dropped
                                 # (3 not enabled, or 2 retired): stage it
@@ -883,6 +900,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage, *, offer: handback.H
                         break  # a pass now: what was written while it waited
                 time.sleep(1)
                 slept += 1
+                _beat(c)
                 if slept % COMPANION_POLL_SECONDS == 0:
                     companion.poll()
     finally:

@@ -77,6 +77,52 @@ def _ticks(monkeypatch, n, then):
     monkeypatch.setattr(tapmain.time, "sleep", sleep)
 
 
+def test_a_beat_stamps_the_recorder_s_progress():
+    """The Probe service reads it: a hosted recorder whose beat is old while its
+    agent runs is stalled (crash-report plan, review #12)."""
+    controls = hosted.Controls()
+    assert controls.beaten is None
+    before = time.monotonic()
+    controls.beat()
+    assert before <= controls.beaten <= time.monotonic()
+
+
+@pytest.mark.parametrize("setup", ["hosted"], indirect=True)
+def test_the_hosted_loop_beats_on_every_pass_and_each_second_it_waits(setup, monkeypatch):
+    config, storage, _wire = setup
+    beats: list = []
+    config.beat = lambda: beats.append(time.monotonic())
+    _ticks(monkeypatch, 4, lambda: config.stop.set())
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert len(beats) >= 4, "at the passes, and while it sleeps between them"
+
+
+@pytest.mark.parametrize("setup", ["hosted"], indirect=True)
+def test_the_hosted_loop_beats_before_each_session_and_batch_it_sends(setup, monkeypatch):
+    """Delta review #3: one pass may send 64 sessions' batches, each behind HTTP
+    timeouts; a beat per pass alone made a slow server read as every recorder
+    stalled. Each batch's delivery comes after a beat of its own."""
+    from tap.session_journal import Journal
+
+    config, storage, _wire = setup
+    beats: list = []
+    config.beat = lambda: beats.append(time.monotonic())
+    seen: list = []
+    deliver = Journal.deliver
+
+    def counted(self, *args, **kwargs):
+        seen.append(len(beats))
+        return deliver(self, *args, **kwargs)
+
+    monkeypatch.setattr(Journal, "deliver", counted)
+    _ticks(monkeypatch, 2, lambda: config.stop.set())
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert seen, "something was delivered"
+    first_pass_beat = 1
+    assert all(n > first_pass_beat for n in seen), "a beat for the session and its batch, not only the pass's"
+    assert len(beats) >= len(seen) + 2
+
+
 @pytest.mark.parametrize("setup", ["hosted"], indirect=True)
 def test_stop_finishes_the_session_with_its_finalize(setup, monkeypatch):
     config, storage, wire = setup

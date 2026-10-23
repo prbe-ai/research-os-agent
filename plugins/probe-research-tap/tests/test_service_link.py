@@ -163,7 +163,9 @@ def _link(sid, *, owner=None, ensure=None, **kw):
     )
 
 
-def test_registers_heartbeats_and_ends(service):
+def test_registers_heartbeats_and_ends(service, monkeypatch):
+    for name in ("PROBE_TELEMETRY", "PROBE_DIAGNOSTICS", "PROBE_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
     _state("sid-1", "daemon")
     owner = {"pid": os.getpid(), "start_time": "123"}
     link = _link("sid-1", owner=owner).start()
@@ -177,6 +179,8 @@ def test_registers_heartbeats_and_ends(service):
         "generation": link.generation,
         # Where this session's locks live, for the service's quiet check (plan D13).
         "state_dir": str(lease.sessions_dir().parent.resolve()),
+        # Whether its environment allows automatic reports (crash-report plan B2).
+        "report_env": True,
     }
     assert service.methods()[0] == "service.hello"
     # Heartbeats are the same generation on the same connection: one hello.
@@ -400,3 +404,38 @@ def test_a_hosted_link_reads_under_its_sessions_environment(monkeypatch):
     assert asked.wait(5)
     link.stop()
     assert seen and set(seen) == {"/h/x"}
+
+
+@pytest.mark.parametrize("env, said", [
+    ({}, True),
+    ({"PROBE_TELEMETRY": "off"}, False),
+    ({"PROBE_DIAGNOSTICS": "0"}, False),
+    ({"PROBE_BASE_URL": "https://probe.example.com"}, False),
+    ({"PROBE_BASE_URL": "https://api.research.prbe.ai"}, True),
+])
+def test_the_register_says_whether_its_environment_allows_reports(service, monkeypatch, env, said):
+    """`report_env` is a bool from the session's own opt-outs (crash-report plan
+    B2), never any of the environment itself."""
+    for name in ("PROBE_TELEMETRY", "PROBE_DIAGNOSTICS", "PROBE_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    _state("sid-r", "daemon")
+    link = _link("sid-r").start()
+    try:
+        assert _wait(lambda: service.registers(), 3.0), service.calls
+    finally:
+        link.stop()
+    assert service.registers()[0]["report_env"] is said
+
+
+def test_a_hosted_link_says_what_its_session_s_environment_allows(service, monkeypatch):
+    """Hosted by the service, the session's environment decides, not the service's."""
+    monkeypatch.delenv("PROBE_TELEMETRY", raising=False)
+    _state("sid-h", "daemon")
+    link = _link("sid-h", env={"HOME": os.environ["HOME"], "PROBE_TELEMETRY": "off"}).start()
+    try:
+        assert _wait(lambda: service.registers(), 3.0), service.calls
+    finally:
+        link.stop()
+    assert service.registers()[0]["report_env"] is False

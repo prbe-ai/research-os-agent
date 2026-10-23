@@ -37,6 +37,8 @@ def _no_real_probe_service(monkeypatch):
     monkeypatch.setattr(service_link, "start", lambda session_id, **_: None)
     # Nor may `tap start` (or a hook under test) ask it to record a session (plan A2).
     monkeypatch.setenv("PROBE_TAP_HOSTED", "0")
+    # Nor may a service started under test send an automatic diagnostic report.
+    monkeypatch.setenv("PROBE_SERVICE_REPORTS", "0")
 
 
 @pytest.fixture(autouse=True)

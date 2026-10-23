@@ -151,6 +151,29 @@ describe("spawnDaemon", () => {
     expect(plainEnv[SERVICE_OWNER_PID_ENV]).toBeUndefined();
   });
 
+  it("hands the tap the report opt-outs its registration's report_env is computed from", () => {
+    // pi registers its session through the tap (`tap/service_link.py`), which
+    // sends `report_env` from the environment it starts with: pi's own, so a
+    // PROBE_TELEMETRY / PROBE_DIAGNOSTICS off or a self-hosted PROBE_BASE_URL
+    // must reach it unchanged (crash-report plan B2).
+    const deps = fakeDeps();
+    const optOuts = {
+      PROBE_TELEMETRY: "off",
+      PROBE_DIAGNOSTICS: "0",
+      PROBE_BASE_URL: "https://probe.example.com",
+    };
+    spawnDaemon(
+      { sessionId: "sess-r", transcriptPath: "/tmp/r.jsonl", cwd: "/repo", runtime, baseEnv: { PATH: "/usr/bin", ...optOuts } },
+      deps,
+    );
+    const env = (deps.spawnCalls[0].options as { env: Record<string, string | undefined> }).env;
+    expect({
+      PROBE_TELEMETRY: env.PROBE_TELEMETRY,
+      PROBE_DIAGNOSTICS: env.PROBE_DIAGNOSTICS,
+      PROBE_BASE_URL: env.PROBE_BASE_URL,
+    }).toEqual(optOuts);
+  });
+
   it("passes --session-id, --cwd and --transcript through to `tap start`'s argv", () => {
     const deps = fakeDeps();
 

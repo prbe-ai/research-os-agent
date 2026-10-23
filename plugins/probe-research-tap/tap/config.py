@@ -614,6 +614,10 @@ class WatchConfig:
     #: Hosted: called with the journal folder the loop holds the session's live
     #: claim in once it takes it, and with None when it lets go (`hosted.Controls.claim`).
     claimed: object = None
+    #: Hosted: called on every pass and every second the loop waits between
+    #: them (`hosted.Controls.beat`): the service sees a recorder that stopped
+    #: making progress while its agent runs. None in a `tap watch` process.
+    beat: object = None
 
     @property
     def shutdown_sentinel(self) -> Path:

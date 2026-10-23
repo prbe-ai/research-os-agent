@@ -53,7 +53,9 @@ import time
 from collections.abc import Callable
 
 from . import paths, procid
-from .protocol import API_VERSION, JSONRPC, MAX_LINE_BYTES, Client, Method, Mode, encode, request
+from .protocol import (
+    API_VERSION, JSONRPC, MAX_LINE_BYTES, REPORT_ENV, Client, Method, Mode, encode, report_consent, request,
+)
 
 
 #: Every socket operation's deadline (plan X6: the registrant's own 2 s).
@@ -107,6 +109,9 @@ ENV_ALLOWLIST = (
     "PROBE_SERVICE_KEEPER",
     "PROBE_SERVICE_WORKER_POLL_S",
     "PROBE_SERVICE_WORKER_BACKOFF_S",
+    # The watch's test-only switches (`watch.REPORTS_ENV`, `watch.SCAN_ENV`).
+    "PROBE_SERVICE_REPORTS",
+    "PROBE_SERVICE_WATCH_S",
     # Windows: what a Python process and its children need there to run at all
     # (SYSTEMROOT for sockets and random), and where the user's folders are.
     "SYSTEMROOT",
@@ -450,8 +455,11 @@ def register(
     client: str = Client.TAP,
     client_version: str = "unknown",
     timeout: float = TIMEOUT_S,
+    report_env: bool | None = None,
 ) -> dict:
     params = {"sid": sid, "harness": harness, "mode": mode, "owner": owner, "generation": generation}
+    if report_env is not None:
+        params[REPORT_ENV] = report_env
     answer = call(Method.SESSION_REGISTER, params, client=client, client_version=client_version, timeout=timeout)
     return answer if isinstance(answer, dict) else {}
 
@@ -801,7 +809,7 @@ def _pid_runs(pid: object) -> bool:
 #: its own with no window (CREATE_NO_WINDOW, which DETACHED_PROCESS would
 #: cancel), so neither it nor the console programs it starts show a window.
 _DETACHED: dict = (
-    {"creationflags": 0x00000200 | 0x08000000}  # CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW
+    {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}  # Windows-only names
     if os.name == "nt" else {"start_new_session": True}
 )
 #: Windows: out of the spawner's job too, when the job allows it (a job that
@@ -1027,6 +1035,8 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
             answer = register(
                 args.session_id, args.harness, args.mode, owner, args.generation,
                 client=client, client_version=client_version,
+                # Whether this registrant's environment allows automatic reports.
+                report_env=report_consent(os.environ),
             )
         elif args.cmd == "end":
             answer = end(args.session_id, args.generation, client=client, client_version=client_version)

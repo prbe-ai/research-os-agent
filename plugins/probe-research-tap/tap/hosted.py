@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 
 from tap import threadenv
@@ -49,10 +50,19 @@ class Controls:
     #: while it holds it; None otherwise. The service reads the session's
     #: receipts from there (`probe.service.receipts`), never by probing a lock.
     claimed: str | None = None
+    #: When (monotonic, this process's clock) the recorder's loop last made
+    #: progress (`beat`); None before its first pass. A Probe service reads it:
+    #: a beat older than 5 min while the agent runs is a stalled recorder.
+    beaten: float | None = None
 
     def claim(self, folder: str | None) -> None:
         """Published by the recorder's loop (`WatchConfig.claimed`)."""
         self.claimed = folder
+
+    def beat(self) -> None:
+        """Called by the recorder's loop on every pass and every second it waits
+        (`WatchConfig.beat`). One float written: nothing to lock."""
+        self.beaten = time.monotonic()
 
 
 class _ThisThread(logging.Filter):

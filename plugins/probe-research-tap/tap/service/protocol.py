@@ -681,6 +681,40 @@ def runtime_env_name(name: str) -> bool:
     return (name in RUNTIME_ENV_NAMES or name.startswith(RUNTIME_ENV_PREFIXES)) and not secret_env(name)
 
 
+#: `session.register`'s optional `report_env` (crash-report plan B2): whether
+#: the registrant's own environment allows the Probe service to send the Probe
+#: team an automatic diagnostic report about its session. A bool; absent from
+#: an older registrant, which then counts as "no".
+REPORT_ENV = "report_env"
+_REPORTS_OFF = frozenset({"off", "0", "false", "no", "disabled"})
+
+
+def report_consent(env) -> bool:
+    """`report_env` for a registrant whose environment is `env` (a tap, pi
+    through the tap): `PROBE_TELEMETRY` or `PROBE_DIAGNOSTICS` off, or a
+    `PROBE_BASE_URL` that is not Probe's hosted service (https, `prbe.ai` or a
+    subdomain), says no. The rule of `probe._shared.report_policy.allowed(env)`
+    with no CLI config, restated for the tap, which cannot import `probe`
+    (tests/test_service_watch.py holds the two equal). The service takes the
+    bool as said (it holds none of the registrant's variables), and the report
+    child, handed `{}` for such a session, checks only the CLI config's
+    backend: this is the one place the session's own opt-outs are read."""
+    for name in ("PROBE_TELEMETRY", "PROBE_DIAGNOSTICS"):
+        if (env.get(name) or "").strip().lower() in _REPORTS_OFF:
+            return False
+    base_url = env.get(BASE_URL_ENV) or ""
+    if not base_url:
+        return True
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(base_url)
+    except ValueError:
+        return False
+    host = (parts.hostname or "").lower().rstrip(".")
+    return parts.scheme == "https" and (host == "prbe.ai" or host.endswith(".prbe.ai"))
+
+
 class BackgroundState:
     """`outbox.drain` / `box.watch`'s `state` when `accepted`."""
 
