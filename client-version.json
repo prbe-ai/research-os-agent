@@ -1,6 +1,6 @@
 {
   "cli": {
-    "latest": "0.293.1",
+    "latest": "0.294.0",
     "min": "0.226.2",
     "recommended": "0.261.0",
     "message": "CLIs before 0.261.0 cannot write project and experiment summaries, so your team's summaries stop updating."

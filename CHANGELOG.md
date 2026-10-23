@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.294.0
+
 - **Each release is now checked against the ones already out, and both ways the tap records a session.** The tap's recorder is tested end to end under both of its hosts, `tap watch` and the Probe service, with the same checks: every transcript line reaches the server once and in order, the session is finalized at its end or when its agent is killed, a crashed host resumes without losing or repeating a line, an outage loses nothing, a folder switched off sends nothing more, and a credential in the transcript never leaves the machine. A new CI check installs from PyPI the previous CLI release, the oldest one still supported and the oldest supported one that has the Probe service, and confirms each works with the current service and that the current CLI and tap work with its own service (a release from before the service only has to install and run). The 5 h live run that gates each Probe service release can now be started from main by hand (`gh workflow run live-run.yml`), and it always ends with a report: a command it runs can no longer hold it, and an end phase that overruns writes what the run has. Nothing changes for an install.
 - **The Probe service says which sessions it records right now.** The service's status (`service.status` `recorders`) now gives each session it records a `recording` field: true only while its recorder holds the session (it records every line), false while it waits to try again because something else holds it (the session's own `tap watch`). Before, a waiting recorder read as recording. Nothing else changes.
 
