@@ -16,7 +16,8 @@ threads (the service's own loop) see the process's environment, unchanged.
 What does not follow: a child started WITHOUT `env=` inherits the process's
 real environment (the C-level `environ`). Every child the recorder starts for
 a session passes `env=` built from `os.environ` (the daemon worker:
-`companion_supervisor`); a tool it runs only to look (`ps`, `lsof`) needs none.
+`companion_supervisor`, or the service's own supervisor, handed that copy);
+a tool it runs only to look (`ps`, `lsof`) needs none.
 
 Stdlib only.
 """

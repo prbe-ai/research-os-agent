@@ -1,5 +1,7 @@
 """The daemon worker's supervisor inside `tap watch`: how it spawns, when it gives
-up, how it backs off a crashing worker, and the SDK socket it drains.
+up, how it backs off a crashing worker, the SDK socket it drains, that it never
+starts a second worker while one holds the session lock, and that hosted by a
+service that supervises workers itself it hands its worker over and spawns none.
 
 `test_companion.py` covers spawning only in `daemon` and exit 3; this covers the
 rest.
@@ -7,8 +9,12 @@ rest.
 
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import socket
+import threading
+import time
 
 import pytest
 
@@ -54,13 +60,31 @@ def _popen(exits: list[int | None], spawned: list[dict]):
     return FakePopen
 
 
-def _sup(tmp_path, monkeypatch, exits):
+def _sup(tmp_path, monkeypatch, exits, service=None):
     spawned: list[dict] = []
     clock = Clock()
     monkeypatch.setattr(supervisor_mod.subprocess, "Popen", _popen(exits, spawned))
     monkeypatch.setattr(supervisor_mod.time, "monotonic", clock)
-    sup = supervisor_mod.Supervisor(session_id=SID, transcript=tmp_path / "t.jsonl", cwd=tmp_path)
+    sup = supervisor_mod.Supervisor(session_id=SID, transcript=tmp_path / "t.jsonl", cwd=tmp_path, service=service)
     return sup, spawned, clock
+
+
+class Link:
+    """The service's `probe.service.workers.Link`, as the tap sees it."""
+
+    def __init__(self, answer=True) -> None:
+        self.answer = answer
+        self.specs: list[dict] = []
+        self.released = 0
+
+    def supervise(self, spec):
+        self.specs.append(spec)
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        return self.answer
+
+    def release(self):
+        self.released += 1
 
 
 def test_a_cli_without_the_worker_command_is_not_respawned(tmp_path, monkeypatch):
@@ -209,3 +233,124 @@ def test_sdk_messages_on_the_socket_land_in_the_inbox(tmp_path, monkeypatch):
     assert all(isinstance(m["received_at"], float) for m in lines)
     sup.stop()
     assert not path.exists() and sup.sock is None
+
+
+def _hold_lock():
+    path = supervisor_mod.daemon_dir() / f"{SID}.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    handle = open(path, "a")  # noqa: SIM115 -- the test closes it
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    return handle
+
+
+def test_no_second_worker_while_another_holds_the_session_lock(tmp_path, monkeypatch):
+    """A worker whose exit this never saw (the Windows harness: ~100 waiting
+    workers piled up), or a resumed session's predecessor: none is started
+    while it holds the lock, and it is asked to hand over meanwhile."""
+    sup, spawned, clock = _sup(tmp_path, monkeypatch, [None])
+    _set_state("daemon")
+    held = _hold_lock()
+    try:
+        for _ in range(10):
+            sup.poll()
+            clock.now += supervisor_mod.HANDOVER_TOUCH_SECONDS
+        assert spawned == [] and sup.spawns == [], "a wait is no spawn: the per-minute cap is untouched"
+        marker = supervisor_mod.daemon_dir() / f"{SID}.handover"
+        assert time.time() - marker.stat().st_mtime < 10
+    finally:
+        held.close()
+    sup.poll()
+    assert len(spawned) == 1
+
+
+def test_leaving_while_it_asked_the_holder_to_hand_over_withdraws_the_ask(tmp_path, monkeypatch):
+    """Its session ends while another worker holds the lock: that worker must
+    finish its queue, not hand it to a successor that never comes."""
+    sup, spawned, _ = _sup(tmp_path, monkeypatch, [None])
+    _set_state("daemon")
+    marker = supervisor_mod.daemon_dir() / f"{SID}.handover"
+    held = _hold_lock()
+    try:
+        sup.poll()
+        assert marker.exists()
+        sup.stop()
+        assert not marker.exists() and spawned == []
+        marker.touch()
+        ahead = time.time() + 180
+        os.utime(marker, (ahead, ahead))
+        sup2, _, _ = _sup(tmp_path, monkeypatch, [None])
+        sup2.poll()
+        sup2.stop()
+        assert marker.exists(), "an ask dated ahead (a stopping service's) is not this one's"
+    finally:
+        held.close()
+
+
+def test_hosted_it_does_nothing_until_its_recorder_owns_the_session(tmp_path, monkeypatch):
+    """A hosted recorder polls before it takes the journal's live claim; one
+    that then steps back for another recorder of the session must start (or
+    hand over) nothing -- every 15 s retry would otherwise churn a worker."""
+    link = Link()
+    sup, spawned, _ = _sup(tmp_path, monkeypatch, [None], service=link)
+    _set_state("daemon")
+    held = _hold_lock()
+    try:
+        for _ in range(3):
+            sup.poll()
+        assert spawned == [] and link.specs == [] and not sup.delegated
+        assert not (supervisor_mod.daemon_dir() / f"{SID}.handover").exists()
+    finally:
+        held.close()
+    sup.stop()
+    assert link.released == 0
+
+
+def test_hosted_by_a_supervising_service_it_hands_the_worker_over_and_spawns_none(tmp_path, monkeypatch):
+    link = Link()
+    sup, spawned, _ = _sup(tmp_path, monkeypatch, [None], service=link)
+    _set_state("daemon")
+    sup.poll()
+    sup.claimed()
+    for _ in range(3):
+        sup.poll()
+    assert spawned == [] and sup.delegated and len(link.specs) == 1
+    (spec,) = link.specs
+    assert spec["sid"] == SID and spec["transcript"] == str(tmp_path / "t.jsonl") and spec["cwd"] == str(tmp_path)
+    assert spec["daemon_dir"] == str(supervisor_mod.daemon_dir()) and spec["source"] == "claude_code"
+    assert spec["env"]["XDG_STATE_HOME"] == os.environ["XDG_STATE_HOME"]
+    assert spec["switch"]() == ("daemon", True)
+    _set_state("off")
+    assert spec["switch"]() == ("off", False)
+    assert sup.sock is not None, "the SDK socket stays the tap's"
+    sup.stop()
+    assert link.released == 1
+
+
+def test_the_switch_it_hands_over_reads_its_own_session_s_state_from_any_thread(tmp_path, monkeypatch):
+    """The service calls it on its own thread, whose environment is the
+    service's: it must read under this session's (its XDG_STATE_HOME)."""
+    link = Link()
+    sup, _, _ = _sup(tmp_path, monkeypatch, [None], service=link)
+    _set_state("daemon")
+    sup.claimed()
+    switch = link.specs[0]["switch"]
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "elsewhere"))
+    got = {}
+    thread = threading.Thread(target=lambda: got.setdefault("v", switch()))
+    thread.start()
+    thread.join(5)
+    assert got["v"] == ("daemon", True)
+
+
+@pytest.mark.parametrize("answer", [False, RuntimeError("an older service")])
+def test_a_service_that_says_no_leaves_the_worker_here(tmp_path, monkeypatch, answer):
+    link = Link(answer)
+    sup, spawned, _ = _sup(tmp_path, monkeypatch, [None], service=link)
+    _set_state("daemon")
+    sup.claimed()
+    sup.poll()
+    sup.poll()
+    assert len(spawned) == 1 and not sup.delegated
+    assert len(link.specs) == 1, "asked once"
+    sup.stop()
+    assert link.released == 0

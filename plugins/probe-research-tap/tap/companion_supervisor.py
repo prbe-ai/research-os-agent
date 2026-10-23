@@ -20,11 +20,25 @@ must be killable without touching capture.
                            EXIT_DO_NOT_RESPAWN (no key, the store is newer than
                            the code) until the switch moves
                          state left daemon ─> the child notices and exits itself
+                       another live worker holds the session lock (a
+                         resumed session's predecessor, one whose exit this
+                         never saw) ─> start none; keep its `.handover` ask
+                         fresh, so a stopping holder hands over at its next
+                         model round, and start one once it lets go
     tap watch exit ──> stop(): SIGTERM and return. The worker is in its OWN
                        process group, finishes its queue (bounded) and exits on
                        its own -- capture's FINALIZE never waits on a model. A
                        worker whose tap watch died without stop() sees its
                        parent gone and does the same.
+
+Hosted by a Probe service that supervises workers itself (`service`: the
+`probe.service.workers.Link` on the recorder's controls), the worker is handed
+to it once this recorder owns the session (`claimed()`: after the journal's
+live claim, or a pass later -- a recorder about to step back for another starts
+nothing) -- what
+this would spawn, and how to read the switch -- and this only drains the SDK
+socket; stop() releases it. One owner, never two: a service that says no (or
+an older one, with no link) leaves it here.
 
 While the worker is down its lease lapses and the agent records; nothing here
 has to tell anyone.
@@ -122,11 +136,46 @@ def socket_path(session_id: str) -> Path:
 
 #: How long `stop()` waits for the worker before returning; it is not killed.
 STOP_WAIT_SECONDS = 2
+#: While another worker holds the session lock, its `.handover` ask is
+#: re-touched at most this often (the worker trusts one younger than 10 s).
+HANDOVER_TOUCH_SECONDS = 2
 
+
+def _safe_sid(session_id: str) -> str:
+    """The session's file stem under the daemon folder (`probe.daemon.store.store_path`)."""
+    return "".join(c for c in session_id if c.isalnum() or c in "-_") or "session"
+
+
+def lock_held(path: Path) -> bool:
+    """Does a live worker hold this session lock (`<daemon>/<sid>.lock`, for its
+    whole life)? A shared probe released at once. Unknown (no flock here, an
+    unreadable file) reads as free: the worker's own wait is bounded."""
+    try:
+        import fcntl
+    except ImportError:
+        return False
+    try:
+        handle = open(path, "rb")  # noqa: SIM115 -- closed below
+    except OSError:
+        return False
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    else:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        return False
+    finally:
+        handle.close()
 
 
 class Supervisor:
-    def __init__(self, *, session_id: str, transcript: Path, cwd: Path) -> None:
+    def __init__(self, *, session_id: str, transcript: Path, cwd: Path, service: object = None) -> None:
         self.session_id = session_id
         self.transcript = transcript
         self.cwd = cwd
@@ -136,6 +185,13 @@ class Supervisor:
         self.crashes = 0  # in a row
         self.not_before = float("-inf")  # monotonic: no spawn before this, after a crash
         self.sock: socket.socket | None = None
+        #: The Probe service's handle on this session's worker, hosted (see above).
+        self.service = service
+        #: The service took the worker over: nothing is spawned here.
+        self.delegated = False
+        #: This recorder holds the session's live claim (`claimed()`).
+        self._claimed = False
+        self._touched = float("-inf")
         try:
             ledger_mod.prune()
         except Exception:  # noqa: BLE001 - housekeeping must never stop capture
@@ -199,6 +255,78 @@ class Supervisor:
         except OSError:
             log.exception("daemon inbox write failed")
 
+    def _switch(self, env: dict) -> tuple[str | None, bool]:
+        """The session's switch, and whether it wants a worker: for the service's
+        supervisor, on ITS thread, so read under this session's environment."""
+        from tap import threadenv
+
+        with threadenv.install().session(env):
+            state = lease.session_state(self.session_id)
+            return state, state == worker.STATE_DAEMON or lease.reads_only(self.session_id, state)
+
+    def _delegate(self) -> bool:
+        """Hand the worker to the service, once. True while it supervises it."""
+        if self.delegated or self.service is None:
+            return self.delegated
+        env = dict(os.environ)  # this session's (hosted: its thread's own)
+        spec = {
+            "sid": self.session_id, "transcript": str(self.transcript), "cwd": str(self.cwd),
+            "source": str(cfg.capture_source()), "daemon_dir": str(daemon_dir()), "env": env,
+            "switch": lambda: self._switch(env),
+        }
+        try:
+            self.delegated = bool(self.service.supervise(spec))
+        except Exception:  # noqa: BLE001 -- the worker stays here, as before
+            log.exception("the Probe service did not take the daemon worker over")
+        if not self.delegated:
+            self.service = None  # said no: this supervises it, for good
+        else:
+            log.info("the Probe service supervises this session's daemon worker")
+        return self.delegated
+
+    def claimed(self) -> None:
+        """The recorder keeps the session (its live claim, or a pass done without
+        stepping back): hand the worker over now. Cheap and idempotent."""
+        self._claimed = True
+        try:
+            self._delegate()
+        except Exception:  # noqa: BLE001 -- the next poll tries again
+            log.exception("companion supervisor hand-over failed")
+
+    def _lock_path(self) -> Path:
+        return daemon_dir() / (_safe_sid(self.session_id) + ".lock")
+
+    def _ask_handover(self) -> None:
+        """Keep the lock holder's `.handover` ask fresh (one dated ahead stays)."""
+        now = time.monotonic()
+        if now - self._touched < HANDOVER_TOUCH_SECONDS:
+            return
+        self._touched = now
+        marker = daemon_dir() / (_safe_sid(self.session_id) + ".handover")
+        try:
+            if marker.stat().st_mtime > time.time():
+                return
+        except OSError:
+            pass
+        try:
+            marker.touch()
+        except OSError:
+            pass
+
+    def _withdraw_ask(self) -> None:
+        """Leaving while it asked the lock's holder to hand over: the ask goes
+        (as a waiting worker's does), or the holder would hand over to nobody
+        instead of finishing its queue. One dated ahead is not ours."""
+        if self._touched == float("-inf"):
+            return
+        self._touched = float("-inf")
+        marker = daemon_dir() / (_safe_sid(self.session_id) + ".handover")
+        try:
+            if marker.stat().st_mtime <= time.time():
+                marker.unlink()
+        except OSError:
+            pass
+
     def _spawn_argv(self) -> list[str] | None:
         """Daemon v2: `probe daemon worker` from the researcher's CLI environment.
         No CLI, or one too old to have it: the worker exits EXIT_DO_NOT_RESPAWN,
@@ -219,6 +347,13 @@ class Supervisor:
             self._drain_socket()
         except Exception:  # noqa: BLE001
             log.exception("daemon socket poll failed")
+        if self.service is not None and not self._claimed:
+            return  # hosted: nothing until this recorder owns the session
+        try:
+            if self.child is None and self._delegate():
+                return  # the service supervises it
+        except Exception:  # noqa: BLE001
+            log.exception("companion supervisor hand-over failed")
         try:
             if self.child is not None and self.child.poll() is not None:
                 code = self.child.returncode
@@ -250,6 +385,11 @@ class Supervisor:
                 now = time.monotonic()
                 if now < self.not_before:
                     return
+                if lock_held(self._lock_path()):
+                    # Another live worker of this session: a second would only
+                    # wait for it. Ask it to hand over; start one once it lets go.
+                    self._ask_handover()
+                    return
                 self.spawns = [t for t in self.spawns if now - t < 60]
                 if len(self.spawns) >= RESPAWNS_PER_MINUTE:
                     return
@@ -275,6 +415,7 @@ class Supervisor:
                         # cut the worker's final cycle short.
                         start_new_session=True,
                     )
+                self._touched = float("-inf")  # an ask made while it waited is the new worker's to clear
                 log.info("companion worker started (pid %s)", self.child.pid)
         except Exception:  # noqa: BLE001
             log.exception("companion supervisor poll failed")
@@ -290,6 +431,15 @@ class Supervisor:
             except OSError:
                 pass
             self.sock = None
+        self._withdraw_ask()
+        if self.delegated:
+            # The service stops it (SIGTERM, as below) and reaps it.
+            self.delegated = False
+            try:
+                self.service.release()
+            except Exception:  # noqa: BLE001
+                log.exception("companion supervisor release failed")
+            return
         child, self.child = self.child, None
         if child is None or child.poll() is not None:
             return

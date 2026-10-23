@@ -862,3 +862,64 @@ def test_other_refusals_keep_their_cadence_and_record_no_wait(setup, monkeypatch
     assert "conflict_wait" not in journal.get(config.session_id)
     assert journal.conflict_retry_in(config.session_id) == 0
     journal.close()
+
+
+# -- the daemon worker, handed to a service that supervises it (plan Q3) ---------
+
+
+class _Link:
+    """The service's `probe.service.workers.Link`, as the recorder's controls carry it."""
+
+    def __init__(self):
+        self.specs = []
+        self.released = 0
+
+    def supervise(self, spec):
+        self.specs.append(spec)
+        return True
+
+    def release(self):
+        self.released += 1
+
+
+def _daemon_switch(monkeypatch, tmp_path, sid):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+    state = tmp_path / "xdg" / "probe" / "sessions" / f"{sid}.state"
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("daemon")
+
+
+def test_the_worker_is_handed_over_once_the_recorder_owns_the_session(setup, monkeypatch, tmp_path):
+    config, storage, _ = setup
+    _daemon_switch(monkeypatch, tmp_path, config.session_id)
+    config.workers = link = _Link()
+    spawned = []
+    monkeypatch.setattr(tapmain.Supervisor, "_spawn_argv", lambda self: spawned.append(1))
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert len(link.specs) == 1 and link.specs[0]["sid"] == config.session_id
+    assert link.released == 1, "its loop's end releases it"
+    assert spawned == [], "the tap spawned nothing itself"
+
+
+def test_a_recorder_that_steps_back_for_another_hands_nothing_over(setup, monkeypatch, tmp_path):
+    """Another recorder holds the session's live claim (D39): this one leaves
+    at once and must start, or hand over, nothing -- each of its retries would
+    otherwise churn the worker."""
+    config, storage, _ = setup
+    _daemon_switch(monkeypatch, tmp_path, config.session_id)
+    config.workers = link = _Link()
+    monkeypatch.setattr(Journal, "claim_live", lambda self, sid: False)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert link.specs == [] and link.released == 0
+
+
+def test_with_ingestion_off_the_worker_is_still_handed_over_a_pass_later(setup, monkeypatch, tmp_path):
+    """No live claim comes while ingestion is off, but the recorder stays: its
+    worker is handed over, as `tap watch` starts one."""
+    config, storage, _ = setup
+    _daemon_switch(monkeypatch, tmp_path, config.session_id)
+    config.workers = link = _Link()
+    monkeypatch.setattr(tapmain.killswitch, "is_ingestion_enabled", lambda **kw: (False, "off"))
+    _stop_after(monkeypatch, 2)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert len(link.specs) == 1

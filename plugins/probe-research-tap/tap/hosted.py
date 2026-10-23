@@ -39,6 +39,11 @@ FAILED = "failed"  # an error the service's guard restarts after
 class Controls:
     stop: threading.Event = field(default_factory=threading.Event)
     pause: threading.Event = field(default_factory=threading.Event)
+    #: The service's handle on this session's daemon worker
+    #: (`probe.service.workers.Link`), set by a service that supervises
+    #: workers itself: the tap's Supervisor hands its worker over to it.
+    #: None (an older service): the tap's Supervisor spawns it, as before.
+    workers: object = None
 
 
 class _ThisThread(logging.Filter):

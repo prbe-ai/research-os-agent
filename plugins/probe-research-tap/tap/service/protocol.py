@@ -398,6 +398,31 @@ class State:
     GRACE = "grace"
 
 
+class WorkerState:
+    """`service.status` `workers[].state`: a recorded session's daemon worker,
+    as the service's own supervisor sees it (`probe.service.workers`)."""
+
+    RUNNING = "running"
+    #: Being started, on a thread of its own (the interpreter's stat, the exec).
+    STARTING = "starting"
+    #: The switch does not want a worker (`off`, `inline`, read-only outside a
+    #: daemon-profile session).
+    IDLE = "idle"
+    #: Another live worker holds the session's lock: asked to hand over, and
+    #: none is started until it lets go.
+    WAITING_FOR_LOCK = "waiting_for_lock"
+    #: Not before `retry_in`: after a crash (doubling), a switch exit, missing
+    #: AI libraries, or the respawn cap.
+    BACKOFF = "backoff"
+    #: The updater holds new worker starts (`barrier.hold_workers`, the barrier).
+    HELD_FOR_UPDATE = "held_for_update"
+    #: The worker said respawning cannot help (no key, a newer store, no CLI):
+    #: none again until the switch moves (`gave_up_in`).
+    GAVE_UP = "gave_up"
+    #: Its session ended: asked to stop (SIGTERM), finishing its queue.
+    DRAINING = "draining"
+
+
 class Topic:
     SESSION_STARTED = "session.started"
     SESSION_ENDED = "session.ended"

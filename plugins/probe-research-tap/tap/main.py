@@ -324,6 +324,7 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
         idle_interval_s=idle_s,
         stop=getattr(hosted, "stop", None),
         pause=getattr(hosted, "pause", None),
+        workers=getattr(hosted, "workers", None),
     )
 
     storage = Storage(cfg.state_db_path())
@@ -485,12 +486,21 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
     # The Probe daemon worker rides this process's lifecycle as a child; see
     # companion_supervisor.py. Polled every tick and every few seconds of the
     # sleep, so switching to `daemon` mid-session starts it within seconds.
-    companion = Supervisor(session_id=c.session_id, transcript=c.transcript_path, cwd=c.cwd)
+    # Hosted by a service that supervises workers itself, it is handed to it.
+    companion = Supervisor(
+        session_id=c.session_id, transcript=c.transcript_path, cwd=c.cwd, service=getattr(c, "workers", None)
+    )
+    looped = False
     try:
         while True:
             if _paused(c):
                 return 0
             stopping = _shutdown_observed(c)
+            if looped:
+                # Still here a pass later (ingestion off, the server unreachable):
+                # this recorder did not step back for another one.
+                companion.claimed()
+            looped = True
             if not stopping:
                 companion.poll()
             if cfg.killswitch_active() or cfg.cwd_disabled(c.cwd):
@@ -513,6 +523,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                     journal = journal or Journal(wire.base_url, remote["customer_id"], wire.source)
                     if not journal.claim_live(c.session_id):
                         return 0  # another compatible daemon owns this session
+                    companion.claimed()
                     journal.ensure(
                         c.session_id,
                         c.transcript_path,
@@ -694,6 +705,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                 log.warning("capture pending; source and queue retained: %s", exc)
             if stopping:
                 return 0
+            companion.claimed()  # a pass done: this recorder keeps the session
             tick += 1
             owner = session_owner.state(c.session_id)
             if owner is session_owner.OwnerState.GONE:

@@ -585,6 +585,9 @@ class WatchConfig:
     #: this session's saved progress). None in a `tap watch` process.
     stop: object = None
     pause: object = None
+    #: Hosted by a service that supervises daemon workers itself: its handle
+    #: on this session's (`tap.hosted.Controls.workers`). None otherwise.
+    workers: object = None
 
     @property
     def shutdown_sentinel(self) -> Path:
