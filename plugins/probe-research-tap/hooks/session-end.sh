@@ -46,9 +46,65 @@ set -euo pipefail
 
 WAIT=0
 [ "${1:-}" = "--wait" ] && WAIT=1
+SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
+
+# `--wait`'s deadline, FIRST, so this script's own start-up (cat, python3, ps)
+# spends it instead of adding to it. It is a clock: bash 3.2 (/bin/bash on
+# macOS) has no sub-second time, and BSD `date` no %N, so a background `sleep`
+# is the deadline and the waits below end when it does. Counting 0.2s sleeps
+# instead overran on macOS, where one `sleep 0.2` takes ~236ms on a runner (5ms
+# to start it, the rest the timer firing late): 75 ticks took 19s, Codex's 13
+# took 3.3s against its 3s, and Claude Code's 6 took 1.66s against its 1.5s.
+#
+# WAIT_MS: at most 15s. Under Claude Code, its exit budget less 400ms for what
+# the deadline cannot cover (the hooks.json wrapper's and this bash's start,
+# the deadline's own lateness, the exit): ~5ms on Linux, but up to 190ms on a
+# macOS runner, whose 1.2s `sleep` fired up to 82ms late. So 1.1s at the
+# default 1.5s. Codex (0.159) clamps every SessionEnd hook's timeout to 3s,
+# whatever the entry asks: 2.6s, the same 400ms reserve. A registry harness
+# (Kimi Code) awaits its SessionEnd hooks up to the entry's own timeout, so it
+# gets the full 15s.
+WAIT_MS=15000
+if [ "$SOURCE" = codex ]; then
+    WAIT_MS=2600
+elif [ "$SOURCE" = claude_code ]; then
+    BUDGET_MS="${CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS:-}"
+    case "$BUDGET_MS" in '' | *[!0-9]*) BUDGET_MS=1500 ;; esac
+    # Strip leading zeros so the length check measures magnitude, and read 0
+    # as unset, as Claude Code does.
+    BUDGET_MS="${BUDGET_MS#"${BUDGET_MS%%[!0]*}"}"
+    [ -n "$BUDGET_MS" ] || BUDGET_MS=1500
+    # Past six digits it is over the 15s cap anyway, and a 20-digit value
+    # would overflow the arithmetic below.
+    [ "${#BUDGET_MS}" -gt 6 ] || WAIT_MS=$((BUDGET_MS - 400))
+    if [ "$WAIT_MS" -gt 15000 ]; then WAIT_MS=15000; fi
+    if [ "$WAIT_MS" -lt 0 ]; then WAIT_MS=0; fi
+fi
+printf -v WAIT_S '%d.%03d' "$((WAIT_MS / 1000))" "$((WAIT_MS % 1000))"
+DEADLINE=""
+POLLER=""
+FINISH=""
+# Stop one of this script's helpers with signal $2 and reap it. Only while bash
+# still holds it unreaped (`jobs -r`): once reaped, its pid is free, and may be
+# another process's. Reaped here, not left to an init: a container's PID 1
+# that does not reap would keep it a zombie. Quiet, as bash 3.2 reports a
+# killed job ("Terminated") on stderr.
+stop_helper() {
+    local job
+    [ -n "$1" ] || return 0
+    for job in $(jobs -rp); do
+        if [ "$job" = "$1" ]; then kill "-$2" "$1" || true; fi
+    done
+    wait "$1" || true
+} 2>/dev/null
+if [ "$WAIT" = 1 ] && [ "$WAIT_MS" -gt 0 ]; then
+    # Its own stdio, so the harness never waits on a pipe it holds open.
+    sleep "$WAIT_S" </dev/null >/dev/null 2>&1 &
+    DEADLINE=$!
+    trap 'stop_helper "$POLLER" TERM; stop_helper "$FINISH" KILL; stop_helper "$DEADLINE" TERM' EXIT
+fi
 
 HOOK_INPUT="$(cat)"
-SOURCE="${PROBE_TAP_SOURCE:-claude_code}"
 # Any harness but Claude Code and Codex: its values, and its session id without
 # the harness's own prefix, from its registry row (tap/hook_env.py).
 REGISTRY_ENV=""
@@ -90,7 +146,8 @@ touch "$SHUTDOWN_FILE"
 
 # The pid file, or the hand-over a sibling entry left before removing it.
 PID=$(cat "$PID_FILE" 2>/dev/null || true)
-[ -n "$PID" ] || PID=$(cat "$STOPPING_FILE" 2>/dev/null || true)
+HANDED_OVER=0
+[ -n "$PID" ] || { PID=$(cat "$STOPPING_FILE" 2>/dev/null || true) && HANDED_OVER=1; }
 case "$PID" in '' | *[!0-9]*) PID="" ;; esac
 LEADER=0
 
@@ -126,6 +183,12 @@ if [ -n "$PID" ]; then
         # wrapper alone as before, and wait on the group below.
         kill -TERM "$PID" 2>/dev/null || true
         LEADER=1
+    elif [ "$HANDED_OVER" = 1 ]; then
+        # A sibling entry signalled the wrapper and handed its pid over, and
+        # the wrapper exits the moment its TERM trap has forwarded: by now its
+        # group, if any, is the daemon still making its last pass. Wait on it
+        # below, and signal nothing: the pid may be gone, even reused.
+        if kill -0 -- "-$PID" 2>/dev/null; then LEADER=1; fi
     else
         # Not a group leader: signal the wrapper alone. Its TERM trap
         # forwards to the python child, so both still stop.
@@ -137,52 +200,72 @@ rm -f "$PID_FILE"
 # `--wait`: stay until the wrapper's group (the daemon) has exited, so the agent
 # cannot exit, and take a container down, before the FINALIZE leaves. Not on
 # `clear` or `resume`: the agent keeps running (and so does the delivery), and a
-# wait there would freeze the researcher's /clear. At most 75 x 0.2s = 15s;
-# under Claude Code, at most its exit budget less 300ms for this script's
-# start-up (python3, ps: ~60ms on Linux) and the hooks.json wrapper, which spend
-# the same budget: 6 ticks at the default 1.5s. Codex (0.159) clamps every
-# SessionEnd hook's timeout to 3s, whatever the entry asks, so its wait ends at
-# 2.7s: 13 ticks, the same 300ms margin. A registry harness (Kimi Code) awaits
-# its SessionEnd hooks up to the entry's own timeout, so it gets the full wait.
-WAIT_TICKS=75
-if [ "$SOURCE" = codex ] && [ -z "$REGISTRY_ENV" ]; then
-    WAIT_TICKS=13
-elif [ -z "$REGISTRY_ENV" ]; then
-    BUDGET_MS="${CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS:-}"
-    case "$BUDGET_MS" in '' | *[!0-9]*) BUDGET_MS=1500 ;; esac
-    # Strip leading zeros so the length check measures magnitude, and read 0
-    # as unset, as Claude Code does.
-    BUDGET_MS="${BUDGET_MS#"${BUDGET_MS%%[!0]*}"}"
-    [ -n "$BUDGET_MS" ] || BUDGET_MS=1500
-    # Past six digits it is over the 75-tick cap anyway, and a 20-digit value
-    # would overflow the arithmetic below.
-    if [ "${#BUDGET_MS}" -gt 6 ]; then
-        WAIT_TICKS=75
-    else
-        WAIT_TICKS=$(((BUDGET_MS - 300) / 200))
-    fi
-    if [ "$WAIT_TICKS" -gt 75 ]; then WAIT_TICKS=75; fi
-    if [ "$WAIT_TICKS" -lt 0 ]; then WAIT_TICKS=0; fi
-fi
+# wait there would freeze the researcher's /clear.
+WAITS=0
+[ -n "$DEADLINE" ] && [ "$REASON" != clear ] && [ "$REASON" != resume ] && WAITS=1
+
+# Return once "$@" stops holding, or at the deadline set at the top. This shell
+# waits on the deadline itself, so a wait ends when it does, not at the end of a
+# poll (one `sleep 0.05` takes 88ms on a macOS runner). A background poller
+# checks "$@" every 50ms and, once it fails, ends the wait early with SIGUSR1:
+# a trapped signal returns `wait`, and the deadline runs on for the next wait.
+# The poller sleeps before its first check, by when this shell is in `wait`
+# (were it not, the wait would run to the deadline: late, never over budget),
+# and stops with the deadline, so a killed hook leaves none behind. Stopped,
+# it ends and reaps its own sleep, then exits 0.
+wait_while() {
+    "$@" 2>/dev/null || return 0
+    trap ':' USR1
+    (
+        nap=""
+        trap 'if [ -n "$nap" ]; then kill "$nap" 2>/dev/null || true; fi; wait 2>/dev/null || true; exit 0' TERM
+        held=1
+        polls=$((WAIT_MS / 50))
+        while [ "$polls" -gt 0 ]; do
+            sleep 0.05 &
+            nap=$!
+            wait "$nap" || true
+            nap=""
+            kill -0 "$DEADLINE" 2>/dev/null || exit 0
+            # Once "$@" fails, signal every poll until stopped: bash 3.2's
+            # `wait` missed ~1 in 9 single signals in a loop of these tests.
+            if [ "$held" = 0 ] || ! "$@" 2>/dev/null; then
+                held=0
+                kill -USR1 "$$" 2>/dev/null || true
+            fi
+            polls=$((polls - 1))
+        done
+    ) </dev/null >/dev/null 2>&1 &
+    POLLER=$!
+    wait "$DEADLINE" 2>/dev/null || true
+    # Ignored from here, so a late one cannot cut short the reaping wait.
+    trap '' USR1
+    stop_helper "$POLLER" TERM
+    POLLER=""
+}
+
 # The Probe service records it (plan A2): the sentinel above ends its recorder
 # as it ends a `tap watch`, and `tap finish` waits for the last pass the same way.
+# The service finishes the session whether or not this client is still waiting,
+# so the deadline ends the client too: its start-up and the call's own timeout
+# never push the hook past its budget.
 HOSTED_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
 if [ -s "$HOSTED_FILE" ]; then
-    if [ "$WAIT" = 1 ] && [ "$REASON" != clear ] && [ "$REASON" != resume ] && [ "$WAIT_TICKS" -gt 0 ]; then
+    if [ "$WAITS" = 1 ]; then
         TAP_ROOT="${TAP_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
         PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$TAP_ROOT" python3 -m tap finish --session-id "$SESSION_ID" \
-            --wait "$((WAIT_TICKS / 5)).$((WAIT_TICKS % 5 * 2))" </dev/null >/dev/null 2>&1 || true
+            --wait "$WAIT_S" </dev/null >/dev/null 2>&1 &
+        FINISH=$!
+        wait_while kill -0 "$FINISH"
+        stop_helper "$FINISH" KILL
+        FINISH=""
     fi
     rm -f "$HOSTED_FILE"
 fi
 
 if [ "$WAIT" = 1 ]; then
-    if [ "$LEADER" = 1 ] && [ "$REASON" != clear ] && [ "$REASON" != resume ]; then
-        i=0
-        while [ "$i" -lt "$WAIT_TICKS" ] && kill -0 -- "-$PID" 2>/dev/null; do
-            sleep 0.2
-            i=$((i + 1))
-        done
+    if [ "$LEADER" = 1 ] && [ "$WAITS" = 1 ]; then
+        wait_while kill -0 -- "-$PID"
     fi
     rm -f "$STOPPING_FILE"
 fi

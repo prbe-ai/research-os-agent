@@ -24,6 +24,7 @@ import os
 import shutil
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -319,25 +320,68 @@ def test_an_agent_that_dies_without_session_end_ends_its_session(tap_env, tmp_pa
     assert Path(f"/tmp/probe-research-tap-watcher-{session_id}.shutdown").is_file()
 
 
+#: The stand-in's two processes, shaped as session-start.sh makes them. The
+#: wrapper forwards TERM to its child and exits at once. The child (`tap watch`)
+#: makes its last pass, which a second TERM does not cut short (the daemon only
+#: sets a flag), and records that it finished.
+_WRAPPER = 'trap \'kill -TERM "$C" 2>/dev/null; exit 0\' TERM; bash -c "$1" daemon "$2" "$3" & C=$!; wait "$C"'
+_DAEMON = (
+    'trap "T=1" TERM; T=; while [ -z "$T" ]; do sleep 0.05; done; trap "" TERM; sleep "$1"; : >"$2"'
+)
+#: Forks the wrapper into its own session and exits, so the OS reaps it as it
+#: reaps the real one, whose spawner exits too. Left a zombie of this test, it
+#: still counts in `kill -0 -- -PGID` on Linux, though not on macOS: the sibling
+#: test passed on Linux only because of it.
+_DETACH = """
+import os, sys
+pid = os.fork()
+if pid:
+    sys.stdout.write(f"{pid}\\n")
+    sys.stdout.flush()
+    os._exit(0)
+os.setsid()
+null = os.open(os.devnull, os.O_RDWR)
+for fd in (0, 1, 2):
+    os.dup2(null, fd)
+os.execvp("bash", ["bash", "-c", *sys.argv[1:]])
+"""
+
+
+class _Daemon:
+    def __init__(self, pid: int, marker: Path) -> None:
+        self.pid = pid
+        self.marker = marker
+
+    def finished(self) -> bool:
+        """Whether its last pass ran to the end."""
+        return self.marker.exists()
+
+
 def _fake_daemon_group(
     session_id: str, linger_s: float, prefix: str = "probe-research-tap"
-) -> subprocess.Popen:
-    """A wrapper stand-in that leads its group and takes `linger_s` to finish
-    after SIGTERM, the way the daemon's last pass delivers its FINALIZE."""
-    proc = subprocess.Popen(
-        ["bash", "-c", f'trap "sleep {linger_s}; exit 0" TERM; while :; do sleep 0.05; done'],
-        start_new_session=True,
-    )
-    Path(f"/tmp/{prefix}-watcher-{session_id}.pid").write_text(str(proc.pid))
+) -> _Daemon:
+    """A wrapper and daemon that take `linger_s` to finish after SIGTERM, the
+    way the daemon's last pass delivers its FINALIZE."""
+    marker = Path(f"/tmp/{prefix}-watcher-{session_id}.finished")
+    marker.unlink(missing_ok=True)
+    out = subprocess.run(
+        [sys.executable, "-c", _DETACH, _WRAPPER, "wrapper", _DAEMON, str(linger_s), str(marker)],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
+    ).stdout
+    daemon = _Daemon(int(out), marker)
+    Path(f"/tmp/{prefix}-watcher-{session_id}.pid").write_text(str(daemon.pid))
     time.sleep(0.3)
-    return proc
+    assert _pgid(daemon.pid) == daemon.pid, "the stand-in wrapper must lead its own group"
+    return daemon
 
 
-def _cleanup(session_id: str, proc: subprocess.Popen, prefix: str = "probe-research-tap") -> None:
+def _cleanup(session_id: str, daemon: _Daemon, prefix: str = "probe-research-tap") -> None:
     with contextlib.suppress(OSError):
-        os.killpg(proc.pid, signal.SIGKILL)
-    proc.wait(timeout=10)
-    for suffix in (".pid", ".shutdown", ".stopping"):
+        os.killpg(daemon.pid, signal.SIGKILL)
+    for suffix in (".pid", ".shutdown", ".stopping", ".finished"):
         Path(f"/tmp/{prefix}-watcher-{session_id}{suffix}").unlink(missing_ok=True)
 
 
@@ -345,6 +389,19 @@ def _cleanup(session_id: str, proc: subprocess.Popen, prefix: str = "probe-resea
 BUDGET_ENV = "CLAUDE_CODE_SESSIONEND_HOOKS_TIMEOUT_MS"
 #: A researcher who raised that budget: the wait is then bounded by its own 15s.
 RAISED = {BUDGET_ENV: "20000"}
+#: The hook's deadline is each budget less this reserve, for what the deadline
+#: cannot cover: the hook's own start, the deadline firing late, the exit. A
+#: macOS runner spent up to 190ms of it, Linux ~5ms.
+RESERVE_S = 0.4
+#: A run must leave the harness this much of the reserve: it ends at least this
+#: long before the budget.
+HEADROOM_S = 0.1
+
+
+def _inside(elapsed: float, wait_s: float) -> bool:
+    """Whether a run with a `wait_s` deadline waited that long and ended at
+    least HEADROOM_S before its budget."""
+    return wait_s <= elapsed < wait_s + RESERVE_S - HEADROOM_S
 
 
 def _env(**overrides: str) -> dict:
@@ -355,7 +412,7 @@ def _env(**overrides: str) -> dict:
 
 def _session_end(session_id: str, reason: str, *flags: str, env: dict | None = None) -> float:
     started = time.monotonic()
-    subprocess.run(
+    done = subprocess.run(
         ["bash", str(SESSION_END), *flags],
         input=json.dumps({"session_id": session_id, "reason": reason}),
         text=True,
@@ -364,7 +421,10 @@ def _session_end(session_id: str, reason: str, *flags: str, env: dict | None = N
         timeout=30,
         env=_env() if env is None else env,
     )
-    return time.monotonic() - started
+    elapsed = time.monotonic() - started
+    # bash 3.2 reports a killed background job ("Terminated") on stderr.
+    assert done.stderr == "", done.stderr
+    return elapsed
 
 
 @pytest.mark.parametrize(
@@ -375,85 +435,126 @@ def test_session_end_waits_for_the_final_delivery(reason, waits) -> None:
     """Returning at once let the agent exit before the FINALIZE left: in a
     container that exit kills the daemon mid-delivery. `/clear` and `/resume`
     keep the agent running, so they must not freeze the researcher. (Under a
-    raised exit budget, so the 1.5s last pass fits.)"""
+    raised exit budget, so the 1.5s last pass fits.) The wait ends when the
+    daemon does, not at its 15s deadline."""
     session_id = f"pytest-wait-{os.getpid()}-{reason}"
-    proc = _fake_daemon_group(session_id, linger_s=1.5)
+    daemon = _fake_daemon_group(session_id, linger_s=1.5)
     try:
         elapsed = _session_end(session_id, reason, "--wait", env=_env(**RAISED))
         if waits:
-            assert elapsed >= 1.2, f"returned after {elapsed:.2f}s, before the daemon finished"
-            assert proc.wait(timeout=5) == 0
+            assert daemon.finished(), f"returned after {elapsed:.2f}s, before the daemon finished"
+            assert 1.2 <= elapsed < 2.0, f"took {elapsed:.2f}s for a 1.5s last pass"
         else:
             assert elapsed < 1.0, f"{reason} waited {elapsed:.2f}s"
     finally:
-        with contextlib.suppress(OSError):
-            os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait(timeout=10)
-        for suffix in (".pid", ".shutdown", ".stopping"):
-            Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
+        _cleanup(session_id, daemon)
+
+
+def test_a_daemon_that_is_already_done_is_not_waited_for() -> None:
+    """Nothing left to send: the hook returns at once, not at its deadline."""
+    session_id = f"pytest-done-{os.getpid()}"
+    daemon = _fake_daemon_group(session_id, linger_s=0)
+    try:
+        elapsed = _session_end(session_id, "other", "--wait", env=_env(**RAISED))
+        assert daemon.finished()
+        assert elapsed < 0.5, f"waited {elapsed:.2f}s for a daemon with nothing left to send"
+    finally:
+        _cleanup(session_id, daemon)
 
 
 def test_session_end_wait_is_bounded() -> None:
     """A daemon stuck on a dead network cannot hold the agent's exit past the
     hook's own 15s cap: a budget too long for the arithmetic still caps there,
-    and exits 0."""
+    well inside the entry's own 20s timeout, and exits 0."""
     session_id = f"pytest-bounded-{os.getpid()}"
     prefix = "probe-research-tap"
-    proc = _fake_daemon_group(session_id, linger_s=60, prefix=prefix)
+    daemon = _fake_daemon_group(session_id, linger_s=60, prefix=prefix)
     try:
         elapsed = _session_end(session_id, "other", "--wait", env=_env(**{BUDGET_ENV: "99999999999999999999"}))
-        assert 14 <= elapsed < 19
+        assert 15 <= elapsed < 16, f"took {elapsed:.2f}s"
     finally:
-        _cleanup(session_id, proc, prefix=prefix)
+        _cleanup(session_id, daemon, prefix=prefix)
 
 
 def test_codex_wait_ends_inside_its_3s_clamp() -> None:
     """Codex (0.159) clamps every SessionEnd hook's timeout to 3s, whatever the
     entry asks, and kills the hook then. The wait must end, exit 0, inside it:
-    13 ticks, the same 300ms margin Claude Code's budget gets. Claude Code's
+    at 2.6s, the same 400ms reserve Claude Code's budget gets. Claude Code's
     budget variable is not Codex's and must not move it."""
     session_id = f"pytest-codex-clamp-{os.getpid()}"
     prefix = "prbe-codex-tap"
-    proc = _fake_daemon_group(session_id, linger_s=60, prefix=prefix)
+    daemon = _fake_daemon_group(session_id, linger_s=60, prefix=prefix)
     try:
         elapsed = _session_end(
             session_id, "other", "--wait", env=_env(PROBE_TAP_SOURCE="codex", **{BUDGET_ENV: "20000"})
         )
-        # 13 ticks is 2.6s; Codex kills the hook at 3s. 0.2s of slack for a loaded box.
-        assert 2.6 <= elapsed < 3.2, f"took {elapsed:.2f}s; Codex kills the hook at 3s"
+        assert _inside(elapsed, 2.6), f"took {elapsed:.2f}s; Codex kills the hook at 3s"
     finally:
-        _cleanup(session_id, proc, prefix=prefix)
+        _cleanup(session_id, daemon, prefix=prefix)
 
 
 @pytest.mark.parametrize(
-    ("budget", "ticks"),
+    ("budget", "wait_s"),
     [
-        (None, 6),
-        ("soon", 6),
-        ("1500", 6),
+        (None, 1.1),
+        ("soon", 1.1),
+        ("1500", 1.1),
         # Zero-padded is still 1500ms to Claude Code, not a 7-digit budget.
-        ("0001500", 6),
+        ("0001500", 1.1),
         # Claude Code reads 0 as unset.
-        ("0", 6),
-        ("0500", 1),
-        ("0000001", 0),
+        ("0", 1.1),
+        ("0500", 0.1),
+        # Shorter than one 50ms poll.
+        ("420", 0.02),
+        ("0000001", 0.0),
     ],
-    ids=["unset", "garbage", "default", "zero-padded", "zero", "short", "below-start-up"],
+    ids=["unset", "garbage", "default", "zero-padded", "zero", "short", "under-a-poll", "below-start-up"],
 )
-def test_claude_code_wait_ends_inside_its_exit_budget(budget, ticks) -> None:
+def test_claude_code_wait_ends_inside_its_exit_budget(budget, wait_s) -> None:
     """Claude Code bounds the whole SessionEnd phase at its exit budget (1.5s
     unless the researcher sets one) and kills a hook still running then, with
-    "Hook cancelled" on the terminal. The wait must end, exit 0, inside it."""
+    "Hook cancelled" on the terminal. The wait must end, exit 0, inside it:
+    1.1s from the hook's start at the default, its start-up included."""
     session_id = f"pytest-budget-{os.getpid()}"
-    proc = _fake_daemon_group(session_id, linger_s=60)
+    daemon = _fake_daemon_group(session_id, linger_s=60)
     env = _env() if budget is None else _env(**{BUDGET_ENV: budget})
     try:
         elapsed = _session_end(session_id, "prompt_input_exit", "--wait", env=env)
-        assert elapsed < 1.5, f"took {elapsed:.2f}s; Claude Code cancels at 1.5s"
-        assert ticks * 0.2 <= elapsed < ticks * 0.2 + 0.4, f"{elapsed:.2f}s is not {ticks} ticks"
+        assert _inside(elapsed, wait_s), f"took {elapsed:.2f}s for a {wait_s}s wait"
         assert not Path(f"/tmp/probe-research-tap-watcher-{session_id}.stopping").exists()
     finally:
-        _cleanup(session_id, proc)
+        _cleanup(session_id, daemon)
+
+
+def test_a_hung_tap_finish_still_ends_inside_the_budget(tmp_path) -> None:
+    """The Probe service records the session (a `.hosted` marker, no wrapper),
+    and `tap finish` waits for its last pass. A service that never answers must
+    not hold the hook past Claude Code's budget, as the client's own start-up
+    and its call's 2s timeout did."""
+    session_id = f"pytest-hosted-{os.getpid()}"
+    marker = Path(f"/tmp/probe-research-tap-watcher-{session_id}.hosted")
+    real = shutil.which("python3")
+    assert real
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "python3"
+    client = tmp_path / "finish.pid"
+    fake.write_text(
+        f'#!/bin/sh\ncase "$*" in *"tap finish"*) echo $$ >"{client}"; exec sleep 60 ;; esac\n'
+        f'exec "{real}" "$@"\n'
+    )
+    fake.chmod(0o755)
+    marker.write_text("12345")
+    try:
+        elapsed = _session_end(
+            session_id, "other", "--wait", env=_env(PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+        )
+        assert _inside(elapsed, 1.1), f"took {elapsed:.2f}s; Claude Code cancels at 1.5s"
+        assert not marker.exists()
+        assert _gone(int(client.read_text()), timeout=2), "the hook left `tap finish` running"
+    finally:
+        for suffix in (".hosted", ".shutdown", ".stopping"):
+            Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
 
 
 def test_the_original_entry_still_returns_at_once() -> None:
@@ -461,28 +562,149 @@ def test_the_original_entry_still_returns_at_once() -> None:
     started on an older release still runs it, against this script once its
     start folder is replaced: its behavior, and its 3s budget, must not change."""
     session_id = f"pytest-nowait-{os.getpid()}"
-    proc = _fake_daemon_group(session_id, linger_s=1.5)
+    daemon = _fake_daemon_group(session_id, linger_s=1.5)
     try:
         assert _session_end(session_id, "other") < 1.0
     finally:
-        _cleanup(session_id, proc)
+        _cleanup(session_id, daemon)
 
 
 def test_the_waiting_entry_finds_the_daemon_after_its_sibling_ran() -> None:
     """A session that loaded an older plugin's two SessionEnd entries runs both
     at once, in either order. When the flagless one has already signalled and
-    removed the pid file, the waiting one must still find the daemon and wait
-    for it."""
+    removed the pid file, the wrapper is gone (it exits on TERM) but its group
+    is still delivering: the waiting one must find that group and wait for it."""
     session_id = f"pytest-sibling-{os.getpid()}"
-    proc = _fake_daemon_group(session_id, linger_s=1.5)
+    daemon = _fake_daemon_group(session_id, linger_s=1.5)
     try:
         assert _session_end(session_id, "other") < 1.0
         assert not Path(f"/tmp/probe-research-tap-watcher-{session_id}.pid").exists()
-        assert _session_end(session_id, "other", "--wait", env=_env(**RAISED)) >= 1.0
-        assert proc.wait(timeout=5) == 0
+        # The state this is about: the wrapper gone (reaped), its group alive.
+        deadline = time.monotonic() + 0.3
+        while time.monotonic() < deadline and _pgid(daemon.pid) is not None:
+            time.sleep(0.02)
+        if _pgid(daemon.pid) is not None:
+            pytest.skip("nothing reaps orphans here (PID 1 without an init): the wrapper stays a zombie")
+        os.killpg(daemon.pid, 0)
+        elapsed = _session_end(session_id, "other", "--wait", env=_env(**RAISED))
+        assert 1.0 <= elapsed < 2.0, f"took {elapsed:.2f}s for what is left of a 1.5s last pass"
+        assert daemon.finished(), "the waiting entry returned before the daemon finished"
         assert not Path(f"/tmp/probe-research-tap-watcher-{session_id}.stopping").exists()
     finally:
-        _cleanup(session_id, proc)
+        _cleanup(session_id, daemon)
+
+
+# -- the hook's own helpers: the deadline, the poller, `tap finish` ----------
+
+
+def _fake_on_path(tmp_path: Path, name: str, script: str) -> dict:
+    """The hook's environment with `name` on PATH replaced by `script`
+    (/bin/sh), which reaches the real one as "$REAL"."""
+    real = shutil.which(name)
+    assert real, name
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    fake = bin_dir / name
+    fake.write_text(f'#!/bin/sh\nREAL="{real}"\n{script}\n')
+    fake.chmod(0o755)
+    return {"PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+
+
+def test_cleanup_never_signals_a_helper_bash_has_reaped(tmp_path) -> None:
+    """Once the deadline has ended and `wait` has reaped it, its pid is free
+    and may be another process's: the hook's exit must not signal it."""
+    session_id = f"pytest-reaped-{os.getpid()}"
+    daemon = _fake_daemon_group(session_id, linger_s=60)
+    record = tmp_path / "deadline.pid"
+    # A 700ms budget: a 0.300s deadline, recorded by the `sleep` that is it.
+    path = _fake_on_path(tmp_path, "sleep", f'[ "$1" = 0.300 ] && echo $$ >"{record}"\nexec "$REAL" "$@"')
+    # Every `kill` the hook runs, its subshells' included, logged to a file of
+    # its own: no redirection inside the hook can hide one (bash 3.2 has no
+    # BASH_XTRACEFD, and `bash -x` writes to the stderr a helper silences).
+    kills = tmp_path / "kills.log"
+    wrapper = tmp_path / "kill.bash"
+    wrapper.write_text(f'kill() {{ printf "%s\\n" "$*" >>"{kills}"; builtin kill "$@"; }}\n')
+    try:
+        _session_end(session_id, "other", "--wait", env=_env(**path, **{BUDGET_ENV: "700"}, BASH_ENV=str(wrapper)))
+        deadline = record.read_text().strip()
+        calls = kills.read_text().splitlines()
+        assert any(call.split()[-1:] == [deadline] for call in calls), f"no kill naming the deadline was logged: {calls}"
+        signals = [call for call in calls if deadline in call.split() and "-0" not in call.split()]
+        assert not signals, f"signalled the reaped deadline {deadline}: {signals}"
+    finally:
+        _cleanup(session_id, daemon)
+
+
+#: Runs the hook as a child subreaper, the way a container's PID 1 adopts what
+#: a process leaves behind, and lists what the hook left: a child it never
+#: reaped, or one still running, both become ours once it exits. A PID 1 that
+#: does not reap (an agent run as a container's entry point) keeps each one.
+_ADOPT = r"""
+import ctypes, json, os, subprocess, sys, time
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:  # PR_SET_CHILD_SUBREAPER
+    sys.exit("prctl(PR_SET_CHILD_SUBREAPER) failed")
+run = json.loads(sys.stdin.read())
+hook = subprocess.run(run["argv"], input=run["input"], text=True, capture_output=True, env=run["env"], timeout=30)
+time.sleep(0.3)
+left = []
+for pid in filter(str.isdigit, os.listdir("/proc")):
+    try:
+        stat = open(f"/proc/{pid}/stat").read()
+    except OSError:
+        continue
+    name, rest = stat[stat.index("(") + 1 : stat.rindex(")")], stat[stat.rindex(")") + 1 :].split()
+    if rest[1] == str(os.getpid()):
+        left.append(f"{pid} {name} {rest[0]}")
+        try:
+            os.kill(int(pid), 9)
+        except OSError:
+            pass
+while True:
+    try:
+        os.waitpid(-1, 0)
+    except ChildProcessError:
+        break
+print(json.dumps({"rc": hook.returncode, "stderr": hook.stderr, "left": left}))
+"""
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="a child subreaper is Linux's prctl")
+@pytest.mark.parametrize(
+    "case", ["no-session", "at-the-deadline", "daemon-done", "clear", "hung-tap-finish"]
+)
+def test_the_hook_leaves_no_process_behind(tmp_path, case) -> None:
+    """Every helper is stopped AND reaped before the hook exits: in a container
+    whose PID 1 does not reap, anything left becomes a zombie for good."""
+    session_id = f"pytest-adopt-{os.getpid()}-{case}"
+    payload = {"session_id": session_id, "reason": "clear" if case == "clear" else "other"}
+    env = _env(**{BUDGET_ENV: "500"})
+    daemon = None
+    hosted = Path(f"/tmp/probe-research-tap-watcher-{session_id}.hosted")
+    if case == "no-session":
+        payload = {}
+    elif case == "hung-tap-finish":
+        hosted.write_text("12345")
+        env.update(_fake_on_path(tmp_path, "python3", 'case "$*" in *"tap finish"*) exec sleep 60 ;; esac\nexec "$REAL" "$@"'))
+    else:
+        daemon = _fake_daemon_group(session_id, linger_s=0.2 if case == "daemon-done" else 60)
+    try:
+        out = subprocess.run(
+            [sys.executable, "-c", _ADOPT],
+            input=json.dumps({"argv": ["bash", str(SESSION_END), "--wait"], "input": json.dumps(payload), "env": env}),
+            text=True,
+            capture_output=True,
+            check=True,
+            timeout=60,
+        )
+        result = json.loads(out.stdout)
+        assert result["rc"] == 0, result
+        assert result["stderr"] == "", result["stderr"]
+        assert result["left"] == [], f"the hook left {result['left']} behind"
+    finally:
+        if daemon is not None:
+            _cleanup(session_id, daemon)
+        for suffix in (".hosted", ".shutdown", ".stopping"):
+            Path(f"/tmp/probe-research-tap-watcher-{session_id}{suffix}").unlink(missing_ok=True)
 
 
 # -- a resume after an update ------------------------------------------------

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **The tap's SessionEnd wait fits Claude Code's and Codex's budgets on macOS (tap 0.10.4).** The wait counted 0.2 s sleeps, and on a Mac each one takes about 0.24 s, so it ran past the 1.5 s Claude Code gives SessionEnd at exit (1.6 s: "Hook cancelled") and past Codex's 3 s (3.3 s). It now ends at a deadline measured from the hook's start: 1.1 s under Claude Code's default, 2.6 s under Codex, at most 15 s, on macOS and Linux alike, and still as soon as the session's last upload is done. A Codex session still running two SessionEnd entries from an older plugin now waits for that upload in either order (it did not when the other entry ran first), and when the Probe service records the session, a service that does not answer no longer keeps the hook past the budget.
+
 ## 0.290.1
 
 - **The Probe daemon is no longer refused its own start.** Since 0.285.2 the CLI's copy of the daemon-profile check could refuse `probe daemon worker`: the recorder starts the worker with the session's environment, and when that environment names the agent's session (a recorder started from the agent's own shell, or an agent that hands its hooks its session id) the check read the daemon as the agent and refused it, so no daemon ran in that session. The check now never refuses the daemon worker; an agent typing `probe daemon worker` is still refused by the plugin's hook.
