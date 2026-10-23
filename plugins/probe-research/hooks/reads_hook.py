@@ -12,7 +12,8 @@ same files through both.
                        waiting answer (answer / nothing found / failed) and run
                        alert, every message from the daemon's writer (its
                        replies and receipts), plus at most ONE unasked message of
-                       the reader's for the turn, as `additionalContext`
+                       the reader's and at most ONE hint (the Probe service's,
+                       `origin` "hint") for the turn, as `additionalContext`
     PostToolUse        the same, after each MAIN-agent tool call. A helper
                        agent's tool call never claims: its context is not the
                        main agent's, and a message put there would vanish with it
@@ -38,8 +39,10 @@ this hook when a message waits, and otherwise the bash fast path in its
 `routes.json` route itself (for a session the reader serves), so a turn with nothing to deliver still
 ends the last one and wakes no stale waiter. The turn's slot is an exclusive create
 of `turns/<sid>.unasked-<token>`: of any number of hooks racing in one turn
-(parallel tool calls), exactly one gets it. Answers and run alerts are exempt.
-Unasked messages never wake the agent.
+(parallel tool calls), exactly one gets it. A hint has a slot of its own
+(`turns/<sid>.hint-<token>`), so one hint and one reader message can both go out
+in a turn. Answers and run alerts are exempt. Unasked messages and hints never
+wake the agent.
 
 ONE OWNER PER MESSAGE. Delivery is `os.rename` into `claimed/<sid>/`: exactly one
 deliverer wins; `claimed/<sid>/log.jsonl` says who. The Probe service owns
@@ -86,6 +89,11 @@ TEXT_NOTHING = '[Probe] Answer to your ask {id} ("{question}"): nothing in the t
 TEXT_FAILED = '[Probe] Your ask {id} ("{question}") failed: {reason}. No answer is coming for it.'
 TEXT_ALERT = "[Probe] Run alert\n{message}"
 ORIGIN_WRITER = "writer"
+#: A hint the Probe service posted: its own slot, its text shown as it came.
+ORIGIN_HINT = "hint"
+HINT_PREFIX = "[Probe] "
+SLOT_UNASKED = "unasked"
+SLOT_HINT = "hint"
 TEXT_WRITER_REPLY = "[Probe] The writer's reply:\n{message}"
 TEXT_WRITER_RECEIPT = "[Probe] The writer recorded: {message}"
 TEXT_WRITER_FAILED = "[Probe] The writer did not run your request: {reason}"
@@ -287,6 +295,9 @@ def _message(data: "dict | None") -> "dict | None":
 def rendered(msg: dict) -> str:
     """`Message.rendered`: what the main agent reads."""
     kind = msg.get("kind")
+    text = msg.get("text") or ""
+    if msg.get("origin") == ORIGIN_HINT and kind == KIND_MESSAGE and text.startswith(HINT_PREFIX):
+        return text  # rendered whole by Probe, its framing included; else framed as its kind
     if msg.get("origin") == ORIGIN_WRITER:
         if kind == KIND_FAILED:
             return TEXT_WRITER_FAILED.format(reason=msg.get("reason") or "unknown")
@@ -342,12 +353,22 @@ def claim(sid: str, path: Path, by: str) -> "dict | None":
     except FileNotFoundError:
         return None
     msg = _message(_read_json(dst))
+    _log_claim(sid, msg["id"] if msg else path.name, by, msg)
+    return msg
+
+
+def _log_claim(sid: str, message_id: str, by: str, msg: "dict | None") -> None:
+    """`mailbox._log_claim`: one claim log line, with the message's `origin`
+    when it has one (a hint, the writer's)."""
+    entry = {"id": message_id, "by": by, "at": time.time()}
+    origin = msg.get("origin") if msg else None
+    if isinstance(origin, str) and origin:
+        entry["origin"] = origin
     try:
         with (_claimed_dir(sid) / "log.jsonl").open("a", encoding="utf-8") as log:
-            log.write(json.dumps({"id": msg["id"] if msg else path.name, "by": by, "at": time.time()}) + "\n")
+            log.write(json.dumps(entry) + "\n")
     except OSError:
         pass
-    return msg
 
 
 def open_asks(sid: str, now: "float | None" = None) -> "list[str]":
@@ -472,11 +493,12 @@ def new_turn(sid: str) -> str:
     token = secrets.token_hex(8)
     path = _turn_path(sid)
     _write_atomic(path, token)
-    for old in path.parent.glob(f"{path.name}.unasked-*"):  # earlier turns' slots
-        try:
-            old.unlink()
-        except OSError:
-            pass
+    for slot in (SLOT_UNASKED, SLOT_HINT):
+        for old in path.parent.glob(f"{path.name}.{slot}-*"):  # earlier turns' slots
+            try:
+                old.unlink()
+            except OSError:
+                pass
     return token
 
 
@@ -568,10 +590,11 @@ def _window(sid: str, now: "float | None" = None) -> int:
     return max(0, int((now - started) // UNASKED_WINDOW_S))
 
 
-def _take_unasked_slot(sid: str, token: str) -> "Path | None":
-    """This turn's unasked delivery for this window of it: an exclusive create,
-    so of hooks racing in one window exactly one gets it."""
-    marker = _turn_path(sid).with_name(f"{_safe(sid)}.unasked-{token}-{_window(sid)}")
+def _take_unasked_slot(sid: str, token: str, slot: str = SLOT_UNASKED) -> "Path | None":
+    """This turn's unasked delivery (the reader's message, or `slot` SLOT_HINT:
+    a hint) for this window of it: an exclusive create, so of hooks racing in
+    one window exactly one gets it."""
+    marker = _turn_path(sid).with_name(f"{_safe(sid)}.{slot}-{token}-{_window(sid)}")
     marker.parent.mkdir(parents=True, exist_ok=True)
     try:
         fd = os.open(str(marker), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
@@ -583,10 +606,10 @@ def _take_unasked_slot(sid: str, token: str) -> "Path | None":
 
 def deliver(sid: str, token: str, by: str) -> "list[str]":
     """Claim what this hook may hand over now: every answer not held for a
-    waiting `probe ask --wait`, every run alert, every writer message, and this
-    turn's one unasked message of the reader's."""
-    picks: list = []  # (path, the turn's unasked slot it took or None), in delivery order
-    unasked_done = False
+    waiting `probe ask --wait`, every run alert, every writer message, this
+    turn's one unasked message of the reader's, and its one hint."""
+    picks: list = []  # (path, the turn's slot it took or None), in delivery order
+    tried: set = set()  # the slots this hook tried
     for path, msg in waiting(sid):
         if msg["kind"] != KIND_MESSAGE or msg.get("origin") == ORIGIN_WRITER:
             # The end of an ask, a run alert (no ask, so never held) or a writer
@@ -594,10 +617,11 @@ def deliver(sid: str, token: str, by: str) -> "list[str]":
             if not held(sid, msg["ask"]):
                 picks.append((path, None))
             continue
-        if unasked_done:
+        slot = SLOT_HINT if msg.get("origin") == ORIGIN_HINT else SLOT_UNASKED
+        if slot in tried:
             continue
-        unasked_done = True  # one try per hook: a lost slot or claim waits for the next
-        marker = _take_unasked_slot(sid, token)
+        tried.add(slot)  # one try per slot per hook: a lost slot or claim waits for the next
+        marker = _take_unasked_slot(sid, token, slot)
         if marker is not None:
             picks.append((path, marker))
     got = claim_all(sid, [path for path, _ in picks], by)
@@ -747,11 +771,7 @@ def receive(sid: str, claimed: Path, by: str, *, ledger: bool) -> "dict | None":
         return None
     msg = _message(_read_json(plain))
     if msg is not None and ledger and not _logged(sid, msg["id"]):
-        try:
-            with (_claimed_dir(sid) / "log.jsonl").open("a", encoding="utf-8") as log:
-                log.write(json.dumps({"id": msg["id"], "by": by, "at": time.time()}) + "\n")
-        except OSError:
-            pass
+        _log_claim(sid, msg["id"], by, msg)
     return msg
 
 

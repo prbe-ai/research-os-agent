@@ -10,12 +10,13 @@
  *   before_agent_start  a new turn token; every waiting answer (answer / nothing
  *                       found / failed) and run alert, every message from the
  *                       daemon's writer, plus at most ONE unasked message of the
- *                       reader's, as the turn's message
+ *                       reader's and at most ONE hint (the Probe service's,
+ *                       origin "hint", in a slot of its own), as the turn's message
  *   the poller (2 s)    an answer or a run alert that lands mid-run is steered in
  *                       after the current tool calls; one that lands while pi is
  *                       idle starts a turn (pi's `triggerTurn`: the wake). An
- *                       unasked message goes in mid-run only (one per turn);
- *                       idle, it waits for the next prompt. A writer's receipt
+ *                       unasked message (or hint) goes in mid-run only (one per
+ *                       turn); idle, it waits for the next prompt. A writer's receipt
  *                       likewise: mid-run, outside the one-per-turn slot; never a
  *                       wake.
  *   the researcher      one line per change of the reader's state (the
@@ -48,6 +49,15 @@ export const TEXT_NOTHING = "[Probe] Answer to your ask {id} (\"{question}\"): n
 export const TEXT_FAILED = "[Probe] Your ask {id} (\"{question}\") failed: {reason}. No answer is coming for it.";
 export const TEXT_ALERT = "[Probe] Run alert\n{message}";
 export const ORIGIN_WRITER = "writer";
+/** A hint the Probe service posted: a slot of its own beside the reader's one
+ * unasked message, its text shown as it came (rendered whole by Probe). */
+export const ORIGIN_HINT = "hint";
+/** How a hint's own text begins (Probe frames it): one that does not is framed
+ * as a reader message. */
+export const HINT_PREFIX = "[Probe] ";
+/** The turn's delivery slot files (`turns/<sid>.<slot>-<token>-<window>`). */
+export const SLOT_UNASKED = "unasked";
+export const SLOT_HINT = "hint";
 export const TEXT_WRITER_REPLY = "[Probe] The writer's reply:\n{message}";
 export const TEXT_WRITER_RECEIPT = "[Probe] The writer recorded: {message}";
 export const TEXT_WRITER_FAILED = "[Probe] The writer did not run your request: {reason}";
@@ -84,7 +94,8 @@ export interface Message {
   question: string | null;
   reason: string | null;
   expiresAt: number;
-  /** ORIGIN_WRITER for the daemon writer's messages; null for the reader's. */
+  /** ORIGIN_WRITER for the daemon writer's messages, ORIGIN_HINT for the Probe
+   * service's hints; null for the reader's. */
   origin: string | null;
 }
 
@@ -128,6 +139,9 @@ export function rendered(msg: Message): string {
     id: String(msg.ask), question, message: msg.text, reason: msg.reason || "unknown",
   };
   const fill = (t: string) => t.replace(/\{(id|question|message|reason)\}/g, (_m, k: string) => values[k]);
+  // Rendered whole by Probe, its framing included; anything else of this origin
+  // renders as its kind does (`origin` alone never takes the label off).
+  if (msg.origin === ORIGIN_HINT && msg.kind === KIND_MESSAGE && msg.text.startsWith(HINT_PREFIX)) return msg.text;
   if (msg.origin === ORIGIN_WRITER) {
     if (msg.kind === KIND_FAILED) return fill(TEXT_WRITER_FAILED);
     if (msg.kind === KIND_MESSAGE) return fill(TEXT_WRITER_RECEIPT);
@@ -196,8 +210,11 @@ export class Mailbox {
       return null;
     }
     const msg = parseMessage(readJson(dst));
+    // The message's origin rides its log line when it has one (a hint, the writer's).
+    const entry: Record<string, unknown> = { id: msg?.id ?? path, by, at: Date.now() / 1000 };
+    if (msg?.origin) entry.origin = msg.origin;
     try {
-      fs.appendFileSync(join(claimed, "log.jsonl"), JSON.stringify({ id: msg?.id ?? path, by, at: Date.now() / 1000 }) + "\n");
+      fs.appendFileSync(join(claimed, "log.jsonl"), JSON.stringify(entry) + "\n");
     } catch {
       // the claim stands; only its log line is lost
     }
@@ -212,9 +229,9 @@ export class Mailbox {
       const tmp = `${path}.${process.pid}.tmp`;
       fs.writeFileSync(tmp, token);
       fs.renameSync(tmp, path);
-      const prefix = `${safe(this.sessionId)}.unasked-`;
+      const prefixes = [SLOT_UNASKED, SLOT_HINT].map((slot) => `${safe(this.sessionId)}.${slot}-`);
       for (const name of fs.readdirSync(join(this.root, "turns"))) {
-        if (name.startsWith(prefix)) fs.rmSync(join(this.root, "turns", name), { force: true });
+        if (prefixes.some((prefix) => name.startsWith(prefix))) fs.rmSync(join(this.root, "turns", name), { force: true });
       }
     } catch {
       // no token: this turn's unasked slot is shared with the last one
@@ -267,8 +284,8 @@ export class Mailbox {
     }
   }
 
-  private takeUnaskedSlot(token: string): string | null {
-    const marker = join(this.root, "turns", `${safe(this.sessionId)}.unasked-${token}-${this.window()}`);
+  private takeUnaskedSlot(token: string, slot: string = SLOT_UNASKED): string | null {
+    const marker = join(this.root, "turns", `${safe(this.sessionId)}.${slot}-${token}-${this.window()}`);
     try {
       fs.mkdirSync(join(this.root, "turns"), { recursive: true });
       fs.closeSync(fs.openSync(marker, "wx"));
@@ -279,11 +296,11 @@ export class Mailbox {
   }
 
   /** Claim every answer not held for a waiting `probe ask --wait`, every run
-   * alert, and -- when `unasked` -- every writer receipt and this turn's one
-   * unasked message of the reader's. */
+   * alert, and -- when `unasked` -- every writer receipt, this turn's one
+   * unasked message of the reader's and its one hint. */
   deliver(token: string, by: string, unasked = true): string[] {
     const out: string[] = [];
-    let unaskedDone = !unasked;
+    const tried = new Set<string>(); // the slots this call tried
     for (const [path, msg] of this.waiting()) {
       if (msg.kind !== KIND_MESSAGE) {
         // The end of an ask, or a run alert (no ask, so never held): each one,
@@ -300,9 +317,11 @@ export class Mailbox {
         if (got) out.push(rendered(got));
         continue;
       }
-      if (unaskedDone) continue;
-      unaskedDone = true;
-      const marker = this.takeUnaskedSlot(token);
+      if (!unasked) continue;
+      const slot = msg.origin === ORIGIN_HINT ? SLOT_HINT : SLOT_UNASKED;
+      if (tried.has(slot)) continue;
+      tried.add(slot);
+      const marker = this.takeUnaskedSlot(token, slot);
       if (!marker) continue;
       const got = this.claim(path, by);
       if (got) out.push(rendered(got));
