@@ -2,8 +2,8 @@
   "cli": {
     "latest": "0.299.0",
     "min": "0.226.2",
-    "recommended": "0.261.0",
-    "message": "CLIs before 0.261.0 cannot write project and experiment summaries, so your team's summaries stop updating."
+    "recommended": "0.286.0",
+    "message": "This Probe CLI stopped updating itself. Run probe wizard --action update in a terminal; if it says a setup is running, restart the computer first."
   },
   "plugin": {
     "latest": "0.169.0",
