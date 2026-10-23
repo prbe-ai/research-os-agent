@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.289.0
+
 - **Tap 0.10.2.** Re-ships the 409 backoff (from the 0.288.0 entry about the recorder re-sending refused batches) to installs that updated to 0.10.1 in the 16 minutes before it merged (two changes both claimed 0.10.1).
 
 - **`probe status`, `probe doctor`, turning capture off, `probe exec` and the version check now go through the Probe service.** `probe status` (in `--json`, a new `service` key) and `probe doctor` show what the service holds: whether it runs (version, pid), the sessions it has registered and their Probe mode, the sessions it records itself, its warm hook hosts, the runs in flight and its updater (a cycle running, the last check, why an update is deferred). With no service they say so and how it starts, and never start one; asking costs at most a second. Turning capture off for an agent now stops the recordings the service runs for that agent at once (it says how many) instead of at their next check. `probe exec` tells the service about the run it wraps, so the service's updater waits for it directly; the run lock stays for older services. A command that finds its cached release manifest stale asks the running service to refresh it instead of starting a background process of its own. With no service answering, an older one or Windows, each works as before.
