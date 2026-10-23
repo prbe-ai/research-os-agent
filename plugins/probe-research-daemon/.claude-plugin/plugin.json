@@ -1,6 +1,6 @@
 {
   "name": "probe-research-daemon",
-  "version": "0.164.0",
+  "version": "0.165.0",
   "description": "Probe Research, daemon profile: the Probe daemon records and reads the team's work for this agent. Installs instrument-code (the SDK inside a training or eval script), plan-research-review (plan research before code), visualize-progress (where the work stands, from the daemon), the daemon's messages and questions, and the guard; no MCP.",
   "author": {
     "name": "Probe",
