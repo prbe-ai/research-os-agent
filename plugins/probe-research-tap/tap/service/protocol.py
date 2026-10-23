@@ -59,6 +59,9 @@ class Method:
     UPDATE_CHECK_NOW = "update.check_now"
     #: A session's dispatcher asks for a warm host for its plugin folder (plan A0).
     HOOKS_HOST = "hooks.host"
+    #: A harness with no hooks of its own (pi) has one hook event run for a
+    #: plugin folder, and gets the routes' merged output back (plan D38).
+    HOOKS_RUN = "hooks.run"
     #: The tap asks the service to record a session itself (plan A2): register
     #: it, and run its recorder on a thread here instead of a `tap watch`.
     SESSION_RECORD = "session.record"
@@ -84,6 +87,7 @@ METHODS = frozenset(
         Method.UPDATE_STATUS,
         Method.UPDATE_CHECK_NOW,
         Method.HOOKS_HOST,
+        Method.HOOKS_RUN,
         Method.SESSION_RECORD,
         Method.SESSION_RECORDING,
         Method.SESSION_FINISH,
@@ -268,6 +272,31 @@ CONTEXT_ENV = frozenset(
 #: `base_url` reaches the child as this variable (`probe.sdk.config.resolve`).
 BASE_URL_ENV = "PROBE_BASE_URL"
 MAX_CONTEXT_VALUE = 4096
+
+#: `hooks.run`'s `lane`s and the hook event each one serves: `hooks/dispatch.py`
+#: LANE_EVENT, the argument each frozen hooks.json entry passes its dispatcher, and
+#: the lanes only `harness_io.py --event` runs (Kimi Code's TurnStarted); the
+#: two are held equal (tests/test_service_hooks_run.py).
+HOOK_LANES = {
+    "session-start": "SessionStart",
+    "prompt": "UserPromptSubmit",
+    "pre-compact": "PreCompact",
+    "pre-tool": "PreToolUse",
+    "post-tool": "PostToolUse",
+    "session-end": "SessionEnd",
+    "stop": "Stop",
+    "turn-started": "TurnStarted",
+}
+#: `hooks.run`'s `timeout_ms` when the caller names none: plan D28's wait, the
+#: one a dispatcher gives a warm host before it runs the event itself.
+HOOK_WAIT_MS = 300
+MAX_HOOK_WAIT_MS = 60_000
+#: `hooks.run`'s `env` (the session's environment, as a harness hands its
+#: hooks theirs): at most this many variables, each value at most this long,
+#: as a recorder's (`recorders.MAX_ENV`).
+MAX_HOOK_ENV = 200
+MAX_HOOK_ENV_VALUE = 8192
+MAX_HOOK_PATH = 4096
 
 
 class Client:
@@ -501,6 +530,73 @@ def need_state_dir(params: dict) -> str | None:
     if not isinstance(value, str) or not value.startswith("/") or len(value) > MAX_STATE_DIR or "\0" in value:
         raise invalid_params(f"state_dir must be an absolute path of at most {MAX_STATE_DIR} characters")
     return value
+
+
+def _need_path(params: dict, key: str) -> str:
+    value = params.get(key)
+    if not isinstance(value, str) or not value.startswith("/") or len(value) > MAX_HOOK_PATH or "\0" in value:
+        raise invalid_params(f"{key} must be an absolute path of at most {MAX_HOOK_PATH} characters")
+    return value
+
+
+def need_hook_run(params: dict) -> dict:
+    """`hooks.run`'s params, checked: `{root, lane, event, payload (bytes),
+    env, cwd, timeout_s}`.
+
+        plugin_root  the plugin folder whose routes run (absolute)
+        lane         a HOOK_LANES key: the hooks.json entry's argument
+        payload      the event as the harness's hook reads it on stdin: a JSON
+                     object; its `hook_event_name`, when given, must be the lane's
+        env          the session's environment (at most MAX_HOOK_ENV strings)
+        cwd          the session's folder (absolute)
+        timeout_ms   how long the caller waits (default HOOK_WAIT_MS)
+    """
+    root = _need_path(params, "plugin_root")
+    lane = params.get("lane")
+    if lane not in HOOK_LANES:
+        raise invalid_params(f"lane must be one of {sorted(HOOK_LANES)}")
+    event = HOOK_LANES[lane]
+    payload = params.get("payload")
+    if not isinstance(payload, dict):
+        raise invalid_params("payload must be a JSON object")
+    named = payload.get("hook_event_name")
+    if named is not None and named != event:
+        raise invalid_params(f"payload.hook_event_name must be {event!r} on lane {lane!r}")
+    payload = {**payload, "hook_event_name": event}
+    env = params.get("env", {})
+    if (
+        not isinstance(env, dict)
+        or len(env) > MAX_HOOK_ENV
+        or not all(
+            isinstance(k, str)
+            and k
+            and len(k) <= 256
+            and "=" not in k
+            and "\0" not in k
+            and isinstance(v, str)
+            and len(v) <= MAX_HOOK_ENV_VALUE
+            and "\0" not in v
+            for k, v in env.items()
+        )
+    ):
+        raise invalid_params(
+            f"env must be an object of at most {MAX_HOOK_ENV} variables, each a string of at most "
+            f"{MAX_HOOK_ENV_VALUE} characters"
+        )
+    cwd = _need_path(params, "cwd")
+    timeout = params.get("timeout_ms", HOOK_WAIT_MS)
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or not 1 <= timeout <= MAX_HOOK_WAIT_MS:
+        raise invalid_params(f"timeout_ms must be an integer from 1 to {MAX_HOOK_WAIT_MS}")
+    return {
+        "root": root,
+        "lane": lane,
+        "event": event,
+        # ASCII, so a lone surrogate a JSON client may send stays an escape.
+        "payload": json.dumps(payload, separators=(",", ":")).encode("ascii"),
+        "env": dict(env),
+        "cwd": cwd,
+        "timeout_s": timeout / 1000.0,
+    }
 
 
 def need_owner(params: dict) -> dict | None:

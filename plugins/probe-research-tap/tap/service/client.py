@@ -541,6 +541,10 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     p_end.add_argument("--session-id", required=True)
     p_end.add_argument("--generation", type=int, required=True)
     sub.add_parser("status", help="service.status")
+    # Where this machine's service listens, for a client that speaks API v1
+    # itself (pi's tool guard, `hooks.run`): the machine key needs the OS's
+    # machine id, which pi would otherwise have to work out again.
+    sub.add_parser("socket", help="print this machine's service socket path")
     p_check = sub.add_parser("check-now", help="update.check_now, starting the service when none runs")
     p_check.add_argument("--trigger", default="cli", choices=("app", "cli", "session", "schedule"))
     p_check.add_argument(
@@ -553,6 +557,9 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
 
     if args.cmd == "ensure":
         print(json.dumps({"ensured": ensure(wait=args.wait)}))
+        return 0
+    if args.cmd == "socket":
+        print(json.dumps({"socket": str(paths.socket_path())}))
         return 0
     try:
         if args.cmd == "register":

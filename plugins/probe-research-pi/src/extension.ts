@@ -32,8 +32,10 @@ import { approvalsDir, disabledFile, extensionLogFile, probeStateDir, teamNoteDo
 import { Mailbox } from "./core/reads.js";
 import { checkPairing } from "./core/pairing.js";
 import { buildStatusReport } from "./status.js";
-import { resolveTapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
-import { ensureService } from "./core/service.js";
+import { resolveTapRuntime, type TapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
+import { ensureService, lookupServiceSocket } from "./core/service.js";
+import { packageVersion } from "./packageVersion.js";
+import { guardViaService } from "./serviceGuard.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./core/trackingSwitch.js";
 import { writeTurnSignal, type TurnSignalDeps } from "./core/turnSignal.js";
 import {
@@ -164,6 +166,26 @@ function probeIsOff(): boolean {
  * session that just LEFT it runs it once more to clear the notified record.
  */
 let lastTurnInDaemon = false;
+
+/**
+ * This machine's Probe service socket, for the guard's `hooks.run` (plan D38):
+ * asked of the tap once per pi process (`lookupServiceSocket`, a Python start,
+ * so never on a tool call's path), module scope so a /reload keeps it. Until it
+ * answers, and if it cannot, the guard is `guard.ts` alone.
+ */
+const serviceSocket: { value: string | null; asked: boolean } = { value: null, asked: false };
+
+function askServiceSocket(runtime: TapRuntime): void {
+  if (serviceSocket.asked) return;
+  serviceSocket.asked = true;
+  void lookupServiceSocket(runtime, { execFile: realTrackingExecFile, env: process.env, log: logLine }).then((socket) => {
+    serviceSocket.value = socket;
+    if (socket) logLine(`probe service: the guard asks the service at ${socket}`);
+  });
+}
+
+/** This package's version, for the service's `service.hello`. */
+const PACKAGE_VERSION = packageVersion();
 
 // `.probe.config` (paths Probe never records), from `session initialize`:
 // the line that goes into the prompt while Probe records, and the question
@@ -639,8 +661,10 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // The machine-wide Probe service (core/service.ts): started now, detached
     // and never waited on, so it is up by the time capture registers this
     // session. Not under `off` (plan A2), and not where capture cannot start.
+    // Its socket is asked for once per process, for the guard (`tool_call`).
     if (!probeIsOff()) {
       const runtime = resolveTapRuntime({ existsSync: fs.existsSync, isExecutable, env: process.env, extensionDir });
+      if (runtime) askServiceSocket(runtime);
       if (runtime && checkPairing(process.env).paired) {
         ensureService(runtime, { spawn: realSpawn, env: process.env, log: logLine });
       }
@@ -892,10 +916,21 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     };
   });
 
-  // THE GUARD: refused before the tool runs (guard.ts). In both profiles a
-  // write aimed at the daemon's question folder; in the daemon profile also
-  // every `probe` command but the agent's own and every Probe MCP call. Fires
-  // for calls a codemode script makes too, so an inactive tool cannot slip by.
+  // THE GUARD: refused before the tool runs. In both profiles a write aimed at
+  // the daemon's question folder; in the daemon profile also every `probe`
+  // command but the agent's own and every Probe MCP call. Fires for calls a
+  // codemode script makes too, so an inactive tool cannot slip by.
+  //
+  // THE SERVICE FIRST (plan D38, serviceGuard.ts): the call goes to the Probe
+  // service as Claude Code's PreToolUse payload, and the plugin folder's own
+  // pre-tool routes (the Python guard Claude Code runs) answer within 300 ms;
+  // a refusal of theirs is the answer, in their words. guard.ts runs on every
+  // call all the same, as the floor: the Python guard fails OPEN (a route that
+  // broke exits 0 with nothing to say, which reads as "allowed"), so its allow
+  // never overrides a refusal of guard.ts's, whose rules are a port of the
+  // same ones. No service, an older one, out of time, an unclear answer: guard.ts
+  // decides alone, exactly as before. Not under `off`: such a session never
+  // reaches the service (A2).
   pi.on("tool_call", async (event, ctx) => {
     // The session file exists by the first tool call. Not awaited: a tool must
     // not wait on a spawn.
@@ -903,15 +938,46 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     try {
       const sessionId = ctx?.sessionManager?.getSessionId();
       const daemonProfile = inDaemonProfile(sessionId);
-      const reason = guardToolCall(event.toolName, event.input, {
-        daemonProfile,
-        inline: daemonProfile && sessionIsInline(sessionId),
-        inlineReadOnly: sessionInlineReadOnly(sessionId),
-        env: process.env,
-        cwd: ctx?.cwd ?? process.cwd(),
-      });
+      const cwd = ctx?.cwd ?? process.cwd();
+      let own: string | null = null;
+      try {
+        own = guardToolCall(event.toolName, event.input, {
+          daemonProfile,
+          inline: daemonProfile && sessionIsInline(sessionId),
+          inlineReadOnly: sessionInlineReadOnly(sessionId),
+          env: process.env,
+          cwd,
+        });
+      } catch (err) {
+        // A guard bug must never take the session's tools down with it.
+        logLine(`guard failed open: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      if (!serviceSocket.asked && !probeIsOff()) {
+        // A session that started `off` asked for no socket at session_start.
+        const runtime = resolveTapRuntime({ existsSync: fs.existsSync, isExecutable, env: process.env, extensionDir });
+        if (runtime) askServiceSocket(runtime);
+      }
+      const answered = probeIsOff()
+        ? null
+        : await guardViaService(
+            {
+              toolName: event.toolName,
+              input: event.input,
+              toolCallId: event.toolCallId,
+              sessionId,
+              transcriptPath: ctx?.sessionManager?.getSessionFile?.(),
+              cwd,
+              daemonProfile,
+              extensionDir,
+              env: process.env,
+              socket: serviceSocket.value,
+            },
+            { clientVersion: PACKAGE_VERSION },
+          );
+      const reason = answered?.reason ?? own;
       if (reason === null) return;
-      logLine(`guard refused ${event.toolName}: ${reason.slice(0, 120)}`);
+      const by = answered?.reason ? " (the service's routes)" : "";
+      logLine(`guard refused ${event.toolName}${by}: ${reason.slice(0, 120)}`);
       return { block: true, reason };
     } catch (err) {
       // A guard bug must never take the session's tools down with it.

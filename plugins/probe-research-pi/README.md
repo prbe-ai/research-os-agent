@@ -251,6 +251,19 @@ except `ask`, `session status`, `run expect`, `doctor` and the runs' own data
 (`exec`, `run start`/`end`, ...), and every Probe MCP call, with the same
 refusal Claude Code's lean plugin gives.
 
+**The guard asks the Probe service first (both profiles).** A `bash`,
+`powershell`, `write`, `edit` or Probe MCP call goes to the Probe service as
+Claude Code's PreToolUse payload (`hooks.run`), and the pre-tool hooks of the
+Probe plugin folder beside this package (`../probe-research`, or
+`../probe-research-daemon` in the daemon profile) answer, warm, in about 20 ms:
+the same checks Claude Code runs, in the same words. The built-in guard
+(`src/guard.ts`) still runs on every call, and a refusal of its own always
+stands (the Python hooks fail open), so the service can only add refusals.
+When the service gives no clear answer within 300 ms (none running, a CLI from
+before `hooks.run`, a hook that failed), the built-in guard decides alone, as
+before. A session set to `off` never asks the service. See
+`src/serviceGuard.ts` for the mapping.
+
 **The daemon's questions (both profiles).** When the daemon holds an action
 for the researcher's yes, pi asks it in its own pick-one dialog, word for word,
 at the next prompt or within 2 s, and writes the pick where the daemon reads
