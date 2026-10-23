@@ -325,6 +325,7 @@ def main(argv: list[str] | None = None, *, hosted: object = None) -> int:
         stop=getattr(hosted, "stop", None),
         pause=getattr(hosted, "pause", None),
         workers=getattr(hosted, "workers", None),
+        claimed=getattr(hosted, "claim", None),
     )
 
     storage = Storage(cfg.state_db_path())
@@ -524,6 +525,7 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
                     if not journal.claim_live(c.session_id):
                         return 0  # another compatible daemon owns this session
                     companion.claimed()
+                    _publish_claim(c, str(journal.directory))
                     journal.ensure(
                         c.session_id,
                         c.transcript_path,
@@ -742,8 +744,21 @@ def _run_durable_loop(c: cfg.WatchConfig, storage: Storage) -> int:
         # to hand over and carries the same conversation on.
         if not _paused(c):
             companion.stop()
+        _publish_claim(c, None)
         if journal is not None:
             journal.close()
+
+
+def _publish_claim(c: cfg.WatchConfig, folder: str | None) -> None:
+    """Hosted: tell the Probe service which journal this loop holds the
+    session's live claim in (None: it lets go). Never raises."""
+    claimed = getattr(c, "claimed", None)
+    if claimed is None:
+        return
+    try:
+        claimed(folder)
+    except Exception:  # noqa: BLE001 -- only the service's receipts are at stake
+        log.debug("could not publish the journal claim", exc_info=True)
 
 
 def _run_loop(c: cfg.WatchConfig, storage: Storage) -> int:

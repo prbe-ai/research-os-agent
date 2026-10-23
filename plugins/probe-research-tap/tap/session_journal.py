@@ -113,6 +113,10 @@ PROTOCOL2_RETIRED = "protocol 2 retired"
 #: own suffix, because an older tap deletes every `*.snapshot.jsonl` its own
 #: sessions do not name.
 _FRAGMENT_SESSIONS = "fragment_sessions"
+#: Beside a journal: the destination its folder's name is the hash of
+#: (`{"base_url", "customer_id", "source"}`), so a reader can tell whose
+#: receipts these are (the Probe service, `probe.service.receipts`).
+DESTINATION_NAME = "destination.json"
 _SNAPSHOT_SUFFIXES = {PROTOCOL_EVENTS: ".snapshot.jsonl", PROTOCOL_FRAGMENTS: ".snapshot-p3.jsonl"}
 EMPTY_HASH = hashlib.sha256(b"").hexdigest()
 MAX_BODY_BYTES = 1024 * 1024
@@ -1102,6 +1106,7 @@ class Journal:
         ).hexdigest()
         self.directory = (directory or state_root()) / namespace
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._record_destination(source)
         self.db_path = self.directory / "state.sqlite3"
         self.conn = sqlite3.connect(self.db_path, isolation_level=None, timeout=5)
         if self.conn.execute("PRAGMA user_version").fetchone()[0] not in (0, 2):
@@ -1129,6 +1134,26 @@ class Journal:
         # Still 2: taps that predate protocol 3 keep opening this journal for
         # their own protocol-2 streams, and never read the table above.
         self.conn.execute("PRAGMA user_version=2")
+
+    def _record_destination(self, source: str) -> None:
+        """Write `DESTINATION_NAME` once (0600, atomically): which backend,
+        customer and agent this folder's name hashes. Best effort: a journal
+        without it reads as one whose account is unknown."""
+        path = self.directory / DESTINATION_NAME
+        wanted = {"base_url": self.base_url, "customer_id": self.customer_id, "source": source}
+        try:
+            if json.loads(path.read_text(encoding="utf-8")) == wanted:
+                return
+        except (OSError, ValueError):
+            pass
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}")
+        try:
+            with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w", encoding="utf-8") as handle:
+                json.dump(wanted, handle, separators=(",", ":"))
+            os.replace(tmp, path)
+        except OSError:
+            with suppress(OSError):
+                tmp.unlink()
 
     def close(self):
         self.conn.close()
@@ -2053,6 +2078,11 @@ class Journal:
                     "last_seq": payload["batch_seq"],
                     "finalized": bool(payload.get("finalize")),
                     "error": None,
+                    # When the server last took this session's transcript
+                    # (epoch seconds): the desktop's "Last received" (plan
+                    # D29, `probe.service.receipts`). A journal row from an
+                    # older tap has none until its next receipt.
+                    "received_at": time.time(),
                 }
             )
             # Accepted: a wait out of a lasting 409 (`defer_conflict`) is over.

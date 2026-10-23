@@ -611,6 +611,9 @@ class WatchConfig:
     #: Hosted by a service that supervises daemon workers itself: its handle
     #: on this session's (`tap.hosted.Controls.workers`). None otherwise.
     workers: object = None
+    #: Hosted: called with the journal folder the loop holds the session's live
+    #: claim in once it takes it, and with None when it lets go (`hosted.Controls.claim`).
+    claimed: object = None
 
     @property
     def shutdown_sentinel(self) -> Path:

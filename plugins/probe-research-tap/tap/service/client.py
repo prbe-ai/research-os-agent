@@ -12,8 +12,12 @@
     finish_recorders()  recorders.finish: `probe capture off` for one agent
     hold_run() / release_run()  run.hold / run.release: a `probe exec`'s run
     refresh_manifest()  manifest.refresh: a stale release-manifest cache
+    desktop_request()   desktop.request: one of the desktop app's
+                management requests, answered as `probe desktop request`
                 Never start the service: each is for a service that already
                 runs (OSError when none answers), and the caller falls back.
+    locations() where this machine's service keeps its socket and files
+                (`python -m probe.service.client socket` prints them)
     call()      any method, for the CLI and tests.
     Connection  a kept connection: the tap's registration thread holds one, so
                 a restarted service is noticed (EOF) and re-told at once.
@@ -60,6 +64,9 @@ CHECK_NOW_WAIT_S = 5.0
 #: `check-now --wait-for-pid` waits at most this long for the command that
 #: asked (`probe._shared.autoupdate.WAIT_FOR_PID_TIMEOUT`).
 WAIT_FOR_PID_S = 1800.0
+#: `desktop_request`'s socket deadline: the service's longest (a change, 120 s)
+#: and a little more, so its own `timed_out` answer arrives first.
+DESKTOP_TIMEOUT_S = 125.0
 
 #: The only variables the service starts with (plan X2): never an agent's
 #: PROBE_TOKEN, endpoint or PYTHONPATH, which would leak the first launcher's
@@ -395,6 +402,45 @@ def queue_hook(
     on its own socket (`hooks/dispatch.py` `Miss`): it cannot import this."""
     answer = call(Method.HOOKS_QUEUE, event, client=client, client_version=client_version, timeout=timeout)
     return answer if isinstance(answer, dict) else {}
+
+
+def desktop_request(
+    request: dict,
+    context: dict | None = None,
+    *,
+    origin: str | None = None,
+    client: str = Client.APP,
+    client_version: str = "unknown",
+    timeout: float = DESKTOP_TIMEOUT_S,
+) -> dict:
+    """`desktop.request`: one management request (`probe desktop request
+    --json`'s stdin object) -> its v1 envelope, `{v, ok, data | error}`.
+    `origin="desktop"`: a person asked. ServiceError for a refusal (its
+    `data.reason`), OSError when no service answers: the caller then runs the
+    CLI, as before (`agent/docs/desktop-service-management.md`)."""
+    params: dict = {"request": request}
+    if context:
+        params["context"] = context
+    if origin is not None:
+        params["origin"] = origin
+    return _dict(call(Method.DESKTOP_REQUEST, params, client=client, client_version=client_version, timeout=timeout))
+
+
+def locations() -> dict:
+    """Where this machine's service keeps its files, for a client that speaks
+    API v1 itself and must not work out the machine key again (the desktop
+    app, pi's tool guard): `socket` (connect here first), `legacy_socket`
+    (then here: a service from before the machine key), `service_dir`,
+    `root_dir`, `runtime` (the CLI's interpreter, `runtime.json`) and
+    `machine_key`. All absolute; nothing is created."""
+    return {
+        "socket": str(paths.socket_path()),
+        "legacy_socket": str(paths.legacy_socket_path()),
+        "service_dir": str(paths.service_dir()),
+        "root_dir": str(paths.root_dir()),
+        "runtime": str(paths.runtime_path()),
+        "machine_key": paths.machine_key(),
+    }
 
 
 def wait_for_exit(pid: int, *, timeout: float = WAIT_FOR_PID_S, poll: float = 0.25) -> bool:
@@ -734,9 +780,10 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
     p_end.add_argument("--generation", type=int, required=True)
     sub.add_parser("status", help="service.status")
     # Where this machine's service listens, for a client that speaks API v1
-    # itself (pi's tool guard, `hooks.run`): the machine key needs the OS's
-    # machine id, which pi would otherwise have to work out again.
-    sub.add_parser("socket", help="print this machine's service socket path")
+    # itself (pi's tool guard, `hooks.run`; the desktop app): the machine key
+    # needs the OS's machine id, which they would otherwise work out again.
+    # `socket` first, then `legacy_socket`; the rest is `locations()`.
+    sub.add_parser("socket", help="print this machine's service socket paths (JSON)")
     p_check = sub.add_parser("check-now", help="update.check_now, starting the service when none runs")
     p_check.add_argument("--trigger", default="cli", choices=("app", "cli", "session", "schedule"))
     p_check.add_argument(
@@ -751,7 +798,7 @@ def main(argv: list[str] | None = None, *, client: str = Client.CLI, client_vers
         print(json.dumps({"ensured": ensure(wait=args.wait)}))
         return 0
     if args.cmd == "socket":
-        print(json.dumps({"socket": str(paths.socket_path())}))
+        print(json.dumps(locations()))
         return 0
     try:
         if args.cmd == "register":

@@ -44,6 +44,15 @@ class Controls:
     #: workers itself: the tap's Supervisor hands its worker over to it.
     #: None (an older service): the tap's Supervisor spawns it, as before.
     workers: object = None
+    #: The journal folder (`<transcript state>/<namespace>`: one backend,
+    #: customer and agent) this session's recorder holds the live claim in,
+    #: while it holds it; None otherwise. The service reads the session's
+    #: receipts from there (`probe.service.receipts`), never by probing a lock.
+    claimed: str | None = None
+
+    def claim(self, folder: str | None) -> None:
+        """Published by the recorder's loop (`WatchConfig.claimed`)."""
+        self.claimed = folder
 
 
 class _ThisThread(logging.Filter):

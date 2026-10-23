@@ -927,3 +927,28 @@ def test_with_ingestion_off_the_worker_is_still_handed_over_a_pass_later(setup, 
     _stop_after(monkeypatch, 2)
     assert tapmain._run_durable_loop(config, storage) == 0
     assert len(link.specs) == 1
+
+
+def test_a_hosted_recorder_publishes_the_journal_it_holds_the_claim_in(setup):
+    """The Probe service reads a session's receipts from the journal its own
+    recorder holds the live claim in, as published here (`WatchConfig.claimed`,
+    `hosted.Controls.claim`): set once the claim is taken, cleared when the
+    loop lets go of it. No lock is probed to find it."""
+    config, storage, wire = setup
+    published = []
+    config.claimed = published.append
+    assert tapmain._run_durable_loop(config, storage) == 0
+    journal = Journal(wire.base_url, "synthetic", "claude_code")
+    assert published == [str(journal.directory), None]
+    journal.close()
+
+
+def test_hosted_controls_hold_what_the_recorder_published():
+    from tap import hosted
+
+    controls = hosted.Controls()
+    assert controls.claimed is None
+    controls.claim("/journal/ns")
+    assert controls.claimed == "/journal/ns"
+    controls.claim(None)
+    assert controls.claimed is None

@@ -93,6 +93,9 @@ class Method:
     MAILBOX_POST = "mailbox.post"
     MAILBOX_CLAIM = "mailbox.claim"
     MAILBOX_ANSWER = "mailbox.answer"
+    #: The desktop app's management requests (`probe desktop request --json`'s
+    #: request in, its v1 envelope out), answered by a child of the service.
+    DESKTOP_REQUEST = "desktop.request"
 
 
 #: The methods this service answers. Every other name is `-32601`.
@@ -125,11 +128,80 @@ METHODS = frozenset(
         Method.MAILBOX_POST,
         Method.MAILBOX_CLAIM,
         Method.MAILBOX_ANSWER,
+        Method.DESKTOP_REQUEST,
     }
 )
 
 #: `recorders.finish`'s `wait`, and `manifest.refresh`'s, at most (seconds).
 MAX_WAIT_S = 60.0
+
+
+class DesktopOp:
+    """`desktop.request`'s `request.op`: the ops of `probe desktop request
+    --json` (`probe.cli.desktop.FIELDS`; tests/test_service_desktop_request.py
+    holds the two equal)."""
+
+    JOBS = "jobs"
+    JOB = "job"
+    DISCOVER_SESSIONS = "discover_sessions"
+    PREVIEW_BACKFILL = "preview_backfill"
+    START_BACKFILL = "start_backfill"
+    RESUME_JOB = "resume_job"
+    CANCEL_JOB = "cancel_job"
+    DELIVERY = "delivery"
+    PROFILE = "profile"
+    ANALYTICS_POLICY = "analytics_policy"
+    SET_CAPTURE = "set_capture"
+    ONBOARDING_COMPLETE = "onboarding_complete"
+
+
+#: The ops that change nothing a stopped child could leave half-written (a
+#: review's preview file is written atomically), as the app's own `mutating()`
+#: says. Any other op, one added later included, is a change: never killed at
+#: its deadline.
+DESKTOP_READS = frozenset(
+    {
+        DesktopOp.JOBS,
+        DesktopOp.JOB,
+        DesktopOp.DISCOVER_SESSIONS,
+        DesktopOp.PREVIEW_BACKFILL,
+        DesktopOp.DELIVERY,
+        DesktopOp.PROFILE,
+        DesktopOp.ANALYTICS_POLICY,
+    }
+)
+#: `action.run`'s and `desktop.request`'s `origin`: a person asked, in the app.
+ORIGIN_DESKTOP = "desktop"
+
+#: `session.list`'s `sessions[].receipts` (plan D29; `receipts.py`): what the
+#: server has taken of the session's transcript and what waits, and `scope`,
+#: whose (the journal's account: RECEIPT_SCOPE_FIELDS). A reader overlays a
+#: receipt only where its scope is the account it shows.
+RECEIPT_FIELDS = (
+    "last_line",
+    "received_bytes",
+    "received_at",
+    "pending_bytes",
+    "pending_lines",
+    "pending_batch",
+    "finalized",
+    "retrying",
+    "scope",
+)
+#: `scope`: the journal's backend (its base URL's host, `:port` when named)
+#: and customer id.
+RECEIPT_SCOPE_FIELDS = ("backend", "customer")
+#: `session.list`'s `harnesses[]`: per agent and scope.
+HARNESS_RECEIPT_FIELDS = (
+    "harness",
+    "scope",
+    "sessions",
+    "alive",
+    "received_at",
+    "pending_bytes",
+    "pending_lines",
+    "pending_batches",
+)
 
 
 class Action:
@@ -539,6 +611,17 @@ class RefusedReason:
     #: `manifest.refresh` or `recorders.finish` from a caller in a sandbox:
     #: what it asks for would run (or stop) outside it, with the context it chose.
     SANDBOXED = "sandboxed"
+    #: `desktop.request`: no child could start (no CLI interpreter). Nothing ran.
+    CLI_UNAVAILABLE = "cli_unavailable"
+    #: `desktop.request`: as many requests as it takes at once are running or
+    #: waiting, or none got its turn within its deadline. Nothing ran.
+    TOO_MANY = "too_many"
+    #: `desktop.request`: no answer within the request's deadline. A read was
+    #: stopped (`data.killed: true`); a change goes on, and may still finish.
+    TIMED_OUT = "timed_out"
+    #: `desktop.request`: the child ended without a readable v1 envelope
+    #: (`data.exit_code`), or its answer is over one line (`data.too_large`).
+    NO_ANSWER = "no_answer"
 
 
 class BusyHolder:
@@ -546,6 +629,9 @@ class BusyHolder:
 
     ACTION = "action"
     UPDATE = "update"
+    #: A `desktop.request` change whose child still runs (`data.holder.changes`:
+    #: how many), also one its caller stopped waiting for.
+    DESKTOP = "desktop"
 
 
 class RpcError(Exception):
