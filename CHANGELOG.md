@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.290.1
+
 - **The Probe daemon is no longer refused its own start.** Since 0.285.2 the CLI's copy of the daemon-profile check could refuse `probe daemon worker`: the recorder starts the worker with the session's environment, and when that environment names the agent's session (a recorder started from the agent's own shell, or an agent that hands its hooks its session id) the check read the daemon as the agent and refused it, so no daemon ran in that session. The check now never refuses the daemon worker; an agent typing `probe daemon worker` is still refused by the plugin's hook.
 
 ## 0.290.0
