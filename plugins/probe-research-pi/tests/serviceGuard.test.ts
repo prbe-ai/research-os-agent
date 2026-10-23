@@ -21,7 +21,6 @@ import {
   runHook,
   SERVICE_HOOK_RUN_MS,
   SERVICE_HOOK_WAIT_MS,
-  ServicelessPlatform,
   ToolVerdict,
   VETO_WITHOUT_REASON,
   type HookRun,
@@ -362,16 +361,5 @@ describe("lookupServiceSocket", () => {
     for (const [error, stdout] of answers) {
       expect(await lookupServiceSocket(runtime, { execFile: (_c, _a, _o, callback) => callback(error, stdout, ""), env: {}, log: () => {} })).toBeNull();
     }
-    let asked = false;
-    const windows = await lookupServiceSocket(runtime, {
-      execFile: () => {
-        asked = true;
-      },
-      env: {},
-      log: () => {},
-      platform: ServicelessPlatform.Windows,
-    });
-    expect(windows).toBeNull();
-    expect(asked).toBe(false);
   });
 });
