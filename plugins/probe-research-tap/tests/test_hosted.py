@@ -110,16 +110,41 @@ def test_pause_leaves_without_finishing_and_lets_go_of_the_session(setup, monkey
 @pytest.mark.parametrize("setup", ["hosted"], indirect=True)
 def test_a_session_another_recorder_holds_is_left_to_it(setup, monkeypatch):
     """D39: the session's own `tap watch` (any other live recorder) still holds
-    the journal's claim: the hosted loop returns at once and records nothing."""
+    the journal's claim: the hosted loop returns at once and records nothing,
+    and never says it holds the claim (the service's `recording` reads it)."""
     config, storage, wire = setup
+    published = []
+    config.claimed = published.append
     holder = Journal(wire.base_url, "synthetic", "claude_code")
     try:
         assert holder.claim_live(config.session_id)
         _ticks(monkeypatch, 50, lambda: config.stop.set())
         assert tapmain._run_durable_loop(config, storage) == 0
         assert wire.accepted == {}
+        assert not any(published), "never published a folder"
     finally:
         holder.close()
+
+
+@pytest.mark.parametrize("setup", ["hosted"], indirect=True)
+def test_the_hosted_loop_says_while_it_holds_the_sessions_claim(setup, monkeypatch):
+    """`claimed` carries the journal folder from the moment the loop holds its live
+    claim until it lets go of it (None): the service's recorder row reports it as `recording`
+    (a thread alive in its retry wait records nothing)."""
+    config, storage, wire = setup
+    seen = []
+    published = []
+    config.claimed = published.append
+
+    def sleep(_seconds):
+        seen.append(bool(published) and published[-1] is not None)
+        if len(seen) >= 2:
+            config.stop.set()
+
+    monkeypatch.setattr(tapmain.time, "sleep", sleep)
+    assert tapmain._run_durable_loop(config, storage) == 0
+    assert seen and all(seen), "held while it recorded"
+    assert published[-1] is None, "let go of when the loop returned"
 
 
 # -- hosted.record ---------------------------------------------------------------------
