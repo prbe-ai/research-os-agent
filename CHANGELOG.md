@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.304.1
+
 - **A session whose recorder the Probe service lost is reported once, not every 6 hours.** A session the next service could not resume stays unrecorded until its agent's next prompt registers it again, and an idle agent may not prompt for hours. Its automatic `recorder`/`gone` report was sent again every time the 6-hour dedupe ran out, across service restarts, with nothing new in it: one Codex session sent three in 13.5 hours. The report is now sent once per registration (`watch.json` keeps it); a session that registers again and loses its recorder again is reported again.
 
 - **A full disk stops the Probe daemon with a message saying so, and no longer reports a crash to the Probe team.** When the disk was full, the daemon's session store could not save (SQLite's "database or disk is full"); the daemon stopped, told you only "the daemon crashed (OperationalError: database or disk is full)", and sent a crash report (and, after three in a row, the Probe service sent a crash-loop report). It now says `the daemon stopped: the disk is full (...; its state folder: <folder>); it starts again once there is space` in `probe doctor` and the status line, your agent is told the daemon is "out of disk space" while it records the session itself, and no report is sent. The daemon keeps restarting on the usual crash backoff (30 s, doubling to 30 min). A failed save is rolled back and its events are read again, so nothing is lost. A write that fails with "No space left on device" or a full disk quota counts the same, in the daemon's other error reports too (SQLite reports a full quota as a disk I/O error, which is still reported).
