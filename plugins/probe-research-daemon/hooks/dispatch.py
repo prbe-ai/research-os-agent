@@ -1432,6 +1432,19 @@ DOWN_RETRY_S = 2.0
 #: With no service answering, a miss starts one at most this often (the CLI's
 #: own client, `client.ensure`, in a detached process: `ensure_service`).
 ENSURE_EVERY_S = 10.0
+#: The service's record of its last stop on purpose (`guard.LAST_STOP_NAME`,
+#: in its machine folder: `{"pid", "reason", "at", ...}`), and the reason it
+#: gives for an idle exit (`protocol.StopReason.IDLE`).
+LAST_STOP_NAME = "last-stop.json"
+IDLE_STOP = "idle"
+#: A service that exited idle had nothing to keep it: no session it records or
+#: tracks, no app window, no run, no queued event. Within this long of that a
+#: miss starts none and queues nothing for one (its record-keeping routes run
+#: here): a session whose tap never asks it to record (a 0.9.x tap after an
+#: update, a session set off) only restarted it at every miss, to quit 20 s
+#: later, every minute (live test G, 2026-10-24). A session it would record
+#: starts it itself (its tap's `tap record`).
+IDLE_RETRY_S = 15 * 60
 #: What this dispatcher sets in its own environment: never part of a queued
 #: event's (the service sets its own when it runs it).
 OWNED_ENV = (HANDED_OVER, HOSTED_ENV, HOST_ENV, DEADLINE_ENV, "PROBE_HOOK_PARENT_PID")
@@ -1593,19 +1606,54 @@ def session_off(payload: dict) -> bool:
         return True
 
 
+def idle_recently(sp) -> bool:
+    """Did the service last stop idle, within IDLE_RETRY_S, with none started
+    since? Its own record of its last stop (`LAST_STOP_NAME`) against the
+    service lock's holder; False when there is none or it cannot be read.
+    Asked only on a miss with no service answering."""
+    import json
+
+    raw = _read_ledger(os.path.join(str(sp.service_dir()), LAST_STOP_NAME))
+    try:
+        record = json.loads(raw.decode("utf-8")) if raw else None
+    except ValueError:
+        return False
+    if not isinstance(record, dict) or record.get("reason") != IDLE_STOP:
+        return False
+    at = record.get("at")
+    if not isinstance(at, (int, float)) or isinstance(at, bool):
+        return False
+    if not 0 <= time.time() - at < IDLE_RETRY_S:
+        return False
+    # A service started since (a tap's `tap record`) and then crashed or was
+    # killed wrote no stop of its own: the record is still the idle one. The
+    # service lock names the last service to hold it (`<pid> <start time>`,
+    # `server._name_holder`): another one than the record's started since, and
+    # nothing keeps a miss from starting the next.
+    # Read as `guard.holder` reads it: the pid, then the rest (a start time on
+    # macOS is `ps lstart`, five words).
+    holder = _read_ledger(str(sp.lock_path()))
+    pid_s, _, start_s = holder.decode("utf-8", "replace").strip().partition(" ") if holder else ("", "", "")
+    if pid_s:
+        start = str(record.get("start") or "").strip()
+        if pid_s != str(record.get("pid")) or (start and start_s.strip() and start_s.strip() != start):
+            return False
+    return True
+
+
 def ensure_service(sp, allowed) -> None:
     """No service answered: start one for the next event, at most every
     ENSURE_EVERY_S (the `ensured` mark: set before `allowed()` is asked, so a
     session set off pays its costly check at most that often too), when
-    `allowed()` (the session's switch). The CLI's own client does it
-    (`client.ensure`: its start lock, its back-off, its clean environment), in
-    a detached process this never waits on, so the event goes on at once
-    (plan D35)."""
+    `allowed()` (the session's switch), unless the service just exited idle
+    (`idle_recently`). The CLI's own client does it (`client.ensure`: its
+    start lock, its back-off, its clean environment), in a detached process
+    this never waits on, so the event goes on at once (plan D35)."""
     marker = service_mark("ensured")
     if _fresh(marker, ENSURE_EVERY_S):
         return
     python = runtime_python(sp)
-    if python is None or not _touch(marker) or not allowed():
+    if python is None or not _touch(marker) or idle_recently(sp) or not allowed():
         return
     import subprocess
 
@@ -1867,7 +1915,8 @@ class Miss:
                 # still claim and run it there).
                 return claim_event(folder, item["id"]) is not True
             folder = queue_folder(sp, any_drainer=False)
-            if folder is None or self._session_off():
+            if folder is None or self._session_off() or idle_recently(sp):
+                # No service is coming to drain it soon (`idle_recently`): here.
                 return False
             return write_queued(folder, item, data)
         except Exception:  # noqa: BLE001 - fail open: run them here

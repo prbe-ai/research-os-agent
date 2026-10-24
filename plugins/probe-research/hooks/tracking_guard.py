@@ -1173,6 +1173,15 @@ def _daemon_notice(session_id: str, cwd: "str | None") -> "str | None":
         # Grace: the worker may not have taken its first lease yet. Only when it
         # CAN start -- with no key it never will, and saying so now is honest.
         current = None
+    elif reason == getattr(_session_marker, "DAEMON_HANDOVER", None):
+        # The worker let go for a new daemon process (an update, the Probe
+        # service restarting, a resumed session's worker): recording is NOT
+        # back with the agent. Said once, in its own words, and its return to
+        # live says nothing. One no successor took up within
+        # DAEMON_HANDOVER_STALE_S reads `expired`: the plain handback below.
+        if previous not in (_session_marker.DAEMON_DEGRADED, reason):
+            notice = _session_marker.daemon_degraded_notice(reason)
+        current = previous if previous == _session_marker.DAEMON_DEGRADED else reason
     else:
         if previous != _session_marker.DAEMON_DEGRADED:
             notice = _session_marker.daemon_degraded_notice(reason)

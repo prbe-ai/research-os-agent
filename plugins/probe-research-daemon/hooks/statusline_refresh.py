@@ -116,10 +116,63 @@ def sync_renderer() -> None:
     ONLY WHEN ALREADY INSTALLED. An absent directory means the user never turned
     the status line on in the wizard, and a hook that created it would be installing a
     status line nobody asked for.
+
+    ONLY FROM THE INSTALLED COPY. Every session's status line runs the one copy,
+    so a session left open on an older plugin copy whose SessionStart (a
+    `/clear`, a resume) could not hand over to the installed one wrote its OLD
+    renderer over the new one (surface audit #7). When Claude Code's install
+    ledger names another copy of this plugin as the renderer's
+    (`renderer_copy`: its user-scope install, else the newest), this one
+    writes nothing; the Probe service refreshes it from that copy after an
+    update (`probe.service.followup`). No ledger, or one that names none (a
+    checkout, Kimi Code's own copy): as before.
     """
+    if _another_copy_installed():
+        return
     for target in install_dirs():
         if os.path.isdir(target):
             _sync_into(target)
+
+
+def _another_copy_installed() -> bool:
+    """Does Claude Code's install ledger name a copy of this plugin other than
+    this folder as the renderer's (`renderer_copy` of its key,
+    `dispatch.ledger_key`)? False when it cannot be read or names none. Never
+    raises."""
+    try:
+        import json
+
+        root = os.path.realpath(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        dispatch = _load("dispatch")
+        raw = dispatch._read_ledger(dispatch._ledger(os.environ))
+        if raw is None:
+            return False
+        plugins = json.loads(raw.decode("utf-8")).get("plugins")
+        chosen = renderer_copy(plugins.get(dispatch.ledger_key(root)) if isinstance(plugins, dict) else None)
+        return chosen is not None and chosen != root
+    except BaseException:  # noqa: BLE001 - a hook contracted to silence
+        return False
+
+
+def renderer_copy(entries) -> "str | None":
+    """Which of a ledger key's install folders the renderer comes from: its
+    user-scope one (a project's own install serves that project only), else
+    the newest version folder; the newest of several either way. None for
+    anything but a non-empty list of entries that each name one. The
+    service's twin is `probe.service.followup.renderer_copy`."""
+    if not isinstance(entries, list) or not entries:
+        return None
+    try:
+        listed = [(e.get("scope"), os.path.realpath(e["installPath"])) for e in entries]
+    except (KeyError, TypeError, AttributeError, ValueError):
+        return None
+    candidates = {p for scope, p in listed if scope == "user"} or {p for _, p in listed}
+
+    def version(path: str) -> tuple:
+        parts = os.path.basename(path).split(".")
+        return tuple(int(p) for p in parts) if all(p.isdigit() for p in parts) else ()
+
+    return max(sorted(candidates), key=version)
 
 
 def _sync_into(target: str) -> None:

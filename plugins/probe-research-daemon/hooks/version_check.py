@@ -104,6 +104,20 @@ DEFAULT_BASE = version_policy.DEFAULT_BASE
 # for CLIs >= this; older ones get the raw commands (which get them to a version
 # that has it). CI keeps this == the released version (see release.yml).
 UPDATE_CMD_MIN_CLI = "0.8.1"
+#: What an update needs of an open session where it follows (`_picked_up`):
+#: nothing. Its hooks run the installed plugin from their next event
+#: (`dispatch.hand_over`), the prompt hook moves an old tap's watcher
+#: (`tap_handover.py`), and the Probe service moves the rest after its update
+#: (`probe.service.followup`). Anywhere else, RESTART_TO_APPLY, as before.
+PICKED_UP = "open sessions pick it up at their next prompt"
+RESTART_TO_APPLY = "restart {agent} to apply"
+#: The agents whose open sessions follow an update (`probe.cli.updater.FOLLOWING_AGENTS`).
+FOLLOWING_AGENTS = ("claude_code", "codex")
+#: The Probe plugins and the tap, by name, in Claude Code's install ledger.
+LEDGER_PLUGINS = ("probe-research", "probe-research-daemon", "probe-research-tap")
+#: The first tap whose watcher hands its session to the Probe service
+#: (`tap_handover.HANDBACK_TAP`).
+HANDBACK_TAP = "0.10.13"
 
 # Which hook event we are running under. routes.json exports this ONLY for
 # PreCompact, so an unset value means SessionStart -- the reading that preserves
@@ -956,7 +970,9 @@ def _daemon_profile_notice() -> str | None:
             status = _session_marker.daemon_status(os.environ.get(SESSION_ID_ENV) or "", state)
             if status is not None and status[0] != _session_marker.DAEMON_LIVE:
                 reason = status[1]
-        if reason is not None:
+        if reason is not None and reason != getattr(_session_marker, "DAEMON_HANDOVER", None):
+            # (A worker handing over to a new daemon process is not stopped;
+            # one whose hand-over nobody took up reads `expired`.)
             words = _session_marker.DAEMON_REASON_WORDS.get(reason or "", "not running")
             stopped = DAEMON_STOPPED_LINE.format(reason=words)
             return f"{stopped}\nProbe: {tail}. Run `probe doctor`." if tail else stopped
@@ -1045,6 +1061,54 @@ def _triplet(v: str):
     while len(nums) < 3:
         nums.append(0)
     return tuple(nums[:3])
+
+
+def _user_scope_installs() -> bool:
+    """Does Claude Code's install ledger record the Probe plugin, and every
+    install of it and of the tap at user scope? A project-scoped install
+    serves its project only, and an open session's hooks never hand over to
+    it (`dispatch.installed_root`). False when it cannot be read."""
+    harness = _hook_harness()
+    dispatch = harness.load_sibling("dispatch")
+    raw = dispatch._read_ledger(dispatch._ledger(os.environ))
+    if raw is None:
+        return False
+    plugins = json.loads(raw.decode("utf-8")).get("plugins")
+    if not isinstance(plugins, dict):
+        return False
+    ours = {k: v for k, v in plugins.items() if isinstance(k, str) and k.split("@", 1)[0] in LEDGER_PLUGINS}
+    if not any(k.split("@", 1)[0] != "probe-research-tap" and v for k, v in ours.items()):
+        return False
+    return all(isinstance(e, dict) and e.get("scope") == "user" for v in ours.values() for e in v or [])
+
+
+def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
+    """`(follows, agent)`: do this agent's open sessions follow the update with
+    no restart (`probe.cli.updater.follows_without_restart`, before it runs)?
+    Claude Code or Codex (FOLLOWING_AGENTS), a user-scope install (Claude
+    Code's ledger), the tap it updates to handing its sessions to the Probe
+    service (HANDBACK_TAP or later; no tap at all: nothing to hand back) and
+    every live `tap watch` one the prompt hook can move
+    (`tap_handover.watchers_movable`). `agent` names it for the restart note.
+    Never raises: anything unproven is (False, ...)."""
+    agent = "Claude Code"
+    try:
+        harness = _hook_harness().current()
+        agent = getattr(harness, "label", None) or agent
+        if harness.id not in FOLLOWING_AGENTS:
+            return False, agent
+        if harness.id == "claude_code" and not _user_scope_installs():
+            return False, agent
+        tap = local.get("tap")
+        latest = (manifest.get("tap") or {}).get("latest") if isinstance(manifest.get("tap"), dict) else None
+        if tap:
+            target = latest if latest and _remote_gt_local(str(tap), str(latest)) else tap
+            if _remote_gt_local(str(target), HANDBACK_TAP):
+                return False, agent
+        handover = _hook_harness().load_sibling("tap_handover")
+        return bool(handover.watchers_movable(harness.capture.watcher_prefix)), agent
+    except Exception:  # noqa: BLE001 - a notice must never fail the hook
+        return False, agent
 
 
 def _remote_gt_local(local: str, remote: str) -> bool:
@@ -1542,8 +1606,12 @@ def main() -> None:
     # 0.144.0. `recommended` is what makes it addressable -- an install the
     # advisory applies to is now a tier the server can name, so the note reaches
     # that machine and stays off everyone else's screen.
+    # "No restart" only where it is true (`_picked_up`), else the restart note.
+    picked_up, agent = _picked_up(manifest, local)
+    after = PICKED_UP if picked_up else RESTART_TO_APPLY.format(agent=agent)
+    then = f" (no restart: {PICKED_UP})" if picked_up else f", then restart {agent}"
     if urgent:
-        lines.append(f"{run_line} (restart Claude Code to apply)")
+        lines.append(f"{run_line} ({after})")
         if isinstance(advisory, str) and advisory.strip():
             # Human-facing only, and bounded: one line, capped, so a hostile
             # manifest cannot paste paragraphs of instructions into the session.
@@ -1562,7 +1630,7 @@ def main() -> None:
         ctx = (
             f"The Probe Research client is out of date ({summary}) and known to "
             "misbehave at that version: features may fail until it is updated. "
-            f"Tell the user {tell}, then restart Claude Code, and say so "
+            f"Tell the user {tell}{then}, and say so "
             "again if they hit an error that could be explained by the stale "
             "client. This one is worth raising unprompted; do not repeat it more "
             "than once unless something fails."
@@ -1570,13 +1638,13 @@ def main() -> None:
     else:
         ctx = (
             f"The Probe Research client is out of date ({summary}). If the user wants "
-            f"to update, tell them {tell}, then restart Claude Code. "
+            f"to update, tell them {tell}{then}. "
             "Do not nag; only act if they ask."
         )
 
     # An update exists. If the user opted in, apply it in the background; the
-    # nudge below still renders this session, because the upgrade only takes
-    # effect on the next one.
+    # nudge below still renders this session, because the update lands after
+    # it (open sessions then pick it up at their next prompt, where `_picked_up`).
     _spawn_autoupdate(os.environ.get("PROBE_BIN") or "probe")
 
     # PreCompact applies and says nothing. See the module docstring: the payload
