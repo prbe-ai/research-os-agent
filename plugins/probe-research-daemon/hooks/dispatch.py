@@ -1252,6 +1252,34 @@ def host_socket(root: str) -> str:
     return os.path.join("/tmp", "probe-%d" % os.getuid(), "hooks-%s.sock" % digest)
 
 
+def host_key_path(root: str) -> str:
+    """The host's key beside its socket (`zygote.key_path`): `.../hooks-<hash>.key`."""
+    return host_socket(root)[: -len(".sock")] + ".key"
+
+
+def _host_key(root: str) -> "str | None":
+    """The folder's host key (#3355), or None (a host from before keys has none:
+    it is sent nothing, and ignores the field anyway). Never waits: opened
+    non-blocking and never through a symlink, a regular file only, so a FIFO
+    at the key's path costs this event a run here, never a hang."""
+    try:
+        fd = os.open(host_key_path(root), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+                     | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NOCTTY", 0))
+    except OSError:
+        return None
+    try:
+        import stat
+
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        key = os.read(fd, 130).decode("ascii", "replace").strip()
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return key if len(key) == 64 and all(c in "0123456789abcdef" for c in key) else None
+
+
 def _private(folder: str) -> bool:
     try:
         st = os.lstat(folder)
@@ -1322,6 +1350,9 @@ def via_host(lane: str, argv: list, payload: bytes, started: "float | None" = No
             "v": 1, "argv": list(argv), "cwd": os.getcwd(), "env": env, "parent": os.getppid(),
             "deadline": time.time() + budget(lane) + MARGIN_S, "payload": len(payload),
         }
+        key = _host_key(root)
+        if key is not None:
+            header["key"] = key  # the host runs nothing for a client without it (#3355)
         data = json.dumps(header).encode("utf-8") + b"\n" + payload
         try:
             # The fds ride the first send, which may take less than it was given.

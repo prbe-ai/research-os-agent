@@ -75,7 +75,7 @@ export const WRITER_RETRY = "Otherwise ask the daemon's writer: `probe ask --wri
 export const DAEMON_PROFILE_DENY_WRITE = DAEMON_PROFILE_DENY + "\n\n" + DIRECTED_RETRY + " " + WRITER_RETRY;
 
 /** `session_marker._APPROVALS_TEXT`'s pattern: the folder as a command's text names it. */
-export const APPROVALS_TEXT_SOURCE = String.raw`probe/+approvals\b|\bapprovals/+(answers|requests)\b`;
+export const APPROVALS_TEXT_SOURCE = String.raw`probe/+approvals\b|\bapprovals/+(answers|requests|keys|asked)\b`;
 const APPROVALS_TEXT = new RegExp(APPROVALS_TEXT_SOURCE);
 
 /** `session_marker._SESSIONS_TEXT`'s pattern: the per-session folder as a command names it. */

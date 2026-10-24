@@ -1690,7 +1690,7 @@ _FILE_WRITE_TOOLS = {"Write": ("file_path", "path"), "Edit": ("file_path", "path
                      "MultiEdit": ("file_path",), "NotebookEdit": ("notebook_path",)}
 #: The folder as a command's text names it (`~/.local/state/probe/approvals/answers/x.json`,
 #: `$XDG_STATE_HOME/probe/approvals`, `cd probe && ... approvals/...`).
-_APPROVALS_TEXT = re.compile(r"probe/+approvals\b|\bapprovals/+(answers|requests)\b")
+_APPROVALS_TEXT = re.compile(r"probe/+approvals\b|\bapprovals/+(answers|requests|keys|asked)\b")
 
 
 def approvals_dir() -> Path:
@@ -1781,6 +1781,111 @@ def touches_sessions_dir(tool_name: object, tool_input: object, cwd: "str | None
             _SESSIONS_TEXT.search(command) or str(sessions_dir()) in command
         ):
             return str(sessions_dir())
+    return None
+
+
+#: The guard hook's refusal of a coding-agent shell command that calls the
+#: Probe service's mailbox (or has it run a hook event) itself (#3355;
+#: `tracking_guard.calls_mailbox`). Placeholder: `{matched}`, the method.
+DENY_REASON_MAILBOX = (
+    "`Bash` would call the Probe service's `{matched}` itself, so it was refused before it ran. The service's "
+    "mailbox is where the Probe daemon's questions for the researcher are answered and its messages to you are "
+    "delivered, and only Probe's own hooks and daemon call it. Only the researcher answers the daemon's "
+    "questions: through your question tool, word for word, or `probe approvals` in their own terminal. Do not "
+    "call it, and do not route around this."
+)
+
+#: The guard hook's refusal of a coding-agent shell command that runs one of
+#: Probe's own hook programs by hand (#3355; `tracking_guard.runs_probe_hook`).
+#: Placeholder: `{matched}`, the program.
+DENY_REASON_HOOK_BY_HAND = (
+    "`Bash` would run Probe's hook program `{matched}` itself, so it was refused before it ran. Probe's hooks act "
+    "on the events your harness sends them (the researcher's prompt, their answer to a question); run by hand they "
+    "would act on an event you wrote. Only the harness runs them. Do not run them, and do not route around this."
+)
+
+#: The guard hook's refusal of a coding-agent tool call aimed at the folder of
+#: Probe's warm hook hosts, `/tmp/probe-<uid>`: each host's socket and the key a
+#: client must send it before it runs an event (#3355), and the service's own
+#: fallback socket. Placeholders: `{tool}`, `{path}`.
+DENY_REASON_HOOK_HOST = (
+    "`{tool}` would touch {path}, where Probe's hook hosts keep their sockets and the keys that let a hook "
+    "event in, so it was refused before it ran. Only your harness sends Probe's hooks their events. Do not "
+    "touch it, and do not route around this."
+)
+
+def hook_host_dir() -> "str | None":
+    """`/tmp/probe-<uid>` (`hooks/dispatch.py` `host_socket`), or None off POSIX."""
+    getuid = getattr(os, "getuid", None)
+    return os.path.join("/tmp", "probe-%d" % getuid()) if getuid is not None else None
+
+
+def _hook_host_text() -> "re.Pattern | None":
+    """That folder as a command's text names it: THIS user's number (another
+    number, `/tmp/probe-42`, is a researcher's own folder), or the number as
+    the shell spells it (`$(id -u)` and every `id` form with `-u`, the same in
+    backticks, `$UID`, `$EUID`, `${UID}`, `${EUID}`); or one host's socket or
+    key by its own name or a glob of it (`hooks-*.key`, never `hooks-tls.key`
+    or `git-hooks-server.key`). A glob over `/tmp/probe-*` is
+    `_globs_hook_hosts`'."""
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return None
+    return re.compile(
+        r"/tmp/+probe-(?:%d(?![0-9A-Za-z_.-])"
+        r"|\$\(\s*id\b[^)]*-[A-Za-z]*u[^)]*\)"
+        r"|`\s*id\b[^`]*-[A-Za-z]*u[^`]*`"
+        r"|\$(?:E?UID\b|\{E?UID\}))" % getuid()
+        + r"|(?<![\w.-])hooks-[0-9a-f*?\[\]]{1,16}\.(?:sock|key)\b"
+    )
+
+
+_HOOK_HOST_TEXT = _hook_host_text()
+#: A glob in the folder's place: `/tmp/probe-*`, `/tmp/probe-[0-9]*/`.
+_TMP_PROBE_GLOB = re.compile(r"/tmp/+(probe-[^/\s'\"`;|&()<>]*[*?\[][^/\s'\"`;|&()<>]*)")
+
+
+def _globs_hook_hosts(command: str) -> bool:
+    """Does a glob after `/tmp/` match this user's `probe-<uid>` (`du -sh
+    /tmp/probe-*`)? A glob that cannot (`/tmp/probe-*.pt`) is a researcher's."""
+    getuid = getattr(os, "getuid", None)
+    if getuid is None:
+        return False
+    import fnmatch
+
+    mine = "probe-%d" % getuid()
+    return any(fnmatch.fnmatchcase(mine, found.group(1)) for found in _TMP_PROBE_GLOB.finditer(command))
+
+
+def touches_hook_host(tool_name: object, tool_input: object, cwd: "str | None" = None) -> "str | None":
+    """The hook hosts' folder a coding agent's tool call aims at, or None: a
+    Write/Edit whose file is in it, a Bash command that names it (or one host's
+    socket or key). The same TRIPWIRE as `touches_approvals`, NOT A BOUNDARY: a
+    path built at run time still reaches it. A host runs an event only for a
+    client that sends its key (`hooks/zygote.py`), and the key is in there."""
+    folder = hook_host_dir()
+    if folder is None or not isinstance(tool_input, dict):
+        return None
+    fields = _FILE_WRITE_TOOLS.get(tool_name) if isinstance(tool_name, str) else None
+    if fields is not None:
+        root = os.path.realpath(folder)
+        for field in fields:
+            target = tool_input.get(field)
+            if not isinstance(target, str) or not target:
+                continue
+            path = os.path.expanduser(target)
+            if not os.path.isabs(path) and isinstance(cwd, str) and cwd:
+                path = os.path.join(cwd, path)
+            real = os.path.realpath(path)
+            if real == root or real.startswith(root.rstrip(os.sep) + os.sep):
+                return target
+        return None
+    if tool_name == "Bash":
+        command = tool_input.get("command")
+        if isinstance(command, str) and (
+            (_HOOK_HOST_TEXT is not None and _HOOK_HOST_TEXT.search(command)) or _globs_hook_hosts(command)
+        ):
+            return folder
     return None
 
 

@@ -346,20 +346,41 @@ CLAIM_VERSION = 2
 REMOVAL_VERBS = _session_marker.REMOVAL_VERBS
 
 
-def _skip_heredoc_bodies(command: str, index: int, pending: "list[tuple[str, bool]]") -> int:
-    """Past every pending heredoc body, starting at the line after the operator."""
+def _skip_heredoc_bodies(command: str, index: int, pending: "list[tuple[str, bool]]",
+                         bodies: "list[str] | None" = None) -> int:
+    """Past every pending heredoc body, starting at the line after the operator
+    (each body's text appended to `bodies`, in order, when given)."""
+    lines: "list[str]" = []
     while pending and index < len(command):
         newline = command.find("\n", index)
         line = command[index:] if newline < 0 else command[index:newline]
         word, tabs = pending[0]
         if (line.lstrip("\t") if tabs else line) == word:
             pending.pop(0)
+            if bodies is not None:
+                bodies.append("\n".join(lines))
+            lines = []
+        else:
+            lines.append(line)
         index = len(command) if newline < 0 else newline + 1
+    if bodies is not None and pending:  # an unterminated body runs to the end
+        bodies.append("\n".join(lines))
+        bodies.extend("" for _ in pending[1:])
     pending.clear()  # an unterminated body runs to the end: all of it is dropped
     return index
 
 
-def _strip_heredocs(command: str) -> str:
+def _heredocs(command: str) -> "list[tuple[str, str]]":
+    """Each heredoc as (the command text before its `<<`, its body): the body
+    belongs to the simple command that opened it (`_strip_heredocs`' scan)."""
+    openers: "list[str]" = []
+    bodies: "list[str]" = []
+    _strip_heredocs(command, openers, bodies)
+    return list(zip(openers, bodies))
+
+
+def _strip_heredocs(command: str, openers: "list[str] | None" = None,
+                    bodies: "list[str] | None" = None) -> str:
     """The command with every heredoc BODY removed, the line that opens it kept.
 
     A body is text handed to a program on stdin (a commit message, a Python
@@ -420,7 +441,7 @@ def _strip_heredocs(command: str) -> str:
         # A shell context: the top level, a `$(...)`, or a paren inside one.
         if char == "\n" and pending:
             out.append(char)
-            index = _skip_heredoc_bodies(command, index + 1, pending)
+            index = _skip_heredoc_bodies(command, index + 1, pending, bodies)
             continue
         if char == "#" and (not out or out[-1][-1:] in _WORD_BOUNDARY):
             # A comment runs to the end of the line. Left in, an apostrophe in
@@ -448,6 +469,8 @@ def _strip_heredocs(command: str) -> str:
             if match:
                 word = match.group(2) or match.group(3) or match.group(4)
                 pending.append((word, bool(match.group(1))))
+                if openers is not None:
+                    openers.append("".join(out))
                 out.append(command[index : match.end()])
                 index = match.end()
                 continue
@@ -456,6 +479,8 @@ def _strip_heredocs(command: str) -> str:
             continue
         out.append(char)
         index += 1
+    if bodies is not None and pending:  # a heredoc opened on the last line: an empty body
+        bodies.extend("" for _ in pending)
     return "".join(out)
 
 
@@ -468,6 +493,12 @@ def _segments(command: str):
     protect what they hold. A segment still open when the quotes stop balancing
     is dropped, not reported: the text after an unclosed quote is inside it.
     """
+    yield from _split(command)[0]
+
+
+def _split(command: str) -> "tuple[list[list[str]], bool]":
+    """`_segments`' simple commands, and whether the whole command tokenized
+    (False: the quotes stopped balancing, and what followed was not read)."""
     lexer = shlex.shlex(
         # A backslash-newline is removed, as bash does: `--a\<newline>dd` is `--add`.
         _strip_heredocs(command).replace("\\\n", ""),
@@ -477,6 +508,7 @@ def _segments(command: str):
     lexer.whitespace_split = True
     lexer.whitespace = " \t\r"
     lexer.commenters = ""  # as `shlex.split` does: `#` starts no comment here
+    segments: "list[list[str]]" = []
     segment: "list[str]" = []
     try:
         for token in lexer:
@@ -486,14 +518,15 @@ def _segments(command: str):
                 and set(token) & _SEPARATOR_CHARS
             ):
                 if segment:
-                    yield segment
+                    segments.append(segment)
                 segment = []
             else:
                 segment.append(token)
     except ValueError:
-        return  # unbalanced quotes: the open segment is not parseable, lean silent
+        return segments, False  # unbalanced quotes: the open segment is not parseable, lean silent
     if segment:
-        yield segment
+        segments.append(segment)
+    return segments, True
 
 
 #: Commands that run the command after them: `command probe ...`, `nohup probe
@@ -1318,6 +1351,538 @@ def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, se
     )
 
 
+# ---------------------------------------------------------------------------
+# #3355: THE AGENT'S SHELL NEVER SPEAKS FOR THE HARNESS. Two tripwires, read off
+# this file's shell tokenizer (`_split`: quotes respected, heredoc bodies and
+# backslash-newlines removed): a call to the Probe service's mailbox, and one of
+# Probe's own hook programs run by hand. Each follows the shell a little way:
+# into `bash -c`/`sh -c` and `eval` strings, backtick bodies and shell heredocs
+# (two levels, as `_probe_invocations`), past wrappers (`env`, `sudo`, `xargs`,
+# `exec -a`, `uv run`, ...), and through `cd`/`pushd`/`env -C`/`uv run
+# --directory` and plain variables to the folder a relative path is read in.
+# NOT BOUNDARIES: a command built at run time, or a copy of a program, still
+# gets through. What protects a yes is the service's answer key and the hook
+# host's key (`probe.daemon.approvals`, `zygote.py`); these refuse the plain
+# ways a model talked into it tries first.
+# ---------------------------------------------------------------------------
+
+#: This file's own folder: a Probe plugin's hooks folder, whatever path names it.
+_HOOKS_HERE = os.path.dirname(os.path.abspath(__file__))
+#: How deep into `-c`, `eval`, backtick and heredoc strings the tripwires follow.
+_MAX_NESTING = 2
+
+#: The service methods that answer a held question, take or post a message, or
+#: run a hook event (pi's `hooks.run`): none is the agent's shell's to call.
+_MAILBOX_METHOD = re.compile(r"\b(?:mailbox\.(?:answer|claim|post)|hooks\.run)\b")
+#: A call in the code a runner is handed (`-c`, a heredoc script): also a bare
+#: `call(` (`from probe.service.client import call`), a raw socket's
+#: `'method':` or `method=`, `AF_UNIX`, `jsonrpc`. Counted only beside the
+#: method as a quoted string (`_QUOTED_METHOD`): `hooks.run(method='fit')` or a
+#: comment naming `mailbox.post` in a researcher's own code is not the call.
+_CALL_IN_RUNNER = re.compile(
+    r"\.call\(|\bcall\(|\bservice_call\(|[\"']method[\"']\s*:|\bmethod\s*=|\bAF_UNIX\b|\bjsonrpc\b")
+_QUOTED_METHOD = re.compile(r"[\"']((?:mailbox\.(?:answer|claim|post)|hooks\.run))[\"']")
+#: Commands that read, search or record text: what they name is an argument.
+_TEXT_COMMANDS = frozenset({
+    "grep", "egrep", "fgrep", "rg", "ag", "ack", "git", "gh", "sed", "awk", "gawk", "cat", "bat", "less", "more",
+    "head", "tail", "wc", "ls", "find", "fd", "diff", "cp", "mv", "md5sum", "sha256sum", "shasum", "file", "stat",
+    "echo", "printf", "jq", "sort", "uniq", "cut", "tr", "tee", "xxd", "od", "strings",
+})
+#: Socket tools: a command that puts one in a command's place and names a
+#: method anywhere (a line it pipes in, a here-string) is a call.
+_SOCKET_TOOLS = frozenset({"nc", "ncat", "netcat", "socat"})
+#: Programs that run code they are handed (`-c`, `-e`, a script on stdin).
+_INTERPRETERS = re.compile(r"^(?:python|pypy)(\d+(\.\d+)?)?$")
+_CODE_RUNNERS = frozenset({"node", "perl", "ruby", "deno", "bun"})
+#: Wrappers that run the command after their options: {wrapper: (options that
+#: take a value, those of them that name the folder it runs in)}.
+_WRAPPER_FORMS = {
+    "env": (frozenset({"-u", "--unset", "-C", "--chdir", "-S", "--split-string"}), frozenset({"-C", "--chdir"})),
+    "sudo": (frozenset({"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "--user", "--group",
+                        "--chdir", "--host", "--prompt", "--role", "--type", "--other-user",
+                        "--command-timeout", "--close-from"}), frozenset({"-D", "--chdir"})),
+    "xargs": (frozenset({"-I", "-i", "-n", "-P", "-L", "-l", "-d", "-a", "-E", "-e", "-s", "--max-args",
+                         "--max-procs", "--delimiter", "--arg-file", "--max-lines", "--max-chars",
+                         "--replace", "--eof"}), frozenset()),
+    "exec": (frozenset({"-a"}), frozenset()),
+    "nice": (frozenset({"-n", "--adjustment"}), frozenset()),
+    "stdbuf": (frozenset({"-i", "-o", "-e", "--input", "--output", "--error"}), frozenset()),
+    "timeout": (frozenset({"-s", "--signal", "-k", "--kill-after"}), frozenset()),
+    "time": (frozenset({"-f", "-o", "--format", "--output"}), frozenset()),
+    "command": (frozenset(), frozenset()),
+    "nohup": (frozenset(), frozenset()),
+    "setsid": (frozenset(), frozenset()),
+    "builtin": (frozenset(), frozenset()),
+}
+#: Shell words a command may stand behind (`{ cmd; }`, `if ...; then cmd; fi`,
+#: `! cmd`): the program is the word after them.
+_SHELL_KEYWORDS = frozenset({"{", "!", "if", "then", "elif", "else", "do", "while", "until"})
+#: `uv run`'s options that take a value, and the one that names its folder.
+_UV_VALUE_OPTS = frozenset({"--with", "--python", "-p", "--project", "--directory", "--extra", "--group",
+                            "--env-file", "--package", "--index", "--index-url", "--with-requirements"})
+#: Python's options that take a value (`-W ignore`, `-X dev`, `-Xdev`).
+_PYTHON_VALUE_FLAGS = frozenset("WX")
+_PYTHON_VALUE_LONG = frozenset({"--check-hash-based-pycs"})
+#: A shell's options that take a value (`-o pipefail`, `+O extglob`).
+_SHELL_VALUE_OPTS = frozenset({"-o", "+o", "-O", "+O"})
+#: Probe's hook programs whose event decides a consent: the answer to a held
+#: question and the permission mode (`approvals_hook.py`), the Probe switch
+#: (`tracking_guard.py`), and what runs any route (`dispatch.py`/`dispatch.sh`,
+#: Kimi Code's `harness_io.py`, the warm host `zygote.py`).
+_HOOK_PROGRAMS = frozenset({"approvals_hook.py", "tracking_guard.py", "dispatch.py", "dispatch.sh",
+                            "harness_io.py", "zygote.py"})
+#: The ones no researcher's own program is plausibly called: refused by name,
+#: under a `hooks/` folder, where a path cannot be followed (a variable the
+#: guard cannot see, a quote its tokenizer cannot read).
+_HOOK_NAMES_ALONE = frozenset({"approvals_hook.py", "tracking_guard.py", "harness_io.py", "zygote.py"})
+_HOOK_BY_NAME = re.compile(
+    r"(?:^|[;&|(\n`]|\$\()\s*(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*"
+    r"(?:(?:\S*/)?(?:python[0-9.]*|pypy[0-9.]*|exec|env|sudo|nohup|time|command|source|\.)\b[^;&|\n`]*?\s)?"
+    r"[\"']?([^\s;&|()<>`'\"]*\bhooks/+(approvals_hook\.py|tracking_guard\.py|harness_io\.py|zygote\.py))\b")
+_BACKTICK = re.compile(r"`([^`]*)`")
+_VARIABLE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+#: What the shell says the folder is: `$(pwd)` / `` `pwd` `` is `$PWD`, and
+#: `$(git rev-parse --show-toplevel)` the repository's root above it.
+_PWD_SUBST = re.compile(r"\$\(\s*pwd(?:\s+-[LP])?\s*\)|`\s*pwd(?:\s+-[LP])?\s*`")
+_GIT_ROOT_SUBST = re.compile(r"\$\(\s*git\s+rev-parse\s+--show-toplevel\s*\)|`\s*git\s+rev-parse\s+--show-toplevel\s*`")
+_GIT_ROOT_NAME = "__PROBE_GIT_ROOT__"
+
+
+def _the_folder_spelled(command: str) -> str:
+    """`command` with the shell's own names for the folder made plain variables."""
+    command = _PWD_SUBST.sub("${PWD}", command)
+    return _GIT_ROOT_SUBST.sub("${%s}" % _GIT_ROOT_NAME, command)
+
+
+def _git_root(folder: "str | None") -> "str | None":
+    """The repository root at or above `folder` (a `.git` there), or None."""
+    if not folder:
+        return None
+    here = os.path.abspath(folder)
+    for _ in range(64):
+        if os.path.exists(os.path.join(here, ".git")):
+            return here
+        parent = os.path.dirname(here)
+        if parent == here:
+            return None
+        here = parent
+    return None
+
+
+def _expand(word: str, names: dict, base: "str | None" = None) -> "str | None":
+    """`word` with `~` and `$NAME`/`${NAME}` filled in (the command's own
+    assignments first; `$PWD` and the repository root from `base`; then this
+    hook's environment), or None when a `$` is left that cannot be (unset,
+    `$(...)`, `$1`)."""
+    def fill(match: "re.Match") -> str:
+        name = match.group(1) or match.group(2)
+        if name in names:
+            value = names[name]
+        elif name == "PWD":
+            value = base
+        elif name == _GIT_ROOT_NAME:
+            value = _git_root(base)
+        else:
+            value = os.environ.get(name)
+        return match.group(0) if value is None else value
+
+    word = _VARIABLE.sub(fill, word)
+    if word.startswith("~"):
+        word = os.path.expanduser(word)
+    return None if "$" in word else word
+
+
+def _folder(word: str, base: "str | None", names: dict) -> "str | None":
+    """The folder `word` names, read from `base` (None: not known)."""
+    path = _expand(word, names, base)
+    if path is None:
+        return None
+    if not os.path.isabs(path):
+        if base is None:
+            return None
+        path = os.path.join(base, path)
+    return os.path.normpath(path)
+
+
+def _option_value(tokens: "list[str]", index: int, value_opts: "frozenset[str]") -> "tuple[str | None, int]":
+    """The value of the option at `index` (separate, or `--opt=value`), and the index after it."""
+    word = tokens[index]
+    if "=" in word and word.startswith("--"):
+        return word.split("=", 1)[1], index + 1
+    if word in value_opts:
+        return (tokens[index + 1] if index + 1 < len(tokens) else None), index + 2
+    return None, index + 1
+
+
+def _program_start(tokens: "list[str]", base: "str | None", names: dict) -> "tuple[int, str | None]":
+    """Where a simple command's program is, past env assignments, a leading
+    redirection, wrappers and `uv run`, and the folder it runs in (`env -C`,
+    `sudo -D`, `uv run --directory` move it)."""
+    index = 0
+    while index < len(tokens):
+        word = tokens[index]
+        name = os.path.basename(word)
+        if _ENV_ASSIGNMENT.match(word) or word in _SHELL_KEYWORDS:
+            index += 1
+        elif word in _REDIRECTIONS:
+            index += 2
+        elif name in _WRAPPER_FORMS:
+            value_opts, folder_opts = _WRAPPER_FORMS[name]
+            index += 1
+            while index < len(tokens) and tokens[index].startswith("-") and tokens[index] != "-":
+                option = tokens[index].split("=", 1)[0]
+                value, index = _option_value(tokens, index, value_opts)
+                if option in folder_opts and value is not None:
+                    base = _folder(value, base, names)
+            if name == "timeout" and index < len(tokens):
+                index += 1  # its duration
+        elif name == "uv" and tokens[index + 1 : index + 2] == ["run"]:
+            index += 2
+            while index < len(tokens) and tokens[index].startswith("-"):
+                option = tokens[index].split("=", 1)[0]
+                value, index = _option_value(tokens, index, _UV_VALUE_OPTS)
+                if option == "--directory" and value is not None:
+                    base = _folder(value, base, names)
+        else:
+            break
+    return index, base
+
+
+def _command_start(tokens: "list[str]") -> int:
+    """Where a simple command's program is (`_program_start`, the folder unknown)."""
+    return _program_start(tokens, None, {})[0]
+
+
+def _runs_code(head: str) -> bool:
+    return bool(_INTERPRETERS.match(head)) or head in _SHELLS or head in _CODE_RUNNERS
+
+
+def _python_operand(tokens: "list[str]", start: int) -> "tuple[str, str | None]":
+    """How a Python command runs: ("code", None) for `-c`/`-m`/`--version`,
+    ("file", operand) otherwise (operand None or "-": its stdin)."""
+    index = start + 1
+    while index < len(tokens):
+        word = tokens[index]
+        if word in _REDIRECTIONS:
+            index += 2
+            continue
+        if word == "--":
+            index += 1
+            break
+        if not word.startswith("-") or word == "-":
+            break
+        if word.startswith("--"):
+            if word in ("--version", "--help"):
+                return "code", None
+            index += 2 if word in _PYTHON_VALUE_LONG else 1
+            continue
+        flags, skip = word[1:], 1
+        for at, flag in enumerate(flags):
+            if flag in "cm" or flag in "Vh":
+                return "code", None
+            if flag in _PYTHON_VALUE_FLAGS:
+                if at == len(flags) - 1:
+                    skip = 2  # its value is the next word
+                break  # the rest of this word is its value
+        index += skip
+    return "file", tokens[index] if index < len(tokens) else None
+
+
+def _shell_operand(tokens: "list[str]", start: int) -> "tuple[str, str | None]":
+    """How a shell command runs: ("code", the -c string), ("check", None) for
+    `-n`, ("file", operand) otherwise (None, "-" or `-s`: its stdin)."""
+    index, code = start + 1, False
+    while index < len(tokens):
+        word = tokens[index]
+        if word in _REDIRECTIONS:
+            index += 2
+            continue
+        if word == "--":
+            index += 1
+            break
+        if word in _SHELL_VALUE_OPTS:
+            index += 2
+            continue
+        if not word[:1] in ("-", "+") or word in ("-", "+"):
+            break
+        flags = word[1:] if not word.startswith("--") else ""
+        if "n" in flags and word.startswith("-"):
+            return "check", None
+        if "c" in flags:
+            code = True
+        if "s" in flags:
+            return "file", None
+        index += 1
+    operand = tokens[index] if index < len(tokens) else None
+    return ("code", operand) if code else ("file", operand)
+
+
+def _stdin_runner(tokens: "list[str]") -> bool:
+    """Does this simple command run what comes on its stdin (`python3 -`,
+    `bash`, `bash -s`, `node -`)?"""
+    start = _command_start(tokens)
+    if start >= len(tokens):
+        return False
+    head = os.path.basename(tokens[start])
+    if _INTERPRETERS.match(head):
+        kind, operand = _python_operand(tokens, start)
+        return kind == "file" and operand in (None, "-")
+    if head in _SHELLS:
+        kind, operand = _shell_operand(tokens, start)
+        return kind == "file" and operand in (None, "-")
+    if head in _CODE_RUNNERS:
+        rest = [t for t in tokens[start + 1 :] if t not in _REDIRECTIONS]
+        return not rest or rest[0] == "-"
+    return False
+
+
+def _nested(tokens: "list[str]", start: int) -> "str | None":
+    """The shell code a simple command runs from a string: `bash -c '...'`,
+    `sh -c "..."`, `eval ...`."""
+    head = os.path.basename(tokens[start])
+    if head == "eval":
+        return " ".join(tokens[start + 1 :]) or None
+    if head in _SHELLS:
+        kind, operand = _shell_operand(tokens, start)
+        if kind == "code":
+            return operand
+    return None
+
+
+def calls_mailbox(command: str) -> "str | None":
+    """The mailbox method (`mailbox.answer`, `.claim`, `.post`, `hooks.run`) a
+    shell command calls on the Probe service itself, or None. A call is the
+    method named beside a way of calling: the client's command line (`python
+    -m probe.service.client call [--] mailbox.answer ...`), a call in the code
+    a runner is handed (`-c`, a heredoc script on its stdin), or a socket tool
+    in a command's place (`nc`, `socat`, `curl --unix-socket`); followed into
+    `bash -c`, `eval` and backtick strings. A method that a text command
+    (`grep`, `git`, `gh`, `sed`, ...) is handed, or a comment, is never a call."""
+    if not isinstance(command, str) or ("mailbox." not in command and "hooks.run" not in command):
+        return None
+    return _mailbox_in(command, 0)
+
+
+def _mailbox_in(command: str, depth: int) -> "str | None":
+    named = _MAILBOX_METHOD.search(command)
+    if named is None:
+        return None
+    if depth < _MAX_NESTING:
+        for body in _BACKTICK.findall(command):
+            found = _mailbox_in(body, depth + 1)
+            if found:
+                return found
+    socket_tool = False
+    for tokens in _split(command)[0]:
+        start = _command_start(tokens)
+        if start >= len(tokens):
+            continue
+        head = os.path.basename(tokens[start])
+        if head in _TEXT_COMMANDS:
+            continue
+        nested = _nested(tokens, start)
+        if nested and depth < _MAX_NESTING:
+            found = _mailbox_in(nested, depth + 1)
+            if found:
+                return found
+        if head in _SOCKET_TOOLS or (head == "curl" and any(w.startswith("--unix-socket") for w in tokens[start:])):
+            socket_tool = True
+        runner = _runs_code(head)
+        words = tokens[start:]
+        for index, word in enumerate(words):
+            found = _MAILBOX_METHOD.search(word)
+            if not found:
+                continue
+            before = [w for w in words[:index] if w != "--"]
+            if before and before[-1] == "call":
+                return found.group(0)  # the client's command line: `... call [--] mailbox.answer`
+            quoted = _QUOTED_METHOD.search(word) if runner else None
+            if quoted and _CALL_IN_RUNNER.search(word):
+                return quoted.group(1)  # code a runner is handed, calling it
+    if socket_tool:
+        return named.group(0)
+    for opened, body in _heredocs(command):
+        segments = _split(opened)[0]
+        if not segments or not _stdin_runner(segments[-1]):
+            continue  # a commit message, a file a text command reads: never code
+        quoted = _QUOTED_METHOD.search(body)
+        if quoted and _CALL_IN_RUNNER.search(body):
+            return quoted.group(1)
+        if depth < _MAX_NESTING and os.path.basename(segments[-1][_command_start(segments[-1])]) in _SHELLS:
+            found = _mailbox_in(body, depth + 1)
+            if found:
+                return found
+    return None
+
+
+def _is_probe_hooks(folder: str) -> bool:
+    """A Probe plugin's hooks folder: this file's own, or one holding
+    `routes.json` and `_session_marker.py`."""
+    folder = os.path.realpath(folder)
+    if folder == os.path.realpath(_HOOKS_HERE):
+        return True
+    return os.path.isfile(os.path.join(folder, "routes.json")) and os.path.isfile(
+        os.path.join(folder, "_session_marker.py"))
+
+
+def _probe_hook_path(script: str, base: "str | None", names: dict) -> "bool | None":
+    """Is `script` (read as the shell would, from `base`) a file in a Probe
+    plugin's hooks folder? None when it cannot be followed."""
+    path = _folder(script, base, names)
+    if path is None:
+        return None
+    return _is_probe_hooks(os.path.dirname(os.path.realpath(path)))
+
+
+def _researchers_own(name: str, origin: "str | None") -> bool:
+    """Does the researcher's folder (the session's, or its repository root)
+    hold a `hooks/<name>` of its own, in a folder that is no Probe plugin's?"""
+    for root in {origin, _git_root(origin)}:
+        if not root:
+            continue
+        folder = os.path.join(root, "hooks")
+        if os.path.isfile(os.path.join(folder, name)) and not _is_probe_hooks(folder):
+            return True
+    return False
+
+
+def _by_name(path_text: str, origin: "str | None") -> "str | None":
+    """A program refused by its name alone, where its path cannot be followed:
+    one of `_HOOK_NAMES_ALONE` under a `hooks/` folder, unless the researcher's
+    own folder has a `hooks/` program of that name (theirs, then)."""
+    name = os.path.basename(path_text)
+    if name in _HOOK_NAMES_ALONE and "hooks" in path_text.split("/")[:-1] and not _researchers_own(name, origin):
+        return name
+    return None
+
+
+def runs_probe_hook(command: str, cwd: "str | None" = None) -> "str | None":
+    """The Probe hook program a shell command runs by hand, or None.
+
+    A hook trusts its event because the harness writes it; run by hand, it acts
+    on whatever the caller pipes in: a "yes" to a held question (the hook reads
+    the question's answer key itself), a bypass permission mode, a typed
+    `/probe inline`. Only the program a simple command RUNS is looked at (the
+    command, or the file an interpreter is handed), and only when that file is
+    in a Probe plugin's hooks folder: a researcher's own `scripts/dispatch.py`
+    runs, and reading, listing, copying, diffing, committing or testing Probe's
+    programs is not running them. Where a path cannot be followed, the names no
+    researcher's script plausibly has (`_HOOK_NAMES_ALONE`) under `hooks/` are
+    refused by name."""
+    if not isinstance(command, str) or not any(name in command for name in _HOOK_PROGRAMS):
+        return None
+    base = cwd if isinstance(cwd, str) and os.path.isabs(cwd) else os.getcwd()
+    return _hook_in(command, base, {}, 0, base)
+
+
+def _hook_in(command: str, base: "str | None", names: dict, depth: int, origin: "str | None",
+             hint: "str | None" = None) -> "str | None":
+    """`runs_probe_hook` for one command string, read from `base` (`hint`: the
+    text of a `cd` target that could not be followed). `origin` is the
+    session's folder, whose own `hooks/` programs are the researcher's."""
+    command = _the_folder_spelled(command)
+    if depth < _MAX_NESTING:
+        for body in _BACKTICK.findall(command):
+            found = _hook_in(body, base, dict(names), depth + 1, origin, hint)
+            if found:
+                return found
+    segments, whole = _split(command)
+    for tokens in segments:
+        if all(_ENV_ASSIGNMENT.match(word) for word in tokens):
+            for word in tokens:  # `H=/x/hooks;`: the shell's variable from here on
+                key, _, value = word.partition("=")
+                names[key] = _expand(value, names, base) or value
+            continue
+        start, here = _program_start(tokens, base, names)
+        if start >= len(tokens):
+            continue
+        head = os.path.basename(tokens[start])
+        if head in ("cd", "pushd"):
+            operands = [t for t in tokens[start + 1 :] if not t.startswith("-")]
+            target = operands[0] if operands else "~"
+            base = _folder(target, base, names)
+            hint = None if base is not None else (os.path.join(hint, target) if hint else target)
+            continue
+        if head == "export":
+            for word in tokens[start + 1 :]:
+                if _ENV_ASSIGNMENT.match(word):
+                    key, _, value = word.partition("=")
+                    names[key] = _expand(value, names, base) or value
+            continue
+        nested = _nested(tokens, start)
+        if nested is not None:
+            if depth < _MAX_NESTING:
+                found = _hook_in(nested, here, dict(names), depth + 1, origin, hint)
+                if found:
+                    return found
+            continue
+        if head in ("source", "."):
+            script = next((t for t in tokens[start + 1 :] if t not in _REDIRECTIONS), None)
+        elif _INTERPRETERS.match(head):
+            kind, script = _python_operand(tokens, start)
+            script = script if kind == "file" and script != "-" else None
+        elif head in _SHELLS:
+            kind, script = _shell_operand(tokens, start)
+            script = script if kind == "file" and script != "-" else None
+        else:
+            script = tokens[start]
+        if not script or os.path.basename(script) not in _HOOK_PROGRAMS:
+            continue
+        verdict = _probe_hook_path(script, here, names)
+        if verdict:
+            return os.path.basename(script)
+        if verdict is None:
+            spelled = script if script.startswith(("/", "~", "$")) or not hint else hint.rstrip("/") + "/" + script
+            found = _by_name(spelled, origin)
+            if found:
+                return found
+    if depth < _MAX_NESTING:
+        for opened, body in _heredocs(command):
+            opener = _split(opened)[0]
+            if opener and _stdin_runner(opener[-1]) and os.path.basename(
+                    opener[-1][_command_start(opener[-1])]) in _SHELLS:
+                found = _hook_in(body, base, dict(names), depth + 1, origin, hint)
+                if found:
+                    return found
+    if not whole:
+        # The tokenizer stopped at a quote it could not read: what follows it
+        # is looked at by its paths, followed from `base` where they can be,
+        # and by the names alone where they cannot.
+        for found in _HOOK_BY_NAME.finditer(command):
+            verdict = _probe_hook_path(found.group(1), base, names)
+            if verdict or (verdict is None and _by_name(found.group(1), origin)):
+                return found.group(2)
+    return None
+
+
+def _shell_command(payload: dict) -> "str | None":
+    tool_input = payload.get("tool_input")
+    command = tool_input.get("command") if payload.get("tool_name") == "Bash" and isinstance(tool_input, dict) else None
+    return command if isinstance(command, str) else None
+
+
+def _refuse_for_the_harness(payload: dict) -> bool:
+    """The #3355 tripwires, in every state and both profiles: the hook hosts'
+    folder, a mailbox call, a hook program run by hand. True when refused."""
+    aimed = _session_marker.touches_hook_host(payload.get("tool_name"), payload.get("tool_input"),
+                                              _payload_cwd(payload))
+    if aimed:
+        _refuse(_session_marker.DENY_REASON_HOOK_HOST.format(tool=payload.get("tool_name"), path=aimed))
+        return True
+    command = _shell_command(payload)
+    if command is None:
+        return False
+    called = calls_mailbox(command)
+    if called:
+        _refuse(_session_marker.DENY_REASON_MAILBOX.format(matched=called))
+        return True
+    by_hand = runs_probe_hook(command, _payload_cwd(payload))
+    if by_hand:
+        _refuse(_session_marker.DENY_REASON_HOOK_BY_HAND.format(matched=by_hand))
+        return True
+    return False
+
+
 def _deny(payload: dict, session_id: str) -> None:
     """Refuse a call this state does not permit. THE HOT PATH.
 
@@ -1328,7 +1893,10 @@ def _deny(payload: dict, session_id: str) -> None:
 
         any state      -> deny a Write/Edit/Bash aimed at the Probe daemon's
                           approvals folder (a substring check, before the state
-                          read: only the researcher answers the daemon)
+                          read: only the researcher answers the daemon), the
+                          hook hosts' folder, a Bash command calling the
+                          service's mailbox itself, or one running a Probe hook
+                          program by hand (`_refuse_for_the_harness`)
         state == full or daemon -> return, always (`daemon` is enforced by the
                                    CLI's own write gate, which knows the lease)
         state == read-only -> deny WRITES typed into Bash
@@ -1341,6 +1909,8 @@ def _deny(payload: dict, session_id: str) -> None:
     forged = _session_marker.touches_sessions_dir(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
     if forged:
         _refuse(_session_marker.DENY_REASON_SESSIONS.format(tool=payload.get("tool_name"), path=forged))
+        return
+    if _refuse_for_the_harness(payload):
         return
     state = _state(session_id, _payload_cwd(payload))
     if _session_marker.state_allows_writes(state):
@@ -1412,6 +1982,8 @@ def _deny_daemon_profile(payload: dict, session_id: str) -> None:
     forged = _session_marker.touches_sessions_dir(payload.get("tool_name"), payload.get("tool_input"), _payload_cwd(payload))
     if forged:
         _refuse(_session_marker.DENY_REASON_SESSIONS.format(tool=payload.get("tool_name"), path=forged))
+        return
+    if _refuse_for_the_harness(payload):
         return
     state = _state(session_id, _payload_cwd(payload))
     if state == _session_marker.STATE_OFF:

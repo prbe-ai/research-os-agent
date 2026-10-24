@@ -33,10 +33,21 @@ seccomp/no-new-privs/namespaces on Linux, the macOS sandbox): the event would
 run outside it, with an environment and PATH that caller chose. Closed at
 once; the event runs where it is.
 
+Never for a caller without this host's key (#3355). Any process of this user
+reaches the socket, the agent's own shell included, and an event here is
+believed as the harness's: a forged question-tool pick would be recorded as
+the researcher's yes, a forged prompt would move the Probe switch. So the host
+writes a random key beside its socket (`<socket minus .sock>.key`, 0600, in
+the private `/tmp/probe-<uid>`) before it listens, and runs an event only for a
+client whose header carries it (compared in constant time): the dispatcher
+and the Probe service read it there; the guard hook keeps the agent's shell
+out of that folder. A client without it (one from before the key) is closed
+before `R`, so its event runs where it is, exactly as on any host failure.
+
 Wire, one connection per event:
 
     client -> host   {"v": 1, "argv": [...], "cwd", "env": {...}, "parent": pid,
-                      "deadline": epoch, "payload": N}\\n  + N payload bytes,
+                      "deadline": epoch, "payload": N, "key": hex}\\n  + N payload bytes,
                      with the harness's stdout and stderr fds on the first send
     host -> client   R
     client -> host   G
@@ -50,6 +61,7 @@ routes changed (a new copy runs in a new host). Stdlib only, Python 3.9.
 from __future__ import annotations
 
 import errno
+import hmac
 import json
 import os
 import select
@@ -59,7 +71,18 @@ import sys
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-IDLE_S = 15 * 60
+
+
+def _idle_s() -> float:
+    """How long the host waits with no event before it leaves (`PROBE_HOOK_HOST_IDLE_S`
+    overrides the 15 minutes, for tests)."""
+    try:
+        return max(0.1, float(os.environ.get("PROBE_HOOK_HOST_IDLE_S") or 15 * 60))
+    except ValueError:
+        return 15 * 60.0
+
+
+IDLE_S = _idle_s()
 #: A request's header and payload together, at most (a huge tool result).
 MAX_REQUEST = 64 * 1024 * 1024
 #: The client has this long, after `R`, to say `G`.
@@ -72,6 +95,64 @@ PRELOAD = ("json", "re", "subprocess", "threading", "signal", "runpy", "io", "ha
            "_harness_registry")
 #: What a child changes when it starts: this host's own files, so a change shows.
 WATCHED = ("dispatch.py", "routes.json", "zygote.py")
+#: The host's key (#3355): beside its socket, this many hex characters.
+KEY_SUFFIX = ".key"
+KEY_HEX = 64
+#: The key this host runs events for (`serve` sets it before it listens).
+_KEY: list = []
+
+
+def key_path(sock_path: str) -> str:
+    """`/tmp/probe-<uid>/hooks-<hash>.key` beside `.../hooks-<hash>.sock` (`dispatch.host_key_path`)."""
+    stem = sock_path[: -len(".sock")] if sock_path.endswith(".sock") else sock_path
+    return stem + KEY_SUFFIX
+
+
+def _write_key(path: str) -> str:
+    """A fresh random key, written 0600 through a file of its own and moved into place."""
+    import secrets
+
+    key = secrets.token_hex(KEY_HEX // 2)
+    tmp = "%s.%d.tmp" % (path, os.getpid())
+    try:
+        os.unlink(tmp)
+    except FileNotFoundError:
+        pass
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.write(fd, key.encode("ascii"))
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+    return key
+
+
+def read_key(path: str) -> "str | None":
+    """The key at `path`, read the way every client reads it: never waiting (a
+    FIFO there), never through a symlink, a regular file of a key's size only."""
+    try:
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NOCTTY", 0))
+    except OSError:
+        return None
+    try:
+        import stat as _stat
+
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        key = os.read(fd, 130).decode("ascii", "replace").strip()
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return key if len(key) == KEY_HEX and all(c in "0123456789abcdef" for c in key) else None
+
+
+def _key_ok(given: object) -> bool:
+    """Does a request carry this host's key? Constant time; never without one."""
+    if not _KEY or not isinstance(given, str) or len(given) != len(_KEY[0]):
+        return False
+    return hmac.compare_digest(given.encode("ascii", "replace"), _KEY[0].encode("ascii"))
 
 
 def _mtimes() -> tuple:
@@ -313,6 +394,8 @@ def _read(pending: Pending) -> bool:
             return True
         if not isinstance(header, dict) or header.get("v") != 1:
             return True
+        if not _key_ok(header.get("key")):
+            return True  # closed before `R`: the client runs the event where it is
         pending.header = header
         pending.buffer = rest
     want = pending.header.get("payload")
@@ -340,6 +423,9 @@ def serve(sock_path: str, service_pid: int) -> int:
     import dispatch  # noqa: F401 - warm: compiled and imported once, for every child
 
     _private_dir(os.path.dirname(sock_path))
+    keyfile = key_path(sock_path)
+    _KEY[:] = [_write_key(keyfile)]  # before it listens: a client that finds the socket finds the key
+    written = os.lstat(keyfile)
     try:
         os.unlink(sock_path)
     except FileNotFoundError:
@@ -388,8 +474,9 @@ def serve(sock_path: str, service_pid: int) -> int:
                         conn.close()  # the event runs where it is
                         continue
                     conn.setblocking(False)
+                    # Not use yet: only an event it runs counts (a stream of
+                    # connections it refuses never holds off its idle exit).
                     pendings.append(Pending(conn))
-                    last = now
             for pending in list(pendings):
                 if pending.conn in ready and pending.state in ("reading", "go"):
                     if _read(pending):
@@ -408,6 +495,7 @@ def serve(sock_path: str, service_pid: int) -> int:
                         continue
                     if pid == 0:
                         _child(pending, listener, pendings)
+                    last = now
                     pending.child = pid
                     pending.state = "running"
                     try:
@@ -461,11 +549,41 @@ def serve(sock_path: str, service_pid: int) -> int:
                     pass
             if _mtimes() != stamps:
                 break
+            # The key: gone (another host's exit took it, or anything) is written
+            # again, so this host never refuses every event for good; another
+            # file in its place (a newer host for this folder wrote its own, or
+            # something that is not a key) ends this host, and the service
+            # starts a fresh one.
+            try:
+                now_key = os.lstat(keyfile)
+            except FileNotFoundError:
+                try:
+                    _KEY[:] = [_write_key(keyfile)]
+                    written = os.lstat(keyfile)
+                except OSError:
+                    break  # cannot write it: leave, and the service starts a host that can
+                continue
+            except OSError:
+                break
+            else:
+                # Its inode alone does not say it is ours: a filesystem may hand a
+                # file created after an unlink the same one. The contents do.
+                if (now_key.st_dev, now_key.st_ino) != (written.st_dev, written.st_ino) or read_key(
+                        keyfile) != _KEY[0]:
+                    break
     finally:
         try:
             st = os.stat(sock_path)
             if (st.st_dev, st.st_ino) == (bound.st_dev, bound.st_ino):
                 os.unlink(sock_path)
+        except OSError:
+            pass
+        try:
+            st = os.lstat(keyfile)
+            # Ours only when the same file AND our key (read without waiting: a
+            # FIFO there never holds the exit); another host's key is left alone.
+            if (st.st_dev, st.st_ino) == (written.st_dev, written.st_ino) and read_key(keyfile) == _KEY[0]:
+                os.unlink(keyfile)
         except OSError:
             pass
         listener.close()

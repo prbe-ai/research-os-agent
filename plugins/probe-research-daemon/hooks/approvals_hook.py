@@ -21,7 +21,8 @@ the prompt, silent when nothing waits:
                                       result and written as the answer: the exact yes
                                       label is a yes, anything else is a no. Through
                                       the Probe service when it answers
-                                      (`mailbox.answer`, plan Q2), else written here
+                                      (`mailbox.answer`, plan Q2, with the question's
+                                      answer key), else written here
 
 Every lookup is scoped to the payload's session: one session's hook never
 nudges, checks or answers another session's question.
@@ -44,6 +45,13 @@ sandbox named in the payload, records `default`: the daemon asks.
 The agent never records an answer itself and `probe` has no approve command, so
 planted text cannot say yes. Where the harness has no question tool, the
 researcher answers in their own terminal: `probe approvals`.
+
+THE ANSWER KEY (#3355). The service records an answer only with the question's
+answer key, `keys/<id>` in the approvals folder (`probe.daemon.approvals`): this
+hook reads it beside the request and sends it; the agent's shell, kept out of
+the approvals folder, cannot. A question with no key (filed by an older daemon),
+or a service that refuses, gets the answer file written here, as before. The
+key is never printed: not in the nudge, a refusal, or anything the agent sees.
 
 Harness differences come from the harness registry beside this file (the daemon's adapters
 carry the same facts for the core); the logic is one program.
@@ -353,11 +361,30 @@ ANSWER_WAIT_S = 0.8
 ANSWER_GRACE_S = 0.4
 
 
+#: `probe.daemon.approvals.KEYS_DIRNAME` / `KEY_HEX_CHARS`: each question's answer key.
+KEYS_DIRNAME = "keys"
+KEY_HEX_CHARS = 64
+
+
+def _answer_key(rid: str) -> "str | None":
+    """The question's answer key (`probe.daemon.approvals.Board.mint_key`), or
+    None: a question filed before keys, or one whose key could not be written."""
+    if not rid or not all(c.isascii() and (c.isalnum() or c == "_") for c in rid):
+        return None
+    try:
+        with open(_state() / "approvals" / KEYS_DIRNAME / rid, encoding="ascii") as handle:
+            key = handle.read(KEY_HEX_CHARS + 2).strip()
+    except (OSError, ValueError):
+        return None
+    return key if len(key) == KEY_HEX_CHARS and set(key) <= set("0123456789abcdef") else None
+
+
 def _answer_via_service(rid: str, choice: object) -> "bool | None":
     """Record the pick through the Probe service (`mailbox.answer`, plan Q2),
     which writes the same answer file and tells the session's watchers: True
     when it did, False when the question no longer waits, None when no service
-    answered in time (or none runs, or it refused): this hook writes it."""
+    answered in time (or none runs, or it refused: a question with no answer
+    key is always refused): this hook writes it."""
     if not isinstance(choice, str):
         return None
     try:
@@ -367,11 +394,14 @@ def _answer_via_service(rid: str, choice: object) -> "bool | None":
     if rpc is None:
         return None
     deadline = time.time() + ANSWER_WAIT_S
+    # `channel` is for an older service, which requires it; a newer one names it itself.
+    params = {"state_dir": os.path.abspath(str(_state())), "id": rid, "choice": choice,
+              "channel": "question-tool", "deadline": deadline, "budget": ANSWER_WAIT_S}
+    key = _answer_key(rid)
+    if key is not None:
+        params["key"] = key
     try:
-        answer = rpc.call("mailbox.answer", {"state_dir": os.path.abspath(str(_state())), "id": rid,
-                                             "choice": choice, "channel": "question-tool", "deadline": deadline,
-                                             "budget": ANSWER_WAIT_S},
-                          timeout=ANSWER_WAIT_S + ANSWER_GRACE_S)
+        answer = rpc.call("mailbox.answer", params, timeout=ANSWER_WAIT_S + ANSWER_GRACE_S)
     except Exception as exc:  # noqa: BLE001 -- no answer: written here, past the deadline
         if not getattr(exc, "answered", False):
             time.sleep(max(0.0, deadline + ANSWER_GRACE_S - time.time()))
