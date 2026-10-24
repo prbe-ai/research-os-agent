@@ -168,6 +168,52 @@ def proc(pid: int) -> Proc | None:
     return proc_ps(pid)
 
 
+def members(pgid: int) -> list[tuple[int, str]]:
+    """`(pid, start)` of every running (not zombie) process in process group
+    `pgid`, its start time as `start_time` reads it; [] when none, when they
+    cannot be listed, and on Windows (no process groups)."""
+    found: list[tuple[int, str]] = []
+    if os.name == "nt" or pgid <= 1:
+        return found
+    if Path("/proc/self/stat").exists():
+        try:
+            entries = [e for e in os.listdir("/proc") if e.isdigit()]
+        except OSError:
+            return found
+        for entry in entries:
+            try:
+                raw = Path(f"/proc/{entry}/stat").read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            close = raw.rfind(")")
+            fields = raw[close + 2 :].split()
+            if close < 0 or len(fields) < 20 or fields[0] in ("Z", "X"):
+                continue
+            with contextlib.suppress(ValueError):
+                if int(fields[2]) == pgid:
+                    found.append((int(entry), fields[19]))
+        return found
+    try:
+        out = subprocess.run(
+            ["ps", "-A", "-ww", "-o", "pid=,pgid=,stat=,lstart="],
+            capture_output=True,
+            text=True,
+            timeout=_PS_TIMEOUT_S,
+            check=False,
+            env={**os.environ, "LC_ALL": "C", "TZ": "UTC0"},  # as `proc_ps`: the same start string
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return found
+    for line in out.splitlines():
+        tokens = line.split()
+        if len(tokens) < 8 or tokens[2].startswith("Z"):
+            continue
+        with contextlib.suppress(ValueError):
+            if int(tokens[1]) == pgid:
+                found.append((int(tokens[0]), " ".join(tokens[3:8])))
+    return found
+
+
 def exists(pid: int) -> bool:
     """Does a process `pid` exist (ours or not)? `os.kill(pid, 0)` on POSIX;
     on Windows the process is opened instead (there os.kill terminates it)."""
