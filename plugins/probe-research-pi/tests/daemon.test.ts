@@ -1,11 +1,25 @@
-import { readFileSync } from "node:fs";
+import { execFile, type ChildProcess } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { describe, expect, it, vi } from "vitest";
 
-import { isDaemonAlive, pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type PruneDeps } from "../src/core/daemon.js";
-import { pidFile, shutdownSentinelFile } from "../src/core/paths.js";
+import {
+  finishHostedSession,
+  HOSTED_FINISH_GRACE_MS,
+  HostedFinish,
+  isDaemonAlive,
+  pruneStaleShutdownSentinels,
+  SpawnConfirmation,
+  spawnDaemon,
+  stopDaemon,
+  waitForSpawnConfirmation,
+  type DaemonDeps,
+  type PruneDeps,
+} from "../src/core/daemon.js";
+import { hostedFile, pidFile, shutdownSentinelFile } from "../src/core/paths.js";
 import { SERVICE_OWNER_PID_ENV } from "../src/core/service.js";
 import type { TapRuntime } from "../src/core/tapRuntime.js";
 
@@ -74,6 +88,9 @@ function fakeDeps(overrides: Partial<DaemonDeps> = {}): DaemonDeps & { files: Ma
     commandForPid: () =>
       '/bin/sh -c SID="$1"; ... "$PY" -m tap watch --session-id "$SID" ... sh sess /repo ' +
       "/usr/bin/python3 /tmp/sess.log /tmp/probe-research-tap-watcher-sess.pid probe-research-tap",
+    // No session here is the Probe service's unless a test says so (and no
+    // test reads the real /tmp marker by accident).
+    hostedServicePid: () => null,
     log: () => {},
     // Instant by default so nothing in this suite pays real wall-clock time
     // for the bounded poll in waitForSpawnConfirmation; tests that care about
@@ -100,7 +117,7 @@ describe("spawnDaemon", () => {
       deps,
     );
 
-    expect(result).toEqual({ spawned: true, pid: 4242 });
+    expect(result).toMatchObject({ spawned: true, pid: 4242 });
     expect(deps.spawnCalls).toHaveLength(1);
     expect(deps.spawnCalls[0].command).toBe("/usr/bin/python3");
     // Built from the SHARED contract, never retyped here. This argv has three
@@ -256,7 +273,118 @@ describe("spawnDaemon", () => {
   });
 });
 
+/**
+ * A `.hosted` marker that was there BEFORE the spawn says nothing about this
+ * start: a service that stopped recording the session leaves its marker, and a
+ * `tap start` that then refused (a gate, an interpreter) would read as confirmed.
+ * Only a marker that appeared or was rewritten since (the service writes it
+ * whole, a new inode), or an unchanged one once `tap start` itself exited 0,
+ * is confirmation.
+ */
+describe("waitForSpawnConfirmation and a marker from before the spawn", () => {
+  const before = { ino: "41", mtimeNs: "1000" };
+
+  it("is not confirmation while `tap start` has not answered", async () => {
+    const logged: string[] = [];
+    const deps = fakeDeps({ hostedServicePid: () => 9001, markerStamp: () => before, log: (m) => logged.push(m) });
+    const answer = await waitForSpawnConfirmation("stale-running", deps, {
+      maxPolls: 3,
+      spawned: { markerBefore: before, exitCode: () => undefined },
+    });
+    expect(answer).toBe(SpawnConfirmation.Missing);
+    expect(logged.join("\n")).toContain("spawn failed?");
+  });
+
+  it("is not confirmation after `tap start` refused (exit 2: not paired)", async () => {
+    const deps = fakeDeps({ hostedServicePid: () => 9001, markerStamp: () => before });
+    expect(
+      await waitForSpawnConfirmation("stale-refused", deps, { maxPolls: 3, spawned: { markerBefore: before, exitCode: () => 2 } }),
+    ).toBe(SpawnConfirmation.Missing);
+  });
+
+  it("is confirmation once `tap start` exited 0 (the service already records the session)", async () => {
+    let polls = 0;
+    const deps = fakeDeps({
+      hostedServicePid: () => 9001,
+      markerStamp: () => before,
+      sleep: async () => {
+        polls += 1;
+      },
+    });
+    const answer = await waitForSpawnConfirmation("stale-then-ok", deps, {
+      spawned: { markerBefore: before, exitCode: () => (polls >= 2 ? 0 : undefined) },
+    });
+    expect(answer).toBe(SpawnConfirmation.Hosted);
+    expect(polls).toBe(2);
+  });
+
+  it("is confirmation when the service rewrites it during the wait", async () => {
+    let polls = 0;
+    const deps = fakeDeps({
+      hostedServicePid: () => 9001,
+      markerStamp: () => (polls >= 1 ? { ino: "42", mtimeNs: "2000" } : before),
+      sleep: async () => {
+        polls += 1;
+      },
+    });
+    const answer = await waitForSpawnConfirmation("rewritten", deps, { spawned: { markerBefore: before, exitCode: () => undefined } });
+    expect(answer).toBe(SpawnConfirmation.Hosted);
+    expect(polls).toBe(1);
+  });
+
+  it("with no word on the spawn, a marker already there when the wait starts is not confirmation", async () => {
+    const deps = fakeDeps({ hostedServicePid: () => 9001, markerStamp: () => before });
+    expect(await waitForSpawnConfirmation("no-witness", deps, { maxPolls: 2 })).toBe(SpawnConfirmation.Missing);
+  });
+
+  it("spawnDaemon reports how `tap start` exited", () => {
+    let onExit: ((code: number | null) => void) | undefined;
+    const deps = fakeDeps({
+      spawn: (() => ({
+        pid: 77,
+        unref: () => {},
+        once: (event: string, listener: (code: number | null) => void) => {
+          if (event === "exit") onExit = listener;
+        },
+      })) as never,
+    });
+    const result = spawnDaemon({ sessionId: "exit-code", transcriptPath: "/t.jsonl", cwd: "/repo", runtime }, deps);
+    expect(result.spawned).toBe(true);
+    if (!result.spawned) return;
+    expect(result.exitCode()).toBeUndefined();
+    onExit?.(0);
+    expect(result.exitCode()).toBe(0);
+  });
+});
+
+describe("spawnDaemon and a session the Probe service records", () => {
+  // `tap start` asks the service whether it still records the session (a
+  // marker outlives a recorder that ended); the pre-check here cannot, so it
+  // never skips `tap start` on the marker alone.
+  it("still runs `tap start` when only the `.hosted` marker says the service records it", () => {
+    const deps = fakeDeps({ hostedServicePid: () => 9001 });
+    const result = spawnDaemon({ sessionId: "hosted-precheck", transcriptPath: "/t.jsonl", cwd: "/repo", runtime }, deps);
+    expect(result.spawned).toBe(true);
+    expect(deps.spawnCalls).toHaveLength(1);
+  });
+});
+
 describe("waitForSpawnConfirmation", () => {
+  it("answers which confirmation came", async () => {
+    const watcher = fakeDeps({ kill: () => {} });
+    watcher.files.set(pidFile("answers-watcher"), "55");
+    expect(await waitForSpawnConfirmation("answers-watcher", watcher)).toBe(SpawnConfirmation.Watcher);
+    // A marker that was not there before the spawn and is now.
+    const appeared = fakeDeps({ hostedServicePid: () => 9001, markerStamp: () => ({ ino: "7", mtimeNs: "1" }) });
+    expect(
+      await waitForSpawnConfirmation("answers-hosted", appeared, { spawned: { markerBefore: null, exitCode: () => undefined } }),
+    ).toBe(SpawnConfirmation.Hosted);
+    expect(await waitForSpawnConfirmation("answers-missing", fakeDeps())).toBe(SpawnConfirmation.Missing);
+    const dead = fakeDeps();
+    dead.files.set(pidFile("answers-dead"), "55");
+    expect(await waitForSpawnConfirmation("answers-dead", dead)).toBe(SpawnConfirmation.NotAlive);
+  });
+
   it("resolves without sleeping when the pidfile already has content", async () => {
     const deps = fakeDeps();
     const sleepCalls: number[] = [];
@@ -405,6 +533,170 @@ describe("isDaemonAlive", () => {
     const deps = fakeDeps({ kill: () => {}, commandForPid: () => null });
     deps.files.set(pidFile("unidentifiable"), "123");
     expect(isDaemonAlive("unidentifiable", deps)).toBe(false);
+  });
+
+  it("is true for a session the Probe service records (no pid file, a live marker)", () => {
+    expect(isDaemonAlive("hosted", fakeDeps({ hostedServicePid: () => 9001 }))).toBe(true);
+  });
+
+  it("falls through a dead watcher's pid file to the service's marker", () => {
+    const deps = fakeDeps({ hostedServicePid: () => 9001 });
+    deps.files.set(pidFile("dead-then-hosted"), "123");
+    expect(isDaemonAlive("dead-then-hosted", deps)).toBe(true);
+  });
+});
+
+describe("finishHostedSession", () => {
+  type ExecCall = { command: string; args: string[]; options: { env: Record<string, string | undefined>; timeout: number } };
+
+  function finishDeps(overrides: Partial<DaemonDeps> = {}, execError: Error | null = null) {
+    const deps = fakeDeps(overrides);
+    const calls: ExecCall[] = [];
+    const execFile = vi.fn((command: string, args: string[], options: ExecCall["options"], callback: (e: Error | null, out: string, err: string) => void) => {
+      calls.push({ command, args, options });
+      callback(execError, "", "");
+    });
+    return { deps: { ...deps, execFile }, files: deps.files, calls };
+  }
+
+  it("does nothing for a session the service does not record", async () => {
+    const { deps, calls } = finishDeps({ hostedServicePid: () => 9001 });
+    expect(await finishHostedSession("not-hosted", { runtime, waitS: 3 }, deps)).toBe(HostedFinish.NotHosted);
+    expect(calls).toEqual([]);
+  });
+
+  it("resolves the interpreter only when it will run `tap finish`", async () => {
+    const resolveRuntime = vi.fn(() => runtime);
+    const none = finishDeps({ hostedServicePid: () => 9001 });
+    await finishHostedSession("lazy-none", { runtime: resolveRuntime, waitS: 3 }, none.deps); // no marker
+    const sw = finishDeps({ hostedServicePid: () => 9001 });
+    sw.files.set(hostedFile("lazy-switch"), "9001");
+    await finishHostedSession("lazy-switch", { runtime: resolveRuntime, waitS: 0 }, sw.deps); // a switch
+    const gone = finishDeps({ hostedServicePid: () => null });
+    gone.files.set(hostedFile("lazy-gone"), "9001");
+    await finishHostedSession("lazy-gone", { runtime: resolveRuntime, waitS: 3 }, gone.deps); // no live service
+    expect(resolveRuntime).not.toHaveBeenCalled();
+
+    const quit = finishDeps({ hostedServicePid: () => 9001 });
+    quit.files.set(hostedFile("lazy-quit"), "9001");
+    await finishHostedSession("lazy-quit", { runtime: resolveRuntime, waitS: 3 }, quit.deps);
+    expect(resolveRuntime).toHaveBeenCalledTimes(1);
+    expect(quit.calls).toHaveLength(1);
+  });
+
+  it("starts `tap finish` with no console window (Windows)", async () => {
+    const { deps, files, calls } = finishDeps({ hostedServicePid: () => 9001 });
+    files.set(hostedFile("hidden"), "9001");
+    await finishHostedSession("hidden", { runtime, waitS: 3 }, deps);
+    expect((calls[0].options as { windowsHide?: boolean }).windowsHide).toBe(true);
+  });
+
+  it(
+    "holds the quit no longer than its bound, even when `tap finish` ignores SIGTERM: it is killed",
+    async () => {
+      const dir = mkdtempSync(join(tmpdir(), "pi-finish-sleeper-"));
+      let child: ChildProcess | undefined;
+      try {
+        // Ignores TERM (SIG_IGN survives the exec), as a wedged interpreter would.
+        const sleeper = join(dir, "python3");
+        writeFileSync(sleeper, "#!/bin/sh\ntrap '' TERM\nexec sleep 30\n");
+        chmodSync(sleeper, 0o755);
+        const files = new Map<string, string>([[hostedFile("wedged"), "9001"]]);
+        const started = Date.now();
+        const outcome = await finishHostedSession(
+          "wedged",
+          { runtime: { python: sleeper }, waitS: 1 },
+          {
+            existsSync: (p) => files.has(p),
+            rmSync: (p) => {
+              files.delete(p);
+            },
+            hostedServicePid: () => 9001,
+            log: () => {},
+            execFile: (command, args, options, callback) => {
+              child = execFile(command, args, options, (error, stdout, stderr) => callback(error, String(stdout), String(stderr)));
+              return child;
+            },
+          },
+        );
+        const took = Date.now() - started;
+        expect(outcome).toBe(HostedFinish.Finished);
+        expect(took).toBeLessThan(1000 + HOSTED_FINISH_GRACE_MS + 700);
+        expect(files.has(hostedFile("wedged"))).toBe(false);
+        await new Promise((r) => setTimeout(r, 200));
+        expect(child?.pid).toBeGreaterThan(1);
+        expect(() => process.kill(child!.pid!, 0)).toThrow();
+      } finally {
+        if (child?.pid) {
+          try {
+            process.kill(child.pid, "SIGKILL");
+          } catch {
+            // gone, as it should be
+          }
+        }
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+    10_000,
+  );
+
+  it("on a quit, runs `tap finish` with the wait, bounded, on the resolved tap, then drops the marker", async () => {
+    const { deps, files, calls } = finishDeps({ hostedServicePid: () => 9001 });
+    files.set(hostedFile("quit"), "9001");
+
+    expect(await finishHostedSession("quit", { runtime, waitS: 3, baseEnv: { PATH: "/usr/bin" } }, deps)).toBe(HostedFinish.Finished);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].command).toBe(runtime.python);
+    expect(calls[0].args).toEqual(["-m", "tap", "finish", "--session-id", "quit", "--wait", "3"]);
+    expect(calls[0].options.env.PYTHONPATH).toBe(runtime.tapRoot);
+    expect(calls[0].options.env.PROBE_TAP_SOURCE).toBe("pi"); // harness-literal-ok: the tap's source id, asserted
+    expect(calls[0].options.timeout).toBe(3000 + HOSTED_FINISH_GRACE_MS);
+    expect(files.has(hostedFile("quit"))).toBe(false);
+  });
+
+  it("drops the marker whatever `tap finish` answered (exit 1, exit 2, killed at the bound)", async () => {
+    const { deps, files } = finishDeps({ hostedServicePid: () => 9001 }, new Error("Command failed: exit 2"));
+    files.set(hostedFile("finish-failed"), "9001");
+    expect(await finishHostedSession("finish-failed", { runtime, waitS: 3 }, deps)).toBe(HostedFinish.Finished);
+    expect(files.has(hostedFile("finish-failed"))).toBe(false);
+  });
+
+  it("on a session switch, asks no finish (the sentinel ends the recorder) and drops the marker", async () => {
+    const { deps, files, calls } = finishDeps({ hostedServicePid: () => 9001 });
+    files.set(hostedFile("switch"), "9001");
+    expect(await finishHostedSession("switch", { runtime, waitS: 0 }, deps)).toBe(HostedFinish.MarkerDropped);
+    expect(calls).toEqual([]);
+    expect(files.has(hostedFile("switch"))).toBe(false);
+  });
+
+  it("asks no finish of a service that is gone, or with no interpreter, and still drops the marker", async () => {
+    const gone = finishDeps({ hostedServicePid: () => null });
+    gone.files.set(hostedFile("gone"), "9001");
+    expect(await finishHostedSession("gone", { runtime, waitS: 3 }, gone.deps)).toBe(HostedFinish.MarkerDropped);
+    expect(gone.calls).toEqual([]);
+    expect(gone.files.has(hostedFile("gone"))).toBe(false);
+
+    const none = finishDeps({ hostedServicePid: () => 9001 });
+    none.files.set(hostedFile("no-python"), "9001");
+    expect(await finishHostedSession("no-python", { runtime: null, waitS: 3 }, none.deps)).toBe(HostedFinish.MarkerDropped);
+    expect(none.calls).toEqual([]);
+    expect(none.files.has(hostedFile("no-python"))).toBe(false);
+  });
+
+  it("never throws: an interpreter that cannot be started is logged, and the marker still goes", async () => {
+    const logged: string[] = [];
+    const { deps, files } = finishDeps({ hostedServicePid: () => 9001, log: (m) => logged.push(m) });
+    files.set(hostedFile("spawn-throws"), "9001");
+    const throwing = {
+      ...deps,
+      execFile: () => {
+        throw new Error("spawn EACCES");
+      },
+    };
+    expect(await finishHostedSession("spawn-throws", { runtime, waitS: 3 }, throwing)).toBe(HostedFinish.Finished);
+    expect(logged.join("\n")).toContain("spawn EACCES");
+    expect(files.has(hostedFile("spawn-throws"))).toBe(false);
   });
 });
 

@@ -22,23 +22,32 @@
  *    own session/process group on POSIX (libuv calls setsid() internally),
  *    which is the property session-start.sh needed a nohup+python shim to
  *    get. Nothing here reproduces that shim.
- *  - THE PRE-CHECK, THE WAIT AND THE STOP. `isDaemonAlive()` (which must
+ *  - THE PRE-CHECK, THE WAIT AND THE STOP. `isWatcherAlive()` (which must
  *    agree with the spawner — see its own comment),
  *    `waitForSpawnConfirmation()`'s post-spawn diagnostic, `stopDaemon()`'s
  *    session_shutdown analog of session-end.sh, and the sentinel pruning.
  *    All four read and write the same `/tmp` files `tap start` does.
+ *  - A SESSION THE PROBE SERVICE RECORDS (plan A2): `tap start` asks the
+ *    service first, and when it takes the session there is no wrapper and no
+ *    pid file, only a `.hosted` marker naming the service (`hosted.ts`). The
+ *    readers here accept that marker, and `finishHostedSession()` is the
+ *    `tap finish` half of session-end.sh.
  */
 
 import { execFileSync } from "node:child_process";
 import { delimiter, join } from "node:path";
 
-import { pidFile, sessionLogFile, shutdownSentinelFile, WATCHER_PREFIX, watcherDir, type PathEnv } from "./paths.js";
+import { hostedMarkerStamp, hostedServicePid, sameMarkerStamp, type MarkerStamp } from "./hosted.js";
+import { hostedFile, pidFile, sessionLogFile, shutdownSentinelFile, WATCHER_PREFIX, watcherDir, type PathEnv } from "./paths.js";
 import { SERVICE_OWNER_PID_ENV } from "./service.js";
 import type { TapRuntime } from "./tapRuntime.js";
+import type { TrackingChild, TrackingExecFileFn } from "./trackingState.js";
 
 export interface ChildLike {
   pid: number | undefined;
   unref: () => void;
+  /** Node's ChildProcess `once`; read here for "exit", whose first argument is the exit code (null when signalled). */
+  once?: (event: string, listener: (payload?: unknown) => void) => unknown;
 }
 
 export type SpawnFn = (
@@ -62,6 +71,14 @@ export interface DaemonDeps {
    * `psCommandForPid` below — and only tests have a reason to substitute one.
    */
   commandForPid?: (pid: number) => string | null;
+  /**
+   * The Probe service's pid when it records this session (its `.hosted`
+   * marker, checked), else null. Optional for the same reason: every real
+   * caller wants `hosted.ts::hostedServicePid`.
+   */
+  hostedServicePid?: (sessionId: string) => number | null;
+  /** The session's `.hosted` marker as it is now; defaults to `hosted.ts::hostedMarkerStamp`. */
+  markerStamp?: (sessionId: string) => MarkerStamp | null;
   log: (message: string) => void;
   /** Real callers pass a setTimeout-backed sleep; tests pass an instant one so
    * the bounded poll below never actually costs wall-clock time in the suite. */
@@ -73,7 +90,7 @@ export interface DaemonDeps {
  *
  * Byte-for-byte the same question `tap/start.py::_looks_like_the_uploader`
  * asks (`/bin/ps -ww -p <pid> -o command=`, 5s bound, any failure reads as "not
- * the tap"), because the two answers have to match — see `isDaemonAlive`.
+ * the tap"), because the two answers have to match — see `isWatcherAlive`.
  *
  * Never throws: an unreadable `ps` is indistinguishable, from here, from a
  * process that is not ours, and both must resolve to "do not claim it is
@@ -92,7 +109,7 @@ function psCommandForPid(pid: number): string | null {
 }
 
 /**
- * Is a tap daemon watching this session?
+ * Is a `tap watch` (its wrapper) watching this session?
  *
  * TWO conditions, not one: the pidfile's pid must be signalable AND the OS
  * must say that process is the tap. The second half is not belt-and-braces —
@@ -114,7 +131,7 @@ function psCommandForPid(pid: number): string | null {
  * mirrors `tap start`'s looser substring form on purpose: this function must
  * match the process that decides the spawn, not a third variant.)
  */
-export function isDaemonAlive(
+export function isWatcherAlive(
   sessionId: string,
   deps: Pick<DaemonDeps, "existsSync" | "readFileSync" | "kill" | "commandForPid">,
 ): boolean {
@@ -137,8 +154,35 @@ export function isDaemonAlive(
   return command !== null && command.includes("tap");
 }
 
+/**
+ * Is anything recording this session: its `tap watch` (`isWatcherAlive`), or
+ * else the Probe service, by its `.hosted` marker (`hosted.ts`)? What
+ * `/probe-status` and the post-spawn wait report.
+ *
+ * A dead or foreign pid file falls through to the marker, as lane A's
+ * `capture_state` does (a SessionStart the service took may leave a dead
+ * watcher's pid file behind).
+ *
+ * NOT the spawn pre-check: `spawnDaemon` asks `isWatcherAlive` alone. For a
+ * hosted session `tap start` also asks the service whether it still records the
+ * session (`tap/start.py::_hosted`: a marker outlives a recorder that ended,
+ * say when its agent exited), and a pre-check more permissive than that would
+ * skip `tap start` and leave the session unrecorded. See `isWatcherAlive`.
+ */
+export function isDaemonAlive(
+  sessionId: string,
+  deps: Pick<DaemonDeps, "existsSync" | "readFileSync" | "kill" | "commandForPid" | "hostedServicePid">,
+): boolean {
+  return isWatcherAlive(sessionId, deps) || (deps.hostedServicePid ?? ((sid: string) => hostedServicePid(sid)))(sessionId) !== null;
+}
+
 export type SpawnResult =
-  | { spawned: true; pid: number | undefined }
+  | {
+      spawned: true;
+      pid: number | undefined;
+      /** How `tap start` exited: undefined while it runs, null when signalled (or unknown). */
+      exitCode: () => number | null | undefined;
+    }
   | { spawned: false; reason: "already-running" };
 
 export interface SpawnParams {
@@ -156,6 +200,27 @@ export interface SpawnParams {
 // exactly rather than re-guessed. See waitForSpawnConfirmation().
 const SPAWN_CONFIRM_POLL_MS = 50;
 const SPAWN_CONFIRM_MAX_POLLS = 40;
+
+/** How a fresh spawn was confirmed (`waitForSpawnConfirmation`'s answer). */
+export const SpawnConfirmation = {
+  /** The wrapper wrote its pid file, and it is the tap. */
+  Watcher: "watcher",
+  /** The Probe service records the session: its `.hosted` marker names it. */
+  Hosted: "hosted",
+  /** Neither showed up within the bound (logged). */
+  Missing: "missing",
+  /** A pid file showed up, but nothing behind it is alive (logged). */
+  NotAlive: "not-alive",
+} as const;
+export type SpawnConfirmationValue = (typeof SpawnConfirmation)[keyof typeof SpawnConfirmation];
+
+/** What the caller knows about the spawn it waits on (`waitForSpawnConfirmation`). */
+export interface SpawnWitness {
+  /** The `.hosted` marker as it was just BEFORE the spawn (`hostedMarkerStamp`), null for none. */
+  markerBefore: MarkerStamp | null;
+  /** How the spawned `tap start` exited: undefined while it runs (`SpawnResult.exitCode`). */
+  exitCode: () => number | null | undefined;
+}
 
 /**
  * Poll for the wrapper's pidfile to appear and become non-empty, bounded to
@@ -178,7 +243,7 @@ const SPAWN_CONFIRM_MAX_POLLS = 40;
  *    session_start for the SAME session id -- another pi process resuming
  *    the same conversation, or a second event firing before the in-process
  *    `spawnedSessionIds` guard in extension.ts has a chance to matter --
- *    sees no pidfile via `isDaemonAlive()`. It is `tap start`'s own
+ *    sees no pidfile via `isWatcherAlive()`. It is `tap start`'s own
  *    three-state pid check that ultimately makes a doubled spawn harmless;
  *    waiting here, before the caller's session_start handler completes,
  *    keeps the window from being left wide open in the first place.
@@ -196,18 +261,40 @@ const SPAWN_CONFIRM_MAX_POLLS = 40;
  *    spawn, an interpreter below 3.11, a transcript not yet on disk) are
  *    exactly the cases worth a log line.
  *
+ * A SESSION THE PROBE SERVICE TAKES writes no pid file at all: `tap start`
+ * asks the service first (`tap record`), and the service's `.hosted` marker
+ * is its confirmation. A live one (`hosted.ts`: this user's file, naming the
+ * running service) ends the wait, quietly; waiting the full bound for a pid
+ * file that never comes cost every such session start 2 s and a false
+ * "spawn failed?" line (audit #9). But only a marker THIS start produced: one
+ * that appeared or was rewritten since the spawn (`tap record` writes it whole,
+ * so a new inode), or, unchanged, once `tap start` itself exited 0 (it found
+ * the service already recording the session). A marker from before the spawn
+ * says nothing about it: a service that stopped recording the session leaves
+ * its marker, and a `tap start` that then refused would read as confirmed.
+ * `opts.spawned` says what the caller knows (the marker before the spawn, and
+ * how `tap start` exited); without it the marker as it is when the wait starts
+ * is taken as the one from before, and no exit is known.
+ *
  * Never throws and never changes the caller's success/failure story: exactly
  * like session-start.sh, which always prints `{"continue": true}` whether or
- * not its own diagnostic fired, this only logs.
+ * not its own diagnostic fired, this only logs. The answer says which
+ * confirmation came, for the caller's own log line.
  */
 export async function waitForSpawnConfirmation(
   sessionId: string,
-  deps: Pick<DaemonDeps, "existsSync" | "readFileSync" | "kill" | "commandForPid" | "log" | "sleep">,
-  opts: { pollMs?: number; maxPolls?: number } = {},
-): Promise<void> {
+  deps: Pick<DaemonDeps, "existsSync" | "readFileSync" | "kill" | "commandForPid" | "hostedServicePid" | "markerStamp" | "log" | "sleep">,
+  opts: { pollMs?: number; maxPolls?: number; spawned?: SpawnWitness } = {},
+): Promise<SpawnConfirmationValue> {
   const pollMs = opts.pollMs ?? SPAWN_CONFIRM_POLL_MS;
   const maxPolls = opts.maxPolls ?? SPAWN_CONFIRM_MAX_POLLS;
   const pf = pidFile(sessionId);
+  const hosted = deps.hostedServicePid ?? ((sid: string) => hostedServicePid(sid, { log: deps.log }));
+  const stamp = deps.markerStamp ?? hostedMarkerStamp;
+  const witness: SpawnWitness = opts.spawned ?? { markerBefore: stamp(sessionId), exitCode: () => undefined };
+  /** The service records the session, and this start is why we know. */
+  const hostedByThisStart = (): boolean =>
+    (!sameMarkerStamp(stamp(sessionId), witness.markerBefore) || witness.exitCode() === 0) && hosted(sessionId) !== null;
 
   const hasContent = (): boolean => {
     if (!deps.existsSync(pf)) return false;
@@ -217,27 +304,47 @@ export async function waitForSpawnConfirmation(
       return false;
     }
   };
+  const confirmation = (): SpawnConfirmationValue | null => {
+    if (hasContent()) return SpawnConfirmation.Watcher;
+    return hostedByThisStart() ? SpawnConfirmation.Hosted : null;
+  };
 
-  let confirmed = hasContent();
-  for (let i = 0; !confirmed && i < maxPolls; i++) {
+  let confirmed = confirmation();
+  for (let i = 0; confirmed === null && i < maxPolls; i++) {
     await deps.sleep(pollMs);
-    confirmed = hasContent();
+    confirmed = confirmation();
   }
 
-  if (!confirmed) {
+  if (confirmed === null) {
     deps.log(
       `tap: wrapper wrote no pid file within ${(pollMs * maxPolls) / 1000}s (spawn failed?); ` +
         `session=${sessionId} — transcript will be recovered by the reconciler`,
     );
-    return;
+    return SpawnConfirmation.Missing;
   }
+  if (confirmed === SpawnConfirmation.Hosted) return confirmed;
 
-  if (!isDaemonAlive(sessionId, deps)) {
+  if (!isDaemonAlive(sessionId, { ...deps, hostedServicePid: hosted })) {
     deps.log(
       `tap: wrapper pid not alive just after spawn; session=${sessionId} — ` +
         "transcript will be recovered by the reconciler",
     );
+    return SpawnConfirmation.NotAlive;
   }
+  return confirmed;
+}
+
+/** The environment a `python -m tap ...` child of this package runs with:
+ * ours, PROBE_TAP_SOURCE set to pi, and the resolved tap first on PYTHONPATH. */
+function tapChildEnv(runtime: TapRuntime, baseEnv: PathEnv): PathEnv {
+  const pythonPath = runtime.tapRoot
+    ? [runtime.tapRoot, baseEnv.PYTHONPATH].filter((v): v is string => Boolean(v)).join(delimiter)
+    : baseEnv.PYTHONPATH;
+  return {
+    ...baseEnv,
+    PROBE_TAP_SOURCE: "pi",
+    ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
+  };
 }
 
 /**
@@ -260,7 +367,9 @@ export async function waitForSpawnConfirmation(
 export function spawnDaemon(params: SpawnParams, deps: DaemonDeps): SpawnResult {
   const { sessionId, transcriptPath, cwd, runtime } = params;
 
-  if (isDaemonAlive(sessionId, deps)) {
+  // The watcher alone, never the `.hosted` marker: `tap start` decides a hosted
+  // session by asking the service too (see `isDaemonAlive`).
+  if (isWatcherAlive(sessionId, deps)) {
     return { spawned: false, reason: "already-running" };
   }
 
@@ -269,14 +378,8 @@ export function spawnDaemon(params: SpawnParams, deps: DaemonDeps): SpawnResult 
 
   deps.mkdirSync(join(logFile, ".."));
 
-  const pythonPath = runtime.tapRoot
-    ? [runtime.tapRoot, baseEnv.PYTHONPATH].filter((v): v is string => Boolean(v)).join(delimiter)
-    : baseEnv.PYTHONPATH;
-
   const env: PathEnv = {
-    ...baseEnv,
-    PROBE_TAP_SOURCE: "pi",
-    ...(pythonPath ? { PYTHONPATH: pythonPath } : {}),
+    ...tapChildEnv(runtime, baseEnv),
     // Read by the tap's registration thread only while the service is on.
     ...(params.ownerPid ? { [SERVICE_OWNER_PID_ENV]: String(params.ownerPid) } : {}),
   };
@@ -300,10 +403,14 @@ export function spawnDaemon(params: SpawnParams, deps: DaemonDeps): SpawnResult 
     ],
     { detached: true, stdio: "ignore", env },
   );
+  let exit: number | null | undefined;
+  child.once?.("exit", (code) => {
+    exit = typeof code === "number" ? code : null;
+  });
   child.unref();
 
   deps.log(`spawned tap watcher for session ${sessionId} (pid ${child.pid ?? "unknown"})`);
-  return { spawned: true, pid: child.pid };
+  return { spawned: true, pid: child.pid, exitCode: () => exit };
 }
 
 /**
@@ -353,6 +460,133 @@ export function stopDaemon(sessionId: string, deps: Pick<DaemonDeps, "existsSync
   // if the wrapper missed this signal, the sentinel is the last-resort stop
   // condition both the wrapper's loop and the daemon's per-tick check watch.
   // The next spawnDaemon() for this session id clears it before spawning.
+}
+
+/**
+ * How long a quit waits for the Probe service to finish a session it records
+ * (`tap finish --wait`): its recorder's last pass and FINALIZE. session-end.sh
+ * waits 1.1 s under Claude Code's default exit budget, 2.6 s under Codex and
+ * 15 s for a harness that awaits its hooks; pi awaits its handlers with no
+ * budget of its own, so this is pi's choice: long enough for a usual last pass,
+ * short enough that a quit is not held. The service finishes the session
+ * whether or not pi is still waiting.
+ */
+export const HOSTED_FINISH_WAIT_S = 3;
+/** On top of the wait: the client's Python start and its connect. Then the client is stopped. */
+export const HOSTED_FINISH_GRACE_MS = 1_000;
+
+/** What `finishHostedSession` did. */
+export const HostedFinish = {
+  /** No `.hosted` marker: the session was not the service's. */
+  NotHosted: "not-hosted",
+  /** The marker went; no `tap finish` was asked (a switch, a dead service, no interpreter). */
+  MarkerDropped: "marker-dropped",
+  /** `tap finish` ran (bounded), then the marker went. */
+  Finished: "finished",
+} as const;
+export type HostedFinishValue = (typeof HostedFinish)[keyof typeof HostedFinish];
+
+export interface FinishParams {
+  /**
+   * The interpreter `tap finish` runs on (null: none found; the marker still
+   * goes). A function is called only when `tap finish` will run: resolving one
+   * may ask interpreters their version, which a switch, or a session the
+   * service does not record, must not pay for.
+   */
+  runtime: TapRuntime | null | (() => TapRuntime | null);
+  /** Seconds to wait for the last pass: HOSTED_FINISH_WAIT_S on a quit, 0 on a session switch. */
+  waitS: number;
+  baseEnv?: PathEnv;
+}
+
+/**
+ * The hosted half of session-end.sh, after `stopDaemon` touched the sentinel.
+ *
+ * For a session the Probe service records (its `.hosted` marker, plan A2):
+ *  - on a quit (`waitS` > 0) and while the marker names the live service, ask
+ *    the service to finish the session now and wait, bounded, for its last
+ *    pass (`python -m tap finish --session-id S --wait W`). The sentinel alone
+ *    ends the recorder only at its next pass, and a recorder still finishing
+ *    when the session is resumed answered "recording" to the resume;
+ *  - then remove the marker, as session-end.sh does. This is what lets a
+ *    resume record again (audit #10): `tap start` reads a session whose
+ *    marker is gone as recorded by no one, clears the sentinel and asks the
+ *    service to record it (`session.record`, which starts a new recorder even
+ *    while an old one finishes). Left in place, the marker plus a finishing
+ *    recorder read "running", and nothing recorded the resumed session.
+ *
+ * A session switch (`waitS` 0) asks no `tap finish`, as session-end.sh skips
+ * it on `clear` and `resume`: the sentinel ends the recorder, and a wait would
+ * hold pi's switch. Never throws; every failure ends in the marker removed.
+ *
+ * The bound holds whatever the client does: at `waitS` + HOSTED_FINISH_GRACE_MS
+ * this stops waiting on its own timer and kills the client (SIGKILL), so a
+ * `tap finish` that ignores the SIGTERM `execFile`'s timeout sends cannot hold
+ * pi's quit.
+ */
+export async function finishHostedSession(
+  sessionId: string,
+  params: FinishParams,
+  deps: Pick<DaemonDeps, "existsSync" | "rmSync" | "hostedServicePid" | "log"> & { execFile: TrackingExecFileFn },
+): Promise<HostedFinishValue> {
+  const marker = hostedFile(sessionId);
+  if (!deps.existsSync(marker)) return HostedFinish.NotHosted;
+  let outcome: HostedFinishValue = HostedFinish.MarkerDropped;
+  const { waitS } = params;
+  const hosted = deps.hostedServicePid ?? ((sid: string) => hostedServicePid(sid, { log: deps.log }));
+  const runtime =
+    waitS > 0 && hosted(sessionId) !== null
+      ? typeof params.runtime === "function"
+        ? params.runtime()
+        : params.runtime
+      : null;
+  if (runtime) {
+    const bound = waitS * 1000 + HOSTED_FINISH_GRACE_MS;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      let child: TrackingChild | void = undefined;
+      const settle = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        try {
+          child?.kill("SIGKILL");
+        } catch {
+          // gone already
+        }
+        settle();
+      }, bound);
+      try {
+        child = deps.execFile(
+          runtime.python,
+          ["-m", "tap", "finish", "--session-id", sessionId, "--wait", String(waitS)],
+          {
+            env: tapChildEnv(runtime, params.baseEnv ?? process.env),
+            encoding: "utf8",
+            timeout: bound,
+            maxBuffer: 64 * 1024,
+            windowsHide: true,
+          },
+          // Exit 1 (the service does not record it) and 2 (not finished in
+          // time) read the same here: the service finishes it either way.
+          () => settle(),
+        );
+      } catch (err) {
+        deps.log(`tap finish did not run for ${sessionId}: ${err instanceof Error ? err.message : String(err)}`);
+        settle();
+      }
+    });
+    outcome = HostedFinish.Finished;
+  }
+  try {
+    deps.rmSync(marker);
+  } catch {
+    // Not ours to remove (another user's file in the shared /tmp), or gone.
+  }
+  return outcome;
 }
 
 /** Sentinels older than this are from a session that is long over — see below. */

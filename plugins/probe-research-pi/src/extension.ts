@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, SessionShutdownEvent } from "@earendil-works/pi-coding-agent";
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
 import { QuestionAsker, feedbackUnsent, spawnFeedbackFlush, type ApprovalsDeps } from "./core/approvals.js";
@@ -26,13 +26,24 @@ import {
   localCliVersion,
   markInlineShown,
 } from "./inlineNotice.js";
-import { pruneStaleShutdownSentinels, spawnDaemon, stopDaemon, waitForSpawnConfirmation, type DaemonDeps, type SpawnFn } from "./core/daemon.js";
+import {
+  finishHostedSession,
+  HOSTED_FINISH_WAIT_S,
+  pruneStaleShutdownSentinels,
+  SpawnConfirmation,
+  spawnDaemon,
+  stopDaemon,
+  waitForSpawnConfirmation,
+  type DaemonDeps,
+  type SpawnFn,
+} from "./core/daemon.js";
 import { connectAndRegisterTools, defaultMcpBridgeDeps, interactiveOAuthLogin, type ConnectResult } from "./mcpBridge.js";
-import { approvalsDir, disabledFile, extensionLogFile, probeStateDir, teamNoteDocumentPath } from "./core/paths.js";
+import { approvalsDir, disabledFile, extensionLogFile, probeStateDir, pythonMissingFile, teamNoteDocumentPath } from "./core/paths.js";
+import { hostedMarkerStamp } from "./core/hosted.js";
 import { Mailbox } from "./core/reads.js";
 import { checkPairing } from "./core/pairing.js";
 import { buildStatusReport } from "./status.js";
-import { resolveTapRuntime, type TapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
+import { pythonSeen, resolveTapRuntime, type TapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
 import { ensureService, lookupServiceSocket } from "./core/service.js";
 import { packageVersion } from "./packageVersion.js";
 import { guardViaService } from "./serviceGuard.js";
@@ -76,10 +87,13 @@ import { renderTeamNoteForPrompt } from "./teamNotePrompt.js";
 // double-spawn guard, and knowing which session's daemon to stop in the
 // session_shutdown handler, survive a reload instead of resetting on every
 // one. The real dedup authority is still the pidfile check inside
-// spawnDaemon()/isDaemonAlive() — this set is a same-process fast path that
+// spawnDaemon()/isWatcherAlive() — this set is a same-process fast path that
 // also closes the narrow race where session_start could fire twice before a
 // freshly-spawned wrapper has written its own pidfile.
 const spawnedSessionIds = new Set<string>();
+
+/** Why pi tears an extension runtime down (`SessionShutdownEvent.reason`), the ones this file tells apart. */
+const ShutdownReason = { Quit: "quit", Reload: "reload" } as const satisfies Record<string, SessionShutdownEvent["reason"]>;
 
 // The team-note cache. Module-scope for the same reason spawnedSessionIds is:
 // pi rebuilds the extension runtime on /reload and session switches, and this
@@ -559,16 +573,32 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   };
   const runtime = resolveTapRuntime(runtimeDeps);
   if (!runtime) {
+    // What was found instead, for the researcher and for `probe doctor`
+    // (`.python-missing`, as the tap's own session-start.sh leaves it).
+    const seen = pythonSeen(runtimeDeps);
+    try {
+      fs.writeFileSync(pythonMissingFile(process.env), `${seen}\n`);
+    } catch {
+      // No tap state folder to note it in: the announcement still says it.
+    }
     announce(
       ctx,
-      "no python3 interpreter found for the probe-research-tap daemon — capture disabled for this session. " +
-        "Install Python 3.11+ and ensure `python3` is on PATH, or set PROBE_PI_TAP_ROOT.",
+      `no Python 3.11 or newer found for the probe-research-tap daemon (${seen}) — capture disabled for this session. ` +
+        "Install Python 3.11 or newer, or set PROBE_PI_TAP_ROOT, then start a new session.",
       "error",
     );
     return;
   }
+  try {
+    fs.rmSync(pythonMissingFile(process.env), { force: true });
+  } catch {
+    // Best-effort, as the hook's `rm -f`.
+  }
 
   const deps = realDaemonDeps();
+  // The service's marker as it was before this start: only one this start
+  // produced (or `tap start` exiting 0 beside it) confirms it below.
+  const markerBefore = hostedMarkerStamp(sessionId);
   const result = spawnDaemon({ sessionId, transcriptPath, cwd: ctx.cwd, runtime, ownerPid: process.pid }, deps);
   // Marked SYNCHRONOUSLY, with no await between the spawn decision and this
   // line: spawnedSessionIds is the same-process fast path (see its own
@@ -579,7 +609,14 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
   spawnedSessionIds.add(sessionId);
   if (result.spawned) {
     logLine(`${label}: spawned capture for ${sessionId} (pid ${result.pid ?? "unknown"})`);
-    await waitForSpawnConfirmation(sessionId, deps);
+    // A session the Probe service records confirms by its `.hosted` marker,
+    // with no pid file: the wait ends then instead of at its 2 s bound.
+    const confirmed = await waitForSpawnConfirmation(sessionId, deps, {
+      spawned: { markerBefore, exitCode: result.exitCode },
+    });
+    if (confirmed === SpawnConfirmation.Hosted) {
+      logLine(`${label}: the Probe service records ${sessionId}`);
+    }
   } else {
     logLine(`${label}: capture already running for ${sessionId}`);
   }
@@ -769,7 +806,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       clearInterval(readsCtx.timer);
       readsCtx = null;
     }
-    if (event.reason === "reload") {
+    if (event.reason === ShutdownReason.Reload) {
       // Extensions are reloading, not the session — the SAME session id fires
       // session_start again right after this. Leave the daemon running:
       // stopping it here would spuriously FINALIZE a session that isn't
@@ -783,6 +820,22 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     const sessionId = ctx.sessionManager.getSessionId();
     stopDaemon(sessionId, realDaemonDeps());
     spawnedSessionIds.delete(sessionId);
+    // A session the Probe service records (its `.hosted` marker): on a quit the
+    // service finishes it now, waited on for a few seconds; then the marker goes,
+    // so a resume of this session is recorded again (daemon.ts, audit #10).
+    try {
+      await finishHostedSession(
+        sessionId,
+        {
+          // Resolved only if `tap finish` will run (a marker, a quit, a live service).
+          runtime: () => resolveTapRuntime({ existsSync: fs.existsSync, isExecutable, env: process.env, extensionDir }),
+          waitS: event.reason === ShutdownReason.Quit ? HOSTED_FINISH_WAIT_S : 0,
+        },
+        { ...realDaemonDeps(), execFile: realTrackingExecFile },
+      );
+    } catch (err) {
+      logLine(`session_shutdown(${event.reason}): hosted finish failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
     const mcpConnection = mcpConnections.get(sessionId);
     if (mcpConnection) {
       mcpConnections.delete(sessionId);

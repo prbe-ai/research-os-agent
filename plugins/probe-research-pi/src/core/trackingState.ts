@@ -92,6 +92,8 @@ export interface TrackingExecOptions {
   encoding: "utf8";
   timeout: number;
   maxBuffer: number;
+  /** No console window for the child on Windows. */
+  windowsHide?: boolean;
 }
 
 export interface TrackingChild {

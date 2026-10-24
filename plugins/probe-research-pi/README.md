@@ -293,12 +293,22 @@ package in this order:
    so the tap package (with its `tap/__init__.py`) is right where this step
    looks. It is only absent for an install shape that ships this package
    alone — see "Known limitation."
-3. A bare `python3`/`python` on `PATH`, assuming `probe-research-tap` was
-   separately `pip install`-ed into the active environment.
+3. No checkout at all: an interpreter with no `PYTHONPATH` override,
+   assuming `probe-research-tap` was separately `pip install`-ed into it.
 
-If no step resolves an interpreter at all, the extension refuses to spawn
-and says so once, on stderr and in its own log — it will not start a daemon
-that immediately exits.
+The interpreter must be Python 3.11 or newer (the tap's own minimum). It is
+the first of these that says so when asked (`python -S -c ...`, once per pi
+process), in the order the tap's `hooks/tap-python.sh` uses: the checkout's
+`.venv/bin/python3`, `python3` (then `python`) on `PATH`, the Probe CLI's
+interpreter (the one the Probe service's `runtime.json` names, else
+`~/.local/share/uv/tools/probe-research/bin/python`), then `python3.14` down
+to `python3.11` on `PATH`. On a Mac the first `python3` is Apple's 3.9, which
+the tap cannot run on.
+
+If no interpreter is new enough, the extension refuses to spawn and says so
+once, on stderr and in its own log, naming the `python3` it found — it will
+not start a daemon that immediately exits — and leaves that in
+`.python-missing` in the tap's state folder, where `probe doctor` shows it.
 
 ## Pairing
 
@@ -324,7 +334,10 @@ Run the `/probe-status` command inside an interactive or RPC pi session to
 see: whether this device is paired and how, whether the Probe MCP bridge is
 running directly or standing down for pi-mcp-adapter (see "pi-mcp-adapter"
 below), which Python interpreter/tap checkout would be used, and whether a
-daemon is currently capturing the active session. (Not verified against
+daemon is currently capturing the active session — its own watcher, or the
+Probe service, which records a session with no watcher of its own and leaves
+a `.hosted` marker naming itself (trusted only when it is this user's file
+and names this user's running service). (Not verified against
 print/json mode's slash-command handling — for a one-shot headless run,
 check the session_start refusal message on stderr, or `PROBE_TAP_SOURCE=pi
 python3 -m tap status` directly.)
@@ -605,7 +618,12 @@ Then, still inside `session_start`:
 On `session_shutdown`: touches the shutdown sentinel and signals the
 wrapper's process group (`stopDaemon`, the `session-end.sh` analog), and
 best-effort closes any live Probe MCP connection, for every reason
-**except** `reload` — a reload tears down and rebuilds the extension runtime
+**except** `reload`. For a session the Probe service records (its `.hosted`
+marker), a `quit` also asks the service to finish it now and waits up to 3 s
+for its last upload (`python -m tap finish --session-id <id> --wait 3`), and
+every reason but `reload` then removes the marker, so a resume of that
+session asks the service to record it again (`finishHostedSession`). Not on
+`reload` — a reload tears down and rebuilds the extension runtime
 for the *same* session, which fires `session_start` again immediately after;
 stopping the daemon (or dropping the MCP connection) there would spuriously
 FINALIZE a session that isn't actually ending, or leave that session's Probe
@@ -666,7 +684,7 @@ npm test
 ```
 
 **Layout.** `src/core/` holds the modules that re-state Probe's Python
-behaviour (paths, the capture daemon's spawn, the switch, the tracking state,
+behaviour (paths, the capture daemon's spawn, the Probe service's session marker, the switch, the tracking state,
 pairing, the MCP token, the daemon's messages, reads and questions, the team
 note's read and sync, the `probe` command parse) and import nothing from pi.
 `src/` holds the pi glue: `extension.ts`, the MCP bridge, pi-mcp-adapter's

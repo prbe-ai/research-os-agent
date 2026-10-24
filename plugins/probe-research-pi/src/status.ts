@@ -14,9 +14,10 @@
  */
 
 import { detectAdapterHandoff, MCP_SERVED_VIA_ADAPTER_MESSAGE } from "./adapterHandoff.js";
-import { isDaemonAlive } from "./core/daemon.js";
+import { isWatcherAlive } from "./core/daemon.js";
+import { hostedServicePid } from "./core/hosted.js";
 import { checkPairing } from "./core/pairing.js";
-import { pidFile, pluginDir, sessionLogFile, type PathEnv } from "./core/paths.js";
+import { hostedFile, pidFile, pluginDir, sessionLogFile, type PathEnv } from "./core/paths.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
 
 export interface StatusDeps {
@@ -28,6 +29,10 @@ export interface StatusDeps {
   extensionDir: string;
   /** The session's cwd — needed for D6's project-scope settings.json read. */
   cwd: string;
+  /** The Probe service's pid when it records the session; defaults to `hosted.ts`'s check. */
+  hostedServicePid?: (sessionId: string) => number | null;
+  /** Does an interpreter run the tap (3.11+)? Defaults to asking it (`tapRuntime.ts`). */
+  runsTap?: (python: string) => boolean;
 }
 
 export function buildStatusReport(sessionId: string | undefined, deps: StatusDeps): string {
@@ -58,20 +63,30 @@ export function buildStatusReport(sessionId: string | undefined, deps: StatusDep
     isExecutable: deps.isExecutable,
     env: deps.env,
     extensionDir: deps.extensionDir,
+    runsTap: deps.runsTap,
+    readFileSync: deps.readFileSync,
   };
   const runtime = resolveTapRuntime(runtimeDeps);
   if (runtime) {
     lines.push(`  interpreter:   ${runtime.python}${runtime.tapRoot ? ` (tap root: ${runtime.tapRoot})` : " (assumed pip-installed)"}`);
   } else {
-    lines.push("  interpreter:   not found — no python3/python on PATH");
+    lines.push("  interpreter:   not found — no Python 3.11 or newer (the tap needs one)");
   }
 
   lines.push(`  state dir:     ${pluginDir(deps.env)}`);
 
   if (sessionId) {
-    const alive = isDaemonAlive(sessionId, deps);
-    lines.push(`  this session:  ${alive ? "capturing" : "not capturing"}`);
-    lines.push(`    pid file:    ${pidFile(sessionId)}`);
+    // The session's own watcher, else the Probe service by its `.hosted`
+    // marker (daemon.ts::isDaemonAlive, said apart here so the line names it).
+    const watcher = isWatcherAlive(sessionId, deps);
+    const hosted = watcher ? null : (deps.hostedServicePid ?? hostedServicePid)(sessionId);
+    if (hosted !== null) {
+      lines.push(`  this session:  capturing (recorded by the Probe service, pid ${hosted})`);
+      lines.push(`    marker:      ${hostedFile(sessionId)}`);
+    } else {
+      lines.push(`  this session:  ${watcher ? "capturing" : "not capturing"}`);
+      lines.push(`    pid file:    ${pidFile(sessionId)}`);
+    }
     lines.push(`    log:         ${sessionLogFile(sessionId, deps.env)}`);
   } else {
     lines.push("  this session:  no session file yet (nothing to capture)");

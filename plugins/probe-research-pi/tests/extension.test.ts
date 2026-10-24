@@ -93,6 +93,8 @@ const { pidFile, shutdownSentinelFile, disabledFile, teamNoteDocumentPath, exten
 const { MCP_SERVED_VIA_ADAPTER_MESSAGE } = await import("../src/adapterHandoff.js");
 const { trackingStatusText } = await import("../src/core/trackingState.js");
 const paths = await import("../src/core/paths.js");
+// The real module, for a stand-in Probe service process (the mock above stands in for every spawn the extension makes).
+const realChildProcess = await vi.importActual<typeof import("node:child_process")>("node:child_process");
 
 type Handler = (event: unknown, ctx: unknown) => Promise<void> | void;
 
@@ -764,6 +766,174 @@ describe("registerExtension — session_shutdown", () => {
     expect(existsSync(shutdownSentinelFile(sessionId))).toBe(true);
 
     rmSync(shutdownSentinelFile(sessionId), { force: true });
+  });
+
+  /**
+   * Audit #10: a session the Probe service records has no `.pid` file, only a
+   * `.hosted` marker. pi's quit touched the sentinel and left the marker, so a
+   * resume right after read "running" in `tap start` (marker + a recorder still
+   * finishing) and nothing recorded the resumed session. Now the quit asks the
+   * service to finish the session (`tap finish`, as session-end.sh does) and
+   * drops the marker, so the next `tap start` asks the service again.
+   */
+  describe.runIf(existsSync("/proc/self"))("a session the Probe service records", () => {
+    async function withService(fn: (pid: number) => Promise<void>): Promise<void> {
+      const child = realChildProcess.spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", "probe.service"], { stdio: "ignore" });
+      try {
+        for (let i = 0; i < 100; i++) {
+          try {
+            if (readFileSync(`/proc/${child.pid}/cmdline`, "utf-8").includes("probe.service")) break;
+          } catch {
+            // not exec'd yet
+          }
+          await new Promise((r) => setTimeout(r, 20));
+        }
+        await fn(child.pid!);
+      } finally {
+        child.kill("SIGKILL");
+      }
+    }
+
+    async function startHosted(label: string, pid: number) {
+      pair();
+      const { api, handlers } = fakeExtensionAPI();
+      registerExtension(api as never, tmp);
+      const sessionId = uniqueSessionId(label);
+      const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
+      await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
+      const hosted = `/tmp/${paths.WATCHER_PREFIX}-watcher-${sessionId}.hosted`;
+      writeFileSync(hosted, String(pid), { mode: 0o600 });
+      execFileMock.mockClear();
+      return { handlers, ctx, sessionId, hosted };
+    }
+
+    const finishCalls = () => execFileMock.mock.calls.filter(([, args]) => args[2] === "finish");
+
+    it("on quit: the service finishes the session (tap finish, bounded wait), and the marker goes", async () => {
+      await withService(async (pid) => {
+        const { handlers, ctx, sessionId, hosted } = await startHosted("hosted-quit", pid);
+        try {
+          await handlers.get("session_shutdown")!({ reason: "quit" }, ctx);
+
+          expect(finishCalls()).toHaveLength(1);
+          const [command, args, options] = finishCalls()[0];
+          expect(command).toBe(join(process.env.PROBE_PI_TAP_ROOT!, ".venv", "bin", "python3"));
+          expect(args).toEqual(["-m", "tap", "finish", "--session-id", sessionId, "--wait", "3"]);
+          expect(options.env.PYTHONPATH?.split(delimiter)[0]).toBe(process.env.PROBE_PI_TAP_ROOT);
+          expect(existsSync(hosted)).toBe(false);
+          expect(existsSync(shutdownSentinelFile(sessionId))).toBe(true);
+        } finally {
+          rmSync(hosted, { force: true });
+          rmSync(shutdownSentinelFile(sessionId), { force: true });
+        }
+      });
+    });
+
+    it("on a switch to another session: the marker goes, and nothing waits on a finish", async () => {
+      await withService(async (pid) => {
+        const { handlers, ctx, sessionId, hosted } = await startHosted("hosted-switch", pid);
+        try {
+          await handlers.get("session_shutdown")!({ reason: "new" }, ctx);
+
+          expect(finishCalls()).toHaveLength(0);
+          expect(existsSync(hosted)).toBe(false);
+        } finally {
+          rmSync(hosted, { force: true });
+          rmSync(shutdownSentinelFile(sessionId), { force: true });
+        }
+      });
+    });
+
+    it("with no marker, neither a quit nor a switch asks any interpreter anything", async () => {
+      pair();
+      const { api, handlers } = fakeExtensionAPI();
+      registerExtension(api as never, tmp);
+      // A checkout no start in this process asked about: any version probe would be a new call.
+      const fresh = join(tmp, "never-asked");
+      mkdirSync(join(fresh, "tap"), { recursive: true });
+      writeFileSync(join(fresh, "tap", "__init__.py"), "");
+      mkdirSync(join(fresh, ".venv", "bin"), { recursive: true });
+      writeFileSync(join(fresh, ".venv", "bin", "python3"), "#!/bin/sh\nexit 0\n");
+      chmodSync(join(fresh, ".venv", "bin", "python3"), 0o755);
+      process.env.PROBE_PI_TAP_ROOT = fresh;
+      for (const reason of ["new", "quit"]) {
+        const sessionId = uniqueSessionId(`no-marker-${reason}`);
+        const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
+        execFileSyncMock.mockClear();
+        await handlers.get("session_shutdown")!({ reason }, ctx);
+        expect(execFileSyncMock).not.toHaveBeenCalled();
+        rmSync(shutdownSentinelFile(sessionId), { force: true });
+      }
+    });
+
+    it("on reload: the marker stays (the same session starts again)", async () => {
+      await withService(async (pid) => {
+        const { handlers, ctx, sessionId, hosted } = await startHosted("hosted-reload", pid);
+        try {
+          await handlers.get("session_shutdown")!({ reason: "reload" }, ctx);
+
+          expect(finishCalls()).toHaveLength(0);
+          expect(existsSync(hosted)).toBe(true);
+        } finally {
+          rmSync(hosted, { force: true });
+          rmSync(shutdownSentinelFile(sessionId), { force: true });
+        }
+      });
+    });
+  });
+});
+
+describe("registerExtension — no Python 3.11 or newer", () => {
+  it("says so once, naming what it found, and leaves it for `probe doctor`; a later start that finds one clears it", async () => {
+    pair();
+    // The checkout's .venv python answers the version probe "too old" (exit 1).
+    execFileSyncMock.mockImplementation(() => {
+      throw new Error("exit 1");
+    });
+    const missing = paths.pythonMissingFile(process.env);
+    try {
+      const { api, handlers } = fakeExtensionAPI();
+      registerExtension(api as never, tmp);
+      const sessionId = uniqueSessionId("old-python");
+      const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
+      // Its own folder, so no python earlier in this file's run answered for it.
+      const venv = join(process.env.PROBE_PI_TAP_ROOT!, ".venv", "bin", "python3");
+      const moved = join(tmp, "old-venv", ".venv", "bin");
+      mkdirSync(moved, { recursive: true });
+      writeFileSync(join(moved, "python3"), readFileSync(venv));
+      chmodSync(join(moved, "python3"), 0o755);
+      const oldRoot = join(tmp, "old-venv");
+      mkdirSync(join(oldRoot, "tap"), { recursive: true });
+      writeFileSync(join(oldRoot, "tap", "__init__.py"), "");
+      process.env.PROBE_PI_TAP_ROOT = oldRoot;
+      process.env.PATH = join(tmp, "empty-path");
+
+      const chunks = await captureStderr(() => invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx));
+
+      expect(chunks.join("")).toContain("no Python 3.11 or newer found");
+      expect(chunks.join("")).toContain("(no python3)");
+      expect(daemonSpawns()).toHaveLength(0);
+      expect(readFileSync(missing, "utf-8")).toBe("no python3\n");
+    } finally {
+      execFileSyncMock.mockReset();
+      execFileSyncMock.mockImplementation(() => "");
+    }
+
+    // The next start finds an interpreter: the note goes.
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const sessionId = uniqueSessionId("new-python");
+    const ctx = fakeContext({ sessionId, sessionFile: `/tmp/${sessionId}.jsonl` });
+    const fresh = join(tmp, "fresh-checkout");
+    mkdirSync(join(fresh, "tap"), { recursive: true });
+    writeFileSync(join(fresh, "tap", "__init__.py"), "");
+    mkdirSync(join(fresh, ".venv", "bin"), { recursive: true });
+    writeFileSync(join(fresh, ".venv", "bin", "python3"), "#!/bin/sh\nexit 0\n");
+    chmodSync(join(fresh, ".venv", "bin", "python3"), 0o755);
+    process.env.PROBE_PI_TAP_ROOT = fresh;
+    await invokeSessionStart(handlers.get("session_start")!, { reason: "startup" }, ctx);
+    expect(existsSync(missing)).toBe(false);
+    rmSync(pidFile(sessionId), { force: true });
   });
 });
 

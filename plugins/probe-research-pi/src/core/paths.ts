@@ -229,11 +229,14 @@ export function mcpOAuthStateFile(env: PathEnv = process.env): string {
   return join(piAgentDir(env), "state", "probe-research-mcp", "oauth.json");
 }
 
+/** The platforms this package treats apart (Node's `process.platform` names). */
+export const OsPlatform = { Windows: "win32", Mac: "darwin", Linux: "linux" } as const satisfies Record<string, NodeJS.Platform>;
+
 /** Where a session's watcher files live: `/tmp`, as the tap computes it
  *  (`tap/config.py::_watcher_dir`); on Windows the user's temp folder (the
  *  hooks' Git Bash `/tmp`), never `\\tmp` on the current drive. */
 export function watcherDir(platform: NodeJS.Platform = process.platform): string {
-  return platform === "win32" ? tmpdir() : "/tmp";
+  return platform === OsPlatform.Windows ? tmpdir() : "/tmp";
 }
 
 export function pidFile(sessionId: string): string {
@@ -242,4 +245,76 @@ export function pidFile(sessionId: string): string {
 
 export function shutdownSentinelFile(sessionId: string): string {
   return join(watcherDir(), `${WATCHER_PREFIX}-watcher-${sessionId}.shutdown`);
+}
+
+/**
+ * The session is recorded by the Probe service (plan A2, `tap record`), not by a
+ * `tap watch` of its own: no `.pid` file, and this marker names the service's
+ * pid instead. Mirrors `tap/config.py::hosted_file`. Read only through
+ * `hosted.ts::hostedServicePid`: /tmp is shared, so its number is checked.
+ */
+export function hostedFile(sessionId: string): string {
+  return join(watcherDir(), `${WATCHER_PREFIX}-watcher-${sessionId}.hosted`);
+}
+
+/** `probe.service.paths`: the service's folder name, the lock its running copy
+ * holds (and writes `<pid> <start time>` into), and the CLI's own interpreter. */
+export const SERVICE_DIRNAME = "service";
+export const SERVICE_LOCK_NAME = "service.lock";
+export const SERVICE_RUNTIME_NAME = "runtime.json";
+
+/** `$HOME`, as `Path.home()` reads it on POSIX (and USERPROFILE on Windows). */
+function homeOf(env: PathEnv, platform: NodeJS.Platform): string {
+  const home = platform === OsPlatform.Windows ? env.USERPROFILE ?? env.HOME : env.HOME;
+  return home && home.trim() ? home : homedir();
+}
+
+/**
+ * `probe.service.paths.root_dir`: `$HOME/.local/state/probe/service`, NEVER
+ * moved by `XDG_STATE_HOME` (unlike `probeStateDir` above: every client must
+ * agree where the one service lives, plan X2); on Windows
+ * `%LOCALAPPDATA%\\probe\\service`. Each machine's service is a folder below it,
+ * named by `hosted.ts::machineKey`.
+ */
+export function serviceRootDir(env: PathEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  if (platform === OsPlatform.Windows) {
+    const local = env.LOCALAPPDATA;
+    const base = local && local.trim() ? local : join(homeOf(env, platform), "AppData", "Local");
+    return join(base, "probe", SERVICE_DIRNAME);
+  }
+  return join(homeOf(env, platform), ".local", "state", "probe", SERVICE_DIRNAME);
+}
+
+/** `paths.runtime_path`: `{"python": ..., "cli_version": ...}`, the Probe CLI's
+ * interpreter, rewritten by the CLI at every start. */
+export function serviceRuntimeFile(env: PathEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  return join(serviceRootDir(env, platform), SERVICE_RUNTIME_NAME);
+}
+
+/** `paths.UV_TOOL_PYTHON`: where `uv tool install probe-research` puts the CLI's
+ * interpreter, under `$HOME`. */
+export const UV_TOOL_PYTHON = [".local", "share", "uv", "tools", "probe-research", "bin", "python"] as const;
+/** `paths.fallback_python` on Windows, under `%APPDATA%`. */
+export const UV_TOOL_PYTHON_WINDOWS = ["uv", "tools", "probe-research", "Scripts", "python.exe"] as const;
+
+/** `paths.fallback_python`: the CLI's interpreter when runtime.json names none. */
+export function uvToolPython(env: PathEnv = process.env, platform: NodeJS.Platform = process.platform): string {
+  if (platform === OsPlatform.Windows) {
+    const roaming = env.APPDATA;
+    const base = roaming && roaming.trim() ? roaming : join(homeOf(env, platform), "AppData", "Roaming");
+    return join(base, ...UV_TOOL_PYTHON_WINDOWS);
+  }
+  return join(homeOf(env, platform), ...UV_TOOL_PYTHON);
+}
+
+/**
+ * Left in the tap's state folder when no Python 3.11+ was found to run the tap
+ * on, holding what was found instead ("python3 3.9.6"); removed once one is.
+ * `probe doctor` names it (`doctor.TAP_PYTHON_MISSING`). Mirrors
+ * `hooks/tap-python.sh`'s TAP_PYTHON_MISSING.
+ */
+export const TAP_PYTHON_MISSING = ".python-missing";
+
+export function pythonMissingFile(env: PathEnv = process.env): string {
+  return join(pluginDir(env), TAP_PYTHON_MISSING);
 }
