@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.299.2
+
 - **A debug log names only the coding agents on the machine.** Since 0.298.1 every log was filed under all 4 coding agents Probe knows (Claude Code, Codex, pi, Kimi Code), because each one's folder in the log always holds two records, even for an agent that is not installed, so staff filtering logs by agent matched every log. An agent now counts when the log holds its version (its own program on PATH answered `--version`; another package's `pi` is not pi, as in the wizard), a recent transcript, or a file from its settings folder.
 
 ## 0.299.1
