@@ -192,8 +192,11 @@ def test_turn_end_marks_the_canonical_session_at_the_wire_s_size(kimi) -> None:
 
 
 def _fake_daemon(sid: str, linger_s: float) -> subprocess.Popen:
+    """A wrapper as session-start.sh starts one: its command line names `tap
+    watch` and the session id, which session-end.sh checks before signalling."""
     proc = subprocess.Popen(
-        ["bash", "-c", f'trap "sleep {linger_s}; exit 0" TERM; while :; do sleep 0.05; done'],
+        ["bash", "-c", f'trap "sleep {linger_s}; exit 0" TERM; while :; do sleep 0.05; done'
+         ' # "$PY" -m tap watch --session-id "$1"', "wrapper", sid],
         start_new_session=True,
     )
     Path(f"/tmp/probe-research-tap-watcher-{sid}.pid").write_text(str(proc.pid))

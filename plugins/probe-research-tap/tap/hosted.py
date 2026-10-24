@@ -19,6 +19,7 @@ Stdlib only.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
@@ -54,6 +55,9 @@ class Controls:
     #: progress (`beat`); None before its first pass. A Probe service reads it:
     #: a beat older than 5 min while the agent runs is a stalled recorder.
     beaten: float | None = None
+    #: This recording's number among its session's recordings in this process
+    #: (`record` numbers it on its first call; a retried call keeps it).
+    generation: int | None = None
 
     def claim(self, folder: str | None) -> None:
         """Published by the recorder's loop (`WatchConfig.claimed`)."""
@@ -87,16 +91,46 @@ def ending(session: dict) -> bool:
         return cfg.shutdown_sentinel(str(session["sid"])).exists()
 
 
-def _drop_marker(path) -> None:
+#: `{sid: n}`: how many recordings of each session this process started. A
+#: finishing recording and the fresh one a resume started run side by side in
+#: one service (D39), and both name this process in the session's marker.
+_STARTS: dict[str, int] = {}
+_STARTS_LOCK = threading.Lock()
+
+
+def _numbered(sid: str, controls: Controls) -> int:
+    """This recording's number for `sid` in this process: given on its first
+    `record` call and kept on `controls`, so the service's retries of the same
+    recording (its guard calls `record` again after a failure, its last pass
+    included) keep it, and only a new recording counts as newer."""
+    with _STARTS_LOCK:
+        mine = getattr(controls, "generation", None)
+        if not isinstance(mine, int):
+            mine = _STARTS[sid] = _STARTS.get(sid, 0) + 1
+            with contextlib.suppress(AttributeError):  # a service's own controls without the field
+                controls.generation = mine
+        return mine
+
+
+def _drop_marker(path, sid: str | None = None, mine: int | None = None) -> None:
     """The session ended here: its `.hosted` marker goes (when it names this
-    process), so a resume of it records again instead of reading as recorded."""
+    process), so a resume of it records again instead of reading as recorded.
+    Not when a newer recording of the session started in this process since
+    (`mine`, from `_numbered`): that one wrote the same pid into the marker for
+    the resumed session, and dropping it would read that session as recorded
+    by nobody. The check, the read and the unlink hold `_STARTS_LOCK`: a new
+    recording numbered between them (`_numbered` takes the same lock) waits,
+    and writes its marker after this one is gone."""
     import os
 
-    try:
-        if path.read_text(encoding="utf-8").strip() == str(os.getpid()):
-            path.unlink()
-    except (OSError, ValueError):
-        pass
+    with _STARTS_LOCK:
+        if sid is not None and mine is not None and _STARTS.get(sid, 0) != mine:
+            return
+        try:
+            if path.read_text(encoding="utf-8").strip() == str(os.getpid()):
+                path.unlink()
+        except (OSError, ValueError):
+            pass
 
 
 def _argv(session: dict) -> list[str]:
@@ -115,6 +149,7 @@ def record(session: dict, controls: Controls) -> tuple[str, str]:
     environ = threadenv.install()
     handler: logging.Handler | None = None
     loggers = [logging.getLogger(name) for name in LOGGERS]
+    mine = _numbered(str(session["sid"]), controls)
     try:
         with environ.session(session.get("env") or {}):
             from tap import config as cfg
@@ -152,7 +187,7 @@ def record(session: dict, controls: Controls) -> tuple[str, str]:
             if controls.pause.is_set():
                 return PAUSED, ""
             if controls.stop.is_set() or cfg.shutdown_sentinel(str(session["sid"])).exists():
-                _drop_marker(cfg.hosted_file(str(session["sid"])))
+                _drop_marker(cfg.hosted_file(str(session["sid"])), str(session["sid"]), mine)
                 return ENDED, ""
             return STOPPED, f"returned {code!r}"
     except BaseException as exc:  # noqa: BLE001 -- the guard decides; never take the service down

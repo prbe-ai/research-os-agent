@@ -16,8 +16,9 @@ HOOK = Path(__file__).resolve().parents[1] / "hooks" / "ensure-daemon.sh"
 
 #: Distinct from test_start.py's id on purpose: both files reach the same
 #: shared `/tmp` filenames, and a leftover pid file from one is a silent
-#: "daemon is alive" in the other.
-SID = "01a06383-6f4e-751a-b94c-ee5ea70d0001"
+#: "daemon is alive" in the other. Per worker process too (`-n`): one worker's
+#: `.hosted` marker read as a live service in another's test.
+SID = f"01a06383-6f4e-751a-b94c-{os.getpid():012d}"
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="the hook is POSIX shell")
 

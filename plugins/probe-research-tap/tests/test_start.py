@@ -172,3 +172,71 @@ def test_a_live_uploader_is_recognised_in_a_narrow_terminal(monkeypatch):
     finally:
         proc.kill()
         proc.wait()
+
+
+# -- a session the Probe service records ------------------------------------------------
+
+
+def test_a_resume_while_the_hosted_session_finishes_records_it_again(paired, tmp_path, monkeypatch):
+    """Audit #10, pi quit-then-resume: pi's quit touches the shutdown sentinel,
+    and the service's recorder makes its last pass and FINALIZEs. Until its
+    thread ends the service still answers `recording`, and a `tap start` for
+    the resumed session in that window read "already recorded": it returned
+    without clearing the sentinel or asking the service, the recorder ended,
+    and nothing recorded the resumed session."""
+    sentinel = cfg.shutdown_sentinel(SID)
+    sentinel.touch()
+    # The marker names a live service that still answers recording=True.
+    from tap import record_client
+
+    monkeypatch.setattr(record_client, "hosted_pid", lambda sid: 4242)
+    monkeypatch.setattr(record_client, "recording", lambda args: 0)
+    asked, spawned = [], []
+    code = tap_start.main(_args(tmp_path), spawn=spawned.append, record=lambda a: asked.append(a) or True)
+    assert code == tap_start.EXIT_OK
+    assert len(asked) == 1, "the resumed session was never asked to be recorded"
+    assert spawned == []
+    assert not sentinel.exists(), "the sentinel would end the resumed session's recorder"
+
+
+def test_a_hosted_session_that_is_not_finishing_is_already_running(paired, tmp_path, monkeypatch):
+    from tap import record_client
+
+    monkeypatch.setattr(record_client, "hosted_pid", lambda sid: 4242)
+    monkeypatch.setattr(record_client, "recording", lambda args: 0)
+    asked, spawned = [], []
+    code = tap_start.main(_args(tmp_path), spawn=spawned.append, record=lambda a: asked.append(a) or True)
+    assert (code, asked, spawned) == (tap_start.EXIT_OK, [], [])
+    assert tap_start.daemon_state(SID) == ("running", 4242)
+
+
+def test_a_finishing_hosted_session_reads_as_not_recorded(paired, monkeypatch):
+    from tap import record_client
+
+    monkeypatch.setattr(record_client, "hosted_pid", lambda sid: 4242)
+    monkeypatch.setattr(record_client, "recording", lambda args: 0)
+    cfg.shutdown_sentinel(SID).touch()
+    assert tap_start.daemon_state(SID) == ("none", None)
+
+
+def test_pi_0_6_2s_resume_with_no_watcher_files_clears_the_sentinel_and_asks(paired, tmp_path):
+    """What pi 0.6.2 relies on after its quit removed every watcher file: `tap
+    start` reads "none", clears the sentinel and asks the service."""
+    cfg.hosted_file(SID).unlink(missing_ok=True)
+    sentinel = cfg.shutdown_sentinel(SID)
+    sentinel.touch()
+    assert tap_start.daemon_state(SID) == ("none", None)
+    asked = []
+    code = tap_start.main(_args(tmp_path), spawn=lambda argv: None, record=lambda a: asked.append(a) or True)
+    assert (code, len(asked), sentinel.exists()) == (tap_start.EXIT_OK, 1, False)
+
+
+def test_tap_finish_takes_a_session_and_a_wait(monkeypatch):
+    """pi 0.6.2 runs `tap finish --session-id <id> --wait <s>`."""
+    from tap import record_client
+
+    calls = []
+    monkeypatch.setattr(record_client, "_call", lambda method, params, **kw: calls.append((method, params)) or
+                        {"recording": True, "finished": True})
+    assert record_client.main("finish", ["--session-id", SID, "--wait", "2.5"]) == 0
+    assert calls[0][1] == {"sid": SID, "wait": 2.5}

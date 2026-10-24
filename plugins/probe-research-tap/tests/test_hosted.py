@@ -541,3 +541,113 @@ def test_a_resumed_recorder_names_its_own_service_in_the_marker(tmp_path, monkey
     t.start()
     t.join(10)
     assert seen == [str(os.getpid())]
+
+
+def test_a_hosted_loop_that_sees_the_sessions_end_says_so_on_its_stop(tmp_path, monkeypatch):
+    """The service keeps a recorder for a resumed session unless it is
+    finishing (`RecorderHost.record`): one that saw the shutdown sentinel is,
+    whatever happens to the sentinel after (a resume clears it)."""
+    import types
+
+    monkeypatch.setenv("PROBE_RESEARCH_TAP_PLUGIN_DIR", str(tmp_path / "plugin"))
+    sentinel = tmp_path / "s.shutdown"
+    config = types.SimpleNamespace(stop=threading.Event(), shutdown_sentinel=sentinel)
+    assert tapmain._shutdown_observed(config) is False
+    assert not config.stop.is_set()
+    sentinel.touch()
+    assert tapmain._shutdown_observed(config) is True
+    sentinel.unlink()
+    assert config.stop.is_set() and tapmain._shutdown_observed(config) is True
+    # `tap watch` has no `stop`: the sentinel alone, as before.
+    watch = types.SimpleNamespace(shutdown_sentinel=sentinel)
+    assert tapmain._shutdown_observed(watch) is False
+
+
+@pytest.mark.parametrize("last_pass", ["first-call", "retried"])
+def test_a_finishing_recorder_leaves_the_marker_a_resumed_one_wrote(tmp_path, monkeypatch, last_pass):
+    """One service, two recordings of one session (D39): the finishing one and
+    the fresh one a resume started, which wrote this process's pid into the
+    marker. The finishing one's end must not drop it: the resumed session
+    would read as recorded by nobody. Also when the finishing one's last pass
+    is a RETRY (its guard calls `record` again after a failed last pass, with
+    the same controls): that call is the same recording, not a newer one."""
+    monkeypatch.setattr(os, "environ", os.environ)
+    marker = tmp_path / "s-1.hosted"
+    monkeypatch.setattr(cfg, "hosted_file", lambda sid: marker)
+    old_controls, new_controls = hosted.Controls(), hosted.Controls()
+    old_running, new_started, old_may_end = threading.Event(), threading.Event(), threading.Event()
+
+    def fake_main(argv, *, hosted=None):
+        if hosted is new_controls:
+            new_started.set()
+            hosted.pause.set()  # the resumed one runs on; paused here to end the test
+            return 0
+        old_running.set()
+        old_may_end.wait(10)  # the finishing one, on its last pass
+        hosted.stop.set()
+        if last_pass == "retried" and not getattr(fake_main, "failed_once", False):
+            fake_main.failed_once = True
+            raise RuntimeError("the last pass failed")  # the guard calls `record` again
+        return 0
+
+    monkeypatch.setattr(tapmain, "main", fake_main)
+    old_out, new_out = [], []
+
+    def finishing():
+        old_out.append(hosted.record(_session(tmp_path), old_controls))
+        if last_pass == "retried":
+            old_out.append(hosted.record(_session(tmp_path), old_controls))  # the guard's retry
+
+    old = threading.Thread(target=finishing)
+    old.start()
+    assert old_running.wait(10)
+    new = threading.Thread(target=lambda: new_out.append(hosted.record(_session(tmp_path), new_controls)))
+    new.start()
+    assert new_started.wait(10)
+    new.join(10)
+    assert marker.read_text() == str(os.getpid())
+    old_may_end.set()
+    old.join(10)
+    assert old_out[-1][0] == hosted.ENDED and new_out[0][0] == hosted.PAUSED
+    if last_pass == "retried":
+        assert old_out[0][0] == hosted.FAILED
+    assert old_controls.generation < new_controls.generation
+    assert marker.exists(), "the finishing recorder dropped the resumed one's marker"
+
+
+def test_the_newest_recorder_still_drops_the_marker_when_it_ends(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "environ", os.environ)
+    marker = tmp_path / "s-9.hosted"
+    monkeypatch.setattr(cfg, "hosted_file", lambda sid: marker)
+
+    def fake_main(argv, *, hosted=None):
+        hosted.stop.set()
+        return 0
+
+    monkeypatch.setattr(tapmain, "main", fake_main)
+    for _ in range(2):  # a session recorded, ended, resumed, ended again
+        out = []
+        t = threading.Thread(target=lambda out=out: out.append(hosted.record(_session(tmp_path, sid="s-9"),
+                                                                             hosted.Controls())))
+        t.start()
+        t.join(10)
+        assert out[0][0] == hosted.ENDED and not marker.exists()
+
+
+def test_dropping_the_marker_holds_the_numbering_lock():
+    """The newest-recording check, the marker's read and its unlink are one
+    step: a recording numbered in between (`_numbered`, same lock) could
+    otherwise write its marker just before this one deletes it."""
+    held = []
+
+    class Marker:
+        def read_text(self, encoding=None):
+            held.append(hosted._STARTS_LOCK.locked())
+            return str(os.getpid())
+
+        def unlink(self):
+            held.append(hosted._STARTS_LOCK.locked())
+
+    mine = hosted._numbered("s-lock", hosted.Controls())
+    hosted._drop_marker(Marker(), "s-lock", mine)
+    assert held == [True, True]

@@ -106,11 +106,27 @@ def _looks_like_the_uploader(pid: int) -> bool:
     return "tap" in completed.stdout
 
 
+def _finishing(session_id: str) -> bool:
+    """Its shutdown sentinel is down: the session's stop came (pi's quit, a
+    SessionEnd) and its recorder is making its last pass, if it has not ended."""
+    return cfg.shutdown_sentinel(session_id).exists()
+
+
 def _hosted(session_id: str) -> int | None:
     """The service's pid when it records THIS session now (its marker, then the
-    service asked: a marker outlives a recorder that ended)."""
+    service asked: a marker outlives a recorder that ended).
+
+    None while the session is finishing (`_finishing`): its recorder still
+    answers `recording` until its last pass ends, then FINALIZEs. A start in
+    that window is a resume (pi `--continue` right after a quit): read as
+    recorded, it returned without clearing the sentinel or asking the service
+    again, and the recorder ended with nothing recording the resumed session.
+    So it reads as not recorded, and `main` clears the sentinel and asks the
+    service, which takes the session over from its finishing recorder."""
     from tap import record_client
 
+    if _finishing(session_id):
+        return None
     pid = record_client.hosted_pid(session_id)
     if pid is None:
         return None

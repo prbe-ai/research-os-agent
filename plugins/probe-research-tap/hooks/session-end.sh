@@ -149,15 +149,95 @@ STOPPING_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping"
 
 touch "$SHUTDOWN_FILE"
 
-# The pid file, or the hand-over a sibling entry left before removing it.
-PID=$(cat "$PID_FILE" 2>/dev/null || true)
+# A watcher file of this user's: a regular file, not a link, owned by us. /tmp
+# is shared, so a file anyone else put there names nothing of ours, and a link
+# to a tty or a FIFO would block the read below.
+own_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]; }
+# The pid in watcher file $1, or nothing.
+pid_in() {
+    local pid=""
+    own_file "$1" || return 0
+    pid=$(head -c 32 "$1" 2>/dev/null | tr -d '[:space:]' || true)
+    case "$pid" in '' | *[!0-9]*) return 0 ;; esac
+    [ "$pid" -gt 1 ] 2>/dev/null || return 0
+    printf '%s' "$pid"
+}
+# The command line of pid $1: `ps`, else Linux's /proc (a slim container has no
+# `ps`); empty when neither answers.
+cmdline_of() {
+    local cmd=""
+    cmd=$(ps -ww -o command= -p "$1" 2>/dev/null || true)
+    if [ -z "$cmd" ] && [ -r "/proc/$1/cmdline" ]; then
+        cmd=$(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null || true)
+    fi
+    printf '%s' "$cmd"
+}
+# Does pid $1 run this session's `tap watch`? Its command line names both, as
+# session-start.sh proves it before replacing a wrapper.
+runs_this_session() {
+    case "$(cmdline_of "$1")" in *"tap watch"*"$SESSION_ID"*) return 0 ;; esac
+    return 1
+}
+# Does the process group pid $1 led still run this session's `tap watch`? The
+# leader itself, or (its wrapper gone, as after a hand-over: the wrapper exits
+# once its TERM trap forwarded) a member of the group: from `ps`, else (no
+# `ps`, or a busybox one that knows no `pgid`/`command`) Linux's /proc, each
+# process's group from its `stat` and its command line from `cmdline`.
+group_runs_this_session() {
+    local group="$1" listing="" d stat rest
+    runs_this_session "$group" && return 0
+    if command -v ps >/dev/null 2>&1; then
+        listing=$(ps -A -ww -o pgid= -o command= 2>/dev/null || true)
+    fi
+    if [ -n "$listing" ]; then
+        printf '%s\n' "$listing" \
+            | awk -v g="$group" -v s="$SESSION_ID" '$1 == g && index($0, "tap watch") && index($0, s) { f = 1 } END { exit !f }'
+        return
+    fi
+    [ -r /proc/self/stat ] || return 1
+    for d in /proc/[0-9]*; do
+        IFS= read -r stat <"$d/stat" 2>/dev/null || continue
+        # `pid (comm) state ppid pgrp ...`: comm may hold spaces, so after the last `) `.
+        rest="${stat##*) }"
+        set -f
+        # shellcheck disable=SC2086
+        set -- $rest
+        set +f
+        [ "${3:-}" = "$group" ] || continue
+        case "$(tr '\0' ' ' <"$d/cmdline" 2>/dev/null || true)" in
+            *"tap watch"*"$SESSION_ID"*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# The pid file, or the hand-over a sibling entry left before removing it. Only
+# a pid that is provably THIS session's tap wrapper is ever signalled: /tmp is
+# world-writable and pids are reused, so a pid file the wrapper left when it
+# died (or one a session the service now records kept) can name any process by
+# now, and its group with it. No proof, no signal: the stale pid file is only
+# removed. A hand-over (`.stopping`) is NEVER signalled: the entry that wrote it
+# signalled already. It is only waited on, and only while its group still runs
+# this session's `tap watch`.
+PID=$(pid_in "$PID_FILE")
 HANDED_OVER=0
-[ -n "$PID" ] || { PID=$(cat "$STOPPING_FILE" 2>/dev/null || true) && HANDED_OVER=1; }
-case "$PID" in '' | *[!0-9]*) PID="" ;; esac
+if [ -z "$PID" ]; then
+    PID=$(pid_in "$STOPPING_FILE")
+    [ -z "$PID" ] || HANDED_OVER=1
+fi
 LEADER=0
 
-if [ -n "$PID" ]; then
-    printf '%s' "$PID" >"$STOPPING_FILE" 2>/dev/null || true
+if [ -n "$PID" ] && [ "$HANDED_OVER" = 1 ]; then
+    if kill -0 -- "-$PID" 2>/dev/null && group_runs_this_session "$PID"; then
+        LEADER=1
+    else
+        PID=""
+    fi
+elif [ -n "$PID" ] && runs_this_session "$PID"; then
+    # Written only over nothing or a file of this user's: never through a link.
+    if { [ ! -e "$STOPPING_FILE" ] && [ ! -L "$STOPPING_FILE" ]; } || own_file "$STOPPING_FILE"; then
+        printf '%s' "$PID" >"$STOPPING_FILE" 2>/dev/null || true
+    fi
     # Kill the wrapper's process group so the Python child dies too — but
     # ONLY when the wrapper really leads that group.
     #
@@ -188,19 +268,15 @@ if [ -n "$PID" ]; then
         # wrapper alone as before, and wait on the group below.
         kill -TERM "$PID" 2>/dev/null || true
         LEADER=1
-    elif [ "$HANDED_OVER" = 1 ]; then
-        # A sibling entry signalled the wrapper and handed its pid over, and
-        # the wrapper exits the moment its TERM trap has forwarded: by now its
-        # group, if any, is the daemon still making its last pass. Wait on it
-        # below, and signal nothing: the pid may be gone, even reused.
-        if kill -0 -- "-$PID" 2>/dev/null; then LEADER=1; fi
     else
         # Not a group leader: signal the wrapper alone. Its TERM trap
         # forwards to the python child, so both still stop.
         kill -TERM "$PID" 2>/dev/null || true
     fi
+else
+    PID=""
 fi
-rm -f "$PID_FILE"
+rm -f "$PID_FILE" 2>/dev/null || true
 
 # `--wait`: stay until the wrapper's group (the daemon) has exited, so the agent
 # cannot exit, and take a container down, before the FINALIZE leaves. Not on
@@ -281,14 +357,14 @@ if [ -s "$HOSTED_FILE" ]; then
         stop_helper "$FINISH" KILL
         FINISH=""
     fi
-    rm -f "$HOSTED_FILE"
+    rm -f "$HOSTED_FILE" 2>/dev/null || true
 fi
 
 if [ "$WAIT" = 1 ]; then
     if [ "$LEADER" = 1 ] && [ "$WAITS" = 1 ]; then
         wait_while kill -0 -- "-$PID"
     fi
-    rm -f "$STOPPING_FILE"
+    rm -f "$STOPPING_FILE" 2>/dev/null || true
 fi
 
 # Deliberately do NOT rm the shutdown sentinel here. If the wrapper missed the

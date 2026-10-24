@@ -1142,6 +1142,12 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     description: "Show Probe Research session-capture status",
     handler: async (_args, ctx) => {
       const sessionId = ctx.sessionManager.getSessionId();
+      // The CLI's reading now (`probe session initialize` asks the Probe
+      // service what its recorder does), so this line, the footer and `probe
+      // doctor` agree; a reading that cannot be had leaves the marker's.
+      if (sessionId) {
+        await refreshTrackingStatus(ctx, sessionId, ctx.cwd);
+      }
       const report = buildStatusReport(sessionId, {
         existsSync: fs.existsSync,
         isExecutable,
@@ -1150,6 +1156,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
         env: process.env,
         extensionDir,
         cwd: ctx.cwd,
+        capture: sessionId ? cachedTracking?.capture : undefined,
       });
       logLine("probe-status invoked");
       if (ctx.hasUI) {

@@ -164,6 +164,14 @@ def _shutdown_observed(c: cfg.WatchConfig) -> bool:
     # ever set by `tap watch`'s signal handlers, which a hosted loop never
     # installs: the process's signals are the service's.
     stop = getattr(c, "stop", None)
+    if stop is not None and not stop.is_set() and c.shutdown_sentinel.exists():
+        # Hosted, the session's end seen: this recorder finishes now, whatever
+        # happens to the sentinel next. Set on its own `stop`, so the service
+        # sees it: a resume right after (pi `--continue` after a quit) clears
+        # the sentinel and asks the service again, which starts a fresh
+        # recorder for it that takes over once this one lets go (D39), instead
+        # of keeping this finishing one (`RecorderHost.record`).
+        stop.set()
     return (
         _shutdown_requested
         or (stop is not None and stop.is_set())

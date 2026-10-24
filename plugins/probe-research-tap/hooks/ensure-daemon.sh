@@ -80,21 +80,45 @@ else
     PREFIX="probe-research-tap"
 fi
 
+# A watcher file of this user's: a regular file, not a link, owned by us. /tmp
+# is shared: another user's file could name any process, and a link to a tty or
+# a FIFO would block the read. OWN_PID: the pid in one, when it is a number
+# above 1 (`kill -0 0` asks this hook's own process group, which is always
+# there, so a file saying 0 read as a live daemon on every prompt, forever),
+# else empty. Set, not printed: called without `$(...)`, and read with bash's
+# own `read` (a regular file, so it cannot block), it starts no process, as
+# the `cat` it replaced did.
+OWN_PID=""
+own_pid() {
+    local pid=""
+    OWN_PID=""
+    { [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ] && [ -s "$1" ]; } || return 0
+    IFS= read -r -n 32 pid <"$1" 2>/dev/null || true
+    pid="${pid%$'\r'}"
+    case "$pid" in '' | *[!0-9]*) return 0 ;; esac
+    [ "$pid" -gt 1 ] 2>/dev/null || return 0
+    OWN_PID="$pid"
+}
+
 PIDF="/tmp/${PREFIX}-watcher-${SID}.pid"
-if [ -s "$PIDF" ]; then
-    PID=$(cat "$PIDF" 2>/dev/null || echo "")
-    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-        quiet_exit
-    fi
+PID=""
+if [ -f "$PIDF" ]; then
+    own_pid "$PIDF"
+    PID="$OWN_PID"
+fi
+if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+    quiet_exit
 fi
 # The Probe service records it (plan A2): its pid, in the marker `tap record`
 # wrote. A service that restarted resumes the session under a new pid; the cold
 # path below (at most every ten minutes) asks it again and rewrites the marker.
+# Only a marker of this user's naming a real pid (`own_pid`): pid 1 is init,
+# never the service.
 HOSTF="/tmp/${PREFIX}-watcher-${SID}.hosted"
 HOSTED_GONE=""
-if [ -s "$HOSTF" ]; then
-    PID=$(cat "$HOSTF" 2>/dev/null || echo "")
-    case "$PID" in '' | *[!0-9]*) PID="" ;; esac
+if [ -f "$HOSTF" ] && [ ! -L "$HOSTF" ] && [ -O "$HOSTF" ] && [ -s "$HOSTF" ]; then
+    own_pid "$HOSTF"
+    PID="$OWN_PID"
     if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
         quiet_exit
     fi

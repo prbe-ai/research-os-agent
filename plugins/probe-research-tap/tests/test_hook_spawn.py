@@ -324,10 +324,18 @@ def test_an_agent_that_dies_without_session_end_ends_its_session(tap_env, tmp_pa
 #: The stand-in's two processes, shaped as session-start.sh makes them. The
 #: wrapper forwards TERM to its child and exits at once. The child (`tap watch`)
 #: makes its last pass, which a second TERM does not cut short (the daemon only
-#: sets a flag), and records that it finished.
-_WRAPPER = 'trap \'kill -TERM "$C" 2>/dev/null; exit 0\' TERM; bash -c "$1" daemon "$2" "$3" & C=$!; wait "$C"'
+#: sets a flag), and records that it finished. Its command line names `tap
+#: watch` and the session id, as the real wrapper's does: session-end.sh
+#: signals no other pid.
+_WRAPPER = (
+    'trap \'kill -TERM "$C" 2>/dev/null; exit 0\' TERM; bash -c "$1" daemon "$2" "$3" "$4" & C=$!; wait "$C"'
+    ' # "$PY" -m tap watch --session-id "$4"'
+)
+#: The daemon names `tap watch` and the session id too, as `python -m tap watch
+#: --session-id <id>` does: a hand-over is waited on only while its group runs it.
 _DAEMON = (
     'trap "T=1" TERM; T=; while [ -z "$T" ]; do sleep 0.05; done; trap "" TERM; sleep "$1"; : >"$2"'
+    ' # -m tap watch --session-id "$3"'
 )
 #: Forks the wrapper into its own session and exits, so the OS reaps it as it
 #: reaps the real one, whose spawner exits too. Left a zombie of this test, it
@@ -366,7 +374,7 @@ def _fake_daemon_group(
     marker = Path(f"/tmp/{prefix}-watcher-{session_id}.finished")
     marker.unlink(missing_ok=True)
     out = subprocess.run(
-        [sys.executable, "-c", _DETACH, _WRAPPER, "wrapper", _DAEMON, str(linger_s), str(marker)],
+        [sys.executable, "-c", _DETACH, _WRAPPER, "wrapper", _DAEMON, str(linger_s), str(marker), session_id],
         capture_output=True,
         text=True,
         check=True,
@@ -872,7 +880,9 @@ def test_an_older_tap_never_replaces_a_newer_daemon(tap_env) -> None:
 
 def test_a_live_pid_that_is_not_this_sessions_tap_is_never_signalled(tap_env) -> None:
     """/tmp is world-writable and pids are reused: a pid file naming some other
-    live process, with no version record, must not get it killed."""
+    live process, with no version record, must not get it killed. Its pid file
+    is stale (its command line is not this session's `tap watch`): it goes, and
+    the session gets its own wrapper."""
     session_id, transcript, env, _ = tap_env
     stranger = subprocess.Popen(["sleep", "60"])
     pid_file = Path(f"/tmp/probe-research-tap-watcher-{session_id}.pid")
@@ -891,7 +901,7 @@ def test_a_live_pid_that_is_not_this_sessions_tap_is_never_signalled(tap_env) ->
         )
         time.sleep(0.5)
         assert stranger.poll() is None, "the hook signalled a process that is not its tap"
-        assert pid_file.read_text().strip() == str(stranger.pid)
+        assert pid_file.read_text().strip() != str(stranger.pid), "the stale pid file still names the stranger"
     finally:
         stranger.kill()
         stranger.wait()

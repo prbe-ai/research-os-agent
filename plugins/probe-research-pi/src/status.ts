@@ -19,6 +19,7 @@ import { hostedServicePid } from "./core/hosted.js";
 import { checkPairing } from "./core/pairing.js";
 import { hostedFile, pidFile, pluginDir, sessionLogFile, type PathEnv } from "./core/paths.js";
 import { resolveTapRuntime, type TapRuntimeDeps } from "./core/tapRuntime.js";
+import type { CaptureReading } from "./core/trackingState.js";
 
 export interface StatusDeps {
   existsSync: (path: string) => boolean;
@@ -33,6 +34,13 @@ export interface StatusDeps {
   hostedServicePid?: (sessionId: string) => number | null;
   /** Does an interpreter run the tap (3.11+)? Defaults to asking it (`tapRuntime.ts`). */
   runsTap?: (python: string) => boolean;
+  /**
+   * The CLI's own reading for this session (`probe session initialize`'s
+   * `capture`), when it could be read. A `.hosted` marker only says the
+   * service took the session; whether its recorder records it now is the
+   * service's to say, and the CLI asks it (`capture_state`).
+   */
+  capture?: CaptureReading;
 }
 
 export function buildStatusReport(sessionId: string | undefined, deps: StatusDeps): string {
@@ -80,7 +88,12 @@ export function buildStatusReport(sessionId: string | undefined, deps: StatusDep
     // marker (daemon.ts::isDaemonAlive, said apart here so the line names it).
     const watcher = isWatcherAlive(sessionId, deps);
     const hosted = watcher ? null : (deps.hostedServicePid ?? hostedServicePid)(sessionId);
-    if (hosted !== null) {
+    if (hosted !== null && deps.capture?.running === false) {
+      // The footer and `probe doctor` say the same word (the CLI's closed
+      // vocabulary, verbatim): a live recorder holding nothing, or none.
+      lines.push(`  this session:  not capturing: ${deps.capture.reason} (marker names the Probe service, pid ${hosted})`);
+      lines.push(`    marker:      ${hostedFile(sessionId)}`);
+    } else if (hosted !== null) {
       lines.push(`  this session:  capturing (recorded by the Probe service, pid ${hosted})`);
       lines.push(`    marker:      ${hostedFile(sessionId)}`);
     } else {

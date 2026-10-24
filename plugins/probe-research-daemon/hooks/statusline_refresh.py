@@ -42,6 +42,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -336,7 +337,7 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
 
     A session the Probe service records has no wrapper and so no pid file: its
     `.hosted` marker names the service instead (`tap record`, plan A2). With no
-    readable pid file of this user's, that marker is read as
+    live pid in a pid file of this user's, that marker is read as
     `capture_state._hosted_pid` reads it, and NOT at face value: nothing rewrites
     the marker of a service that stopped without resuming the session, so a
     reused pid would read as recording for as long as it lives. The marker's pid
@@ -352,9 +353,25 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
     resolution): a re-paired machine clears the latch at its recorder's next
     start, seconds later under the service.
 
-    Windows is not read here yet: the hooks' watcher folder is not `/tmp` there
-    and `os.kill(pid, 0)` is not a probe (signal 0 is CTRL_C_EVENT), so a
-    Windows session reads `not started` as before.
+    A pid file whose pid is gone is stale, not an answer, as there: its
+    wrapper gave up or was killed, and the session may have moved to the
+    service since, which leaves its marker beside that pid file.
+
+    Windows: the watcher files are in the folder the hooks named
+    (`_watcher_dir`), a pid is never probed with `os.kill` (signal 0 is
+    CTRL_C_EVENT, sent to a whole process group), and the marker's pid must be
+    the one the service wrote into its lock file, still that same process
+    (`_alive_nt`), as `capture_state._hosted_pid` reads it there. A wrapper's
+    pid file names a Git Bash (MSYS) pid, which no Windows call can ask, so
+    there only the marker can say running.
+
+    A marker naming the service is not taken as "running" on its own: the
+    service is asked what its recorder of the session does (`service.status`,
+    `_recorder_reading`), as `capture_state` asks it: `not recording` while a
+    live recorder does not hold the session (its server does not answer, it
+    waits to try again), `not started` when it records no such session. No
+    answer (no service, an older one) reads the marker alone, as before. Asked
+    here, in the refresh, never in the renderer.
 
     `agent` is the session's harness as its hook resolved it, for a refresh
     the Probe service runs (its environment names no harness).
@@ -368,22 +385,105 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
         return {"running": False, "reason": "killswitch"}
     if _halted(plugin_dir):
         return {"running": False, "reason": "halted"}
-    if os.name == "nt":
-        return {"running": False, "reason": "not started"}
 
-    stem = os.path.join("/tmp", _watcher_prefix(source) + "-watcher-" + session_id)
-    pid = _own_pid(stem + ".pid")
-    if pid is None:
-        if _is_the_service(_own_pid(stem + ".hosted")):
-            return {"running": True, "reason": "running"}
+    stem = os.path.join(_watcher_dir(source), _watcher_prefix(source) + "-watcher-" + session_id)
+    if os.name != "nt":
+        pid = _own_pid(stem + ".pid")
+        if pid is not None and pid > 0:
+            try:
+                os.kill(pid, 0)
+                return {"running": True, "reason": "running"}
+            except OSError:
+                pass
+    if not _is_the_service(_own_pid(stem + ".hosted")):
         return {"running": False, "reason": "not started"}
-    if pid <= 0:
-        return {"running": False, "reason": "not started"}
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return {"running": False, "reason": "not started"}
-    return {"running": True, "reason": "running"}
+    reading = _recorder_reading(session_id)
+    if reading in (None, "running"):
+        return {"running": True, "reason": "running"}
+    return {"running": False, "reason": reading}
+
+
+#: Mirrors `tap.config.WATCHER_DIR_ENV`: on Windows, Git Bash's `/tmp` as a
+#: Windows path, which session-start.sh exports for what it starts ...
+_WATCHER_DIR_ENV = "PROBE_TAP_WATCHER_DIR"
+#: ... and keeps in the tap's state folder for what it does not start, this
+#: refresh included (`capture_state.WATCHER_DIR_FILE`).
+_WATCHER_DIR_FILE = ".watcher_dir"
+
+
+def _watcher_dir(source: str | None = None) -> str:
+    """Where the tap's hooks keep a session's watcher files: `/tmp`. On Windows
+    the folder Git Bash's `/tmp` is: the one session-start.sh recorded in the
+    tap's state folder (`_WATCHER_DIR_FILE`), else `_WATCHER_DIR_ENV`, else the
+    user's temp folder. Mirrors `capture_state._watcher_dir`."""
+    if os.name == "nt":
+        if source:
+            try:
+                with open(os.path.join(_tap_plugin_dir(source), _WATCHER_DIR_FILE), encoding="utf-8") as handle:
+                    saved = handle.read(4096).strip()
+            except (OSError, ValueError):
+                saved = ""
+            if saved and os.path.isabs(saved):
+                return saved
+        given = os.environ.get(_WATCHER_DIR_ENV, "")
+        if given and os.path.isabs(given):
+            return given
+        import tempfile  # noqa: PLC0415
+
+        return tempfile.gettempdir()
+    return "/tmp"
+
+
+#: One `service.status` per refresh process, at most every this many seconds:
+#: the service's `fetch-all` child refreshes many sessions at once.
+_RECORDERS_TTL_S = 2.0
+#: ... and how long it may take (the connect has its own 0.3 s).
+_RECORDERS_TIMEOUT_S = 0.5
+_recorders_cache: dict = {}
+_recorders_lock = threading.Lock()
+
+
+def _service_recorders() -> "list | None":
+    """The Probe service's `recorders` (`service.status`), through the vendored
+    `_service_rpc`; None when no service answers in time (or a hook is told
+    not to ask, `PROBE_HOOK_SERVICE=off`). Never raises."""
+    with _recorders_lock:
+        cached = _recorders_cache.get("rows")
+        if cached is not None and time.monotonic() - cached[0] < _RECORDERS_TTL_S:
+            return cached[1]
+        rows = None
+        try:
+            rpc = _load("_service_rpc").Rpc.connect()
+            if rpc is not None:
+                try:
+                    found = rpc.call("service.status", {}, timeout=_RECORDERS_TIMEOUT_S).get("recorders")
+                    rows = [row for row in found if isinstance(row, dict)] if isinstance(found, list) else None
+                finally:
+                    rpc.close()
+        except Exception:  # noqa: BLE001 - the status line must render: the marker alone
+            rows = None
+        _recorders_cache["rows"] = (time.monotonic(), rows)
+        return rows
+
+
+def _recorder_reading(session_id: str) -> "str | None":
+    """`capture_state._recorder_reading`, through `_service_recorders`: what
+    the service's recorder of the session does now (`running`, `not
+    recording`: a live recorder that does not hold the session, `not started`:
+    none), or None when the service cannot say (the marker alone, as before)."""
+    rows = _service_recorders()
+    if rows is None:
+        return None
+    for row in rows:
+        if row.get("sid") != session_id:
+            continue
+        if row.get("alive") is False:
+            return "not started"
+        claim = row.get("recording")
+        if not isinstance(claim, bool):
+            return None
+        return "running" if claim else "not recording"
+    return "not started"
 
 
 def _own_pid(path: str) -> int | None:
@@ -422,12 +522,52 @@ def _service_lock() -> str:
     return str(_service_paths.lock_path())
 
 
+def _alive_nt(pid: int, start: str) -> bool:
+    """Windows: is the process (pid, start) still running? `procid.alive`'s
+    Windows branch, stdlib only: OpenProcess, its exit code still STILL_ACTIVE
+    (259), and its creation FILETIME the start the service wrote. Never
+    `os.kill`: on Windows that ends the process (signal 0 is CTRL_C_EVENT)."""
+    try:
+        import ctypes  # noqa: PLC0415
+        from ctypes import wintypes  # noqa: PLC0415
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = k32.OpenProcess(0x1000, False, int(pid))  # PROCESS_QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            times = [wintypes.FILETIME() for _ in range(4)]
+            if not k32.GetExitCodeProcess(handle, ctypes.byref(code)) or code.value != 259:
+                return False
+            if not k32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+                return False
+            created = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime
+        finally:
+            k32.CloseHandle(handle)
+    except (OSError, AttributeError, ValueError):
+        return False
+    return str(created) == start
+
+
 def _is_the_service(pid: int | None) -> bool:
     """Is `pid` this user's Probe service, alive? Its `/proc` command line names
     `probe.service` (Linux); with no `/proc`, it is the pid the service holding
-    its lock wrote there (`server._name_holder`), and alive."""
+    its lock wrote there (`server._name_holder`), and alive. On Windows that
+    lock line's start time must match too (`_alive_nt`): no `/proc`, and no
+    `os.kill`."""
     if pid is None or pid <= 1:
         return False
+    if os.name == "nt":
+        try:
+            with open(_service_lock(), encoding="utf-8") as handle:
+                pid_s, _, start = handle.read(64).strip().partition(" ")
+        except (OSError, ValueError):
+            return False
+        return pid_s == str(pid) and bool(start) and _alive_nt(pid, start)
     try:
         with open(os.path.join(_PROC_DIR, str(pid), "cmdline"), "rb") as handle:
             return b"probe.service" in handle.read()

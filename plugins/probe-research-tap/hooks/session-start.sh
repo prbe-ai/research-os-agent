@@ -60,6 +60,18 @@ else
 fi
 LOG_DIR="$PLUGIN_DIR/logs"
 mkdir -p "$LOG_DIR"
+# Git Bash: the watcher folder (its `/tmp`), kept in the tap's state folder for
+# what this hook does not start: `probe session status`, `probe doctor` and the
+# status line run from other shells, without PROBE_TAP_WATCHER_DIR. Rewritten
+# only when it changed, whole (a reader sees the old folder or the new one).
+if [ -n "${PROBE_TAP_WATCHER_DIR:-}" ] && case "${OSTYPE:-}" in msys* | cygwin*) true ;; *) false ;; esac; then
+    WATCHER_DIR_FILE="$PLUGIN_DIR/.watcher_dir"
+    if [ "$(cat "$WATCHER_DIR_FILE" 2>/dev/null || true)" != "$PROBE_TAP_WATCHER_DIR" ]; then
+        printf '%s' "$PROBE_TAP_WATCHER_DIR" >"$WATCHER_DIR_FILE.$$" 2>/dev/null \
+            && mv -f "$WATCHER_DIR_FILE.$$" "$WATCHER_DIR_FILE" 2>/dev/null \
+            || rm -f "$WATCHER_DIR_FILE.$$" 2>/dev/null || true
+    fi
+fi
 
 # Prune leaked shutdown sentinels. session-end.sh deliberately never deletes
 # one (it is the last-resort stop signal for an orphaned daemon), and only a
@@ -76,9 +88,55 @@ mkdir -p "$LOG_DIR"
 # a running daemon refreshes its owner record every tick, so only a finished
 # session's files are ever 2 days old.
 find /tmp/ -maxdepth 1 \( -name "${WATCHER_PREFIX}-watcher-*.shutdown" \
-    -o -name "${WATCHER_PREFIX}-watcher-*.owner" -o -name "${WATCHER_PREFIX}-watcher-*.stopping" \
-    -o -name "${WATCHER_PREFIX}-watcher-*.hosted" \) \
+    -o -name "${WATCHER_PREFIX}-watcher-*.owner" -o -name "${WATCHER_PREFIX}-watcher-*.stopping" \) \
     -mtime +2 -delete 2>/dev/null || true
+
+# The command line of pid $1: `ps`, else Linux's /proc (a slim container has no
+# `ps`); empty when neither answers.
+cmdline_of() {
+    local cmd=""
+    cmd=$(ps -ww -o command= -p "$1" 2>/dev/null || true)
+    if [ -z "$cmd" ] && [ -r "/proc/$1/cmdline" ]; then
+        cmd=$(tr '\0' ' ' <"/proc/$1/cmdline" 2>/dev/null || true)
+    fi
+    printf '%s' "$cmd"
+}
+
+# Whether the `.hosted` marker $1 must be kept: it is not this user's (not ours
+# to judge), or the pid in it is this user's live Probe service. Nothing
+# rewrites the marker while the service records the session, and a session can
+# live for days: pruning it by age alone left a live session reading "not
+# started" in `probe session status` and the status line.
+keep_hosted() {
+    local pid lock base
+    # Not a regular file (a link to a tty, a FIFO): never read, never ours.
+    { [ -f "$1" ] && [ ! -L "$1" ]; } || return 1
+    [ -O "$1" ] || return 0
+    pid=$(head -c 32 "$1" 2>/dev/null | tr -d '[:space:]' || true)
+    case "$pid" in '' | *[!0-9]*) return 1 ;; esac
+    [ "$pid" -gt 1 ] || return 1
+    case "${OSTYPE:-}" in
+    msys* | cygwin*)
+        # A Windows pid, which Git Bash's `kill` and `ps` do not know: the
+        # service names itself in its lock file (`server._name_holder`).
+        base=$(cygpath -u "${LOCALAPPDATA:-}" 2>/dev/null || true)
+        [ -n "$base" ] || return 1
+        for lock in "$base"/probe/service/*/service.lock; do
+            [ -f "$lock" ] || continue
+            [ "$(head -c 64 "$lock" 2>/dev/null | tr -s ' \r\n' ' ' | cut -d' ' -f1)" = "$pid" ] && return 0
+        done
+        return 1
+        ;;
+    esac
+    kill -0 "$pid" 2>/dev/null || return 1
+    case "$(cmdline_of "$pid")" in *probe.service*) return 0 ;; esac
+    return 1
+}
+# Kept ones are touched, so each is looked at again in 2 days, not every start.
+find /tmp/ -maxdepth 1 -name "${WATCHER_PREFIX}-watcher-*.hosted" -mtime +2 2>/dev/null \
+    | while IFS= read -r _hf; do
+        if keep_hosted "$_hf"; then touch -c "$_hf" 2>/dev/null || true; else rm -f "$_hf" 2>/dev/null || true; fi
+    done || true
 # A wrapper's version record is written once and never refreshed, and a live
 # session can be days old: of the 2-day-old ones, only those whose pid file is
 # gone are pruned.
@@ -293,6 +351,42 @@ tap_older() {
     return 1
 }
 
+# A watcher file of this user's: a regular file, not a link, owned by us. /tmp
+# is shared, so a file anyone else put there names nothing of ours, and a link
+# to a tty or a FIFO would block a read.
+own_file() { [ -f "$1" ] && [ ! -L "$1" ] && [ -O "$1" ]; }
+
+# Remove the session's pid file when it names no wrapper of this session: its
+# wrapper is gone (it gave up after 5 restarts, was killed, or the machine slept
+# through it), or its pid now runs something else (pids are reused). Left, it
+# says "a wrapper runs this session" to everything that reads it after this hook
+# hosts the session or starts a new wrapper, and session-end.sh would act on it.
+# Kept: an empty one (a wrapper writing its pid: it truncates, then writes), and
+# a live pid whose command line cannot be read (no proof either way). A link or
+# a file that is not a regular one is never read, and goes.
+drop_dead_pid_file() {
+    local old
+    if [ -L "$PID_FILE" ] || { [ -e "$PID_FILE" ] && [ ! -f "$PID_FILE" ]; }; then
+        rm -f "$PID_FILE" 2>/dev/null || true
+        return 0
+    fi
+    own_file "$PID_FILE" || return 0
+    old=$(head -c 32 "$PID_FILE" 2>/dev/null | tr -d '[:space:]' || true)
+    case "$old" in
+        '') return 0 ;;
+        *[!0-9]*) rm -f "$PID_FILE" 2>/dev/null || true; return 0 ;;
+    esac
+    if [ "$old" -le 1 ] 2>/dev/null || ! kill -0 "$old" 2>/dev/null; then
+        rm -f "$PID_FILE" 2>/dev/null || true
+        return 0
+    fi
+    case "$(cmdline_of "$old")" in
+        '' | *"tap watch"*"$SESSION_ID"*) ;;
+        *) rm -f "$PID_FILE" 2>/dev/null || true ;;
+    esac
+}
+drop_dead_pid_file
+
 # If a daemon is already running for this session_id (e.g. resumed session),
 # don't spawn another -- unless an OLDER tap started it.
 #
@@ -307,8 +401,9 @@ tap_older() {
 # finalize, exactly as at SessionEnd, after which the stream continues as on
 # any resume -- and this version's daemon takes the session over. Never the
 # other way: an older tap resuming a session never replaces a newer daemon.
-if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
-    LIVE_VER=$(cat "$VERSION_FILE" 2>/dev/null || true)
+if own_file "$PID_FILE" && kill -0 "$(head -c 32 "$PID_FILE" | tr -d '[:space:]')" 2>/dev/null; then
+    LIVE_VER=""
+    own_file "$VERSION_FILE" && LIVE_VER=$(head -c 64 "$VERSION_FILE" 2>/dev/null | tr -d '[:space:]' || true)
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null || true)
     case "$OLD_PID" in '' | *[!0-9]*) OLD_PID="" ;; esac
     # Only a pid that is provably THIS session's tap wrapper is stopped: /tmp is
@@ -318,10 +413,7 @@ if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     # left alone.
     OLD_CMD=""
     if [ -n "$OLD_PID" ]; then
-        OLD_CMD=$(ps -ww -o command= -p "$OLD_PID" 2>/dev/null || true)
-        if [ -z "$OLD_CMD" ] && [ -r "/proc/$OLD_PID/cmdline" ]; then
-            OLD_CMD=$(tr '\0' ' ' <"/proc/$OLD_PID/cmdline" 2>/dev/null || true)
-        fi
+        OLD_CMD=$(cmdline_of "$OLD_PID")
     fi
     case "$OLD_CMD" in
         *"tap watch"*"$SESSION_ID"*) OURS=1 ;;
@@ -367,6 +459,9 @@ fi
 # immediately kill the fresh daemon on a resumed session.
 SHUTDOWN_FILE="/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.shutdown"
 rm -f "$SHUTDOWN_FILE"
+# The last SessionEnd's hand-over goes with it: no wrapper of this session runs
+# now, and session-end.sh would otherwise wait on whatever pid it names.
+rm -f "/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.stopping" 2>/dev/null || true
 
 if [ -n "$TRANSCRIPT_PATH" ]; then
     TRANSCRIPT_ARGS=(--transcript "$TRANSCRIPT_PATH")
@@ -385,7 +480,11 @@ if [ "${PROBE_TAP_HOSTED:-1}" != 0 ] && PROBE_TAP_SOURCE="$SOURCE" PYTHONPATH="$
     "$PY" -m tap record --session-id "$SESSION_ID" --cwd "$CWD" --plugin-root "$PLUGIN_ROOT" \
     "${TRANSCRIPT_ARGS[@]}" </dev/null >>"$LOG_FILE" 2>&1; then
     HOSTED=1
-    rm -f "$VERSION_FILE"
+    rm -f "$VERSION_FILE" 2>/dev/null || true
+    # A wrapper's pid file that outlived it: the service records the session
+    # now, and `probe session status` and session-end.sh must not read it. One
+    # a wrapper wrote since the check above (a concurrent start) is live: kept.
+    drop_dead_pid_file
     echo "[$(date -u +%FT%TZ)] tap: the Probe service records this session (tap ${RUNNING_VER:-unknown})" >>"$LOG_FILE"
 fi
 
@@ -395,10 +494,11 @@ rm -f "/tmp/${WATCHER_PREFIX}-watcher-${SESSION_ID}.hosted"
 # Which tap the wrapper below runs, for the next resume's check above. Written
 # before the spawn, so there is no moment when a live wrapper carries an older
 # one's version; unknown (no manifest) leaves none, which never replaces.
-if [ -n "$RUNNING_VER" ]; then
+# Written only over nothing or a file of this user's: never through a link.
+if [ -n "$RUNNING_VER" ] && { { [ ! -e "$VERSION_FILE" ] && [ ! -L "$VERSION_FILE" ]; } || own_file "$VERSION_FILE"; }; then
     printf '%s' "$RUNNING_VER" >"$VERSION_FILE" 2>/dev/null || true
 else
-    rm -f "$VERSION_FILE"
+    rm -f "$VERSION_FILE" 2>/dev/null || true
 fi
 
 # Crash-recovery wrapper: respawn up to 5 times per minute.
