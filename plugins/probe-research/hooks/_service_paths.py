@@ -72,6 +72,14 @@ BARRIER_NAME = "update.barrier"
 UPDATE_STATE_NAME = "update.json"
 #: Written by the desktop app's `--background-update` run (prbe-ai/desktop #11).
 APP_UPDATE_NAME = "app-update.json"
+#: Set on every `probe` this service starts itself (`children.cli_argv`, with
+#: `children.cli_env`): such a command never asks the service for an update
+#: (`probe.cli.main._hand_update_to_service`). The service is the updater, and
+#: an ask from one command of a job would land while the job's next command
+#: still runs from the files an update replaces. Here, not in `children`: the
+#: CLI reads it on its every-command path, which has loaded this module
+#: already and must not pay for `children`'s asyncio import.
+SERVICE_CHILD_ENV = "PROBE_SERVICE_CHILD"
 #: Hook events' record-keeping routes, queued for the service to run once
 #: (plan D36; `hookqueue.py`): `<event id>.json` waits, `<event id>.done` marks
 #: one taken. `drained-by` holds the version of the service that drains it: a
