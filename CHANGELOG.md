@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **A debug log names only the coding agents on the machine.** Since 0.298.1 every log was filed under all 4 coding agents Probe knows (Claude Code, Codex, pi, Kimi Code), because each one's folder in the log always holds two records, even for an agent that is not installed, so staff filtering logs by agent matched every log. An agent now counts when the log holds its version (its own program on PATH answered `--version`; another package's `pi` is not pi, as in the wizard), a recent transcript, or a file from its settings folder.
+
 ## 0.299.1
 
 - **One stuck update no longer stops a machine's automatic updates for good.** The Probe service waited for its update with no time limit. An update that never finished kept the service's update in progress, so every later check answered "running" and nothing updated again. A service started after that one found the stuck update's setup lock and waited on it forever, because a setup lock is never taken over. Now an update runs 30 minutes at most (normal ones take under a minute). Past that the service stops it: SIGTERM first, so the update can let go of its locks and say how it ended, then SIGKILL 30 seconds later. The update fails, and the next one can run. A service that finds a stuck update left by the service before it stops that one the same way first, and only when it can prove which process it is: the update record names it, it is still that same process (not a reused process id), and it is running Probe's update. A person's `probe wizard` and the app's Update action are never stopped. `probe doctor` shows the stopped update as failed ("the update ran past 30 min and was stopped"), and the update report to the server says it was stopped instead of sending only the parts that finished.
