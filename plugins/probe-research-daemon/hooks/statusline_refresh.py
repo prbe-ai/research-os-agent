@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -324,19 +325,36 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
     `not started` is a fault. Two implementations that ordered these
     differently would put two different words on the same machine.
 
-    THE ONE DELIBERATE GAP is `halted` (the tap's 401 latch). Naming it means
-    opening the tap's sqlite state db AND resolving the winning credential to
-    fingerprint it, which is `capture_state._halted`'s job in a process that
-    can import the tap. This hook runs every few seconds for the life of a
-    session; a halted daemon reads as `not started` here, which is wrong about
-    the cause but right about the fact, and `probe session status` and
-    `probe doctor` both name it exactly.
+    `halted` (the tap's 401 latch) sits between those and running, as there:
+    see below.
 
     A pid that exists is taken at face value here, where `probe.cli.capture_state`
     additionally asks `ps` what the process IS. That check is a subprocess, and
     this runs every few seconds for the life of a session; the accident it
     guards against is pid reuse inside the refresh window, which costs one
     over-optimistic reading that the next refresh corrects.
+
+    A session the Probe service records has no wrapper and so no pid file: its
+    `.hosted` marker names the service instead (`tap record`, plan A2). With no
+    readable pid file of this user's, that marker is read as
+    `capture_state._hosted_pid` reads it, and NOT at face value: nothing rewrites
+    the marker of a service that stopped without resuming the session, so a
+    reused pid would read as recording for as long as it lives. The marker's pid
+    must be the service's: `probe.service` in its `/proc` command line, or, with
+    no `/proc` (macOS), the pid the service wrote into its lock file. Reading
+    only the pid file put `not started` on every session the service recorded.
+
+    `halted` is read here too, from the tap's own state db (`last_401_at`, the
+    latch `tap/outbox.py` sets on a 401): a recorder the service keeps retrying
+    after a 401 leaves a live service behind its marker, so without this the
+    segment would say capture is fine while nothing uploads. The rejected
+    token's fingerprint is not compared (that needs the tap's credential
+    resolution): a re-paired machine clears the latch at its recorder's next
+    start, seconds later under the service.
+
+    Windows is not read here yet: the hooks' watcher folder is not `/tmp` there
+    and `os.kill(pid, 0)` is not a probe (signal 0 is CTRL_C_EVENT), so a
+    Windows session reads `not started` as before.
 
     `agent` is the session's harness as its hook resolved it, for a refresh
     the Probe service runs (its environment names no harness).
@@ -348,18 +366,107 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
         return {"running": False, "reason": "not installed"}
     if os.path.exists(os.path.join(plugin_dir, ".disabled")):
         return {"running": False, "reason": "killswitch"}
+    if _halted(plugin_dir):
+        return {"running": False, "reason": "halted"}
+    if os.name == "nt":
+        return {"running": False, "reason": "not started"}
 
-    prefix = _watcher_prefix(source)
-    path = os.path.join("/tmp", prefix + "-watcher-" + session_id + ".pid")
+    stem = os.path.join("/tmp", _watcher_prefix(source) + "-watcher-" + session_id)
+    pid = _own_pid(stem + ".pid")
+    if pid is None:
+        if _is_the_service(_own_pid(stem + ".hosted")):
+            return {"running": True, "reason": "running"}
+        return {"running": False, "reason": "not started"}
+    if pid <= 0:
+        return {"running": False, "reason": "not started"}
     try:
-        with open(path, encoding="utf-8") as handle:
-            pid = int(handle.read().strip())
-        if pid <= 0:
-            return {"running": False, "reason": "not started"}
         os.kill(pid, 0)
-    except (OSError, ValueError):
+    except OSError:
         return {"running": False, "reason": "not started"}
     return {"running": True, "reason": "running"}
+
+
+def _own_pid(path: str) -> int | None:
+    """The number in a watcher file of this user's, else None. Opened without
+    following a link and without blocking (`/tmp` is shared: another user's
+    FIFO there would hang this child until the service kills it), then checked
+    on the open file: a regular file, this user's."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError:
+        return None
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if hasattr(os, "getuid") and info.st_uid != os.getuid():
+            return None
+        return int(os.read(fd, 32).decode("ascii", "replace").strip())
+    except (OSError, ValueError):
+        return None
+    finally:
+        os.close(fd)
+
+
+#: Where Linux lists processes; a machine without it (macOS) asks the lock file.
+_PROC_DIR = "/proc"
+#: The vendored `_service_paths`, loaded once per process (`_service_lock`).
+_service_paths = None
+
+
+def _service_lock() -> str:
+    global _service_paths
+    if _service_paths is None:
+        _service_paths = _load("_service_paths")
+    return str(_service_paths.lock_path())
+
+
+def _is_the_service(pid: int | None) -> bool:
+    """Is `pid` this user's Probe service, alive? Its `/proc` command line names
+    `probe.service` (Linux); with no `/proc`, it is the pid the service holding
+    its lock wrote there (`server._name_holder`), and alive."""
+    if pid is None or pid <= 1:
+        return False
+    try:
+        with open(os.path.join(_PROC_DIR, str(pid), "cmdline"), "rb") as handle:
+            return b"probe.service" in handle.read()
+    except FileNotFoundError:
+        if os.path.isdir(os.path.join(_PROC_DIR, "self")):
+            return False  # /proc is there and this pid is not: it is gone
+    except OSError:
+        return False
+    try:
+        with open(_service_lock(), encoding="utf-8") as handle:
+            if handle.read(64).split()[:1] != [str(pid)]:
+                return False
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def _halted(plugin_dir: str) -> bool:
+    """Is the tap in its 401 latch (`last_401_at` in its state db's meta)?
+    Read-only, and never waiting on a writer: a missing, locked or older db is
+    not a halt."""
+    import sqlite3  # noqa: PLC0415 - only a session with a tap state db pays for it
+    from pathlib import Path  # noqa: PLC0415
+
+    db = os.path.join(plugin_dir, "state.db")
+    if not os.path.isfile(db):
+        return False
+    try:
+        conn = sqlite3.connect(Path(os.path.abspath(db)).as_uri() + "?mode=ro", uri=True, timeout=0.05)
+    except sqlite3.Error:
+        return False
+    try:
+        row = conn.execute("SELECT v FROM meta WHERE k = 'last_401_at'").fetchone()
+    except sqlite3.Error:
+        return False
+    finally:
+        conn.close()
+    return bool(row and row[0])
 
 
 def refresh(session_id: str, agent: str | None = None, *, core=None, marker=None) -> None:
