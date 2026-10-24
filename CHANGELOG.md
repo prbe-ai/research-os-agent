@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.299.3
+
 - **A Codex session keeps being recorded across the Probe service's self-update.** When the service restarts, it resumes every session it was recording. It loaded the tap from each session's saved plugin folder in turn, and a session whose folder was gone was dropped without a word. Its entry was then erased from `recorders.json`, so nothing recorded it until its agent's next prompt. Codex removes a plugin's old version folder when it installs a new one, and an update cycle does exactly that just before it restarts the service. So the first Codex session in line stopped being recorded at every update that bumped the tap: on one Mac (2026-10-24, CLI 0.299.0, tap 0.10.15 → 0.10.16) the new service resumed 7 sessions but not the open Codex one, and its watch reported the Codex session's recorder `gone` 107 s later. Now the service picks one tap first and resumes every session on it, so one session's missing folder no longer decides anything. A folder that is gone moves to the highest-numbered version folder beside it that holds a tap, along with the session's saved `PLUGIN_ROOT`. A session that still cannot resume is named in `service.log` with the reason, and its agent's next prompt asks the service again; one resumed on an older tap than its own (its own would not load) is named there too.
 
 ## 0.299.2
