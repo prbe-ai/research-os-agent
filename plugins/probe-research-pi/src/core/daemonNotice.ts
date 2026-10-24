@@ -48,6 +48,7 @@ export const DaemonReason = {
   Budget: "budget",
   Unauthorized: "unauthorized",
   Error: "error",
+  DiskFull: "disk_full",
 } as const;
 
 /** `session_marker.DAEMON_REASON_WORDS`. */
@@ -59,6 +60,7 @@ export const DAEMON_REASON_WORDS: Readonly<Record<string, string>> = {
   [DaemonReason.Budget]: "out of budget",
   [DaemonReason.Unauthorized]: "not authorized",
   [DaemonReason.Error]: "hitting an error",
+  [DaemonReason.DiskFull]: "out of disk space",
 };
 
 /** `session_marker.LEASE_VERSION`, `LEASE_SUFFIX`, `NOTIFIED_SUFFIX`, and the lease's writer. */

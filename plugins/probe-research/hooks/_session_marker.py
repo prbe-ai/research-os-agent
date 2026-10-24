@@ -1935,6 +1935,7 @@ DAEMON_REASON_WORDS = {
     "budget": "out of budget",
     "unauthorized": "not authorized",
     "error": "hitting an error",
+    "disk_full": "out of disk space",
 }
 
 
