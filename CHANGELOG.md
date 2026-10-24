@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.303.1
+
 - **A debug log keeps an agent's part when the agent prunes its sessions mid-scan.** A transcript deleted while `probe doctor --bundle` read the transcripts' dates failed that agent's whole part of the log (`failed: FileNotFoundError`): its transcript list, facts and settings files were left out, and only a working `--version` still named the agent. A deleted transcript is now skipped and the next newest one takes its place in the 10 listed. A session folder deleted during the walk (which fails it on Python 3.10 and 3.11) no longer empties the agent's transcript list: the folder is walked up to 3 times, and a walk that fails every time is named in the log's notes instead of reading as an agent with no sessions. An agent folder this user cannot read (removed meanwhile, or left owned by root after `sudo`) no longer fails the agent's whole part: its version and facts are kept, and the notes say the folder could not be listed. The log's README now heads these lines Notes instead of Trimmed. The same skip, with the next newest taking the place, covers the Probe service's action records in the log, the old debug logs Probe deletes (it keeps the newest 3), and the report copies it keeps: two reports saved at once no longer leave one copy marked as still sending.
 
 ## 0.303.0
