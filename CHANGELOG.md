@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Per-push CI runs fast logic tests only.** A new `heavy` marker holds back 140 slow end-to-end tests (a spawned service, a real tap, packaged builds; 8–28 s each) from agent-ci; the nightly full-regression still runs them. The temporary release-smoke test that installed CLI 0.309.1 from PyPI to host tap 0.10.19 is removed.
+
 - **The Probe service checks whether it may update the desktop app without asking macOS.** Its "can I write the app?" check used `os.access`, which on macOS makes App Management evaluate the protected bundle; a background caller's ask was refused and logged (seen on a real Mac, 2026-10-25; silent, and the install went on). It now reads the owner and mode bits instead.
 
 - **`read` says what it does: nothing new is filed in Probe, and the conversation is still captured.** The `probe` skill (every copy), its reply templates and `probe state --help` said `read` "records nothing", while the transcript has always been captured in `read` (owner's call, 2026-10-25: keep capturing it). Only `off` stops capture.
