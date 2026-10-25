@@ -46,22 +46,26 @@ export interface McpBearerToken {
   detail: string;
 }
 
-/** The probe CLI config file's `mcp_token`, flattened to one dict whatever the file shape (v1 or v2). */
-function readProbeConfigMcpToken(env: PathEnv): string | null {
+/**
+ * The probe CLI config file's ACTIVE context as one flat dict, whatever the file
+ * shape (v1 or v2); `{}` when it is absent or unreadable. Shared with
+ * `workspaceLimit.ts`, which reads the same context's `workspace`.
+ */
+export function readActiveProbeContext(env: PathEnv): Record<string, unknown> {
   const path = probeConfigPath(env);
   let raw: string;
   try {
     raw = readFileSync(path, "utf-8");
   } catch {
-    return null;
+    return {};
   }
   let data: unknown;
   try {
     data = JSON.parse(raw);
   } catch {
-    return null;
+    return {};
   }
-  if (typeof data !== "object" || data === null || Array.isArray(data)) return null;
+  if (typeof data !== "object" || data === null || Array.isArray(data)) return {};
   let flat = data as Record<string, unknown>;
   const contexts = flat.contexts;
   if (typeof contexts === "object" && contexts !== null && !Array.isArray(contexts)) {
@@ -78,6 +82,12 @@ function readProbeConfigMcpToken(env: PathEnv): string | null {
     const active = contextsMap[current];
     flat = typeof active === "object" && active !== null && !Array.isArray(active) ? (active as Record<string, unknown>) : {};
   }
+  return flat;
+}
+
+/** The probe CLI config file's `mcp_token` (the active context's, v1 or v2). */
+function readProbeConfigMcpToken(env: PathEnv): string | null {
+  const flat = readActiveProbeContext(env);
   const tok = flat.mcp_token;
   return typeof tok === "string" && tok.trim() ? tok.trim() : null;
 }

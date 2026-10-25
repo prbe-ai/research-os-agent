@@ -1057,6 +1057,77 @@ describe("registerExtension — team note", () => {
     expect(result!.systemPrompt).toContain(notePath);
   });
 
+  /** This computer's workspace limit in the probe CLI config pi reads. */
+  function writeWorkspaceLimit(teamItems: string | null): void {
+    const path = paths.probeConfigPath(process.env);
+    mkdirSync(dirname(path), { recursive: true });
+    const workspace = teamItems === null ? { id: "11111111-1111-1111-1111-111111111111" } : {
+      id: "11111111-1111-1111-1111-111111111111", limit: true, team_items: teamItems,
+    };
+    writeFileSync(path, JSON.stringify({ version: 2, current_context: "default", contexts: { default: { workspace } } }));
+  }
+
+  it("stops injecting the note the moment the workspace limit hides team items, mid-session included", async () => {
+    writeTeamNote("# Team note\nDo not repeat the June outage.\n");
+    writeWorkspaceLimit(null);
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-mid-session"), sessionFile: undefined });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
+    expect((await beforeAgentStart({ systemPrompt: "P1" }, ctx))!.systemPrompt).toContain("June outage");
+
+    writeWorkspaceLimit("hide"); // `probe workspace limit <w> --team-items hide`, mid-session
+    const hidden = await beforeAgentStart({ systemPrompt: "P2" }, ctx);
+    expect(hidden?.systemPrompt ?? "P2").not.toContain("June outage");
+
+    writeWorkspaceLimit("show");
+    expect((await beforeAgentStart({ systemPrompt: "P3" }, ctx))!.systemPrompt).toContain("June outage");
+  });
+
+  it("a session that starts with team items hidden neither syncs nor injects, until they show", async () => {
+    installProbeCli();
+    writeTeamNote("# Team note\nKeep the June outage in mind.\n");
+    writeWorkspaceLimit("hide");
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-hidden-start"), sessionFile: undefined });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    await handlers.get("agent_settled")!({}, ctx);
+    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
+    expect((await beforeAgentStart({ systemPrompt: "P1" }, ctx))?.systemPrompt ?? "P1").not.toContain("June outage");
+    expect(noteSyncs()).toHaveLength(0);
+
+    writeWorkspaceLimit("show");
+    expect((await beforeAgentStart({ systemPrompt: "P2" }, ctx))!.systemPrompt).toContain("June outage");
+  });
+
+  it("showing team items again syncs and reloads the note for the CURRENT account before injecting it", async () => {
+    installProbeCli();
+    const notePath = writeTeamNote("# Team note\nthe PREVIOUS account's note\n");
+    writeWorkspaceLimit("hide");
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: uniqueSessionId("note-limit-account-switch"), sessionFile: undefined });
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+    expect(noteSyncs()).toHaveLength(0);
+
+    // Meanwhile another account signed in; its sync replaces the machine's note.
+    spawnMock.mockImplementationOnce(() => {
+      writeFileSync(notePath, "# Team note\nthe CURRENT account's note\n");
+      return { pid: 4242, unref: vi.fn(), once: (event: string, cb: (v: unknown) => void) => {
+        if (event === "exit") queueMicrotask(() => cb(0));
+      } };
+    });
+    writeWorkspaceLimit("show");
+    const beforeAgentStart = handlers.get("before_agent_start") as unknown as BeforeAgentStartHandler;
+    const prompt = (await beforeAgentStart({ systemPrompt: "P" }, ctx))!.systemPrompt!;
+
+    expect(noteSyncs()).toHaveLength(1);
+    expect(prompt).toContain("the CURRENT account's note");
+    expect(prompt).not.toContain("PREVIOUS");
+  });
+
   it("does not re-read the file on every before_agent_start -- cached once at session_start", async () => {
     writeTeamNote("original note");
     const { api, handlers } = fakeExtensionAPI();

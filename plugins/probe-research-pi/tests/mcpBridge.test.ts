@@ -147,13 +147,36 @@ describe("connectAndRegisterTools", () => {
     expect("registered" in result).toBe(true);
     if ("registered" in result) expect(result.registered).toBe(2);
     expect(connectWithBearer).toHaveBeenCalledTimes(1);
-    expect(connectWithBearer).toHaveBeenCalledWith(mcpServerUrl(deps.env), "bearer-token-1", deps.timeouts.connectMs);
+    // No workspace limit here: no limit headers beside the bearer.
+    expect(connectWithBearer).toHaveBeenCalledWith(mcpServerUrl(deps.env), "bearer-token-1", deps.timeouts.connectMs, {});
     expect(tools.has("probe_mcp_search_runs")).toBe(true);
     expect(tools.has("probe_mcp_get_run")).toBe(true);
     const registered = tools.get("probe_mcp_search_runs")!;
     expect(registered.label).toBe("search_runs");
     expect(registered.description).toBe("Search runs by query");
     expect((registered.parameters as Record<string, unknown>).type).toBe("object");
+  });
+
+  it("sends this computer's workspace limit beside the bearer, on connect and on reconnect", async () => {
+    const client = fakeClient({ listTools: async () => ({ tools: [SEARCH_TOOL] }) });
+    const connectWithBearer = vi.fn(async () => client);
+    const { deps } = fakeDeps({
+      env: {
+        PROBE_MCP_TOKEN: "bearer-token-1",
+        PI_CODING_AGENT_DIR: "/fake/pi-agent-dir",
+        PROBE_WORKSPACE_LIMIT: "11111111-1111-1111-1111-111111111111",
+        PROBE_WORKSPACE_LIMIT_TEAM_ITEMS: "hide",
+      },
+      connector: { ...unimplementedConnector(), connectWithBearer },
+    });
+    const { pi } = fakePi();
+
+    await connectAndRegisterTools(pi, deps);
+
+    expect(connectWithBearer).toHaveBeenCalledWith(mcpServerUrl(deps.env), "bearer-token-1", deps.timeouts.connectMs, {
+      "X-Probe-Workspace-Limit": "11111111-1111-1111-1111-111111111111",
+      "X-Probe-Workspace-Limit-Team-Items": "hide",
+    });
   });
 
   it("uses PROBE_MCP_URL to override the server URL when set", async () => {
@@ -479,6 +502,23 @@ describe("interactiveOAuthLogin", () => {
     const result = await interactiveOAuthLogin(pi, deps, fakeUI({ hasUI: false }));
 
     expect(result.status).toBe("requires-interactive");
+  });
+
+  it("sends this computer's workspace limit on the interactive OAuth login's connection too", async () => {
+    const client = fakeClient({ listTools: async () => ({ tools: [SEARCH_TOOL] }) });
+    const startOAuthLogin = vi.fn(async (): Promise<OAuthLoginStart> => ({ authorized: true, client }));
+    const { deps } = fakeDeps({
+      env: { PI_CODING_AGENT_DIR: "/fake", PROBE_WORKSPACE_LIMIT: "11111111-1111-1111-1111-111111111111" },
+      connector: { ...unimplementedConnector(), startOAuthLogin },
+    });
+    const { pi } = fakePi();
+
+    await interactiveOAuthLogin(pi, deps, fakeUI());
+
+    expect(startOAuthLogin).toHaveBeenCalledWith(expect.any(URL), expect.anything(), deps.timeouts.connectMs, {
+      "X-Probe-Workspace-Limit": "11111111-1111-1111-1111-111111111111",
+      "X-Probe-Workspace-Limit-Team-Items": "show",
+    });
   });
 
   it("reports connected (no fresh login) when the OAuth provider already has valid stored tokens", async () => {

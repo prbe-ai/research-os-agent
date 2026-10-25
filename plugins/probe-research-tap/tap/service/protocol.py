@@ -184,6 +184,9 @@ class DesktopOp:
     ANALYTICS_POLICY = "analytics_policy"
     SET_CAPTURE = "set_capture"
     ONBOARDING_COMPLETE = "onboarding_complete"
+    #: Every workspace on the team (`{id, name, slug, kind}`), fetched WITHOUT this
+    #: computer's workspace limit, and that limit: the Settings picker's list.
+    WORKSPACES = "workspaces"
 
 
 #: The ops that change nothing a stopped child could leave half-written (a
@@ -199,6 +202,7 @@ DESKTOP_READS = frozenset(
         DesktopOp.DELIVERY,
         DesktopOp.PROFILE,
         DesktopOp.ANALYTICS_POLICY,
+        DesktopOp.WORKSPACES,
     }
 )
 #: `action.run`'s and `desktop.request`'s `origin`: a person asked, in the app.
@@ -288,10 +292,22 @@ class Action:
     UNINSTALL = "uninstall"
     UPDATE = "update"
     SESSION_DEFAULT = "session_default"
+    #: `{"workspace": <id|slug|name> | null, "team_items": "show"|"hide"}`: limit what
+    #: Probe on this computer reads to one workspace (null: the whole team). Its
+    #: `result` row's `actual` is `probe workspace limit --json`'s object.
+    WORKSPACE_LIMIT = "workspace_limit"
 
 
 ACTIONS = frozenset(
-    {Action.CONFIGURE, Action.RECORDER, Action.LOGOUT, Action.UNINSTALL, Action.UPDATE, Action.SESSION_DEFAULT}
+    {
+        Action.CONFIGURE,
+        Action.RECORDER,
+        Action.LOGOUT,
+        Action.UNINSTALL,
+        Action.UPDATE,
+        Action.SESSION_DEFAULT,
+        Action.WORKSPACE_LIMIT,
+    }
 )
 
 

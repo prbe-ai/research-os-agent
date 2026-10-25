@@ -43,6 +43,7 @@ import { StreamableHTTPClientTransport, StreamableHTTPError } from "@modelcontex
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { resolveMcpBearerToken } from "./core/mcpAuth.js";
+import { workspaceLimitHeaders } from "./core/workspaceLimit.js";
 import { defaultOAuthStorageDeps, ProbeOAuthClientProvider, type OAuthStorageDeps } from "./mcpOAuth.js";
 import { jsonSchemaToTypeBox, prefixToolName } from "./mcpSchema.js";
 import { packageVersion } from "./packageVersion.js";
@@ -195,8 +196,14 @@ export type OAuthLoginStart =
  * against this interface and is exercised in tests through a fake one.
  */
 export interface McpConnector {
-  connectWithBearer(url: URL, token: string, timeoutMs: number): Promise<McpClientLike>;
-  connectWithOAuthProvider(url: URL, provider: ProbeOAuthClientProvider, timeoutMs: number): Promise<McpClientLike>;
+  /** `headers`: sent beside the bearer on every request -- this computer's workspace limit (`core/workspaceLimit.ts`). */
+  connectWithBearer(url: URL, token: string, timeoutMs: number, headers?: Record<string, string>): Promise<McpClientLike>;
+  connectWithOAuthProvider(
+    url: URL,
+    provider: ProbeOAuthClientProvider,
+    timeoutMs: number,
+    headers?: Record<string, string>,
+  ): Promise<McpClientLike>;
   /**
    * Attempt a connection using `authProvider`. If stored tokens are already
    * valid, resolves `{ authorized: true, client }` directly. If the server
@@ -206,7 +213,12 @@ export interface McpConnector {
    * the exchange and reconnects. Rejects for any other failure (network,
    * timeout, ...).
    */
-  startOAuthLogin(url: URL, provider: ProbeOAuthClientProvider, timeoutMs: number): Promise<OAuthLoginStart>;
+  startOAuthLogin(
+    url: URL,
+    provider: ProbeOAuthClientProvider,
+    timeoutMs: number,
+    headers?: Record<string, string>,
+  ): Promise<OAuthLoginStart>;
 }
 
 async function realConnect(url: URL, transport: StreamableHTTPClientTransport, timeoutMs: number): Promise<Client> {
@@ -216,18 +228,22 @@ async function realConnect(url: URL, transport: StreamableHTTPClientTransport, t
 }
 
 export const realMcpConnector: McpConnector = {
-  async connectWithBearer(url, token, timeoutMs) {
-    const transport = new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } });
+  async connectWithBearer(url, token, timeoutMs, headers = {}) {
+    const transport = new StreamableHTTPClientTransport(url, {
+      requestInit: { headers: { ...headers, Authorization: `Bearer ${token}` } },
+    });
     return realConnect(url, transport, timeoutMs);
   },
 
-  async connectWithOAuthProvider(url, provider, timeoutMs) {
-    const transport = new StreamableHTTPClientTransport(url, { authProvider: provider });
+  async connectWithOAuthProvider(url, provider, timeoutMs, headers = {}) {
+    const transport = new StreamableHTTPClientTransport(url, { authProvider: provider, requestInit: { headers } });
     return realConnect(url, transport, timeoutMs);
   },
 
-  async startOAuthLogin(url, provider, timeoutMs) {
-    const transport = new StreamableHTTPClientTransport(url, { authProvider: provider });
+  async startOAuthLogin(url, provider, timeoutMs, headers = {}) {
+    // The workspace limit rides the login's connection AND the one after the
+    // code exchange, exactly as on the non-interactive path.
+    const transport = new StreamableHTTPClientTransport(url, { authProvider: provider, requestInit: { headers } });
     try {
       const client = await realConnect(url, transport, timeoutMs);
       return { authorized: true, client };
@@ -240,7 +256,7 @@ export const realMcpConnector: McpConnector = {
         authorized: false,
         finishAuth: async (code: string) => {
           await withTimeout(transport.finishAuth(code), timeoutMs, "MCP token exchange");
-          const retryTransport = new StreamableHTTPClientTransport(url, { authProvider: provider });
+          const retryTransport = new StreamableHTTPClientTransport(url, { authProvider: provider, requestInit: { headers } });
           return realConnect(url, retryTransport, timeoutMs);
         },
       };
@@ -362,9 +378,10 @@ export async function connectAndRegisterTools(pi: ExtensionAPI, deps: McpBridgeD
   const bearer = resolveMcpBearerToken(deps.env);
 
   let client: McpClientLike;
+  // This computer's workspace limit, read again on every (re)connect like the token.
   if (bearer) {
     try {
-      client = await deps.connector.connectWithBearer(url, bearer.token, deps.timeouts.connectMs);
+      client = await deps.connector.connectWithBearer(url, bearer.token, deps.timeouts.connectMs, workspaceLimitHeaders(deps.env));
     } catch (err) {
       return { skipped: describeConnectFailure(err, `bearer token (${bearer.source})`) };
     }
@@ -381,7 +398,7 @@ export async function connectAndRegisterTools(pi: ExtensionAPI, deps: McpBridgeD
       };
     }
     try {
-      client = await deps.connector.connectWithOAuthProvider(url, provider, deps.timeouts.connectMs);
+      client = await deps.connector.connectWithOAuthProvider(url, provider, deps.timeouts.connectMs, workspaceLimitHeaders(deps.env));
     } catch (err) {
       return { skipped: describeConnectFailure(err, "stored OAuth credentials") };
     }
@@ -400,7 +417,12 @@ export async function connectAndRegisterTools(pi: ExtensionAPI, deps: McpBridgeD
     const freshBearer = resolveMcpBearerToken(deps.env);
     if (!freshBearer) return null;
     try {
-      currentClient = await deps.connector.connectWithBearer(url, freshBearer.token, deps.timeouts.connectMs);
+      currentClient = await deps.connector.connectWithBearer(
+        url,
+        freshBearer.token,
+        deps.timeouts.connectMs,
+        workspaceLimitHeaders(deps.env),
+      );
       return currentClient;
     } catch {
       return null;
@@ -479,7 +501,7 @@ export async function interactiveOAuthLogin(pi: ExtensionAPI, deps: McpBridgeDep
 
   let start: OAuthLoginStart;
   try {
-    start = await deps.connector.startOAuthLogin(url, provider, deps.timeouts.connectMs);
+    start = await deps.connector.startOAuthLogin(url, provider, deps.timeouts.connectMs, workspaceLimitHeaders(deps.env));
   } catch (err) {
     return { status: "failed", message: `Could not reach Probe MCP: ${errMessage(err)}` };
   }

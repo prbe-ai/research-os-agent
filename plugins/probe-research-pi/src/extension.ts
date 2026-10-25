@@ -49,6 +49,7 @@ import { packageVersion } from "./packageVersion.js";
 import { guardViaService } from "./serviceGuard.js";
 import { applyTrackingSwitch, parseSwitchIntent, switchAppliedNotice, type SwitchChild, type SwitchSpawnFn } from "./core/trackingSwitch.js";
 import { writeTurnSignal, type TurnSignalDeps } from "./core/turnSignal.js";
+import { teamItemsHidden } from "./core/workspaceLimit.js";
 import {
   companionKeyHeld,
   DAEMON_CONTEXT,
@@ -102,6 +103,11 @@ const ShutdownReason = { Quit: "quit", Reload: "reload" } as const satisfies Rec
 // EVERY before_agent_start of that session, and never refreshed mid-session —
 // see teamNote.ts's module docstring ("cache once per session") for why.
 let cachedTeamNote: string | null = null;
+// Were team-wide items hidden by this computer's workspace limit when the note
+// was last looked at? While they are, the note is neither synced nor cached --
+// the machine's one document may be another account's by the time they show
+// again -- so the first prompt after `show` syncs and reloads it first.
+let teamNoteHidden = false;
 
 /**
  * The three-valued switch for this session, as the CLI last reported it.
@@ -694,7 +700,16 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
       // pi's AGENTS.md without Probe's block is the researcher's opt-out.
       cachedTeamNote = null;
       logLine("no Probe block in pi's AGENTS.md: skipping the team-note sync and injection");
+    } else if (teamItemsHidden(process.env)) {
+      // This computer's workspace limit hides team-wide items, the team note
+      // among them (`probe workspace limit --team-items hide`): no sync and no
+      // cached copy. `before_agent_start` asks the limit again on every prompt,
+      // and once they show it syncs and reads the CURRENT account's note.
+      cachedTeamNote = null;
+      teamNoteHidden = true;
+      logLine("the workspace limit hides team-wide items: skipping the team-note sync and injection");
     } else {
+      teamNoteHidden = false;
       await syncTeamNoteThenRead(realTeamNoteSyncDeps());
       cachedTeamNote = readTeamNote(process.env);
     }
@@ -901,7 +916,18 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     }
     if (probeIsOff()) return;
     let systemPrompt = event.systemPrompt;
-    if (cachedTeamNote) {
+    // Asked again on every prompt (one small config read), not only at
+    // session_start: `--team-items hide` set mid-session stops the very next
+    // injection. Shown again after being hidden, the note is synced and re-read
+    // first (bounded, as at session_start): whichever account is signed in NOW
+    // is whose note this session gets, never a copy cached before.
+    const hiddenNow = teamItemsHidden(process.env);
+    if (!hiddenNow && teamNoteHidden && hasProbePointer(process.env)) {
+      await syncTeamNoteThenRead(realTeamNoteSyncDeps());
+      cachedTeamNote = readTeamNote(process.env);
+    }
+    teamNoteHidden = hiddenNow;
+    if (cachedTeamNote && !hiddenNow) {
       systemPrompt += renderTeamNoteForPrompt(cachedTeamNote, teamNoteDocumentPath(process.env));
     }
     if (cachedProbeConfigContext) systemPrompt += `\n\n${cachedProbeConfigContext}`;
@@ -1076,7 +1102,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     }
     // Read per settle, not cached: one small file, and an opt-out made in the
     // wizard mid-session stops the next sync rather than the next session's.
-    if (hasProbePointer(process.env)) spawnTeamNoteSync(realTeamNoteSyncDeps());
+    if (hasProbePointer(process.env) && !teamItemsHidden(process.env)) spawnTeamNoteSync(realTeamNoteSyncDeps());
   });
 
   // A compaction took the inline notice out of the agent's context: the next

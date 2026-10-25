@@ -121,23 +121,73 @@ if [ -n "$AGENT_LABEL" ] && [ -n "$AGENT_SESSION" ]; then
     "$AGENT_LABEL" "$AGENT_SESSION")
 fi
 
+# This computer's WORKSPACE LIMIT (`probe workspace limit`; MIRRORS
+# src/probe/sdk/workspace_limit.py `resolve_limit`): PROBE_WORKSPACE_LIMIT first
+# (`team` = none), else the active context's `workspace` when its `limit` is true;
+# PROBE_WORKSPACE_LIMIT_TEAM_ITEMS overrides the team-items choice of either. The
+# hosted MCP forwards both headers on its API calls, and the API narrows what that
+# request reads to the workspace.
+#
+# FAIL CLOSED, NEVER OPEN. A value this cannot vouch for (a slug no CLI resolved, a
+# malformed id, a team-items word that is not show/hide) is still sent -- the
+# charset-safe slug, or the word `unreadable` -- so the API refuses it (400
+# `invalid_workspace_limit`) rather than the MCP silently reading the whole team.
+# The same charset rule as the session id above keeps stdout valid JSON.
+LIMIT_ID=""
+LIMIT_ITEMS=""
+ENV_LIMIT="${PROBE_WORKSPACE_LIMIT:-}"
+ENV_ITEMS="${PROBE_WORKSPACE_LIMIT_TEAM_ITEMS:-}"
+LIMIT_FROM_ENV=""
+case "$ENV_LIMIT" in
+  "") ;;
+  [Tt][Ee][Aa][Mm]) LIMIT_FROM_ENV="team" ;;
+  *) LIMIT_FROM_ENV="yes"; LIMIT_ID="$ENV_LIMIT"; LIMIT_ITEMS="${ENV_ITEMS:-show}" ;;
+esac
+
+is_uuid() {
+  value=${1#id:}
+  case "$value" in
+    *[!0-9a-fA-F-]*) return 1 ;;
+  esac
+  [ "${#value}" -eq 36 ]
+}
+
+limit_headers() {
+  [ -n "$LIMIT_ID" ] || return 0
+  id=${LIMIT_ID#id:}
+  case "$id" in
+    *[!A-Za-z0-9._:-]*) id="unreadable" ;;
+  esac
+  { [ -n "$id" ] && [ "${#id}" -le 200 ]; } || id="unreadable"
+  case "$LIMIT_ITEMS" in
+    show|hide) items="$LIMIT_ITEMS" ;;
+    *) items="unreadable" ;;
+  esac
+  printf ', "X-Probe-Workspace-Limit": "%s", "X-Probe-Workspace-Limit-Team-Items": "%s"' "$id" "$items"
+}
+
 emit() {
+  LIMIT_HEADERS=$(limit_headers)
   if [ -n "$PLUGIN_VERSION" ]; then
-    printf '{"Authorization": "Bearer %s", "X-Probe-Client": "plugin", "X-Probe-Client-Version": "%s"%s}\n' \
-      "$1" "$PLUGIN_VERSION" "$AGENT_HEADERS"
+    printf '{"Authorization": "Bearer %s", "X-Probe-Client": "plugin", "X-Probe-Client-Version": "%s"%s%s}\n' \
+      "$1" "$PLUGIN_VERSION" "$AGENT_HEADERS" "$LIMIT_HEADERS"
   else
-    printf '{"Authorization": "Bearer %s"%s}\n' "$1" "$AGENT_HEADERS"
+    printf '{"Authorization": "Bearer %s"%s%s}\n' "$1" "$AGENT_HEADERS" "$LIMIT_HEADERS"
   fi
   exit 0
 }
 
-[ -n "${PROBE_MCP_TOKEN:-}" ] && emit "$PROBE_MCP_TOKEN"
-
+# The config is read FIRST now, even when PROBE_MCP_TOKEN decides the token: the
+# limit lives there too. One python start (tens of ms), never the CLI's.
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/probe/config.json"
+CONFIG_TOKEN=""
+CONFIG_READ=""
+NL='
+'
 if [ -r "$CONFIG" ]; then
   for python in python3 python; do
     command -v "$python" >/dev/null 2>&1 || continue
-    token=$("$python" -c '
+    out=$("$python" -c '
 import json, sys
 try:
     data = json.load(open(sys.argv[1]))
@@ -153,11 +203,53 @@ if isinstance(contexts, dict):
     context = contexts.get(data.get("current_context") or "default")
     data = context if isinstance(context, dict) else {}
 print(data.get("mcp_token") or "")
-' "$CONFIG" 2>/dev/null) || token=""
-    [ -n "$token" ] && emit "$token"
+# Line two: the workspace limit, "<id> <team_items>", or nothing (whole team).
+anchor = data.get("workspace") if isinstance(data.get("workspace"), dict) else {}
+if anchor.get("limit") is True:
+    ident = "".join(str(anchor.get("id") or "").split()) or "-"
+    items = "".join(str(anchor.get("team_items") or "show").split()) or "show"
+    print(ident + " " + items)
+else:
+    print("")
+' "$CONFIG" 2>/dev/null) || out=""
+    # Split with the shell alone: this path must need nothing but an interpreter.
+    CONFIG_TOKEN=${out%%"$NL"*}
+    case "$out" in
+      *"$NL"*) stored_limit=${out#*"$NL"} ;;
+      *) stored_limit="" ;;
+    esac
+    CONFIG_READ="yes"
+    if [ -z "$LIMIT_FROM_ENV" ] && [ -n "$stored_limit" ]; then
+      LIMIT_ID=${stored_limit%% *}
+      [ "$LIMIT_ID" = "-" ] && LIMIT_ID="unreadable"
+      LIMIT_ITEMS="${ENV_ITEMS:-${stored_limit#* }}"
+    fi
     break
   done
 fi
+
+# An environment SLUG names no uuid this script can look up: the CLI can
+# (`probe mcp headers`, one `GET /v1/workspaces`). Without one, the slug is sent
+# as it is and the API refuses it -- see FAIL CLOSED above.
+if [ "$LIMIT_FROM_ENV" = "yes" ] && ! is_uuid "$LIMIT_ID"; then
+  for candidate in \
+    "$(command -v probe 2>/dev/null || true)" \
+    "$HOME/.local/bin/probe" \
+    "$HOME/.local/share/uv/tools/probe-research/bin/probe"
+  do
+    [ -n "$candidate" ] && [ -x "$candidate" ] || continue
+    out=$("$candidate" mcp headers 2>/dev/null) || continue
+    resolved=$(printf '%s\n' "$out" | sed -n \
+      's/.*"X-Probe-Workspace-Limit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    if [ -n "$resolved" ] && is_uuid "$resolved"; then
+      LIMIT_ID="$resolved"
+      break
+    fi
+  done
+fi
+
+[ -n "${PROBE_MCP_TOKEN:-}" ] && emit "$PROBE_MCP_TOKEN"
+[ -n "$CONFIG_TOKEN" ] && emit "$CONFIG_TOKEN"
 
 # No python, or nothing stored: let the CLI answer if it is new enough to know how.
 # Try every candidate — an old `probe` first on PATH must not hide a newer one, which is
@@ -174,6 +266,13 @@ do
   if out=$("$candidate" mcp headers 2>/dev/null) && [ -n "$out" ]; then
     token=$(printf '%s\n' "$out" | sed -n \
       's/.*"Authorization"[[:space:]]*:[[:space:]]*"Bearer \([^"]*\)".*/\1/p')
+    if [ -z "$CONFIG_READ" ] && [ -z "$LIMIT_FROM_ENV" ]; then
+      # No python read the config: the CLI's answer carries its limit.
+      LIMIT_ID=$(printf '%s\n' "$out" | sed -n \
+        's/.*"X-Probe-Workspace-Limit"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+      LIMIT_ITEMS=$(printf '%s\n' "$out" | sed -n \
+        's/.*"X-Probe-Workspace-Limit-Team-Items"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+    fi
     [ -n "$token" ] && emit "$token"
   fi
 done

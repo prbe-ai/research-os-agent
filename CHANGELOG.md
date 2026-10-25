@@ -6,6 +6,22 @@
 - **Kimi Code sessions follow plugin updates, and keep their hooks past the weekly cleanup.** Probe installs each version of a plugin into Kimi as a folder of its own and removed versions older than a week once two newer ones were installed, so a Kimi session open longer than that lost every Probe hook with no word, and no Kimi hook ever ran the installed version. Now a removed version folder is replaced by a link to the version kept, so a session that started on it, including one from before this release, keeps its hooks and runs the kept version's. A session that starts on this release also hands each event to the copy Kimi's plugin list records (the Probe plugins' hook adapter and the capture scripts, the way Claude Code's and Codex's hooks already move), and a hook whose folder is gone altogether runs the newest installed one instead of nothing. Uninstalling removes the links too, and installing a version again makes it a whole folder again.
 - **The Probe service records sessions from its own copy of the tap, so a Codex tap update can no longer break it mid-session.** The service imported the tap from the plugin folder the first session named, often Codex's plugin cache, which keeps one version of a plugin and deletes its folder when it installs the next. The tap reads some of its own files long after it starts (modules it loads the first time they are needed, its data files), and those reads failed once the folder was gone. The service now copies the tap package into its own folder (`taps/<version>-<hash>` beside `recorders.json`, made once per tap version and reused) and loads it from there. It keeps the copy in use and the three most recently used, and removes copies unused for a week. If the copy cannot be made (a full disk), it loads the tap where it is, as before, and says so in `service.log`.
 
+- **Limit Probe on a computer to one workspace.** `probe workspace limit <workspace>
+  [--team-items show|hide]` makes the CLI, SDK runs, the Probe daemon, the Probe service
+  and the Probe MCP on this computer read only that workspace (keys and permissions are
+  unchanged; anyone on the computer can change it); `--team` sees the whole team again and
+  `probe workspace limit` shows the current setting. Every API request and every MCP header
+  copy (Claude Code's helper, Codex, Kimi Code, pi) carries `X-Probe-Workspace-Limit`, and
+  the hosted MCP forwards it. `PROBE_WORKSPACE_LIMIT=<id|slug>` (or `team`) limits one job.
+  While limited, `probe workspace use` / `project use` will not move this computer's
+  workspace elsewhere, "not found" says when the limit hid something, and with team-wide
+  items hidden the team note leaves CLAUDE.md / AGENTS.md. `probe status --json` adds
+  `account.workspace_limit`; the Probe service gains the `workspace_limit` action and the
+  desktop interface the `workspaces` op (every workspace, listed without the limit); the
+  capture tap's copy of the service protocol carries the two new names. A Codex signed in
+  through the plugin's own OAuth stays unlimited (rewriting its entry would sign it out);
+  `probe workspace limit` says so and names the fix.
+
 ## 0.308.0
 
 - **Where a Probe hint serves the session, the daemon reader no longer takes a turn at each prompt; everywhere else it still does, and its check-ins read the work now.** The Probe service's hint lane touches a small marker for every session it can hint (followed by the service's recorder, a key from the session's own CLI config, the server neither refusing that key nor lacking the hints route), at most every 30 seconds. The session's daemon counts hints as live while that marker is under 120 seconds old, says so on every chat request (`x-probe-hints-live: on | off`), and skips the reader's prompt turn only when hints are live and the server agreed (`x-probe-reader-prompt-wake: off`). A session no hint serves (Probe's `read` mode, a sandboxed one, `PROBE_HINTS=off`, an environment with its own Probe key or address, a stopped service) keeps the reader's turn at each prompt, and goes back to it within 2 minutes of hints stopping. With prompt turns off, nothing reads a busy session's backlog turn by turn any more, so a check-in or an answer to `probe ask` reads the newest window of events (400 events at most) and older unread ones drop off, instead of reading a window that could fall hours behind. `PROBE_READER_PROMPT_WAKE=on` or `off` on the machine still wins.
