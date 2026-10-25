@@ -1,6 +1,6 @@
 {
   "cli": {
-    "latest": "0.314.2",
+    "latest": "0.315.0",
     "min": "0.226.2",
     "recommended": "0.303.0",
     "message": "This Probe CLI is missing a security fix and has stopped updating itself. Run probe wizard --action update in a terminal; if it says a setup is running, restart the computer first."
