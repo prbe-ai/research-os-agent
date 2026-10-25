@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **"No restart needed" is never said for a pi Probe cannot see.** A pi on package 0.6.3 or older writes no shim record, so it was found only by its process title `pi`; its RPC mode (`pi-rpc`) and a pi as macOS `ps` shows it (`node .../pi-coding-agent/.../cli.js`) were missed, and an update could say no restart while such a session ran old code. Both count now. A pin is no longer made `current` when pi's clone moved while it was copied, and the pi package (0.7.1) looks at a turned-down `current` again at the next turn instead of waiting for the next update (a clone read mid-update kept a session on its old version).
+
 ## 0.314.0
 
 - **The notes docs describe the server's 1,000-token cap.** The server now caps every note but the team note at 1,000 tokens (research-os, `notes_max_tokens`), and a note already over it must be rewritten under it before its next change. The CLI and SDK read every cap from the server (`notes_limit_tokens`), so the fullness line, the pre-send refusal and the compaction advice follow it with no code change; only the comments in `probe.sdk.notes` and `_notes_write` that quoted the old 30,000 / 2,000 caps changed.

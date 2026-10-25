@@ -55,8 +55,11 @@
  *       node_modules/...  package.json
  *       .pinned                         present only once the copy is complete
  *   <state>/pi/current                JSON {"pin": "<pins/ folder name>",
- *                                     "version": "<pi package version>"},
- *                                     replaced atomically by the CLI
+ *                                     "version": "<pi package version>",
+ *                                     "from": "<the clone>", "head": "<its
+ *                                     commit>"}, replaced atomically by the
+ *                                     CLI; run only when it is the clone's
+ *                                     install and version (`pinIsClone`)
  *   <state>/pi/live/<pid>.json        one per pi process, written by THIS
  *                                     module: `LiveRecord` below
  *
@@ -544,6 +547,8 @@ export class ShimHost {
   private activating: Candidate | null = null;
   private currentStamp: { mtimeMs: number; size: number; ino: number } | null = null;
   private wanted: CurrentPin | null = null;
+  /** The last `current` pin turned down for not being the clone's version (logged once). */
+  private rejected: string | null = null;
   private readonly started: number;
   private lastRecord: string | null = null;
   private stopped = false;
@@ -817,8 +822,14 @@ export class ShimHost {
       this.log(`current names ${this.wanted.pin}, made from ${this.wanted.from ?? "an unknown install"}, not this one: it is not run here`);
       this.wanted = null;
     } else if (this.wanted && !pinIsClone(this.wanted, this.installRoot)) {
-      this.log(`current names ${this.wanted.pin}, not the version the clone holds now: it is not run here until it is pinned`);
+      // Not cached: the clone may be mid-update (a read error looks the same),
+      // so the next event looks again rather than waiting for `current` to move.
+      if (this.rejected !== this.wanted.pin) {
+        this.log(`current names ${this.wanted.pin}, not the version the clone holds now: it is not run here until it is pinned`);
+        this.rejected = this.wanted.pin;
+      }
       this.wanted = null;
+      this.currentStamp = null;
     }
   }
 

@@ -347,6 +347,22 @@ describe("bootstrap", () => {
     expect(calls).toEqual(["clone:prepare", "clone:activate"]);
   });
 
+  it("looks at a turned-down `current` again at the next event: the clone may have been mid-update", async () => {
+    makePin("0.7.1-abc", "0.7.1");
+    setCurrent("0.7.1-abc", "0.7.1");
+    writeFileSync(join(installRoot, "package.json"), "{");  // pi update rewriting it: unreadable for a moment
+    const calls: string[] = [];
+    const { shim } = host(fakeImpl("clone", calls), { "0.7.1-abc": fakeImpl("pin", calls) });
+    const pi = fakePi();
+    await shim.attach(pi.api as never);
+    expect(shim.activePin).toBeNull();
+
+    writeFileSync(join(installRoot, "package.json"), JSON.stringify({ name: "probe-research-pi", version: "0.7.1" }));
+    await pi.emit(ShimEvent.BeforeAgentStart, {});
+    expect(shim.activePin).toBe("0.7.1-abc");
+    expect(logs.filter((line) => line.includes("not the version the clone holds")).length).toBe(1);
+  });
+
   it("never runs a pin made from another install (a local checkout pi now loads)", async () => {
     makePin("0.7.0-abc", "0.7.0");
     const path = currentFile(env);
