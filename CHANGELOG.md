@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- **A researcher's prompt waits for the daemon writer's least gap like a turn end, as the round-7 plan approved.** 0.314.0 held a prompt back only after the writer's last 3 runs recorded nothing; that rule came from a bench reading that turned out to be noise (the check it lost is flaky on main itself). `probe ask --writer`, a full queue, the session's end and a paused run still start a run at once; the server's `x-probe-writer-prompt-waits` switch still turns it off.
 
 ## 0.314.1
 
