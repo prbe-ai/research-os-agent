@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.318.1
+
 - **Probe's own folder-import agents are no longer captured as the researcher's sessions.** Every agent the import launches (classifier, upload, reconstruction) now runs without the researcher's hooks (`disableAllHooks` in its Claude `--settings`; `--disable hooks` for a Codex whose `features list` names `hooks`), so no Probe plugin registers it for capture, and the past-sessions import skips any transcript that ran in one of the import's own scratch dirs, matched by their layout wherever the state root was (`import_agents` in its census), which also covers sessions an older CLI left on disk. On 2026-10-25, 45 classifier sessions had been imported as one researcher's history.
 
 ## 0.318.0
