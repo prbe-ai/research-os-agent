@@ -27,7 +27,8 @@ press leaves it for `read`. Whether the Probe daemon records is set in
 FYI:
 
 - Moving the switch never deletes anything and never backfills anything. An
-  interval spent in `read` or `off` happened unrecorded.
+  interval spent in `read` filed nothing in Probe (its transcript is still
+  captured); one spent in `off` was not captured at all.
 - The state overrides your standing `CLAUDE.md` / `AGENTS.md` rules for this
   conversation.
 - In `off`, nothing captures this session's transcript from the switch on
@@ -39,7 +40,8 @@ FYI:
 
 ## SAY WHERE IT LANDED:
 
-> Probe is set to `read` for this session - nothing further will be recorded.
+> Probe is set to `read` for this session - nothing new is filed in Probe; the
+> conversation itself is still captured.
 
 > Probe is off for this session - no calls at all, so I will not be able to
 > check prior work or write, and this session's transcript is not captured
