@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.319.1
+
 - **One failed step no longer stops a folder import.** A slice the classifier could not read (twice) used to stop the whole classification; now it only narrows what the naming step sees, its files are still filed, and the review screen counts it (`unread_slices`). A naming step that fails or names nothing used to stop it too; now the folder goes into one project named for the folder (`naming_fallback`), and the review screen says so and that the plan can split it. A background import whose upload agent stopped mid-batch used to end failed until someone pressed resume; now the job retries that batch itself with its saved progress, until the batch's 3-attempt limit, and only then reports it (`unit_retries` on the job's progress and finish event; no connection-wait stall is reported for it).
 
 ## 0.319.0
