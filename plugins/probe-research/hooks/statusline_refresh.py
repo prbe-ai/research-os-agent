@@ -714,9 +714,16 @@ def refresh(session_id: str, agent: str | None = None, *, core=None, marker=None
     base_url = core.effective_base_url(config)
     work = fetch_work(base_url, token, session_id)
     if work is None:
-        # Offline, or a token that cannot read this session. Leave the previous
-        # marker in place: a stale project name is a better answer than
-        # flickering to "untracked" every time the wifi drops.
+        # Offline, or a key the server refuses. The previous project stays: a
+        # stale project name is a better answer than flickering to "untracked"
+        # every time the wifi drops. The capture reading is local, though, and
+        # is exactly what such a machine needs to see: written only after a
+        # good server read, it was never written while the key was refused, and
+        # the segment read a green "tracking" while nothing reached the server
+        # (`probe session status` and `probe doctor` said so; release gate C8).
+        state = dict(marker._read_marker(session_id) or marker.from_session_work({}))
+        state["capture"] = _capture_reading(session_id, agent)
+        marker.write(session_id, state)
         return
     state = marker.from_session_work(work)
     # Liveness is a SEPARATE failure domain from identity. If this call fails we
@@ -724,10 +731,10 @@ def refresh(session_id: str, agent: str | None = None, *, core=None, marker=None
     # for the accent, which is exactly what the fast path is for.
     state["active_run_ids"] = fetch_active_run_ids(base_url, token, session_id, marker)
     # Local, and stored alongside the server's answer so the segment renders both
-    # halves of one state from one file. Written LAST so a reading is never
-    # published without the identity it qualifies: `not capturing session
-    # transcript` on a segment that does not yet name a project is a warning
-    # about nothing.
+    # halves of one state from one file. When the server answers, the reading
+    # goes in with the identity it qualifies; with no answer (above) it is
+    # written alone, beside the last good read's project or none, since "not
+    # capturing session transcript" is worth saying even with no project named.
     state["capture"] = _capture_reading(session_id, agent)
     marker.write(session_id, state)
 
