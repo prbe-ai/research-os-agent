@@ -1848,6 +1848,15 @@ DENY_REASON_MAILBOX = (
     "call it, and do not route around this."
 )
 
+#: The guard hook's refusal of a coding-agent shell command that registers or
+#: ends a session with the Probe service itself (#3360;
+#: `tracking_guard.calls_mailbox`). Placeholder: `{matched}`, the method.
+DENY_REASON_SESSION_CALL = (
+    "`Bash` would call the Probe service's `{matched}` itself, so it was refused before it ran. The service's "
+    "session registry is how Probe knows which conversations its daemon records, and only Probe's own recorder "
+    "registers or ends a session. Do not call it, and do not route around this."
+)
+
 #: The guard hook's refusal of a coding-agent shell command that runs one of
 #: Probe's own hook programs by hand (#3355; `tracking_guard.runs_probe_hook`).
 #: Placeholder: `{matched}`, the program.

@@ -1422,7 +1422,8 @@ def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, se
 # ---------------------------------------------------------------------------
 # #3355: THE AGENT'S SHELL NEVER SPEAKS FOR THE HARNESS. Two tripwires, read off
 # this file's shell tokenizer (`_split`: quotes respected, heredoc bodies and
-# backslash-newlines removed): a call to the Probe service's mailbox, and one of
+# backslash-newlines removed): a call to the Probe service's mailbox or its
+# session registry (`session.register`/`session.end`, #3360), and one of
 # Probe's own hook programs run by hand. Each follows the shell a little way:
 # into `bash -c`/`sh -c` and `eval` strings, backtick bodies and shell heredocs
 # (two levels, as `_probe_invocations`), past wrappers (`env`, `sudo`, `xargs`,
@@ -1430,8 +1431,10 @@ def _announce(hook_event: str, landed: "str | None", *, daemon: bool = False, se
 # --directory` and plain variables to the folder a relative path is read in.
 # NOT BOUNDARIES: a command built at run time, or a copy of a program, still
 # gets through. What protects a yes is the service's answer key and the hook
-# host's key (`probe.daemon.approvals`, `zygote.py`); these refuse the plain
-# ways a model talked into it tries first.
+# host's key (`probe.daemon.approvals`, `zygote.py`), and what protects a
+# session's registration and mailbox is the service binding each to the
+# process that owns it (#3360, #3361); these refuse the plain ways a model
+# talked into it tries first.
 # ---------------------------------------------------------------------------
 
 #: This file's own folder: a Probe plugin's hooks folder, whatever path names it.
@@ -1439,9 +1442,10 @@ _HOOKS_HERE = os.path.dirname(os.path.abspath(__file__))
 #: How deep into `-c`, `eval`, backtick and heredoc strings the tripwires follow.
 _MAX_NESTING = 2
 
-#: The service methods that answer a held question, take or post a message, or
-#: run a hook event (pi's `hooks.run`): none is the agent's shell's to call.
-_MAILBOX_METHOD = re.compile(r"\b(?:mailbox\.(?:answer|claim|post)|hooks\.run)\b")
+#: The service methods that answer a held question, take or post a message, run
+#: a hook event (pi's `hooks.run`), or register or end a session (#3360): none
+#: is the agent's shell's to call.
+_MAILBOX_METHOD = re.compile(r"\b(?:mailbox\.(?:answer|claim|post)|hooks\.run|session\.(?:end|register))\b")
 #: A call in the code a runner is handed (`-c`, a heredoc script): also a bare
 #: `call(` (`from probe.service.client import call`), a raw socket's
 #: `'method':` or `method=`, `AF_UNIX`, `jsonrpc`. Counted only beside the
@@ -1449,7 +1453,24 @@ _MAILBOX_METHOD = re.compile(r"\b(?:mailbox\.(?:answer|claim|post)|hooks\.run)\b
 #: comment naming `mailbox.post` in a researcher's own code is not the call.
 _CALL_IN_RUNNER = re.compile(
     r"\.call\(|\bcall\(|\bservice_call\(|[\"']method[\"']\s*:|\bmethod\s*=|\bAF_UNIX\b|\bjsonrpc\b")
-_QUOTED_METHOD = re.compile(r"[\"']((?:mailbox\.(?:answer|claim|post)|hooks\.run))[\"']")
+_QUOTED_METHOD = re.compile(r"[\"']((?:mailbox\.(?:answer|claim|post)|hooks\.run|session\.(?:end|register)))[\"']")
+#: The same two without the session methods: `session.end` is someone else's
+#: too (WebDriver BiDi), so it counts only in a command that names Probe's
+#: service (`_PROBE_SERVICE`).
+_MAILBOX_ONLY = re.compile(r"\b(?:mailbox\.(?:answer|claim|post)|hooks\.run)\b")
+_QUOTED_MAILBOX_ONLY = re.compile(r"[\"']((?:mailbox\.(?:answer|claim|post)|hooks\.run))[\"']")
+#: What names Probe's service in a command: its client (`probe.service`, the
+#: tap's `tap.service` / `tap service`, the hooks' `_service_rpc`, the daemon's
+#: `service_call`) or its socket (`.../probe/service/...`, `service.sock`,
+#: `/tmp/probe-<uid>/service-<hash>.sock`).
+_PROBE_SERVICE = re.compile(
+    r"\bprobe\.service\b|\btap\.service\b|\btap\s+service\b|\b_service_rpc\b|\bservice_call\b"
+    r"|\bservice(?:-[0-9a-f]+)?\.sock\b|probe/+service\b|/tmp/probe-")
+#: The service client's own command line (`python -m probe.service.client
+#: register|end ...`, the tap's copy as `python -m tap service ...`): its
+#: subcommands that register or end a session, as the method each one calls.
+_CLIENT_MODULES = frozenset({"probe.service.client", "tap.service.client"})
+_CLIENT_SESSION_COMMANDS = {"register": "session.register", "end": "session.end"}
 #: Commands that read, search or record text: what they name is an argument.
 _TEXT_COMMANDS = frozenset({
     "grep", "egrep", "fgrep", "rg", "ag", "ack", "git", "gh", "sed", "awk", "gawk", "cat", "bat", "less", "more",
@@ -1718,26 +1739,91 @@ def _nested(tokens: "list[str]", start: int) -> "str | None":
 
 
 def calls_mailbox(command: str) -> "str | None":
-    """The mailbox method (`mailbox.answer`, `.claim`, `.post`, `hooks.run`) a
-    shell command calls on the Probe service itself, or None. A call is the
-    method named beside a way of calling: the client's command line (`python
-    -m probe.service.client call [--] mailbox.answer ...`), a call in the code
-    a runner is handed (`-c`, a heredoc script on its stdin), or a socket tool
-    in a command's place (`nc`, `socat`, `curl --unix-socket`); followed into
-    `bash -c`, `eval` and backtick strings. A method that a text command
-    (`grep`, `git`, `gh`, `sed`, ...) is handed, or a comment, is never a call."""
-    if not isinstance(command, str) or ("mailbox." not in command and "hooks.run" not in command):
+    """The mailbox or session method (`mailbox.answer`, `.claim`, `.post`,
+    `hooks.run`, `session.register`, `session.end`) a shell command calls on
+    the Probe service itself, or None. A call is the method named beside a way
+    of calling: the client's command line (`python -m probe.service.client call
+    [--] mailbox.answer ...`, or its own `register`/`end` subcommands), a call
+    in the code a runner is handed (`-c`, a heredoc script on its stdin), or a
+    socket tool in a command's place (`nc`, `socat`, `curl --unix-socket`);
+    followed into `bash -c`, `eval` and backtick strings. A method that a text
+    command (`grep`, `git`, `gh`, `sed`, ...) is handed, or a comment, is never
+    a call, and a session method counts only in a command that names Probe's
+    service (`_PROBE_SERVICE`): WebDriver BiDi has a `session.end` too."""
+    if not isinstance(command, str):
         return None
-    return _mailbox_in(command, 0)
+    if "service" in command:
+        found = _client_session_command(command, 0)
+        if found:
+            return found
+    if "mailbox." not in command and "hooks.run" not in command and "session." not in command:
+        return None
+    if _PROBE_SERVICE.search(command):
+        return _mailbox_in(command, 0, _MAILBOX_METHOD, _QUOTED_METHOD)
+    return _mailbox_in(command, 0, _MAILBOX_ONLY, _QUOTED_MAILBOX_ONLY)
 
 
-def _mailbox_in(command: str, depth: int) -> "str | None":
-    named = _MAILBOX_METHOD.search(command)
+def _client_module_command(tokens: "list[str]", start: int) -> "str | None":
+    """The session method a Python simple command calls through the service
+    client's own subcommand (`python -I -m probe.service.client end ...`,
+    `python -m tap service register ...`), or None."""
+    index = start + 1
+    while index < len(tokens) and tokens[index].startswith("-") and tokens[index] != "-m":
+        index += 2 if tokens[index] in ("-W", "-X") else 1
+    if tokens[index : index + 1] != ["-m"] or index + 1 >= len(tokens):
+        return None
+    module, rest = tokens[index + 1], tokens[index + 2 :]
+    if module == "tap" and rest[:1] == ["service"]:
+        rest = rest[1:]
+    elif module not in _CLIENT_MODULES:
+        return None
+    words = [w for w in rest if not w.startswith("-")]
+    return _CLIENT_SESSION_COMMANDS.get(words[0]) if words else None
+
+
+def _client_session_command(command: str, depth: int) -> "str | None":
+    """`_client_module_command` in any simple command of `command`, followed
+    into backticks, `bash -c`/`eval` strings and shell heredocs."""
+    if depth < _MAX_NESTING:
+        for body in _BACKTICK.findall(command):
+            found = _client_session_command(body, depth + 1)
+            if found:
+                return found
+    for tokens in _split(command)[0]:
+        start = _command_start(tokens)
+        if start >= len(tokens):
+            continue
+        head = os.path.basename(tokens[start])
+        if head in _TEXT_COMMANDS:
+            continue
+        nested = _nested(tokens, start)
+        if nested and depth < _MAX_NESTING:
+            found = _client_session_command(nested, depth + 1)
+            if found:
+                return found
+        if _INTERPRETERS.match(head):
+            found = _client_module_command(tokens, start)
+            if found:
+                return found
+    if depth < _MAX_NESTING:
+        for opened, body in _heredocs(command):
+            segments = _split(opened)[0]
+            last = segments[-1] if segments else []
+            start = _command_start(last)
+            if start < len(last) and os.path.basename(last[start]) in _SHELLS:
+                found = _client_session_command(body, depth + 1)
+                if found:
+                    return found
+    return None
+
+
+def _mailbox_in(command: str, depth: int, methods=_MAILBOX_METHOD, quoted_methods=_QUOTED_METHOD) -> "str | None":
+    named = methods.search(command)
     if named is None:
         return None
     if depth < _MAX_NESTING:
         for body in _BACKTICK.findall(command):
-            found = _mailbox_in(body, depth + 1)
+            found = _mailbox_in(body, depth + 1, methods, quoted_methods)
             if found:
                 return found
     socket_tool = False
@@ -1750,7 +1836,7 @@ def _mailbox_in(command: str, depth: int) -> "str | None":
             continue
         nested = _nested(tokens, start)
         if nested and depth < _MAX_NESTING:
-            found = _mailbox_in(nested, depth + 1)
+            found = _mailbox_in(nested, depth + 1, methods, quoted_methods)
             if found:
                 return found
         if head in _SOCKET_TOOLS or (head == "curl" and any(w.startswith("--unix-socket") for w in tokens[start:])):
@@ -1758,13 +1844,13 @@ def _mailbox_in(command: str, depth: int) -> "str | None":
         runner = _runs_code(head)
         words = tokens[start:]
         for index, word in enumerate(words):
-            found = _MAILBOX_METHOD.search(word)
+            found = methods.search(word)
             if not found:
                 continue
             before = [w for w in words[:index] if w != "--"]
             if before and before[-1] == "call":
                 return found.group(0)  # the client's command line: `... call [--] mailbox.answer`
-            quoted = _QUOTED_METHOD.search(word) if runner else None
+            quoted = quoted_methods.search(word) if runner else None
             if quoted and _CALL_IN_RUNNER.search(word):
                 return quoted.group(1)  # code a runner is handed, calling it
     if socket_tool:
@@ -1773,11 +1859,11 @@ def _mailbox_in(command: str, depth: int) -> "str | None":
         segments = _split(opened)[0]
         if not segments or not _stdin_runner(segments[-1]):
             continue  # a commit message, a file a text command reads: never code
-        quoted = _QUOTED_METHOD.search(body)
+        quoted = quoted_methods.search(body)
         if quoted and _CALL_IN_RUNNER.search(body):
             return quoted.group(1)
         if depth < _MAX_NESTING and os.path.basename(segments[-1][_command_start(segments[-1])]) in _SHELLS:
-            found = _mailbox_in(body, depth + 1)
+            found = _mailbox_in(body, depth + 1, methods, quoted_methods)
             if found:
                 return found
     return None
@@ -1931,7 +2017,8 @@ def _shell_command(payload: dict) -> "str | None":
 
 def _refuse_for_the_harness(payload: dict) -> bool:
     """The #3355 tripwires, in every state and both profiles: the hook hosts'
-    folder, a mailbox call, a hook program run by hand. True when refused."""
+    folder, a mailbox or session-registry call (#3360), a hook program run by
+    hand. True when refused."""
     aimed = _session_marker.touches_hook_host(payload.get("tool_name"), payload.get("tool_input"),
                                               _payload_cwd(payload))
     if aimed:
@@ -1942,7 +2029,9 @@ def _refuse_for_the_harness(payload: dict) -> bool:
         return False
     called = calls_mailbox(command)
     if called:
-        _refuse(_session_marker.DENY_REASON_MAILBOX.format(matched=called))
+        reason = (_session_marker.DENY_REASON_SESSION_CALL if called.startswith("session.")
+                  else _session_marker.DENY_REASON_MAILBOX)
+        _refuse(reason.format(matched=called))
         return True
     by_hand = runs_probe_hook(command, _payload_cwd(payload))
     if by_hand:
