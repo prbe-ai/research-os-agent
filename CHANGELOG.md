@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.308.0
+
 - **Where a Probe hint serves the session, the daemon reader no longer takes a turn at each prompt; everywhere else it still does, and its check-ins read the work now.** The Probe service's hint lane touches a small marker for every session it can hint (followed by the service's recorder, a key from the session's own CLI config, the server neither refusing that key nor lacking the hints route), at most every 30 seconds. The session's daemon counts hints as live while that marker is under 120 seconds old, says so on every chat request (`x-probe-hints-live: on | off`), and skips the reader's prompt turn only when hints are live and the server agreed (`x-probe-reader-prompt-wake: off`). A session no hint serves (Probe's `read` mode, a sandboxed one, `PROBE_HINTS=off`, an environment with its own Probe key or address, a stopped service) keeps the reader's turn at each prompt, and goes back to it within 2 minutes of hints stopping. With prompt turns off, nothing reads a busy session's backlog turn by turn any more, so a check-in or an answer to `probe ask` reads the newest window of events (400 events at most) and older unread ones drop off, instead of reading a window that could fall hours behind. `PROBE_READER_PROMPT_WAKE=on` or `off` on the machine still wins.
 
 ## 0.307.0
