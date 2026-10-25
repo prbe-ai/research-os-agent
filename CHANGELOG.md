@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.309.1
+
 - **The desktop app opens even when this computer's workspace limit names a deleted workspace.** The app's account read (`probe desktop request` `profile`) no longer carries the limit, so the API's `workspace_limit_unknown` refusal can no longer lock the person out of the Settings where the limit is changed.
 
 ## 0.309.0
