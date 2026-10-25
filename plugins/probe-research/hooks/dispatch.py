@@ -58,7 +58,9 @@ hands the event to the installed copy, when that is another version folder of
 this same plugin (`installed_root`, `hand_over`): under Claude Code the one its
 install ledger names, under Codex the newest complete version in Codex's plugin
 cache (`codex_installed_root`). So every event hooks.json sends here runs the
-installed hooks. The Stop wake (claude-reads.json, outside this dispatcher) does
+installed hooks. Kimi Code's entries run `harness_io.py`, which hands its event
+the same way, to the copy Kimi's plugin list records (`kimi_installed_root`).
+The Stop wake (claude-reads.json, outside this dispatcher) does
 the same in reads_hook.py. Skills follow too: Claude Code reads Probe's from its
 own skills folder (copies of the plugin's, which it re-reads when they change),
 and the pre-tool route on the Skill tool (`root_skills_sync.py skill-call`) brings
@@ -479,6 +481,69 @@ def codex_installed_root(root: str, env) -> "str | None":
     return None
 
 
+#: Kimi Code's plugin folders and its plugin list, side by side
+#: (`probe.cli.kimi_config`): `<kimi>/plugins/managed/<id>@<version>` (Kimi's
+#: own `/plugins install`: `managed/<id>`) and `<kimi>/plugins/installed.json`.
+KIMI_MANAGED = "managed"
+KIMI_LIST = "installed.json"
+_KIMI_RECORD_ROOT = b'"root"'
+
+
+def kimi_installed_root(root: str) -> "str | None":
+    """`installed_root` for Kimi Code: the folder Kimi's plugin list records for
+    this plugin (the copy Kimi loads at its next start), when that is another
+    folder of this plugin beside `root` in `managed/`, carries Kimi's manifest
+    and the adapter its entries run (`harness_io.py`), and is `_complete`; None
+    to run the event here.
+
+    Anchored on `root` itself (`<kimi>/plugins/managed/<folder>`, the list one
+    level up), so no variable decides where to look. Probe installs a version
+    per folder and keeps the old ones a week (`kimi_config._prune_versions`),
+    then leaves a link to the kept one in their place: an event from a pruned
+    folder already runs the installed copy (its real path is that copy). It
+    follows the record both ways, as the ledger is followed for Claude Code.
+
+    One read of the list per event; parsed only when a byte scan finds another
+    folder of this plugin recorded there."""
+    here = os.path.realpath(root)
+    managed = os.path.dirname(here)
+    if os.path.basename(managed) != KIMI_MANAGED:
+        return None
+    plugin = os.path.basename(here).split("@", 1)[0]
+    raw = _read_ledger(os.path.join(os.path.dirname(managed), KIMI_LIST))
+    if raw is None or not plugin:
+        return None
+
+    def other(path: str) -> bool:
+        real = os.path.realpath(path)
+        name = os.path.basename(real)
+        return real != here and os.path.dirname(real) == managed and name.split("@", 1)[0] == plugin
+
+    try:
+        if not any(other(p) for p in string_values(raw, _KIMI_RECORD_ROOT)):
+            return None
+        import json
+
+        records = json.loads(raw.decode("utf-8"))["plugins"]
+        roots = {
+            os.path.realpath(r["root"]) for r in records
+            if isinstance(r, dict) and r.get("id") == plugin and isinstance(r.get("root"), str)
+        }
+    except (ValueError, KeyError, TypeError, AttributeError):
+        # ValueError also: a path with a NUL byte in it.
+        return None
+    if len(roots) != 1:
+        return None
+    real = roots.pop()
+    if real == here or os.path.dirname(real) != managed:
+        return None
+    if not os.path.isfile(os.path.join(real, ".kimi-plugin", "plugin.json")):
+        return None
+    if not os.path.isfile(os.path.join(real, "hooks", "harness_io.py")) or not _complete(real):
+        return None
+    return real
+
+
 def root_variable(env) -> str:
     """Where the harness gave this plugin's folder, and so where a route reads
     it: `PLUGIN_ROOT` under Codex (a route's `$ROOT` reads it first), else
@@ -490,7 +555,9 @@ def installed_root(root: str, env) -> "str | None":
     """The plugin folder to hand this event to, or None to run it here.
 
     Only once per event. Under Codex (`PLUGIN_ROOT` marks it), the newest copy
-    in its plugin cache (`codex_installed_root`). Under Claude Code, `root` sits
+    in its plugin cache (`codex_installed_root`). A folder in Kimi Code's
+    `managed/` (its entries run `harness_io.py`): the copy its plugin list
+    records (`kimi_installed_root`). Under Claude Code, `root` sits
     in its cache as `<marketplace>/<plugin>/<version>`; the
     copy to hand to is the one folder the ledger lists under that same
     `<plugin>@<marketplace>`, when every entry there is user scope (a
@@ -507,6 +574,8 @@ def installed_root(root: str, env) -> "str | None":
         return None
     if env.get("PLUGIN_ROOT"):
         return codex_installed_root(root, env)
+    if os.path.basename(os.path.dirname(os.path.realpath(root))) == KIMI_MANAGED:
+        return kimi_installed_root(root)
     raw = _read_ledger(_ledger(env))
     if raw is None:
         return None

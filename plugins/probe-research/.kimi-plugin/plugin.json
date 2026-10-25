@@ -31,45 +31,45 @@
   "hooks": [
     {
       "event": "UserPromptSubmit",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event UserPromptSubmit'",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; ROOT=\"${ROOT%/}\"; if [ ! -e \"$ROOT/hooks/harness_io.py\" ]; then ID=\"${ROOT##*/}\"; ROOT=\"$(ls -dt \"${ROOT%/*}/${ID%%@*}\"@*/ 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/}\"; [ -n \"$ROOT\" ] || exit 0; export KIMI_PLUGIN_ROOT=\"$ROOT\"; fi; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event UserPromptSubmit'",
       "timeout": 10
     },
     {
       "event": "SessionStart",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event SessionStart'",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; ROOT=\"${ROOT%/}\"; if [ ! -e \"$ROOT/hooks/harness_io.py\" ]; then ID=\"${ROOT##*/}\"; ROOT=\"$(ls -dt \"${ROOT%/*}/${ID%%@*}\"@*/ 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/}\"; [ -n \"$ROOT\" ] || exit 0; export KIMI_PLUGIN_ROOT=\"$ROOT\"; fi; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event SessionStart'",
       "timeout": 60
     },
     {
       "event": "PreCompact",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event PreCompact'",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; ROOT=\"${ROOT%/}\"; if [ ! -e \"$ROOT/hooks/harness_io.py\" ]; then ID=\"${ROOT##*/}\"; ROOT=\"$(ls -dt \"${ROOT%/*}/${ID%%@*}\"@*/ 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/}\"; [ -n \"$ROOT\" ] || exit 0; export KIMI_PLUGIN_ROOT=\"$ROOT\"; fi; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event PreCompact'",
       "timeout": 11
     },
     {
       "event": "PreToolUse",
       "matcher": "^Bash$|probe[-_]research|^AskUserQuestion$|^(Write|Edit|MultiEdit|NotebookEdit)$|^WebSearch$|^Skill$",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event PreToolUse'",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; ROOT=\"${ROOT%/}\"; if [ ! -e \"$ROOT/hooks/harness_io.py\" ]; then ID=\"${ROOT##*/}\"; ROOT=\"$(ls -dt \"${ROOT%/*}/${ID%%@*}\"@*/ 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/}\"; [ -n \"$ROOT\" ] || exit 0; export KIMI_PLUGIN_ROOT=\"$ROOT\"; fi; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event PreToolUse'",
       "timeout": 6
     },
     {
       "event": "PostToolUse",
       "matcher": "^(Bash|Skill|SlashCommand)$|probe[-_]research|^AskUserQuestion$",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event PostToolUse --unshown'",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; ROOT=\"${ROOT%/}\"; if [ ! -e \"$ROOT/hooks/harness_io.py\" ]; then ID=\"${ROOT##*/}\"; ROOT=\"$(ls -dt \"${ROOT%/*}/${ID%%@*}\"@*/ 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/}\"; [ -n \"$ROOT\" ] || exit 0; export KIMI_PLUGIN_ROOT=\"$ROOT\"; fi; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event PostToolUse --unshown'",
       "timeout": 6
     },
     {
       "event": "SessionEnd",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event SessionEnd'",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; ROOT=\"${ROOT%/}\"; if [ ! -e \"$ROOT/hooks/harness_io.py\" ]; then ID=\"${ROOT##*/}\"; ROOT=\"$(ls -dt \"${ROOT%/*}/${ID%%@*}\"@*/ 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/}\"; [ -n \"$ROOT\" ] || exit 0; export KIMI_PLUGIN_ROOT=\"$ROOT\"; fi; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event SessionEnd'",
       "timeout": 3
     },
     {
       "event": "Stop",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event Stop'",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; ROOT=\"${ROOT%/}\"; if [ ! -e \"$ROOT/hooks/harness_io.py\" ]; then ID=\"${ROOT##*/}\"; ROOT=\"$(ls -dt \"${ROOT%/*}/${ID%%@*}\"@*/ 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/}\"; [ -n \"$ROOT\" ] || exit 0; export KIMI_PLUGIN_ROOT=\"$ROOT\"; fi; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event Stop'",
       "timeout": 16
     },
     {
       "event": "TurnStarted",
       "matcher": "^skill_activation$",
-      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event TurnStarted'",
+      "command": "/bin/bash -c 'ROOT=\"${KIMI_PLUGIN_ROOT:-}\"; [ -n \"$ROOT\" ] || exit 0; unset PLUGIN_ROOT CLAUDE_PLUGIN_ROOT; ROOT=\"${ROOT%/}\"; if [ ! -e \"$ROOT/hooks/harness_io.py\" ]; then ID=\"${ROOT##*/}\"; ROOT=\"$(ls -dt \"${ROOT%/*}/${ID%%@*}\"@*/ 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/}\"; [ -n \"$ROOT\" ] || exit 0; export KIMI_PLUGIN_ROOT=\"$ROOT\"; fi; export PROBE_AGENT=kimi_code; [ -f \"$ROOT/hooks/harness_io.py\" ] || exit 0; PY=\"$(command -v python3)\" || exit 0; exec \"$PY\" -S \"$ROOT/hooks/harness_io.py\" --event TurnStarted'",
       "timeout": 6
     }
   ]

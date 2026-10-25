@@ -1,0 +1,49 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/session-start.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/session-start.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_TAP_SOURCE=codex; exec \"$ROOT/hooks/session-start.sh\"'",
+            "timeout": 10,
+            "statusMessage": "Starting Probe transcript capture"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/ensure-daemon.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/ensure-daemon.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_TAP_SOURCE=codex; exec \"$ROOT/hooks/ensure-daemon.sh\"'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/session-end.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/session-end.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_TAP_SOURCE=codex; exec \"$ROOT/hooks/session-end.sh\" --wait'",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/bash -c 'ROOT=\"${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-}}\"; ROOT=\"${ROOT%/}\"; if [ ! -x \"$ROOT/hooks/turn-end.sh\" ] && [ -n \"${PLUGIN_ROOT:-}\" ]; then ROOT=\"$(ls -dt \"${ROOT%/*}\"/[0-9]*.[0-9]*/.codex-plugin/plugin.json 2>/dev/null | head -1)\"; ROOT=\"${ROOT%/.codex-plugin/plugin.json}\"; [ -n \"$ROOT\" ] && export PLUGIN_ROOT=\"$ROOT\"; fi; [ -x \"$ROOT/hooks/turn-end.sh\" ] || exit 0; [ -n \"${PLUGIN_ROOT:-}\" ] && export PROBE_TAP_SOURCE=codex; exec \"$ROOT/hooks/turn-end.sh\"'",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

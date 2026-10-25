@@ -111,8 +111,6 @@ UPDATE_CMD_MIN_CLI = "0.8.1"
 #: (`probe.service.followup`). Anywhere else, RESTART_TO_APPLY, as before.
 PICKED_UP = "open sessions pick it up at their next prompt"
 RESTART_TO_APPLY = "restart {agent} to apply"
-#: The agents whose open sessions follow an update (`probe.cli.updater.FOLLOWING_AGENTS`).
-FOLLOWING_AGENTS = ("claude_code", "codex")
 #: The Probe plugins and the tap, by name, in Claude Code's install ledger.
 LEDGER_PLUGINS = ("probe-research", "probe-research-daemon", "probe-research-tap")
 #: The first tap whose watcher hands its session to the Probe service
@@ -1086,8 +1084,10 @@ def _user_scope_installs() -> bool:
 def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
     """`(follows, agent)`: do this agent's open sessions follow the update with
     no restart (`probe.cli.updater.follows_without_restart`, before it runs)?
-    Claude Code or Codex (FOLLOWING_AGENTS), a user-scope install (Claude
-    Code's ledger), the tap it updates to handing its sessions to the Probe
+    An agent whose open sessions follow updates (the registry's
+    `follows_updates`: Claude Code, Codex), every install at user scope where
+    its ledger has scopes (`scoped_installs`: Claude Code's), the tap it
+    updates to handing its sessions to the Probe
     service (HANDBACK_TAP or later; no tap at all: nothing to hand back) and
     every live `tap watch` one the prompt hook can move
     (`tap_handover.watchers_movable`). `agent` names it for the restart note.
@@ -1096,9 +1096,10 @@ def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
     try:
         harness = _hook_harness().current()
         agent = getattr(harness, "label", None) or agent
-        if harness.id not in FOLLOWING_AGENTS:
+        capabilities = _hook_harness().load_sibling("_harness_registry")
+        if not harness.can(capabilities.CAPABILITY_FOLLOWS_UPDATES):
             return False, agent
-        if harness.id == "claude_code" and not _user_scope_installs():
+        if harness.can(capabilities.CAPABILITY_SCOPED_INSTALLS) and not _user_scope_installs():
             return False, agent
         tap = local.get("tap")
         latest = (manifest.get("tap") or {}).get("latest") if isinstance(manifest.get("tap"), dict) else None

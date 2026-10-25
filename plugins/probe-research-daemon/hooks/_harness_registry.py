@@ -50,6 +50,19 @@ CAPABILITY_WAKE = "wake"  # start a turn for a late answer
 #: prefix (`cli/root_skills.py`). Claude Code only: Codex and Kimi read the
 #: plugin's `agent-skills/` by manifest key, and pi its package manifest.
 CAPABILITY_ROOT_SKILLS = "root_skills"
+#: An open session follows a plugin update with no restart: its hooks run the
+#: installed plugin copy (`hooks/dispatch.py installed_root`) and the prompt
+#: hook moves an old tap's watcher to the Probe service (`hooks/tap_handover.py`),
+#: so "no restart needed" may be said (`cli/updater.follows_without_restart`,
+#: `hooks/version_check._picked_up`). Claude Code and Codex. Not Kimi Code: its
+#: hooks hand over only in sessions started on a plugin that does (plan C3), the
+#: prompt hook leaves its watchers alone, and it loads its manifest at start.
+CAPABILITY_FOLLOWS_UPDATES = "follows_updates"
+#: The agent's install ledger records a plugin at user or project scope, and an
+#: open session's hooks hand over only to a user-scope install
+#: (`dispatch.installed_root`): "no restart needed" needs every Probe install
+#: there at user scope. Claude Code (`installed_plugins.json`).
+CAPABILITY_SCOPED_INSTALLS = "scoped_installs"
 
 #: How a transcript's path yields its session id.
 SESSION_ID_STEM = "stem"  # the whole stem is the id

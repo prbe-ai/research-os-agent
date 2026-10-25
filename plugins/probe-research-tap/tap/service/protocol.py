@@ -217,6 +217,7 @@ RECEIPT_FIELDS = (
     "pending_batch",
     "finalized",
     "retrying",
+    "offline",
     "scope",
 )
 #: `scope`: the journal's backend (its base URL's host, `:port` when named)

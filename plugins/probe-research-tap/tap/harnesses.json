@@ -69,7 +69,9 @@
       "attribution_requires_pairing": false,
       "capabilities": {
         "root_skills": true, "prompt_context": true,
-        "wake": true
+        "wake": true,
+        "follows_updates": true,
+        "scoped_installs": true
       },
       "statusline": "claude-settings",
       "reasoning_setting": "settings-json",
@@ -138,7 +140,9 @@
       "attribution_requires_pairing": true,
       "capabilities": {
         "root_skills": false, "prompt_context": false,
-        "wake": false
+        "wake": false,
+        "follows_updates": true,
+        "scoped_installs": false
       },
       "statusline": null,
       "reasoning_setting": "config-toml",
@@ -201,7 +205,9 @@
       "attribution_requires_pairing": false,
       "capabilities": {
         "root_skills": false, "prompt_context": false,
-        "wake": true
+        "wake": true,
+        "follows_updates": false,
+        "scoped_installs": false
       },
       "statusline": null,
       "reasoning_setting": null,
@@ -277,7 +283,9 @@
       "attribution_requires_pairing": false,
       "capabilities": {
         "root_skills": false, "prompt_context": true,
-        "wake": false
+        "wake": false,
+        "follows_updates": false,
+        "scoped_installs": false
       },
       "statusline": "kimi-tui-toml",
       "reasoning_setting": null,

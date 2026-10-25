@@ -13,6 +13,13 @@
 # the session is not in `daemon` or the harness gives no transcript path (Codex's
 # payload may not carry one: the worker falls back to its quiet timer).
 
+# An open session runs the INSTALLED tap's copy of this script when that is
+# another one: a tap fix reaches it at its next event (hooks/installed-tap.sh).
+# First of all, before stdin is read.
+if [ -f "${BASH_SOURCE[0]%/*}/installed-tap.sh" ] && . "${BASH_SOURCE[0]%/*}/installed-tap.sh"; then
+    tap_run_installed "${BASH_SOURCE[0]}" "$@"
+fi
+
 set -uo pipefail
 
 HOOK_INPUT="$(cat)"

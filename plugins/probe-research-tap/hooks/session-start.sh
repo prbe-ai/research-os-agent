@@ -9,6 +9,13 @@
 # harness (Kimi Code) gets its values, and its payload in Claude Code's shape,
 # from its registry row through `python3 -m tap hook-env` (tap/hook_env.py).
 
+# An open session runs the INSTALLED tap's copy of this script when that is
+# another one: a tap fix reaches it at its next event (hooks/installed-tap.sh).
+# First of all, before stdin is read.
+if [ -f "${BASH_SOURCE[0]%/*}/installed-tap.sh" ] && . "${BASH_SOURCE[0]%/*}/installed-tap.sh"; then
+    tap_run_installed "${BASH_SOURCE[0]}" "$@"
+fi
+
 set -euo pipefail
 
 PLUGIN_ROOT="${PLUGIN_ROOT:-${CLAUDE_PLUGIN_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}}"

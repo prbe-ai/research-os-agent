@@ -24,7 +24,10 @@ their output is translated by the registry row's `hook_output`. A harness whose
 row says `claude-json` gets its payload and output through untouched. Claude
 Code and Codex never run this file (their hooks.json is frozen).
 
-`--event` (one manifest entry per event, tools/kimi_hooks.py): the payload is
+`--event` (one manifest entry per event, tools/kimi_hooks.py): first the event
+moves to the installed copy's adapter when that is another folder (`hand_over`,
+as `dispatch.sh` moves Claude Code's and Codex's), so a Kimi session left open
+across an update runs the installed hooks; then the payload is
 normalized ONCE, and the event's lane runs through the dispatcher
 (`dispatch.serve`, the same path `dispatch.sh` takes for Claude Code and Codex:
 the Probe service's warm host, else here), with this process's stdout caught so
@@ -33,8 +36,10 @@ variables, inherited when Kimi runs inside one, are dropped first
 (`foreign_session_envs`): route gates read them before the payload. `--unshown` goes to the
 dispatcher as is (`dispatch.UNSHOWN`: the harness shows no one this event's
 output). `<hook file>` is how every manifest through plugin 0.163.0 ran each
-hook, one entry per script; a Kimi session left open keeps those entries while
-an update replaces the files under them, so it keeps working unchanged.
+hook, one entry per script; a Kimi session left open keeps those entries, and
+the folder they run from (each version is installed into a folder of its own
+and never changed; a version pruned after a week becomes a link to the kept
+one), so they keep working unchanged.
 
 A skill the person TYPES (`/probe on`) fires no UserPromptSubmit in Kimi: it
 arrives only as TurnStarted with `origin_kind: skill_activation` and a leading
@@ -414,10 +419,65 @@ def run_event(argv: "list[str]") -> int:
     return _reply(stdout, "", code, row, quiet)
 
 
+#: Set while this adapter hands an event to the installed copy (`dispatch.HANDED_OVER`,
+#: which a test keeps equal): that copy takes it out of the environment, so an
+#: event moves at most once and nothing a route starts inherits it.
+HANDED_OVER = "PROBE_HOOKS_HANDED_OVER"
+#: The private names this folder's modules load under (`_load_dispatch`,
+#: `_hook_harness.load_sibling`): another copy's must load its own.
+_PRIVATE_PREFIX = "_probe_hooks."
+
+
+def hand_over(argv: "list[str]") -> None:
+    """`--event`: run this event in the installed copy's adapter instead, in this
+    process, when that is another folder (`dispatch.kimi_installed_root`: the
+    one Kimi's plugin list records; a Kimi session keeps the folder it started
+    with, and with it this file, while updates install new folders beside it).
+    Its `harness_io.py` is loaded in place of this one, with sys.path[0] (where
+    in-process routes import from), this folder's private modules and
+    KIMI_PLUGIN_ROOT pointing at it; stdin is still unread. One that will not
+    load: the event runs here. Once its `main` starts, the event is its own.
+
+    Only `--event`: the per-script entries (plugin 0.163.0 and before) run the
+    harness_io.py of a folder from before this hand-over existed."""
+    if os.environ.pop(HANDED_OVER, None) is not None:
+        return
+    here = os.path.dirname(_HERE)
+    try:
+        target = _load_dispatch().kimi_installed_root(here)
+        if target is None:
+            return
+        import importlib.util  # noqa: PLC0415
+
+        hooks = os.path.join(target, "hooks")
+        mine = {name: sys.modules.pop(name) for name in list(sys.modules) if name.startswith(_PRIVATE_PREFIX)}
+        first = sys.path[0] if sys.path else None
+        if sys.path:
+            sys.path[0] = hooks
+        try:
+            spec = importlib.util.spec_from_file_location(_PRIVATE_PREFIX + "harness_io", os.path.join(hooks, "harness_io.py"))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            entry = module.main
+        except Exception:  # noqa: BLE001 -- a copy that will not load: run here
+            for name in [n for n in sys.modules if n.startswith(_PRIVATE_PREFIX)]:
+                sys.modules.pop(name, None)
+            sys.modules.update(mine)
+            if first is not None:
+                sys.path[0] = first
+            return
+        os.environ["KIMI_PLUGIN_ROOT"] = target
+        os.environ[HANDED_OVER] = here
+    except Exception:  # noqa: BLE001 -- fail open: run the event here
+        return
+    sys.exit(entry(argv))
+
+
 def main(argv: "list[str]") -> int:
     if not argv:
         return 0
     if argv[0] == EVENT_FLAG:
+        hand_over(argv)
         return run_event(argv[1:])
     hook = argv[0] if os.path.isabs(argv[0]) else os.path.join(_HERE, argv[0])
     raw_in = sys.stdin.buffer.read()
