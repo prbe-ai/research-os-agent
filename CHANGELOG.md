@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.314.0
+
 - **The notes docs describe the server's 1,000-token cap.** The server now caps every note but the team note at 1,000 tokens (research-os, `notes_max_tokens`), and a note already over it must be rewritten under it before its next change. The CLI and SDK read every cap from the server (`notes_limit_tokens`), so the fullness line, the pre-send refusal and the compaction advice follow it with no code change; only the comments in `probe.sdk.notes` and `_notes_write` that quoted the old 30,000 / 2,000 caps changed.
 - **The daemon's writer wakes less, re-reads less and runs its helpers on a cheaper model, as the server says (daemon cost round 7).** With the server's settings: a researcher's prompt waits for the writer's least gap like a turn end once the writer's last 3 runs recorded nothing (a loop, not a working session) (`probe ask --writer` still starts a run at once); a writer conversation idle past the model's prompt cache starts fresh from disk instead of re-reading it at the full price; more than 10 new files in a row (a checkout, a build's output) reach the writer as one list of paths, each one open away; `probe daemon task` helpers run on the server's `task` model once it serves one. Every setting is off against an older server. Helpers' model calls now go into the session's trace under the command that started them. New `probe notes find <words> --project|--experiment|--run <slug> [--note <title>]` prints only the paragraphs of a note that mention the words, verbatim with their heading and lines; the daemon writer's edit-notes now finds the paragraph it changes and reads the whole note only to restructure it (the main agent's edit-notes is unchanged).
 
