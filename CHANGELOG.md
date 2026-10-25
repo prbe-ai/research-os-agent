@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.306.0
+
 - **Probe staff can ask your machine to update, and it does, with nothing for you to run.** When the Probe team asks one of your machines to update (for example after its automatic updates got stuck), the server says so on the answers to requests the CLI already makes. The CLI notes it, and its next `probe` command hands an update to the machine's own updater: the Probe service where it updates (macOS, Linux), else the CLI's own updater, now even when every `probe` command comes from a coding agent's hooks and never a terminal. At most once every 15 minutes while the request stands, never from a run-scoped command (`probe log`, `probe exec`, ...), never into a run that holds the update lock, never while automatic updates are off, and the updater's own deferrals still apply; without the Probe service (Windows, pip installs), where the update lands in place, also never from a command a Probe daemon runs or while a daemon is recording. Silent: it prints nothing. Older servers never ask, and nothing changes.
 
 ## 0.305.0
