@@ -87,6 +87,9 @@ def _load_hook_harness():
 
 _hook_harness = _load_hook_harness()
 _session_marker = _hook_harness.load_sibling("_session_marker")
+#: The folder this event's entry ran from: the session's own, which Kimi loaded
+#: (a hand-over passes it on in HANDED_OVER). Set by `main`, read by `_record`.
+_LOADED_ROOT = ""
 
 #: Hook events that name a (new) session for this harness process.
 _RECORD_EVENTS = ("SessionStart", "UserPromptSubmit")
@@ -251,7 +254,16 @@ def _record(payload: dict, row) -> None:
             # (macOS `ps` shows `kimi`, never the new title).
             binary = row._raw.get("binary")  # noqa: SLF001
             titles = (title, binary) if isinstance(binary, str) and binary else (title,)
-            _session_marker.record_harness_process(row.id, session_id, titles)
+            loaded = None
+            if _LOADED_ROOT:
+                # What this Kimi process loaded (kimi/pi update parity K4): the
+                # update's "no restart needed" is proven from it, never from disk.
+                try:
+                    loaded = _hook_harness.load_sibling("_kimi_live").loaded_info(
+                        _LOADED_ROOT, str(payload.get("hook_event_name") or ""), str(payload.get("source") or ""))
+                except Exception:  # noqa: BLE001 -- no record: the restart line stays
+                    loaded = None
+            _session_marker.record_harness_process(row.id, session_id, titles, loaded=loaded)
 
 
 def _adapt(raw_in: bytes):
@@ -474,8 +486,11 @@ def hand_over(argv: "list[str]") -> None:
 
 
 def main(argv: "list[str]") -> int:
+    global _LOADED_ROOT
     if not argv:
         return 0
+    # Before `hand_over` takes it: the folder the session's entry ran from.
+    _LOADED_ROOT = os.environ.get(HANDED_OVER) or os.environ.get("KIMI_PLUGIN_ROOT") or ""
     if argv[0] == EVENT_FLAG:
         hand_over(argv)
         return run_event(argv[1:])

@@ -54,10 +54,15 @@ CAPABILITY_ROOT_SKILLS = "root_skills"
 #: installed plugin copy (`hooks/dispatch.py installed_root`) and the prompt
 #: hook moves an old tap's watcher to the Probe service (`hooks/tap_handover.py`),
 #: so "no restart needed" may be said (`cli/updater.follows_without_restart`,
-#: `hooks/version_check._picked_up`). Claude Code and Codex. Not Kimi Code: its
-#: hooks hand over only in sessions started on a plugin that does (plan C3), the
-#: prompt hook leaves its watchers alone, and it loads its manifest at start.
+#: `hooks/version_check._picked_up`). Claude Code, Codex and Kimi Code (with
+#: CAPABILITY_LOADED_RECORDS below).
 CAPABILITY_FOLLOWS_UPDATES = "follows_updates"
+#: The harness keeps a plugin's manifest (hook entries, skills, MCP servers) from
+#: its start or /reload, so an open session follows an update only when the
+#: record its hooks keep for its process proves it loaded hand-over-capable
+#: releases and the manifests now installed, and the Probe service records it
+#: (`probe._shared.kimi_live.sessions_follow`). Kimi Code.
+CAPABILITY_LOADED_RECORDS = "loaded_records"
 #: The agent's install ledger records a plugin at user or project scope, and an
 #: open session's hooks hand over only to a user-scope install
 #: (`dispatch.installed_root`): "no restart needed" needs every Probe install

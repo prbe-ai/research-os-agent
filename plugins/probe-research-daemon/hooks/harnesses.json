@@ -284,8 +284,9 @@
       "capabilities": {
         "root_skills": false, "prompt_context": true,
         "wake": false,
-        "follows_updates": false,
-        "scoped_installs": false
+        "follows_updates": true,
+        "scoped_installs": false,
+        "loaded_records": true
       },
       "statusline": "kimi-tui-toml",
       "reasoning_setting": null,

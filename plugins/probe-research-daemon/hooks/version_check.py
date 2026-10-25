@@ -1085,7 +1085,8 @@ def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
     """`(follows, agent)`: do this agent's open sessions follow the update with
     no restart (`probe.cli.updater.follows_without_restart`, before it runs)?
     An agent whose open sessions follow updates (the registry's
-    `follows_updates`: Claude Code, Codex), every install at user scope where
+    `follows_updates`: Claude Code, Codex; never one with `loaded_records`, Kimi
+    Code, whose answer needs the release installed first), every install at user scope where
     its ledger has scopes (`scoped_installs`: Claude Code's), the tap it
     updates to handing its sessions to the Probe
     service (HANDBACK_TAP or later; no tap at all: nothing to hand back) and
@@ -1098,6 +1099,11 @@ def _picked_up(manifest: dict, local: dict) -> "tuple[bool, str]":
         agent = getattr(harness, "label", None) or agent
         capabilities = _hook_harness().load_sibling("_harness_registry")
         if not harness.can(capabilities.CAPABILITY_FOLLOWS_UPDATES):
+            return False, agent
+        if harness.can(capabilities.CAPABILITY_LOADED_RECORDS):
+            # Kimi keeps what it loaded at its start: whether the coming release
+            # needs a /reload is known only once it is installed (the update's own
+            # line, `updater.follows_without_restart`), never predicted here.
             return False, agent
         if harness.can(capabilities.CAPABILITY_SCOPED_INSTALLS) and not _user_scope_installs():
             return False, agent

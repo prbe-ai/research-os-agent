@@ -79,7 +79,9 @@ installed tap is looked for, a watcher that needs no move, PROBE_TAP_HOSTED=0,
 Windows, MAX_TRIES spent), `<sid>.<pid>` (that wrapper was moved, written
 before the child starts), `<sid>.later` (look again after LATER_S),
 `<sid>.tries` (failed `tap record`s), `<sid>.moved` (the service took it).
-Claude Code and Codex; another agent's sessions are left alone. Silent always
+Claude Code, Codex and Kimi Code (whose entries run this route through
+`harness_io.py`, the installed copy's since plugin 0.175.0); another agent's
+sessions are left alone. Silent always
 (a prompt hook's stdout reaches the model), exit 0 always. Stdlib only,
 Python 3.9.
 """
@@ -127,14 +129,16 @@ HANDOVER_AHEAD_S = 180.0
 SWAP, HEAL = "swap", "heal"
 #: A versioned plugin folder in an old wrapper's command line (the tap's
 #: session-start.sh reads the same, for taps that wrote no `.version`).
-_VERSIONED = re.compile(r"/(probe-research-tap|prbe-cc-tap-plugin|prbe-codex-tap-plugin)/(\d+\.\d+\.\d+)(?:/|\s|$)")
+#: Kimi Code's folders are `managed/probe-research-tap@<version>`.
+_VERSIONED = re.compile(r"/(probe-research-tap|prbe-cc-tap-plugin|prbe-codex-tap-plugin)[/@](\d+\.\d+\.\d+)(?:/|\s|$)")
 _SID = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 #: How each agent's installed tap is found, by the plugin-root variable its
-#: registry row names (`plugin.root_env`): Claude Code's install ledger, or
-#: Codex's plugin cache (one version folder per install). Another agent's
-#: sessions are left alone.
-LEDGER, CODEX_CACHE = "ledger", "codex-cache"
-_FINDS = {"CLAUDE_PLUGIN_ROOT": LEDGER, "PLUGIN_ROOT": CODEX_CACHE}
+#: registry row names (`plugin.root_env`): Claude Code's install ledger,
+#: Codex's plugin cache (one version folder per install), or Kimi Code's plugin
+#: list (`installed.json` beside its `managed/<id>@<version>` folders). Another
+#: agent's sessions are left alone.
+LEDGER, CODEX_CACHE, KIMI_LIST = "ledger", "codex-cache", "kimi-list"
+_FINDS = {"CLAUDE_PLUGIN_ROOT": LEDGER, "PLUGIN_ROOT": CODEX_CACHE, "KIMI_PLUGIN_ROOT": KIMI_LIST}
 #: No pid here proves anything: Git Bash's pids are not Windows's, and
 #: `os.kill(pid, 0)` there sends a console control event.
 _WINDOWS = os.name == "nt"
@@ -313,7 +317,10 @@ def installed_tap(finds: str, env=None) -> tuple[str, str] | None:
     the hand-back; else None. LEDGER (Claude Code): the one folder its install
     ledger keeps under `probe-research-tap@<marketplace>` (this plugin's
     marketplace when this copy sits in its cache, else the only such key).
-    CODEX_CACHE: the newest version folder of the tap in Codex's plugin cache."""
+    CODEX_CACHE: the newest version folder of the tap in Codex's plugin cache.
+    KIMI_LIST: the one folder Kimi's plugin list records for the tap, in the
+    `managed/` folder this plugin's own copy sits in (`dispatch.kimi_installed_root`'s
+    anchor: no variable decides where to look)."""
     values = os.environ if env is None else env
     dispatch = _sibling("dispatch")
     root_here = os.path.dirname(HERE)
@@ -342,11 +349,39 @@ def installed_tap(finds: str, env=None) -> tuple[str, str] | None:
             return None
         root = max(found)[1]
         manifest = ".codex-plugin"
+    elif finds == KIMI_LIST:
+        found = _kimi_recorded(os.path.realpath(root_here), dispatch)
+        if found is None:
+            return None
+        root = found
+        manifest = ".kimi-plugin"
     else:
         return None
     if not _hands_back(root):
         return None
     return root, _manifest_version(root, manifest)
+
+
+def _kimi_recorded(here: str, dispatch) -> "str | None":
+    """The tap folder Kimi's plugin list records (`<kimi>/plugins/installed.json`,
+    one level above the `managed/` folder `here` sits in), when it is a
+    `managed/probe-research-tap@<version>` folder with Kimi's manifest; else None."""
+    managed = os.path.dirname(here)
+    if os.path.basename(managed) != dispatch.KIMI_MANAGED:
+        return None
+    try:
+        with open(os.path.join(os.path.dirname(managed), dispatch.KIMI_LIST), encoding="utf-8") as handle:
+            records = json.load(handle)["plugins"]
+        roots = {os.path.realpath(r["root"]) for r in records
+                 if isinstance(r, dict) and r.get("id") == TAP_PLUGIN and isinstance(r.get("root"), str)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+    if len(roots) != 1:
+        return None
+    root = roots.pop()
+    if os.path.dirname(root) != managed or not os.path.basename(root).startswith(TAP_PLUGIN + "@"):
+        return None
+    return root if os.path.isfile(os.path.join(root, ".kimi-plugin", "plugin.json")) else None
 
 
 def decide(payload: dict, env=None) -> dict | None:
@@ -407,6 +442,10 @@ def decide(payload: dict, env=None) -> dict | None:
         # Not yet, maybe: the tap's own update can land after this plugin's.
         return {"sid": sid, "later": "no newer tap with the hand-back is installed"}
     transcript = payload.get("transcript_path")
+    if finds != CODEX_CACHE and not (isinstance(transcript, str) and os.path.isabs(transcript)):
+        # Only Codex's rollout is found from its folder (`_record`); Claude Code
+        # and Kimi give the transcript in the payload (Kimi's adapter, harness_io).
+        return {"sid": sid, "later": "no transcript path in this event"}
     cwd = payload.get("cwd")
     plan = {
         "kind": kind, "sid": sid, "agent": harness.id, "root_env": root_env, "prefix": prefix,
