@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.317.0
+
 - **Probe hints reach a prompt sooner.** The Probe service's hint lane looks at each followed transcript every 0.25 s instead of every second (a prompt waited ~0.5 s on average before its lookup went; now ~0.125 s). Window lookups go on a thread and kept connection of their own, so a prompt that comes while a window lookup waits on the server (up to 12 s) is asked at once, not after it, and a window just sent no longer starts its session's 10 s gap for the next prompt (each kind waits after its own lookup only). With two lookups of one session now answering out of order, a hint from an older trigger never replaces a newer one waiting in the session's slot, one sharing a record with a hint delivered while it was asked is not posted, a window lookup leaves the machine's tokens to the prompts due now, and nothing is posted after the team's hints went off or the service began to close (an aborted request is not sent again). A transcript whose last line is unfinished is not read again until it grows. Every answered lookup's log line now ends `answered N ms after the trigger`, not only a posted hint's. Plan hints-latency.
 
 ## 0.316.0
