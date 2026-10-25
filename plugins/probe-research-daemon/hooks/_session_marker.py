@@ -663,22 +663,71 @@ def is_live(state: dict | None) -> bool:
     return bool(set(run_ids) & live_run_ids())
 
 
+#: A session's gap file (`probe.service.capture_gate`): the stretches of its
+#: transcript written while Probe was off, which are never to be uploaded.
+GAPS_SUFFIX = ".gaps"
+#: What a kept session keeps: its gap file and its switch (what says it was off).
+KEPT_SUFFIXES = (GAPS_SUFFIX, ".state")
+#: A gap file that names no transcript (or does not read) goes after this long.
+UNKNOWN_TRANSCRIPT_KEEP_SECONDS = 90 * 86400
+
+
+def _keeps_gaps(path: str, mtime: float, now: float) -> bool:
+    """Does this gap file still hold a gap of a transcript that still exists?
+    One whose transcript is gone is done with. One that names no transcript,
+    or does not read, is kept for UNKNOWN_TRANSCRIPT_KEEP_SECONDS from its
+    last write."""
+    try:
+        with open(path, encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        data = None
+    if isinstance(data, dict) and isinstance(data.get("gaps"), list) and not data["gaps"]:
+        return False
+    transcript = data.get("transcript") if isinstance(data, dict) else None
+    if isinstance(transcript, str) and transcript:
+        return os.path.exists(transcript)
+    return now - mtime < UNKNOWN_TRANSCRIPT_KEEP_SECONDS
+
+
 def prune(max_age_seconds: float = MAX_AGE_SECONDS) -> None:
     """Drop markers for sessions long finished. Never raises.
 
     os.scandir rather than a `find` shell-out, for the reason the telemetry
     hook's prune already documents: `find /tmp` on macOS matches the symlink
     and silently descends into nothing.
+
+    A session whose gap file still holds a gap (`_keeps_gaps`) keeps that file
+    and its `.state` (what says it was off) whatever their age; its other
+    files go as any session's do. A gap file that is done with goes now.
     """
     try:
-        cutoff = time.time() - max_age_seconds
-        with os.scandir(sessions_dir()) as entries:
-            for entry in entries:
-                try:
-                    if entry.is_file() and entry.stat().st_mtime < cutoff:
-                        os.unlink(entry.path)
-                except OSError:
+        now = time.time()
+        cutoff = now - max_age_seconds
+        with os.scandir(sessions_dir()) as listing:
+            entries = list(listing)
+        kept: set[str] = set()
+        for entry in entries:
+            if not entry.name.endswith(GAPS_SUFFIX):
+                continue
+            try:
+                if not entry.is_file():
                     continue
+                if _keeps_gaps(entry.path, entry.stat().st_mtime, now):
+                    kept.add(entry.name[: -len(GAPS_SUFFIX)])
+                else:
+                    os.unlink(entry.path)
+            except OSError:
+                continue
+        for entry in entries:
+            try:
+                suffix = next((s for s in KEPT_SUFFIXES if entry.name.endswith(s)), None)
+                if suffix is not None and entry.name[: -len(suffix)] in kept:
+                    continue
+                if entry.is_file() and entry.stat().st_mtime < cutoff:
+                    os.unlink(entry.path)
+            except OSError:
+                continue
     except OSError:
         pass
 
@@ -846,7 +895,10 @@ def is_tracking(signal: str | None, *, default: bool | None = None) -> bool:
 #   full        reads and writes. What "tracking on" has always meant.
 #   read-only   reads allowed, records nothing new. What "tracking off" has
 #               always meant -- the switch never gated reads.
-#   off         no Probe calls at all, and no session-start injections.
+#   off         no Probe calls at all, and no session-start injections; and
+#               the Probe service stops capturing the transcript
+#               (`probe.service.capture_gate`; this setup may still upload it
+#               until the next tap update).
 #
 #                 /probe
 #          full <----------> read-only        off ----------> read-only

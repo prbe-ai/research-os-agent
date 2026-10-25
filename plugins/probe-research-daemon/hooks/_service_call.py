@@ -147,6 +147,18 @@ def statusline_refresh(sid: str, plugin_root: str, *, agent=None, env=None) -> b
     return isinstance(answer, dict) and answer.get("scheduled") is True
 
 
+def capture_switched(sid: str) -> bool:
+    """A hook moved `sid`'s switch (`/probe off|on|read`): the Probe service,
+    which records the session, looks at it now (`session.recording`), so a
+    session turned off is held before its agent writes another line, and one
+    turned on again is recorded from this moment (what was written while off
+    is never sent). True when a service answered. Like everything here it
+    never starts one (the caller decides: `tracking_guard._capture_switched`)."""
+    if any((os.environ.get(name) or "").strip().lower() == "off" for name in ("PROBE_HOOK_SERVICE", "PROBE_READS_SERVICE")):
+        return False  # this hook is told never to ask the service (`_service_rpc.SERVICE_ENVS`)
+    return call("session.recording", {"sid": sid}) is not None
+
+
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     if len(argv) == 2 and argv[0] == "notes-sync" and argv[1] in ("push", "reconcile"):

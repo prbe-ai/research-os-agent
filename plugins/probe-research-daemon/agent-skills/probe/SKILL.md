@@ -14,7 +14,7 @@ To see where it landed, run `probe session status`.
 ```
 /probe on      on (daemon): the daemon records and reads     /probe          advance one step
 /probe read    read only (daemon): reads, records nothing    /probe status   print it, change nothing
-/probe off     off: no daemon, no Probe calls
+/probe off     off: no daemon, no Probe calls, transcript capture stops
 /probe inline  on (inline): no daemon; you read and write Probe yourself
 ```
 
@@ -39,13 +39,20 @@ press leaves it for `read`. Whether the daemon is used at all is set in
 > reading the team's work, nothing further will be recorded.
 
 > Probe is off for this session - the daemon neither records nor reads, so I
-> will not be able to check prior work. `/probe [read/on]` to turn back on.
+> will not be able to check prior work, and the Probe service stops capturing
+> this session's transcript (this setup may still upload it until the next tap
+> update). `/probe [read/on]` to turn back on.
 
 > Probe is set to `on (inline)` for this session - the daemon is off, and I read
 > and write Probe myself.
 
 Moving the switch never deletes anything and never backfills anything. In the
 `off` state, say you could not look; never report that no prior work exists.
+In `off`, the Probe service stops capturing the transcript from the switch on.
+Until the next tap update it can still be uploaded by another session's `tap
+watch` process, an older tap, a sandboxed session or a Probe CLI on Python 3.10,
+and a compaction summary written after switching back on can repeat what was
+said while off.
 
 ## `.probe.config`:
 

@@ -96,6 +96,11 @@ export function buildStatusReport(sessionId: string | undefined, deps: StatusDep
     } else if (hosted !== null) {
       lines.push(`  this session:  capturing (recorded by the Probe service, pid ${hosted})`);
       lines.push(`    marker:      ${hostedFile(sessionId)}`);
+    } else if (!watcher && deps.capture?.running === false) {
+      // The CLI's reason, verbatim: `Probe is off` for a session switched off
+      // (nothing of it is captured: the Probe service holds it), else why not.
+      lines.push(`  this session:  not capturing: ${deps.capture.reason}`);
+      lines.push(`    pid file:    ${pidFile(sessionId)}`);
     } else {
       lines.push(`  this session:  ${watcher ? "capturing" : "not capturing"}`);
       lines.push(`    pid file:    ${pidFile(sessionId)}`);

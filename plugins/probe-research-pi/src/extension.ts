@@ -166,6 +166,9 @@ function footerText(sessionId: string, daemonLive?: boolean): string | undefined
   // `on (inline)`: the researcher set Probe inline (`/probe inline`).
   const inline = inDaemonProfile(sessionId) && sessionIsInline(sessionId);
   if (inline && sessionInlineReadOnly(sessionId)) return "○ read only (inline)";
+  // Probe off: no Probe calls, and the Probe service holds the session
+  // without capturing it. The status line's word for it.
+  if (probeIsOff()) return "○ off";
   return trackingStatusText(cachedTracking.tracking, cachedTracking.capture, live, inline);
 }
 
@@ -612,7 +615,7 @@ export function registerExtension(pi: ExtensionAPI, extensionDir: string): void 
     // A session the Probe service records confirms by its `.hosted` marker,
     // with no pid file: the wait ends then instead of at its 2 s bound.
     const confirmed = await waitForSpawnConfirmation(sessionId, deps, {
-      spawned: { markerBefore, exitCode: result.exitCode },
+      spawned: { markerBefore, exitCode: result.exitCode, switchedOff: probeIsOff() },
     });
     if (confirmed === SpawnConfirmation.Hosted) {
       logLine(`${label}: the Probe service records ${sessionId}`);

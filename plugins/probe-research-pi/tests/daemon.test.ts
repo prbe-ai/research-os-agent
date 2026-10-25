@@ -302,6 +302,28 @@ describe("waitForSpawnConfirmation and a marker from before the spawn", () => {
     ).toBe(SpawnConfirmation.Missing);
   });
 
+  it("is confirmation when Probe is off and `tap start` exited 0, with no service in the marker", async () => {
+    // Probe off: the service takes the session and holds it (recording nothing);
+    // once it goes idle the marker names the session's own agent, never a
+    // service. No 2 s wait, no "spawn failed?".
+    const logged: string[] = [];
+    let polls = 0;
+    const deps = fakeDeps({
+      hostedServicePid: () => null,
+      markerStamp: () => before,
+      log: (m) => logged.push(m),
+      sleep: async () => {
+        polls += 1;
+      },
+    });
+    const answer = await waitForSpawnConfirmation("off-session", deps, {
+      spawned: { markerBefore: before, exitCode: () => 0, switchedOff: true },
+    });
+    expect(answer).toBe(SpawnConfirmation.Hosted);
+    expect(polls).toBe(0);
+    expect(logged.join("\n")).not.toContain("spawn failed?");
+  });
+
   it("is confirmation once `tap start` exited 0 (the service already records the session)", async () => {
     let polls = 0;
     const deps = fakeDeps({

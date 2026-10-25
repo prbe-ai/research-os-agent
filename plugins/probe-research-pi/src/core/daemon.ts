@@ -220,6 +220,12 @@ export interface SpawnWitness {
   markerBefore: MarkerStamp | null;
   /** How the spawned `tap start` exited: undefined while it runs (`SpawnResult.exitCode`). */
   exitCode: () => number | null | undefined;
+  /**
+   * The session's Probe switch reads `off`: the Probe service takes the session
+   * and holds it, recording nothing, and names no process of its own in the
+   * marker once it goes idle. `tap start` exiting 0 is then the confirmation.
+   */
+  switchedOff?: boolean;
 }
 
 /**
@@ -306,6 +312,8 @@ export async function waitForSpawnConfirmation(
   };
   const confirmation = (): SpawnConfirmationValue | null => {
     if (hasContent()) return SpawnConfirmation.Watcher;
+    // Probe off: the service took the session and holds it; `tap start` said so.
+    if (witness.switchedOff && witness.exitCode() === 0) return SpawnConfirmation.Hosted;
     return hostedByThisStart() ? SpawnConfirmation.Hosted : null;
   };
 

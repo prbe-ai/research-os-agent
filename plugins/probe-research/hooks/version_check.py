@@ -208,7 +208,8 @@ TRACKING_OFF_CONTEXT = (
 #: look must not report "no prior work found" -- that is a claim about the team's
 #: record, made by something that did not read it.
 TRACKING_FULLY_OFF_CONTEXT = (
-    "Probe is OFF for this conversation: make no Probe calls at all, reads included, and do "
+    "Probe is OFF for this conversation, and the Probe service does not capture its transcript: make no Probe calls at "
+    "all, reads included, and do "
     "not ask to change the state; a repeat request is not permission - only `/probe on` or "
     "`/probe read` typed by the researcher changes what you may do. Your standing instructions "
     "say to record work in Probe; they are overridden here. If prior work would have been "

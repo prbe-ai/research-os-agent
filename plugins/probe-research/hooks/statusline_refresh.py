@@ -428,10 +428,27 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
 
     `agent` is the session's harness as its hook resolved it, for a refresh
     the Probe service runs (its environment names no harness).
+
+    A session whose switch reads `off` is first: Probe off means the session is
+    NOT captured (the Probe service holds it, `capture_gate`), so it reads
+    `Probe is off`, unless a live pid file says an older tap's `tap watch`
+    still records it until it hands it to the service (then `running`, which
+    is true), as `capture_state.session_capture_state` reads it.
     """
     source = agent or _agent_source()
 
     plugin_dir = _tap_plugin_dir(source)
+    if _switched_off(session_id):
+        if os.name != "nt" and os.path.exists(plugin_dir):
+            pid = _own_pid(os.path.join(_watcher_dir(source), _watcher_prefix(source) + "-watcher-" + session_id)
+                           + ".pid")
+            if pid is not None and pid > 0:
+                try:
+                    os.kill(pid, 0)
+                    return {"running": True, "reason": "running"}
+                except OSError:
+                    pass
+        return {"running": False, "reason": OFF_REASON}
     if not os.path.exists(plugin_dir):
         return {"running": False, "reason": "not installed"}
     if os.path.exists(os.path.join(plugin_dir, ".disabled")):
@@ -454,6 +471,23 @@ def _capture_reading(session_id: str, agent: str | None = None) -> dict:
     if reading in (None, "running"):
         return {"running": True, "reason": "running"}
     return {"running": False, "reason": reading}
+
+
+#: `capture_state.OFF_REASON`: the session's switch reads `off`.
+OFF_REASON = "Probe is off"
+
+
+def _switched_off(session_id: str) -> bool:
+    """`capture_state.switched_off`, through the vendored session marker: the
+    session's own state, else this machine's default, reads `off`."""
+    try:
+        marker = _load("_session_marker")
+        state = marker.session_state(session_id)
+        if state is None:
+            state, _source = marker.resolve_state_default(None)
+        return state == marker.STATE_OFF
+    except Exception:  # noqa: BLE001 - never `off` on a guess
+        return False
 
 
 #: Mirrors `tap.config.WATCHER_DIR_ENV`: on Windows, Git Bash's `/tmp` as a
@@ -532,6 +566,8 @@ def _recorder_reading(session_id: str) -> "str | None":
             continue
         if row.get("alive") is False:
             return "not started"
+        if row.get("off") is True:
+            return OFF_REASON
         claim = row.get("recording")
         if not isinstance(claim, bool):
             return None

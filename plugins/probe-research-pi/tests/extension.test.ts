@@ -324,6 +324,34 @@ describe("registerExtension — session_start", () => {
     expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ not tracking");
   });
 
+  it("says a session switched off is off, in the footer", async () => {
+    // Probe off: the footer names the state, as the status line's `off` does
+    // (it read "not tracking", as for `read`).
+    installProbeCli();
+    execFileMock.mockImplementationOnce((_command, _args, _options, callback) => {
+      callback(
+        null,
+        JSON.stringify({
+          session_id: "pi-off-session",
+          tracking: false,
+          signal: "off",
+          state: "off",
+          seeded: false,
+          source: "session",
+          capture: { running: false, reason: "Probe is off" },
+        }),
+        "",
+      );
+    });
+    const { api, handlers } = fakeExtensionAPI();
+    registerExtension(api as never, tmp);
+    const ctx = fakeContext({ sessionId: "pi-off-session", sessionFile: undefined, cwd: "/repo", hasUI: true });
+
+    await handlers.get("session_start")!({ reason: "startup" }, ctx);
+
+    expect(ctx.setStatus).toHaveBeenCalledWith("probe-tracking", "○ off");
+  });
+
   it("continues session startup when the footer renderer throws", async () => {
     pair();
     installProbeCli();
