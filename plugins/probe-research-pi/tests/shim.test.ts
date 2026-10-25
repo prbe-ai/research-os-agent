@@ -347,6 +347,61 @@ describe("bootstrap", () => {
     expect(calls).toEqual(["clone:prepare", "clone:activate"]);
   });
 
+  it("starts while `pi update` reinstalls the clone's packages, and runs the pin at the next turn", async () => {
+    const calls: string[] = [];
+    let loads = 0;
+    const missing = async () => {
+      loads += 1;
+      throw new Error("Cannot find module '@modelcontextprotocol/sdk'");
+    };
+    const { shim } = host(missing as unknown as ImplModule, { "0.6.3-abc": fakeImpl("pin", calls) });
+    const pi = fakePi();
+    await expect(shim.attach(pi.api as never)).resolves.toBeUndefined();
+    expect(shim.activePin).toBeUndefined();  // nothing runs yet, and pi started
+    expect(loads).toBe(1);
+    expect(logs.some((line) => line.includes("did not start"))).toBe(true);
+
+    await pi.emit(ShimEvent.SessionStart, { reason: "startup" });  // nothing runs: no implementation gets it
+    makePin("0.6.3-abc", "0.6.3");
+    setCurrent("0.6.3-abc", "0.6.3");
+    await pi.emit(ShimEvent.BeforeAgentStart, {});
+    expect(shim.activePin).toBe("0.6.3-abc");
+    // The pin gets the session start it missed (capture, MCP, the team note start there), then the turn.
+    expect(calls).toEqual(["pin:prepare", "pin:activate", "pin:session_start", "pin:before_agent_start"]);
+  });
+
+  it("tells the person once to /reload when nothing could load and no pin runs (a `pi update` by hand)", async () => {
+    const missing = async () => {
+      throw new Error("Cannot find module '@modelcontextprotocol/sdk'");
+    };
+    const { shim } = host(missing as unknown as ImplModule);
+    const pi = fakePi();
+    await shim.attach(pi.api as never);
+    const ctx = fakeCtx();
+    await pi.emit(ShimEvent.SessionStart, { reason: "startup" }, ctx);
+    await pi.emit(ShimEvent.BeforeAgentStart, {}, ctx);
+    await pi.emit(ShimEvent.BeforeAgentStart, {}, ctx);
+    expect(shim.activePin).toBeUndefined();
+    expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
+    expect(ctx.ui.notify).toHaveBeenCalledWith(
+      "Probe did not load in this pi (its packages were being reinstalled); run /reload in pi to load it", "warning");
+  });
+
+  it("loads the clone's implementation through a loader only when no pin runs", async () => {
+    const calls: string[] = [];
+    let loads = 0;
+    const loader = async () => {
+      loads += 1;
+      return fakeImpl("clone", calls);
+    };
+    makePin("0.7.0-abc", "0.7.0");
+    setCurrent("0.7.0-abc", "0.7.0");
+    const { shim } = host(loader as unknown as ImplModule, { "0.7.0-abc": fakeImpl("pin", calls) });
+    await shim.attach(fakePi().api as never);
+    expect(shim.activePin).toBe("0.7.0-abc");
+    expect(loads).toBe(0);
+  });
+
   it("looks at a turned-down `current` again at the next event: the clone may have been mid-update", async () => {
     makePin("0.7.1-abc", "0.7.1");
     setCurrent("0.7.1-abc", "0.7.1");

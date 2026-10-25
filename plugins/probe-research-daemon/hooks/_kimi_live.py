@@ -319,6 +319,23 @@ def _argv_of(pid: int) -> "list[str]":
         return []
 
 
+#: A Kimi tap watch in one `ps` command line, whose folders may hold spaces: the
+#: `--plugin-root` runs up to its `<kimi>/plugins/managed/<id>@<version>` folder.
+_WATCH_COMMAND = re.compile(
+    r"(?:^|\s)-m\s+tap\s+watch(?:\s|$)")
+_WATCH_SESSION = re.compile(r"\s--session-id\s+(\S+)")
+_WATCH_ROOT = re.compile(r"\s--plugin-root\s+(.+?/" + MANAGED + r"/[A-Za-z0-9._-]+@\d+(?:\.\d+)+)/?(?=\s|$)")
+
+
+def _watch_in_command(command: str) -> "str | None":
+    """The session id of a Kimi tap watch in one `ps` command line (macOS gives
+    no argv boundaries: a folder with a space in it splits), else None."""
+    if not _WATCH_COMMAND.search(command):
+        return None
+    session = _WATCH_SESSION.search(command)
+    return session.group(1) if session and _WATCH_ROOT.search(command) else None
+
+
 def own_watches() -> "set[str] | None":
     """The session ids of every live `tap watch` running from a Kimi tap folder
     (`<kimi>/plugins/managed/probe-research-tap@<version>`, its `--plugin-root`):
@@ -334,9 +351,10 @@ def own_watches() -> "set[str] | None":
                                  timeout=5, check=False).stdout
         except (OSError, subprocess.SubprocessError):
             return None
-        argvs = [line.split() for line in out.splitlines()]
-        if not argvs:
+        lines = out.splitlines()
+        if not lines:
             return None
+        return {sid for sid in (_watch_in_command(line) for line in lines) if sid}
     found = set()
     for argv in argvs:
         at = next((i for i in range(len(argv) - 2) if tuple(argv[i:i + 3]) == _WATCH_ARGV), None)

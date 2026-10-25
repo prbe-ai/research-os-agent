@@ -16,16 +16,23 @@
  * be) and hands both to the shim.
  */
 
-import { dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-import * as cloneImpl from "./src/impl.js";
 import { attachShim } from "./src/shim.js";
 
 const installRoot = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * The implementation beside this file, loaded only when no pin can run. Never
+ * imported statically: `pi update` reinstalls the clone's packages (`git clean
+ * -fdx`, then `npm install`), and a pi started in that second failed to load
+ * the extension at all; now it starts, and the shim runs a pin at a later turn.
+ */
+const loadCloneImpl = () => import(pathToFileURL(join(installRoot, "src", "impl.ts")).href);
+
 export default async function probeResearchPi(pi: ExtensionAPI): Promise<void> {
-  await attachShim(pi, installRoot, cloneImpl);
+  await attachShim(pi, installRoot, loadCloneImpl);
 }

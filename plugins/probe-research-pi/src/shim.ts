@@ -422,7 +422,11 @@ function checkCandidate(candidate: Candidate): Candidate {
 export interface ShimOptions {
   /** The directory pi loaded `index.ts` from: the pi clone's package folder. */
   installRoot: string;
-  /** The implementation beside the shim (`installRoot/src/impl.ts`), loaded with it: used whenever no pin can be. */
+  /**
+   * The implementation beside the shim (`installRoot/src/impl.ts`), used whenever no pin can be:
+   * the module, or a loader called only then (`index.ts`'s, so a pi started while `pi update`
+   * reinstalls the clone's packages still starts, and runs a pin at the next turn).
+   */
   cloneImpl: unknown;
   /** Where `probeStateDir` is read from. Defaults to `process.env`. */
   env?: PathEnv;
@@ -547,6 +551,11 @@ export class ShimHost {
   private activating: Candidate | null = null;
   private currentStamp: { mtimeMs: number; size: number; ino: number } | null = null;
   private wanted: CurrentPin | null = null;
+  /** A `session_start` no implementation got (none could run then); replayed to the first that starts. */
+  private missedStart: unknown = undefined;
+  /** Nothing runs in this pi and no pin can: tell the person once, at a turn, to /reload. */
+  private notLoadedNoticePending = false;
+  private notLoadedNoticeShown = false;
   /** The last `current` pin turned down for not being the clone's version (logged once). */
   private rejected: string | null = null;
   private readonly started: number;
@@ -618,15 +627,20 @@ export class ShimHost {
     }
     if (!this.active) {
       try {
-        await this.start(asImplModule(this.cloneImpl), null);
+        await this.start(asImplModule(await this.loadClone()), null);
       } catch (err) {
-        this.log(`the implementation beside the shim did not start (${message(err)}): Probe does nothing in this pi process`);
+        this.log(`the implementation beside the shim did not start (${message(err)}): Probe starts at a later turn once a pin of the clone's version exists, or at /reload`);
       }
     }
     if (this.active) {
       this.resourcesPin = this.active.pin;
       this.loadedFingerprint = this.active.fingerprint;
     }
+  }
+
+  /** The clone's implementation: the module given, or what its loader loads (a failure is the caller's). */
+  private async loadClone(): Promise<unknown> {
+    return typeof this.cloneImpl === "function" ? await (this.cloneImpl as () => Promise<unknown>)() : this.cloneImpl;
   }
 
   /** Prepare and activate an implementation with nothing to replace. */
@@ -670,8 +684,11 @@ export class ShimHost {
   private async forward(name: string, event: unknown, ctx: any): Promise<unknown> {
     try {
       this.refreshWanted();
+      if (name === ShimEvent.SessionStart && !this.active) this.missedStart = event;
       if (SWITCH_EVENTS.has(name)) await this.maybeSwitch();
+      await this.replayMissedStart(name, ctx);
       this.showReloadNotice(ctx);
+      this.showNotLoadedNotice(ctx);
     } catch (err) {
       this.log(`${name}: ${message(err)}`);
     }
@@ -686,6 +703,20 @@ export class ShimHost {
         this.log(`${name}: ${message(err)}`);
       }
     }
+  }
+
+  /**
+   * An implementation that started after this session's `session_start` (none
+   * could run then) sets the session up there -- capture, tracking, MCP, the
+   * team note -- so it gets that event before this one.
+   */
+  private async replayMissedStart(name: string, ctx: any): Promise<void> {
+    if (!this.active || this.missedStart === undefined) return;
+    const missed = this.missedStart;
+    this.missedStart = undefined;
+    if (name === ShimEvent.SessionStart) return; // this event is the start
+    const start = this.active.candidate.declarations.events[ShimEvent.SessionStart];
+    if (start) await start(missed, ctx);
   }
 
   private afterEvent(name: string, event: unknown): void {
@@ -835,9 +866,13 @@ export class ShimHost {
 
   private async maybeSwitch(): Promise<void> {
     const want = this.wanted;
-    if (!want || this.switching) return;
-    if (want.pin === this.active?.pin || this.badPins.has(want.pin) || this.tooNewPins.has(want.pin)) return;
-    if (!this.pinComplete(want.pin)) return;
+    if (this.switching) return;
+    const usable = want !== null && !this.badPins.has(want.pin) && !this.tooNewPins.has(want.pin) && this.pinComplete(want.pin);
+    if (!this.active && !usable) {
+      this.notLoadedNoticePending = !this.notLoadedNoticeShown;
+      return;
+    }
+    if (!want || !usable || want.pin === this.active?.pin) return;
     this.switching = true;
     try {
       if (this.active) await this.switchTo(want.pin);
@@ -957,6 +992,24 @@ export class ShimHost {
   }
 
   /** Once per shim: the one update a person has to apply. */
+  /**
+   * Nothing runs (this pi started while `pi update` reinstalled the clone's
+   * packages, and the module loader keeps that failed import) and no pin can:
+   * the person learns it once, at a turn, instead of Probe being silently off.
+   */
+  private showNotLoadedNotice(ctx: any): void {
+    if (!this.notLoadedNoticePending || this.notLoadedNoticeShown || this.active || !ctx) return;
+    this.notLoadedNoticePending = false;
+    this.notLoadedNoticeShown = true;
+    const notice = "Probe did not load in this pi (its packages were being reinstalled); run /reload in pi to load it";
+    this.log(notice);
+    try {
+      if (ctx.hasUI) ctx.ui.notify(notice, "warning");
+    } catch {
+      // a notice is best effort
+    }
+  }
+
   private showReloadNotice(ctx: any): void {
     if (!this.reloadNoticePending || this.reloadNoticeShown || !ctx) return;
     this.reloadNoticePending = false;
