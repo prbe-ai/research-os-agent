@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.312.0
+
 - **A refused key says so.** When the Probe gateway refuses a session's capture key (401), the Probe service now stamps the tap's 401 latch (`last_401_at` and the refused key's fingerprint in its state db), which the status line, `probe session status` and `probe doctor` already read; the next answer that accepts the same key clears it, and a new key is never latched by an old stamp. Only the tap's old outbox drain wrote it, so a refused key read as "not recording" at best and nobody was told to reconnect (release gate, 2026-10-25). Offline, server errors and a proxy's page change nothing.
 
 - **No `probe` command fails or mixes versions during a machine's first update.** That update is the one-time move to the side-by-side install and runs in place, longer than the 10 s a command waited: `probe session status` and `probe --version` answered "Probe is updating itself" (exit 75) to agents mid-work, and a command that did wait went on with old modules under the new CLI (`module 'probe.service.procid' has no attribute 'exists'`; release gate, 2026-10-25). Every command except a hook's call now waits it out (up to 90 s, under an agent's own 2-minute command limit), then runs again in a fresh interpreter on the new code. A hook's call still answers at once.
