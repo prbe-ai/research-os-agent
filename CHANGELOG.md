@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.317.1
+
 - **The daemon host checks `probe` commands without loading the whole CLI again.** The command spec shipped with the CLI (`cli_spec.json`) must match the CLI's source exactly, and any edit makes it older: 0.315.1 shipped one older than its CLI, so every host loaded the whole CLI (35 MB) instead. Now a spec older than the installed CLI is replaced, once per CLI version, by one a short-lived child process writes into the daemon's state folder (`<state>/probe/daemon/cli-spec/`); and this release's spec matches its CLI.
 
 ## 0.317.0
